@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-#[derive(Hash, PartialEq, Eq)]
+#[derive(Hash, PartialEq, Eq, Debug, Clone, Copy)]
 pub enum Lang {
     En,
     ZhCn,
@@ -9,7 +9,7 @@ pub enum Lang {
 }
 
 pub struct I18n {
-    lang: Lang,
+    pub lang: Lang,
     strings: HashMap<&'static str, HashMap<Lang, &'static str>>,
 }
 
@@ -154,6 +154,10 @@ impl I18n {
             tr!(en, "Providers", cn, "供应商", tw, "供應商"),
         );
         m.insert("tab.about", tr!(en, "About", cn, "关于", tw, "關於"));
+        m.insert(
+            "tab.prompts",
+            tr!(en, "Prompts", cn, "提示词", tw, "提示詞"),
+        );
 
         m.insert(
             "app.backendRequired",
@@ -2409,6 +2413,64 @@ impl I18n {
                 "序列化 input_schema 失敗"
             ),
         );
+
+        // ── Prompts ────────────────────────────────────────────────────
+        m.insert(
+            "prompts.title",
+            tr!(en, "Prompt Manager", cn, "提示词管理", tw, "提示詞管理"),
+        );
+        m.insert(
+            "prompts.search",
+            tr!(
+                en,
+                "Search prompts...",
+                cn,
+                "搜索提示词...",
+                tw,
+                "搜尋提示詞..."
+            ),
+        );
+        m.insert(
+            "prompts.categories",
+            tr!(en, "Categories", cn, "分类", tw, "分類"),
+        );
+        m.insert(
+            "prompts.templates",
+            tr!(en, "templates", cn, "模板", tw, "模板"),
+        );
+        m.insert(
+            "prompts.insert",
+            tr!(en, "Insert to Chat", cn, "插入到对话", tw, "插入到對話"),
+        );
+        m.insert(
+            "prompts.create",
+            tr!(en, "Create Template", cn, "创建模板", tw, "創建模板"),
+        );
+        m.insert("prompts.edit", tr!(en, "Edit", cn, "编辑", tw, "編輯"));
+        m.insert("prompts.delete", tr!(en, "Delete", cn, "删除", tw, "刪除"));
+        m.insert("prompts.save", tr!(en, "Save", cn, "保存", tw, "儲存"));
+        m.insert("prompts.cancel", tr!(en, "Cancel", cn, "取消", tw, "取消"));
+        m.insert(
+            "prompts.content",
+            tr!(en, "Content", cn, "内容", tw, "內容"),
+        );
+        m.insert("prompts.tags", tr!(en, "Tags", cn, "标签", tw, "標籤"));
+        m.insert(
+            "prompts.noTemplates",
+            tr!(en, "No templates", cn, "暂无模板", tw, "暫無模板"),
+        );
+        m.insert(
+            "prompts.noCategory",
+            tr!(
+                en,
+                "No category selected",
+                cn,
+                "未选择分类",
+                tw,
+                "未選擇分類"
+            ),
+        );
+
         m.insert(
             "security.hint",
             tr!(

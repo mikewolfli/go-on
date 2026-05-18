@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-dc275d80.js";
+            window.path_to_searchindex_js = "searchindex-ddf09bb2.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-512b02fc.js"></script>
+        <script src="toc-c47ee197.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -476,8 +476,45 @@ go-on --secret delete --secret-name openai
 <p>Example:</p>
 <pre><code class="language-bash">go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:8090
 </code></pre>
+<h2 id="terminal-chat-mode---chat---a"><a class="header" href="#terminal-chat-mode---chat---a">Terminal Chat Mode (<code>--chat</code> / <code>-a</code>)</a></h2>
+<p>Start an interactive terminal chat session (like Claude Code or Codex).</p>
+<pre><code class="language-bash">go-on -a
+# or
+go-on --chat
+</code></pre>
+<p>If your config file is in a different location:</p>
+<pre><code class="language-bash">go-on -c /path/to/config.toml -a
+</code></pre>
+<h3 id="requirements"><a class="header" href="#requirements">Requirements</a></h3>
+<p>At least one AI provider must be configured in <code>config.toml</code> with valid API keys. API keys are read automatically from the system keyring (keyring → env var fallback).</p>
+<h3 id="behavior"><a class="header" href="#behavior">Behavior</a></h3>
+<ol>
+<li>Builds the agent registry from the configured providers.</li>
+<li>Opens a readline-style chat loop.</li>
+<li>Each message is sent to the first available agent with streaming output.</li>
+<li>Supports conversation history (capped at 1000 messages).</li>
+<li>Handles graceful shutdown on Ctrl+C or <code>/quit</code>.</li>
+</ol>
+<h3 id="built-in-commands"><a class="header" href="#built-in-commands">Built-in Commands</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Command</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>/quit</code> or <code>/exit</code></td><td>Exit chat mode</td></tr>
+<tr><td><code>/help</code></td><td>Show available commands</td></tr>
+<tr><td><code>/clear</code></td><td>Clear conversation history</td></tr>
+<tr><td><code>/agents</code></td><td>List configured agents</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="automatic-setup-redirect"><a class="header" href="#automatic-setup-redirect">Automatic Setup Redirect</a></h3>
+<p>If <code>--chat</code> is passed and no providers are configured, the onboarding prompt is skipped and a message directs you to run <code>--setup</code> first:</p>
+<pre><code class="language-bash">go-on -c config.toml -a
+# → "No AI agents configured. Run go-on --init to set up a provider first."
+</code></pre>
 <h2 id="common-command-recipes"><a class="header" href="#common-command-recipes">Common command recipes</a></h2>
-<p>Minimal setup:</p>
 <pre><code class="language-bash">go-on --setup --setup-level standard --setup-secrets auto
 </code></pre>
 <p>Validate then inspect readiness:</p>
@@ -489,6 +526,9 @@ go-on --config config.toml --status
 </code></pre>
 <p>Run ACP over stdio for an editor-launched integration:</p>
 <pre><code class="language-bash">go-on --config config.toml --protocol-mode acp_stdio --verbose
+</code></pre>
+<p>Terminal chat (interactive, like Claude Code):</p>
+<pre><code class="language-bash">go-on -a
 </code></pre>
 <h2 id="operational-guidance"><a class="header" href="#operational-guidance">Operational guidance</a></h2>
 <ul>

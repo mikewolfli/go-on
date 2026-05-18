@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-bf14e7b9.js";
+            window.path_to_searchindex_js = "../searchindex-0bb38933.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-5b302f00.js"></script>
+        <script src="../toc-1158cbfc.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -188,8 +188,17 @@
 <ul>
 <li><strong>多用户支持</strong>：专为多个用户并发访问设计</li>
 <li><strong>PostgreSQL 存储</strong>：带 pgvector 扩展的可扩展数据库</li>
+<li><strong>CORS 支持</strong>：可配置的允许来源、预检（OPTIONS）处理、所有 HTTP/SSE 响应上的 CORS 标头</li>
+<li><strong>入口认证（网关）</strong>：通过 <code>Authorization: Bearer</code>、<code>X-Api-Key</code> 或 <code>X-Go-On-Key</code> 标头验证的共享 API 密钥</li>
+<li><strong>用户认证（HMAC 令牌）</strong>：基于 HMAC-SHA256 签名的每用户 JWT 类令牌，自动配置，可配置 TTL</li>
+<li><strong>RBAC 授权</strong>：基于角色的访问控制（admin/user/viewer/monitor），在 ACP+HTTP 和 MCP+HTTP 路径上均进行按端点权限检查</li>
+<li><strong>租户预算控制</strong>：每个租户的每日令牌/并发任务/API 调用配额，自动配置</li>
+<li><strong>对话隔离</strong>：带租户前缀的命名空间对话 ID，防止跨用户数据泄露</li>
+<li><strong>关闭排空</strong>：优雅关闭期间处理进行中连接的可配置排空期</li>
+<li><strong>信号处理</strong>：所有平台上的 SIGINT（Ctrl+C）和 SIGTERM，实现干净关闭</li>
+<li><strong>线程安全密钥管理</strong>：<code>SECRET_OVERRIDE_MAP</code> 替代 <code>std::env::set_var()</code>（在多线程上下文中已记录为未定义行为）；<code>KEYRING_CACHE</code> 带 30 秒 TTL，避免在异步热路径中阻塞密钥环 I/O</li>
+<li><strong>热重载配置</strong>：通过 <code>config.reload</code> RPC 进行运行时配置重载</li>
 <li><strong>高可用性</strong>：内置冗余和故障转移支持</li>
-<li><strong>高级安全</strong>：基于角色的访问控制、审计日志</li>
 <li><strong>企业监控</strong>：全面的可观测性堆栈</li>
 <li><strong>可扩展性</strong>：水平扩展能力</li>
 <li><strong>完整 Phase 4 架构</strong>：所有 14 条总线和 21 个 F-GAP 模块</li>
@@ -200,11 +209,22 @@
 <h3 id="架构"><a class="header" href="#架构">架构</a></h3>
 <pre><code>多用户服务器架构：
 ├── 应用层：go-on 运行时实例
+│   ├── ACP HTTP 服务器（端口 8090）：CORS → 入口认证 → 用户认证 → RBAC → 路由
+│   └── MCP HTTP 服务器（端口 8090）：CORS → 入口认证 → 用户认证 → RBAC → 分发
 ├── 数据库层：带 pgvector 的 PostgreSQL
 ├── 缓存层：Redis（可选）
 ├── 负载均衡器：流量分发
 ├── 监控：Prometheus、Grafana、ELK
 └── 备份：自动化备份系统
+
+请求流程（ACP+HTTP）：
+客户端 → CORS 标头 → 入口认证（API 密钥）→ 用户会话（HMAC 令牌）
+       → RBAC 授权 → 租户预算检查 → 命名空间对话
+       → AI 处理 → 带 CORS 标头的响应
+
+请求流程（MCP+HTTP）：
+客户端 → CORS 标头 → 入口认证（API 密钥）→ 用户会话（HMAC 令牌）
+       → RBAC 授权 → MCP 方法分发 → 带 CORS 的 JSON-RPC 响应
 </code></pre>
 <h2 id="配置"><a class="header" href="#配置">配置</a></h2>
 <h3 id="服务器配置"><a class="header" href="#服务器配置">服务器配置</a></h3>
@@ -214,17 +234,32 @@ default_phase = "coding"
 model_selection_mode = "adaptive"
 
 [protocol]
-mode = "mcp_http"  # 多用户访问的 MCP over HTTP
+mode = "acp_http"  # 用于多用户访问的 ACP over HTTP（使用 mcp_http 用于 MCP）
 
 [runtime]
 acp_http_bind_addr = "0.0.0.0:8090"
 production_strict = true
+
+# ── 网关入口认证（所有入站流量的共享 API 密钥）────
 entry_auth_enabled = true
 entry_auth_api_key_env = "GO_ON_ENTRY_API_KEY"
 entry_rate_limit_rpm = 5000
 entry_rate_limit_burst = 1000
-session_timeout_minutes = 60
-max_sessions_per_user = 10
+
+# ── 用户认证（每用户 HMAC 令牌）─────────────
+user_auth_enabled = true
+user_auth_token_secret_env = "GO_ON_USER_AUTH_TOKEN_SECRET"
+user_auth_token_ttl_seconds = 86400
+
+# ── 跨域资源共享（CORS）───────────────────
+cors_allowed_origins = ["https://my-frontend.example.com"]
+# 仅用于开发使用 "*"：
+# cors_allowed_origins = ["*"]
+
+# ── 租户资源配额 ────────────────────────────
+tenant_default_daily_token_limit = 1000000
+tenant_default_concurrent_tasks = 10
+tenant_default_daily_api_calls = 10000
 
 [database]
 type = "postgres"
@@ -240,22 +275,13 @@ ssl_mode = "prefer"
 [cache]
 enabled = true
 type = "database"  # 使用 PostgreSQL 作为缓存
-# 可选 Redis 缓存
-# type = "redis"
-# redis_url = "redis://localhost:6379"
 
 [vector]
 enabled = true
 type = "pgvector"
-dimensions = 768  # 企业使用的高维度
+dimensions = 768
 top_k = 10
 min_similarity = 0.7
-
-[security]
-rbac_enabled = true
-audit_logging_enabled = true
-data_encryption_enabled = true
-mfa_enabled = false  # 可选：更高安全性时启用
 
 [observability]
 otel_enabled = true
@@ -271,6 +297,30 @@ tracing_sampling_rate = 0.1
 <li><code>postgres</code>：PostgreSQL 客户端库</li>
 <li><code>pgvector</code>：PostgreSQL 的向量扩展</li>
 </ul>
+<h3 id="运行时配置字段"><a class="header" href="#运行时配置字段">运行时配置字段</a></h3>
+<p>以下是多用户模式特有的运行时配置字段：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>字段</th><th>描述</th><th>默认值</th></tr>
+</thead>
+<tbody>
+<tr><td><code>entry_auth_enabled</code></td><td>启用网关 API 密钥认证</td><td><code>false</code></td></tr>
+<tr><td><code>entry_auth_api_key_env</code></td><td>入口 API 密钥的环境变量名</td><td><code>GO_ON_ENTRY_API_KEY</code></td></tr>
+<tr><td><code>entry_rate_limit_rpm</code></td><td>每源 IP 的速率限制</td><td><code>240</code></td></tr>
+<tr><td><code>entry_rate_limit_burst</code></td><td>令牌桶突发容量</td><td><code>60</code></td></tr>
+<tr><td><code>user_auth_enabled</code></td><td>启用每用户 HMAC 令牌认证</td><td><code>false</code></td></tr>
+<tr><td><code>user_auth_token_secret</code></td><td>HMAC 签名密钥（配置文件）</td><td><code>go-on-multi-user-secret</code></td></tr>
+<tr><td><code>user_auth_token_secret_env</code></td><td>HMAC 密钥的环境变量覆盖</td><td><code>GO_ON_USER_AUTH_TOKEN_SECRET</code></td></tr>
+<tr><td><code>user_auth_token_ttl_seconds</code></td><td>令牌 TTL（秒）</td><td><code>86400</code>（24小时）</td></tr>
+<tr><td><code>cors_allowed_origins</code></td><td>允许的 CORS 来源（空 = 禁用）</td><td><code>[]</code></td></tr>
+<tr><td><code>tenant_default_daily_token_limit</code></td><td>每租户每日令牌限制</td><td><code>1000000</code></td></tr>
+<tr><td><code>tenant_default_concurrent_tasks</code></td><td>每租户最大并发任务数</td><td><code>10</code></td></tr>
+<tr><td><code>tenant_default_daily_api_calls</code></td><td>每租户每日 API 调用限制</td><td><code>10000</code></td></tr>
+<tr><td><code>shutdown_drain_seconds</code></td><td>优雅关闭排空期</td><td><code>30</code></td></tr>
+</tbody>
+</table>
+</div>
 <h2 id="安装"><a class="header" href="#安装">安装</a></h2>
 <h3 id="为企业部署构建"><a class="header" href="#为企业部署构建">为企业部署构建</a></h3>
 <pre><code class="language-bash"># 使用 multi-users-server 配置文件构建
@@ -585,46 +635,112 @@ server {
 </code></pre>
 <h2 id="安全"><a class="header" href="#安全">安全</a></h2>
 <h3 id="认证和授权"><a class="header" href="#认证和授权">认证和授权</a></h3>
-<pre><code class="language-toml">[security.authentication]
-type = "jwt"
-jwt_secret_env = "GO_ON_JWT_SECRET"
-token_expiry_hours = 24
-refresh_token_expiry_days = 7
+<p>多用户服务器提供<strong>双层认证</strong>系统：</p>
+<p><strong>第一层：网关入口认证（共享 API 密钥）</strong></p>
+<ul>
+<li>对每个 HTTP 请求验证预先共享的 API 密钥</li>
+<li>密钥来自 <code>entry_auth_api_key_env</code> 指定的环境变量（默认：<code>GO_ON_ENTRY_API_KEY</code>）</li>
+<li>接受的标头：<code>Authorization: Bearer &lt;key&gt;</code>、<code>X-Api-Key</code>、<code>X-Go-On-Key</code></li>
+<li>如果缺失/无效，返回 401 <code>ENTRY_AUTH_REQUIRED</code></li>
+<li>如果环境变量未设置，返回 503 <code>ENTRY_AUTH_MISCONFIGURED</code></li>
+</ul>
+<p><strong>第二层：用户认证（HMAC-SHA256 令牌）</strong></p>
+<ul>
+<li>发行使用 HMAC-SHA256 签名的每用户令牌</li>
+<li>令牌格式：<code>user_id:base64_hmac:expires_at_ms</code></li>
+<li>令牌密钥解析顺序：环境变量（<code>user_auth_token_secret_env</code>）&gt; 配置文件 &gt; 默认值</li>
+<li>自动配置：有效令牌无需预注册即可获得会话</li>
+<li>降级回退：当 <code>user_auth_enabled=false</code> 时，所有请求视为管理员</li>
+</ul>
+<p><strong>RBAC 授权</strong></p>
+<ul>
+<li>内置角色：<code>admin</code>（完全访问）、<code>user</code>（R/W/X）、<code>viewer</code>（只读）、<code>monitor</code></li>
+<li>权限映射：<code>GET</code> → 读取，<code>POST /chat</code> → 执行，<code>POST /rpc</code> → 执行</li>
+<li>在 ACP+HTTP 和 MCP+HTTP 路径上一致应用</li>
+<li>返回 401 <code>AUTH_REQUIRED</code>（无会话）、403 <code>ACCESS_DENIED</code>（无权限）、403 <code>PRIVILEGE_ESCALATION_REQUIRED</code>（角色不足）</li>
+</ul>
+<p><strong>免认证端点：</strong> <code>/</code> 和 <code>/health</code> 绕过所有认证。</p>
+<h3 id="发行用户令牌"><a class="header" href="#发行用户令牌">发行用户令牌</a></h3>
+<p>用户令牌可以通过内部 <code>SessionManager</code> API 编程方式发行。令牌格式为 <code>user_id:base64_hmac_sig:expires_at_ms</code>：</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Rust：编程方式发行令牌
+use crate::acp::r#impl::session::{AuthConfig, SessionManager};
 
-[security.authorization]
-rbac_enabled = true
-roles = ["admin", "user", "viewer"]
-default_role = "user"
-
-[security.audit]
-enabled = true
-retention_days = 90
-sensitive_fields = ["password", "api_key", "token"]
+let auth_cfg = AuthConfig::from(&amp;runtime_config);
+let mgr = SessionManager::with_auth_config(auth_cfg);
+let token = mgr.issue_token("alice", &amp;["admin"], None, 86400).unwrap();
+// 返回："alice:&lt;base64_hmac&gt;:&lt;expires_at_ms&gt;"
+<span class="boring">}</span></code></pre>
+<h3 id="cors-配置"><a class="header" href="#cors-配置">CORS 配置</a></h3>
+<p>允许的来源默认为 <code>[]</code>（空 = 禁用 CORS）。要启用跨域请求：</p>
+<pre><code class="language-toml">[runtime]
+cors_allowed_origins = ["https://my-frontend.example.com"]
+# 多个来源：
+# cors_allowed_origins = ["https://app1.example.com", "https://app2.example.com"]
+# 仅用于开发：
+# cors_allowed_origins = ["*"]
 </code></pre>
+<p>配置后，所有 HTTP 响应（JSON、SSE、错误）都会自动包含 CORS 标头。</p>
+<h3 id="租户预算控制"><a class="header" href="#租户预算控制">租户预算控制</a></h3>
+<p>启用用户认证后，系统会自动配置默认租户配额：</p>
+<pre><code class="language-toml">[runtime]
+tenant_default_daily_token_limit = 1000000
+tenant_default_concurrent_tasks = 10
+tenant_default_daily_api_calls = 10000
+</code></pre>
+<p>对话 ID 使用租户 ID 前缀进行命名空间隔离，以防止跨用户数据泄露：</p>
+<pre><code>内部 conversation_id = "tenant_id:user_provided_conversation_id"
+</code></pre>
+<h3 id="对话隔离"><a class="header" href="#对话隔离">对话隔离</a></h3>
+<p>所有对话状态按租户隔离：</p>
+<ul>
+<li>当 <code>user_auth_enabled</code> 时，对话 ID 以 <code>tenant_id:</code> 为前缀</li>
+<li>预算控制使用用户会话中的 <code>tenant_id</code>（而非原始的 <code>conversation_id</code>）</li>
+<li>防止跨用户对话历史泄露</li>
+</ul>
+<h3 id="线程安全密钥管理"><a class="header" href="#线程安全密钥管理">线程安全密钥管理</a></h3>
+<p>项目将所有 <code>std::env::set_var()</code> 调用（在多线程上下文中已记录为<strong>未定义行为</strong>）替换为内存中的 <code>HashMap</code>：</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// 线程安全：设置密钥覆盖
+crate::shared::secret_override::set_secret_override("GITHUB_TOKEN", "ghp_xxx");
+
+// 线程安全：读取（先检查覆盖映射，再检查环境变量）
+let value = crate::shared::secret_override::get_secret("GITHUB_TOKEN");
+<span class="boring">}</span></code></pre>
+<p>密钥环查找缓存 30 秒 TTL，以避免在异步上下文中阻塞 I/O：</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// 使用 30 秒 TTL 的缓存
+let value = crate::shared::secret_override::get_keyring_cached("go-on", "copilot_api_key");
+<span class="boring">}</span></code></pre>
+<p><strong>安全合规：</strong></p>
+<ul>
+<li>✅ 生产代码中 0 个 <code>std::env::set_var()</code> 调用</li>
+<li>✅ 0 个 <code>.expect("lock poisoned")</code> panic——所有锁中毒通过 <code>unwrap_or_else(|e| e.into_inner())</code> 恢复</li>
+<li>✅ 生产代码中 0 个 <code>unsafe</code> 块</li>
+<li>✅ 所有 HTTP 响应（JSON、SSE、错误）包含 CORS 标头</li>
+<li>✅ MCP HTTP 服务器与 ACP HTTP 服务器共享相同的认证管道</li>
+</ul>
 <h3 id="网络安全"><a class="header" href="#网络安全">网络安全</a></h3>
 <pre><code class="language-bash"># 防火墙规则
 sudo ufw allow 443/tcp  # HTTPS
 sudo ufw allow 5432/tcp  # PostgreSQL
 sudo ufw allow 6379/tcp  # Redis
-sudo ufw allow 9090/tcp  # 指标
-sudo ufw allow 4317/tcp  # OpenTelemetry
+sudo ufw allow 8090/tcp  # go-on ACP/MCP HTTP
 
 # 启用防火墙
 sudo ufw --force enable
 </code></pre>
 <h3 id="密钥管理"><a class="header" href="#密钥管理">密钥管理</a></h3>
-<pre><code class="language-bash"># 使用 HashiCorp Vault
-vault kv put secret/go-on \
-  db_username=go_on \
-  db_password=$(openssl rand -base64 32) \
-  entry_api_key=$(openssl rand -base64 48) \
-  jwt_secret=$(openssl rand -base64 64)
+<pre><code class="language-bash"># 设置所需的环境变量
+export GO_ON_ENTRY_API_KEY=$(openssl rand -base64 48)
+export GO_ON_USER_AUTH_TOKEN_SECRET=$(openssl rand -base64 64)
 
-# 环境变量
-export GO_ON_DB_USERNAME=$(vault kv get -field=db_username secret/go-on)
-export GO_ON_DB_PASSWORD=$(vault kv get -field=db_password secret/go-on)
-export GO_ON_ENTRY_API_KEY=$(vault kv get -field=entry_api_key secret/go-on)
-export GO_ON_JWT_SECRET=$(vault kv get -field=jwt_secret secret/go-on)
+# 可选：PostgreSQL 凭据
+export GO_ON_DB_USERNAME="go_on"
+export GO_ON_DB_PASSWORD=$(openssl rand -base64 32)
 </code></pre>
 <h2 id="监控和可观测性"><a class="header" href="#监控和可观测性">监控和可观测性</a></h2>
 <h3 id="prometheus-配置"><a class="header" href="#prometheus-配置">Prometheus 配置</a></h3>

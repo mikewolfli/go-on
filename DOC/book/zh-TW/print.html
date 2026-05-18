@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-03594683.js";
+            window.path_to_searchindex_js = "searchindex-b1b723c4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a5a70d2b.js"></script>
+        <script src="toc-e47fbd73.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -179,7 +179,7 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="go-on-文檔"><a class="header" href="#go-on-文檔">go-on 文檔</a></h1>
-<p>本文檔描述 <code>go-on</code> 當前的 <code>0.8.3</code> 架構和使用模型。</p>
+<p>本文檔描述 <code>go-on</code> 當前的 <code>0.9.5</code> 架構和使用模型。</p>
 <p>運行時已完成 <strong>Phase 4</strong>（FutureDesign）—— 21 個 F-GAP 模組 100% 實現，
 全部 38 個能力維度 ★★★★★，14 匯流排架構全面運行。</p>
 <p>從 <a href="#架構總覽">架構總覽</a> 開始閱讀。</p>
@@ -188,14 +188,26 @@
 <p><code>go-on</code> 是一個圍繞 Rust 後端構建的三端運行時體系：</p>
 <ul>
 <li><strong>後端</strong>：負責配置加載、Provider 選擇、路由、setup、健康檢查、協議協商、stdio 或 HTTP 傳輸層，以及包含 14 條總線和 21 個 F-GAP 模塊的能力架構。</li>
-<li><strong>GUI</strong>：Tauri 桌面控制台，負責後端發現、進程生命週期、集成探測和本地運維。</li>
+<li><strong>GUI</strong>：EGUI（Rust 原生）桌面圖形界面，負責後端發現、進程生命週期、集成探測、監控、對話和配置管理。</li>
 <li><strong>VS Code 插件</strong>：負責拉起或探測運行時，暴露基於 RPC 的命令，並可在工作區級別覆蓋協議模式。</li>
 </ul>
 <h2 id="版本"><a class="header" href="#版本">版本</a></h2>
 <ul>
-<li>後端 Runtime：<strong>0.8.3</strong></li>
-<li>GUI 桌面端：<strong>0.8.3</strong></li>
-<li>VS Code 插件：<strong>0.8.3</strong></li>
+<li>后端 Runtime：<strong>0.9.5</strong></li>
+<li>GUI 桌面端：<strong>0.9.5</strong></li>
+<li>VS Code 插件：<strong>0.9.5</strong></li>
+</ul>
+<h2 id="gui-桌面應用"><a class="header" href="#gui-桌面應用">GUI 桌面應用</a></h2>
+<p>基於 EGUI 的桌面圖形界面（<code>gui/</code>）提供監控、對話和配置管理：</p>
+<pre><code class="language-bash">cargo run --manifest-path gui/Cargo.toml
+</code></pre>
+<p>主要功能：</p>
+<ul>
+<li><strong>監控面板</strong>：後端健康狀態、AI 供應商狀態、實時指標</li>
+<li><strong>對話界面</strong>：多會話管理、階段選擇（coding/review/debug/test/deploy）、模式切換（Ask/Plan/Edit/Safeguard/Full Auto）、文件附件、動態發送按鈕（依據 AI 狀態變化）</li>
+<li><strong>技能管理</strong>：創建和導入 AI 技能；內置 <code>skill-creator</code> 讓 AI 自主定義新技能</li>
+<li><strong>設置</strong>：功能開關、語言切換（en/zh-CN/zh-TW）、5 種視覺主題</li>
+<li><strong>後端連接</strong>：ACP+HTTP JSON-RPC，自動健康輪詢</li>
 </ul>
 <h2 id="構建配置文件"><a class="header" href="#構建配置文件">構建配置文件</a></h2>
 <p>三種構建配置文件適配不同的部署場景：</p>
@@ -211,16 +223,16 @@
 </tbody>
 </table>
 </div>
-<h2 id="驗證狀態phase-4-完成"><a class="header" href="#驗證狀態phase-4-完成">驗證狀態（Phase 4 完成）</a></h2>
+<h2 id="驗證狀態phase-4--25-輪深度掃描完成gui-7-輪"><a class="header" href="#驗證狀態phase-4--25-輪深度掃描完成gui-7-輪">驗證狀態（Phase 4+ — 25 輪深度掃描完成，GUI 7 輪）</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th>配置文件</th><th style="text-align: center"><code>cargo check</code></th><th style="text-align: center"><code>cargo clippy -D warnings</code></th><th style="text-align: center"><code>cargo test</code></th></tr>
 </thead>
 <tbody>
-<tr><td><strong>profile-local</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>866 通過</strong>（766 單元 + 86 RPC + 14 transport）</td></tr>
-<tr><td><strong>profile-simple-server</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>905 通過</strong></td></tr>
-<tr><td><strong>profile-multi-users-server</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>898 通過</strong></td></tr>
+<tr><td><strong>profile-local</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>781 通過</strong></td></tr>
+<tr><td><strong>profile-simple-server</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>827 通過</strong></td></tr>
+<tr><td><strong>profile-multi-users-server</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>890 通過</strong></td></tr>
 </tbody>
 </table>
 </div>
@@ -358,9 +370,9 @@ Phase 5: 生產硬化              ███████████████
 <tr><th style="text-align: left">語言</th><th style="text-align: left">文件</th><th style="text-align: center">鍵值數</th></tr>
 </thead>
 <tbody>
-<tr><td style="text-align: left">英語（美國）</td><td style="text-align: left"><code>languages/en_US.json</code></td><td style="text-align: center">372+</td></tr>
-<tr><td style="text-align: left">簡體中文</td><td style="text-align: left"><code>languages/zh_CN.json</code></td><td style="text-align: center">372+</td></tr>
-<tr><td style="text-align: left">繁體中文</td><td style="text-align: left"><code>languages/zh_TW.json</code></td><td style="text-align: center">372+</td></tr>
+<tr><td style="text-align: left">英語（美國）</td><td style="text-align: left"><code>languages/en_US.json</code></td><td style="text-align: center">448+</td></tr>
+<tr><td style="text-align: left">簡體中文</td><td style="text-align: left"><code>languages/zh_CN.json</code></td><td style="text-align: center">448+</td></tr>
+<tr><td style="text-align: left">繁體中文</td><td style="text-align: left"><code>languages/zh_TW.json</code></td><td style="text-align: center">448+</td></tr>
 </tbody>
 </table>
 </div>
@@ -381,7 +393,7 @@ Phase 5: 生產硬化              ███████████████
 <li><code>src/i18n/</code>：語言運行時</li>
 </ul>
 </li>
-<li><code>GUI/</code>：Tauri 桌面控制台</li>
+<li><code>gui/</code>：EGUI（Rust 原生）桌面圖形界面</li>
 <li><code>vscode-addon/</code>：VS Code 插件（支持 en_US、zh_CN、zh_TW 多語言）</li>
 <li><code>config/</code>：配置文件</li>
 <li><code>tests/</code>：集成測試與回放資產</li>
@@ -800,6 +812,47 @@ go-on --config config.toml --status
 <p>為編輯器啟動的集成運行 ACP over stdio：</p>
 <pre><code class="language-bash">go-on --config config.toml --protocol-mode acp_stdio --verbose
 </code></pre>
+<p>終端聊天（互動式，類似 Claude Code / Codex）：</p>
+<pre><code class="language-bash">go-on -a
+</code></pre>
+<h2 id="終端聊天模式--chat---a"><a class="header" href="#終端聊天模式--chat---a">終端聊天模式（<code>--chat</code> / <code>-a</code>）</a></h2>
+<p>啟動互動式終端聊天會話（類似 Claude Code 或 Codex）。</p>
+<pre><code class="language-bash">go-on -a
+# 或
+go-on --chat
+</code></pre>
+<p>如果配置文件在其他路徑：</p>
+<pre><code class="language-bash">go-on -c /path/to/config.toml -a
+</code></pre>
+<h3 id="前置條件"><a class="header" href="#前置條件">前置條件</a></h3>
+<p>至少需要在 <code>config.toml</code> 中配置一個 AI 供應商並擁有有效的 API 密鑰。API 密鑰自動從系統 keyring 讀取（keyring → 環境變數回退）。</p>
+<h3 id="行為說明"><a class="header" href="#行為說明">行為說明</a></h3>
+<ol>
+<li>根據已配置的供應商構建智能體註冊表。</li>
+<li>打開 readline 風格的對話循環。</li>
+<li>每條消息發送到第一個可用智能體，支援串流輸出。</li>
+<li>維護對話歷史（上限 1000 條消息）。</li>
+<li>Ctrl+C 或 <code>/quit</code> 優雅退出。</li>
+</ol>
+<h3 id="內置命令"><a class="header" href="#內置命令">內置命令</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>命令</th><th>說明</th></tr>
+</thead>
+<tbody>
+<tr><td><code>/quit</code> 或 <code>/exit</code></td><td>退出聊天模式</td></tr>
+<tr><td><code>/help</code></td><td>顯示可用命令</td></tr>
+<tr><td><code>/clear</code></td><td>清除對話歷史</td></tr>
+<tr><td><code>/agents</code></td><td>列出已配置的智能體</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="自動跳轉到設置"><a class="header" href="#自動跳轉到設置">自動跳轉到設置</a></h3>
+<p>如果傳入 <code>--chat</code> 時未配置任何供應商，將跳過互動式引導直接提示執行 <code>--setup</code>：</p>
+<pre><code class="language-bash">go-on -c config.toml -a
+# → "未配置 AI 智能體。請先執行 go-on --init 來設定供應商。"
+</code></pre>
 <h2 id="操作指導"><a class="header" href="#操作指導">操作指導</a></h2>
 <ul>
 <li>在假設傳輸層故障之前，先使用 <code>--validate-config</code>。</li>
@@ -925,7 +978,7 @@ curl http://127.0.0.1:8090/health?verbose=true
 <ul>
 <li><strong>Zed</strong>：使用 ACP over stdio 或 HTTP</li>
 <li><strong>VS Code</strong>：使用 go-on 擴展與本地運行時</li>
-<li><strong>GUI 控制台</strong>：基於 Tauri 的桌面界面</li>
+<li><strong>GUI 控制台</strong>：基於 EGUI（Rust 原生）的桌面圖形界面</li>
 </ul>
 <h2 id="存儲管理"><a class="header" href="#存儲管理">存儲管理</a></h2>
 <h3 id="緩存位置"><a class="header" href="#緩存位置">緩存位置</a></h3>
@@ -1446,8 +1499,17 @@ sudo -u go-on sqlite3 /var/lib/go-on/cache.sqlite3 "EXPLAIN QUERY PLAN SELECT * 
 <ul>
 <li><strong>多用戶支持</strong>：專為多個用戶併發訪問設計</li>
 <li><strong>PostgreSQL 存儲</strong>：帶 pgvector 擴展的可擴展數據庫</li>
+<li><strong>CORS 支援</strong>：可配置的允許來源、預檢（OPTIONS）處理、所有 HTTP/SSE 響應上的 CORS 標頭</li>
+<li><strong>入口認證（閘道）</strong>：通過 <code>Authorization: Bearer</code>、<code>X-Api-Key</code> 或 <code>X-Go-On-Key</code> 標頭驗證的共享 API 金鑰</li>
+<li><strong>用戶認證（HMAC 權杖）</strong>：基於 HMAC-SHA256 簽名的每用戶 JWT 類權杖，自動配置，可配置 TTL</li>
+<li><strong>RBAC 授權</strong>：基於角色的訪問控制（admin/user/viewer/monitor），在 ACP+HTTP 和 MCP+HTTP 路徑上均進行按端點權限檢查</li>
+<li><strong>租戶預算控制</strong>：每個租戶的每日權杖/併發任務/API 調用配額，自動配置</li>
+<li><strong>對話隔離</strong>：帶租戶前綴的命名空間對話 ID，防止跨用戶數據洩露</li>
+<li><strong>關閉排空</strong>：優雅關閉期間處理進行中連接的可配置排空期</li>
+<li><strong>信號處理</strong>：所有平台上的 SIGINT（Ctrl+C）和 SIGTERM，實現乾淨關閉</li>
+<li><strong>執行緒安全金鑰管理</strong>：<code>SECRET_OVERRIDE_MAP</code> 替代 <code>std::env::set_var()</code>（在多執行緒上下文中已記錄為未定義行為）；<code>KEYRING_CACHE</code> 帶 30 秒 TTL，避免在異步熱路徑中阻塞金鑰環 I/O</li>
+<li><strong>熱重載配置</strong>：通過 <code>config.reload</code> RPC 進行運行時配置重載</li>
 <li><strong>高可用性</strong>：內置冗餘和故障轉移支持</li>
-<li><strong>高級安全</strong>：基於角色的訪問控制、審計日誌</li>
 <li><strong>企業監控</strong>：全面的可觀測性堆棧</li>
 <li><strong>可擴展性</strong>：水平擴展能力</li>
 <li><strong>完整 Phase 4 架構</strong>：所有 14 條總線和 21 個 F-GAP 模塊</li>
@@ -1458,11 +1520,22 @@ sudo -u go-on sqlite3 /var/lib/go-on/cache.sqlite3 "EXPLAIN QUERY PLAN SELECT * 
 <h3 id="架構-1"><a class="header" href="#架構-1">架構</a></h3>
 <pre><code>多用戶服務器架構：
 ├── 應用層：go-on 運行時實例
+│   ├── ACP HTTP 服務器（端口 8090）：CORS → 入口認證 → 用戶認證 → RBAC → 路由
+│   └── MCP HTTP 服務器（端口 8090）：CORS → 入口認證 → 用戶認證 → RBAC → 分發
 ├── 數據庫層：帶 pgvector 的 PostgreSQL
 ├── 緩存層：Redis（可選）
 ├── 負載均衡器：流量分發
 ├── 監控：Prometheus、Grafana、ELK
 └── 備份：自動化備份系統
+
+請求流程（ACP+HTTP）：
+客戶端 → CORS 標頭 → 入口認證（API 金鑰）→ 用戶會話（HMAC 權杖）
+       → RBAC 授權 → 租戶預算檢查 → 命名空間對話
+       → AI 處理 → 帶 CORS 標頭的響應
+
+請求流程（MCP+HTTP）：
+客戶端 → CORS 標頭 → 入口認證（API 金鑰）→ 用戶會話（HMAC 權杖）
+       → RBAC 授權 → MCP 方法分發 → 帶 CORS 的 JSON-RPC 響應
 </code></pre>
 <h2 id="配置-2"><a class="header" href="#配置-2">配置</a></h2>
 <h3 id="服務器配置-1"><a class="header" href="#服務器配置-1">服務器配置</a></h3>
@@ -1472,17 +1545,32 @@ default_phase = "coding"
 model_selection_mode = "adaptive"
 
 [protocol]
-mode = "mcp_http"  # 多用戶訪問的 MCP over HTTP
+mode = "acp_http"  # 用於多用戶訪問的 ACP over HTTP（使用 mcp_http 用於 MCP）
 
 [runtime]
 acp_http_bind_addr = "0.0.0.0:8090"
 production_strict = true
+
+# ── 網關入口認證（所有入站流量的共享 API 金鑰）────
 entry_auth_enabled = true
 entry_auth_api_key_env = "GO_ON_ENTRY_API_KEY"
 entry_rate_limit_rpm = 5000
 entry_rate_limit_burst = 1000
-session_timeout_minutes = 60
-max_sessions_per_user = 10
+
+# ── 用戶認證（每用戶 HMAC 權杖）─────────────
+user_auth_enabled = true
+user_auth_token_secret_env = "GO_ON_USER_AUTH_TOKEN_SECRET"
+user_auth_token_ttl_seconds = 86400
+
+# ── 跨域資源共享（CORS）───────────────────
+cors_allowed_origins = ["https://my-frontend.example.com"]
+# 僅用於開發使用 "*"：
+# cors_allowed_origins = ["*"]
+
+# ── 租戶資源配額 ────────────────────────────
+tenant_default_daily_token_limit = 1000000
+tenant_default_concurrent_tasks = 10
+tenant_default_daily_api_calls = 10000
 
 [database]
 type = "postgres"
@@ -1498,22 +1586,13 @@ ssl_mode = "prefer"
 [cache]
 enabled = true
 type = "database"  # 使用 PostgreSQL 作為緩存
-# 可選 Redis 緩存
-# type = "redis"
-# redis_url = "redis://localhost:6379"
 
 [vector]
 enabled = true
 type = "pgvector"
-dimensions = 768  # 企業使用的高維度
+dimensions = 768
 top_k = 10
 min_similarity = 0.7
-
-[security]
-rbac_enabled = true
-audit_logging_enabled = true
-data_encryption_enabled = true
-mfa_enabled = false  # 可選：更高安全性時啟用
 
 [observability]
 otel_enabled = true
@@ -1529,6 +1608,30 @@ tracing_sampling_rate = 0.1
 <li><code>postgres</code>：PostgreSQL 客戶端庫</li>
 <li><code>pgvector</code>：PostgreSQL 的向量擴展</li>
 </ul>
+<h3 id="運行時配置字段"><a class="header" href="#運行時配置字段">運行時配置字段</a></h3>
+<p>以下是多用戶模式特有的運行時配置字段：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>字段</th><th>描述</th><th>默認值</th></tr>
+</thead>
+<tbody>
+<tr><td><code>entry_auth_enabled</code></td><td>啟用網關 API 金鑰認證</td><td><code>false</code></td></tr>
+<tr><td><code>entry_auth_api_key_env</code></td><td>入口 API 金鑰的環境變量名</td><td><code>GO_ON_ENTRY_API_KEY</code></td></tr>
+<tr><td><code>entry_rate_limit_rpm</code></td><td>每源 IP 的速率限制</td><td><code>240</code></td></tr>
+<tr><td><code>entry_rate_limit_burst</code></td><td>令牌桶突發容量</td><td><code>60</code></td></tr>
+<tr><td><code>user_auth_enabled</code></td><td>啟用每用戶 HMAC 權杖認證</td><td><code>false</code></td></tr>
+<tr><td><code>user_auth_token_secret</code></td><td>HMAC 簽名金鑰（配置文件）</td><td><code>go-on-multi-user-secret</code></td></tr>
+<tr><td><code>user_auth_token_secret_env</code></td><td>HMAC 金鑰的環境變量覆蓋</td><td><code>GO_ON_USER_AUTH_TOKEN_SECRET</code></td></tr>
+<tr><td><code>user_auth_token_ttl_seconds</code></td><td>權杖 TTL（秒）</td><td><code>86400</code>（24小時）</td></tr>
+<tr><td><code>cors_allowed_origins</code></td><td>允許的 CORS 來源（空 = 禁用）</td><td><code>[]</code></td></tr>
+<tr><td><code>tenant_default_daily_token_limit</code></td><td>每租戶每日權杖限制</td><td><code>1000000</code></td></tr>
+<tr><td><code>tenant_default_concurrent_tasks</code></td><td>每租戶最大併發任務數</td><td><code>10</code></td></tr>
+<tr><td><code>tenant_default_daily_api_calls</code></td><td>每租戶每日 API 調用限制</td><td><code>10000</code></td></tr>
+<tr><td><code>shutdown_drain_seconds</code></td><td>優雅關閉排空期</td><td><code>30</code></td></tr>
+</tbody>
+</table>
+</div>
 <h2 id="安裝-2"><a class="header" href="#安裝-2">安裝</a></h2>
 <h3 id="為企業部署構建"><a class="header" href="#為企業部署構建">為企業部署構建</a></h3>
 <pre><code class="language-bash"># 使用 multi-users-server 配置文件構建
@@ -1843,46 +1946,112 @@ server {
 </code></pre>
 <h2 id="安全-2"><a class="header" href="#安全-2">安全</a></h2>
 <h3 id="認證和授權"><a class="header" href="#認證和授權">認證和授權</a></h3>
-<pre><code class="language-toml">[security.authentication]
-type = "jwt"
-jwt_secret_env = "GO_ON_JWT_SECRET"
-token_expiry_hours = 24
-refresh_token_expiry_days = 7
+<p>多用戶服務器提供<strong>雙層認證</strong>系統：</p>
+<p><strong>第一層：網關入口認證（共享 API 金鑰）</strong></p>
+<ul>
+<li>對每個 HTTP 請求驗證預先共享的 API 金鑰</li>
+<li>金鑰來自 <code>entry_auth_api_key_env</code> 指定的環境變量（默認：<code>GO_ON_ENTRY_API_KEY</code>）</li>
+<li>接受的標頭：<code>Authorization: Bearer &lt;key&gt;</code>、<code>X-Api-Key</code>、<code>X-Go-On-Key</code></li>
+<li>如果缺失/無效，返回 401 <code>ENTRY_AUTH_REQUIRED</code></li>
+<li>如果環境變量未設置，返回 503 <code>ENTRY_AUTH_MISCONFIGURED</code></li>
+</ul>
+<p><strong>第二層：用戶認證（HMAC-SHA256 權杖）</strong></p>
+<ul>
+<li>發行使用 HMAC-SHA256 簽名的每用戶權杖</li>
+<li>權杖格式：<code>user_id:base64_hmac:expires_at_ms</code></li>
+<li>權杖金鑰解析順序：環境變量（<code>user_auth_token_secret_env</code>）&gt; 配置文件 &gt; 默認值</li>
+<li>自動配置：有效權杖無需預註冊即可獲得會話</li>
+<li>降級回退：當 <code>user_auth_enabled=false</code> 時，所有請求視為管理員</li>
+</ul>
+<p><strong>RBAC 授權</strong></p>
+<ul>
+<li>內置角色：<code>admin</code>（完全訪問）、<code>user</code>（R/W/X）、<code>viewer</code>（唯讀）、<code>monitor</code></li>
+<li>權限映射：<code>GET</code> → 讀取，<code>POST /chat</code> → 執行，<code>POST /rpc</code> → 執行</li>
+<li>在 ACP+HTTP 和 MCP+HTTP 路徑上一致應用</li>
+<li>返回 401 <code>AUTH_REQUIRED</code>（無會話）、403 <code>ACCESS_DENIED</code>（無權限）、403 <code>PRIVILEGE_ESCALATION_REQUIRED</code>（角色不足）</li>
+</ul>
+<p><strong>免認證端點：</strong> <code>/</code> 和 <code>/health</code> 繞過所有認證。</p>
+<h3 id="發行用戶權杖"><a class="header" href="#發行用戶權杖">發行用戶權杖</a></h3>
+<p>用戶權杖可以通過內部 <code>SessionManager</code> API 編程方式發行。權杖格式為 <code>user_id:base64_hmac_sig:expires_at_ms</code>：</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Rust：編程方式發行權杖
+use crate::acp::r#impl::session::{AuthConfig, SessionManager};
 
-[security.authorization]
-rbac_enabled = true
-roles = ["admin", "user", "viewer"]
-default_role = "user"
-
-[security.audit]
-enabled = true
-retention_days = 90
-sensitive_fields = ["password", "api_key", "token"]
+let auth_cfg = AuthConfig::from(&amp;runtime_config);
+let mgr = SessionManager::with_auth_config(auth_cfg);
+let token = mgr.issue_token("alice", &amp;["admin"], None, 86400).unwrap();
+// 返回："alice:&lt;base64_hmac&gt;:&lt;expires_at_ms&gt;"
+<span class="boring">}</span></code></pre>
+<h3 id="cors-配置"><a class="header" href="#cors-配置">CORS 配置</a></h3>
+<p>允許的來源默認為 <code>[]</code>（空 = 禁用 CORS）。要啟用跨域請求：</p>
+<pre><code class="language-toml">[runtime]
+cors_allowed_origins = ["https://my-frontend.example.com"]
+# 多個來源：
+# cors_allowed_origins = ["https://app1.example.com", "https://app2.example.com"]
+# 僅用於開發：
+# cors_allowed_origins = ["*"]
 </code></pre>
+<p>配置後，所有 HTTP 響應（JSON、SSE、錯誤）都會自動包含 CORS 標頭。</p>
+<h3 id="租戶預算控制"><a class="header" href="#租戶預算控制">租戶預算控制</a></h3>
+<p>啟用用戶認證後，系統會自動配置默認租戶配額：</p>
+<pre><code class="language-toml">[runtime]
+tenant_default_daily_token_limit = 1000000
+tenant_default_concurrent_tasks = 10
+tenant_default_daily_api_calls = 10000
+</code></pre>
+<p>對話 ID 使用租戶 ID 前綴進行命名空間隔離，以防止跨用戶數據洩露：</p>
+<pre><code>內部 conversation_id = "tenant_id:user_provided_conversation_id"
+</code></pre>
+<h3 id="對話隔離"><a class="header" href="#對話隔離">對話隔離</a></h3>
+<p>所有對話狀態按租戶隔離：</p>
+<ul>
+<li>當 <code>user_auth_enabled</code> 時，對話 ID 以 <code>tenant_id:</code> 為前綴</li>
+<li>預算控制使用用戶會話中的 <code>tenant_id</code>（而非原始的 <code>conversation_id</code>）</li>
+<li>防止跨用戶對話歷史洩露</li>
+</ul>
+<h3 id="執行緒安全金鑰管理"><a class="header" href="#執行緒安全金鑰管理">執行緒安全金鑰管理</a></h3>
+<p>項目將所有 <code>std::env::set_var()</code> 調用（在多執行緒上下文中已記錄為<strong>未定義行為</strong>）替換為內存中的 <code>HashMap</code>：</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// 執行緒安全：設置金鑰覆蓋
+crate::shared::secret_override::set_secret_override("GITHUB_TOKEN", "ghp_xxx");
+
+// 執行緒安全：讀取（先檢查覆蓋映射，再檢查環境變量）
+let value = crate::shared::secret_override::get_secret("GITHUB_TOKEN");
+<span class="boring">}</span></code></pre>
+<p>金鑰環查找緩存 30 秒 TTL，以避免在異步上下文中阻塞 I/O：</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// 使用 30 秒 TTL 的緩存
+let value = crate::shared::secret_override::get_keyring_cached("go-on", "copilot_api_key");
+<span class="boring">}</span></code></pre>
+<p><strong>安全合規：</strong></p>
+<ul>
+<li>✅ 生產代碼中 0 個 <code>std::env::set_var()</code> 調用</li>
+<li>✅ 0 個 <code>.expect("lock poisoned")</code> panic——所有鎖中毒通過 <code>unwrap_or_else(|e| e.into_inner())</code> 恢復</li>
+<li>✅ 生產代碼中 0 個 <code>unsafe</code> 塊</li>
+<li>✅ 所有 HTTP 響應（JSON、SSE、錯誤）包含 CORS 標頭</li>
+<li>✅ MCP HTTP 服務器與 ACP HTTP 服務器共享相同的認證管道</li>
+</ul>
 <h3 id="網絡安全"><a class="header" href="#網絡安全">網絡安全</a></h3>
 <pre><code class="language-bash"># 防火牆規則
 sudo ufw allow 443/tcp  # HTTPS
 sudo ufw allow 5432/tcp  # PostgreSQL
 sudo ufw allow 6379/tcp  # Redis
-sudo ufw allow 9090/tcp  # 指標
-sudo ufw allow 4317/tcp  # OpenTelemetry
+sudo ufw allow 8090/tcp  # go-on ACP/MCP HTTP
 
 # 啟用防火牆
 sudo ufw --force enable
 </code></pre>
 <h3 id="密鑰管理"><a class="header" href="#密鑰管理">密鑰管理</a></h3>
-<pre><code class="language-bash"># 使用 HashiCorp Vault
-vault kv put secret/go-on \
-  db_username=go_on \
-  db_password=$(openssl rand -base64 32) \
-  entry_api_key=$(openssl rand -base64 48) \
-  jwt_secret=$(openssl rand -base64 64)
+<pre><code class="language-bash"># 設置所需的環境變量
+export GO_ON_ENTRY_API_KEY=$(openssl rand -base64 48)
+export GO_ON_USER_AUTH_TOKEN_SECRET=$(openssl rand -base64 64)
 
-# 環境變量
-export GO_ON_DB_USERNAME=$(vault kv get -field=db_username secret/go-on)
-export GO_ON_DB_PASSWORD=$(vault kv get -field=db_password secret/go-on)
-export GO_ON_ENTRY_API_KEY=$(vault kv get -field=entry_api_key secret/go-on)
-export GO_ON_JWT_SECRET=$(vault kv get -field=jwt_secret secret/go-on)
+# 可選：PostgreSQL 憑據
+export GO_ON_DB_USERNAME="go_on"
+export GO_ON_DB_PASSWORD=$(openssl rand -base64 32)
 </code></pre>
 <h2 id="監控和可觀測性"><a class="header" href="#監控和可觀測性">監控和可觀測性</a></h2>
 <h3 id="prometheus-配置"><a class="header" href="#prometheus-配置">Prometheus 配置</a></h3>
@@ -2464,7 +2633,7 @@ openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365
 tls_cert_path = "cert.pem"
 tls_key_path = "key.pem"
 </code></pre>
-<h3 id="cors-配置"><a class="header" href="#cors-配置">CORS 配置</a></h3>
+<h3 id="cors-配置-1"><a class="header" href="#cors-配置-1">CORS 配置</a></h3>
 <pre><code class="language-toml">[security.cors]
 allowed_origins = ["https://example.com", "http://localhost:3000"]
 allowed_methods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
@@ -3661,9 +3830,13 @@ GET http://127.0.0.1:8090/v1/models
 <h2 id="進程輸出通道"><a class="header" href="#進程輸出通道">進程輸出通道</a></h2>
 <p>所有 Go-On 進程輸出（stdout、stderr、退出碼、進程錯誤）均寫入 VS Code 的 <strong>“Go-On”</strong> 輸出通道。通過 <strong>查看 → 輸出</strong> 打開，再從下拉菜單中選擇 <strong>Go-On</strong> 即可查看。這是啟動失敗和運行時錯誤排查的首選入口。</p>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="gui-控制台"><a class="header" href="#gui-控制台">GUI 控制台</a></h1>
-<p>GUI 是圍繞後端構建的 Tauri 桌面控制台，目標是讓運維和集成調試不必一直停留在終端裡。</p>
-<h2 id="gui-依賴什麼"><a class="header" href="#gui-依賴什麼">GUI 依賴什麼</a></h2>
+<h1 id="gui-桌面控制台"><a class="header" href="#gui-桌面控制台">GUI 桌面控制台</a></h1>
+<p>GUI 是基於 EGUI（Rust 原生）的桌面圖形界面，位於 <code>gui/</code> 目錄下。
+它提供後端監控、多會話對話、技能管理和設置編輯等功能，
+讓運維和集成調試不必一直停留在終端裡。</p>
+<h2 id="架構概述"><a class="header" href="#架構概述">架構概述</a></h2>
+<p>GUI 是一個 Rust 原生桌面應用，使用 EGUI 框架（基於 <code>eframe</code>/<code>egui</code>）構建。
+它通過 ACP+HTTP JSON-RPC 與後端通信，自動管理後端進程的生命週期。</p>
 <p>GUI 持有並使用三個核心值：</p>
 <ul>
 <li>後端可執行文件路徑</li>
@@ -3671,17 +3844,46 @@ GET http://127.0.0.1:8090/v1/models
 <li>工作目錄中的運行時配置文件</li>
 </ul>
 <p>GUI 拉起後端進程時會以工作目錄作為當前目錄，因此要求 <code>config.toml</code> 就放在該目錄下。</p>
+<h2 id="功能面板"><a class="header" href="#功能面板">功能面板</a></h2>
+<h3 id="監控面板-monitor"><a class="header" href="#監控面板-monitor">監控面板 (Monitor)</a></h3>
+<ul>
+<li>後端健康狀態：通過 <code>/health</code> 端點自動輪詢</li>
+<li>AI 供應商狀態：實時顯示 Provider 連接狀況</li>
+<li>實時指標：請求數、延遲、錯誤率</li>
+</ul>
+<h3 id="對話界面-chat"><a class="header" href="#對話界面-chat">對話界面 (Chat)</a></h3>
+<ul>
+<li>多會話管理：創建、切換、刪除會話</li>
+<li>多模型支持：每個會話可選擇不同 AI 模型</li>
+<li>階段選擇：coding / review / debug / test / deploy</li>
+<li>模式切換：Ask / Plan / Edit / Safeguard / Full Auto</li>
+<li>文件附件：支持上傳文件作為對話上下文</li>
+<li>動態發送按鈕：依據 AI 狀態變化（loading / ready / error）</li>
+</ul>
+<h3 id="技能管理-skills"><a class="header" href="#技能管理-skills">技能管理 (Skills)</a></h3>
+<ul>
+<li>創建和導入 AI 技能</li>
+<li>內置 <code>skill-creator</code>：讓 AI 自主定義新技能</li>
+<li>技能列表管理：啟用、禁用、刪除</li>
+</ul>
+<h3 id="設置面板-settings"><a class="header" href="#設置面板-settings">設置面板 (Settings)</a></h3>
+<ul>
+<li><strong>Provider 管理</strong>：動態環境變量注入（支持全部 34+ 供應商），不再硬編碼為 8 個</li>
+<li><strong>配置文件編輯器</strong>：管理 <code>gui_config.json</code>，含 JSON 語法驗證</li>
+<li><strong>主題選擇</strong>：6 種視覺主題（简约 / 国风 / 武侠 / 山水 / Hello Kitty / 暗黑）</li>
+<li><strong>語言切換</strong>：繁體中文、簡體中文、English</li>
+<li><strong>功能開關</strong>：啟用/禁用各項 GUI 功能</li>
+</ul>
 <h2 id="開發與構建命令"><a class="header" href="#開發與構建命令">開發與構建命令</a></h2>
-<p>在 <code>GUI/</code> 目錄下：</p>
-<pre><code class="language-bash">npm install
-npm run dev
-</code></pre>
-<p>生產構建：</p>
-<pre><code class="language-bash">npm run build
-</code></pre>
-<p>桌面調試與打包：</p>
-<pre><code class="language-bash">npm run tauri dev
-npm run tauri build
+<p>在 <code>gui/</code> 目錄下：</p>
+<pre><code class="language-bash"># 開發運行
+cargo run
+
+# 構建（release）
+cargo build --release
+
+# 從項目根目錄運行
+cargo run --manifest-path gui/Cargo.toml
 </code></pre>
 <h2 id="綁定後端"><a class="header" href="#綁定後端">綁定後端</a></h2>
 <p>GUI 可以自動發現後端可執行文件。自動綁定成功後，會把可執行文件所在目錄作為工作目錄，並把日誌落到該目錄下的 <code>go-on.log</code>。</p>
@@ -3691,23 +3893,16 @@ npm run tauri build
 <li>填寫工作目錄</li>
 <li>確保該目錄下存在 <code>config.toml</code></li>
 </ol>
-<h2 id="配置與環境變量行為"><a class="header" href="#配置與環境變量行為">配置與環境變量行為</a></h2>
-<p>GUI 會直接管理：</p>
+<h2 id="密鑰管理-1"><a class="header" href="#密鑰管理-1">密鑰管理</a></h2>
+<p>GUI 使用雙重存儲機制：</p>
 <ul>
-<li><code>config.toml</code></li>
-<li><code>config.toml.autopilot-adaptive</code> 作為恢復默認模板來源</li>
-<li><code>.env.goon</code> 作為持久化環境變量文件</li>
+<li><strong>系統密鑰環 (keyring)</strong>：優先使用操作系統級別的密鑰存儲（如 Linux 的 Secret Service、macOS 的 Keychain、Windows 的 Credential Manager）</li>
+<li><strong>配置文件 (config file)</strong>：作爲備份和便攜方案</li>
 </ul>
-<p>因此，一條實用的 GUI 初始化路徑是：</p>
-<ol>
-<li>綁定後端可執行文件</li>
-<li>必要時恢復默認配置</li>
-<li>通過 GUI 保存 Provider API Key</li>
-<li>啟動後端進程</li>
-<li>檢查集成探測狀態</li>
-</ol>
-<h2 id="運行時進程行為"><a class="header" href="#運行時進程行為">運行時進程行為</a></h2>
-<p>GUI 啟動後端時，會從當前配置的工作目錄拉起該可執行文件，並把 stdout 與 stderr 都寫到 <code>go-on.log</code>。</p>
+<p>API Key 無需寫入 <code>.env.goon</code>，全部通過 GUI 的 Provider 管理界面動態注入。</p>
+<h2 id="運行時進程行爲"><a class="header" href="#運行時進程行爲">運行時進程行爲</a></h2>
+<p>GUI 啓動後端時，會從當前配置的工作目錄拉起該可執行文件，並把 stdout 與 stderr 都寫到 <code>go-on.log</code>。</p>
+<p><strong>自動重啓</strong>：如果後端崩潰，GUI 會在 3 秒冷卻後自動重啓後端進程。</p>
 <p>因此最常見的操作錯誤是：二進制路徑正確，但工作目錄錯誤，導致配置文件找不到或加載了錯誤配置。</p>
 <h2 id="健康檢查與集成探測"><a class="header" href="#健康檢查與集成探測">健康檢查與集成探測</a></h2>
 <p>GUI 當前會探測：</p>
@@ -3730,20 +3925,321 @@ npm run tauri build
 <p>GUI 本身無論哪種模式都可以繼續管理後端可執行文件，模式差異主要體現在 GUI 啟動之後外部客戶端還能做什麼。</p>
 <h2 id="推薦操作順序"><a class="header" href="#推薦操作順序">推薦操作順序</a></h2>
 <ol>
-<li>構建後端。</li>
-<li>啟動 GUI。</li>
-<li>使用自動綁定，或手工填寫可執行文件路徑。</li>
-<li>確認工作目錄中存在 <code>config.toml</code>。</li>
-<li>必要時把 API Key 保存到 <code>.env.goon</code>。</li>
-<li>啟動後端。</li>
-<li>查看健康狀態和集成探測結果。</li>
+<li>構建後端：<code>cargo build</code></li>
+<li>初始化後端（首次）：<code>cargo run -- --init</code></li>
+<li>構建 GUI：<code>cargo build --manifest-path gui/Cargo.toml</code></li>
+<li>啟動 GUI：<code>cargo run --manifest-path gui/Cargo.toml</code></li>
+<li>使用自動綁定，或手工填寫可執行文件路徑</li>
+<li>確認工作目錄中存在 <code>config.toml</code></li>
+<li>在 Provider 管理中配置 API Key（自動存儲到系統密鑰環）</li>
+<li>啟動後端</li>
+<li>查看健康狀態和集成探測結果</li>
 </ol>
 <h2 id="故障排查"><a class="header" href="#故障排查">故障排查</a></h2>
 <ul>
 <li>如果啟動時報文件錯誤，先重新檢查可執行文件路徑。</li>
 <li>如果啟動成功但探測失敗，優先檢查協議模式和 Provider 就緒狀態。</li>
 <li>如果 GUI 顯示健康正常，但編輯器仍失敗，就對照編輯器所需傳輸契約與當前運行時模式是否一致。</li>
+<li>GUI 自身問題：檢查 <code>gui_config.json</code> 是否損壞，必要時刪除重置。</li>
 </ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="prompts-系統"><a class="header" href="#prompts-系統">Prompts 系統</a></h1>
+<h2 id="概述-9"><a class="header" href="#概述-9">概述</a></h2>
+<p>Prompts 系統是 go-on 內建的提示詞範本管理功能，提供 <strong>84+ 個即用範本</strong>，涵蓋 12 個行業類別。使用者可透過 GUI 瀏覽、搜尋和插入範本，在 Chat 中使用 <code>/</code> 指令快速展開範本，或透過 MCP（Model Context Protocol）讓 AI 代理自動呼叫範本。</p>
+<blockquote>
+<p>相關文件：<a href="#gui-桌面控制台">GUI 控制台</a> | <a href="#工作流程配置">工作流程配置</a></p>
+</blockquote>
+<hr>
+<h2 id="目錄結構-1"><a class="header" href="#目錄結構-1">目錄結構</a></h2>
+<p>提示詞範本按分層目錄結構組織：</p>
+<pre><code>prompts/
+├── en.json           # 英文內建範本（預設）
+├── zh-CN.json        # 簡體中文內建範本
+├── zh-TW.json        # 繁體中文內建範本
+└── custom/
+    ├── en.json       # 英文自訂範本
+    ├── zh-CN.json    # 簡體中文自訂範本
+    └── zh-TW.json    # 繁體中文自訂範本
+</code></pre>
+<ul>
+<li><code>prompts/{lang}.json</code> — 內建範本，隨系統發佈，唯讀</li>
+<li><code>prompts/custom/{lang}.json</code> — 自訂範本，使用者可自由建立、編輯和刪除</li>
+<li>語言自動切換：當 GUI 語言改變時，系統自動載入對應語言的範本檔案</li>
+</ul>
+<h3 id="支援的語言"><a class="header" href="#支援的語言">支援的語言</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>語言代碼</th><th>名稱</th></tr>
+</thead>
+<tbody>
+<tr><td><code>en</code></td><td>English</td></tr>
+<tr><td><code>zh-CN</code></td><td>簡體中文</td></tr>
+<tr><td><code>zh-TW</code></td><td>繁體中文</td></tr>
+</tbody>
+</table>
+</div>
+<p>切換 GUI 語言時，提示詞範本系統會自動載入對應的語言檔案，無需手動切換。</p>
+<hr>
+<h2 id="12-個行業類別"><a class="header" href="#12-個行業類別">12 個行業類別</a></h2>
+<p>每個類別包含 7 個範本，共 <strong>84+ 個範本</strong>，覆蓋各行業典型使用場景。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>#</th><th>類別</th><th>描述</th><th>代表範本</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td>軟體開發</td><td>程式碼生成、除錯、重構、程式碼審查</td><td><code>explain_code</code> 解釋程式碼 / <code>review_code</code> 程式碼審查 / <code>generate_test</code> 生成單元測試</td></tr>
+<tr><td>2</td><td>寫作與創意</td><td>文章寫作、創意寫作、文案撰寫</td><td><code>write_article</code> 撰寫文章 / <code>creative_story</code> 創意故事 / <code>copywriting</code> 文案寫作</td></tr>
+<tr><td>3</td><td>學術研究</td><td>論文寫作、文獻綜述、資料分析</td><td><code>write_paper</code> 論文寫作 / <code>literature_review</code> 文獻綜述 / <code>data_analysis</code> 資料分析</td></tr>
+<tr><td>4</td><td>商業分析</td><td>市場分析、商業模式、競爭分析</td><td><code>market_analysis</code> 市場分析 / <code>business_model</code> 商業模式 / <code>competitive_analysis</code> 競爭分析</td></tr>
+<tr><td>5</td><td>市場行銷</td><td>行銷方案、廣告文案、社交媒體</td><td><code>marketing_plan</code> 行銷計畫 / <code>ad_copy</code> 廣告文案 / <code>social_media</code> 社交媒體內容</td></tr>
+<tr><td>6</td><td>法律與合規</td><td>合約審查、法律諮詢、合規檢查</td><td><code>contract_review</code> 合約審查 / <code>legal_advice</code> 法律諮詢 / <code>compliance_check</code> 合規檢查</td></tr>
+<tr><td>7</td><td>醫療與健康</td><td>醫療諮詢、健康管理、藥品資訊</td><td><code>medical_consult</code> 醫療諮詢 / <code>health_plan</code> 健康計畫 / <code>drug_info</code> 藥品資訊</td></tr>
+<tr><td>8</td><td>教育與培訓</td><td>課程設計、教案編寫、輔導答疑</td><td><code>course_design</code> 課程設計 / <code>lesson_plan</code> 教案 / <code>tutoring</code> 輔導答疑</td></tr>
+<tr><td>9</td><td>金融與投資</td><td>投資分析、風險評估、財務報告</td><td><code>investment_analysis</code> 投資分析 / <code>risk_assessment</code> 風險評估 / <code>financial_report</code> 財務報告</td></tr>
+<tr><td>10</td><td>資料科學</td><td>資料分析、機器學習、資料視覺化</td><td><code>data_cleaning</code> 資料清洗 / <code>ml_model</code> 機器學習模型 / <code>data_viz</code> 資料視覺化</td></tr>
+<tr><td>11</td><td>設計與創意</td><td>UI/UX 設計、平面設計、創意腦力激盪</td><td><code>ui_design</code> UI 設計 / <code>brand_design</code> 品牌設計 / <code>creative_brainstorm</code> 創意腦力激盪</td></tr>
+<tr><td>12</td><td>系統維運</td><td>伺服器管理、網路配置、監控告警</td><td><code>server_setup</code> 伺服器設定 / <code>network_config</code> 網路配置 / <code>monitor_setup</code> 監控設定</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="gui-操作"><a class="header" href="#gui-操作">GUI 操作</a></h2>
+<p>在 GUI 的 <strong>Prompts 標籤頁</strong>中，您可以：</p>
+<ul>
+<li><strong>瀏覽</strong> — 按行業類別分組檢視所有範本（內建 + 自訂）</li>
+<li><strong>搜尋</strong> — 按關鍵字搜尋範本標題和內容</li>
+<li><strong>建立</strong> — 建立新的自訂範本，選擇類別和語言</li>
+<li><strong>編輯</strong> — 修改已有的自訂範本</li>
+<li><strong>刪除</strong> — 移除不需要的自訂範本</li>
+</ul>
+<h3 id="操作流程"><a class="header" href="#操作流程">操作流程</a></h3>
+<ol>
+<li>切換到 Prompts 標籤頁</li>
+<li>在左側選擇行業類別進行篩選</li>
+<li>使用搜尋框按關鍵字搜尋</li>
+<li>點擊範本卡片檢視詳情</li>
+<li>點擊 <strong>插入到 Chat</strong> 按鈕，將範本內容插入到 Chat 輸入框</li>
+<li>在 Chat 中微調範本內容後發送</li>
+</ol>
+<hr>
+<h2 id="chat--指令"><a class="header" href="#chat--指令">Chat <code>/</code> 指令</a></h2>
+<p>在 Chat 輸入框中輸入 <code>/</code> 可觸發指令補全。輸入範本 ID 後按 Enter 即可直接展開範本內容。</p>
+<h3 id="指令格式"><a class="header" href="#指令格式">指令格式</a></h3>
+<pre><code>/&lt;template_id&gt; &lt;參數&gt;
+</code></pre>
+<p>範例：</p>
+<ul>
+<li><code>/explain_code</code> — 解釋選中的程式碼</li>
+<li><code>/review_code</code> — 審查程式碼品質</li>
+<li><code>/generate_test Rust</code> — 為 Rust 程式碼生成單元測試</li>
+<li><code>/write_article topic: AI 趨勢</code> — 撰寫指定主題的文章</li>
+</ul>
+<h3 id="常用指令"><a class="header" href="#常用指令">常用指令</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>指令</th><th>功能</th></tr>
+</thead>
+<tbody>
+<tr><td><code>/explain_code</code></td><td>解釋選中的程式碼</td></tr>
+<tr><td><code>/review_code</code></td><td>審查程式碼品質</td></tr>
+<tr><td><code>/optimize_code</code></td><td>最佳化程式碼效能</td></tr>
+<tr><td><code>/generate_test</code></td><td>生成單元測試</td></tr>
+<tr><td><code>/refactor_code</code></td><td>重構程式碼</td></tr>
+<tr><td><code>/write_doc</code></td><td>編寫文件註解</td></tr>
+<tr><td><code>/write_article</code></td><td>撰寫文章</td></tr>
+<tr><td><code>/market_analysis</code></td><td>市場分析</td></tr>
+<tr><td><code>/contract_review</code></td><td>合約審查</td></tr>
+<tr><td><code>/data_analysis</code></td><td>資料分析</td></tr>
+</tbody>
+</table>
+</div>
+<p>輸入 <code>/</code> 時，系統會顯示自動補全列表，支援模糊搜尋、類別篩選和完整範本 ID 比對。</p>
+<hr>
+<h2 id="自訂範本"><a class="header" href="#自訂範本">自訂範本</a></h2>
+<h3 id="建立範本"><a class="header" href="#建立範本">建立範本</a></h3>
+<ol>
+<li>在 Prompts 標籤頁中，點擊 <strong>建立新範本</strong></li>
+<li>填寫範本詳細資訊：
+<ul>
+<li><strong>ID</strong> — <code>/</code> 指令呼叫的唯一識別碼（例如 <code>my_custom_template</code>）</li>
+<li><strong>標題</strong> — 範本的顯示名稱</li>
+<li><strong>類別</strong> — 所屬行業類別</li>
+<li><strong>語言</strong> — 範本語言</li>
+<li><strong>內容</strong> — 提示詞文字，支援 <code>{{variable}}</code> 佔位符</li>
+<li><strong>描述</strong> — 簡要說明範本用途</li>
+</ul>
+</li>
+<li>儲存 — 範本將寫入 <code>prompts/custom/{lang}.json</code></li>
+</ol>
+<h3 id="編輯範本"><a class="header" href="#編輯範本">編輯範本</a></h3>
+<p>在 Prompts 標籤頁中找到自訂範本，點擊編輯按鈕進行修改。儲存後，系統將更新 <code>prompts/custom/{lang}.json</code>。</p>
+<h3 id="刪除範本"><a class="header" href="#刪除範本">刪除範本</a></h3>
+<p>在 Prompts 標籤頁中找到自訂範本，點擊刪除按鈕並確認。</p>
+<blockquote>
+<p>⚠️ 注意：只能刪除自訂範本，內建範本為唯讀。</p>
+</blockquote>
+<hr>
+<h2 id="後端-rpc-介面"><a class="header" href="#後端-rpc-介面">後端 RPC 介面</a></h2>
+<p>提示詞系統提供以下 RPC 介面：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>RPC</th><th>方法</th><th>描述</th></tr>
+</thead>
+<tbody>
+<tr><td><code>prompts.list</code></td><td>List</td><td>取得所有範本，可按類別和語言篩選</td></tr>
+<tr><td><code>prompts.search</code></td><td>Search</td><td>按關鍵字搜尋範本</td></tr>
+<tr><td><code>prompts.get</code></td><td>Get</td><td>取得單個範本的詳細資訊</td></tr>
+<tr><td><code>prompts.create</code></td><td>Create</td><td>建立新的自訂範本</td></tr>
+<tr><td><code>prompts.update</code></td><td>Update</td><td>更新自訂範本</td></tr>
+<tr><td><code>prompts.delete</code></td><td>Delete</td><td>刪除自訂範本</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="mcp-工具"><a class="header" href="#mcp-工具">MCP 工具</a></h2>
+<p>透過 MCP（Model Context Protocol），AI 代理可以自動發現並呼叫提示詞範本：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>MCP 工具</th><th>功能</th></tr>
+</thead>
+<tbody>
+<tr><td><code>prompts_list</code></td><td>列出所有可用的提示詞範本</td></tr>
+<tr><td><code>prompts_get</code></td><td>取得指定範本的詳細內容</td></tr>
+</tbody>
+</table>
+</div>
+<p>AI 代理透過 MCP 協定發現這些工具，並可在對話過程中自動選擇和應用合適的範本。例如，當使用者說“幫我審查這段程式碼“時，AI 代理可以自動呼叫 <code>prompts_get</code> 取得 <code>review_code</code> 範本並應用到回覆中。</p>
+<hr>
+<h2 id="設定開關"><a class="header" href="#設定開關">設定開關</a></h2>
+<p>在 <strong>設定 → 功能開關</strong> 中，可以啟用或停用 <strong>Prompts</strong> 模組。停用後：</p>
+<ul>
+<li>Prompts 標籤頁從標籤列中隱藏</li>
+<li>相關 RPC 介面停止回應</li>
+<li>相關 MCP 工具停止回應</li>
+</ul>
+<blockquote>
+<p>預設狀態：<strong>啟用</strong></p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="工作流程配置"><a class="header" href="#工作流程配置">工作流程配置</a></h1>
+<p>go-on 支援多種工作流程類型，適用於不同的使用場景。工作流程在 <code>config.toml</code> 的 <code>[flow]</code> 部分進行配置。</p>
+<blockquote>
+<p>相關文件：<a href="#gui-桌面控制台">GUI 控制台</a> | <a href="#prompts-系統">Prompts 系統</a></p>
+</blockquote>
+<hr>
+<h2 id="1-工作流程類型"><a class="header" href="#1-工作流程類型">1. 工作流程類型</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>類型</th><th>值</th><th>用途</th><th>預設階段</th></tr>
+</thead>
+<tbody>
+<tr><td>Auto</td><td><code>"auto"</code></td><td>根據上下文自動偵測</td><td>因情況而異</td></tr>
+<tr><td>Dev</td><td><code>"dev"</code></td><td>軟體開發</td><td>planning → coding → review → delivery</td></tr>
+<tr><td>General</td><td><code>"general"</code></td><td>問答、分析、研究</td><td>gathering → thinking → executing → validating → closing</td></tr>
+<tr><td>Free</td><td><code>"free"</code></td><td>單輪對話，無階段路由</td><td>無</td></tr>
+<tr><td>Custom</td><td><code>"custom"</code></td><td>使用者自訂階段</td><td>使用者自訂</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="2-快速開始"><a class="header" href="#2-快速開始">2. 快速開始</a></h2>
+<p>在 <code>config/templates/</code> 中提供了兩個即用的配置範本：</p>
+<h3 id="開發工作流程"><a class="header" href="#開發工作流程">開發工作流程</a></h3>
+<pre><code class="language-bash">cp config/templates/config.dev.toml config.toml
+# 編輯 config.toml 新增您的 API 金鑰
+go-on --config config.toml
+</code></pre>
+<h3 id="通用工作流程"><a class="header" href="#通用工作流程">通用工作流程</a></h3>
+<pre><code class="language-bash">cp config/templates/config.general.toml config.toml
+# 編輯 config.toml 新增您的 API 金鑰
+go-on --config config.toml
+</code></pre>
+<hr>
+<h2 id="3-代理路由流程"><a class="header" href="#3-代理路由流程">3. 代理路由流程</a></h2>
+<p><strong>代理並不綁定到階段。</strong> 所有註冊的 AI 提供者全域可用。<strong>CapabilityBus</strong> 根據以下條件動態為每個子任務選擇最佳提供者：</p>
+<ol>
+<li><strong>任務上下文</strong> — 正在執行的工作類型（編碼、分析等）</li>
+<li><strong>信譽評分</strong> — 類似任務的歷史成功率</li>
+<li><strong>能力標籤</strong> — 每個提供者擅長的領域</li>
+</ol>
+<p>您可以在不列出代理的情況下定義階段——匯流排會自動選擇最佳代理：</p>
+<pre><code class="language-toml">[phases.coding]
+description = "編碼 — 實現功能"
+agents = []          # ← 留空！能力匯流排會自動選擇最佳代理。
+fallback = true
+</code></pre>
+<p>或者透過列出首選代理來給匯流排提示：</p>
+<pre><code class="language-toml">[phases.coding]
+agents = ["deepseek", "openai"]   # ← 提示：優先使用這些，但匯流排仍會自行決定
+fallback = true
+</code></pre>
+<hr>
+<h2 id="4-自動偵測workflow_type--auto"><a class="header" href="#4-自動偵測workflow_type--auto">4. 自動偵測（<code>workflow_type = "auto"</code>）</a></h2>
+<p>當未設定 <code>workflow_type</code> 或設定為 <code>"auto"</code> 時，系統會在啟動時偵測上下文：</p>
+<ul>
+<li>如果偵測到程式碼倉儲 → 使用 <strong>Dev</strong> 工作流程（4 個階段）</li>
+<li>否則 → 使用 <strong>General</strong> 工作流程（5 個階段）</li>
+</ul>
+<p>透過在配置中明確設定 <code>workflow_type</code> 來覆蓋預設行為。</p>
+<hr>
+<h2 id="5-自由模式workflow_type--free"><a class="header" href="#5-自由模式workflow_type--free">5. 自由模式（<code>workflow_type = "free"</code>）</a></h2>
+<p>自由模式繞過階段路由。每次請求都是單輪互動，不進行階段切換：</p>
+<pre><code class="language-toml">[flow]
+name = "自由聊天"
+workflow_type = "free"
+phases = []   # 無階段 — 僅直接路由
+</code></pre>
+<hr>
+<h2 id="6-自訂工作流程"><a class="header" href="#6-自訂工作流程">6. 自訂工作流程</a></h2>
+<p>定義您自己的工作流程階段和轉換：</p>
+<pre><code class="language-toml">default_phase = "research"
+model_selection_mode = "adaptive"
+
+[flow]
+name = "我的研究工作流程"
+workflow_type = "custom"
+phases = ["research", "draft", "polish", "publish"]
+
+[phases.research]
+description = "研究 — 收集資料、分析數據"
+agents = []
+fallback = true
+
+[phases.research.options]
+request_timeout_seconds = 180
+cache_enabled = true
+vector_enabled = true
+phase_max_inflight = 8
+global_max_inflight = 128
+</code></pre>
+<p>每個階段都支援可配置選項，包括超時、快取、向量記憶、並發限制以及高風險多代理投票設定。</p>
+<hr>
+<h2 id="7-高風險多代理投票"><a class="header" href="#7-高風險多代理投票">7. 高風險多代理投票</a></h2>
+<p>對於高風險階段（醫療、法律、金融、安全關鍵），go-on 支援多代理聯合處理：</p>
+<ol>
+<li><strong>風險偵測</strong> — 分析使用者訊息中的領域和決策關鍵字</li>
+<li><strong>多代理執行</strong> — 多個代理並行獨立生成回覆</li>
+<li><strong>投票</strong> — 回覆去重並排名；獲得共識者勝出</li>
+<li><strong>升級處理</strong> — 如未達成共識，由其他模型參與打破平局</li>
+</ol>
+<p>透過 <code>options</code> 在每個階段進行配置：</p>
+<pre><code class="language-toml">[phases.review.options]
+high_risk_vote_enabled = true
+high_risk_vote_threshold = 1
+high_risk_vote_min_agents = 2
+high_risk_vote_max_agents = 4
+high_risk_escalate_multi_model_enabled = true
+</code></pre>
+<hr>
+<blockquote>
+<p>完整的文件（包括階段選項參考、功能配置檔案和技能系統）可在專案 <code>docs/workflow-config.md</code> 中找到。</p>
+</blockquote>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="skills-擴展"><a class="header" href="#skills-擴展">Skills 擴展</a></h1>
 <p>Skills 系統為 go-on 運行時提供了一種輕量、類型安全的能力單元註冊與分發機制，

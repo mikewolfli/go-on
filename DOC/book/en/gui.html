@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-dc275d80.js";
+            window.path_to_searchindex_js = "searchindex-ddf09bb2.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-512b02fc.js"></script>
+        <script src="toc-c47ee197.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -180,9 +180,13 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="gui-console"><a class="header" href="#gui-console">GUI Console</a></h1>
-<p>The GUI is a Tauri desktop console around the backend. It is designed for operators who want process control, integration status, configuration editing, and local environment management without staying in a terminal.</p>
-<h2 id="what-the-gui-needs"><a class="header" href="#what-the-gui-needs">What the GUI needs</a></h2>
+                        <h1 id="gui-desktop-console"><a class="header" href="#gui-desktop-console">GUI Desktop Console</a></h1>
+<p>The GUI is an EGUI (Rust native) desktop application located in the <code>gui/</code> directory.
+It provides backend monitoring, multi-session chat, skills management, and settings editing,
+so operations and integration debugging don’t have to stay in the terminal.</p>
+<h2 id="architecture-overview"><a class="header" href="#architecture-overview">Architecture Overview</a></h2>
+<p>The GUI is a Rust native desktop app built with the EGUI framework (based on <code>eframe</code>/<code>egui</code>).
+It communicates with the backend via ACP+HTTP JSON-RPC and manages the backend process lifecycle.</p>
 <p>The GUI stores and uses three core values:</p>
 <ul>
 <li>backend executable path</li>
@@ -190,17 +194,80 @@
 <li>runtime config file inside the working directory</li>
 </ul>
 <p>The backend process is started from the configured working directory. The GUI expects <code>config.toml</code> to live there.</p>
+<h2 id="feature-tabs"><a class="header" href="#feature-tabs">Feature Tabs</a></h2>
+<h3 id="monitor-tab"><a class="header" href="#monitor-tab">Monitor Tab</a></h3>
+<ul>
+<li>Backend health: auto-polls <code>/health</code> endpoint</li>
+<li>AI provider status: real-time provider connection status</li>
+<li>Live metrics: request count, latency, error rate</li>
+</ul>
+<h3 id="chat-tab"><a class="header" href="#chat-tab">Chat Tab</a></h3>
+<ul>
+<li>Multi-session management: create, switch, delete sessions</li>
+<li>Multi-model support: each session can select a different AI model</li>
+<li>Phase selection: coding / review / debug / test / deploy</li>
+<li>Mode switching: Ask / Plan / Edit / Safeguard / Full Auto</li>
+<li>File attachments: upload files as chat context</li>
+<li>Dynamic send button: changes based on AI status (loading / ready / error)</li>
+<li><strong>Risk Decision panel</strong>: displays risk assessment, mitigation strategy, and review requirements for high-risk AI responses (see dedicated section below)</li>
+</ul>
+<h3 id="skills-tab"><a class="header" href="#skills-tab">Skills Tab</a></h3>
+<ul>
+<li>Create and import AI skills</li>
+<li>Built-in <code>skill-creator</code>: lets AI define new skills autonomously</li>
+<li>Skill list management: enable, disable, delete</li>
+</ul>
+<h3 id="prompts-tab"><a class="header" href="#prompts-tab">Prompts Tab</a></h3>
+<p>Browse, search, create, edit, and delete prompt templates across 12 industry categories.
+See the <a href="prompts.html">Prompts System</a> document for full details.</p>
+<ul>
+<li><strong>Browse by category</strong> — filter templates by 12 industry categories (Software Development, Writing,
+Academic Research, Business Analysis, Marketing, Legal, Medical, Education, Finance, Data Science, Design, System Operations)</li>
+<li><strong>Search</strong> — keyword search across template titles and content</li>
+<li><strong>Custom templates</strong> — create your own templates with <code>{{variable}}</code> placeholders</li>
+<li><strong>Insert to Chat</strong> — click the <strong>Insert to Chat</strong> button on any template card to insert the template
+content into the Chat input box</li>
+<li><strong>Chat <code>/</code> commands</strong> — type <code>/</code> in the Chat input box to trigger command completion;
+type a template ID and press Enter to expand the template directly</li>
+</ul>
+<blockquote>
+<p>For details on the template system, see the <a href="prompts.html">Prompts System</a>.</p>
+</blockquote>
+<h3 id="chat-tab--risk-decision--safeguard-mode"><a class="header" href="#chat-tab--risk-decision--safeguard-mode">Chat Tab — Risk Decision &amp; Safeguard Mode</a></h3>
+<p>The GUI displays a <strong>Risk Decision panel</strong> on AI responses when the backend’s governance layer detects potentially high-risk content. This feature is part of the Safeguard mode and multi-model voting system.</p>
+<p><strong>What triggers it:</strong> The backend analyzes user messages against domain keywords (medical, legal, financial, security, etc.) and decision-related keywords. When the risk score exceeds the threshold, the backend activates one or more mitigation strategies:</p>
+<ul>
+<li><strong>Multi-model vote</strong>: Sends the request to multiple models concurrently and compares outputs</li>
+<li><strong>Multi-agent vote</strong>: Routes the request to different AI agents and aggregates results</li>
+<li><strong>Escalation</strong>: Uses more capable (and expensive) models for final judgment</li>
+<li><strong>Review required</strong>: Flags the response for human review</li>
+</ul>
+<p><strong>What the GUI shows:</strong></p>
+<ul>
+<li>Risk state: <strong>High Risk</strong> or <strong>Normal</strong></li>
+<li>Strategy used: e.g. “multi_model_vote”, “multi_agent_vote”, “escalation”</li>
+<li>Review requirement indication</li>
+<li>Specific risk reasons (up to 4 reasons displayed inline)</li>
+</ul>
+<p>The panel adapts theme-wise: high-risk topics get a warm orange/red background, normal risk gets a subtle green tint — both respecting dark/light mode correctly.</p>
+<h3 id="settings-tab"><a class="header" href="#settings-tab">Settings Tab</a></h3>
+<ul>
+<li><strong>Provider Management</strong>: dynamic environment variable injection (all 34+ providers), no longer hardcoded to 8</li>
+<li><strong>Config Editor</strong>: manages <code>gui_config.json</code> with JSON syntax validation</li>
+<li><strong>Theme Selection</strong>: 6 visual themes (Minimal / Chinese-Classic / Wuxia / Landscape / Hello Kitty / Dark)</li>
+<li><strong>Language Switching</strong>: English, Simplified Chinese, Traditional Chinese</li>
+<li><strong>Feature Toggles</strong>: enable/disable GUI features (including <strong>Prompts</strong> toggle that controls the Prompts Tab visibility and related RPC/MCP interfaces)</li>
+</ul>
 <h2 id="development-and-build-commands"><a class="header" href="#development-and-build-commands">Development and build commands</a></h2>
-<p>From <code>GUI/</code>:</p>
-<pre><code class="language-bash">npm install
-npm run dev
-</code></pre>
-<p>Production build:</p>
-<pre><code class="language-bash">npm run build
-</code></pre>
-<p>Desktop packaging and native shell:</p>
-<pre><code class="language-bash">npm run tauri dev
-npm run tauri build
+<p>From <code>gui/</code>:</p>
+<pre><code class="language-bash"># Run in development mode
+cargo run
+
+# Build release
+cargo build --release
+
+# From project root
+cargo run --manifest-path gui/Cargo.toml
 </code></pre>
 <h2 id="linking-the-backend"><a class="header" href="#linking-the-backend">Linking the backend</a></h2>
 <p>The GUI can auto-discover the backend executable. When auto-link succeeds it uses the executable’s parent directory as the working directory and stores logs as <code>go-on.log</code> there.</p>
@@ -210,23 +277,16 @@ npm run tauri build
 <li>set the working directory</li>
 <li>ensure <code>config.toml</code> exists in that directory</li>
 </ol>
-<h2 id="config-and-environment-behavior"><a class="header" href="#config-and-environment-behavior">Config and environment behavior</a></h2>
-<p>The GUI manages:</p>
+<h2 id="key-management"><a class="header" href="#key-management">Key Management</a></h2>
+<p>The GUI uses dual storage for secrets:</p>
 <ul>
-<li><code>config.toml</code></li>
-<li><code>config.toml.autopilot-adaptive</code> as the reset template source</li>
-<li><code>.env.goon</code> for persisted environment variables</li>
+<li><strong>System keyring</strong>: priority storage using OS-level key management (Linux Secret Service, macOS Keychain, Windows Credential Manager)</li>
+<li><strong>Config file</strong>: backup and portable fallback</li>
 </ul>
-<p>That means a practical GUI-based onboarding sequence is:</p>
-<ol>
-<li>link the backend executable</li>
-<li>restore default config if needed</li>
-<li>save provider API keys through the GUI</li>
-<li>start the backend process</li>
-<li>verify integration probes</li>
-</ol>
+<p>API keys no longer need to be written to <code>.env.goon</code> — all keys are injected dynamically through the GUI’s Provider management panel.</p>
 <h2 id="runtime-process-behavior"><a class="header" href="#runtime-process-behavior">Runtime process behavior</a></h2>
 <p>When the GUI starts the backend process, it launches the configured executable from the working directory and writes stdout and stderr to <code>go-on.log</code>.</p>
+<p><strong>Auto-restart</strong>: if the backend crashes, the GUI automatically restarts it after a 3-second cool-down.</p>
 <p>Because startup depends on the working directory, the most common operator mistake is pointing the GUI at the correct binary but the wrong directory.</p>
 <h2 id="health-and-integration-probes"><a class="header" href="#health-and-integration-probes">Health and integration probes</a></h2>
 <p>The GUI probes:</p>
@@ -249,19 +309,22 @@ npm run tauri build
 <p>The GUI itself can still manage the backend executable even when a different mode is selected; the mode choice mostly affects what external clients can do afterward.</p>
 <h2 id="recommended-operator-flow"><a class="header" href="#recommended-operator-flow">Recommended operator flow</a></h2>
 <ol>
-<li>Build the backend.</li>
-<li>Launch the GUI.</li>
-<li>Use auto-link or manual executable-path configuration.</li>
-<li>Confirm the working directory contains <code>config.toml</code>.</li>
-<li>Save API keys into <code>.env.goon</code> if needed.</li>
-<li>Start the backend.</li>
-<li>Check health and integration status.</li>
+<li>Build the backend: <code>cargo build</code></li>
+<li>Initialize backend (first time): <code>cargo run -- --init</code></li>
+<li>Build the GUI: <code>cargo build --manifest-path gui/Cargo.toml</code></li>
+<li>Launch the GUI: <code>cargo run --manifest-path gui/Cargo.toml</code></li>
+<li>Use auto-link or manual executable-path configuration</li>
+<li>Confirm the working directory contains <code>config.toml</code></li>
+<li>Configure API keys in Provider management (auto-stored in system keyring)</li>
+<li>Start the backend</li>
+<li>Check health and integration status</li>
 </ol>
 <h2 id="troubleshooting"><a class="header" href="#troubleshooting">Troubleshooting</a></h2>
 <ul>
 <li>If startup fails with a file error, re-check the executable path first.</li>
 <li>If startup succeeds but probes fail, re-check protocol mode and provider readiness.</li>
 <li>If the GUI shows health but editors still fail, compare the editor transport contract against the current runtime mode.</li>
+<li>GUI-specific issues: check if <code>gui_config.json</code> is corrupted; delete it to reset if necessary.</li>
 </ul>
 
                     </main>
@@ -272,7 +335,7 @@ npm run tauri build
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="skills.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="prompts.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -286,7 +349,7 @@ npm run tauri build
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="skills.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="prompts.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

@@ -95,6 +95,8 @@ pub struct FeatureToggles {
     pub monitor_history_alerts: bool,
     pub config_safe_mode: bool,
     pub setup_enterprise: bool,
+    /// Whether to show the prompt templates tab
+    pub show_prompts_tab: bool,
 }
 
 impl Default for FeatureToggles {
@@ -115,6 +117,7 @@ impl Default for FeatureToggles {
             monitor_history_alerts: false,
             config_safe_mode: false,
             setup_enterprise: false,
+            show_prompts_tab: true,
         }
     }
 }

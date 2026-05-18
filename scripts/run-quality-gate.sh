@@ -12,6 +12,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 echo "=== BLUE15 P3-1 quality gate: request benchmark + regression checks ==="
+echo "=== Validating prompt templates ==="
+"$SCRIPT_DIR/validate-prompts.sh"
+
 "$SCRIPT_DIR/run-request.sh" "$CONFIG" "$ROOT_DIR/requests/quality-benchmark.ndjson" "$BINARY"
 
 echo "=== Running benchmark scenario integration regression ==="

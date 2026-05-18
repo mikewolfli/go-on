@@ -25,4 +25,6 @@
 - [Zed Integration](zed.md)
 - [VS Code Addon](vscode-addon.md)
 - [GUI Console](gui.md)
+- [Prompts](prompts.md)
+- [Workflow Config](workflow-config.md)
 - [Skills Extension](skills.md)

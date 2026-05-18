@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-03594683.js";
+            window.path_to_searchindex_js = "searchindex-b1b723c4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a5a70d2b.js"></script>
+        <script src="toc-e47fbd73.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -489,6 +489,47 @@ go-on --config config.toml --status
 </code></pre>
 <p>為編輯器啟動的集成運行 ACP over stdio：</p>
 <pre><code class="language-bash">go-on --config config.toml --protocol-mode acp_stdio --verbose
+</code></pre>
+<p>終端聊天（互動式，類似 Claude Code / Codex）：</p>
+<pre><code class="language-bash">go-on -a
+</code></pre>
+<h2 id="終端聊天模式--chat---a"><a class="header" href="#終端聊天模式--chat---a">終端聊天模式（<code>--chat</code> / <code>-a</code>）</a></h2>
+<p>啟動互動式終端聊天會話（類似 Claude Code 或 Codex）。</p>
+<pre><code class="language-bash">go-on -a
+# 或
+go-on --chat
+</code></pre>
+<p>如果配置文件在其他路徑：</p>
+<pre><code class="language-bash">go-on -c /path/to/config.toml -a
+</code></pre>
+<h3 id="前置條件"><a class="header" href="#前置條件">前置條件</a></h3>
+<p>至少需要在 <code>config.toml</code> 中配置一個 AI 供應商並擁有有效的 API 密鑰。API 密鑰自動從系統 keyring 讀取（keyring → 環境變數回退）。</p>
+<h3 id="行為說明"><a class="header" href="#行為說明">行為說明</a></h3>
+<ol>
+<li>根據已配置的供應商構建智能體註冊表。</li>
+<li>打開 readline 風格的對話循環。</li>
+<li>每條消息發送到第一個可用智能體，支援串流輸出。</li>
+<li>維護對話歷史（上限 1000 條消息）。</li>
+<li>Ctrl+C 或 <code>/quit</code> 優雅退出。</li>
+</ol>
+<h3 id="內置命令"><a class="header" href="#內置命令">內置命令</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>命令</th><th>說明</th></tr>
+</thead>
+<tbody>
+<tr><td><code>/quit</code> 或 <code>/exit</code></td><td>退出聊天模式</td></tr>
+<tr><td><code>/help</code></td><td>顯示可用命令</td></tr>
+<tr><td><code>/clear</code></td><td>清除對話歷史</td></tr>
+<tr><td><code>/agents</code></td><td>列出已配置的智能體</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="自動跳轉到設置"><a class="header" href="#自動跳轉到設置">自動跳轉到設置</a></h3>
+<p>如果傳入 <code>--chat</code> 時未配置任何供應商，將跳過互動式引導直接提示執行 <code>--setup</code>：</p>
+<pre><code class="language-bash">go-on -c config.toml -a
+# → "未配置 AI 智能體。請先執行 go-on --init 來設定供應商。"
 </code></pre>
 <h2 id="操作指導"><a class="header" href="#操作指導">操作指導</a></h2>
 <ul>

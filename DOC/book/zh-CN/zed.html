@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-bf14e7b9.js";
+            window.path_to_searchindex_js = "searchindex-0bb38933.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-5b302f00.js"></script>
+        <script src="toc-1158cbfc.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -193,6 +193,7 @@
 <pre><code class="language-json">{
   "agent_servers": {
     "go-on-acp": {
+      "type": "custom",
       "command": "go-on",
       "args": [
         "--config",
@@ -209,6 +210,7 @@
 <pre><code class="language-json">{
   "agent_servers": {
     "go-on-acp": {
+      "type": "custom",
       "command": "D:/Workspace/RustWorkspace/go-on/target/debug/go-on.exe",
       "args": [
         "--config",
@@ -238,6 +240,7 @@
 <pre><code class="language-json">{
   "agent_servers": {
     "go-on-http": {
+      "type": "custom",
       "url": "http://127.0.0.1:8090"
     }
   }
@@ -255,17 +258,32 @@
 <li><code>/v1/responses</code></li>
 </ul>
 <p>如果你的 Zed 版本对应的是 OpenAI 兼容 provider 或 MCP 风格 LLM provider，那么应使用 <code>/v1</code> 基址。</p>
-<p>示例：</p>
+<p>示例（按最新 Zed <code>openai_compatible</code> 结构）：</p>
 <pre><code class="language-json">{
   "language_models": {
-    "go-on-local": {
-      "provider": "openai_compatible",
-      "api_url": "http://127.0.0.1:8090/v1",
-      "model": "auto"
+    "openai_compatible": {
+      "go-on-local": {
+        "api_url": "http://127.0.0.1:8090/v1",
+        "available_models": [
+          {
+            "name": "gpt-5.5",
+            "display_name": "go-on auto (gpt-5.5)",
+            "max_tokens": 400000,
+            "capabilities": {
+              "chat_completions": true,
+              "tools": true,
+              "images": false,
+              "parallel_tool_calls": false,
+              "prompt_cache_key": false
+            }
+          }
+        ]
+      }
     }
   }
 }
 </code></pre>
+<p>如果某个模型只支持 Responses API，请将该模型的 <code>capabilities.chat_completions</code> 设为 <code>false</code>。</p>
 <p>适用场景：</p>
 <ul>
 <li>Zed 这一能力要求的是 OpenAI 兼容接口，而不是 ACP 传输</li>
@@ -287,6 +305,24 @@ go-on --config config.toml --validate-config
 <pre><code class="language-text">GET http://127.0.0.1:8090/health
 GET http://127.0.0.1:8090/v1/models
 </code></pre>
+<h2 id="zed-外部-agent-新变化"><a class="header" href="#zed-外部-agent-新变化">Zed 外部 Agent 新变化</a></h2>
+<ul>
+<li>从 Zed <code>v0.221.x+</code> 开始，ACP Registry 是更推荐的外部 Agent 安装方式。</li>
+<li>常见内置外部 Agent 名称包括：<code>claude-acp</code>、<code>codex-acp</code>、<code>gemini</code>。</li>
+<li>建议使用 <code>zed: acp registry</code> 进行安装，使用 <code>dev: open acp logs</code> 进行联调诊断。</li>
+</ul>
+<h2 id="三平台路径统一"><a class="header" href="#三平台路径统一">三平台路径统一</a></h2>
+<ul>
+<li>Linux 配置文件：<code>~/.config/zed/settings.json</code></li>
+<li>macOS 配置文件：<code>~/Library/Application Support/Zed/settings.json</code></li>
+<li>Windows 配置文件：<code>%APPDATA%/Zed/settings.json</code></li>
+</ul>
+<h2 id="模型更新策略"><a class="header" href="#模型更新策略">模型更新策略</a></h2>
+<ul>
+<li>修改 <code>available_models</code> 前，先对齐最新官方文档中的模型 ID 与上下文窗口。</li>
+<li>OpenAI 兼容模型需同时核对 endpoint 兼容性（<code>chat/completions</code> 与 <code>responses</code>）。</li>
+<li>使用 Zed 托管模型时，上线前先检查 Zed <code>AI &gt; Models</code> 中的 retired/replaced 列表。</li>
+</ul>
 <h2 id="常见失败模式"><a class="header" href="#常见失败模式">常见失败模式</a></h2>
 <ul>
 <li><code>/health</code> 能通，但 Zed 仍拒绝 ACP，多半是当前运行时模式偏 MCP-only。</li>

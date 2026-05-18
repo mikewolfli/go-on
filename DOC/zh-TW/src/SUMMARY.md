@@ -25,4 +25,6 @@
 - [Zed 接入](zed.md)
 - [VS Code 插件](vscode-addon.md)
 - [GUI 控制台](gui.md)
+- [提示詞模板](prompts.md)
+- [工作流配置](workflow-config.md)
 - [Skills 擴展](skills.md)

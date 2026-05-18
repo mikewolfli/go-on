@@ -1303,6 +1303,9 @@ pub struct RuntimeConfig {
     /// Default concurrent tasks limit per tenant.
     #[serde(default = "default_runtime_tenant_default_concurrent_tasks")]
     pub tenant_default_concurrent_tasks: usize,
+    /// Default language for i18n (e.g. "en", "zh-CN").
+    #[serde(default = "default_runtime_i18n_default_language")]
+    pub i18n_default_language: String,
     /// Default daily API call limit per tenant.
     #[serde(default = "default_runtime_tenant_default_daily_api_calls")]
     pub tenant_default_daily_api_calls: usize,
@@ -1344,6 +1347,7 @@ impl Default for RuntimeConfig {
             user_auth_token_ttl_seconds: default_runtime_user_auth_token_ttl_seconds(),
             tenant_default_daily_token_limit: default_runtime_tenant_default_daily_token_limit(),
             tenant_default_concurrent_tasks: default_runtime_tenant_default_concurrent_tasks(),
+            i18n_default_language: default_runtime_i18n_default_language(),
             tenant_default_daily_api_calls: default_runtime_tenant_default_daily_api_calls(),
         }
     }
@@ -1438,6 +1442,10 @@ fn default_runtime_tenant_default_daily_token_limit() -> u64 {
 
 fn default_runtime_tenant_default_concurrent_tasks() -> usize {
     10
+}
+
+fn default_runtime_i18n_default_language() -> String {
+    "en".to_string()
 }
 
 fn default_runtime_tenant_default_daily_api_calls() -> usize {
@@ -4004,6 +4012,7 @@ mod tests {
             tenant_default_daily_token_limit: 1_000_000,
             tenant_default_concurrent_tasks: 10,
             tenant_default_daily_api_calls: 10_000,
+            i18n_default_language: "en".to_string(),
         });
 
         let err = cfg
@@ -4548,6 +4557,7 @@ mod tests {
             tenant_default_daily_token_limit: 1_000_000,
             tenant_default_concurrent_tasks: 10,
             tenant_default_daily_api_calls: 10_000,
+            i18n_default_language: "en".to_string(),
         });
 
         let report = super::build_config_health_report(&config_path, &cfg);

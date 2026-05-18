@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-03594683.js";
+            window.path_to_searchindex_js = "searchindex-b1b723c4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a5a70d2b.js"></script>
+        <script src="toc-e47fbd73.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -184,14 +184,26 @@
 <p><code>go-on</code> 是一個圍繞 Rust 後端構建的三端運行時體系：</p>
 <ul>
 <li><strong>後端</strong>：負責配置加載、Provider 選擇、路由、setup、健康檢查、協議協商、stdio 或 HTTP 傳輸層，以及包含 14 條總線和 21 個 F-GAP 模塊的能力架構。</li>
-<li><strong>GUI</strong>：Tauri 桌面控制台，負責後端發現、進程生命週期、集成探測和本地運維。</li>
+<li><strong>GUI</strong>：EGUI（Rust 原生）桌面圖形界面，負責後端發現、進程生命週期、集成探測、監控、對話和配置管理。</li>
 <li><strong>VS Code 插件</strong>：負責拉起或探測運行時，暴露基於 RPC 的命令，並可在工作區級別覆蓋協議模式。</li>
 </ul>
 <h2 id="版本"><a class="header" href="#版本">版本</a></h2>
 <ul>
-<li>後端 Runtime：<strong>0.8.3</strong></li>
-<li>GUI 桌面端：<strong>0.8.3</strong></li>
-<li>VS Code 插件：<strong>0.8.3</strong></li>
+<li>后端 Runtime：<strong>0.9.5</strong></li>
+<li>GUI 桌面端：<strong>0.9.5</strong></li>
+<li>VS Code 插件：<strong>0.9.5</strong></li>
+</ul>
+<h2 id="gui-桌面應用"><a class="header" href="#gui-桌面應用">GUI 桌面應用</a></h2>
+<p>基於 EGUI 的桌面圖形界面（<code>gui/</code>）提供監控、對話和配置管理：</p>
+<pre><code class="language-bash">cargo run --manifest-path gui/Cargo.toml
+</code></pre>
+<p>主要功能：</p>
+<ul>
+<li><strong>監控面板</strong>：後端健康狀態、AI 供應商狀態、實時指標</li>
+<li><strong>對話界面</strong>：多會話管理、階段選擇（coding/review/debug/test/deploy）、模式切換（Ask/Plan/Edit/Safeguard/Full Auto）、文件附件、動態發送按鈕（依據 AI 狀態變化）</li>
+<li><strong>技能管理</strong>：創建和導入 AI 技能；內置 <code>skill-creator</code> 讓 AI 自主定義新技能</li>
+<li><strong>設置</strong>：功能開關、語言切換（en/zh-CN/zh-TW）、5 種視覺主題</li>
+<li><strong>後端連接</strong>：ACP+HTTP JSON-RPC，自動健康輪詢</li>
 </ul>
 <h2 id="構建配置文件"><a class="header" href="#構建配置文件">構建配置文件</a></h2>
 <p>三種構建配置文件適配不同的部署場景：</p>
@@ -207,16 +219,16 @@
 </tbody>
 </table>
 </div>
-<h2 id="驗證狀態phase-4-完成"><a class="header" href="#驗證狀態phase-4-完成">驗證狀態（Phase 4 完成）</a></h2>
+<h2 id="驗證狀態phase-4--25-輪深度掃描完成gui-7-輪"><a class="header" href="#驗證狀態phase-4--25-輪深度掃描完成gui-7-輪">驗證狀態（Phase 4+ — 25 輪深度掃描完成，GUI 7 輪）</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th>配置文件</th><th style="text-align: center"><code>cargo check</code></th><th style="text-align: center"><code>cargo clippy -D warnings</code></th><th style="text-align: center"><code>cargo test</code></th></tr>
 </thead>
 <tbody>
-<tr><td><strong>profile-local</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>866 通過</strong>（766 單元 + 86 RPC + 14 transport）</td></tr>
-<tr><td><strong>profile-simple-server</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>905 通過</strong></td></tr>
-<tr><td><strong>profile-multi-users-server</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>898 通過</strong></td></tr>
+<tr><td><strong>profile-local</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>781 通過</strong></td></tr>
+<tr><td><strong>profile-simple-server</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>827 通過</strong></td></tr>
+<tr><td><strong>profile-multi-users-server</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>890 通過</strong></td></tr>
 </tbody>
 </table>
 </div>
@@ -354,9 +366,9 @@ Phase 5: 生產硬化              ███████████████
 <tr><th style="text-align: left">語言</th><th style="text-align: left">文件</th><th style="text-align: center">鍵值數</th></tr>
 </thead>
 <tbody>
-<tr><td style="text-align: left">英語（美國）</td><td style="text-align: left"><code>languages/en_US.json</code></td><td style="text-align: center">372+</td></tr>
-<tr><td style="text-align: left">簡體中文</td><td style="text-align: left"><code>languages/zh_CN.json</code></td><td style="text-align: center">372+</td></tr>
-<tr><td style="text-align: left">繁體中文</td><td style="text-align: left"><code>languages/zh_TW.json</code></td><td style="text-align: center">372+</td></tr>
+<tr><td style="text-align: left">英語（美國）</td><td style="text-align: left"><code>languages/en_US.json</code></td><td style="text-align: center">448+</td></tr>
+<tr><td style="text-align: left">簡體中文</td><td style="text-align: left"><code>languages/zh_CN.json</code></td><td style="text-align: center">448+</td></tr>
+<tr><td style="text-align: left">繁體中文</td><td style="text-align: left"><code>languages/zh_TW.json</code></td><td style="text-align: center">448+</td></tr>
 </tbody>
 </table>
 </div>
@@ -377,7 +389,7 @@ Phase 5: 生產硬化              ███████████████
 <li><code>src/i18n/</code>：語言運行時</li>
 </ul>
 </li>
-<li><code>GUI/</code>：Tauri 桌面控制台</li>
+<li><code>gui/</code>：EGUI（Rust 原生）桌面圖形界面</li>
 <li><code>vscode-addon/</code>：VS Code 插件（支持 en_US、zh_CN、zh_TW 多語言）</li>
 <li><code>config/</code>：配置文件</li>
 <li><code>tests/</code>：集成測試與回放資產</li>

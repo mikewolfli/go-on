@@ -119,7 +119,8 @@ impl ChatView {
 
         // Concurrent generation limit is enforced atomically below via fetch_add.
         // Do NOT check before fetch_add — that would be a TOCTOU race.
-        let expanded_msg = self.expand_prompt_command(&msg);
+        let expanded_msg =
+            self.expand_prompt_command_with_fallback(&msg, Some(&self.prompts_command_templates));
         let mode = self.selected_mode.clone();
         // Validate phase before sending — if the phase is not in the known list
         // fetched from backend, default to empty (backend will use its default phase).

@@ -27,6 +27,8 @@
 - [Zed Integration](en/zed.md)
 - [VS Code Addon](en/vscode-addon.md)
 - [GUI Console](en/gui.md)
+- [Prompts](en/prompts.md)
+- [Workflow Config](en/workflow-config.md)
 - [Skills Extension](en/skills.md)
 
 # 中文
@@ -54,6 +56,8 @@
 - [Zed 接入](zh-CN/zed.md)
 - [VS Code 插件](zh-CN/vscode-addon.md)
 - [GUI 控制台](zh-CN/gui.md)
+- [提示词模板](zh-CN/prompts.md)
+- [工作流配置](zh-CN/workflow-config.md)
 - [Skills 扩展](zh-CN/skills.md)
 
 # 繁體中文
@@ -81,4 +85,6 @@
 - [Zed 接入](zh-TW/zed.md)
 - [VS Code 插件](zh-TW/vscode-addon.md)
 - [GUI 控制台](zh-TW/gui.md)
+- [提示詞模板](zh-TW/prompts.md)
+- [工作流配置](zh-TW/workflow-config.md)
 - [Skills 擴展](zh-TW/skills.md)

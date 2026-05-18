@@ -17,6 +17,7 @@ use crate::agent::AgentRegistry;
 use crate::cache::ResponseCache;
 use crate::config::{AutoTuneConfig, AutoTuneState, RuntimeConfig, VectorConfig};
 
+use crate::acp::r#impl::request::prompts_pack::PromptManager;
 use crate::acp::r#impl::session::SessionManager;
 use crate::failure_prevention::FailurePrevention;
 use crate::flow::FlowManager;
@@ -162,6 +163,8 @@ pub struct AcpServer {
     pub provenance_ledger: Option<Arc<ProvenanceLedger>>,
     /// User session manager for authentication and session lifecycle
     pub session_manager: Option<Arc<SessionManager>>,
+    /// Prompt manager for prompt template management
+    pub prompt_manager: PromptManager,
     /// RBAC enforcer for request-level authorization
     pub rbac_enforcer: Option<Arc<std::sync::RwLock<crate::governance::rbac::RbacEnforcer>>>,
 }
@@ -522,6 +525,8 @@ impl ServerBuilder {
         ));
         let responses_api_store = Arc::new(StdMutex::new(HashMap::new()));
 
+        let prompt_manager = PromptManager::new(std::path::PathBuf::from("./prompts"));
+
         Ok(AcpServer {
             flow_manager: self.flow_manager,
             agent_registry: self.agent_registry,
@@ -587,6 +592,7 @@ impl ServerBuilder {
             scheduler: self.scheduler,
             provenance_ledger: self.provenance_ledger,
             session_manager: None,
+            prompt_manager,
             rbac_enforcer: None,
         })
     }

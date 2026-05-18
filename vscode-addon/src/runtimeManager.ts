@@ -527,6 +527,34 @@ export class GoOnManager {
       const canWrite = this.process.stdin.write(requestStr);
       if (!canWrite) {
         this._outputChannel?.appendLine("[warn] RPC stdin backpressure");
+        // Fallback to HTTP if available
+        if (
+          typeof globalThis !== "undefined" &&
+          typeof (globalThis as any).fetch === "function"
+        ) {
+          (async () => {
+            try {
+              const httpUrl = `http://127.0.0.1:${(this as any).config?.httpPort || 8090}`;
+              const httpResponse = await (globalThis as any).fetch(httpUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: requestStr,
+              });
+              const result = await httpResponse.json();
+              if (this.pendingRequests.has(id)) {
+                const pending = this.pendingRequests.get(id);
+                this.pendingRequests.delete(id);
+                pending?.resolve(result);
+              }
+              return;
+            } catch (httpErr) {
+              this._outputChannel?.appendLine(
+                `[warn] HTTP fallback also failed: ${httpErr}`,
+              );
+              // HTTP fallback also failed, continue to reject via timeout
+            }
+          })();
+        }
       }
     });
   }

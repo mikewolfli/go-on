@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-dc275d80.js";
+            window.path_to_searchindex_js = "searchindex-ddf09bb2.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-512b02fc.js"></script>
+        <script src="toc-c47ee197.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -193,6 +193,7 @@
 <pre><code class="language-json">{
   "agent_servers": {
     "go-on-acp": {
+      "type": "custom",
       "command": "go-on",
       "args": [
         "--config",
@@ -209,6 +210,7 @@
 <pre><code class="language-json">{
   "agent_servers": {
     "go-on-acp": {
+      "type": "custom",
       "command": "D:/Workspace/RustWorkspace/go-on/target/debug/go-on.exe",
       "args": [
         "--config",
@@ -238,6 +240,7 @@
 <pre><code class="language-json">{
   "agent_servers": {
     "go-on-http": {
+      "type": "custom",
       "url": "http://127.0.0.1:8090"
     }
   }
@@ -255,17 +258,32 @@
 <li><code>/v1/responses</code></li>
 </ul>
 <p>If your Zed version expects an OpenAI-compatible provider or an MCP-style LLM provider, use a <code>/v1</code> base URL.</p>
-<p>Example:</p>
+<p>Example (latest Zed <code>openai_compatible</code> shape):</p>
 <pre><code class="language-json">{
   "language_models": {
-    "go-on-local": {
-      "provider": "openai_compatible",
-      "api_url": "http://127.0.0.1:8090/v1",
-      "model": "auto"
+    "openai_compatible": {
+      "go-on-local": {
+        "api_url": "http://127.0.0.1:8090/v1",
+        "available_models": [
+          {
+            "name": "gpt-5.5",
+            "display_name": "go-on auto (gpt-5.5)",
+            "max_tokens": 400000,
+            "capabilities": {
+              "chat_completions": true,
+              "tools": true,
+              "images": false,
+              "parallel_tool_calls": false,
+              "prompt_cache_key": false
+            }
+          }
+        ]
+      }
     }
   }
 }
 </code></pre>
+<p>If a model is Responses-only, set <code>capabilities.chat_completions=false</code> for that model entry.</p>
 <p>Use this path when:</p>
 <ul>
 <li>Zed expects an OpenAI-compatible endpoint rather than ACP transport</li>
@@ -287,6 +305,24 @@ go-on --config config.toml --validate-config
 <pre><code class="language-text">GET http://127.0.0.1:8090/health
 GET http://127.0.0.1:8090/v1/models
 </code></pre>
+<h2 id="zed-external-agent-updates"><a class="header" href="#zed-external-agent-updates">Zed external-agent updates</a></h2>
+<ul>
+<li>As of Zed <code>v0.221.x+</code>, ACP Registry is the preferred installation path for external agents.</li>
+<li>Built-in external agent names in Zed commonly include <code>claude-acp</code>, <code>codex-acp</code>, and <code>gemini</code>.</li>
+<li>Use <code>zed: acp registry</code> and <code>dev: open acp logs</code> for installation and runtime diagnosis.</li>
+</ul>
+<h2 id="cross-platform-paths"><a class="header" href="#cross-platform-paths">Cross-platform paths</a></h2>
+<ul>
+<li>Linux settings file: <code>~/.config/zed/settings.json</code></li>
+<li>macOS settings file: <code>~/Library/Application Support/Zed/settings.json</code></li>
+<li>Windows settings file: <code>%APPDATA%/Zed/settings.json</code></li>
+</ul>
+<h2 id="model-freshness-policy"><a class="header" href="#model-freshness-policy">Model freshness policy</a></h2>
+<ul>
+<li>Keep <code>available_models</code> aligned with latest provider docs before changing model IDs.</li>
+<li>For OpenAI-family models, verify context window and endpoint compatibility from current provider docs.</li>
+<li>For Zed-hosted model names, re-check retirements/replacements in Zed <code>AI &gt; Models</code> docs before rollout.</li>
+</ul>
 <h2 id="failure-patterns"><a class="header" href="#failure-patterns">Failure patterns</a></h2>
 <ul>
 <li>If <code>/health</code> works but Zed still rejects ACP, the configured runtime mode may be MCP-only.</li>

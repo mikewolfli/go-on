@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-bf14e7b9.js";
+            window.path_to_searchindex_js = "searchindex-0bb38933.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-5b302f00.js"></script>
+        <script src="toc-1158cbfc.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -179,7 +179,7 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="go-on-文档"><a class="header" href="#go-on-文档">go-on 文档</a></h1>
-<p>本文档描述 <code>go-on</code> 当前的 <code>0.8.3</code> 架构和使用模型。</p>
+<p>本文档描述 <code>go-on</code> 当前的 <code>0.9.5</code> 架构和使用模型。</p>
 <p>运行时已完成 <strong>Phase 4</strong>（FutureDesign）—— 21 个 F-GAP 模块 100% 实现，
 全部 38 个能力维度 ★★★★★，14 总线架构全面运行。</p>
 <p>从 <a href="#架构总览">架构总览</a> 开始阅读。</p>
@@ -188,39 +188,51 @@
 <p><code>go-on</code> 是一个围绕 Rust 后端构建的三端运行时体系：</p>
 <ul>
 <li><strong>后端</strong>：负责配置加载、Provider 选择、路由、setup、健康检查、协议协商、stdio 或 HTTP 传输层，以及包含 14 条总线和 21 个 F-GAP 模块的能力架构。</li>
-<li><strong>GUI</strong>：Tauri 桌面控制台，负责后端发现、进程生命周期、集成探测和本地运维。</li>
+<li><strong>GUI</strong>：EGUI（Rust 原生）桌面图形界面，负责后端发现、进程生命周期、集成探测、监控、对话和配置管理。</li>
 <li><strong>VS Code 插件</strong>：负责拉起或探测运行时，暴露基于 RPC 的命令，并可在工作区级别覆盖协议模式。</li>
 </ul>
 <h2 id="版本"><a class="header" href="#版本">版本</a></h2>
 <ul>
-<li>后端 Runtime：<strong>0.8.3</strong></li>
-<li>GUI 桌面端：<strong>0.8.3</strong></li>
-<li>VS Code 插件：<strong>0.8.3</strong></li>
+<li>后端 Runtime：<strong>0.9.5</strong></li>
+<li>GUI 桌面端：<strong>0.9.5</strong></li>
+<li>VS Code 插件：<strong>0.9.5</strong></li>
+</ul>
+<h2 id="gui-桌面应用"><a class="header" href="#gui-桌面应用">GUI 桌面应用</a></h2>
+<p>基于 EGUI 的桌面图形界面（<code>gui/</code>）提供监控、对话和配置管理：</p>
+<pre><code class="language-bash">cargo run --manifest-path gui/Cargo.toml
+</code></pre>
+<p>主要功能：</p>
+<ul>
+<li><strong>监控面板</strong>：后端健康状态、AI 供应商状态、实时指标</li>
+<li><strong>对话界面</strong>：多会话管理、阶段选择（coding/review/debug/test/deploy）、模式切换（Ask/Plan/Edit/Safeguard/Full Auto）、文件附件、动态发送按钮（依据 AI 状态变化）</li>
+<li><strong>技能管理</strong>：创建和导入 AI 技能；内置 <code>skill-creator</code> 让 AI 自主定义新技能</li>
+<li><strong>设置</strong>：功能开关、语言切换（en/zh-CN/zh-TW）、5 种视觉主题</li>
+<li><strong>后端连接</strong>：ACP+HTTP JSON-RPC，自动健康轮询</li>
 </ul>
 <h2 id="构建配置文件"><a class="header" href="#构建配置文件">构建配置文件</a></h2>
-<p>三种构建配置文件适配不同的部署场景：</p>
+<p>三种构建配置文件适用于不同的部署场景：</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>配置文件</th><th>后端</th><th>目标</th><th>构建命令</th></tr>
+<tr><th>配置文件</th><th>后端</th><th>场景</th><th>构建命令</th></tr>
 </thead>
 <tbody>
 <tr><td><code>profile-local</code></td><td>SQLite + sqlite-vec</td><td>单用户本地工具</td><td><code>cargo build</code>（默认）</td></tr>
-<tr><td><code>profile-simple-server</code></td><td>SQLite + sqlite-vec</td><td>单服务部署</td><td><code>cargo build --no-default-features -F profile-simple-server</code></td></tr>
-<tr><td><code>profile-multi-users-server</code></td><td>PostgreSQL + pgvector</td><td>多用户生产环境</td><td><code>cargo build --no-default-features -F profile-multi-users-server</code></td></tr>
+<tr><td><code>profile-simple-server</code></td><td>SQLite + sqlite-vec</td><td>单服务器部署</td><td><code>cargo build --no-default-features -F profile-simple-server</code></td></tr>
+<tr><td><code>profile-multi-users-server</code></td><td>PostgreSQL + pgvector</td><td>多用户生产</td><td><code>cargo build --no-default-features -F profile-multi-users-server</code></td></tr>
 </tbody>
 </table>
 </div>
-<h2 id="验证状态phase-4-完成"><a class="header" href="#验证状态phase-4-完成">验证状态（Phase 4 完成）</a></h2>
+<h2 id="验证状态phase-4--25-轮深度扫描完成gui-7-轮"><a class="header" href="#验证状态phase-4--25-轮深度扫描完成gui-7-轮">验证状态（Phase 4+ — 25 轮深度扫描完成，GUI 7 轮）</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th>配置文件</th><th style="text-align: center"><code>cargo check</code></th><th style="text-align: center"><code>cargo clippy -D warnings</code></th><th style="text-align: center"><code>cargo test</code></th></tr>
 </thead>
 <tbody>
-<tr><td><strong>profile-local</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>866 通过</strong>（766 单元 + 86 RPC + 14 transport）</td></tr>
-<tr><td><strong>profile-simple-server</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>905 通过</strong></td></tr>
-<tr><td><strong>profile-multi-users-server</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>898 通过</strong></td></tr>
+<tr><td><strong>profile-local</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>781 通过</strong></td></tr>
+<tr><td><strong>profile-simple-server</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>827 通过</strong></td></tr>
+<tr><td><strong>profile-multi-users-server</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>890 通过</strong></td></tr>
 </tbody>
 </table>
 </div>
@@ -358,9 +370,9 @@ Phase 5: 生产硬化              ███████████████
 <tr><th style="text-align: left">语言</th><th style="text-align: left">文件</th><th style="text-align: center">键值数</th></tr>
 </thead>
 <tbody>
-<tr><td style="text-align: left">英语（美国）</td><td style="text-align: left"><code>languages/en_US.json</code></td><td style="text-align: center">372+</td></tr>
-<tr><td style="text-align: left">简体中文</td><td style="text-align: left"><code>languages/zh_CN.json</code></td><td style="text-align: center">372+</td></tr>
-<tr><td style="text-align: left">繁体中文</td><td style="text-align: left"><code>languages/zh_TW.json</code></td><td style="text-align: center">372+</td></tr>
+<tr><td style="text-align: left">英语（美国）</td><td style="text-align: left"><code>languages/en_US.json</code></td><td style="text-align: center">448+</td></tr>
+<tr><td style="text-align: left">简体中文</td><td style="text-align: left"><code>languages/zh_CN.json</code></td><td style="text-align: center">448+</td></tr>
+<tr><td style="text-align: left">繁体中文</td><td style="text-align: left"><code>languages/zh_TW.json</code></td><td style="text-align: center">448+</td></tr>
 </tbody>
 </table>
 </div>
@@ -381,7 +393,7 @@ Phase 5: 生产硬化              ███████████████
 <li><code>src/i18n/</code>：语言运行时</li>
 </ul>
 </li>
-<li><code>GUI/</code>：Tauri 桌面控制台</li>
+<li><code>gui/</code>：EGUI（Rust 原生）桌面图形界面</li>
 <li><code>vscode-addon/</code>：VS Code 插件（支持 en_US、zh_CN、zh_TW 多语言）</li>
 <li><code>config/</code>：配置文件</li>
 <li><code>tests/</code>：集成测试与回放资产</li>
@@ -800,6 +812,47 @@ go-on --config config.toml --status
 <p>为编辑器启动的集成运行 ACP over stdio：</p>
 <pre><code class="language-bash">go-on --config config.toml --protocol-mode acp_stdio --verbose
 </code></pre>
+<p>终端聊天（交互式，类似 Claude Code / Codex）：</p>
+<pre><code class="language-bash">go-on -a
+</code></pre>
+<h2 id="终端聊天模式--chat---a"><a class="header" href="#终端聊天模式--chat---a">终端聊天模式（<code>--chat</code> / <code>-a</code>）</a></h2>
+<p>启动交互式终端聊天会话（类似 Claude Code 或 Codex）。</p>
+<pre><code class="language-bash">go-on -a
+# 或
+go-on --chat
+</code></pre>
+<p>如果配置文件在其他路径：</p>
+<pre><code class="language-bash">go-on -c /path/to/config.toml -a
+</code></pre>
+<h3 id="前置条件"><a class="header" href="#前置条件">前置条件</a></h3>
+<p>至少需要在 <code>config.toml</code> 中配置一个 AI 供应商并拥有有效的 API 密钥。API 密钥自动从系统 keyring 读取（keyring → 环境变量回退）。</p>
+<h3 id="行为说明"><a class="header" href="#行为说明">行为说明</a></h3>
+<ol>
+<li>根据已配置的供应商构建智能体注册表。</li>
+<li>打开 readline 风格的对话循环。</li>
+<li>每条消息发送到第一个可用智能体，支持流式输出。</li>
+<li>维护对话历史（上限 1000 条消息）。</li>
+<li>Ctrl+C 或 <code>/quit</code> 优雅退出。</li>
+</ol>
+<h3 id="内置命令"><a class="header" href="#内置命令">内置命令</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>命令</th><th>说明</th></tr>
+</thead>
+<tbody>
+<tr><td><code>/quit</code> 或 <code>/exit</code></td><td>退出聊天模式</td></tr>
+<tr><td><code>/help</code></td><td>显示可用命令</td></tr>
+<tr><td><code>/clear</code></td><td>清除对话历史</td></tr>
+<tr><td><code>/agents</code></td><td>列出已配置的智能体</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="自动跳转到设置"><a class="header" href="#自动跳转到设置">自动跳转到设置</a></h3>
+<p>如果传入 <code>--chat</code> 时未配置任何供应商，将跳过交互式引导直接提示运行 <code>--setup</code>：</p>
+<pre><code class="language-bash">go-on -c config.toml -a
+# → "未配置 AI 智能体。请先运行 go-on --init 来设置供应商。"
+</code></pre>
 <h2 id="操作指导"><a class="header" href="#操作指导">操作指导</a></h2>
 <ul>
 <li>在假设传输层故障之前，先使用 <code>--validate-config</code>。</li>
@@ -925,7 +978,7 @@ curl http://127.0.0.1:8090/health?verbose=true
 <ul>
 <li><strong>Zed</strong>：使用 ACP over stdio 或 HTTP</li>
 <li><strong>VS Code</strong>：使用 go-on 扩展与本地运行时</li>
-<li><strong>GUI 控制台</strong>：基于 Tauri 的桌面界面</li>
+<li><strong>GUI 控制台</strong>：基于 EGUI（Rust 原生）的桌面图形界面</li>
 </ul>
 <h2 id="存储管理"><a class="header" href="#存储管理">存储管理</a></h2>
 <h3 id="缓存位置"><a class="header" href="#缓存位置">缓存位置</a></h3>
@@ -1446,8 +1499,17 @@ sudo -u go-on sqlite3 /var/lib/go-on/cache.sqlite3 "EXPLAIN QUERY PLAN SELECT * 
 <ul>
 <li><strong>多用户支持</strong>：专为多个用户并发访问设计</li>
 <li><strong>PostgreSQL 存储</strong>：带 pgvector 扩展的可扩展数据库</li>
+<li><strong>CORS 支持</strong>：可配置的允许来源、预检（OPTIONS）处理、所有 HTTP/SSE 响应上的 CORS 标头</li>
+<li><strong>入口认证（网关）</strong>：通过 <code>Authorization: Bearer</code>、<code>X-Api-Key</code> 或 <code>X-Go-On-Key</code> 标头验证的共享 API 密钥</li>
+<li><strong>用户认证（HMAC 令牌）</strong>：基于 HMAC-SHA256 签名的每用户 JWT 类令牌，自动配置，可配置 TTL</li>
+<li><strong>RBAC 授权</strong>：基于角色的访问控制（admin/user/viewer/monitor），在 ACP+HTTP 和 MCP+HTTP 路径上均进行按端点权限检查</li>
+<li><strong>租户预算控制</strong>：每个租户的每日令牌/并发任务/API 调用配额，自动配置</li>
+<li><strong>对话隔离</strong>：带租户前缀的命名空间对话 ID，防止跨用户数据泄露</li>
+<li><strong>关闭排空</strong>：优雅关闭期间处理进行中连接的可配置排空期</li>
+<li><strong>信号处理</strong>：所有平台上的 SIGINT（Ctrl+C）和 SIGTERM，实现干净关闭</li>
+<li><strong>线程安全密钥管理</strong>：<code>SECRET_OVERRIDE_MAP</code> 替代 <code>std::env::set_var()</code>（在多线程上下文中已记录为未定义行为）；<code>KEYRING_CACHE</code> 带 30 秒 TTL，避免在异步热路径中阻塞密钥环 I/O</li>
+<li><strong>热重载配置</strong>：通过 <code>config.reload</code> RPC 进行运行时配置重载</li>
 <li><strong>高可用性</strong>：内置冗余和故障转移支持</li>
-<li><strong>高级安全</strong>：基于角色的访问控制、审计日志</li>
 <li><strong>企业监控</strong>：全面的可观测性堆栈</li>
 <li><strong>可扩展性</strong>：水平扩展能力</li>
 <li><strong>完整 Phase 4 架构</strong>：所有 14 条总线和 21 个 F-GAP 模块</li>
@@ -1458,11 +1520,22 @@ sudo -u go-on sqlite3 /var/lib/go-on/cache.sqlite3 "EXPLAIN QUERY PLAN SELECT * 
 <h3 id="架构-1"><a class="header" href="#架构-1">架构</a></h3>
 <pre><code>多用户服务器架构：
 ├── 应用层：go-on 运行时实例
+│   ├── ACP HTTP 服务器（端口 8090）：CORS → 入口认证 → 用户认证 → RBAC → 路由
+│   └── MCP HTTP 服务器（端口 8090）：CORS → 入口认证 → 用户认证 → RBAC → 分发
 ├── 数据库层：带 pgvector 的 PostgreSQL
 ├── 缓存层：Redis（可选）
 ├── 负载均衡器：流量分发
 ├── 监控：Prometheus、Grafana、ELK
 └── 备份：自动化备份系统
+
+请求流程（ACP+HTTP）：
+客户端 → CORS 标头 → 入口认证（API 密钥）→ 用户会话（HMAC 令牌）
+       → RBAC 授权 → 租户预算检查 → 命名空间对话
+       → AI 处理 → 带 CORS 标头的响应
+
+请求流程（MCP+HTTP）：
+客户端 → CORS 标头 → 入口认证（API 密钥）→ 用户会话（HMAC 令牌）
+       → RBAC 授权 → MCP 方法分发 → 带 CORS 的 JSON-RPC 响应
 </code></pre>
 <h2 id="配置-2"><a class="header" href="#配置-2">配置</a></h2>
 <h3 id="服务器配置-1"><a class="header" href="#服务器配置-1">服务器配置</a></h3>
@@ -1472,17 +1545,32 @@ default_phase = "coding"
 model_selection_mode = "adaptive"
 
 [protocol]
-mode = "mcp_http"  # 多用户访问的 MCP over HTTP
+mode = "acp_http"  # 用于多用户访问的 ACP over HTTP（使用 mcp_http 用于 MCP）
 
 [runtime]
 acp_http_bind_addr = "0.0.0.0:8090"
 production_strict = true
+
+# ── 网关入口认证（所有入站流量的共享 API 密钥）────
 entry_auth_enabled = true
 entry_auth_api_key_env = "GO_ON_ENTRY_API_KEY"
 entry_rate_limit_rpm = 5000
 entry_rate_limit_burst = 1000
-session_timeout_minutes = 60
-max_sessions_per_user = 10
+
+# ── 用户认证（每用户 HMAC 令牌）─────────────
+user_auth_enabled = true
+user_auth_token_secret_env = "GO_ON_USER_AUTH_TOKEN_SECRET"
+user_auth_token_ttl_seconds = 86400
+
+# ── 跨域资源共享（CORS）───────────────────
+cors_allowed_origins = ["https://my-frontend.example.com"]
+# 仅用于开发使用 "*"：
+# cors_allowed_origins = ["*"]
+
+# ── 租户资源配额 ────────────────────────────
+tenant_default_daily_token_limit = 1000000
+tenant_default_concurrent_tasks = 10
+tenant_default_daily_api_calls = 10000
 
 [database]
 type = "postgres"
@@ -1498,22 +1586,13 @@ ssl_mode = "prefer"
 [cache]
 enabled = true
 type = "database"  # 使用 PostgreSQL 作为缓存
-# 可选 Redis 缓存
-# type = "redis"
-# redis_url = "redis://localhost:6379"
 
 [vector]
 enabled = true
 type = "pgvector"
-dimensions = 768  # 企业使用的高维度
+dimensions = 768
 top_k = 10
 min_similarity = 0.7
-
-[security]
-rbac_enabled = true
-audit_logging_enabled = true
-data_encryption_enabled = true
-mfa_enabled = false  # 可选：更高安全性时启用
 
 [observability]
 otel_enabled = true
@@ -1529,6 +1608,30 @@ tracing_sampling_rate = 0.1
 <li><code>postgres</code>：PostgreSQL 客户端库</li>
 <li><code>pgvector</code>：PostgreSQL 的向量扩展</li>
 </ul>
+<h3 id="运行时配置字段"><a class="header" href="#运行时配置字段">运行时配置字段</a></h3>
+<p>以下是多用户模式特有的运行时配置字段：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>字段</th><th>描述</th><th>默认值</th></tr>
+</thead>
+<tbody>
+<tr><td><code>entry_auth_enabled</code></td><td>启用网关 API 密钥认证</td><td><code>false</code></td></tr>
+<tr><td><code>entry_auth_api_key_env</code></td><td>入口 API 密钥的环境变量名</td><td><code>GO_ON_ENTRY_API_KEY</code></td></tr>
+<tr><td><code>entry_rate_limit_rpm</code></td><td>每源 IP 的速率限制</td><td><code>240</code></td></tr>
+<tr><td><code>entry_rate_limit_burst</code></td><td>令牌桶突发容量</td><td><code>60</code></td></tr>
+<tr><td><code>user_auth_enabled</code></td><td>启用每用户 HMAC 令牌认证</td><td><code>false</code></td></tr>
+<tr><td><code>user_auth_token_secret</code></td><td>HMAC 签名密钥（配置文件）</td><td><code>go-on-multi-user-secret</code></td></tr>
+<tr><td><code>user_auth_token_secret_env</code></td><td>HMAC 密钥的环境变量覆盖</td><td><code>GO_ON_USER_AUTH_TOKEN_SECRET</code></td></tr>
+<tr><td><code>user_auth_token_ttl_seconds</code></td><td>令牌 TTL（秒）</td><td><code>86400</code>（24小时）</td></tr>
+<tr><td><code>cors_allowed_origins</code></td><td>允许的 CORS 来源（空 = 禁用）</td><td><code>[]</code></td></tr>
+<tr><td><code>tenant_default_daily_token_limit</code></td><td>每租户每日令牌限制</td><td><code>1000000</code></td></tr>
+<tr><td><code>tenant_default_concurrent_tasks</code></td><td>每租户最大并发任务数</td><td><code>10</code></td></tr>
+<tr><td><code>tenant_default_daily_api_calls</code></td><td>每租户每日 API 调用限制</td><td><code>10000</code></td></tr>
+<tr><td><code>shutdown_drain_seconds</code></td><td>优雅关闭排空期</td><td><code>30</code></td></tr>
+</tbody>
+</table>
+</div>
 <h2 id="安装-2"><a class="header" href="#安装-2">安装</a></h2>
 <h3 id="为企业部署构建"><a class="header" href="#为企业部署构建">为企业部署构建</a></h3>
 <pre><code class="language-bash"># 使用 multi-users-server 配置文件构建
@@ -1843,46 +1946,112 @@ server {
 </code></pre>
 <h2 id="安全-2"><a class="header" href="#安全-2">安全</a></h2>
 <h3 id="认证和授权"><a class="header" href="#认证和授权">认证和授权</a></h3>
-<pre><code class="language-toml">[security.authentication]
-type = "jwt"
-jwt_secret_env = "GO_ON_JWT_SECRET"
-token_expiry_hours = 24
-refresh_token_expiry_days = 7
+<p>多用户服务器提供<strong>双层认证</strong>系统：</p>
+<p><strong>第一层：网关入口认证（共享 API 密钥）</strong></p>
+<ul>
+<li>对每个 HTTP 请求验证预先共享的 API 密钥</li>
+<li>密钥来自 <code>entry_auth_api_key_env</code> 指定的环境变量（默认：<code>GO_ON_ENTRY_API_KEY</code>）</li>
+<li>接受的标头：<code>Authorization: Bearer &lt;key&gt;</code>、<code>X-Api-Key</code>、<code>X-Go-On-Key</code></li>
+<li>如果缺失/无效，返回 401 <code>ENTRY_AUTH_REQUIRED</code></li>
+<li>如果环境变量未设置，返回 503 <code>ENTRY_AUTH_MISCONFIGURED</code></li>
+</ul>
+<p><strong>第二层：用户认证（HMAC-SHA256 令牌）</strong></p>
+<ul>
+<li>发行使用 HMAC-SHA256 签名的每用户令牌</li>
+<li>令牌格式：<code>user_id:base64_hmac:expires_at_ms</code></li>
+<li>令牌密钥解析顺序：环境变量（<code>user_auth_token_secret_env</code>）&gt; 配置文件 &gt; 默认值</li>
+<li>自动配置：有效令牌无需预注册即可获得会话</li>
+<li>降级回退：当 <code>user_auth_enabled=false</code> 时，所有请求视为管理员</li>
+</ul>
+<p><strong>RBAC 授权</strong></p>
+<ul>
+<li>内置角色：<code>admin</code>（完全访问）、<code>user</code>（R/W/X）、<code>viewer</code>（只读）、<code>monitor</code></li>
+<li>权限映射：<code>GET</code> → 读取，<code>POST /chat</code> → 执行，<code>POST /rpc</code> → 执行</li>
+<li>在 ACP+HTTP 和 MCP+HTTP 路径上一致应用</li>
+<li>返回 401 <code>AUTH_REQUIRED</code>（无会话）、403 <code>ACCESS_DENIED</code>（无权限）、403 <code>PRIVILEGE_ESCALATION_REQUIRED</code>（角色不足）</li>
+</ul>
+<p><strong>免认证端点：</strong> <code>/</code> 和 <code>/health</code> 绕过所有认证。</p>
+<h3 id="发行用户令牌"><a class="header" href="#发行用户令牌">发行用户令牌</a></h3>
+<p>用户令牌可以通过内部 <code>SessionManager</code> API 编程方式发行。令牌格式为 <code>user_id:base64_hmac_sig:expires_at_ms</code>：</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Rust：编程方式发行令牌
+use crate::acp::r#impl::session::{AuthConfig, SessionManager};
 
-[security.authorization]
-rbac_enabled = true
-roles = ["admin", "user", "viewer"]
-default_role = "user"
-
-[security.audit]
-enabled = true
-retention_days = 90
-sensitive_fields = ["password", "api_key", "token"]
+let auth_cfg = AuthConfig::from(&amp;runtime_config);
+let mgr = SessionManager::with_auth_config(auth_cfg);
+let token = mgr.issue_token("alice", &amp;["admin"], None, 86400).unwrap();
+// 返回："alice:&lt;base64_hmac&gt;:&lt;expires_at_ms&gt;"
+<span class="boring">}</span></code></pre>
+<h3 id="cors-配置"><a class="header" href="#cors-配置">CORS 配置</a></h3>
+<p>允许的来源默认为 <code>[]</code>（空 = 禁用 CORS）。要启用跨域请求：</p>
+<pre><code class="language-toml">[runtime]
+cors_allowed_origins = ["https://my-frontend.example.com"]
+# 多个来源：
+# cors_allowed_origins = ["https://app1.example.com", "https://app2.example.com"]
+# 仅用于开发：
+# cors_allowed_origins = ["*"]
 </code></pre>
+<p>配置后，所有 HTTP 响应（JSON、SSE、错误）都会自动包含 CORS 标头。</p>
+<h3 id="租户预算控制"><a class="header" href="#租户预算控制">租户预算控制</a></h3>
+<p>启用用户认证后，系统会自动配置默认租户配额：</p>
+<pre><code class="language-toml">[runtime]
+tenant_default_daily_token_limit = 1000000
+tenant_default_concurrent_tasks = 10
+tenant_default_daily_api_calls = 10000
+</code></pre>
+<p>对话 ID 使用租户 ID 前缀进行命名空间隔离，以防止跨用户数据泄露：</p>
+<pre><code>内部 conversation_id = "tenant_id:user_provided_conversation_id"
+</code></pre>
+<h3 id="对话隔离"><a class="header" href="#对话隔离">对话隔离</a></h3>
+<p>所有对话状态按租户隔离：</p>
+<ul>
+<li>当 <code>user_auth_enabled</code> 时，对话 ID 以 <code>tenant_id:</code> 为前缀</li>
+<li>预算控制使用用户会话中的 <code>tenant_id</code>（而非原始的 <code>conversation_id</code>）</li>
+<li>防止跨用户对话历史泄露</li>
+</ul>
+<h3 id="线程安全密钥管理"><a class="header" href="#线程安全密钥管理">线程安全密钥管理</a></h3>
+<p>项目将所有 <code>std::env::set_var()</code> 调用（在多线程上下文中已记录为<strong>未定义行为</strong>）替换为内存中的 <code>HashMap</code>：</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// 线程安全：设置密钥覆盖
+crate::shared::secret_override::set_secret_override("GITHUB_TOKEN", "ghp_xxx");
+
+// 线程安全：读取（先检查覆盖映射，再检查环境变量）
+let value = crate::shared::secret_override::get_secret("GITHUB_TOKEN");
+<span class="boring">}</span></code></pre>
+<p>密钥环查找缓存 30 秒 TTL，以避免在异步上下文中阻塞 I/O：</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// 使用 30 秒 TTL 的缓存
+let value = crate::shared::secret_override::get_keyring_cached("go-on", "copilot_api_key");
+<span class="boring">}</span></code></pre>
+<p><strong>安全合规：</strong></p>
+<ul>
+<li>✅ 生产代码中 0 个 <code>std::env::set_var()</code> 调用</li>
+<li>✅ 0 个 <code>.expect("lock poisoned")</code> panic——所有锁中毒通过 <code>unwrap_or_else(|e| e.into_inner())</code> 恢复</li>
+<li>✅ 生产代码中 0 个 <code>unsafe</code> 块</li>
+<li>✅ 所有 HTTP 响应（JSON、SSE、错误）包含 CORS 标头</li>
+<li>✅ MCP HTTP 服务器与 ACP HTTP 服务器共享相同的认证管道</li>
+</ul>
 <h3 id="网络安全"><a class="header" href="#网络安全">网络安全</a></h3>
 <pre><code class="language-bash"># 防火墙规则
 sudo ufw allow 443/tcp  # HTTPS
 sudo ufw allow 5432/tcp  # PostgreSQL
 sudo ufw allow 6379/tcp  # Redis
-sudo ufw allow 9090/tcp  # 指标
-sudo ufw allow 4317/tcp  # OpenTelemetry
+sudo ufw allow 8090/tcp  # go-on ACP/MCP HTTP
 
 # 启用防火墙
 sudo ufw --force enable
 </code></pre>
 <h3 id="密钥管理"><a class="header" href="#密钥管理">密钥管理</a></h3>
-<pre><code class="language-bash"># 使用 HashiCorp Vault
-vault kv put secret/go-on \
-  db_username=go_on \
-  db_password=$(openssl rand -base64 32) \
-  entry_api_key=$(openssl rand -base64 48) \
-  jwt_secret=$(openssl rand -base64 64)
+<pre><code class="language-bash"># 设置所需的环境变量
+export GO_ON_ENTRY_API_KEY=$(openssl rand -base64 48)
+export GO_ON_USER_AUTH_TOKEN_SECRET=$(openssl rand -base64 64)
 
-# 环境变量
-export GO_ON_DB_USERNAME=$(vault kv get -field=db_username secret/go-on)
-export GO_ON_DB_PASSWORD=$(vault kv get -field=db_password secret/go-on)
-export GO_ON_ENTRY_API_KEY=$(vault kv get -field=entry_api_key secret/go-on)
-export GO_ON_JWT_SECRET=$(vault kv get -field=jwt_secret secret/go-on)
+# 可选：PostgreSQL 凭据
+export GO_ON_DB_USERNAME="go_on"
+export GO_ON_DB_PASSWORD=$(openssl rand -base64 32)
 </code></pre>
 <h2 id="监控和可观测性"><a class="header" href="#监控和可观测性">监控和可观测性</a></h2>
 <h3 id="prometheus-配置"><a class="header" href="#prometheus-配置">Prometheus 配置</a></h3>
@@ -2464,7 +2633,7 @@ openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365
 tls_cert_path = "cert.pem"
 tls_key_path = "key.pem"
 </code></pre>
-<h3 id="cors-配置"><a class="header" href="#cors-配置">CORS 配置</a></h3>
+<h3 id="cors-配置-1"><a class="header" href="#cors-配置-1">CORS 配置</a></h3>
 <pre><code class="language-toml">[security.cors]
 allowed_origins = ["https://example.com", "http://localhost:3000"]
 allowed_methods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
@@ -3355,6 +3524,7 @@ X-RateLimit-Reset: 1614556800
 <pre><code class="language-json">{
   "agent_servers": {
     "go-on-acp": {
+      "type": "custom",
       "command": "go-on",
       "args": [
         "--config",
@@ -3371,6 +3541,7 @@ X-RateLimit-Reset: 1614556800
 <pre><code class="language-json">{
   "agent_servers": {
     "go-on-acp": {
+      "type": "custom",
       "command": "D:/Workspace/RustWorkspace/go-on/target/debug/go-on.exe",
       "args": [
         "--config",
@@ -3400,6 +3571,7 @@ X-RateLimit-Reset: 1614556800
 <pre><code class="language-json">{
   "agent_servers": {
     "go-on-http": {
+      "type": "custom",
       "url": "http://127.0.0.1:8090"
     }
   }
@@ -3417,17 +3589,32 @@ X-RateLimit-Reset: 1614556800
 <li><code>/v1/responses</code></li>
 </ul>
 <p>如果你的 Zed 版本对应的是 OpenAI 兼容 provider 或 MCP 风格 LLM provider，那么应使用 <code>/v1</code> 基址。</p>
-<p>示例：</p>
+<p>示例（按最新 Zed <code>openai_compatible</code> 结构）：</p>
 <pre><code class="language-json">{
   "language_models": {
-    "go-on-local": {
-      "provider": "openai_compatible",
-      "api_url": "http://127.0.0.1:8090/v1",
-      "model": "auto"
+    "openai_compatible": {
+      "go-on-local": {
+        "api_url": "http://127.0.0.1:8090/v1",
+        "available_models": [
+          {
+            "name": "gpt-5.5",
+            "display_name": "go-on auto (gpt-5.5)",
+            "max_tokens": 400000,
+            "capabilities": {
+              "chat_completions": true,
+              "tools": true,
+              "images": false,
+              "parallel_tool_calls": false,
+              "prompt_cache_key": false
+            }
+          }
+        ]
+      }
     }
   }
 }
 </code></pre>
+<p>如果某个模型只支持 Responses API，请将该模型的 <code>capabilities.chat_completions</code> 设为 <code>false</code>。</p>
 <p>适用场景：</p>
 <ul>
 <li>Zed 这一能力要求的是 OpenAI 兼容接口，而不是 ACP 传输</li>
@@ -3449,6 +3636,24 @@ go-on --config config.toml --validate-config
 <pre><code class="language-text">GET http://127.0.0.1:8090/health
 GET http://127.0.0.1:8090/v1/models
 </code></pre>
+<h2 id="zed-外部-agent-新变化"><a class="header" href="#zed-外部-agent-新变化">Zed 外部 Agent 新变化</a></h2>
+<ul>
+<li>从 Zed <code>v0.221.x+</code> 开始，ACP Registry 是更推荐的外部 Agent 安装方式。</li>
+<li>常见内置外部 Agent 名称包括：<code>claude-acp</code>、<code>codex-acp</code>、<code>gemini</code>。</li>
+<li>建议使用 <code>zed: acp registry</code> 进行安装，使用 <code>dev: open acp logs</code> 进行联调诊断。</li>
+</ul>
+<h2 id="三平台路径统一"><a class="header" href="#三平台路径统一">三平台路径统一</a></h2>
+<ul>
+<li>Linux 配置文件：<code>~/.config/zed/settings.json</code></li>
+<li>macOS 配置文件：<code>~/Library/Application Support/Zed/settings.json</code></li>
+<li>Windows 配置文件：<code>%APPDATA%/Zed/settings.json</code></li>
+</ul>
+<h2 id="模型更新策略"><a class="header" href="#模型更新策略">模型更新策略</a></h2>
+<ul>
+<li>修改 <code>available_models</code> 前，先对齐最新官方文档中的模型 ID 与上下文窗口。</li>
+<li>OpenAI 兼容模型需同时核对 endpoint 兼容性（<code>chat/completions</code> 与 <code>responses</code>）。</li>
+<li>使用 Zed 托管模型时，上线前先检查 Zed <code>AI &gt; Models</code> 中的 retired/replaced 列表。</li>
+</ul>
 <h2 id="常见失败模式"><a class="header" href="#常见失败模式">常见失败模式</a></h2>
 <ul>
 <li><code>/health</code> 能通，但 Zed 仍拒绝 ACP，多半是当前运行时模式偏 MCP-only。</li>
@@ -3661,9 +3866,13 @@ GET http://127.0.0.1:8090/v1/models
 <h2 id="进程输出通道"><a class="header" href="#进程输出通道">进程输出通道</a></h2>
 <p>所有 Go-On 进程输出（stdout、stderr、退出码、进程错误）均写入 VS Code 的 <strong>“Go-On”</strong> 输出通道。通过 <strong>查看 → 输出</strong> 打开，再从下拉菜单中选择 <strong>Go-On</strong> 即可查看。这是启动失败和运行时错误排查的首选入口。</p>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="gui-控制台"><a class="header" href="#gui-控制台">GUI 控制台</a></h1>
-<p>GUI 是围绕后端构建的 Tauri 桌面控制台，目标是让运维和集成调试不必一直停留在终端里。</p>
-<h2 id="gui-依赖什么"><a class="header" href="#gui-依赖什么">GUI 依赖什么</a></h2>
+<h1 id="gui-桌面控制台"><a class="header" href="#gui-桌面控制台">GUI 桌面控制台</a></h1>
+<p>GUI 是基于 EGUI（Rust 原生）的桌面图形界面，位于 <code>gui/</code> 目录下。
+它提供后端监控、多会话对话、技能管理和设置编辑等功能，
+让运维和集成调试不必一直停留在终端里。</p>
+<h2 id="架构概述"><a class="header" href="#架构概述">架构概述</a></h2>
+<p>GUI 是一个 Rust 原生桌面应用，使用 EGUI 框架（基于 <code>eframe</code>/<code>egui</code>）构建。
+它通过 ACP+HTTP JSON-RPC 与后端通信，自动管理后端进程的生命周期。</p>
 <p>GUI 持有并使用三个核心值：</p>
 <ul>
 <li>后端可执行文件路径</li>
@@ -3671,17 +3880,64 @@ GET http://127.0.0.1:8090/v1/models
 <li>工作目录中的运行时配置文件</li>
 </ul>
 <p>GUI 拉起后端进程时会以工作目录作为当前目录，因此要求 <code>config.toml</code> 就放在该目录下。</p>
+<h2 id="功能面板"><a class="header" href="#功能面板">功能面板</a></h2>
+<h3 id="监控面板-monitor"><a class="header" href="#监控面板-monitor">监控面板 (Monitor)</a></h3>
+<ul>
+<li>后端健康状态：通过 <code>/health</code> 端点自动轮询</li>
+<li>AI 供应商状态：实时显示 Provider 连接状况</li>
+<li>实时指标：请求数、延迟、错误率</li>
+</ul>
+<h3 id="对话界面-chat"><a class="header" href="#对话界面-chat">对话界面 (Chat)</a></h3>
+<ul>
+<li>多会话管理：创建、切换、删除会话</li>
+<li>多模型支持：每个会话可选择不同 AI 模型</li>
+<li>阶段选择：coding / review / debug / test / deploy</li>
+<li>模式切换：Ask / Plan / Edit / Safeguard / Full Auto</li>
+<li>文件附件：支持上传文件作为对话上下文</li>
+<li>动态发送按钮：依据 AI 状态变化（loading / ready / error）</li>
+<li><strong>风险决策面板</strong>：展示高风险 AI 回复的风险评估、缓解策略和审查要求（详见下方专题说明）</li>
+</ul>
+<h3 id="技能管理-skills"><a class="header" href="#技能管理-skills">技能管理 (Skills)</a></h3>
+<ul>
+<li>创建和导入 AI 技能</li>
+<li>内置 <code>skill-creator</code>：让 AI 自主定义新技能</li>
+<li>技能列表管理：启用、禁用、删除</li>
+</ul>
+<h3 id="对话界面--风险决策与安全审查模式"><a class="header" href="#对话界面--风险决策与安全审查模式">对话界面 — 风险决策与安全审查模式</a></h3>
+<p>当后端治理层检测到潜在高风险内容时，GUI 会在 AI 响应中显示<strong>风险决策面板</strong>。该功能属于 Safeguard（安全审查）模式和多模型投票系统的一部分。</p>
+<p><strong>触发机制：</strong> 后端将用户消息与领域关键词（医疗、法律、金融、安全等）及决策相关关键词进行比对分析。当风险评分超过阈值时，后端激活一项或多项缓解策略：</p>
+<ul>
+<li><strong>多模型投票 (Multi-model vote)</strong>：将请求同时发送给多个模型，比较输出结果</li>
+<li><strong>多智能体投票 (Multi-agent vote)</strong>：将请求路由到不同 AI 智能体，汇总结果</li>
+<li><strong>升级处理 (Escalation)</strong>：使用更强大（也更贵）的模型进行最终判断</li>
+<li><strong>需要审查 (Review required)</strong>：标记响应以供人工审核</li>
+</ul>
+<p><strong>GUI 显示内容：</strong></p>
+<ul>
+<li>风险状态：<strong>高风险</strong> 或 <strong>正常</strong></li>
+<li>使用策略：如 “multi_model_vote”、“multi_agent_vote”、“escalation”</li>
+<li>审查要求指示</li>
+<li>具体风险原因（最多显示 4 条）</li>
+</ul>
+<p>面板自适应主题：高风险话题显示暖橙色/红色背景，正常风险显示轻微绿色背景——两种模式均正确支持深色/浅色主题。</p>
+<h3 id="设置面板-settings"><a class="header" href="#设置面板-settings">设置面板 (Settings)</a></h3>
+<ul>
+<li><strong>Provider 管理</strong>：动态环境变量注入（支持全部 34+ 供应商），不再硬编码为 8 个</li>
+<li><strong>配置文件编辑器</strong>：管理 <code>gui_config.json</code>，含 JSON 语法验证</li>
+<li><strong>主题选择</strong>：6 种视觉主题（简约 / 国风 / 武侠 / 山水 / Hello Kitty / 暗黑）</li>
+<li><strong>语言切换</strong>：简体中文、繁體中文、English</li>
+<li><strong>功能开关</strong>：启用/禁用各项 GUI 功能</li>
+</ul>
 <h2 id="开发与构建命令"><a class="header" href="#开发与构建命令">开发与构建命令</a></h2>
-<p>在 <code>GUI/</code> 目录下：</p>
-<pre><code class="language-bash">npm install
-npm run dev
-</code></pre>
-<p>生产构建：</p>
-<pre><code class="language-bash">npm run build
-</code></pre>
-<p>桌面调试与打包：</p>
-<pre><code class="language-bash">npm run tauri dev
-npm run tauri build
+<p>在 <code>gui/</code> 目录下：</p>
+<pre><code class="language-bash"># 开发运行
+cargo run
+
+# 构建（release）
+cargo build --release
+
+# 从项目根目录运行
+cargo run --manifest-path gui/Cargo.toml
 </code></pre>
 <h2 id="绑定后端"><a class="header" href="#绑定后端">绑定后端</a></h2>
 <p>GUI 可以自动发现后端可执行文件。自动绑定成功后，会把可执行文件所在目录作为工作目录，并把日志落到该目录下的 <code>go-on.log</code>。</p>
@@ -3691,23 +3947,16 @@ npm run tauri build
 <li>填写工作目录</li>
 <li>确保该目录下存在 <code>config.toml</code></li>
 </ol>
-<h2 id="配置与环境变量行为"><a class="header" href="#配置与环境变量行为">配置与环境变量行为</a></h2>
-<p>GUI 会直接管理：</p>
+<h2 id="密钥管理-1"><a class="header" href="#密钥管理-1">密钥管理</a></h2>
+<p>GUI 使用双重存储机制：</p>
 <ul>
-<li><code>config.toml</code></li>
-<li><code>config.toml.autopilot-adaptive</code> 作为恢复默认模板来源</li>
-<li><code>.env.goon</code> 作为持久化环境变量文件</li>
+<li><strong>系统密钥环 (keyring)</strong>：优先使用操作系统级别的密钥存储（如 Linux 的 Secret Service、macOS 的 Keychain、Windows 的 Credential Manager）</li>
+<li><strong>配置文件 (config file)</strong>：作为备份和便携方案</li>
 </ul>
-<p>因此，一条实用的 GUI 初始化路径是：</p>
-<ol>
-<li>绑定后端可执行文件</li>
-<li>必要时恢复默认配置</li>
-<li>通过 GUI 保存 Provider API Key</li>
-<li>启动后端进程</li>
-<li>检查集成探测状态</li>
-</ol>
+<p>API Key 无需写入 <code>.env.goon</code>，全部通过 GUI 的 Provider 管理界面动态注入。</p>
 <h2 id="运行时进程行为"><a class="header" href="#运行时进程行为">运行时进程行为</a></h2>
 <p>GUI 启动后端时，会从当前配置的工作目录拉起该可执行文件，并把 stdout 与 stderr 都写到 <code>go-on.log</code>。</p>
+<p><strong>自动重启</strong>：如果后端崩溃，GUI 会在 3 秒冷却后自动重启后端进程。</p>
 <p>因此最常见的操作错误是：二进制路径正确，但工作目录错误，导致配置文件找不到或加载了错误配置。</p>
 <h2 id="健康检查与集成探测"><a class="header" href="#健康检查与集成探测">健康检查与集成探测</a></h2>
 <p>GUI 当前会探测：</p>
@@ -3730,20 +3979,321 @@ npm run tauri build
 <p>GUI 本身无论哪种模式都可以继续管理后端可执行文件，模式差异主要体现在 GUI 启动之后外部客户端还能做什么。</p>
 <h2 id="推荐操作顺序"><a class="header" href="#推荐操作顺序">推荐操作顺序</a></h2>
 <ol>
-<li>构建后端。</li>
-<li>启动 GUI。</li>
-<li>使用自动绑定，或手工填写可执行文件路径。</li>
-<li>确认工作目录中存在 <code>config.toml</code>。</li>
-<li>必要时把 API Key 保存到 <code>.env.goon</code>。</li>
-<li>启动后端。</li>
-<li>查看健康状态和集成探测结果。</li>
+<li>构建后端：<code>cargo build</code></li>
+<li>初始化后端（首次）：<code>cargo run -- --init</code></li>
+<li>构建 GUI：<code>cargo build --manifest-path gui/Cargo.toml</code></li>
+<li>启动 GUI：<code>cargo run --manifest-path gui/Cargo.toml</code></li>
+<li>使用自动绑定，或手工填写可执行文件路径</li>
+<li>确认工作目录中存在 <code>config.toml</code></li>
+<li>在 Provider 管理中配置 API Key（自动存储到系统密钥环）</li>
+<li>启动后端</li>
+<li>查看健康状态和集成探测结果</li>
 </ol>
 <h2 id="故障排查"><a class="header" href="#故障排查">故障排查</a></h2>
 <ul>
 <li>如果启动时报文件错误，先重新检查可执行文件路径。</li>
 <li>如果启动成功但探测失败，优先检查协议模式和 Provider 就绪状态。</li>
 <li>如果 GUI 显示健康正常，但编辑器仍失败，就对照编辑器所需传输契约与当前运行时模式是否一致。</li>
+<li>GUI 自身问题：检查 <code>gui_config.json</code> 是否损坏，必要时删除重置。</li>
 </ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="prompts-系统"><a class="header" href="#prompts-系统">Prompts 系统</a></h1>
+<h2 id="概述-9"><a class="header" href="#概述-9">概述</a></h2>
+<p>Prompts 系统是 go-on 内置的提示词模板管理功能，提供 <strong>84+ 个即用模板</strong>，涵盖 12 个行业类别。用户可通过 GUI 浏览、搜索和插入模板，在 Chat 中使用 <code>/</code> 命令快速展开模板，或通过 MCP（Model Context Protocol）让 AI 代理自动调用模板。</p>
+<blockquote>
+<p>相关文档：<a href="#gui-桌面控制台">GUI 控制台</a> | <a href="#工作流配置">工作流配置</a></p>
+</blockquote>
+<hr>
+<h2 id="目录结构-1"><a class="header" href="#目录结构-1">目录结构</a></h2>
+<p>提示词模板按分层目录结构组织：</p>
+<pre><code>prompts/
+├── en.json           # 英文内置模板（默认）
+├── zh-CN.json        # 简体中文内置模板
+├── zh-TW.json        # 繁体中文内置模板
+└── custom/
+    ├── en.json       # 英文自定义模板
+    ├── zh-CN.json    # 简体中文自定义模板
+    └── zh-TW.json    # 繁体中文自定义模板
+</code></pre>
+<ul>
+<li><code>prompts/{lang}.json</code> — 内置模板，随系统发布，只读</li>
+<li><code>prompts/custom/{lang}.json</code> — 自定义模板，用户可自由创建、编辑和删除</li>
+<li>语言自动切换：当 GUI 语言改变时，系统自动加载对应语言的模板文件</li>
+</ul>
+<h3 id="支持的语言"><a class="header" href="#支持的语言">支持的语言</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>语言代码</th><th>名称</th></tr>
+</thead>
+<tbody>
+<tr><td><code>en</code></td><td>English</td></tr>
+<tr><td><code>zh-CN</code></td><td>简体中文</td></tr>
+<tr><td><code>zh-TW</code></td><td>繁体中文</td></tr>
+</tbody>
+</table>
+</div>
+<p>切换 GUI 语言时，提示词模板系统会自动加载对应的语言文件，无需手动切换。</p>
+<hr>
+<h2 id="12-个行业类别"><a class="header" href="#12-个行业类别">12 个行业类别</a></h2>
+<p>每个类别包含 7 个模板，共 <strong>84+ 个模板</strong>，覆盖各行业典型使用场景。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>#</th><th>类别</th><th>描述</th><th>代表模板</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td>软件开发</td><td>代码生成、调试、重构、代码审查</td><td><code>explain_code</code> 解释代码 / <code>review_code</code> 代码审查 / <code>generate_test</code> 生成单元测试</td></tr>
+<tr><td>2</td><td>写作与创意</td><td>文章写作、创意写作、文案撰写</td><td><code>write_article</code> 撰写文章 / <code>creative_story</code> 创意故事 / <code>copywriting</code> 文案写作</td></tr>
+<tr><td>3</td><td>学术研究</td><td>论文写作、文献综述、数据分析</td><td><code>write_paper</code> 论文写作 / <code>literature_review</code> 文献综述 / <code>data_analysis</code> 数据分析</td></tr>
+<tr><td>4</td><td>商业分析</td><td>市场分析、商业模式、竞争分析</td><td><code>market_analysis</code> 市场分析 / <code>business_model</code> 商业模式 / <code>competitive_analysis</code> 竞争分析</td></tr>
+<tr><td>5</td><td>市场营销</td><td>营销方案、广告文案、社交媒体</td><td><code>marketing_plan</code> 营销计划 / <code>ad_copy</code> 广告文案 / <code>social_media</code> 社交媒体内容</td></tr>
+<tr><td>6</td><td>法律与合规</td><td>合同审查、法律咨询、合规检查</td><td><code>contract_review</code> 合同审查 / <code>legal_advice</code> 法律咨询 / <code>compliance_check</code> 合规检查</td></tr>
+<tr><td>7</td><td>医疗与健康</td><td>医疗咨询、健康管理、药品信息</td><td><code>medical_consult</code> 医疗咨询 / <code>health_plan</code> 健康计划 / <code>drug_info</code> 药品信息</td></tr>
+<tr><td>8</td><td>教育与培训</td><td>课程设计、教案编写、辅导答疑</td><td><code>course_design</code> 课程设计 / <code>lesson_plan</code> 教案 / <code>tutoring</code> 辅导答疑</td></tr>
+<tr><td>9</td><td>金融与投资</td><td>投资分析、风险评估、财务报告</td><td><code>investment_analysis</code> 投资分析 / <code>risk_assessment</code> 风险评估 / <code>financial_report</code> 财务报告</td></tr>
+<tr><td>10</td><td>数据科学</td><td>数据分析、机器学习、数据可视化</td><td><code>data_cleaning</code> 数据清洗 / <code>ml_model</code> 机器学习模型 / <code>data_viz</code> 数据可视化</td></tr>
+<tr><td>11</td><td>设计与创意</td><td>UI/UX 设计、平面设计、创意头脑风暴</td><td><code>ui_design</code> UI 设计 / <code>brand_design</code> 品牌设计 / <code>creative_brainstorm</code> 创意头脑风暴</td></tr>
+<tr><td>12</td><td>系统运维</td><td>服务器管理、网络配置、监控告警</td><td><code>server_setup</code> 服务器设置 / <code>network_config</code> 网络配置 / <code>monitor_setup</code> 监控设置</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="gui-操作"><a class="header" href="#gui-操作">GUI 操作</a></h2>
+<p>在 GUI 的 <strong>Prompts 选项卡</strong>中，您可以：</p>
+<ul>
+<li><strong>浏览</strong> — 按行业类别分组查看所有模板（内置 + 自定义）</li>
+<li><strong>搜索</strong> — 按关键词搜索模板标题和内容</li>
+<li><strong>创建</strong> — 创建新的自定义模板，选择类别和语言</li>
+<li><strong>编辑</strong> — 修改已有的自定义模板</li>
+<li><strong>删除</strong> — 移除不需要的自定义模板</li>
+</ul>
+<h3 id="操作流程"><a class="header" href="#操作流程">操作流程</a></h3>
+<ol>
+<li>切换到 Prompts 选项卡</li>
+<li>在左侧选择行业类别进行筛选</li>
+<li>使用搜索框按关键词搜索</li>
+<li>点击模板卡片查看详情</li>
+<li>点击 <strong>插入到 Chat</strong> 按钮，将模板内容插入到 Chat 输入框</li>
+<li>在 Chat 中微调模板内容后发送</li>
+</ol>
+<hr>
+<h2 id="chat--命令"><a class="header" href="#chat--命令">Chat <code>/</code> 命令</a></h2>
+<p>在 Chat 输入框中输入 <code>/</code> 可触发命令补全。输入模板 ID 后按回车即可直接展开模板内容。</p>
+<h3 id="命令格式"><a class="header" href="#命令格式">命令格式</a></h3>
+<pre><code>/&lt;template_id&gt; &lt;参数&gt;
+</code></pre>
+<p>示例：</p>
+<ul>
+<li><code>/explain_code</code> — 解释选中的代码</li>
+<li><code>/review_code</code> — 审查代码质量</li>
+<li><code>/generate_test Rust</code> — 为 Rust 代码生成单元测试</li>
+<li><code>/write_article topic: AI 趋势</code> — 撰写指定主题的文章</li>
+</ul>
+<h3 id="常用命令"><a class="header" href="#常用命令">常用命令</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>命令</th><th>功能</th></tr>
+</thead>
+<tbody>
+<tr><td><code>/explain_code</code></td><td>解释选中的代码</td></tr>
+<tr><td><code>/review_code</code></td><td>审查代码质量</td></tr>
+<tr><td><code>/optimize_code</code></td><td>优化代码性能</td></tr>
+<tr><td><code>/generate_test</code></td><td>生成单元测试</td></tr>
+<tr><td><code>/refactor_code</code></td><td>重构代码</td></tr>
+<tr><td><code>/write_doc</code></td><td>编写文档注释</td></tr>
+<tr><td><code>/write_article</code></td><td>撰写文章</td></tr>
+<tr><td><code>/market_analysis</code></td><td>市场分析</td></tr>
+<tr><td><code>/contract_review</code></td><td>合同审查</td></tr>
+<tr><td><code>/data_analysis</code></td><td>数据分析</td></tr>
+</tbody>
+</table>
+</div>
+<p>输入 <code>/</code> 时，系统会显示自动补全列表，支持模糊搜索、类别筛选和完整模板 ID 匹配。</p>
+<hr>
+<h2 id="自定义模板"><a class="header" href="#自定义模板">自定义模板</a></h2>
+<h3 id="创建模板"><a class="header" href="#创建模板">创建模板</a></h3>
+<ol>
+<li>在 Prompts 选项卡中，点击 <strong>创建新模板</strong></li>
+<li>填写模板详细信息：
+<ul>
+<li><strong>ID</strong> — <code>/</code> 命令调用的唯一标识（例如 <code>my_custom_template</code>）</li>
+<li><strong>标题</strong> — 模板的显示名称</li>
+<li><strong>类别</strong> — 所属行业类别</li>
+<li><strong>语言</strong> — 模板语言</li>
+<li><strong>内容</strong> — 提示词文本，支持 <code>{{variable}}</code> 占位符</li>
+<li><strong>描述</strong> — 简要说明模板用途</li>
+</ul>
+</li>
+<li>保存 — 模板将写入 <code>prompts/custom/{lang}.json</code></li>
+</ol>
+<h3 id="编辑模板"><a class="header" href="#编辑模板">编辑模板</a></h3>
+<p>在 Prompts 选项卡中找到自定义模板，点击编辑按钮进行修改。保存后，系统将更新 <code>prompts/custom/{lang}.json</code>。</p>
+<h3 id="删除模板"><a class="header" href="#删除模板">删除模板</a></h3>
+<p>在 Prompts 选项卡中找到自定义模板，点击删除按钮并确认。</p>
+<blockquote>
+<p>⚠️ 注意：只能删除自定义模板，内置模板为只读。</p>
+</blockquote>
+<hr>
+<h2 id="后端-rpc-接口"><a class="header" href="#后端-rpc-接口">后端 RPC 接口</a></h2>
+<p>提示词系统提供以下 RPC 接口：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>RPC</th><th>方法</th><th>描述</th></tr>
+</thead>
+<tbody>
+<tr><td><code>prompts.list</code></td><td>List</td><td>获取所有模板，可按类别和语言筛选</td></tr>
+<tr><td><code>prompts.search</code></td><td>Search</td><td>按关键词搜索模板</td></tr>
+<tr><td><code>prompts.get</code></td><td>Get</td><td>获取单个模板的详细信息</td></tr>
+<tr><td><code>prompts.create</code></td><td>Create</td><td>创建新的自定义模板</td></tr>
+<tr><td><code>prompts.update</code></td><td>Update</td><td>更新自定义模板</td></tr>
+<tr><td><code>prompts.delete</code></td><td>Delete</td><td>删除自定义模板</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="mcp-工具"><a class="header" href="#mcp-工具">MCP 工具</a></h2>
+<p>通过 MCP（Model Context Protocol），AI 代理可以自动发现并调用提示词模板：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>MCP 工具</th><th>功能</th></tr>
+</thead>
+<tbody>
+<tr><td><code>prompts_list</code></td><td>列出所有可用的提示词模板</td></tr>
+<tr><td><code>prompts_get</code></td><td>获取指定模板的详细内容</td></tr>
+</tbody>
+</table>
+</div>
+<p>AI 代理通过 MCP 协议发现这些工具，并可在对话过程中自动选择和应用合适的模板。例如，当用户说“帮我审查这段代码“时，AI 代理可以自动调用 <code>prompts_get</code> 获取 <code>review_code</code> 模板并应用到回复中。</p>
+<hr>
+<h2 id="设置开关"><a class="header" href="#设置开关">设置开关</a></h2>
+<p>在 <strong>设置 → 功能开关</strong> 中，可以启用或禁用 <strong>Prompts</strong> 模块。禁用后：</p>
+<ul>
+<li>Prompts 选项卡从标签栏中隐藏</li>
+<li>相关 RPC 接口停止响应</li>
+<li>相关 MCP 工具停止响应</li>
+</ul>
+<blockquote>
+<p>默认状态：<strong>启用</strong></p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="工作流配置"><a class="header" href="#工作流配置">工作流配置</a></h1>
+<p>go-on 支持多种工作流类型，适用于不同的使用场景。工作流在 <code>config.toml</code> 的 <code>[flow]</code> 部分进行配置。</p>
+<blockquote>
+<p>相关文档：<a href="#gui-桌面控制台">GUI 控制台</a> | <a href="#prompts-系统">Prompts 系统</a></p>
+</blockquote>
+<hr>
+<h2 id="1-工作流类型"><a class="header" href="#1-工作流类型">1. 工作流类型</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>类型</th><th>值</th><th>用途</th><th>默认阶段</th></tr>
+</thead>
+<tbody>
+<tr><td>Auto</td><td><code>"auto"</code></td><td>根据上下文自动检测</td><td>因情况而异</td></tr>
+<tr><td>Dev</td><td><code>"dev"</code></td><td>软件开发</td><td>planning → coding → review → delivery</td></tr>
+<tr><td>General</td><td><code>"general"</code></td><td>问答、分析、研究</td><td>gathering → thinking → executing → validating → closing</td></tr>
+<tr><td>Free</td><td><code>"free"</code></td><td>单轮对话，无阶段路由</td><td>无</td></tr>
+<tr><td>Custom</td><td><code>"custom"</code></td><td>用户自定义阶段</td><td>用户自定义</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="2-快速开始"><a class="header" href="#2-快速开始">2. 快速开始</a></h2>
+<p>在 <code>config/templates/</code> 中提供了两个即用的配置模板：</p>
+<h3 id="开发工作流-1"><a class="header" href="#开发工作流-1">开发工作流</a></h3>
+<pre><code class="language-bash">cp config/templates/config.dev.toml config.toml
+# 编辑 config.toml 添加您的 API 密钥
+go-on --config config.toml
+</code></pre>
+<h3 id="通用工作流"><a class="header" href="#通用工作流">通用工作流</a></h3>
+<pre><code class="language-bash">cp config/templates/config.general.toml config.toml
+# 编辑 config.toml 添加您的 API 密钥
+go-on --config config.toml
+</code></pre>
+<hr>
+<h2 id="3-代理路由流程"><a class="header" href="#3-代理路由流程">3. 代理路由流程</a></h2>
+<p><strong>代理并不绑定到阶段。</strong> 所有注册的 AI 提供者全局可用。<strong>CapabilityBus</strong> 根据以下条件动态为每个子任务选择最佳提供者：</p>
+<ol>
+<li><strong>任务上下文</strong> — 正在执行的工作类型（编码、分析等）</li>
+<li><strong>信誉评分</strong> — 类似任务的历史成功率</li>
+<li><strong>能力标签</strong> — 每个提供者擅长的领域</li>
+</ol>
+<p>您可以在不列出代理的情况下定义阶段——总线会自动选择最佳代理：</p>
+<pre><code class="language-toml">[phases.coding]
+description = "编码 — 实现功能"
+agents = []          # ← 留空！能力总线会自动选择最佳代理。
+fallback = true
+</code></pre>
+<p>或者通过列出首选代理来给总线提示：</p>
+<pre><code class="language-toml">[phases.coding]
+agents = ["deepseek", "openai"]   # ← 提示：优先使用这些，但总线仍会自行决定
+fallback = true
+</code></pre>
+<hr>
+<h2 id="4-自动检测workflow_type--auto"><a class="header" href="#4-自动检测workflow_type--auto">4. 自动检测（<code>workflow_type = "auto"</code>）</a></h2>
+<p>当未设置 <code>workflow_type</code> 或设置为 <code>"auto"</code> 时，系统会在启动时检测上下文：</p>
+<ul>
+<li>如果检测到代码仓库 → 使用 <strong>Dev</strong> 工作流（4 个阶段）</li>
+<li>否则 → 使用 <strong>General</strong> 工作流（5 个阶段）</li>
+</ul>
+<p>通过在配置中显式设置 <code>workflow_type</code> 来覆盖默认行为。</p>
+<hr>
+<h2 id="5-自由模式workflow_type--free"><a class="header" href="#5-自由模式workflow_type--free">5. 自由模式（<code>workflow_type = "free"</code>）</a></h2>
+<p>自由模式绕过阶段路由。每次请求都是单轮交互，不进行阶段切换：</p>
+<pre><code class="language-toml">[flow]
+name = "自由聊天"
+workflow_type = "free"
+phases = []   # 无阶段 — 仅直接路由
+</code></pre>
+<hr>
+<h2 id="6-自定义工作流"><a class="header" href="#6-自定义工作流">6. 自定义工作流</a></h2>
+<p>定义您自己的工作流阶段和转换：</p>
+<pre><code class="language-toml">default_phase = "research"
+model_selection_mode = "adaptive"
+
+[flow]
+name = "我的研究工作流"
+workflow_type = "custom"
+phases = ["research", "draft", "polish", "publish"]
+
+[phases.research]
+description = "研究 — 收集资料、分析数据"
+agents = []
+fallback = true
+
+[phases.research.options]
+request_timeout_seconds = 180
+cache_enabled = true
+vector_enabled = true
+phase_max_inflight = 8
+global_max_inflight = 128
+</code></pre>
+<p>每个阶段都支持可配置选项，包括超时、缓存、向量记忆、并发限制以及高风险多代理投票设置。</p>
+<hr>
+<h2 id="7-高风险多代理投票"><a class="header" href="#7-高风险多代理投票">7. 高风险多代理投票</a></h2>
+<p>对于高风险阶段（医疗、法律、金融、安全关键），go-on 支持多代理联合处理：</p>
+<ol>
+<li><strong>风险检测</strong> — 分析用户消息中的领域和决策关键词</li>
+<li><strong>多代理执行</strong> — 多个代理并行独立生成回复</li>
+<li><strong>投票</strong> — 回复去重并排名；获得共识者胜出</li>
+<li><strong>升级处理</strong> — 如未达成共识，由其他模型参与打破平局</li>
+</ol>
+<p>通过 <code>options</code> 在每个阶段进行配置：</p>
+<pre><code class="language-toml">[phases.review.options]
+high_risk_vote_enabled = true
+high_risk_vote_threshold = 1
+high_risk_vote_min_agents = 2
+high_risk_vote_max_agents = 4
+high_risk_escalate_multi_model_enabled = true
+</code></pre>
+<hr>
+<blockquote>
+<p>完整的文档（包括阶段选项参考、功能配置文件和技能系统）可在项目 <code>docs/workflow-config.md</code> 中找到。</p>
+</blockquote>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="skills-扩展"><a class="header" href="#skills-扩展">Skills 扩展</a></h1>
 <p>Skills 系统为 go-on 运行时提供了一种轻量、类型安全的能力单元注册与分发机制，

@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-dc275d80.js";
+            window.path_to_searchindex_js = "searchindex-ddf09bb2.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-512b02fc.js"></script>
+        <script src="toc-c47ee197.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -184,14 +184,26 @@
 <p><code>go-on</code> is a three-surface runtime around a Rust backend:</p>
 <ul>
 <li><strong>Backend</strong>: the executable owns config loading, provider selection, routing, setup, health checks, protocol negotiation, HTTP or stdio transport, and a 14-bus capability architecture with 21 F-GAP modules.</li>
-<li><strong>GUI</strong>: the Tauri desktop console manages backend discovery, process lifecycle, integration probes, and local operator workflows.</li>
+<li><strong>GUI</strong>: the EGUI (Rust native) desktop app manages backend discovery, process lifecycle, integration probes, monitoring, chat, and configuration management.</li>
 <li><strong>VS Code addon</strong>: the extension launches or probes the runtime, exposes RPC-backed commands, and can override protocol mode per workspace.</li>
 </ul>
 <h2 id="version"><a class="header" href="#version">Version</a></h2>
 <ul>
-<li>Core runtime: <strong>0.8.3</strong></li>
-<li>GUI desktop: <strong>0.8.3</strong></li>
-<li>VS Code addon: <strong>0.8.3</strong></li>
+<li>Core runtime: <strong>0.9.5</strong></li>
+<li>GUI desktop: <strong>0.9.5</strong></li>
+<li>VS Code addon: <strong>0.9.5</strong></li>
+</ul>
+<h2 id="gui-desktop-app"><a class="header" href="#gui-desktop-app">GUI Desktop App</a></h2>
+<p>The EGUI-based desktop GUI (<code>gui/</code>) provides monitoring, chat, and configuration management:</p>
+<pre><code class="language-bash">cargo run --manifest-path gui/Cargo.toml
+</code></pre>
+<p>Key features:</p>
+<ul>
+<li><strong>Monitor</strong>: Backend health, AI provider status, real-time metrics</li>
+<li><strong>Chat</strong>: Multi-session conversations with phase (coding/review/debug/test/deploy) and mode (Ask/Plan/Edit/Safeguard/Full Auto) selectors, file attachments, dynamic send button based on AI status</li>
+<li><strong>Skills</strong>: Create and import AI skills; built-in <code>skill-creator</code> lets AI define new skills autonomously</li>
+<li><strong>Settings</strong>: Feature toggles, language switching (en/zh-CN/zh-TW), 5 visual themes</li>
+<li><strong>Backend Connection</strong>: ACP+HTTP JSON-RPC with automatic health polling</li>
 </ul>
 <h2 id="build-profiles"><a class="header" href="#build-profiles">Build Profiles</a></h2>
 <p>Three build profiles support different deployment scenarios:</p>
@@ -207,16 +219,16 @@
 </tbody>
 </table>
 </div>
-<h2 id="verification-status-phase-4-complete"><a class="header" href="#verification-status-phase-4-complete">Verification Status (Phase 4 Complete)</a></h2>
+<h2 id="verification-status-phase-4--25-rounds-of-deep-scan-complete-gui-7-rounds"><a class="header" href="#verification-status-phase-4--25-rounds-of-deep-scan-complete-gui-7-rounds">Verification Status (Phase 4+ — 25 Rounds of Deep Scan Complete, GUI 7 Rounds)</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th>Profile</th><th style="text-align: center"><code>cargo check</code></th><th style="text-align: center"><code>cargo clippy -D warnings</code></th><th style="text-align: center"><code>cargo test</code></th></tr>
 </thead>
 <tbody>
-<tr><td><strong>profile-local</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>866 passed</strong> (766 unit + 86 RPC + 14 transport)</td></tr>
-<tr><td><strong>profile-simple-server</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>905 passed</strong></td></tr>
-<tr><td><strong>profile-multi-users-server</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>898 passed</strong></td></tr>
+<tr><td><strong>profile-local</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>781 passed</strong></td></tr>
+<tr><td><strong>profile-simple-server</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>827 passed</strong></td></tr>
+<tr><td><strong>profile-multi-users-server</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>890 passed</strong></td></tr>
 </tbody>
 </table>
 </div>
@@ -355,9 +367,9 @@ Overall:                         ███████████████�
 <tr><th style="text-align: left">Language</th><th style="text-align: left">File</th><th style="text-align: center">Keys</th></tr>
 </thead>
 <tbody>
-<tr><td style="text-align: left">English (US)</td><td style="text-align: left"><code>languages/en_US.json</code></td><td style="text-align: center">372+</td></tr>
-<tr><td style="text-align: left">Chinese (Simplified)</td><td style="text-align: left"><code>languages/zh_CN.json</code></td><td style="text-align: center">372+</td></tr>
-<tr><td style="text-align: left">Chinese (Traditional)</td><td style="text-align: left"><code>languages/zh_TW.json</code></td><td style="text-align: center">372+</td></tr>
+<tr><td style="text-align: left">English (US)</td><td style="text-align: left"><code>languages/en_US.json</code></td><td style="text-align: center">448+</td></tr>
+<tr><td style="text-align: left">Chinese (Simplified)</td><td style="text-align: left"><code>languages/zh_CN.json</code></td><td style="text-align: center">448+</td></tr>
+<tr><td style="text-align: left">Chinese (Traditional)</td><td style="text-align: left"><code>languages/zh_TW.json</code></td><td style="text-align: center">448+</td></tr>
 </tbody>
 </table>
 </div>
@@ -378,7 +390,7 @@ Overall:                         ███████████████�
 <li><code>src/i18n/</code>: Language runtime</li>
 </ul>
 </li>
-<li><code>GUI/</code>: Tauri desktop console</li>
+<li><code>gui/</code>: EGUI (Rust native) desktop GUI</li>
 <li><code>vscode-addon/</code>: VS Code extension with i18n (en_US, zh_CN, zh_TW)</li>
 <li><code>config/</code>: Configuration files</li>
 <li><code>tests/</code>: Integration tests and replay assets</li>

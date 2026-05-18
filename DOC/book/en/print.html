@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-dc275d80.js";
+            window.path_to_searchindex_js = "searchindex-ddf09bb2.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-512b02fc.js"></script>
+        <script src="toc-c47ee197.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -179,7 +179,7 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="go-on-documentation"><a class="header" href="#go-on-documentation">go-on Documentation</a></h1>
-<p>This book documents the current <code>0.8.3</code> architecture and usage model of <code>go-on</code>.</p>
+<p>This book documents the current <code>0.9.5</code> architecture and usage model of <code>go-on</code>.</p>
 <p>The runtime has completed <strong>Phase 4</strong> (FutureDesign) — 100% of 21 F-GAP modules implemented,
 all 38 capability dimensions at ★★★★★, and 14-bus architecture fully operational.</p>
 <p>Start at <a href="#architecture-overview">Architecture Overview</a>.</p>
@@ -191,7 +191,7 @@ all 38 capability dimensions at ★★★★★, and 14-bus architecture fully o
 <li>Setup wizard and secret management</li>
 <li>Zed integration through ACP stdio and ACP or MCP HTTP</li>
 <li>VS Code addon runtime wiring</li>
-<li>Tauri GUI configuration and operations</li>
+<li>EGUI GUI configuration and operations</li>
 <li>Full i18n coverage (~95%) across backend, GUI, and VS Code addon</li>
 </ul>
 <p>Use this book as the operational reference. Root <code>README</code> files stay concise; the detailed setup and integration procedures live here.</p>
@@ -200,14 +200,26 @@ all 38 capability dimensions at ★★★★★, and 14-bus architecture fully o
 <p><code>go-on</code> is a three-surface runtime around a Rust backend:</p>
 <ul>
 <li><strong>Backend</strong>: the executable owns config loading, provider selection, routing, setup, health checks, protocol negotiation, HTTP or stdio transport, and a 14-bus capability architecture with 21 F-GAP modules.</li>
-<li><strong>GUI</strong>: the Tauri desktop console manages backend discovery, process lifecycle, integration probes, and local operator workflows.</li>
+<li><strong>GUI</strong>: the EGUI (Rust native) desktop app manages backend discovery, process lifecycle, integration probes, monitoring, chat, and configuration management.</li>
 <li><strong>VS Code addon</strong>: the extension launches or probes the runtime, exposes RPC-backed commands, and can override protocol mode per workspace.</li>
 </ul>
 <h2 id="version"><a class="header" href="#version">Version</a></h2>
 <ul>
-<li>Core runtime: <strong>0.8.3</strong></li>
-<li>GUI desktop: <strong>0.8.3</strong></li>
-<li>VS Code addon: <strong>0.8.3</strong></li>
+<li>Core runtime: <strong>0.9.5</strong></li>
+<li>GUI desktop: <strong>0.9.5</strong></li>
+<li>VS Code addon: <strong>0.9.5</strong></li>
+</ul>
+<h2 id="gui-desktop-app"><a class="header" href="#gui-desktop-app">GUI Desktop App</a></h2>
+<p>The EGUI-based desktop GUI (<code>gui/</code>) provides monitoring, chat, and configuration management:</p>
+<pre><code class="language-bash">cargo run --manifest-path gui/Cargo.toml
+</code></pre>
+<p>Key features:</p>
+<ul>
+<li><strong>Monitor</strong>: Backend health, AI provider status, real-time metrics</li>
+<li><strong>Chat</strong>: Multi-session conversations with phase (coding/review/debug/test/deploy) and mode (Ask/Plan/Edit/Safeguard/Full Auto) selectors, file attachments, dynamic send button based on AI status</li>
+<li><strong>Skills</strong>: Create and import AI skills; built-in <code>skill-creator</code> lets AI define new skills autonomously</li>
+<li><strong>Settings</strong>: Feature toggles, language switching (en/zh-CN/zh-TW), 5 visual themes</li>
+<li><strong>Backend Connection</strong>: ACP+HTTP JSON-RPC with automatic health polling</li>
 </ul>
 <h2 id="build-profiles"><a class="header" href="#build-profiles">Build Profiles</a></h2>
 <p>Three build profiles support different deployment scenarios:</p>
@@ -223,16 +235,16 @@ all 38 capability dimensions at ★★★★★, and 14-bus architecture fully o
 </tbody>
 </table>
 </div>
-<h2 id="verification-status-phase-4-complete"><a class="header" href="#verification-status-phase-4-complete">Verification Status (Phase 4 Complete)</a></h2>
+<h2 id="verification-status-phase-4--25-rounds-of-deep-scan-complete-gui-7-rounds"><a class="header" href="#verification-status-phase-4--25-rounds-of-deep-scan-complete-gui-7-rounds">Verification Status (Phase 4+ — 25 Rounds of Deep Scan Complete, GUI 7 Rounds)</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th>Profile</th><th style="text-align: center"><code>cargo check</code></th><th style="text-align: center"><code>cargo clippy -D warnings</code></th><th style="text-align: center"><code>cargo test</code></th></tr>
 </thead>
 <tbody>
-<tr><td><strong>profile-local</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>866 passed</strong> (766 unit + 86 RPC + 14 transport)</td></tr>
-<tr><td><strong>profile-simple-server</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>905 passed</strong></td></tr>
-<tr><td><strong>profile-multi-users-server</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>898 passed</strong></td></tr>
+<tr><td><strong>profile-local</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>781 passed</strong></td></tr>
+<tr><td><strong>profile-simple-server</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>827 passed</strong></td></tr>
+<tr><td><strong>profile-multi-users-server</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>890 passed</strong></td></tr>
 </tbody>
 </table>
 </div>
@@ -371,9 +383,9 @@ Overall:                         ███████████████�
 <tr><th style="text-align: left">Language</th><th style="text-align: left">File</th><th style="text-align: center">Keys</th></tr>
 </thead>
 <tbody>
-<tr><td style="text-align: left">English (US)</td><td style="text-align: left"><code>languages/en_US.json</code></td><td style="text-align: center">372+</td></tr>
-<tr><td style="text-align: left">Chinese (Simplified)</td><td style="text-align: left"><code>languages/zh_CN.json</code></td><td style="text-align: center">372+</td></tr>
-<tr><td style="text-align: left">Chinese (Traditional)</td><td style="text-align: left"><code>languages/zh_TW.json</code></td><td style="text-align: center">372+</td></tr>
+<tr><td style="text-align: left">English (US)</td><td style="text-align: left"><code>languages/en_US.json</code></td><td style="text-align: center">448+</td></tr>
+<tr><td style="text-align: left">Chinese (Simplified)</td><td style="text-align: left"><code>languages/zh_CN.json</code></td><td style="text-align: center">448+</td></tr>
+<tr><td style="text-align: left">Chinese (Traditional)</td><td style="text-align: left"><code>languages/zh_TW.json</code></td><td style="text-align: center">448+</td></tr>
 </tbody>
 </table>
 </div>
@@ -394,7 +406,7 @@ Overall:                         ███████████████�
 <li><code>src/i18n/</code>: Language runtime</li>
 </ul>
 </li>
-<li><code>GUI/</code>: Tauri desktop console</li>
+<li><code>gui/</code>: EGUI (Rust native) desktop GUI</li>
 <li><code>vscode-addon/</code>: VS Code extension with i18n (en_US, zh_CN, zh_TW)</li>
 <li><code>config/</code>: Configuration files</li>
 <li><code>tests/</code>: Integration tests and replay assets</li>
@@ -797,8 +809,45 @@ go-on --secret delete --secret-name openai
 <p>Example:</p>
 <pre><code class="language-bash">go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:8090
 </code></pre>
+<h2 id="terminal-chat-mode---chat---a"><a class="header" href="#terminal-chat-mode---chat---a">Terminal Chat Mode (<code>--chat</code> / <code>-a</code>)</a></h2>
+<p>Start an interactive terminal chat session (like Claude Code or Codex).</p>
+<pre><code class="language-bash">go-on -a
+# or
+go-on --chat
+</code></pre>
+<p>If your config file is in a different location:</p>
+<pre><code class="language-bash">go-on -c /path/to/config.toml -a
+</code></pre>
+<h3 id="requirements"><a class="header" href="#requirements">Requirements</a></h3>
+<p>At least one AI provider must be configured in <code>config.toml</code> with valid API keys. API keys are read automatically from the system keyring (keyring → env var fallback).</p>
+<h3 id="behavior"><a class="header" href="#behavior">Behavior</a></h3>
+<ol>
+<li>Builds the agent registry from the configured providers.</li>
+<li>Opens a readline-style chat loop.</li>
+<li>Each message is sent to the first available agent with streaming output.</li>
+<li>Supports conversation history (capped at 1000 messages).</li>
+<li>Handles graceful shutdown on Ctrl+C or <code>/quit</code>.</li>
+</ol>
+<h3 id="built-in-commands"><a class="header" href="#built-in-commands">Built-in Commands</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Command</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>/quit</code> or <code>/exit</code></td><td>Exit chat mode</td></tr>
+<tr><td><code>/help</code></td><td>Show available commands</td></tr>
+<tr><td><code>/clear</code></td><td>Clear conversation history</td></tr>
+<tr><td><code>/agents</code></td><td>List configured agents</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="automatic-setup-redirect"><a class="header" href="#automatic-setup-redirect">Automatic Setup Redirect</a></h3>
+<p>If <code>--chat</code> is passed and no providers are configured, the onboarding prompt is skipped and a message directs you to run <code>--setup</code> first:</p>
+<pre><code class="language-bash">go-on -c config.toml -a
+# → "No AI agents configured. Run go-on --init to set up a provider first."
+</code></pre>
 <h2 id="common-command-recipes"><a class="header" href="#common-command-recipes">Common command recipes</a></h2>
-<p>Minimal setup:</p>
 <pre><code class="language-bash">go-on --setup --setup-level standard --setup-secrets auto
 </code></pre>
 <p>Validate then inspect readiness:</p>
@@ -810,6 +859,9 @@ go-on --config config.toml --status
 </code></pre>
 <p>Run ACP over stdio for an editor-launched integration:</p>
 <pre><code class="language-bash">go-on --config config.toml --protocol-mode acp_stdio --verbose
+</code></pre>
+<p>Terminal chat (interactive, like Claude Code):</p>
+<pre><code class="language-bash">go-on -a
 </code></pre>
 <h2 id="operational-guidance"><a class="header" href="#operational-guidance">Operational guidance</a></h2>
 <ul>
@@ -934,7 +986,7 @@ curl http://127.0.0.1:8090/health?verbose=true
 <ul>
 <li><strong>Zed</strong>: Uses ACP over stdio or HTTP</li>
 <li><strong>VS Code</strong>: Uses the go-on extension with local runtime</li>
-<li><strong>GUI Console</strong>: Tauri-based desktop interface</li>
+<li><strong>GUI Console</strong>: EGUI (Rust native) desktop GUI</li>
 </ul>
 <h2 id="storage-management"><a class="header" href="#storage-management">Storage Management</a></h2>
 <h3 id="cache-location"><a class="header" href="#cache-location">Cache Location</a></h3>
@@ -1455,8 +1507,17 @@ sudo -u go-on sqlite3 /var/lib/go-on/cache.sqlite3 "EXPLAIN QUERY PLAN SELECT * 
 <ul>
 <li><strong>Multi-user support</strong>: Designed for concurrent access by multiple users</li>
 <li><strong>PostgreSQL storage</strong>: Scalable database with pgvector extension</li>
+<li><strong>CORS support</strong>: Configurable allowed origins, preflight (OPTIONS) handling, CORS headers on all HTTP/SSE responses</li>
+<li><strong>Entry auth (gateway)</strong>: Shared API key validated via <code>Authorization: Bearer</code>, <code>X-Api-Key</code>, or <code>X-Go-On-Key</code> headers</li>
+<li><strong>User auth (HMAC tokens)</strong>: Per-user JWT-like tokens with HMAC-SHA256 signing, auto-provisioning, configurable TTL</li>
+<li><strong>RBAC authorization</strong>: Role-based access control (admin/user/viewer/monitor) with per-endpoint permission checks across both ACP+HTTP and MCP+HTTP paths</li>
+<li><strong>Tenant budget enforcement</strong>: Per-tenant daily token/concurrent task/API call quotas with auto-provisioning</li>
+<li><strong>Conversation isolation</strong>: Namespaced conversation IDs with tenant prefix to prevent cross-user data leakage</li>
+<li><strong>Shutdown drain</strong>: Configurable drain period for in-flight connections during graceful shutdown</li>
+<li><strong>Signal handling</strong>: SIGINT (Ctrl+C) and SIGTERM on all platforms for clean shutdown</li>
+<li><strong>Thread-safe secret management</strong>: <code>SECRET_OVERRIDE_MAP</code> replaces <code>std::env::set_var()</code> (documented UB in multi-threaded contexts); <code>KEYRING_CACHE</code> with 30s TTL avoids blocking keyring I/O in async hot paths</li>
+<li><strong>Hot-reload config</strong>: Runtime configuration reload via <code>config.reload</code> RPC</li>
 <li><strong>High availability</strong>: Built-in redundancy and failover support</li>
-<li><strong>Advanced security</strong>: Role-based access control, audit logging</li>
 <li><strong>Enterprise monitoring</strong>: Comprehensive observability stack</li>
 <li><strong>Scalability</strong>: Horizontal scaling capabilities</li>
 <li><strong>Full Phase 4 architecture</strong>: All 14 buses and 21 F-GAP modules</li>
@@ -1467,11 +1528,22 @@ sudo -u go-on sqlite3 /var/lib/go-on/cache.sqlite3 "EXPLAIN QUERY PLAN SELECT * 
 <h3 id="architecture-1"><a class="header" href="#architecture-1">Architecture</a></h3>
 <pre><code>Multi-Users Server Architecture:
 ├── Application Layer: go-on runtime instances
+│   ├── ACP HTTP Server (port 8090): CORS → Entry Auth → User Auth → RBAC → Routing
+│   └── MCP HTTP Server (port 8090): CORS → Entry Auth → User Auth → RBAC → Dispatch
 ├── Database Layer: PostgreSQL with pgvector
 ├── Cache Layer: Redis (optional)
 ├── Load Balancer: Traffic distribution
 ├── Monitoring: Prometheus, Grafana, ELK
 └── Backup: Automated backup system
+
+Request Flow (ACP+HTTP):
+Client → CORS headers → Entry Auth (API key) → User Session (HMAC token)
+       → RBAC Authorization → Tenant Budget Check → Namespaced Conversation
+       → AI Processing → Response with CORS headers
+
+Request Flow (MCP+HTTP):
+Client → CORS headers → Entry Auth (API key) → User Session (HMAC token)
+       → RBAC Authorization → MCP Method Dispatch → JSON-RPC Response with CORS
 </code></pre>
 <h2 id="configuration-2"><a class="header" href="#configuration-2">Configuration</a></h2>
 <h3 id="server-configuration-1"><a class="header" href="#server-configuration-1">Server Configuration</a></h3>
@@ -1481,17 +1553,32 @@ default_phase = "coding"
 model_selection_mode = "adaptive"
 
 [protocol]
-mode = "mcp_http"  # MCP over HTTP for multi-user access
+mode = "acp_http"  # ACP over HTTP for multi-user access (use mcp_http for MCP)
 
 [runtime]
 acp_http_bind_addr = "0.0.0.0:8090"
 production_strict = true
+
+# ── Gateway Entry Auth (shared API key for all ingress) ────
 entry_auth_enabled = true
 entry_auth_api_key_env = "GO_ON_ENTRY_API_KEY"
 entry_rate_limit_rpm = 5000
 entry_rate_limit_burst = 1000
-session_timeout_minutes = 60
-max_sessions_per_user = 10
+
+# ── User Authentication (per-user HMAC tokens) ─────────────
+user_auth_enabled = true
+user_auth_token_secret_env = "GO_ON_USER_AUTH_TOKEN_SECRET"
+user_auth_token_ttl_seconds = 86400
+
+# ── Cross-Origin Resource Sharing (CORS) ───────────────────
+cors_allowed_origins = ["https://my-frontend.example.com"]
+# Use "*" for development only:
+# cors_allowed_origins = ["*"]
+
+# ── Tenant Resource Quotas ─────────────────────────────────
+tenant_default_daily_token_limit = 1000000
+tenant_default_concurrent_tasks = 10
+tenant_default_daily_api_calls = 10000
 
 [database]
 type = "postgres"
@@ -1507,22 +1594,13 @@ ssl_mode = "prefer"
 [cache]
 enabled = true
 type = "database"  # Uses PostgreSQL for cache
-# Optional Redis cache
-# type = "redis"
-# redis_url = "redis://localhost:6379"
 
 [vector]
 enabled = true
 type = "pgvector"
-dimensions = 768  # Higher dimensions for enterprise use
+dimensions = 768
 top_k = 10
 min_similarity = 0.7
-
-[security]
-rbac_enabled = true
-audit_logging_enabled = true
-data_encryption_enabled = true
-mfa_enabled = false  # Optional: enable for higher security
 
 [observability]
 otel_enabled = true
@@ -1538,6 +1616,30 @@ tracing_sampling_rate = 0.1
 <li><code>postgres</code>: PostgreSQL client library</li>
 <li><code>pgvector</code>: Vector extension for PostgreSQL</li>
 </ul>
+<h3 id="runtime-config-fields"><a class="header" href="#runtime-config-fields">Runtime Config Fields</a></h3>
+<p>The following runtime configuration fields are specific to multi-user mode:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Description</th><th>Default</th></tr>
+</thead>
+<tbody>
+<tr><td><code>entry_auth_enabled</code></td><td>Enable gateway API key auth</td><td><code>false</code></td></tr>
+<tr><td><code>entry_auth_api_key_env</code></td><td>Env var name for entry API key</td><td><code>GO_ON_ENTRY_API_KEY</code></td></tr>
+<tr><td><code>entry_rate_limit_rpm</code></td><td>Rate limit per source IP</td><td><code>240</code></td></tr>
+<tr><td><code>entry_rate_limit_burst</code></td><td>Token bucket burst capacity</td><td><code>60</code></td></tr>
+<tr><td><code>user_auth_enabled</code></td><td>Enable per-user HMAC token auth</td><td><code>false</code></td></tr>
+<tr><td><code>user_auth_token_secret</code></td><td>HMAC signing secret (config file)</td><td><code>go-on-multi-user-secret</code></td></tr>
+<tr><td><code>user_auth_token_secret_env</code></td><td>Env var override for HMAC secret</td><td><code>GO_ON_USER_AUTH_TOKEN_SECRET</code></td></tr>
+<tr><td><code>user_auth_token_ttl_seconds</code></td><td>Token TTL in seconds</td><td><code>86400</code> (24h)</td></tr>
+<tr><td><code>cors_allowed_origins</code></td><td>Allowed CORS origins (empty = disabled)</td><td><code>[]</code></td></tr>
+<tr><td><code>tenant_default_daily_token_limit</code></td><td>Daily token limit per tenant</td><td><code>1000000</code></td></tr>
+<tr><td><code>tenant_default_concurrent_tasks</code></td><td>Max concurrent tasks per tenant</td><td><code>10</code></td></tr>
+<tr><td><code>tenant_default_daily_api_calls</code></td><td>Daily API call limit per tenant</td><td><code>10000</code></td></tr>
+<tr><td><code>shutdown_drain_seconds</code></td><td>Graceful shutdown drain period</td><td><code>30</code></td></tr>
+</tbody>
+</table>
+</div>
 <h2 id="installation-2"><a class="header" href="#installation-2">Installation</a></h2>
 <h3 id="building-for-enterprise-deployment"><a class="header" href="#building-for-enterprise-deployment">Building for Enterprise Deployment</a></h3>
 <pre><code class="language-bash"># Build with multi-users-server profile
@@ -1852,46 +1954,112 @@ server {
 </code></pre>
 <h2 id="security-2"><a class="header" href="#security-2">Security</a></h2>
 <h3 id="authentication-and-authorization"><a class="header" href="#authentication-and-authorization">Authentication and Authorization</a></h3>
-<pre><code class="language-toml">[security.authentication]
-type = "jwt"
-jwt_secret_env = "GO_ON_JWT_SECRET"
-token_expiry_hours = 24
-refresh_token_expiry_days = 7
+<p>Multi-Users Server provides a <strong>two-layer authentication</strong> system:</p>
+<p><strong>Layer 1: Gateway Entry Auth (shared API key)</strong></p>
+<ul>
+<li>Validates every HTTP request against a pre-shared API key</li>
+<li>Key comes from the environment variable specified in <code>entry_auth_api_key_env</code> (default: <code>GO_ON_ENTRY_API_KEY</code>)</li>
+<li>Accepted headers: <code>Authorization: Bearer &lt;key&gt;</code>, <code>X-Api-Key</code>, <code>X-Go-On-Key</code></li>
+<li>Returns 401 <code>ENTRY_AUTH_REQUIRED</code> if missing/invalid</li>
+<li>Returns 503 <code>ENTRY_AUTH_MISCONFIGURED</code> if env var is not set</li>
+</ul>
+<p><strong>Layer 2: User Auth (HMAC-SHA256 tokens)</strong></p>
+<ul>
+<li>Issues per-user tokens signed with HMAC-SHA256</li>
+<li>Token format: <code>user_id:base64_hmac:expires_at_ms</code></li>
+<li>Token secret resolved from env var (<code>user_auth_token_secret_env</code>) &gt; config file &gt; default</li>
+<li>Auto-provisioning: valid tokens get sessions without pre-registration</li>
+<li>Graceful fallback: when <code>user_auth_enabled=false</code>, all requests treated as admin</li>
+</ul>
+<p><strong>RBAC Authorization</strong></p>
+<ul>
+<li>Built-in roles: <code>admin</code> (full access), <code>user</code> (R/W/X), <code>viewer</code> (read-only), <code>monitor</code></li>
+<li>Permission mapping: <code>GET</code> → Read, <code>POST /chat</code> → Execute, <code>POST /rpc</code> → Execute</li>
+<li>Applied consistently across both ACP+HTTP and MCP+HTTP paths</li>
+<li>Returns 401 <code>AUTH_REQUIRED</code> (no session), 403 <code>ACCESS_DENIED</code> (no permission), 403 <code>PRIVILEGE_ESCALATION_REQUIRED</code> (insufficient role)</li>
+</ul>
+<p><strong>Exempt endpoints:</strong> <code>/</code> and <code>/health</code> bypass all authentication.</p>
+<h3 id="issuing-user-tokens"><a class="header" href="#issuing-user-tokens">Issuing User Tokens</a></h3>
+<p>User tokens can be issued programmatically via the internal <code>SessionManager</code> API. The token format is <code>user_id:base64_hmac_sig:expires_at_ms</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Rust: issue a token programmatically
+use crate::acp::r#impl::session::{AuthConfig, SessionManager};
 
-[security.authorization]
-rbac_enabled = true
-roles = ["admin", "user", "viewer"]
-default_role = "user"
-
-[security.audit]
-enabled = true
-retention_days = 90
-sensitive_fields = ["password", "api_key", "token"]
+let auth_cfg = AuthConfig::from(&amp;runtime_config);
+let mgr = SessionManager::with_auth_config(auth_cfg);
+let token = mgr.issue_token("alice", &amp;["admin"], None, 86400).unwrap();
+// Returns: "alice:&lt;base64_hmac&gt;:&lt;expires_at_ms&gt;"
+<span class="boring">}</span></code></pre>
+<h3 id="cors-configuration"><a class="header" href="#cors-configuration">CORS Configuration</a></h3>
+<p>Allowed origins default to <code>[]</code> (empty = CORS disabled). To enable cross-origin requests:</p>
+<pre><code class="language-toml">[runtime]
+cors_allowed_origins = ["https://my-frontend.example.com"]
+# Multiple origins:
+# cors_allowed_origins = ["https://app1.example.com", "https://app2.example.com"]
+# Development only:
+# cors_allowed_origins = ["*"]
 </code></pre>
+<p>All HTTP responses (JSON, SSE, errors) automatically include CORS headers when configured.</p>
+<h3 id="tenant-budget-enforcement"><a class="header" href="#tenant-budget-enforcement">Tenant Budget Enforcement</a></h3>
+<p>When user auth is enabled, the system auto-provisions a default tenant quota:</p>
+<pre><code class="language-toml">[runtime]
+tenant_default_daily_token_limit = 1000000
+tenant_default_concurrent_tasks = 10
+tenant_default_daily_api_calls = 10000
+</code></pre>
+<p>Conversation IDs are namespaced with the tenant ID prefix to prevent cross-user data leakage:</p>
+<pre><code>Internal conversation_id = "tenant_id:user_provided_conversation_id"
+</code></pre>
+<h3 id="conversation-isolation"><a class="header" href="#conversation-isolation">Conversation Isolation</a></h3>
+<p>All conversation state is isolated per-tenant:</p>
+<ul>
+<li>Conversation IDs are prefixed with <code>tenant_id:</code> when <code>user_auth_enabled</code></li>
+<li>Budget enforcement uses <code>tenant_id</code> from user session (not raw <code>conversation_id</code>)</li>
+<li>Cross-user conversation history leakage is prevented</li>
+</ul>
+<h3 id="thread-safe-secret-management"><a class="header" href="#thread-safe-secret-management">Thread-Safe Secret Management</a></h3>
+<p>The project replaces all <code>std::env::set_var()</code> calls (documented as <strong>undefined behavior</strong> in multi-threaded contexts) with an in-memory <code>HashMap</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Thread-safe: set a secret override
+crate::shared::secret_override::set_secret_override("GITHUB_TOKEN", "ghp_xxx");
+
+// Thread-safe: read (checks override map first, then env var)
+let value = crate::shared::secret_override::get_secret("GITHUB_TOKEN");
+<span class="boring">}</span></code></pre>
+<p>Keyring lookups are cached with a 30-second TTL to avoid blocking I/O in async contexts:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Uses cache with 30s TTL
+let value = crate::shared::secret_override::get_keyring_cached("go-on", "copilot_api_key");
+<span class="boring">}</span></code></pre>
+<p><strong>Security compliance:</strong></p>
+<ul>
+<li>✅ 0 <code>std::env::set_var()</code> calls in production code</li>
+<li>✅ 0 <code>.expect("lock poisoned")</code> panics — all lock poison recovered via <code>unwrap_or_else(|e| e.into_inner())</code></li>
+<li>✅ 0 <code>unsafe</code> blocks in production code</li>
+<li>✅ All HTTP responses (JSON, SSE, error) include CORS headers</li>
+<li>✅ MCP HTTP server shares the same auth pipeline as ACP HTTP server</li>
+</ul>
 <h3 id="network-security"><a class="header" href="#network-security">Network Security</a></h3>
 <pre><code class="language-bash"># Firewall rules
 sudo ufw allow 443/tcp  # HTTPS
 sudo ufw allow 5432/tcp  # PostgreSQL
 sudo ufw allow 6379/tcp  # Redis
-sudo ufw allow 9090/tcp  # Metrics
-sudo ufw allow 4317/tcp  # OpenTelemetry
+sudo ufw allow 8090/tcp  # go-on ACP/MCP HTTP
 
 # Enable firewall
 sudo ufw --force enable
 </code></pre>
 <h3 id="secrets-management"><a class="header" href="#secrets-management">Secrets Management</a></h3>
-<pre><code class="language-bash"># Using HashiCorp Vault
-vault kv put secret/go-on \
-  db_username=go_on \
-  db_password=$(openssl rand -base64 32) \
-  entry_api_key=$(openssl rand -base64 48) \
-  jwt_secret=$(openssl rand -base64 64)
+<pre><code class="language-bash"># Set required environment variables
+export GO_ON_ENTRY_API_KEY=$(openssl rand -base64 48)
+export GO_ON_USER_AUTH_TOKEN_SECRET=$(openssl rand -base64 64)
 
-# Environment variables
-export GO_ON_DB_USERNAME=$(vault kv get -field=db_username secret/go-on)
-export GO_ON_DB_PASSWORD=$(vault kv get -field=db_password secret/go-on)
-export GO_ON_ENTRY_API_KEY=$(vault kv get -field=entry_api_key secret/go-on)
-export GO_ON_JWT_SECRET=$(vault kv get -field=jwt_secret secret/go-on)
+# Optional: PostgreSQL credentials
+export GO_ON_DB_USERNAME="go_on"
+export GO_ON_DB_PASSWORD=$(openssl rand -base64 32)
 </code></pre>
 <h2 id="monitoring-and-observability"><a class="header" href="#monitoring-and-observability">Monitoring and Observability</a></h2>
 <h3 id="prometheus-configuration"><a class="header" href="#prometheus-configuration">Prometheus Configuration</a></h3>
@@ -2473,7 +2641,7 @@ openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365
 tls_cert_path = "cert.pem"
 tls_key_path = "key.pem"
 </code></pre>
-<h3 id="cors-configuration"><a class="header" href="#cors-configuration">CORS Configuration</a></h3>
+<h3 id="cors-configuration-1"><a class="header" href="#cors-configuration-1">CORS Configuration</a></h3>
 <pre><code class="language-toml">[security.cors]
 allowed_origins = ["https://example.com", "http://localhost:3000"]
 allowed_methods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
@@ -3364,6 +3532,7 @@ X-RateLimit-Reset: 1614556800
 <pre><code class="language-json">{
   "agent_servers": {
     "go-on-acp": {
+      "type": "custom",
       "command": "go-on",
       "args": [
         "--config",
@@ -3380,6 +3549,7 @@ X-RateLimit-Reset: 1614556800
 <pre><code class="language-json">{
   "agent_servers": {
     "go-on-acp": {
+      "type": "custom",
       "command": "D:/Workspace/RustWorkspace/go-on/target/debug/go-on.exe",
       "args": [
         "--config",
@@ -3409,6 +3579,7 @@ X-RateLimit-Reset: 1614556800
 <pre><code class="language-json">{
   "agent_servers": {
     "go-on-http": {
+      "type": "custom",
       "url": "http://127.0.0.1:8090"
     }
   }
@@ -3426,17 +3597,32 @@ X-RateLimit-Reset: 1614556800
 <li><code>/v1/responses</code></li>
 </ul>
 <p>If your Zed version expects an OpenAI-compatible provider or an MCP-style LLM provider, use a <code>/v1</code> base URL.</p>
-<p>Example:</p>
+<p>Example (latest Zed <code>openai_compatible</code> shape):</p>
 <pre><code class="language-json">{
   "language_models": {
-    "go-on-local": {
-      "provider": "openai_compatible",
-      "api_url": "http://127.0.0.1:8090/v1",
-      "model": "auto"
+    "openai_compatible": {
+      "go-on-local": {
+        "api_url": "http://127.0.0.1:8090/v1",
+        "available_models": [
+          {
+            "name": "gpt-5.5",
+            "display_name": "go-on auto (gpt-5.5)",
+            "max_tokens": 400000,
+            "capabilities": {
+              "chat_completions": true,
+              "tools": true,
+              "images": false,
+              "parallel_tool_calls": false,
+              "prompt_cache_key": false
+            }
+          }
+        ]
+      }
     }
   }
 }
 </code></pre>
+<p>If a model is Responses-only, set <code>capabilities.chat_completions=false</code> for that model entry.</p>
 <p>Use this path when:</p>
 <ul>
 <li>Zed expects an OpenAI-compatible endpoint rather than ACP transport</li>
@@ -3458,6 +3644,24 @@ go-on --config config.toml --validate-config
 <pre><code class="language-text">GET http://127.0.0.1:8090/health
 GET http://127.0.0.1:8090/v1/models
 </code></pre>
+<h2 id="zed-external-agent-updates"><a class="header" href="#zed-external-agent-updates">Zed external-agent updates</a></h2>
+<ul>
+<li>As of Zed <code>v0.221.x+</code>, ACP Registry is the preferred installation path for external agents.</li>
+<li>Built-in external agent names in Zed commonly include <code>claude-acp</code>, <code>codex-acp</code>, and <code>gemini</code>.</li>
+<li>Use <code>zed: acp registry</code> and <code>dev: open acp logs</code> for installation and runtime diagnosis.</li>
+</ul>
+<h2 id="cross-platform-paths"><a class="header" href="#cross-platform-paths">Cross-platform paths</a></h2>
+<ul>
+<li>Linux settings file: <code>~/.config/zed/settings.json</code></li>
+<li>macOS settings file: <code>~/Library/Application Support/Zed/settings.json</code></li>
+<li>Windows settings file: <code>%APPDATA%/Zed/settings.json</code></li>
+</ul>
+<h2 id="model-freshness-policy"><a class="header" href="#model-freshness-policy">Model freshness policy</a></h2>
+<ul>
+<li>Keep <code>available_models</code> aligned with latest provider docs before changing model IDs.</li>
+<li>For OpenAI-family models, verify context window and endpoint compatibility from current provider docs.</li>
+<li>For Zed-hosted model names, re-check retirements/replacements in Zed <code>AI &gt; Models</code> docs before rollout.</li>
+</ul>
 <h2 id="failure-patterns"><a class="header" href="#failure-patterns">Failure patterns</a></h2>
 <ul>
 <li>If <code>/health</code> works but Zed still rejects ACP, the configured runtime mode may be MCP-only.</li>
@@ -3671,9 +3875,13 @@ GET http://127.0.0.1:8090/v1/models
 <h2 id="process-output-channel"><a class="header" href="#process-output-channel">Process output channel</a></h2>
 <p>All Go-On process output (stdout, stderr, exit codes, process errors) is written to the <strong>“Go-On”</strong> Output Channel in VS Code. Open it from <strong>View → Output</strong>, then select <strong>Go-On</strong> from the dropdown. This is the primary diagnostic surface for startup failures and runtime errors.</p>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="gui-console"><a class="header" href="#gui-console">GUI Console</a></h1>
-<p>The GUI is a Tauri desktop console around the backend. It is designed for operators who want process control, integration status, configuration editing, and local environment management without staying in a terminal.</p>
-<h2 id="what-the-gui-needs"><a class="header" href="#what-the-gui-needs">What the GUI needs</a></h2>
+<h1 id="gui-desktop-console"><a class="header" href="#gui-desktop-console">GUI Desktop Console</a></h1>
+<p>The GUI is an EGUI (Rust native) desktop application located in the <code>gui/</code> directory.
+It provides backend monitoring, multi-session chat, skills management, and settings editing,
+so operations and integration debugging don’t have to stay in the terminal.</p>
+<h2 id="architecture-overview-1"><a class="header" href="#architecture-overview-1">Architecture Overview</a></h2>
+<p>The GUI is a Rust native desktop app built with the EGUI framework (based on <code>eframe</code>/<code>egui</code>).
+It communicates with the backend via ACP+HTTP JSON-RPC and manages the backend process lifecycle.</p>
 <p>The GUI stores and uses three core values:</p>
 <ul>
 <li>backend executable path</li>
@@ -3681,17 +3889,80 @@ GET http://127.0.0.1:8090/v1/models
 <li>runtime config file inside the working directory</li>
 </ul>
 <p>The backend process is started from the configured working directory. The GUI expects <code>config.toml</code> to live there.</p>
+<h2 id="feature-tabs"><a class="header" href="#feature-tabs">Feature Tabs</a></h2>
+<h3 id="monitor-tab"><a class="header" href="#monitor-tab">Monitor Tab</a></h3>
+<ul>
+<li>Backend health: auto-polls <code>/health</code> endpoint</li>
+<li>AI provider status: real-time provider connection status</li>
+<li>Live metrics: request count, latency, error rate</li>
+</ul>
+<h3 id="chat-tab"><a class="header" href="#chat-tab">Chat Tab</a></h3>
+<ul>
+<li>Multi-session management: create, switch, delete sessions</li>
+<li>Multi-model support: each session can select a different AI model</li>
+<li>Phase selection: coding / review / debug / test / deploy</li>
+<li>Mode switching: Ask / Plan / Edit / Safeguard / Full Auto</li>
+<li>File attachments: upload files as chat context</li>
+<li>Dynamic send button: changes based on AI status (loading / ready / error)</li>
+<li><strong>Risk Decision panel</strong>: displays risk assessment, mitigation strategy, and review requirements for high-risk AI responses (see dedicated section below)</li>
+</ul>
+<h3 id="skills-tab"><a class="header" href="#skills-tab">Skills Tab</a></h3>
+<ul>
+<li>Create and import AI skills</li>
+<li>Built-in <code>skill-creator</code>: lets AI define new skills autonomously</li>
+<li>Skill list management: enable, disable, delete</li>
+</ul>
+<h3 id="prompts-tab"><a class="header" href="#prompts-tab">Prompts Tab</a></h3>
+<p>Browse, search, create, edit, and delete prompt templates across 12 industry categories.
+See the <a href="#prompts-system">Prompts System</a> document for full details.</p>
+<ul>
+<li><strong>Browse by category</strong> — filter templates by 12 industry categories (Software Development, Writing,
+Academic Research, Business Analysis, Marketing, Legal, Medical, Education, Finance, Data Science, Design, System Operations)</li>
+<li><strong>Search</strong> — keyword search across template titles and content</li>
+<li><strong>Custom templates</strong> — create your own templates with <code>{{variable}}</code> placeholders</li>
+<li><strong>Insert to Chat</strong> — click the <strong>Insert to Chat</strong> button on any template card to insert the template
+content into the Chat input box</li>
+<li><strong>Chat <code>/</code> commands</strong> — type <code>/</code> in the Chat input box to trigger command completion;
+type a template ID and press Enter to expand the template directly</li>
+</ul>
+<blockquote>
+<p>For details on the template system, see the <a href="#prompts-system">Prompts System</a>.</p>
+</blockquote>
+<h3 id="chat-tab--risk-decision--safeguard-mode"><a class="header" href="#chat-tab--risk-decision--safeguard-mode">Chat Tab — Risk Decision &amp; Safeguard Mode</a></h3>
+<p>The GUI displays a <strong>Risk Decision panel</strong> on AI responses when the backend’s governance layer detects potentially high-risk content. This feature is part of the Safeguard mode and multi-model voting system.</p>
+<p><strong>What triggers it:</strong> The backend analyzes user messages against domain keywords (medical, legal, financial, security, etc.) and decision-related keywords. When the risk score exceeds the threshold, the backend activates one or more mitigation strategies:</p>
+<ul>
+<li><strong>Multi-model vote</strong>: Sends the request to multiple models concurrently and compares outputs</li>
+<li><strong>Multi-agent vote</strong>: Routes the request to different AI agents and aggregates results</li>
+<li><strong>Escalation</strong>: Uses more capable (and expensive) models for final judgment</li>
+<li><strong>Review required</strong>: Flags the response for human review</li>
+</ul>
+<p><strong>What the GUI shows:</strong></p>
+<ul>
+<li>Risk state: <strong>High Risk</strong> or <strong>Normal</strong></li>
+<li>Strategy used: e.g. “multi_model_vote”, “multi_agent_vote”, “escalation”</li>
+<li>Review requirement indication</li>
+<li>Specific risk reasons (up to 4 reasons displayed inline)</li>
+</ul>
+<p>The panel adapts theme-wise: high-risk topics get a warm orange/red background, normal risk gets a subtle green tint — both respecting dark/light mode correctly.</p>
+<h3 id="settings-tab"><a class="header" href="#settings-tab">Settings Tab</a></h3>
+<ul>
+<li><strong>Provider Management</strong>: dynamic environment variable injection (all 34+ providers), no longer hardcoded to 8</li>
+<li><strong>Config Editor</strong>: manages <code>gui_config.json</code> with JSON syntax validation</li>
+<li><strong>Theme Selection</strong>: 6 visual themes (Minimal / Chinese-Classic / Wuxia / Landscape / Hello Kitty / Dark)</li>
+<li><strong>Language Switching</strong>: English, Simplified Chinese, Traditional Chinese</li>
+<li><strong>Feature Toggles</strong>: enable/disable GUI features (including <strong>Prompts</strong> toggle that controls the Prompts Tab visibility and related RPC/MCP interfaces)</li>
+</ul>
 <h2 id="development-and-build-commands"><a class="header" href="#development-and-build-commands">Development and build commands</a></h2>
-<p>From <code>GUI/</code>:</p>
-<pre><code class="language-bash">npm install
-npm run dev
-</code></pre>
-<p>Production build:</p>
-<pre><code class="language-bash">npm run build
-</code></pre>
-<p>Desktop packaging and native shell:</p>
-<pre><code class="language-bash">npm run tauri dev
-npm run tauri build
+<p>From <code>gui/</code>:</p>
+<pre><code class="language-bash"># Run in development mode
+cargo run
+
+# Build release
+cargo build --release
+
+# From project root
+cargo run --manifest-path gui/Cargo.toml
 </code></pre>
 <h2 id="linking-the-backend"><a class="header" href="#linking-the-backend">Linking the backend</a></h2>
 <p>The GUI can auto-discover the backend executable. When auto-link succeeds it uses the executable’s parent directory as the working directory and stores logs as <code>go-on.log</code> there.</p>
@@ -3701,23 +3972,16 @@ npm run tauri build
 <li>set the working directory</li>
 <li>ensure <code>config.toml</code> exists in that directory</li>
 </ol>
-<h2 id="config-and-environment-behavior"><a class="header" href="#config-and-environment-behavior">Config and environment behavior</a></h2>
-<p>The GUI manages:</p>
+<h2 id="key-management"><a class="header" href="#key-management">Key Management</a></h2>
+<p>The GUI uses dual storage for secrets:</p>
 <ul>
-<li><code>config.toml</code></li>
-<li><code>config.toml.autopilot-adaptive</code> as the reset template source</li>
-<li><code>.env.goon</code> for persisted environment variables</li>
+<li><strong>System keyring</strong>: priority storage using OS-level key management (Linux Secret Service, macOS Keychain, Windows Credential Manager)</li>
+<li><strong>Config file</strong>: backup and portable fallback</li>
 </ul>
-<p>That means a practical GUI-based onboarding sequence is:</p>
-<ol>
-<li>link the backend executable</li>
-<li>restore default config if needed</li>
-<li>save provider API keys through the GUI</li>
-<li>start the backend process</li>
-<li>verify integration probes</li>
-</ol>
+<p>API keys no longer need to be written to <code>.env.goon</code> — all keys are injected dynamically through the GUI’s Provider management panel.</p>
 <h2 id="runtime-process-behavior"><a class="header" href="#runtime-process-behavior">Runtime process behavior</a></h2>
 <p>When the GUI starts the backend process, it launches the configured executable from the working directory and writes stdout and stderr to <code>go-on.log</code>.</p>
+<p><strong>Auto-restart</strong>: if the backend crashes, the GUI automatically restarts it after a 3-second cool-down.</p>
 <p>Because startup depends on the working directory, the most common operator mistake is pointing the GUI at the correct binary but the wrong directory.</p>
 <h2 id="health-and-integration-probes"><a class="header" href="#health-and-integration-probes">Health and integration probes</a></h2>
 <p>The GUI probes:</p>
@@ -3740,20 +4004,321 @@ npm run tauri build
 <p>The GUI itself can still manage the backend executable even when a different mode is selected; the mode choice mostly affects what external clients can do afterward.</p>
 <h2 id="recommended-operator-flow-1"><a class="header" href="#recommended-operator-flow-1">Recommended operator flow</a></h2>
 <ol>
-<li>Build the backend.</li>
-<li>Launch the GUI.</li>
-<li>Use auto-link or manual executable-path configuration.</li>
-<li>Confirm the working directory contains <code>config.toml</code>.</li>
-<li>Save API keys into <code>.env.goon</code> if needed.</li>
-<li>Start the backend.</li>
-<li>Check health and integration status.</li>
+<li>Build the backend: <code>cargo build</code></li>
+<li>Initialize backend (first time): <code>cargo run -- --init</code></li>
+<li>Build the GUI: <code>cargo build --manifest-path gui/Cargo.toml</code></li>
+<li>Launch the GUI: <code>cargo run --manifest-path gui/Cargo.toml</code></li>
+<li>Use auto-link or manual executable-path configuration</li>
+<li>Confirm the working directory contains <code>config.toml</code></li>
+<li>Configure API keys in Provider management (auto-stored in system keyring)</li>
+<li>Start the backend</li>
+<li>Check health and integration status</li>
 </ol>
 <h2 id="troubleshooting-3"><a class="header" href="#troubleshooting-3">Troubleshooting</a></h2>
 <ul>
 <li>If startup fails with a file error, re-check the executable path first.</li>
 <li>If startup succeeds but probes fail, re-check protocol mode and provider readiness.</li>
 <li>If the GUI shows health but editors still fail, compare the editor transport contract against the current runtime mode.</li>
+<li>GUI-specific issues: check if <code>gui_config.json</code> is corrupted; delete it to reset if necessary.</li>
 </ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="prompts-system"><a class="header" href="#prompts-system">Prompts System</a></h1>
+<h2 id="overview-9"><a class="header" href="#overview-9">Overview</a></h2>
+<p>The Prompts System is go-on’s built-in prompt template management feature, providing <strong>84+ ready-to-use templates</strong> across 12 industry categories. Users can browse, search, and insert templates via the GUI, expand templates quickly with <code>/</code> commands in Chat, or have AI agents automatically invoke templates through MCP (Model Context Protocol).</p>
+<blockquote>
+<p>Related docs: <a href="#gui-desktop-console">GUI Console</a> | <a href="#workflow-configuration">Workflow Config</a></p>
+</blockquote>
+<hr>
+<h2 id="directory-structure-1"><a class="header" href="#directory-structure-1">Directory Structure</a></h2>
+<p>Prompt templates are organized in a layered directory structure:</p>
+<pre><code>prompts/
+├── en.json           # English built-in templates (default)
+├── zh-CN.json        # Simplified Chinese built-in templates
+├── zh-TW.json        # Traditional Chinese built-in templates
+└── custom/
+    ├── en.json       # English custom templates
+    ├── zh-CN.json    # Simplified Chinese custom templates
+    └── zh-TW.json    # Traditional Chinese custom templates
+</code></pre>
+<ul>
+<li><code>prompts/{lang}.json</code> — Built-in templates, shipped with the system, read-only</li>
+<li><code>prompts/custom/{lang}.json</code> — Custom templates, users can freely create, edit, and delete</li>
+<li>Language auto-switch: when the GUI language changes, the system automatically loads the corresponding language template file</li>
+</ul>
+<h3 id="supported-languages"><a class="header" href="#supported-languages">Supported Languages</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Language Code</th><th>Name</th></tr>
+</thead>
+<tbody>
+<tr><td><code>en</code></td><td>English</td></tr>
+<tr><td><code>zh-CN</code></td><td>Simplified Chinese</td></tr>
+<tr><td><code>zh-TW</code></td><td>Traditional Chinese</td></tr>
+</tbody>
+</table>
+</div>
+<p>When switching the GUI language, the prompt template system automatically loads the corresponding language file — no manual switching needed.</p>
+<hr>
+<h2 id="12-industry-categories"><a class="header" href="#12-industry-categories">12 Industry Categories</a></h2>
+<p>Each category contains 7 templates, totaling <strong>84+ templates</strong> covering typical use cases across industries.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>#</th><th>Category</th><th>Description</th><th>Representative Templates</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td>Software Development</td><td>Code generation, debugging, refactoring, code review</td><td><code>explain_code</code> Explain code / <code>review_code</code> Code review / <code>generate_test</code> Generate unit tests</td></tr>
+<tr><td>2</td><td>Writing &amp; Creative</td><td>Article writing, creative writing, copywriting</td><td><code>write_article</code> Write article / <code>creative_story</code> Creative story / <code>copywriting</code> Copywriting</td></tr>
+<tr><td>3</td><td>Academic Research</td><td>Paper writing, literature review, data analysis</td><td><code>write_paper</code> Paper writing / <code>literature_review</code> Literature review / <code>data_analysis</code> Data analysis</td></tr>
+<tr><td>4</td><td>Business Analysis</td><td>Market analysis, business model, competitive analysis</td><td><code>market_analysis</code> Market analysis / <code>business_model</code> Business model / <code>competitive_analysis</code> Competitive analysis</td></tr>
+<tr><td>5</td><td>Marketing</td><td>Marketing plans, ad copy, social media</td><td><code>marketing_plan</code> Marketing plan / <code>ad_copy</code> Ad copy / <code>social_media</code> Social media content</td></tr>
+<tr><td>6</td><td>Legal &amp; Compliance</td><td>Contract review, legal advice, compliance checks</td><td><code>contract_review</code> Contract review / <code>legal_advice</code> Legal advice / <code>compliance_check</code> Compliance check</td></tr>
+<tr><td>7</td><td>Medical &amp; Health</td><td>Medical consultation, health management, drug info</td><td><code>medical_consult</code> Medical consultation / <code>health_plan</code> Health plan / <code>drug_info</code> Drug information</td></tr>
+<tr><td>8</td><td>Education &amp; Training</td><td>Course design, lesson plans, tutoring</td><td><code>course_design</code> Course design / <code>lesson_plan</code> Lesson plan / <code>tutoring</code> Tutoring</td></tr>
+<tr><td>9</td><td>Finance &amp; Investment</td><td>Investment analysis, risk assessment, financial reports</td><td><code>investment_analysis</code> Investment analysis / <code>risk_assessment</code> Risk assessment / <code>financial_report</code> Financial report</td></tr>
+<tr><td>10</td><td>Data Science</td><td>Data analysis, machine learning, data visualization</td><td><code>data_cleaning</code> Data cleaning / <code>ml_model</code> ML model / <code>data_viz</code> Data visualization</td></tr>
+<tr><td>11</td><td>Design &amp; Creative</td><td>UI/UX design, graphic design, creative brainstorming</td><td><code>ui_design</code> UI design / <code>brand_design</code> Brand design / <code>creative_brainstorm</code> Creative brainstorming</td></tr>
+<tr><td>12</td><td>System Operations</td><td>Server management, network config, monitoring alerts</td><td><code>server_setup</code> Server setup / <code>network_config</code> Network config / <code>monitor_setup</code> Monitoring setup</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="gui-operations"><a class="header" href="#gui-operations">GUI Operations</a></h2>
+<p>In the GUI’s <strong>Prompts Tab</strong>, you can:</p>
+<ul>
+<li><strong>Browse</strong> — View all templates grouped by industry category (built-in + custom)</li>
+<li><strong>Search</strong> — Search template titles and content by keyword</li>
+<li><strong>Create</strong> — Create new custom templates, select the category and language</li>
+<li><strong>Edit</strong> — Modify existing custom templates</li>
+<li><strong>Delete</strong> — Remove unwanted custom templates</li>
+</ul>
+<h3 id="workflow"><a class="header" href="#workflow">Workflow</a></h3>
+<ol>
+<li>Switch to the Prompts Tab</li>
+<li>Select an industry category on the left to filter</li>
+<li>Use the search box to search by keyword</li>
+<li>Click a template card to view details</li>
+<li>Click the <strong>Insert to Chat</strong> button to insert template content into the Chat input box</li>
+<li>Fine-tune the template in Chat and send</li>
+</ol>
+<hr>
+<h2 id="chat--commands"><a class="header" href="#chat--commands">Chat <code>/</code> Commands</a></h2>
+<p>In the Chat input box, type <code>/</code> to trigger command completion. Type a template ID and press Enter to expand the template content directly.</p>
+<h3 id="command-format"><a class="header" href="#command-format">Command Format</a></h3>
+<pre><code>/&lt;template_id&gt; &lt;parameters&gt;
+</code></pre>
+<p>Examples:</p>
+<ul>
+<li><code>/explain_code</code> — Explain selected code</li>
+<li><code>/review_code</code> — Review code quality</li>
+<li><code>/generate_test Rust</code> — Generate unit tests for Rust code</li>
+<li><code>/write_article topic: AI trends</code> — Write an article on the specified topic</li>
+</ul>
+<h3 id="common-commands"><a class="header" href="#common-commands">Common Commands</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Command</th><th>Function</th></tr>
+</thead>
+<tbody>
+<tr><td><code>/explain_code</code></td><td>Explain selected code</td></tr>
+<tr><td><code>/review_code</code></td><td>Review code quality</td></tr>
+<tr><td><code>/optimize_code</code></td><td>Optimize code performance</td></tr>
+<tr><td><code>/generate_test</code></td><td>Generate unit tests</td></tr>
+<tr><td><code>/refactor_code</code></td><td>Refactor code</td></tr>
+<tr><td><code>/write_doc</code></td><td>Write documentation comments</td></tr>
+<tr><td><code>/write_article</code></td><td>Write an article</td></tr>
+<tr><td><code>/market_analysis</code></td><td>Market analysis</td></tr>
+<tr><td><code>/contract_review</code></td><td>Contract review</td></tr>
+<tr><td><code>/data_analysis</code></td><td>Data analysis</td></tr>
+</tbody>
+</table>
+</div>
+<p>When you type <code>/</code>, the system shows an autocomplete list with fuzzy search support, category filtering, and full template ID matching.</p>
+<hr>
+<h2 id="custom-templates"><a class="header" href="#custom-templates">Custom Templates</a></h2>
+<h3 id="creating-a-template"><a class="header" href="#creating-a-template">Creating a Template</a></h3>
+<ol>
+<li>In the Prompts Tab, click <strong>Create New Template</strong></li>
+<li>Fill in the template details:
+<ul>
+<li><strong>ID</strong> — Unique identifier for <code>/</code> command invocation (e.g., <code>my_custom_template</code>)</li>
+<li><strong>Title</strong> — Display name of the template</li>
+<li><strong>Category</strong> — Industry category</li>
+<li><strong>Language</strong> — Template language</li>
+<li><strong>Content</strong> — Prompt text, supports <code>{{variable}}</code> placeholders</li>
+<li><strong>Description</strong> — Brief description of the template’s purpose</li>
+</ul>
+</li>
+<li>Save — the template will be written to <code>prompts/custom/{lang}.json</code></li>
+</ol>
+<h3 id="editing-a-template"><a class="header" href="#editing-a-template">Editing a Template</a></h3>
+<p>Find the custom template in the Prompts Tab, click the edit button to modify. After saving, the system updates <code>prompts/custom/{lang}.json</code>.</p>
+<h3 id="deleting-a-template"><a class="header" href="#deleting-a-template">Deleting a Template</a></h3>
+<p>Find the custom template in the Prompts Tab, click the delete button and confirm.</p>
+<blockquote>
+<p>⚠️ Note: Only custom templates can be deleted; built-in templates are read-only.</p>
+</blockquote>
+<hr>
+<h2 id="backend-rpc-interface"><a class="header" href="#backend-rpc-interface">Backend RPC Interface</a></h2>
+<p>The prompts system provides the following RPC interfaces:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>RPC</th><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>prompts.list</code></td><td>List</td><td>Get all templates, filterable by category and language</td></tr>
+<tr><td><code>prompts.search</code></td><td>Search</td><td>Search templates by keyword</td></tr>
+<tr><td><code>prompts.get</code></td><td>Get</td><td>Get a single template’s details</td></tr>
+<tr><td><code>prompts.create</code></td><td>Create</td><td>Create a new custom template</td></tr>
+<tr><td><code>prompts.update</code></td><td>Update</td><td>Update a custom template</td></tr>
+<tr><td><code>prompts.delete</code></td><td>Delete</td><td>Delete a custom template</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="mcp-tools"><a class="header" href="#mcp-tools">MCP Tools</a></h2>
+<p>Through MCP (Model Context Protocol), AI agents can automatically discover and invoke prompt templates:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>MCP Tool</th><th>Function</th></tr>
+</thead>
+<tbody>
+<tr><td><code>prompts_list</code></td><td>List all available prompt templates</td></tr>
+<tr><td><code>prompts_get</code></td><td>Get the detailed content of a specific template</td></tr>
+</tbody>
+</table>
+</div>
+<p>AI agents discover these tools via the MCP protocol and can automatically select and apply appropriate templates during conversations. For example, when a user says “help me review this code”, the AI agent can automatically call <code>prompts_get</code> to retrieve the <code>review_code</code> template and apply it to the response.</p>
+<hr>
+<h2 id="settings-toggle"><a class="header" href="#settings-toggle">Settings Toggle</a></h2>
+<p>In <strong>Settings → Feature Toggles</strong>, you can enable or disable the <strong>Prompts</strong> module. When disabled:</p>
+<ul>
+<li>The Prompts Tab is hidden from the tab bar</li>
+<li>Related RPC interfaces stop responding</li>
+<li>Related MCP tools stop responding</li>
+</ul>
+<blockquote>
+<p>Default state: <strong>Enabled</strong></p>
+</blockquote>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="workflow-configuration"><a class="header" href="#workflow-configuration">Workflow Configuration</a></h1>
+<p>go-on supports multiple workflow types designed for different use cases. Workflows are configured in the <code>[flow]</code> section of <code>config.toml</code>.</p>
+<blockquote>
+<p>Related docs: <a href="#gui-desktop-console">GUI Console</a> | <a href="#prompts-system">Prompts System</a></p>
+</blockquote>
+<hr>
+<h2 id="1-workflow-types"><a class="header" href="#1-workflow-types">1. Workflow Types</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Type</th><th>Value</th><th>Use Case</th><th>Default Phases</th></tr>
+</thead>
+<tbody>
+<tr><td>Auto</td><td><code>"auto"</code></td><td>Auto-detect based on context</td><td>Varies</td></tr>
+<tr><td>Dev</td><td><code>"dev"</code></td><td>Software development</td><td>planning → coding → review → delivery</td></tr>
+<tr><td>General</td><td><code>"general"</code></td><td>Q&amp;A, analysis, research</td><td>gathering → thinking → executing → validating → closing</td></tr>
+<tr><td>Free</td><td><code>"free"</code></td><td>Single-turn, no phase routing</td><td>None</td></tr>
+<tr><td>Custom</td><td><code>"custom"</code></td><td>User-defined phases</td><td>User-defined</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="2-quick-start"><a class="header" href="#2-quick-start">2. Quick Start</a></h2>
+<p>Two ready-to-use config templates are available in <code>config/templates/</code>:</p>
+<h3 id="development-workflow-1"><a class="header" href="#development-workflow-1">Development Workflow</a></h3>
+<pre><code class="language-bash">cp config/templates/config.dev.toml config.toml
+# Edit config.toml to add your API keys
+go-on --config config.toml
+</code></pre>
+<h3 id="general-workflow"><a class="header" href="#general-workflow">General Workflow</a></h3>
+<pre><code class="language-bash">cp config/templates/config.general.toml config.toml
+# Edit config.toml to add your API keys
+go-on --config config.toml
+</code></pre>
+<hr>
+<h2 id="3-agent-routing-flow"><a class="header" href="#3-agent-routing-flow">3. Agent Routing Flow</a></h2>
+<p><strong>Agents are NOT bound to phases.</strong> All registered AI providers are available globally. The <strong>CapabilityBus</strong> dynamically selects the best provider for each subtask based on:</p>
+<ol>
+<li><strong>Task context</strong> — what type of work is being done (coding, analysis, etc.)</li>
+<li><strong>Reputation score</strong> — historical success rate for similar tasks</li>
+<li><strong>Capability tags</strong> — what each provider is good at</li>
+</ol>
+<p>You can define phases without listing agents — the bus picks the best one automatically:</p>
+<pre><code class="language-toml">[phases.coding]
+description = "Coding — implement features"
+agents = []          # ← Empty! The capability bus picks the best agent.
+fallback = true
+</code></pre>
+<p>Or give the bus hints by listing preferred agents:</p>
+<pre><code class="language-toml">[phases.coding]
+agents = ["deepseek", "openai"]   # ← Hint: prefer these, but bus still decides
+fallback = true
+</code></pre>
+<hr>
+<h2 id="4-auto-detect-workflow_type--auto"><a class="header" href="#4-auto-detect-workflow_type--auto">4. Auto-detect (<code>workflow_type = "auto"</code>)</a></h2>
+<p>When <code>workflow_type</code> is not set or set to <code>"auto"</code>, the system detects the context at startup:</p>
+<ul>
+<li>If a code repository is detected → uses <strong>Dev</strong> workflow (4 phases)</li>
+<li>Otherwise → uses <strong>General</strong> workflow (5 phases)</li>
+</ul>
+<p>Override by explicitly setting <code>workflow_type</code> in your config.</p>
+<hr>
+<h2 id="5-free-mode-workflow_type--free"><a class="header" href="#5-free-mode-workflow_type--free">5. Free Mode (<code>workflow_type = "free"</code>)</a></h2>
+<p>Free mode bypasses phase routing entirely. Every request is a single-turn interaction without phase transitions:</p>
+<pre><code class="language-toml">[flow]
+name = "Free Chat"
+workflow_type = "free"
+phases = []   # No phases — direct routing only
+</code></pre>
+<hr>
+<h2 id="6-custom-workflow"><a class="header" href="#6-custom-workflow">6. Custom Workflow</a></h2>
+<p>Define your own workflow phases and transitions:</p>
+<pre><code class="language-toml">default_phase = "research"
+model_selection_mode = "adaptive"
+
+[flow]
+name = "My Research Workflow"
+workflow_type = "custom"
+phases = ["research", "draft", "polish", "publish"]
+
+[phases.research]
+description = "Research — gather sources, analyze data"
+agents = []
+fallback = true
+
+[phases.research.options]
+request_timeout_seconds = 180
+cache_enabled = true
+vector_enabled = true
+phase_max_inflight = 8
+global_max_inflight = 128
+</code></pre>
+<p>Each phase supports configurable options including timeout, caching, vector memory, concurrency limits, and high-risk multi-agent voting settings.</p>
+<hr>
+<h2 id="7-high-risk-multi-agent-voting"><a class="header" href="#7-high-risk-multi-agent-voting">7. High-Risk Multi-Agent Voting</a></h2>
+<p>For high-risk phases (medical, legal, financial, security-critical), go-on supports multi-agent joint processing:</p>
+<ol>
+<li><strong>Risk detection</strong> — Analyzes user message for domain and decision keywords</li>
+<li><strong>Multi-agent execution</strong> — Multiple agents independently generate responses in parallel</li>
+<li><strong>Voting</strong> — Responses are deduplicated and ranked; consensus wins</li>
+<li><strong>Escalation</strong> — If no consensus, additional models break the tie</li>
+</ol>
+<p>Configure per-phase via <code>options</code>:</p>
+<pre><code class="language-toml">[phases.review.options]
+high_risk_vote_enabled = true
+high_risk_vote_threshold = 1
+high_risk_vote_min_agents = 2
+high_risk_vote_max_agents = 4
+high_risk_escalate_multi_model_enabled = true
+</code></pre>
+<hr>
+<blockquote>
+<p>Full documentation including phase options reference, feature profiles, and skill system can be found in the project’s <code>docs/workflow-config.md</code>.</p>
+</blockquote>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="skills-extension"><a class="header" href="#skills-extension">Skills Extension</a></h1>
 <p>The skills system provides a lightweight, type-safe mechanism for registering and

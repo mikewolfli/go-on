@@ -39,6 +39,23 @@ fn error_code_for(err: &anyhow::Error) -> i32 {
 }
 
 impl McpServer {
+    fn resolve_prompt_lang(&self, request: &JsonRpcRequest) -> String {
+        if let Some(lang) = request
+            .params
+            .as_ref()
+            .and_then(|p| p.get("lang"))
+            .and_then(|v| v.as_str())
+        {
+            return lang.to_string();
+        }
+
+        if let Some(acp) = &self.acp_server {
+            return acp.runtime_config.i18n_default_language.clone();
+        }
+
+        "en".to_string()
+    }
+
     pub async fn handle_request(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse> {
         let result = match request.method.as_str() {
             "initialize" => Ok(self.handle_initialize(&request).await),
@@ -456,8 +473,9 @@ impl McpServer {
     /// This is a lightweight implementation that surfaces the agent system prompts
     /// as discoverable prompt templates.  Full template parameterisation is a
     /// future enhancement.
-    async fn handle_list_prompts(&self, _request: &JsonRpcRequest) -> Value {
-        let prompts = self.build_prompt_list();
+    async fn handle_list_prompts(&self, request: &JsonRpcRequest) -> Value {
+        let lang = self.resolve_prompt_lang(request);
+        let prompts = self.build_prompt_list(&lang);
         json!({ "prompts": prompts })
     }
 
@@ -472,6 +490,12 @@ impl McpServer {
             .and_then(|p| p.get("name"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
+
+        let lang = self.resolve_prompt_lang(request);
+
+        if let Some(resolved) = self.resolve_template_prompt(name, &lang, request.params.as_ref()) {
+            return resolved;
+        }
 
         // Try to resolve as an agent system prompt
         if let Some(messages) = self.resolve_agent_prompt(name) {
@@ -496,8 +520,29 @@ impl McpServer {
 
     /// Build a list of discoverable prompt templates from agent configurations
     /// and registered skills.
-    fn build_prompt_list(&self) -> Vec<Value> {
+    fn build_prompt_list(&self, lang: &str) -> Vec<Value> {
         let mut prompts = Vec::new();
+
+        // Prompt templates from ACP prompt manager
+        if let Some(acp) = &self.acp_server {
+            if let Ok(collection) = acp.prompt_manager.get_all_templates(lang) {
+                for category in collection.categories {
+                    for template in category.templates {
+                        prompts.push(json!({
+                            "name": format!("template://{}.{}", category.id, template.id),
+                            "description": template.description,
+                            "arguments": [
+                                {
+                                    "name": "input",
+                                    "description": "Optional input for replacing {{input}} placeholder",
+                                    "required": false
+                                }
+                            ]
+                        }));
+                    }
+                }
+            }
+        }
 
         // Agent system prompts
         for name in self.agent_registry.names() {
@@ -509,6 +554,54 @@ impl McpServer {
         }
 
         prompts
+    }
+
+    fn resolve_template_prompt(
+        &self,
+        name: &str,
+        lang: &str,
+        params: Option<&Value>,
+    ) -> Option<Value> {
+        let acp = self.acp_server.as_ref()?;
+
+        let normalized = name
+            .strip_prefix("template://")
+            .unwrap_or(name)
+            .trim()
+            .trim_start_matches('/');
+
+        let (cat_id, cat_name, tpl) = acp.prompt_manager.get_template(lang, normalized)?;
+
+        let input = params
+            .and_then(|p| p.get("arguments"))
+            .and_then(|a| a.get("input"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+
+        let content = if tpl.content.contains("{{input}}") {
+            tpl.content.replace("{{input}}", input)
+        } else if input.is_empty() {
+            tpl.content
+        } else {
+            format!("{}\n\n{}", tpl.content, input)
+        };
+
+        Some(json!({
+            "description": format!("Template prompt '{}.{}'", cat_id, tpl.id),
+            "messages": [
+                {
+                    "role": "system",
+                    "content": content
+                }
+            ],
+            "template": {
+                "category_id": cat_id,
+                "category_name": cat_name,
+                "id": tpl.id,
+                "title": tpl.title,
+            }
+        }))
     }
 
     /// Resolve an agent prompt by name.

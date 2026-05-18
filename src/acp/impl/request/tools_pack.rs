@@ -1,3 +1,4 @@
+use super::prompts_pack::{build_prompts_get_tool, build_prompts_list_tool};
 use super::*;
 
 pub(super) fn skill_import_policy(server: &AcpServer) -> SkillImportPolicy {
@@ -84,6 +85,39 @@ pub(super) fn build_mcp_tool_descriptors(server: &AcpServer) -> Vec<Value> {
             "name": "goon_skill_version_rollback",
             "description": "Rollback imported skill to a specified version",
             "input_schema": {"type": "object", "required": ["name", "version"]}
+        }),
+        json!({
+            "name": "prompts_list",
+            "description": "List all available prompt templates organized by category. Returns categories with their templates including id, title, description, content, and tags.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "lang": {
+                        "type": "string",
+                        "description": "Language code: 'en', 'zh-CN', or 'zh-TW' (default: 'en')",
+                        "default": "en"
+                    }
+                }
+            }
+        }),
+        json!({
+            "name": "prompts_get",
+            "description": "Get a single prompt template by its id. Returns the full template content and metadata.",
+            "input_schema": {
+                "type": "object",
+                "required": ["id"],
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "The template id to retrieve"
+                    },
+                    "lang": {
+                        "type": "string",
+                        "description": "Language code: 'en', 'zh-CN', or 'zh-TW' (default: 'en')",
+                        "default": "en"
+                    }
+                }
+            }
         }),
         json!({
             "name": "skill-finder",
@@ -251,6 +285,24 @@ pub(crate) async fn execute_mcp_tool_call(
         "goon_metrics_errors_summary" => Ok(metrics_errors_summary_payload(server, arguments)),
         "goon_skill_update" => skill_update_payload(server, arguments),
         "goon_skill_version_list" => skill_version_list_payload(server, arguments),
+        "prompts_list" => {
+            let lang = arguments
+                .get("lang")
+                .and_then(|v| v.as_str())
+                .unwrap_or("en");
+            Ok(build_prompts_list_tool(&server.prompt_manager, lang))
+        }
+        "prompts_get" => {
+            let id = arguments
+                .get("id")
+                .and_then(|v| v.as_str())
+                .context("missing required field: id")?;
+            let lang = arguments
+                .get("lang")
+                .and_then(|v| v.as_str())
+                .unwrap_or("en");
+            Ok(build_prompts_get_tool(&server.prompt_manager, lang, id))
+        }
         "skill-finder" => {
             let query = arguments
                 .get("query")

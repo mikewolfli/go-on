@@ -38,6 +38,22 @@ The backend process is started from the configured working directory. The GUI ex
 - Built-in `skill-creator`: lets AI define new skills autonomously
 - Skill list management: enable, disable, delete
 
+### Prompts Tab
+
+Browse, search, create, edit, and delete prompt templates across 12 industry categories.
+See the [Prompts System](prompts.md) document for full details.
+
+- **Browse by category** — filter templates by 12 industry categories (Software Development, Writing,
+  Academic Research, Business Analysis, Marketing, Legal, Medical, Education, Finance, Data Science, Design, System Operations)
+- **Search** — keyword search across template titles and content
+- **Custom templates** — create your own templates with `{{variable}}` placeholders
+- **Insert to Chat** — click the **Insert to Chat** button on any template card to insert the template
+  content into the Chat input box
+- **Chat `/` commands** — type `/` in the Chat input box to trigger command completion;
+  type a template ID and press Enter to expand the template directly
+
+> For details on the template system, see the [Prompts System](prompts.md).
+
 ### Chat Tab — Risk Decision & Safeguard Mode
 
 The GUI displays a **Risk Decision panel** on AI responses when the backend's governance layer detects potentially high-risk content. This feature is part of the Safeguard mode and multi-model voting system.
@@ -62,7 +78,7 @@ The panel adapts theme-wise: high-risk topics get a warm orange/red background, 
 - **Config Editor**: manages `gui_config.json` with JSON syntax validation
 - **Theme Selection**: 6 visual themes (Minimal / Chinese-Classic / Wuxia / Landscape / Hello Kitty / Dark)
 - **Language Switching**: English, Simplified Chinese, Traditional Chinese
-- **Feature Toggles**: enable/disable GUI features
+- **Feature Toggles**: enable/disable GUI features (including **Prompts** toggle that controls the Prompts Tab visibility and related RPC/MCP interfaces)
 
 ## Development and build commands
 

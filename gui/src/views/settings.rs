@@ -149,6 +149,15 @@ impl SettingsView {
                             changed = true;
                         }
                         ui.end_row();
+
+                        ui.label(i18n.t("tab.prompts"));
+                        if ui
+                            .checkbox(&mut config.features.show_prompts_tab, "")
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                        ui.end_row();
                     });
 
                 ui.add_space(12.0);

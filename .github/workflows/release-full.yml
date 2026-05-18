@@ -81,6 +81,8 @@ jobs:
           cp "gui/icon.ico" "${PKG_DIR}/icon.ico"
           cp -r "RULES" "${PKG_DIR}/backend/rules"
           cp -r "languages" "${PKG_DIR}/backend/languages"
+          cp -r "prompts" "${PKG_DIR}/prompts"
+          cp -r "prompts" "${PKG_DIR}/backend/prompts"
           cp "config/config.toml" "${PKG_DIR}/backend/config.toml"
 
       - name: Prepare package (Windows)
@@ -95,6 +97,8 @@ jobs:
           Copy-Item "gui/icon.ico" "$pkgDir/icon.ico"
           Copy-Item "RULES" "$pkgDir/backend/rules" -Recurse -Force
           Copy-Item "languages" "$pkgDir/backend/languages" -Recurse -Force
+          Copy-Item "prompts" "$pkgDir/prompts" -Recurse -Force
+          Copy-Item "prompts" "$pkgDir/backend/prompts" -Recurse -Force
           Copy-Item "config/config.toml" "$pkgDir/backend/config.toml"
 
       - name: Archive package (Linux/macOS)

@@ -23,8 +23,8 @@ use crate::keyring_util::REDACTED_API_KEY;
 use crate::views::chat::ChatUiRuntimeConfig;
 use crate::views::{
     about::AboutView, autotune::AutoTuneView, chat::ChatView, config_editor::ConfigEditorView,
-    monitor::MonitorView, providers::ProvidersView, security::SecurityView, settings::SettingsView,
-    setup::SetupView, skills::SkillsView, workflow::WorkflowView,
+    monitor::MonitorView, prompts::PromptsView, providers::ProvidersView, security::SecurityView,
+    settings::SettingsView, setup::SetupView, skills::SkillsView, workflow::WorkflowView,
 };
 use std::hash::{Hash, Hasher};
 use std::sync::{mpsc, Arc};
@@ -88,6 +88,7 @@ pub struct GoOnApp {
     pub autotune_view: AutoTuneView,
     pub security_view: SecurityView,
     pub config_editor_view: ConfigEditorView,
+    pub prompts_view: PromptsView,
     pub providers_view: ProvidersView,
     pub about_view: AboutView,
     pub show_setup: bool,
@@ -119,6 +120,8 @@ pub struct GoOnApp {
     last_backend_ui_commit: Instant,
     /// Consecutive backend disconnect samples; used to debounce transient failures.
     health_disconnect_streak: u8,
+    /// Tracks the last seen prompts command version to avoid cloning every frame.
+    last_prompts_command_version: u64,
     /// Persistent UI state shared across all views
     pub ui_state: GlobalUiState,
     /// Count of consecutive backend crashes for rate limiting
@@ -200,6 +203,7 @@ impl GoOnApp {
         config.features.monitor_history_alerts.hash(&mut hasher);
         config.features.config_safe_mode.hash(&mut hasher);
         config.features.setup_enterprise.hash(&mut hasher);
+        config.features.show_prompts_tab.hash(&mut hasher);
         for provider in &config.providers {
             provider.name.hash(&mut hasher);
             provider.model.hash(&mut hasher);
@@ -924,7 +928,7 @@ state_path = "acp_autotune_state.json"
         let initial_url = config.backend_url.clone();
         let ui_state = GlobalUiState::load();
 
-        Self {
+        let mut app = Self {
             backend,
             config_shared,
             config_shared_fingerprint,
@@ -937,6 +941,7 @@ state_path = "acp_autotune_state.json"
             autotune_view: AutoTuneView::new(),
             security_view: SecurityView::new(),
             config_editor_view: ConfigEditorView::new(),
+            prompts_view: PromptsView::new(),
             providers_view: ProvidersView::new(),
             about_view: AboutView::new(),
             config,
@@ -961,8 +966,17 @@ state_path = "acp_autotune_state.json"
             backend_crash_count: 0,
             consecutive_poll_failures: 0,
             blocked_tab_toast_shown: None,
+            last_prompts_command_version: 0,
             ui_state,
+        };
+
+        // Pre-load prompts so that command_templates are ready
+        // when the chat tab is first opened.
+        if app.config.features.show_prompts_tab {
+            app.prompts_view.ensure_loaded(lang);
         }
+
+        app
     }
 
     fn apply_health_debounce(&mut self, mut next: HealthStatus) -> HealthStatus {
@@ -1357,7 +1371,7 @@ impl eframe::App for GoOnApp {
         });
 
         // Tab bar — when disconnected, only monitor/providers/settings are accessible
-        let allowed_when_offline = ["monitor", "providers", "settings"];
+        let allowed_when_offline = ["monitor", "providers", "prompts", "settings"];
         let mut new_tab: Option<String> = None;
         let mut blocked_tab: Option<String> = None;
         egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
@@ -1456,6 +1470,20 @@ impl eframe::App for GoOnApp {
                         "chat" => {
                             let stability = &self.config.ui_stability;
                             let autotune_chain = self.config.features.autotune_chain_injection;
+                            // Check for pending insert from prompts view
+                            if let Some(content) = self.prompts_view.pending_insert.take() {
+                                self.chat_view.input = content;
+                            }
+                            // Pass prompts command templates for `/` command expansion
+                            // Only clone when version changes to avoid per-frame allocation
+                            if self.last_prompts_command_version
+                                != self.prompts_view.command_version
+                            {
+                                self.last_prompts_command_version =
+                                    self.prompts_view.command_version;
+                                self.chat_view.prompts_command_templates =
+                                    self.prompts_view.command_templates.clone();
+                            }
                             self.chat_view.show(
                                 ui,
                                 &self.i18n,
@@ -1526,6 +1554,9 @@ impl eframe::App for GoOnApp {
                                     self.workflow_view.selected_run_id.clone();
                                 self.ui_state.save();
                             }
+                        }
+                        "prompts" => {
+                            self.prompts_view.show(ui, &self.i18n);
                         }
                         "autotune" => self.autotune_view.show(ui, &self.i18n),
                         "security" => self.security_view.show(ui, &self.i18n, &self.backend, ctx),
@@ -1757,6 +1788,9 @@ impl GoOnApp {
         if self.config_shared.features.autotune {
             tabs.push("autotune".into());
         }
+        if self.config_shared.features.show_prompts_tab {
+            tabs.push("prompts".into());
+        }
         if self.config_shared.features.security {
             tabs.push("security".into());
         }
@@ -1778,6 +1812,7 @@ impl GoOnApp {
             "skills" => self.i18n.t("tab.skills"),
             "workflow" => self.i18n.t("tab.workflow"),
             "autotune" => self.i18n.t("tab.autotune"),
+            "prompts" => self.i18n.t("tab.prompts"),
             "security" => self.i18n.t("tab.security"),
             "config" => self.i18n.t("tab.config"),
             "providers" => self.i18n.t("tab.providers"),

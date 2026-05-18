@@ -86,6 +86,8 @@ pub struct ChatView {
     template_content_buf: String,
     pub template_search_query: String,
     templates_bootstrapped: bool,
+    /// Command templates from the PromptsView, used as fallback for `/` commands.
+    pub prompts_command_templates: Vec<crate::views::prompts::CommandTemplate>,
     // Feature 9: search (sessions + messages)
     pub session_search_query: String,
     // Save serialization guards (AtomicBool ensures no concurrent file writes)
@@ -420,6 +422,7 @@ impl ChatView {
             template_content_buf: String::new(),
             template_search_query: String::new(),
             templates_bootstrapped: false,
+            prompts_command_templates: Vec::new(),
             // Feature 9
             session_search_query: String::new(),
             // Save guards
@@ -503,6 +506,36 @@ impl ChatView {
         }
         self.templates_bootstrapped = true;
         if !self.prompt_templates.is_empty() {
+            // Templates exist on disk — just update display names in case language changed.
+            for tpl in &mut self.prompt_templates {
+                match tpl.id.as_str() {
+                    "explain" => {
+                        tpl.name = i18n.t("chat.template.explain").to_string();
+                        tpl.content = i18n.t("chat.template.explain.body").to_string();
+                    }
+                    "test" => {
+                        tpl.name = i18n.t("chat.template.test").to_string();
+                        tpl.content = i18n.t("chat.template.test.body").to_string();
+                    }
+                    "debug" => {
+                        tpl.name = i18n.t("chat.template.debug").to_string();
+                        tpl.content = i18n.t("chat.template.debug.body").to_string();
+                    }
+                    "refactor" => {
+                        tpl.name = i18n.t("chat.template.refactor").to_string();
+                        tpl.content = i18n.t("chat.template.refactor.body").to_string();
+                    }
+                    "summary" => {
+                        tpl.name = i18n.t("chat.template.summary").to_string();
+                        tpl.content = i18n.t("chat.template.summary.body").to_string();
+                    }
+                    "docs" => {
+                        tpl.name = i18n.t("chat.template.docs").to_string();
+                        tpl.content = i18n.t("chat.template.docs.body").to_string();
+                    }
+                    _ => {} // User-created templates keep their content
+                }
+            }
             return;
         }
 
@@ -713,6 +746,16 @@ impl ChatView {
     }
 
     fn expand_prompt_command(&self, raw_input: &str) -> String {
+        self.expand_prompt_command_with_fallback(raw_input, None)
+    }
+
+    /// Expand a `/` command using chat-local templates and optionally
+    /// the PromptsView command templates as a fallback.
+    fn expand_prompt_command_with_fallback(
+        &self,
+        raw_input: &str,
+        prompts_commands: Option<&[crate::views::prompts::CommandTemplate]>,
+    ) -> String {
         let trimmed = raw_input.trim();
         if !trimmed.starts_with('/') {
             return trimmed.to_string();
@@ -721,6 +764,8 @@ impl ChatView {
         let mut parts = trimmed.splitn(2, char::is_whitespace);
         let command = parts.next().unwrap_or_default();
         let arguments = parts.next().unwrap_or_default().trim();
+
+        // Check chat-local templates first
         if let Some(template) = self
             .prompt_templates
             .iter()
@@ -733,6 +778,19 @@ impl ChatView {
                 return template.content.clone();
             }
             return format!("{}\n\n{}", template.content, arguments);
+        }
+
+        // Fallback to prompts view templates
+        if let Some(cmds) = prompts_commands {
+            if let Some(ct) = cmds.iter().find(|ct| ct.command == command) {
+                if ct.content.contains("{{input}}") {
+                    return ct.content.replace("{{input}}", arguments);
+                }
+                if arguments.is_empty() {
+                    return ct.content.clone();
+                }
+                return format!("{}\n\n{}", ct.content, arguments);
+            }
         }
 
         trimmed.to_string()
@@ -889,6 +947,7 @@ mod tests {
             template_content_buf: String::new(),
             template_search_query: String::new(),
             templates_bootstrapped: false,
+            prompts_command_templates: Vec::new(),
             session_search_query: String::new(),
             session_save_in_flight: Arc::new(AtomicBool::new(false)),
             template_save_in_flight: Arc::new(AtomicBool::new(false)),

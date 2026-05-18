@@ -1,0 +1,1691 @@
+[
+  {
+    "id": "software_dev",
+    "name": "軟體開發",
+    "icon": "💻",
+    "templates": [
+      {
+        "id": "explain_code",
+        "title": "解釋程式碼",
+        "description": "詳細程式碼解釋，涵蓋控制流程、資料結構與風險",
+        "content": "請詳細解釋以下程式碼。涵蓋控制流程、關鍵資料結構以及任何風險或權衡。\n\n{{input}}",
+        "tags": [
+          "程式碼",
+          "分析",
+          "學習"
+        ]
+      },
+      {
+        "id": "code_review",
+        "title": "程式碼審查",
+        "description": "全面的程式碼審查，找出錯誤並提供建議",
+        "content": "審查以下程式碼，找出其中的錯誤、安全漏洞、效能問題和風格違規。針對每個問題提供可操作的建議。\n\n{{input}}",
+        "tags": [
+          "程式碼",
+          "審查",
+          "品質"
+        ]
+      },
+      {
+        "id": "refactor_suggestion",
+        "title": "重構建議",
+        "description": "為提升可維護性提供重構建議",
+        "content": "分析以下程式碼並提出重構改進建議。重點在於降低複雜度、提高可讀性，並在適當的地方應用設計模式。\n\n{{input}}",
+        "tags": [
+          "重構",
+          "設計模式",
+          "可維護性"
+        ]
+      },
+      {
+        "id": "generate_unit_tests",
+        "title": "生成單元測試",
+        "description": "生成涵蓋邊緣案例的全面單元測試",
+        "content": "為以下程式碼編寫全面的單元測試。包括正常情況、邊界情況、錯誤處理和極限條件的測試案例。使用適合該語言的測試框架。\n\n{{input}}",
+        "tags": [
+          "測試",
+          "單元測試",
+          "品質"
+        ]
+      },
+      {
+        "id": "debug_error",
+        "title": "偵錯錯誤訊息",
+        "description": "分析錯誤訊息並建議修復方案",
+        "content": "分析以下錯誤訊息和程式碼片段。找出根本原因並提供逐步解決方案來修復問題。\n\n錯誤：{{input}}",
+        "tags": [
+          "偵錯",
+          "錯誤",
+          "故障排除"
+        ]
+      },
+      {
+        "id": "api_design",
+        "title": "API 設計審查",
+        "description": "審查 API 設計是否符合 RESTful 最佳實踐",
+        "content": "審查以下 API 設計。檢查是否符合 RESTful 慣例、HTTP 方法使用是否恰當、狀態碼使用是否正確、錯誤回應格式是否合理以及安全考量是否周全。\n\n{{input}}",
+        "tags": [
+          "API",
+          "REST",
+          "設計"
+        ]
+      },
+      {
+        "id": "architecture_review",
+        "title": "架構審查",
+        "description": "評估系統架構的可擴展性與可靠性",
+        "content": "評估以下系統架構。評估其可擴展性、可靠性、可維護性和潛在瓶頸。根據業界最佳實踐提出改進建議。\n\n{{input}}",
+        "tags": [
+          "架構",
+          "可擴展性",
+          "設計"
+        ]
+      },
+      {
+        "id": "generate_unit_test",
+        "title": "Generate Unit Tests",
+        "description": "Comprehensive unit test generation for functions or modules",
+        "content": "Write thorough unit tests for the following code. Cover edge cases, error conditions, and happy paths. Use {{test_framework}} if applicable.\n\n{{input}}",
+        "tags": [
+          "testing",
+          "unit-test",
+          "code-generation"
+        ]
+      },
+      {
+        "id": "generate_documentation",
+        "title": "Generate Documentation",
+        "description": "Generate comprehensive API or function documentation",
+        "content": "Write clear and comprehensive documentation for the following code. Include parameter descriptions, return values, examples, and caveats.\n\n{{input}}",
+        "tags": [
+          "documentation",
+          "code-generation",
+          "api-docs"
+        ]
+      },
+      {
+        "id": "architecture_design",
+        "title": "Architecture Design",
+        "description": "Design system architecture for given requirements",
+        "content": "Design a software architecture for the following requirements. Discuss component boundaries, data flow, communication protocols, and tradeoffs.\n\n{{input}}",
+        "tags": [
+          "architecture",
+          "design",
+          "system-design"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "writing",
+    "name": "寫作創作",
+    "icon": "✍️",
+    "templates": [
+      {
+        "id": "proofread",
+        "title": "校對與潤飾",
+        "description": "檢查語法、風格和清晰度",
+        "content": "校對以下文字。修正語法、拼字和標點錯誤。改進句子結構和清晰度，同時保留原文的語氣和風格。\n\n{{input}}",
+        "tags": [
+          "校對",
+          "語法",
+          "編輯"
+        ]
+      },
+      {
+        "id": "rewrite_tone",
+        "title": "按特定語氣重寫",
+        "description": "以指定語氣（正式、隨意、說服性）重寫內容",
+        "content": "以{{tone}}的語氣重寫以下內容。保持關鍵資訊和事實準確性，同時適當調整風格。\n\n{{input}}",
+        "tags": [
+          "重寫",
+          "語氣",
+          "風格"
+        ]
+      },
+      {
+        "id": "outline_article",
+        "title": "文章大綱",
+        "description": "建立包含主要觀點和子要點的結構化大綱",
+        "content": "為以下主題的文章建立詳細大綱。包括引人入勝的引言、3-5 個帶有支撐論點的核心部分以及有力的結論。\n\n主題：{{input}}",
+        "tags": [
+          "大綱",
+          "結構",
+          "規劃"
+        ]
+      },
+      {
+        "id": "creative_story",
+        "title": "創意寫作提示",
+        "description": "根據提示生成短篇故事",
+        "content": "根據以下提示寫一篇短篇故事。包含生動的描寫、人物塑造和令人滿意的敘事弧線。\n\n提示：{{input}}",
+        "tags": [
+          "創意",
+          "故事",
+          "小說"
+        ]
+      },
+      {
+        "id": "summarize_content",
+        "title": "內容摘要",
+        "description": "將長篇內容濃縮為簡潔摘要",
+        "content": "將以下內容濃縮為簡潔版本。捕捉主要觀點、關鍵論點和重要結論。保持約為原文三分之一長度。\n\n{{input}}",
+        "tags": [
+          "摘要",
+          "濃縮",
+          "重點"
+        ]
+      },
+      {
+        "id": "headline_generator",
+        "title": "標題產生器",
+        "description": "產生吸引眼球的標題",
+        "content": "為以下文章或主題產生 10 個引人注目的標題。使用多種風格：直接式、提問式、列表式、教學式和挑釁式。\n\n主題：{{input}}",
+        "tags": [
+          "標題",
+          "命名",
+          "行銷"
+        ]
+      },
+      {
+        "id": "email_draft",
+        "title": "草擬專業郵件",
+        "description": "草擬結構良好的專業郵件",
+        "content": "根據以下情境草擬一封專業郵件。包括清晰的主旨、適當的稱呼、結構完整的內文和恰當的結尾敬語。\n\n情境：{{input}}",
+        "tags": [
+          "郵件",
+          "專業",
+          "溝通"
+        ]
+      },
+      {
+        "id": "blog_post_outline",
+        "title": "Blog Post Outline",
+        "description": "Create a structured outline for a blog article",
+        "content": "Create a detailed outline for a blog post on the following topic. Include an engaging title suggestion, introduction, main sections with key points, and a conclusion with call-to-action.\n\n{{input}}",
+        "tags": [
+          "blogging",
+          "outline",
+          "content-planning"
+        ]
+      },
+      {
+        "id": "proofread_text",
+        "title": "Proofread & Polish",
+        "description": "Grammar, style, and clarity improvement for any text",
+        "content": "Proofread and polish the following text. Fix grammar, spelling, and punctuation errors. Improve sentence structure and clarity while preserving the original tone and meaning.\n\n{{input}}",
+        "tags": [
+          "proofreading",
+          "editing",
+          "grammar"
+        ]
+      },
+      {
+        "id": "copywriting_slogan",
+        "title": "Copywriting & Slogans",
+        "description": "Compelling marketing copy and tagline generation",
+        "content": "Write persuasive copy and catchy slogans for the following product or service. Highlight unique value propositions and appeal to the target audience.\n\n{{input}}",
+        "tags": [
+          "copywriting",
+          "marketing",
+          "branding"
+        ]
+      },
+      {
+        "id": "email_template",
+        "title": "Email Template",
+        "description": "Professional email writing for various contexts",
+        "content": "Write a professional email for the following scenario. Maintain appropriate tone, include a clear subject line, and ensure the message achieves its intended purpose.\n\n{{input}}",
+        "tags": [
+          "email",
+          "professional",
+          "communication"
+        ]
+      },
+      {
+        "id": "technical_writing",
+        "title": "Technical Writing",
+        "description": "Translate complex technical concepts into clear prose",
+        "content": "Explain the following technical concept in clear, accessible language suitable for {{audience}}. Use analogies and examples where appropriate.\n\n{{input}}",
+        "tags": [
+          "technical-writing",
+          "documentation",
+          "explanation"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "academic",
+    "name": "學術研究",
+    "icon": "📚",
+    "templates": [
+      {
+        "id": "literature_review",
+        "title": "文獻回顧",
+        "description": "總結並綜合分析某一主題的學術文獻",
+        "content": "針對以下研究主題進行文獻回顧。總結主要論文的重要發現，識別當前的研究趨勢與爭論，並指出研究中的不足之處。\n\n研究主題：{{input}}",
+        "tags": [
+          "文獻",
+          "回顧",
+          "研究"
+        ]
+      },
+      {
+        "id": "abstract_generation",
+        "title": "生成摘要",
+        "description": "撰寫簡潔的研究摘要",
+        "content": "根據以下研究內容撰寫簡潔的學術摘要。包括背景、目標、方法、主要發現和結論。控制在 250 字以內。\n\n{{input}}",
+        "tags": [
+          "摘要",
+          "論文",
+          "總結"
+        ]
+      },
+      {
+        "id": "research_methodology",
+        "title": "研究方法設計",
+        "description": "設計合適的研究方法",
+        "content": "為以下研究設計一套研究方法。推薦合適的研究設計、資料收集方法、抽樣策略和分析技術，並說明每項選擇的理由。\n\n研究問題：{{input}}",
+        "tags": [
+          "方法論",
+          "研究設計",
+          "資料收集"
+        ]
+      },
+      {
+        "id": "peer_review",
+        "title": "同儕審查回覆",
+        "description": "協助制定對審查意見的回覆",
+        "content": "協助制定專業且全面的回覆，回應以下的同儕審查意見。針對每一點提出清晰的說明或描述已進行的修改。\n\n審查意見：{{input}}",
+        "tags": [
+          "同儕審查",
+          "修訂",
+          "回覆"
+        ]
+      },
+      {
+        "id": "citation_format",
+        "title": "引用格式工具",
+        "description": "以各種學術格式排版引用文獻",
+        "content": "將以下參考文獻格式化為{{style}}引用風格（例如 APA、MLA、Chicago、IEEE）。確保作者、標題、期刊、卷期、頁碼和 DOI 格式正確。\n\n參考文獻：{{input}}",
+        "tags": [
+          "引用",
+          "格式",
+          "書目"
+        ]
+      },
+      {
+        "id": "thesis_statement",
+        "title": "論文陳述優化",
+        "description": "優化並加強論文陳述",
+        "content": "優化以下論文陳述。使其更具體、更有論辯性且更簡潔。提供 3 個具有不同角度或重點的替代版本。\n\n論文草稿：{{input}}",
+        "tags": [
+          "論文",
+          "論證",
+          "寫作"
+        ]
+      },
+      {
+        "id": "data_analysis_interpretation",
+        "title": "資料分析解讀",
+        "description": "為學術寫作解讀統計結果",
+        "content": "為學術論文解讀以下統計結果。以平實的語言解釋數字的意義，討論其顯著性，並建議如何有效地呈現這些數據。\n\n結果：{{input}}",
+        "tags": [
+          "統計",
+          "解讀",
+          "分析"
+        ]
+      },
+      {
+        "id": "research_proposal",
+        "title": "Research Proposal Outline",
+        "description": "Structure a compelling research funding proposal",
+        "content": "Help structure a research proposal for the following topic. Include problem statement, research questions, methodology, expected outcomes, and timeline.\n\n{{input}}",
+        "tags": [
+          "proposal",
+          "research",
+          "funding"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "business",
+    "name": "商業分析",
+    "icon": "📊",
+    "templates": [
+      {
+        "id": "swot_analysis",
+        "title": "SWOT 分析",
+        "description": "進行全面的 SWOT 分析",
+        "content": "針對以下企業或專案進行 SWOT 分析。識別關鍵優勢、劣勢、機會和威脅，並根據分析結果提供策略建議。\n\n企業/專案：{{input}}",
+        "tags": [
+          "SWOT",
+          "策略",
+          "分析"
+        ]
+      },
+      {
+        "id": "business_plan",
+        "title": "商業計畫書大綱",
+        "description": "建立結構化的商業計畫書",
+        "content": "為以下商業構想建立詳細的商業計畫書大綱。包括執行摘要、公司描述、市場分析、組織結構、產品線、行銷策略、資金需求和財務預測。\n\n商業構想：{{input}}",
+        "tags": [
+          "商業計畫",
+          "創業",
+          "策略"
+        ]
+      },
+      {
+        "id": "competitive_analysis",
+        "title": "競爭分析",
+        "description": "分析競爭對手與市場定位",
+        "content": "分析以下產品或服務的競爭格局。識別主要競爭對手，比較功能與定價，評估市場佔有率，並建議差異化策略。\n\n產品/服務：{{input}}",
+        "tags": [
+          "競爭",
+          "市場",
+          "策略"
+        ]
+      },
+      {
+        "id": "meeting_agenda",
+        "title": "會議議程與記錄",
+        "description": "根據情境生成結構化的會議議程",
+        "content": "根據以下情境建立結構化的會議議程。包括會議目標、附有時間分配的討論議題、與會人員和準備資料。\n\n情境：{{input}}",
+        "tags": [
+          "會議",
+          "議程",
+          "生產力"
+        ]
+      },
+      {
+        "id": "cost_benefit",
+        "title": "成本效益分析",
+        "description": "評估商業決策的成本與效益",
+        "content": "針對以下商業決策進行成本效益分析。識別所有直接和間接成本，量化預期效益，計算投資報酬率，並評估風險。\n\n決策：{{input}}",
+        "tags": [
+          "成本效益",
+          "投資報酬率",
+          "分析"
+        ]
+      },
+      {
+        "id": "executive_summary",
+        "title": "執行摘要撰寫",
+        "description": "撰寫商業文件的執行摘要",
+        "content": "為以下商業文件撰寫一份具說服力的執行摘要。在 1-2 段內捕捉問題陳述、建議方案、關鍵指標和預期結果。\n\n文件：{{input}}",
+        "tags": [
+          "執行摘要",
+          "簡報",
+          "報告"
+        ]
+      },
+      {
+        "id": "pitch_deck",
+        "title": "募資簡報大綱",
+        "description": "為投資人準備簡報架構",
+        "content": "為投資人簡報建立逐頁大綱。包括問題、解決方案、市場規模、商業模式、營運數據、團隊、競爭優勢和財務預測。\n\n公司：{{input}}",
+        "tags": [
+          "募資",
+          "投資人",
+          "簡報"
+        ]
+      },
+      {
+        "id": "risk_assessment",
+        "title": "Risk Assessment",
+        "description": "Identify and evaluate business risks",
+        "content": "Identify and assess risks for the following business initiative. Categorize risks by likelihood and impact, and propose mitigation strategies for each.\n\n{{input}}",
+        "tags": [
+          "risk-management",
+          "assessment",
+          "business"
+        ]
+      },
+      {
+        "id": "presentation_outline",
+        "title": "Presentation Outline",
+        "description": "Structure a compelling business presentation",
+        "content": "Outline a business presentation on the following topic. Structure the narrative arc, design key slides, and suggest visual aids and delivery techniques.\n\n{{input}}",
+        "tags": [
+          "presentation",
+          "slides",
+          "communication"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "marketing",
+    "name": "市場行銷",
+    "icon": "📢",
+    "templates": [
+      {
+        "id": "social_media_post",
+        "title": "社群媒體文案",
+        "description": "生成針對平台最佳化的社群媒體貼文",
+        "content": "為{{platform}}平台撰寫關於以下主題的社群媒體貼文。針對該平台的最佳實踐、字數限制和受眾期望進行最佳化。包含相關的主題標籤。\n\n主題：{{input}}",
+        "tags": [
+          "社群媒體",
+          "文案",
+          "內容"
+        ]
+      },
+      {
+        "id": "seo_content",
+        "title": "SEO 最佳化內容",
+        "description": "建立針對搜尋引擎最佳化的內容",
+        "content": "為以下關鍵字建立 SEO 最佳化內容。包括適當的標題結構、中繼描述、關鍵字密度、內部連結建議以及具有排名競爭力的文案。\n\n關鍵字：{{input}}",
+        "tags": [
+          "SEO",
+          "內容",
+          "關鍵字"
+        ]
+      },
+      {
+        "id": "email_campaign",
+        "title": "郵件行銷活動",
+        "description": "設計多階段的郵件行銷序列",
+        "content": "為以下產品或優惠設計一套 5 封郵件的行銷序列。包括歡迎郵件、價值傳遞郵件、社會證明郵件、優惠郵件和後續追蹤郵件，每封都附有吸引人的主旨。\n\n產品/優惠：{{input}}",
+        "tags": [
+          "郵件",
+          "活動",
+          "行銷"
+        ]
+      },
+      {
+        "id": "ad_copy",
+        "title": "廣告文案產生器",
+        "description": "建立引人注目的廣告文案",
+        "content": "為{{platform}}平台針對{{audience}}受眾建立引人注目的廣告文案。撰寫 3 組標題和內文變化，突出獨特賣點並包含明確的行動呼籲。\n\n產品：{{input}}",
+        "tags": [
+          "廣告",
+          "文案",
+          "PPC"
+        ]
+      },
+      {
+        "id": "brand_voice",
+        "title": "品牌語調指南",
+        "description": "定義一致的品牌語氣和風格",
+        "content": "為以下公司定義品牌語調指南。描述個性特質、語言風格、注意事項，並提供不同情境（社群媒體、客服、行銷、正式場合）的範例。\n\n公司：{{input}}",
+        "tags": [
+          "品牌",
+          "語調",
+          "指南"
+        ]
+      },
+      {
+        "id": "content_calendar",
+        "title": "內容日曆",
+        "description": "規劃月度內容日曆",
+        "content": "為以下主題或品牌建立 4 週的內容日曆。包括內容主題、貼文類型、發布平台、排程和每項內容的關鍵績效指標。\n\n主題/品牌：{{input}}",
+        "tags": [
+          "日曆",
+          "規劃",
+          "內容策略"
+        ]
+      },
+      {
+        "id": "landing_page",
+        "title": "登陸頁面文案",
+        "description": "撰寫高轉換率的登陸頁面內容",
+        "content": "為高轉換率的登陸頁面撰寫文案。包括引人注目的主標題、副標題、效益說明、社會證明、異議處理和強而有力的行動呼籲。\n\n產品/服務：{{input}}",
+        "tags": [
+          "登陸頁面",
+          "轉換率",
+          "文案"
+        ]
+      },
+      {
+        "id": "marketing_strategy",
+        "title": "Marketing Strategy",
+        "description": "Develop a comprehensive go-to-market strategy",
+        "content": "Develop a marketing strategy for the following product or service. Define target personas, key messaging, channels, budget allocation, and success metrics.\n\n{{input}}",
+        "tags": [
+          "strategy",
+          "go-to-market",
+          "marketing"
+        ]
+      },
+      {
+        "id": "social_media_content",
+        "title": "Social Media Content",
+        "description": "Create engaging posts for social media platforms",
+        "content": "Create {{num_posts}} social media posts for {{platform}} about the following topic. Use appropriate tone, hashtags, and formats for the platform. Include calls-to-action.\n\n{{input}}",
+        "tags": [
+          "social-media",
+          "content",
+          "engagement"
+        ]
+      },
+      {
+        "id": "seo_optimization",
+        "title": "SEO Content Optimization",
+        "description": "Optimize web content for search engines",
+        "content": "Optimize the following content for search engines. Suggest primary and secondary keywords, improve meta descriptions, headers, and internal linking structure.\n\n{{input}}",
+        "tags": [
+          "seo",
+          "keywords",
+          "content-optimization"
+        ]
+      },
+      {
+        "id": "landing_page_copy",
+        "title": "Landing Page Copy",
+        "description": "Conversion-focused landing page text",
+        "content": "Write persuasive landing page copy for the following offer. Craft a compelling headline, subheadline, benefit-driven body, and a strong call-to-action.\n\n{{input}}",
+        "tags": [
+          "landing-page",
+          "conversion",
+          "copywriting"
+        ]
+      },
+      {
+        "id": "email_marketing",
+        "title": "Email Marketing Campaign",
+        "description": "Draft a multi-email marketing sequence",
+        "content": "Draft an email marketing sequence for the following campaign. Include a welcome email, nurture emails, and a conversion email with compelling subject lines and CTA.\n\n{{input}}",
+        "tags": [
+          "email-marketing",
+          "campaign",
+          "automation"
+        ]
+      },
+      {
+        "id": "brand_voice_guide",
+        "title": "Brand Voice Guide",
+        "description": "Define a consistent brand voice and tone",
+        "content": "Define a brand voice guide for the following company. Specify tone characteristics, do and don't examples, and how to adapt the voice across different channels.\n\n{{input}}",
+        "tags": [
+          "branding",
+          "voice",
+          "guidelines"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "legal",
+    "name": "法律合規",
+    "icon": "⚖️",
+    "templates": [
+      {
+        "id": "contract_review",
+        "title": "合約審查清單",
+        "description": "審查合約中的關鍵條款與風險",
+        "content": "審查以下合約或合約摘要。識別關鍵條款、義務、責任、終止條件和潛在風險。標示任何不利條款並建議修改方式。\n\n合約：{{input}}",
+        "tags": [
+          "合約",
+          "審查",
+          "法律"
+        ]
+      },
+      {
+        "id": "legal_memo",
+        "title": "法律備忘錄",
+        "description": "撰寫結構化的法律備忘錄",
+        "content": "針對以下法律問題撰寫一份法律備忘錄。包括事實陳述、法律問題、簡要回答、適用法規分析、事實適用和結論。\n\n法律問題：{{input}}",
+        "tags": [
+          "備忘錄",
+          "法律研究",
+          "寫作"
+        ]
+      },
+      {
+        "id": "privacy_policy",
+        "title": "隱私政策摘要",
+        "description": "為合規審查摘要隱私政策",
+        "content": "摘要以下隱私政策的關鍵方面。識別資料收集實務、使用者權利、資料共享、安全措施以及是否符合 GDPR 或 CCPA 等法規。\n\n政策：{{input}}",
+        "tags": [
+          "隱私",
+          "GDPR",
+          "合規"
+        ]
+      },
+      {
+        "id": "terms_of_service",
+        "title": "服務條款起草",
+        "description": "起草全面的服務條款",
+        "content": "為以下類型的平台或服務起草全面的服務條款。涵蓋使用者權利與義務、智慧財產權、免責聲明、責任限制、終止條款和爭議解決。\n\n平台/服務：{{input}}",
+        "tags": [
+          "條款",
+          "服務條款",
+          "法律"
+        ]
+      },
+      {
+        "id": "case_brief",
+        "title": "案例摘要",
+        "description": "摘要法律案例的主要判決",
+        "content": "摘要以下法律案例。包括案件名稱、法院、引用、重要事實、訴訟程序、法律問題、判決、推理過程以及任何反對意見。\n\n案例：{{input}}",
+        "tags": [
+          "判例",
+          "摘要",
+          "總結"
+        ]
+      },
+      {
+        "id": "compliance_checklist",
+        "title": "合規檢查清單",
+        "description": "為法規遵循生成檢查清單",
+        "content": "為以下法規或標準（例如 GDPR、HIPAA、SOX、PCI-DSS）生成合規檢查清單。包括具體要求、實施步驟、文件需求和稽核準備要點。\n\n法規：{{input}}",
+        "tags": [
+          "合規",
+          "檢查清單",
+          "法規"
+        ]
+      },
+      {
+        "id": "nda_draft",
+        "title": "保密協議起草",
+        "description": "起草保密協議",
+        "content": "為以下當事人和目的起草一份保密協議。包括機密資訊的定義、義務、除外條款、保密期限、管轄法律和救濟措施。\n\n當事人與目的：{{input}}",
+        "tags": [
+          "NDA",
+          "保密",
+          "協議"
+        ]
+      },
+      {
+        "id": "contract_clause",
+        "title": "Contract Clause Drafting",
+        "description": "Draft or review specific contract clauses",
+        "content": "Draft a {{clause_type}} clause for the following contract context. Ensure clarity, enforceability, and alignment with applicable laws.\n\n{{input}}",
+        "tags": [
+          "contracts",
+          "clauses",
+          "legal-drafting"
+        ]
+      },
+      {
+        "id": "legal_disclaimer",
+        "title": "Legal Disclaimer",
+        "description": "Generate appropriate disclaimers for products or services",
+        "content": "Draft a legal disclaimer for the following product, service, or content. Cover liability limitations and comply with relevant regulations.\n\n{{input}}",
+        "tags": [
+          "disclaimer",
+          "liability",
+          "compliance"
+        ]
+      },
+      {
+        "id": "privacy_policy_summary",
+        "title": "Privacy Policy Summary",
+        "description": "Summarize privacy policies in plain language",
+        "content": "Summarize the following privacy policy in plain, understandable language. Highlight key data collection, usage, sharing practices, and user rights.\n\n{{input}}",
+        "tags": [
+          "privacy",
+          "gdpr",
+          "policy"
+        ]
+      },
+      {
+        "id": "cease_and_desist",
+        "title": "Cease and Desist Draft",
+        "description": "Draft cease and desist correspondence",
+        "content": "Draft a cease and desist letter for the following situation. Clearly state the infringement, demand specific actions, and specify a response deadline.\n\n{{input}}",
+        "tags": [
+          "legal-notice",
+          "cease-and-desist",
+          "enforcement"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "medical",
+    "name": "醫療健康",
+    "icon": "🏥",
+    "templates": [
+      {
+        "id": "symptom_analysis",
+        "title": "症狀分析",
+        "description": "分析症狀並提供鑑別診斷",
+        "content": "分析以下症狀和病史。提供鑑別診斷清單，建議相關檢查項目，並識別需要立即關注的危險信號。注意：此內容僅供教育用途，不可取代專業醫療建議。\n\n症狀：{{input}}",
+        "tags": [
+          "症狀",
+          "診斷",
+          "醫療"
+        ]
+      },
+      {
+        "id": "research_summary",
+        "title": "醫學研究摘要",
+        "description": "摘要近期醫學研究論文",
+        "content": "摘要以下醫學研究論文或臨床試驗。包括研究設計、樣本數、方法學、主要發現、統計顯著性、限制和臨床意義。\n\n研究：{{input}}",
+        "tags": [
+          "研究",
+          "臨床試驗",
+          "摘要"
+        ]
+      },
+      {
+        "id": "patient_education",
+        "title": "病患衛教資料",
+        "description": "建立易於理解的病患衛教內容",
+        "content": "為以下醫療狀況或程序建立病患衛教資料。使用平易近人的語言，解釋原因和症狀，描述治療選項，並提供自我照護建議。\n\n狀況/程序：{{input}}",
+        "tags": [
+          "病患",
+          "衛教",
+          "健康識能"
+        ]
+      },
+      {
+        "id": "treatment_plan",
+        "title": "治療計畫大綱",
+        "description": "規劃結構化的治療計畫",
+        "content": "為以下診斷規劃治療計畫大綱。包括治療目標、藥物選擇與劑量、生活型態調整、追蹤時程和監測參數。注意：僅供教育參考。\n\n診斷：{{input}}",
+        "tags": [
+          "治療",
+          "計畫",
+          "醫療"
+        ]
+      },
+      {
+        "id": "clinical_notes",
+        "title": "臨床紀錄格式",
+        "description": "使用 SOAP 結構格式化臨床紀錄",
+        "content": "將以下臨床資訊格式化為標準的 SOAP（主觀、客觀、評估、計畫）紀錄。確保各部分結構清晰並使用適當的醫學術語。\n\n臨床資訊：{{input}}",
+        "tags": [
+          "臨床",
+          "SOAP",
+          "病歷"
+        ]
+      },
+      {
+        "id": "drug_interaction",
+        "title": "藥物交互作用檢查",
+        "description": "檢查潛在的藥物交互作用",
+        "content": "審查以下藥物清單中潛在的藥物交互作用。識別重大、中等和輕微的交互作用，解釋作用機制，並建議替代方案或監測策略。僅供教育用途。\n\n藥物：{{input}}",
+        "tags": [
+          "藥物",
+          "交互作用",
+          "藥理學"
+        ]
+      },
+      {
+        "id": "public_health",
+        "title": "公共衛生溝通",
+        "description": "草擬公共衛生公告與指引",
+        "content": "針對以下主題草擬一份公共衛生溝通內容。包括關鍵事實、預防措施、就醫時機和可靠資訊來源。使用清晰易懂的語言，適合一般大眾閱讀。\n\n主題：{{input}}",
+        "tags": [
+          "公共衛生",
+          "溝通",
+          "指引"
+        ]
+      },
+      {
+        "id": "medication_guide",
+        "title": "Medication Guide",
+        "description": "Explain medication usage, side effects, and interactions",
+        "content": "Provide a clear guide for the following medication. Cover dosage, administration, common and serious side effects, drug interactions, and contraindications.\n\n{{input}}",
+        "tags": [
+          "medication",
+          "pharmacology",
+          "safety"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "education",
+    "name": "教育培訓",
+    "icon": "🎓",
+    "templates": [
+      {
+        "id": "lesson_plan",
+        "title": "教案設計工具",
+        "description": "建立結構化的教案",
+        "content": "為以下主題建立詳細的教案。包括學習目標、所需教材、教學流程與時間分配、評量方法、差異化教學策略和課後作業。\n\n主題：{{input}}",
+        "tags": [
+          "教案",
+          "教學",
+          "課程"
+        ]
+      },
+      {
+        "id": "quiz_generator",
+        "title": "測驗與試題產生器",
+        "description": "生成包含多種題型的測驗",
+        "content": "為以下主題建立一份測驗。包含 10 道混合題型：選擇題、是非題、簡答題和申論題。並提供附有說明的解答。\n\n主題：{{input}}",
+        "tags": [
+          "測驗",
+          "考試",
+          "評量"
+        ]
+      },
+      {
+        "id": "study_guide",
+        "title": "學習指南製作",
+        "description": "建立全面的學習指南",
+        "content": "為以下學科或考試建立全面的學習指南。整理關鍵概念、定義、公式、範例和練習題。包含記憶技巧和讀書建議。\n\n學科/考試：{{input}}",
+        "tags": [
+          "學習指南",
+          "考試準備",
+          "學習"
+        ]
+      },
+      {
+        "id": "course_syllabus",
+        "title": "課程大綱設計",
+        "description": "設計完整的課程大綱",
+        "content": "為以下課程設計完整的課程大綱。包括課程描述、學習成果、指定教材、每週進度與閱讀清單、評分政策和學術誠信規範。\n\n課程：{{input}}",
+        "tags": [
+          "大綱",
+          "課程設計",
+          "課程"
+        ]
+      },
+      {
+        "id": "explain_concept",
+        "title": "用簡單方式解釋概念",
+        "description": "簡化複雜概念以便理解",
+        "content": "用簡單的方式解釋以下概念。使用比喻和生活化的例子。先以一句話總結，再提供更多細節，最後舉出實際應用案例。\n\n概念：{{input}}",
+        "tags": [
+          "解釋",
+          "簡化",
+          "教學"
+        ]
+      },
+      {
+        "id": "feedback_on_assignment",
+        "title": "作業回饋",
+        "description": "對學生作業提供建設性回饋",
+        "content": "為以下學生作業提供建設性回饋。指出優點，具體舉例說明需要改進之處，並建議可行的下一步成長方向。\n\n作業：{{input}}",
+        "tags": [
+          "回饋",
+          "評分",
+          "評量"
+        ]
+      },
+      {
+        "id": "discussion_prompts",
+        "title": "討論引導問題",
+        "description": "生成引人入勝的討論問題",
+        "content": "為以下主題生成 8 個引人入勝的討論問題。包括開放式問題、批判思考提示、辯論主題和反思問題，以鼓勵積極參與。\n\n主題：{{input}}",
+        "tags": [
+          "討論",
+          "問題",
+          "互動"
+        ]
+      },
+      {
+        "id": "quiz_generation",
+        "title": "Quiz Generation",
+        "description": "Create quizzes and assessments on any topic",
+        "content": "Create a {{num_questions}}-question quiz on the following topic. Include a mix of multiple-choice, true/false, and short-answer questions with an answer key.\n\n{{input}}",
+        "tags": [
+          "quiz",
+          "assessment",
+          "testing"
+        ]
+      },
+      {
+        "id": "assignment_feedback",
+        "title": "Assignment Feedback",
+        "description": "Constructive feedback on student assignments",
+        "content": "Provide constructive feedback on the following student assignment. Highlight strengths, identify areas for improvement, and suggest specific next steps for learning.\n\n{{input}}",
+        "tags": [
+          "feedback",
+          "grading",
+          "assessment"
+        ]
+      },
+      {
+        "id": "syllabus_design",
+        "title": "Syllabus Design",
+        "description": "Design a course syllabus with schedule and policies",
+        "content": "Design a syllabus for a course on the following subject. Include course description, learning outcomes, weekly schedule, grading policy, and required materials.\n\n{{input}}",
+        "tags": [
+          "syllabus",
+          "course-design",
+          "academic"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "finance",
+    "name": "金融投資",
+    "icon": "💰",
+    "templates": [
+      {
+        "id": "investment_analysis",
+        "title": "投資分析",
+        "description": "使用關鍵指標分析投資機會",
+        "content": "分析以下投資機會。評估關鍵財務指標（本益比、EBITDA、投資報酬率、成長率），評估市場狀況，識別風險，並提供買入/持有/賣出的建議。\n\n投資標的：{{input}}",
+        "tags": [
+          "投資",
+          "分析",
+          "估值"
+        ]
+      },
+      {
+        "id": "financial_report",
+        "title": "財務報告摘要",
+        "description": "摘要財務報表與報告",
+        "content": "摘要以下財務報告或報表。重點呈現營收趨勢、利潤率、現金流量狀況、負債水準和關鍵財務比率。與業界基準進行比較。\n\n報告：{{input}}",
+        "tags": [
+          "財務報告",
+          "摘要",
+          "分析"
+        ]
+      },
+      {
+        "id": "budget_planner",
+        "title": "預算規劃",
+        "description": "建立個人或企業預算計畫",
+        "content": "為以下情境建立詳細的預算計畫。分類收入與支出，建議儲蓄目標，識別節省開支的機會，並預測未來財務狀況。\n\n情境：{{input}}",
+        "tags": [
+          "預算",
+          "規劃",
+          "個人理財"
+        ]
+      },
+      {
+        "id": "retirement_planning",
+        "title": "退休規劃",
+        "description": "制定退休儲蓄策略",
+        "content": "根據以下資訊制定退休規劃策略。計算所需儲蓄金額，依年齡建議投資配置，考量稅務影響，並建議提領策略。\n\n資訊：{{input}}",
+        "tags": [
+          "退休",
+          "儲蓄",
+          "長期規劃"
+        ]
+      },
+      {
+        "id": "risk_assessment",
+        "title": "風險評估",
+        "description": "評估財務風險與因應策略",
+        "content": "評估以下投資或商業決策相關的財務風險。識別市場風險、信用風險、流動性風險、營運風險，並建議風險因應策略。\n\n決策：{{input}}",
+        "tags": [
+          "風險",
+          "評估",
+          "因應"
+        ]
+      },
+      {
+        "id": "tax_planning",
+        "title": "稅務規劃策略",
+        "description": "制定稅務效率最佳化策略",
+        "content": "針對以下財務狀況提供稅務規劃策略。建議扣除額、稅額抵減、稅務優惠帳戶、時間規劃和組織架構，以最小化稅務負擔。\n\n狀況：{{input}}",
+        "tags": [
+          "稅務",
+          "規劃",
+          "策略"
+        ]
+      },
+      {
+        "id": "portfolio_review",
+        "title": "投資組合檢視",
+        "description": "檢視並重新平衡投資組合",
+        "content": "檢視以下投資組合。分析資產配置、分散程度、風險水準、相對於基準的表現，並建議重新平衡的調整方案。\n\n投資組合：{{input}}",
+        "tags": [
+          "投資組合",
+          "分散風險",
+          "再平衡"
+        ]
+      },
+      {
+        "id": "financial_modeling",
+        "title": "Financial Modeling",
+        "description": "Structure financial projections and models",
+        "content": "Help structure a financial model for the following business scenario. Outline revenue drivers, cost structure, cash flow projections, and key assumptions. Suggest sensitivity analysis variables.\n\n{{input}}",
+        "tags": [
+          "financial-modeling",
+          "forecasting",
+          "valuation"
+        ]
+      },
+      {
+        "id": "budget_planning",
+        "title": "Budget Planning",
+        "description": "Personal or business budget creation and optimization",
+        "content": "Create a detailed budget plan for the following financial situation. Categorize income and expenses, identify saving opportunities, and set realistic financial goals.\n\n{{input}}",
+        "tags": [
+          "budget",
+          "planning",
+          "personal-finance"
+        ]
+      },
+      {
+        "id": "tax_guidance",
+        "title": "Tax Guidance",
+        "description": "Explain tax implications and planning strategies",
+        "content": "Explain the tax implications of the following financial scenario. Discuss applicable deductions, credits, and compliance requirements under {{tax_jurisdiction}} tax law.\n\n{{input}}",
+        "tags": [
+          "tax",
+          "planning",
+          "compliance"
+        ]
+      },
+      {
+        "id": "financial_report_analysis",
+        "title": "Financial Report Analysis",
+        "description": "Analyze income statements, balance sheets, cash flow",
+        "content": "Analyze the following financial report. Discuss revenue trends, profitability ratios, liquidity position, debt levels, and overall financial health. Highlight key metrics.\n\n{{input}}",
+        "tags": [
+          "financial-analysis",
+          "reporting",
+          "ratios"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "data_science",
+    "name": "資料科學",
+    "icon": "📈",
+    "templates": [
+      {
+        "id": "exploratory_analysis",
+        "title": "探索性資料分析",
+        "description": "規劃並指導資料集的探索性分析",
+        "content": "為以下資料集設計探索性資料分析計畫。建議摘要統計量、視覺化類型、相關性分析、離群值檢測方法和初步待檢定假設。\n\n資料集描述：{{input}}",
+        "tags": [
+          "EDA",
+          "資料分析",
+          "統計"
+        ]
+      },
+      {
+        "id": "model_selection",
+        "title": "模型選擇指南",
+        "description": "根據問題類型推薦機器學習模型",
+        "content": "為以下問題推薦合適的機器學習模型。考量資料規模、特徵類型、可解釋性需求、計算資源限制和效能要求。說明每項建議的理由。\n\n問題：{{input}}",
+        "tags": [
+          "機器學習",
+          "模型選擇",
+          "ML"
+        ]
+      },
+      {
+        "id": "feature_engineering",
+        "title": "特徵工程建議",
+        "description": "建議特徵工程技術",
+        "content": "為以下資料集建議特徵工程技術。包括數值轉換、類別編碼、文字特徵、時間特徵、交互作用項和降維的構想。\n\n資料集：{{input}}",
+        "tags": [
+          "特徵",
+          "工程",
+          "資料前處理"
+        ]
+      },
+      {
+        "id": "evaluate_results",
+        "title": "模型評估與解讀",
+        "description": "評估並解讀模型效能",
+        "content": "評估以下機器學習模型的結果。分析混淆矩陣、精確率/召回率、ROC-AUC、特徵重要性、錯誤分析，並建議改善策略。\n\n結果：{{input}}",
+        "tags": [
+          "評估",
+          "解讀",
+          "指標"
+        ]
+      },
+      {
+        "id": "sql_query",
+        "title": "SQL 查詢產生器",
+        "description": "根據自然語言產生複雜 SQL 查詢",
+        "content": "為以下資料請求撰寫 SQL 查詢。包括適當的 JOIN、WHERE 子句、聚合函數、視窗函數，並針對效能進行最佳化。\n\n資料請求：{{input}}",
+        "tags": [
+          "SQL",
+          "查詢",
+          "資料庫"
+        ]
+      },
+      {
+        "id": "visualization_design",
+        "title": "資料視覺化設計",
+        "description": "設計有效的資料視覺化",
+        "content": "為以下分析設計資料視覺化。推薦圖表類型、配色方案、版面配置、互動功能和標註策略，以有效傳達洞察。\n\n分析：{{input}}",
+        "tags": [
+          "視覺化",
+          "圖表",
+          "設計"
+        ]
+      },
+      {
+        "id": "ab_testing",
+        "title": "A/B 測試設計",
+        "description": "設計嚴謹的 A/B 測試並分析結果",
+        "content": "為以下實驗設計 A/B 測試。定義假設，計算所需樣本數，選擇顯著水準，設計測試結構，並提供結果分析的計畫。\n\n實驗：{{input}}",
+        "tags": [
+          "A/B 測試",
+          "實驗",
+          "統計"
+        ]
+      },
+      {
+        "id": "eda_plan",
+        "title": "Exploratory Data Analysis Plan",
+        "description": "Plan a structured EDA approach for a dataset",
+        "content": "Design an exploratory data analysis plan for the following dataset. Include data cleaning steps, statistical summaries, visualization suggestions, and hypotheses to investigate.\n\n{{input}}",
+        "tags": [
+          "eda",
+          "data-analysis",
+          "statistics"
+        ]
+      },
+      {
+        "id": "visualization_recipe",
+        "title": "Data Visualization Recipe",
+        "description": "Choose and design effective data visualizations",
+        "content": "Recommend data visualizations for the following analysis goals. Specify chart types, encoding choices, color schemes, and layout for maximum clarity and impact.\n\n{{input}}",
+        "tags": [
+          "visualization",
+          "charting",
+          "data-storytelling"
+        ]
+      },
+      {
+        "id": "experiment_design",
+        "title": "A/B Test & Experiment Design",
+        "description": "Design statistically sound experiments",
+        "content": "Design an experiment to test the following hypothesis. Define the null and alternative hypotheses, determine sample size, randomization procedure, success metrics, and analysis method.\n\n{{input}}",
+        "tags": [
+          "a-b-testing",
+          "experiment-design",
+          "statistics"
+        ]
+      },
+      {
+        "id": "results_interpretation",
+        "title": "Model Results Interpretation",
+        "description": "Interpret model outputs and metrics",
+        "content": "Interpret the following model results. Explain the metrics (accuracy, precision, recall, F1, AUC-ROC, etc.), feature importance, and limitations. Provide actionable insights.\n\n{{input}}",
+        "tags": [
+          "model-interpretation",
+          "metrics",
+          "reporting"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "design",
+    "name": "設計創意",
+    "icon": "🎨",
+    "templates": [
+      {
+        "id": "ui_review",
+        "title": "UI/UX 審查",
+        "description": "根據可用性最佳實踐審查使用者介面",
+        "content": "審查以下 UI 設計或描述。評估版面配置、視覺層級、色彩對比、字體排印、無障礙設計、互動模式和一致性。提出改進建議。\n\n設計：{{input}}",
+        "tags": [
+          "UI",
+          "UX",
+          "可用性"
+        ]
+      },
+      {
+        "id": "color_palette",
+        "title": "配色方案產生器",
+        "description": "為專案生成和諧的配色方案",
+        "content": "為以下專案生成協調的配色方案。包括主色、輔助色、強調色、中性色和狀態顏色。提供十六進位色碼並說明每個選擇的理由。\n\n專案：{{input}}",
+        "tags": [
+          "色彩",
+          "配色",
+          "設計"
+        ]
+      },
+      {
+        "id": "design_system",
+        "title": "設計系統文件",
+        "description": "記錄設計系統元件與規範",
+        "content": "為以下元件庫或設計語言建立設計系統文件。包括字體比例、間距網格、色彩代碼、元件狀態和使用規範。\n\n系統：{{input}}",
+        "tags": [
+          "設計系統",
+          "文件",
+          "元件"
+        ]
+      },
+      {
+        "id": "wireframe_desc",
+        "title": "線框圖描述",
+        "description": "為開發交接描述線框圖佈局",
+        "content": "描述以下畫面或頁面的線框圖或模型。詳細說明佈局結構、元件擺放、內容層級、使用者流程和互動元素，以便開發交接。\n\n畫面/頁面：{{input}}",
+        "tags": [
+          "線框圖",
+          "模型",
+          "交接"
+        ]
+      },
+      {
+        "id": "typography_guide",
+        "title": "字體選擇指南",
+        "description": "為設計專案選擇和搭配字體",
+        "content": "為以下專案推薦字體選擇。建議標題和內文的字體搭配，指定大小和粗細，考量跨裝置的可讀性，並說明理由。\n\n專案：{{input}}",
+        "tags": [
+          "字體",
+          "字型",
+          "設計"
+        ]
+      },
+      {
+        "id": "accessibility_audit",
+        "title": "無障礙稽核",
+        "description": "評估設計的無障礙合規性",
+        "content": "對以下設計或介面進行無障礙稽核。檢查 WCAG 合規性：色彩對比、鍵盤導航、螢幕閱讀器相容性、焦點指示器和替代文字。\n\n設計：{{input}}",
+        "tags": [
+          "無障礙",
+          "WCAG",
+          "包容性設計"
+        ]
+      },
+      {
+        "id": "brand_identity",
+        "title": "品牌識別指南",
+        "description": "定義視覺品牌識別元素",
+        "content": "為以下品牌定義視覺品牌識別指南。涵蓋標誌使用方式、配色方案、字體、圖像風格、圖示設計以及在各種媒介上的應用。\n\n品牌：{{input}}",
+        "tags": [
+          "品牌",
+          "識別",
+          "指南"
+        ]
+      },
+      {
+        "id": "ux_review",
+        "title": "UX Review",
+        "description": "Evaluate user experience and suggest improvements",
+        "content": "Review the user experience of the following interface or flow. Evaluate usability, accessibility, information architecture, and visual hierarchy. Suggest concrete improvements.\n\n{{input}}",
+        "tags": [
+          "ux",
+          "usability",
+          "review"
+        ]
+      },
+      {
+        "id": "design_brief",
+        "title": "Design Brief",
+        "description": "Create a comprehensive design brief for a project",
+        "content": "Create a design brief for the following project. Include project overview, target audience, design goals, brand guidelines, deliverables, timeline, and success criteria.\n\n{{input}}",
+        "tags": [
+          "design-brief",
+          "creative-brief",
+          "planning"
+        ]
+      },
+      {
+        "id": "prototype_feedback",
+        "title": "Prototype Feedback",
+        "description": "Detailed feedback on design prototypes",
+        "content": "Provide detailed feedback on the following design prototype. Evaluate layout, navigation, visual consistency, interaction design, and alignment with user goals.\n\n{{input}}",
+        "tags": [
+          "prototype",
+          "feedback",
+          "design-review"
+        ]
+      },
+      {
+        "id": "design_system_component",
+        "title": "Design System Component",
+        "description": "Define a reusable design system component",
+        "content": "Define a reusable {{component_type}} component for a design system. Specify visual states (default, hover, active, disabled, error), usage guidelines, and accessibility requirements.\n\n{{input}}",
+        "tags": [
+          "design-system",
+          "components",
+          "ui"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "sysadmin",
+    "name": "系統維運",
+    "icon": "🔧",
+    "templates": [
+      {
+        "id": "incident_response",
+        "title": "事件應變計畫",
+        "description": "建立結構化的事件應變程序",
+        "content": "為以下情境建立事件應變計畫。包括偵測步驟、遏制策略、根除流程、復原程序和事後檢討分析。\n\n情境：{{input}}",
+        "tags": [
+          "事件",
+          "應變",
+          "安全"
+        ]
+      },
+      {
+        "id": "deployment_pipeline",
+        "title": "CI/CD 管線設計",
+        "description": "設計持續整合與持續部署管線",
+        "content": "為以下專案設計 CI/CD 管線。包括建置階段、測試自動化、安全掃描、成品管理、部署策略（藍綠部署、金絲雀部署）和回滾程序。\n\n專案：{{input}}",
+        "tags": [
+          "CI/CD",
+          "DevOps",
+          "部署"
+        ]
+      },
+      {
+        "id": "monitoring_setup",
+        "title": "監控與警示設定",
+        "description": "設計監控與警示基礎設施",
+        "content": "為以下系統設計監控與警示設定。建議需要收集的指標、閾值、警示管道、儀表板佈局和輪值制度。\n\n系統：{{input}}",
+        "tags": [
+          "監控",
+          "警示",
+          "可觀測性"
+        ]
+      },
+      {
+        "id": "backup_strategy",
+        "title": "備份與災難復原",
+        "description": "設計全面的備份與災難復原策略",
+        "content": "為以下基礎設施設計備份與災難復原策略。包括備份排程、保留政策、儲存位置、復原時間目標（RTO）和復原點目標（RPO）。\n\n基礎設施：{{input}}",
+        "tags": [
+          "備份",
+          "災難復原",
+          "可靠性"
+        ]
+      },
+      {
+        "id": "security_hardening",
+        "title": "安全強化檢查清單",
+        "description": "生成伺服器安全強化的檢查清單",
+        "content": "為以下伺服器或服務生成安全強化檢查清單。涵蓋作業系統強化、網路安全、存取控制、加密、日誌記錄和定期維護任務。\n\n伺服器/服務：{{input}}",
+        "tags": [
+          "安全",
+          "強化",
+          "伺服器"
+        ]
+      },
+      {
+        "id": "container_orchestration",
+        "title": "容器編排指南",
+        "description": "設計容器編排配置",
+        "content": "為以下應用程式設計容器編排配置。涵蓋容器映像、資源限制、服務發現、擴展策略、持久化儲存和網路設定。\n\n應用程式：{{input}}",
+        "tags": [
+          "Docker",
+          "Kubernetes",
+          "容器"
+        ]
+      },
+      {
+        "id": "performance_tuning",
+        "title": "效能調校",
+        "description": "診斷並最佳化系統效能",
+        "content": "分析以下系統效能問題。識別瓶頸，建議配置調整，推薦資源擴展方案，並提出 CPU、記憶體、磁碟和網路的優化技術。\n\n問題：{{input}}",
+        "tags": [
+          "效能",
+          "最佳化",
+          "故障排除"
+        ]
+      },
+      {
+        "id": "infrastructure_design",
+        "title": "Infrastructure Design",
+        "description": "Design scalable and reliable system infrastructure",
+        "content": "Design a infrastructure architecture for the following requirements. Discuss compute, networking, storage, redundancy, scaling strategy, and disaster recovery.\n\n{{input}}",
+        "tags": [
+          "infrastructure",
+          "architecture",
+          "devops"
+        ]
+      },
+      {
+        "id": "ci_cd_pipeline",
+        "title": "CI/CD Pipeline Design",
+        "description": "Design continuous integration and deployment pipelines",
+        "content": "Design a CI/CD pipeline for the following project. Specify build stages, test automation, artifact management, deployment environments, and approval gates.\n\n{{input}}",
+        "tags": [
+          "ci-cd",
+          "automation",
+          "devops"
+        ]
+      },
+      {
+        "id": "security_audit",
+        "title": "Security Audit Checklist",
+        "description": "Systematic security review for servers and services",
+        "content": "Create a security audit checklist for the following system. Cover authentication, authorization, network security, data protection, logging, and patch management.\n\n{{input}}",
+        "tags": [
+          "security",
+          "audit",
+          "hardening"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "productivity",
+    "name": "產品與效率",
+    "icon": "🚀",
+    "templates": [
+      {
+        "id": "requirements_breakdown",
+        "title": "需求拆解",
+        "description": "將目標拆解為可執行需求",
+        "content": "將以下目標拆解為清楚的功能需求、非功能需求、假設、限制條件與驗收標準，並以結構化清單輸出。\n\n{{input}}",
+        "tags": [
+          "需求",
+          "規劃",
+          "產品"
+        ]
+      },
+      {
+        "id": "prd_draft",
+        "title": "PRD 草案",
+        "description": "產出精簡且可執行的產品需求文件",
+        "content": "為以下功能撰寫 PRD 草案。包含問題陳述、目標使用者、使用者故事、範圍（含/不含）、成功指標、風險、里程碑與待確認問題。\n\n{{input}}",
+        "tags": [
+          "PRD",
+          "產品管理",
+          "文件"
+        ]
+      },
+      {
+        "id": "task_decomposition",
+        "title": "任務分解",
+        "description": "將工作拆分為 Epic、任務與相依",
+        "content": "將以下專案拆分為 Epic 與任務。每項任務請提供負責角色、工時估算、相依關係與完成定義（DoD）。\n\n{{input}}",
+        "tags": [
+          "任務",
+          "執行",
+          "專案管理"
+        ]
+      },
+      {
+        "id": "meeting_minutes",
+        "title": "會議紀要整理",
+        "description": "將零散筆記整理為結構化紀要",
+        "content": "將以下會議筆記整理為結構化會議紀要，包含：背景、關鍵決策、行動項、負責人、截止日期、未決問題。\n\n{{input}}",
+        "tags": [
+          "會議",
+          "紀要",
+          "協作"
+        ]
+      },
+      {
+        "id": "status_report",
+        "title": "週報生成",
+        "description": "生成面向利害關係人的週進度報告",
+        "content": "根據以下資訊撰寫週報，包含：本週亮點、已完成事項、目前重點、阻塞/風險、下週計畫。語氣精簡，方便管理層快速閱讀。\n\n{{input}}",
+        "tags": [
+          "週報",
+          "狀態",
+          "利害關係人"
+        ]
+      },
+      {
+        "id": "decision_record",
+        "title": "決策紀錄",
+        "description": "完整記錄決策依據與影響",
+        "content": "根據以下情境建立決策紀錄，包含：決策結論、替代方案、決策依據、權衡取捨、影響後果、檢討日期。\n\n{{input}}",
+        "tags": [
+          "決策",
+          "ADR",
+          "治理"
+        ]
+      },
+      {
+        "id": "risk_register",
+        "title": "風險清單",
+        "description": "建立可落地的專案風險台帳",
+        "content": "為以下專案建立風險台帳。每項風險包含：發生機率、影響程度、預警訊號、緩解措施、應變方案、責任人。\n\n{{input}}",
+        "tags": [
+          "風險",
+          "專案",
+          "緩解"
+        ]
+      },
+      {
+        "id": "retro_facilitation",
+        "title": "回顧引導",
+        "description": "設計高品質衝刺回顧流程",
+        "content": "根據以下衝刺背景設計回顧議程，包含：暖場、做得好的地方、待改進項目、根因追問引導、3 項可執行改善行動。\n\n{{input}}",
+        "tags": [
+          "回顧",
+          "敏捷",
+          "團隊改善"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "engineering_delivery",
+    "name": "研發交付",
+    "icon": "🛠️",
+    "templates": [
+      {
+        "id": "bug_report_template",
+        "title": "缺陷回報模板",
+        "description": "產生完整且可重現的 Bug 回報",
+        "content": "根據以下資訊產生高品質缺陷回報。包含：摘要、環境資訊、重現步驟、預期結果、實際結果、嚴重等級、影響範圍、日誌資訊與下一步排查建議。\n\n{{input}}",
+        "tags": [
+          "缺陷",
+          "品質",
+          "分流"
+        ]
+      },
+      {
+        "id": "release_notes",
+        "title": "版本發布說明",
+        "description": "產生清晰的使用者導向發布說明",
+        "content": "為以下版本更新撰寫發布說明。包含：新功能、改善項目、修正項目、已知問題、升級注意事項與回滾提示。語氣以最終使用者為主。\n\n{{input}}",
+        "tags": [
+          "發布",
+          "變更日誌",
+          "溝通"
+        ]
+      },
+      {
+        "id": "rca_report",
+        "title": "根因分析報告",
+        "description": "建立結構化事故復盤與 RCA",
+        "content": "針對以下事故建立 RCA 報告。包含：時間軸、影響範圍、根因、促成因素、偵測與監控缺口、已完成修復、預防措施（含負責人與期限）。\n\n{{input}}",
+        "tags": [
+          "RCA",
+          "事故",
+          "可靠性"
+        ]
+      },
+      {
+        "id": "test_plan",
+        "title": "測試計畫",
+        "description": "制定可落地的測試策略與覆蓋方案",
+        "content": "為以下功能制定測試計畫。包含：測試範圍、測試層級（單元/整合/端對端）、關鍵情境、邊界案例、測試資料、環境準備、進出場標準與風險優先順序。\n\n{{input}}",
+        "tags": [
+          "測試",
+          "品質保證",
+          "覆蓋"
+        ]
+      },
+      {
+        "id": "rollback_plan",
+        "title": "回滾預案",
+        "description": "建立安全的回滾與復原流程",
+        "content": "為以下部署建立回滾預案。包含：觸發條件、回滾步驟、資料一致性檢查、溝通路徑、驗證清單與決策負責人。\n\n{{input}}",
+        "tags": [
+          "回滾",
+          "部署",
+          "安全"
+        ]
+      },
+      {
+        "id": "change_announcement",
+        "title": "變更公告",
+        "description": "清楚說明技術變更與使用者影響",
+        "content": "為以下更新撰寫變更公告。說明：變更內容、變更原因、使用者影響、需採取動作、時程安排與支援管道。語氣精簡且穩定預期。\n\n{{input}}",
+        "tags": [
+          "變更管理",
+          "公告",
+          "利害關係人"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "operations_support",
+    "name": "營運與客服",
+    "icon": "🎧",
+    "templates": [
+      {
+        "id": "customer_reply",
+        "title": "客服回覆",
+        "description": "產生專業且具同理心的回覆",
+        "content": "針對以下工單撰寫客服回覆。語氣需具同理心且清楚，包含：問題理解、目前處理狀態、後續步驟、預估時間（如有）與升級路徑（如需）。\n\n{{input}}",
+        "tags": [
+          "客服",
+          "客戶",
+          "溝通"
+        ]
+      },
+      {
+        "id": "kb_article",
+        "title": "知識庫文章",
+        "description": "將重複問題沉澱為可重用知識",
+        "content": "針對以下問題建立知識庫文章。包含：現象描述、常見原因、前置條件、逐步解法、結果驗證與預防建議。\n\n{{input}}",
+        "tags": [
+          "知識庫",
+          "自助服務",
+          "排障"
+        ]
+      },
+      {
+        "id": "sla_response_plan",
+        "title": "SLA 回應策略",
+        "description": "依優先級制定 SLA 回應目標",
+        "content": "為以下支援情境制定 SLA 回應策略。定義優先級分層、首次回應時限、解決時限、跨團隊轉派規則與超時處置流程。\n\n{{input}}",
+        "tags": [
+          "SLA",
+          "支援營運",
+          "流程"
+        ]
+      },
+      {
+        "id": "faq_builder",
+        "title": "FAQ 產生",
+        "description": "為產品或政策建立高頻問答",
+        "content": "圍繞以下產品或政策主題建立 FAQ。輸出 10 個高頻問題及其精簡、正確、使用者友善的回答。\n\n{{input}}",
+        "tags": [
+          "FAQ",
+          "文件",
+          "使用者教育"
+        ]
+      },
+      {
+        "id": "oncall_handover",
+        "title": "值班交接",
+        "description": "產生清晰的值班交接紀錄",
+        "content": "根據以下情境產生值班交接紀錄。包含：進行中的事故、目前緩解措施、待辦事項、需關注風險與下一班次優先事項。\n\n{{input}}",
+        "tags": [
+          "值班",
+          "交接",
+          "營運"
+        ]
+      },
+      {
+        "id": "support_metric_review",
+        "title": "客服指標復盤",
+        "description": "解讀支援指標並提出改善行動",
+        "content": "分析以下客服指標並輸出可執行復盤。涵蓋：工單量趨勢、回應時長、解決時長、滿意度、積壓健康度、主要根因與優先改善行動。\n\n{{input}}",
+        "tags": [
+          "指標",
+          "KPI",
+          "持續改善"
+        ]
+      }
+    ]
+  }
+]

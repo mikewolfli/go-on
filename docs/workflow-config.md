@@ -344,3 +344,73 @@ User sends high-risk query
 
 These defaults can be overridden per-phase via `high_risk_domain_keywords`
 and `high_risk_decision_keywords` options.
+
+## 10. Skill System
+
+The Skill System allows you to define reusable capabilities that can be
+invoked across workflows. Skills encapsulate specific functionality with
+their own configuration, phases, and agent preferences.
+
+### Skill Discovery and Execution Flow
+
+1. **Registration** — Skills are registered in `config.toml` under the `[skills]` section
+2. **Discovery** — The SkillBus scans registered skills at startup
+3. **Invocation** — Skills can be invoked explicitly by name or automatically matched based on context
+4. **Execution** — Each skill runs in its own phase context with dedicated agents
+5. **Result** — Skill output can be fed back into the main workflow or returned directly
+
+### Skill Dedup Protection
+
+The system automatically deduplicates skills by name and version:
+
+- If two skills have the same name, the one with the higher version wins
+- If versions are equal, the last registered skill is kept
+- Built-in skills cannot be overridden by custom skills with the same name
+
+### Creating Skills
+
+Skills are defined in the `[skills]` section of `config.toml`:
+
+```toml
+[skills.code-review]
+enabled = true
+description = "Perform automated code review"
+
+[skills.code-review.phases.coding]
+description = "Analyze code changes"
+agents = ["reviewer-agent"]
+fallback = true
+```
+
+## 11. Feature Profiles
+
+go-on has three build profiles that enable different feature sets:
+
+| Feature | `profile-local` (default) | `profile-simple-server` | `profile-multi-users-server` |
+|---------|--------------------------|------------------------|------------------------------|
+| SQLite backend | ✅ | ✅ | ❌ |
+| PostgreSQL backend | ❌ | ❌ | ✅ |
+| ToolBus | ❌ | ✅ | ✅ |
+| OrchestrationBus | ❌ | ✅ | ✅ |
+| ObservabilityBus | ❌ | ❌ | ✅ |
+| OptimizationBus | ❌ | ❌ | ✅ |
+| MemoryBus | ❌ | ❌ | ✅ |
+| ProtocolBus | ❌ | ❌ | ✅ |
+| DistributedMemoryBus | ❌ | ❌ | ✅ |
+
+To build with a specific profile:
+
+```bash
+# Default (profile-local)
+cargo build
+
+# Simple server
+cargo build --no-default-features --features profile-simple-server
+
+# Multi-user server
+cargo build --no-default-features --features profile-multi-users-server
+```
+
+---
+
+> 📖 本文档仅包含工作流配置相关内容。其他文档请参见：[文档目录](README.md)。

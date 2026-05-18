@@ -357,6 +357,9 @@ pub fn new_acp_server(
                 responses_api_store: Arc::new(StdMutex::new(std::collections::HashMap::new())),
                 task_graph_store: None,
                 scheduler: None,
+                prompt_manager: crate::acp::r#impl::request::prompts_pack::PromptManager::new(
+                    std::path::PathBuf::from("./prompts"),
+                ),
                 session_manager: None,
                 rbac_enforcer: None,
             };

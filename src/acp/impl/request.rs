@@ -157,6 +157,13 @@ fn is_acp_request(method: &str) -> bool {
             | "models/list"
             | "provider.configure"
             | "provider.list_models"
+            // Prompt template methods
+            | "prompts.list"
+            | "prompts.search"
+            | "prompts.get"
+            | "prompts.create"
+            | "prompts.update"
+            | "prompts.delete"
     )
 }
 // Request handling implementation functions for ACP server
@@ -263,6 +270,7 @@ mod hardness_pack;
 mod learning_pack;
 mod lifecycle_pack;
 mod ops_pack;
+pub mod prompts_pack;
 mod protocol_pack;
 mod pua_pack;
 mod repro_pack;
@@ -458,6 +466,161 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                         request_id,
                     )
                     .await
+                }
+                "prompts.list" => {
+                    let lang = request
+                        .params
+                        .as_ref()
+                        .and_then(|p| p.get("lang"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&server.runtime_config.i18n_default_language);
+                    match prompts_pack::handle_prompts_list(&server.prompt_manager, lang) {
+                        Ok(v) => send_result(server, request_id, v).await,
+                        Err(e) => {
+                            send_error(
+                                server,
+                                request_id,
+                                -32603,
+                                format!("prompts.list failed: {}", e),
+                                None,
+                            )
+                            .await
+                        }
+                    }
+                }
+                "prompts.search" => {
+                    let lang = request
+                        .params
+                        .as_ref()
+                        .and_then(|p| p.get("lang"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&server.runtime_config.i18n_default_language);
+                    match prompts_pack::handle_prompts_search(
+                        &server.prompt_manager,
+                        lang,
+                        request
+                            .params
+                            .as_ref()
+                            .and_then(|p| p.get("query"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(""),
+                    ) {
+                        Ok(v) => send_result(server, request_id, v).await,
+                        Err(e) => {
+                            send_error(
+                                server,
+                                request_id,
+                                -32603,
+                                format!("prompts.search failed: {}", e),
+                                None,
+                            )
+                            .await
+                        }
+                    }
+                }
+                "prompts.get" => {
+                    let lang = request
+                        .params
+                        .as_ref()
+                        .and_then(|p| p.get("lang"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&server.runtime_config.i18n_default_language);
+                    let id = request
+                        .params
+                        .as_ref()
+                        .and_then(|p| p.get("id"))
+                        .and_then(|v| v.as_str());
+                    match id {
+                        Some(id) => {
+                            match prompts_pack::handle_prompts_get(&server.prompt_manager, lang, id)
+                            {
+                                Ok(v) => send_result(server, request_id, v).await,
+                                Err(e) => {
+                                    send_error(server, request_id, -32602, format!("{}", e), None)
+                                        .await
+                                }
+                            }
+                        }
+                        None => {
+                            send_error(
+                                server,
+                                request_id,
+                                -32602,
+                                "missing required field: id".to_string(),
+                                None,
+                            )
+                            .await
+                        }
+                    }
+                }
+                "prompts.create" => {
+                    let lang = request
+                        .params
+                        .as_ref()
+                        .and_then(|p| p.get("lang"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&server.runtime_config.i18n_default_language);
+                    let params = request.params.clone().unwrap_or_default();
+                    match prompts_pack::handle_prompts_create(&server.prompt_manager, lang, &params)
+                    {
+                        Ok(v) => send_result(server, request_id, v).await,
+                        Err(e) => {
+                            send_error(
+                                server,
+                                request_id,
+                                -32603,
+                                format!("prompts.create failed: {}", e),
+                                None,
+                            )
+                            .await
+                        }
+                    }
+                }
+                "prompts.update" => {
+                    let lang = request
+                        .params
+                        .as_ref()
+                        .and_then(|p| p.get("lang"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&server.runtime_config.i18n_default_language);
+                    let params = request.params.clone().unwrap_or_default();
+                    match prompts_pack::handle_prompts_update(&server.prompt_manager, lang, &params)
+                    {
+                        Ok(v) => send_result(server, request_id, v).await,
+                        Err(e) => {
+                            send_error(
+                                server,
+                                request_id,
+                                -32603,
+                                format!("prompts.update failed: {}", e),
+                                None,
+                            )
+                            .await
+                        }
+                    }
+                }
+                "prompts.delete" => {
+                    let lang = request
+                        .params
+                        .as_ref()
+                        .and_then(|p| p.get("lang"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&server.runtime_config.i18n_default_language);
+                    let params = request.params.clone().unwrap_or_default();
+                    match prompts_pack::handle_prompts_delete(&server.prompt_manager, lang, &params)
+                    {
+                        Ok(v) => send_result(server, request_id, v).await,
+                        Err(e) => {
+                            send_error(
+                                server,
+                                request_id,
+                                -32603,
+                                format!("prompts.delete failed: {}", e),
+                                None,
+                            )
+                            .await
+                        }
+                    }
                 }
                 "skill.import" => {
                     protocol_pack::handle_skill_import(

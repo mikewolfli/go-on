@@ -25,6 +25,11 @@ echo "=== 步骤1: 构建项目 ==="
 cargo build --verbose
 echo "✅ 构建成功"
 
+# 1.1 提示词模板校验
+echo "=== 步骤1.1: 提示词模板校验 ==="
+bash scripts/validate-prompts.sh
+echo "✅ 提示词模板校验通过"
+
 # 2. 运行测试
 echo "=== 步骤2: 运行测试 ==="
 cargo test --all --verbose
