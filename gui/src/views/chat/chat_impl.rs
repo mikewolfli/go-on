@@ -382,10 +382,18 @@ impl ChatView {
             .and_then(|json| serde_json::from_str(json).ok())
             .unwrap_or_default();
 
+        // Restore input draft from last session, or use a default starter prompt
+        let default_input = if !ui_state.input_draft.is_empty() {
+            ui_state.input_draft.clone()
+        } else {
+            // Default starter prompt for first-time users
+            String::new()
+        };
+
         Self {
             sessions,
             active_session: 0,
-            input: String::new(),
+            input: default_input,
             sending: false,
             error: String::new(),
             success_message: None,

@@ -113,7 +113,11 @@ impl Agent for PerplexityAgent {
                 name: "Sonar Pro".to_string(),
                 description: "Sonar Pro (200K context, chat, streaming, search)".to_string(),
                 is_default: self.model == "sonar-pro",
-                capabilities: vec!["chat".to_string(), "streaming".to_string(), "search".to_string()],
+                capabilities: vec![
+                    "chat".to_string(),
+                    "streaming".to_string(),
+                    "search".to_string(),
+                ],
                 context_window: Some(200_000),
             },
             ModelInfo {
@@ -129,15 +133,24 @@ impl Agent for PerplexityAgent {
                 name: "Sonar Reasoning Pro".to_string(),
                 description: "Sonar Reasoning Pro (200K context, reasoning)".to_string(),
                 is_default: self.model == "sonar-reasoning-pro",
-                capabilities: vec!["chat".to_string(), "reasoning".to_string(), "streaming".to_string()],
+                capabilities: vec![
+                    "chat".to_string(),
+                    "reasoning".to_string(),
+                    "streaming".to_string(),
+                ],
                 context_window: Some(200_000),
             },
             ModelInfo {
-                id: "sonar-reasoning".to_string(),
-                name: "Sonar Reasoning".to_string(),
-                description: "Sonar Reasoning (200K context)".to_string(),
-                is_default: self.model == "sonar-reasoning",
-                capabilities: vec!["chat".to_string(), "reasoning".to_string(), "streaming".to_string()],
+                id: "sonar-deep-research".to_string(),
+                name: "Sonar Deep Research".to_string(),
+                description: "Sonar Deep Research (200K context, exhaustive research)".to_string(),
+                is_default: self.model == "sonar-deep-research",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "reasoning".to_string(),
+                    "streaming".to_string(),
+                    "search".to_string(),
+                ],
                 context_window: Some(200_000),
             },
         ]

@@ -241,6 +241,30 @@ impl Agent for CohereAgent {
     fn available_models(&self) -> Vec<ModelInfo> {
         vec![
             ModelInfo {
+                id: "command-a-03-2025".to_string(),
+                name: "Command A (03-2025)".to_string(),
+                description: "Cohere Command A 03-2025 (latest flagship)".to_string(),
+                is_default: self.model == "command-a-03-2025",
+                capabilities: vec!["chat".to_string()],
+                context_window: Some(256_000),
+            },
+            ModelInfo {
+                id: "command-a-reasoning-08-2025".to_string(),
+                name: "Command A Reasoning (08-2025)".to_string(),
+                description: "Cohere Command A Reasoning 08-2025 (reasoning variant)".to_string(),
+                is_default: self.model == "command-a-reasoning-08-2025",
+                capabilities: vec!["chat".to_string(), "reasoning".to_string()],
+                context_window: Some(256_000),
+            },
+            ModelInfo {
+                id: "command-r7b-12-2024".to_string(),
+                name: "Command R7B (12-2024)".to_string(),
+                description: "Cohere Command R7B 12-2024".to_string(),
+                is_default: self.model == "command-r7b-12-2024",
+                capabilities: vec!["chat".to_string()],
+                context_window: Some(131072),
+            },
+            ModelInfo {
                 id: "command-r-plus-08-2024".to_string(),
                 name: "Command R+ 08-2024".to_string(),
                 description: "Cohere Command R+ 08-2024".to_string(),
@@ -255,14 +279,6 @@ impl Agent for CohereAgent {
                 is_default: self.model == "command-r-08-2024",
                 capabilities: vec!["chat".to_string()],
                 context_window: Some(131072),
-            },
-            ModelInfo {
-                id: "command-light".to_string(),
-                name: "Command Light".to_string(),
-                description: "Cohere Command Light".to_string(),
-                is_default: self.model == "command-light",
-                capabilities: vec!["chat".to_string()],
-                context_window: Some(4096),
             },
         ]
     }

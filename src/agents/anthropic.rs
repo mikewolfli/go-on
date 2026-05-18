@@ -382,16 +382,50 @@ impl Agent for AnthropicAgent {
     fn available_models(&self) -> Vec<crate::agent::ModelInfo> {
         vec![
             crate::agent::ModelInfo {
-                id: "claude-sonnet-4-20250514".to_string(),
-                name: "Claude Sonnet 4 (20250514)".to_string(),
-                description: "Anthropic Claude Sonnet 4 (latest generation, dated)".to_string(),
-                is_default: self.model == "claude-sonnet-4-20250514",
+                id: "claude-opus-4-7".to_string(),
+                name: "Claude Opus 4.7".to_string(),
+                description:
+                    "Anthropic's most capable model for complex reasoning and agentic coding"
+                        .to_string(),
+                is_default: self.model == "claude-opus-4-7",
                 capabilities: vec![
                     "chat".to_string(),
                     "vision".to_string(),
                     "reasoning".to_string(),
+                    "function_calling".to_string(),
                     "streaming".to_string(),
-                    "tools".to_string(),
+                    "extended_thinking".to_string(),
+                ],
+                context_window: Some(1_000_000),
+            },
+            crate::agent::ModelInfo {
+                id: "claude-sonnet-4-6".to_string(),
+                name: "Claude Sonnet 4.6".to_string(),
+                description: "Anthropic's best combination of speed and intelligence".to_string(),
+                is_default: self.model == "claude-sonnet-4-6",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "reasoning".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                    "extended_thinking".to_string(),
+                ],
+                context_window: Some(1_000_000),
+            },
+            crate::agent::ModelInfo {
+                id: "claude-haiku-4-5-20251001".to_string(),
+                name: "Claude Haiku 4.5 (20251001)".to_string(),
+                description: "Anthropic's fastest model with near-frontier intelligence"
+                    .to_string(),
+                is_default: self.model == "claude-haiku-4-5-20251001",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "reasoning".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                    "extended_thinking".to_string(),
                 ],
                 context_window: Some(200_000),
             },

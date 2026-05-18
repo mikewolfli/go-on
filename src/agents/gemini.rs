@@ -218,6 +218,19 @@ impl Agent for GeminiAgent {
                 context_window: Some(1_048_576),
             },
             ModelInfo {
+                id: "gemini-2.5-flash-lite".to_string(),
+                name: "Gemini 2.5 Flash Lite".to_string(),
+                description: "Google Gemini 2.5 Flash Lite (fast & cost-efficient)".to_string(),
+                is_default: self.model == "gemini-2.5-flash-lite",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "streaming".to_string(),
+                    "tools".to_string(),
+                ],
+                context_window: Some(1_048_576),
+            },
+            ModelInfo {
                 id: "gemini-2.5-pro".to_string(),
                 name: "Gemini 2.5 Pro".to_string(),
                 description: "Google Gemini 2.5 Pro (latest, most capable)".to_string(),
@@ -231,9 +244,36 @@ impl Agent for GeminiAgent {
                 context_window: Some(1_048_576),
             },
             ModelInfo {
+                id: "gemini-3.1-pro-preview-03-2026".to_string(),
+                name: "Gemini 3.1 Pro Preview".to_string(),
+                description: "Google Gemini 3.1 Pro Preview (03-2026, preview)".to_string(),
+                is_default: self.model == "gemini-3.1-pro-preview-03-2026",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "streaming".to_string(),
+                    "tools".to_string(),
+                ],
+                context_window: Some(1_048_576),
+            },
+            ModelInfo {
+                id: "gemini-3-flash-preview-03-2026".to_string(),
+                name: "Gemini 3 Flash Preview".to_string(),
+                description: "Google Gemini 3 Flash Preview (03-2026, preview)".to_string(),
+                is_default: self.model == "gemini-3-flash-preview-03-2026",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "streaming".to_string(),
+                    "tools".to_string(),
+                ],
+                context_window: Some(1_048_576),
+            },
+            ModelInfo {
                 id: "gemini-2.0-flash".to_string(),
                 name: "Gemini 2.0 Flash".to_string(),
-                description: "Google Gemini 2.0 Flash (fast and efficient)".to_string(),
+                description: "Google Gemini 2.0 Flash (DEPRECATED - shutting down soon)"
+                    .to_string(),
                 is_default: self.model == "gemini-2.0-flash",
                 capabilities: vec![
                     "chat".to_string(),
@@ -246,34 +286,8 @@ impl Agent for GeminiAgent {
             ModelInfo {
                 id: "gemini-2.0-pro".to_string(),
                 name: "Gemini 2.0 Pro".to_string(),
-                description: "Google Gemini 2.0 Pro (most capable)".to_string(),
+                description: "Google Gemini 2.0 Pro (DEPRECATED)".to_string(),
                 is_default: self.model == "gemini-2.0-pro",
-                capabilities: vec![
-                    "chat".to_string(),
-                    "vision".to_string(),
-                    "streaming".to_string(),
-                    "tools".to_string(),
-                ],
-                context_window: Some(1_048_576),
-            },
-            ModelInfo {
-                id: "gemini-1.5-pro".to_string(),
-                name: "Gemini 1.5 Pro".to_string(),
-                description: "Google Gemini 1.5 Pro (stable)".to_string(),
-                is_default: self.model == "gemini-1.5-pro",
-                capabilities: vec![
-                    "chat".to_string(),
-                    "vision".to_string(),
-                    "streaming".to_string(),
-                    "tools".to_string(),
-                ],
-                context_window: Some(1_048_576),
-            },
-            ModelInfo {
-                id: "gemini-1.5-flash".to_string(),
-                name: "Gemini 1.5 Flash".to_string(),
-                description: "Google Gemini 1.5 Flash (cost-efficient)".to_string(),
-                is_default: self.model == "gemini-1.5-flash",
                 capabilities: vec![
                     "chat".to_string(),
                     "vision".to_string(),

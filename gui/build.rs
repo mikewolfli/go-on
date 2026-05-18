@@ -1,9 +1,10 @@
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(has_app_icon)");
-    println!("cargo:rerun-if-changed=../ICON.ICO");
+    println!("cargo:rerun-if-changed=icon.ico");
     println!("cargo:rerun-if-changed=../icon.ico");
 
-    let preferred = std::path::Path::new("../ICON.ICO");
+    // Build script runs from gui/ directory
+    let preferred = std::path::Path::new("icon.ico");
     let fallback = std::path::Path::new("../icon.ico");
     let icon_path = if preferred.exists() {
         Some(preferred)

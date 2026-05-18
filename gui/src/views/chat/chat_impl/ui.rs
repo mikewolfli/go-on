@@ -1,5 +1,17 @@
 use super::*;
 
+/// Map mode ID to its i18n key for display.
+fn mode_display_key(mode_id: &str) -> String {
+    match mode_id {
+        "ask" => "mode.ask".to_string(),
+        "plan" => "mode.plan".to_string(),
+        "edit" => "mode.edit".to_string(),
+        "safeguard" => "mode.safeguard".to_string(),
+        "full_auto" => "mode.full_auto".to_string(),
+        other => format!("mode.{other}"),
+    }
+}
+
 impl ChatView {
     const MAX_RENDERED_MESSAGES: usize = 250;
 
@@ -531,13 +543,13 @@ impl ChatView {
                             ui.add_space(6.0);
                             let prev_mode = self.selected_mode.clone();
                             egui::ComboBox::from_id_salt("mode_sel")
-                                .selected_text(i18n.t(&format!("mode.{}", self.selected_mode)))
+                                .selected_text(i18n.t(&mode_display_key(&self.selected_mode)))
                                 .show_ui(ui, |ui| {
                                     for m in &["ask", "plan", "edit", "safeguard", "full_auto"] {
                                         ui.selectable_value(
                                             &mut self.selected_mode,
                                             m.to_string(),
-                                            i18n.t(&format!("mode.{m}")),
+                                            i18n.t(&mode_display_key(m)),
                                         );
                                     }
                                 });

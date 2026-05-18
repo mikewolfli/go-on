@@ -146,6 +146,48 @@ impl Agent for OpenAiAgent {
     fn available_models(&self) -> Vec<crate::agent::ModelInfo> {
         vec![
             crate::agent::ModelInfo {
+                id: "gpt-5.5".to_string(),
+                name: "GPT-5.5".to_string(),
+                description: "OpenAI GPT-5.5 (1M context, flagship model)".to_string(),
+                is_default: self.model == "gpt-5.5",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                    "reasoning".to_string(),
+                ],
+                context_window: Some(1_000_000),
+            },
+            crate::agent::ModelInfo {
+                id: "gpt-5.4".to_string(),
+                name: "GPT-5.4".to_string(),
+                description: "OpenAI GPT-5.4 (1M context, affordable)".to_string(),
+                is_default: self.model == "gpt-5.4",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                    "reasoning".to_string(),
+                ],
+                context_window: Some(1_000_000),
+            },
+            crate::agent::ModelInfo {
+                id: "gpt-5.4-mini".to_string(),
+                name: "GPT-5.4 Mini".to_string(),
+                description: "OpenAI GPT-5.4 Mini (400K context, strongest mini)".to_string(),
+                is_default: self.model == "gpt-5.4-mini",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                    "reasoning".to_string(),
+                ],
+                context_window: Some(400_000),
+            },
+            crate::agent::ModelInfo {
                 id: "gpt-4.1".to_string(),
                 name: "GPT-4.1".to_string(),
                 description: "OpenAI GPT-4.1 (1M context)".to_string(),

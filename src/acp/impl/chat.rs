@@ -58,7 +58,10 @@ use crate::rpc_protocol::{chat_trace_context, child_trace_context, RequestTraceC
 /// Chat parameters structure
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ChatParams {
-    /// Chat mode (e.g., "ask", "edit", "agent", "safeguard", "full_auto")
+    /// Chat mode (e.g., "ask", "edit", "agent", "safeguard", "full_auto").
+    /// When absent or empty (e.g., from external clients like Zed),
+    /// defaults to "ask" (the safest general-purpose mode).
+    #[serde(default)]
     pub mode: String,
     /// Messages to process
     pub messages: Vec<Message>,
@@ -485,7 +488,7 @@ pub async fn handle_chat(
         }
 
         let params_value = params.unwrap_or_else(|| json!({}));
-        let chat_params: ChatParams = match serde_json::from_value(params_value) {
+        let mut chat_params: ChatParams = match serde_json::from_value(params_value) {
             Ok(value) => value,
             Err(err) => {
                 send_error(
@@ -499,6 +502,12 @@ pub async fn handle_chat(
                 return Ok(());
             }
         };
+
+        // Fallback to "ask" mode when absent or empty (e.g., from external clients like Zed)
+        if chat_params.mode.trim().is_empty() {
+            chat_params.mode = "ask".to_string();
+            info!("mode not specified by client, defaulting to 'ask'");
+        }
 
         // Check if should escalate approval strategy
         let should_escalate = should_escalate_approval_strategy(

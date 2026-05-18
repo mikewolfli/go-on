@@ -87,6 +87,10 @@ fn load_cjk_font(fonts: &mut egui::FontDefinitions) -> bool {
         // ── macOS (TTC — fallback) ──
         "/System/Library/Fonts/PingFang.ttc",
         "/System/Library/Fonts/STHeiti Light.ttc",
+        // ── Windows (TTF — safe) ──
+        "C:\\Windows\\Fonts\\simhei.ttf",
+        "C:\\Windows\\Fonts\\simkai.ttf",
+        "C:\\Windows\\Fonts\\simfang.ttf",
         // ── Windows (TTC — fallback) ──
         "C:\\Windows\\Fonts\\msyh.ttc",
         "C:\\Windows\\Fonts\\simsun.ttc",
@@ -170,6 +174,8 @@ fn load_cjk_font(fonts: &mut egui::FontDefinitions) -> bool {
             "/usr/share/fonts",
             "/usr/local/share/fonts",
             "/System/Library/Fonts",
+            // Windows font directory — contains many .ttf CJK fonts
+            "C:\\Windows\\Fonts",
         ];
         for dir in &search_dirs {
             if let Ok(entries) = std::fs::read_dir(dir) {
@@ -193,7 +199,15 @@ fn load_cjk_font(fonts: &mut egui::FontDefinitions) -> bool {
                         || name.contains("wenquan")
                         || name.contains("droid")
                         || name.contains("fallback")
-                        || name.contains("arialuni"))
+                        || name.contains("arialuni")
+                        || name.contains("simhei")
+                        || name.contains("simkai")
+                        || name.contains("simfang")
+                        || name.contains("simsun")
+                        || name.contains("msyh")
+                        || name.contains("deng")
+                        || name.contains("yahei")
+                        || name.contains("mingliu"))
                         && try_load(fonts, &path_str)
                     {
                         cjk_found = true;

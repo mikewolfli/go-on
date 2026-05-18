@@ -1682,7 +1682,13 @@ impl GoOnApp {
     fn restore_tab_ui_state(&mut self, tab_name: &str) {
         match tab_name {
             "chat" => {
-                self.chat_view.selected_mode = self.ui_state.selected_mode.clone();
+                // Only restore mode if saved value is valid — otherwise keep existing default
+                let valid_modes = ["ask", "plan", "edit", "safeguard", "full_auto"];
+                if !self.ui_state.selected_mode.is_empty()
+                    && valid_modes.contains(&self.ui_state.selected_mode.as_str())
+                {
+                    self.chat_view.selected_mode = self.ui_state.selected_mode.clone();
+                }
                 self.chat_view.show_token_details = self.ui_state.show_token_details;
                 self.chat_view.enable_markdown = self.ui_state.enable_markdown;
                 self.chat_view.show_model_picker = self.ui_state.show_model_picker;
