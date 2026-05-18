@@ -50,6 +50,10 @@ pub struct SkillImportManifest {
     /// Optional MCP endpoint for remote skill invocation.
     #[serde(default)]
     pub endpoint: Option<String>,
+    /// Raw prompt template (populated when importing SKILL.md / skill.mdc).
+    /// When present, the skill is registered as a prompt-based skill in SkillRegistry.
+    #[serde(default)]
+    pub prompt_template: Option<String>,
 }
 
 fn default_manifest_schema() -> Value {
@@ -178,11 +182,7 @@ impl SkillImportStore {
     ) -> Result<ImportedSkillRecord> {
         if !self.policy.enabled {
             anyhow::bail!(
-                "{}",
-                tf(
-                    "error.skill_already_registered",
-                    &[("name", "skills_import_enabled")]
-                )
+                "skill import is disabled by security policy (skills_import_enabled = false)"
             );
         }
 
@@ -267,14 +267,56 @@ async fn fetch_source(
             ..
         } => {
             ensure_repo_and_ref(repo, reference, policy.allow_floating_ref)?;
-            let manifest_path = path.clone().unwrap_or_else(|| "manifest.json".to_string());
             let source_label = format!("github.com/{}", repo);
             enforce_allowlist(policy, &source_label)?;
-            let url = format!(
-                "https://raw.githubusercontent.com/{}/{}/{}",
-                repo, reference, manifest_path
-            );
-            let payload = download_bytes(&url).await?;
+            // Try multiple manifest filenames in order of preference
+            let manifest_candidates: Vec<String> = if let Some(p) = path {
+                vec![p.clone()]
+            } else {
+                vec![
+                    "manifest.json".to_string(),
+                    "SKILL.md".to_string(),
+                    "skill.mdc".to_string(),
+                    "skill.json".to_string(),
+                    "skill.yaml".to_string(),
+                ]
+            };
+            let mut last_error = String::new();
+            let mut payload = None;
+            let mut fetched_path = String::new();
+            for manifest_path in &manifest_candidates {
+                let url = format!(
+                    "https://raw.githubusercontent.com/{}/{}/{}",
+                    repo, reference, manifest_path
+                );
+                match download_bytes(&url).await {
+                    Ok(bytes) => {
+                        fetched_path = manifest_path.clone();
+                        payload = Some(bytes);
+                        break;
+                    }
+                    Err(e) => {
+                        last_error = format!("{}", e);
+                    }
+                }
+            }
+            let raw_payload = payload.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Failed to fetch skill from GitHub repo '{}' (ref: {}). Searched for: {}. Make sure this repo contains a go-on skill manifest file. Last error: {}",
+                    repo, reference,
+                    manifest_candidates.join(", "),
+                    last_error
+                )
+            })?;
+            let payload = if fetched_path.ends_with(".md") || fetched_path.ends_with(".mdc") {
+                // SKILL.md / skill.mdc — parse and convert to JSON manifest
+                let manifest =
+                    parse_skill_md(&raw_payload).context("failed to parse SKILL.md / skill.mdc")?;
+                serde_json::to_vec(&manifest)
+                    .context("failed to serialize converted SKILL.md manifest")?
+            } else {
+                raw_payload
+            };
             Ok(FetchedSource {
                 payload,
                 source: source_label,
@@ -392,30 +434,18 @@ async fn download_bytes(url: &str) -> Result<Vec<u8>> {
     let status = response.status();
     if !status.is_success() {
         anyhow::bail!(
-            "{}",
-            tf(
-                "error.http_request_failed",
-                &[("url", url), ("status", &status.to_string())]
-            )
+            "HTTP {} when fetching {} — this URL does not contain a valid skill manifest.",
+            status.as_u16(),
+            url
         );
     }
     if let Some(content_length) = response.content_length() {
         if content_length > SKILL_IMPORT_MAX_BYTES as u64 {
             anyhow::bail!(
-                "{}",
-                tf(
-                    "error.http_request_failed",
-                    &[
-                        ("url", url),
-                        (
-                            "reason",
-                            &format!(
-                                "response body too large: {} bytes (max {})",
-                                content_length, SKILL_IMPORT_MAX_BYTES
-                            )
-                        ),
-                    ]
-                )
+                "Response too large: {} bytes (max {}) for {}",
+                content_length,
+                SKILL_IMPORT_MAX_BYTES,
+                url
             );
         }
     }
@@ -426,20 +456,9 @@ async fn download_bytes(url: &str) -> Result<Vec<u8>> {
         let chunk = chunk.with_context(|| format!("failed to read response body from {}", url))?;
         if payload.len() + chunk.len() > SKILL_IMPORT_MAX_BYTES {
             anyhow::bail!(
-                "{}",
-                tf(
-                    "error.http_request_failed",
-                    &[
-                        ("url", url),
-                        (
-                            "reason",
-                            &format!(
-                                "response stream body exceeded {} bytes",
-                                SKILL_IMPORT_MAX_BYTES
-                            )
-                        ),
-                    ]
-                )
+                "Response stream exceeded {} bytes for {}",
+                SKILL_IMPORT_MAX_BYTES,
+                url
             );
         }
         payload.extend_from_slice(&chunk);
@@ -494,6 +513,139 @@ fn compute_sha256_hex(payload: &[u8]) -> String {
     hasher.update(payload);
     let digest = hasher.finalize();
     digest.iter().map(|byte| format!("{:02x}", byte)).collect()
+}
+
+/// Parse a SKILL.md (Claude Code skill format) into a `SkillImportManifest`.
+///
+/// SKILL.md format (with optional YAML frontmatter):
+/// ```markdown
+/// ---
+/// name: my-skill
+/// description: Does something
+/// version: 1.0.0
+/// ---
+///
+/// # Skill Content
+///
+/// Instructions...
+/// ```
+///
+/// If no YAML frontmatter exists, the first `#` heading is used as the name
+/// (sanitised to match Go-On's skill naming rules), and the first paragraph
+/// following a heading is used as the description.
+///
+/// The `prompt_template` field is always set to the full raw markdown,
+/// so the skill can be registered as a prompt-based skill.
+pub(crate) fn parse_skill_md(content: &[u8]) -> Result<SkillImportManifest> {
+    let text = std::str::from_utf8(content).context("SKILL.md is not valid UTF-8")?;
+    let full_text = text.to_string();
+
+    let mut name = String::new();
+    let mut description = String::new();
+    let mut version = "1.0.0".to_string();
+
+    // Try to parse YAML frontmatter (between --- delimiters)
+    let remaining = if text.starts_with("---") {
+        if let Some(end) = text[3..].find("\n---") {
+            let frontmatter = &text[3..3 + end];
+            for line in frontmatter.lines() {
+                if let Some((key, value)) = line.split_once(':') {
+                    let key = key.trim().to_lowercase();
+                    let value = value
+                        .trim()
+                        .trim_matches('"')
+                        .trim_matches('\'')
+                        .to_string();
+                    match key.as_str() {
+                        "name" => name = value,
+                        "description" | "title" => description = value,
+                        "version" => version = value,
+                        _ => {}
+                    }
+                }
+            }
+            Some(&text[3 + end + 5..]) // skip past closing ---
+        } else {
+            None
+        }
+    } else {
+        Some(text)
+    };
+
+    // If no name from frontmatter, extract from first # heading
+    if name.is_empty() {
+        if let Some(remaining) = remaining {
+            for line in remaining.lines() {
+                if let Some(heading) = line.trim().strip_prefix("# ") {
+                    name = heading.to_string();
+                    // Take first part before dash or colon as name
+                    for sep in &["—", "–", " - ", " – ", ": "] {
+                        if let Some(idx) = name.find(sep) {
+                            name = name[..idx].trim().to_string();
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    // Fallback name if nothing found
+    if name.is_empty() {
+        anyhow::bail!("SKILL.md has no name (no YAML frontmatter and no # heading)");
+    }
+
+    // Sanitise name: lowercase, spaces→hyphens, strip non-allowed characters
+    {
+        let mut sanitised = String::with_capacity(name.len());
+        for ch in name.chars() {
+            match ch {
+                c if c.is_ascii_lowercase() || c.is_ascii_digit() => sanitised.push(c),
+                c if c.is_ascii_uppercase() => sanitised.push(c.to_ascii_lowercase()),
+                ' ' | '_' | '-' | '.' => sanitised.push('-'),
+                _ => {}
+            }
+        }
+        // Trim leading/trailing hyphens and collapse runs
+        let trimmed: String = sanitised
+            .trim_matches('-')
+            .split('-')
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("-");
+        if trimmed.is_empty() {
+            // If sanitisation emptied everything, keep original lowercased
+            name = name.to_ascii_lowercase();
+        } else {
+            name = trimmed;
+        }
+    }
+
+    // Description from frontmatter, or first non-heading, non-empty line
+    if description.is_empty() {
+        if let Some(remaining) = remaining {
+            for line in remaining.lines() {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with("---") {
+                    description = trimmed.to_string();
+                    if description.len() > 200 {
+                        description = description[..197].to_string() + "...";
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(SkillImportManifest {
+        name,
+        version,
+        description,
+        input_schema: default_manifest_schema(),
+        endpoint: None,
+        prompt_template: Some(full_text),
+    })
 }
 
 fn now_ts() -> i64 {

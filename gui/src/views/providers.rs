@@ -28,6 +28,10 @@ pub struct ProvidersView {
     remote_models: std::collections::HashMap<String, Vec<String>>,
     /// Whether we've tried to fetch models
     models_loaded: bool,
+    /// Provider names loaded from backend catalog (fallback to built-in list).
+    provider_names: Vec<String>,
+    /// Whether we've tried to fetch provider catalog.
+    catalog_loaded: bool,
     provider_ops_status: std::collections::HashMap<String, String>,
     provider_capabilities: std::collections::HashMap<String, Vec<ProviderCapabilityModel>>,
     /// Cached security prefs — reloaded at most once per 10s to avoid per-frame disk reads.
@@ -129,7 +133,7 @@ fn provider_label(i18n: &I18n, provider: &str) -> String {
 /// returned by the backend agents' `available_models()` in `src/agents/*.rs`.
 /// The backend agent uses `self.model` as the model ID sent in API requests,
 /// so the GUI suggestions must use model IDs the provider API actually accepts.
-fn models_for_provider(provider: &str) -> &'static [&'static str] {
+pub(crate) fn models_for_provider(provider: &str) -> &'static [&'static str] {
     match provider.to_lowercase().as_str() {
         "deepseek" => &[
             "auto",
@@ -418,6 +422,11 @@ impl ProvidersView {
             pending_tx,
             remote_models: std::collections::HashMap::new(),
             models_loaded: false,
+            provider_names: PROVIDER_NAMES
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect(),
+            catalog_loaded: false,
             provider_ops_status: std::collections::HashMap::new(),
             provider_capabilities: std::collections::HashMap::new(),
             cached_security: security_prefs::load(),
@@ -443,6 +452,7 @@ impl ProvidersView {
 
     pub fn reset_loaded_state(&mut self) {
         self.models_loaded = false;
+        self.catalog_loaded = false;
         self.remote_models.clear();
         self.provider_capabilities.clear();
         self.provider_ops_status.clear();
@@ -461,6 +471,28 @@ impl ProvidersView {
                 >(models_json)
                 {
                     self.remote_models = models;
+                }
+            } else if let Some(catalog_json) = msg.strip_prefix("__catalog__:") {
+                if let Ok(value) = serde_json::from_str::<Value>(catalog_json) {
+                    if let Some(items) = value.get("catalog").and_then(Value::as_array) {
+                        let mut names = items
+                            .iter()
+                            .filter_map(|item| item.get("name").and_then(Value::as_str))
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>();
+                        names.sort();
+                        names.dedup();
+                        if !names.is_empty() {
+                            self.provider_names = names;
+                            if !self
+                                .provider_names
+                                .iter()
+                                .any(|name| name.eq_ignore_ascii_case(&self.selected_provider))
+                            {
+                                self.selected_provider = self.provider_names[0].clone();
+                            }
+                        }
+                    }
                 }
             } else if let Some(rest) = msg.strip_prefix("__ops__:") {
                 if let Some((provider, status)) = rest.split_once(':') {
@@ -632,6 +664,32 @@ impl ProvidersView {
                 ctx_clone.request_repaint();
             });
         }
+
+        if !self.catalog_loaded {
+            self.catalog_loaded = true;
+            let backend_clone = backend.clone();
+            let tx = self.pending_tx.clone();
+            let ctx_clone = ctx.clone();
+            tokio::spawn(async move {
+                let catalog = match tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    backend_clone.provider_catalog(),
+                )
+                .await
+                {
+                    Ok(Ok(value)) => value,
+                    _ => Value::Null,
+                };
+                let msg = format!(
+                    "__catalog__:{}",
+                    serde_json::to_string(&catalog).unwrap_or_default()
+                );
+                if let Err(e) = tx.try_send(msg) {
+                    eprintln!("WARN: providers try_send failed: {:?}", e);
+                }
+                ctx_clone.request_repaint();
+            });
+        }
     }
 
     /// Fetch models from backend on first load. Spawns a background task.
@@ -641,6 +699,45 @@ impl ProvidersView {
             self.cached_security = security_prefs::load();
             self.security_last_load = Instant::now();
         }
+    }
+
+    fn backend_models_for_provider(&self, provider: &str) -> Option<Vec<String>> {
+        let key = provider.to_lowercase();
+        self.remote_models.iter().find_map(|(name, models)| {
+            if name.eq_ignore_ascii_case(&key) || name.eq_ignore_ascii_case(provider) {
+                Some(models.clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    fn available_models_for_provider(&self, provider: &str) -> Vec<String> {
+        let mut models = Vec::<String>::new();
+        models.push("auto".to_string());
+
+        if let Some(remote) = self.backend_models_for_provider(provider) {
+            for model in remote {
+                if !model.trim().is_empty() && model != "auto" {
+                    models.push(model);
+                }
+            }
+        }
+
+        for fallback in models_for_provider(provider) {
+            if *fallback != "auto" {
+                models.push((*fallback).to_string());
+            }
+        }
+
+        let mut deduped = Vec::<String>::new();
+        let mut seen = std::collections::HashSet::<String>::new();
+        for model in models {
+            if seen.insert(model.clone()) {
+                deduped.push(model);
+            }
+        }
+        deduped
     }
 
     pub fn show(
@@ -681,10 +778,11 @@ impl ProvidersView {
                     ui.label(i18n.t("providers.add_new"));
                     ui.horizontal(|ui| {
                         ui.label(i18n.t("providers.provider"));
+                        let provider_options = self.provider_names.clone();
                         egui::ComboBox::from_id_salt("add_provider_sel")
                             .selected_text(provider_label(i18n, &self.selected_provider))
                             .show_ui(ui, |ui| {
-                                for p in PROVIDER_NAMES {
+                                for p in &provider_options {
                                     if ui
                                         .selectable_value(
                                             &mut self.selected_provider,
@@ -756,9 +854,9 @@ impl ProvidersView {
                                 if self.selected_provider.to_lowercase() == "copilot" {
                                     ui.label(i18n.t("providers.copilot_hint"));
                                 }
-                                let models = models_for_provider(&self.selected_provider);
+                                let models = self.available_models_for_provider(&self.selected_provider);
                                 for m in models {
-                                    let display_name = if m == &"auto" {
+                                    let display_name = if m == "auto" {
                                         i18n.t("providers.auto").to_string()
                                     } else {
                                         format!(
@@ -769,7 +867,7 @@ impl ProvidersView {
                                     };
                                     ui.selectable_value(
                                         &mut self.new_model,
-                                        m.to_string(),
+                                        m,
                                         display_name,
                                     );
                                 }
@@ -1209,7 +1307,7 @@ impl ProvidersView {
                             ));
                             ui.label(i18n.t("providers.model"));
                             // Model dropdown for saved providers
-                            let models = models_for_provider(&provider.name);
+                            let models = self.available_models_for_provider(&provider.name);
                             egui::ComboBox::from_id_salt(format!("model_{}", idx))
                                 .selected_text({
                                     if provider.model == "auto" || provider.model.is_empty() {
@@ -1224,7 +1322,7 @@ impl ProvidersView {
                                 })
                                 .show_ui(ui, |ui| {
                                     for m in models {
-                                        let display_name = if m == &"auto" {
+                                        let display_name = if m == "auto" {
                                             i18n.t("providers.auto").to_string()
                                         } else {
                                             format!(
@@ -1236,7 +1334,7 @@ impl ProvidersView {
                                         if ui
                                             .selectable_value(
                                                 &mut provider.model,
-                                                m.to_string(),
+                                                m.clone(),
                                                 display_name,
                                             )
                                             .clicked()
@@ -1248,7 +1346,7 @@ impl ProvidersView {
                                                 let tx_push = self.pending_tx.clone();
                                                 let backend_push = backend.clone();
                                                 let name_push = provider.name.clone();
-                                                let model_push = m.to_string();
+                                                let model_push = m;
                                                 let ctx_push = ctx.clone();
                                                 let key_push = crate::keyring_util::get_api_key_with_fallback(
                                                     &name_push.to_lowercase(),

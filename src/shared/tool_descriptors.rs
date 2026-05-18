@@ -122,6 +122,60 @@ pub fn tool_descriptor(name: &'static str) -> McpTool {
                 "required": ["name", "description", "prompt_template"]
             })),
         },
+        "github_search_skills" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Search GitHub for skill repositories matching a query. ".to_string()
+                    + "Returns repos that may contain installable skills. "
+                    + "Use 'import_skill' with the chosen repo to install.",
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query (e.g. 'web scraping', 'code review')"},
+                    "max_results": {"type": "integer", "description": "Max results to return (1-20)", "default": 10, "minimum": 1, "maximum": 20}
+                },
+                "required": ["query"]
+            })),
+        },
+        "import_skill" => McpTool {
+            name: name.to_string(),
+            description: Some(
+                "Import a skill from a remote URL or GitHub repository. ".to_string()
+                    + "Downloads the skill manifest and registers it locally. "
+                    + "Supports GitHub repos (e.g. 'owner/repo') and direct URLs.",
+            ),
+            input_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "source": {
+                        "type": "object",
+                        "oneOf": [
+                            {
+                                "title": "GitHub",
+                                "type": "object",
+                                "properties": {
+                                    "repo": {"type": "string", "description": "GitHub repository (owner/repo)"},
+                                    "ref": {"type": "string", "description": "Git ref (branch/tag/commit), default: main", "default": "main"},
+                                    "path": {"type": "string", "description": "Path within the repo"}
+                                },
+                                "required": ["repo"]
+                            },
+                            {
+                                "title": "URL",
+                                "type": "object",
+                                "properties": {
+                                    "url": {"type": "string", "description": "Direct URL to the skill manifest JSON"}
+                                },
+                                "required": ["url"]
+                            }
+                        ],
+                        "description": "Source of the skill to import"
+                    }
+                },
+                "required": ["source"]
+            })),
+        },
         other => McpTool {
             name: other.to_string(),
             description: Some("Registered MCP tool".to_string()),
@@ -173,6 +227,12 @@ pub fn validate_required_arguments(tool_name: &str, tool_input: &Value) -> Resul
                 .get("pattern")
                 .and_then(|value| value.as_str())
                 .ok_or_else(|| anyhow::anyhow!("search_files requires arguments.pattern"))?;
+        }
+        "github_search_skills" => {
+            tool_input
+                .get("query")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| anyhow::anyhow!("github_search_skills requires arguments.query"))?;
         }
         "workflow_execute" | "workflow_ask" | "workflow_generate" | "skill_creator" => {
             if tool_name.starts_with("workflow") && tool_input.get("task").is_none() {

@@ -1235,10 +1235,10 @@ pub(crate) async fn process_chat_request(
 You have access to {} registered skill(s). Skills are reusable templates that automate common tasks.
 
 ### How to Use Skills
-1. **Discover** — Call `skill-finder(query, top_k)` to search for skills matching the user's intent.
-2. **Evaluate** — Review the returned skill name, description, score, and input_schema.
-3. **Execute** — If a skill matches well (score > 0.6), call it by its name with the required input parameters.
-4. **Create** — If no existing skill fits, propose creating one via `skill-creator(name, description, prompt_template, input_schema)`.
+1. **Discover Local** — Call `skill-finder(query, top_k)` to search LOCAL skills matching the user's intent.
+2. **Search GitHub** — Call `github_search_skills(query, max_results)` to search GitHub for community skills.
+3. **Import** — Once you find a suitable GitHub repo, use `import_skill` with `{{ "source": {{ "kind": "github", "repo": "owner/repo", "ref": "main" }} }}` to install it.
+4. **Create** — If no existing skill fits, create one via `skill-creator(name, description, prompt_template, input_schema)`.
 
 ### Important Rules
 - When multiple skills seem relevant, pick the one with the HIGHEST score.

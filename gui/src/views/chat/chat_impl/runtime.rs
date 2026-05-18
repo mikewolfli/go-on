@@ -236,11 +236,24 @@ impl ChatView {
             let base_url_clone = base_url.clone();
             let conv_id_clone = self.sessions[self.active_session].conversation_id.clone();
             let branch_id_clone = self.sessions[self.active_session].branch_id.clone();
-            let fallback_options = Self::merge_options_with_tracking(
+            let selected_agent_clone = self.selected_agent.trim().to_string();
+            let mut request_options = Self::merge_options_with_tracking(
                 autotune_extra.clone(),
                 conv_id_clone.as_deref(),
                 branch_id_clone.as_deref(),
             );
+            if !selected_agent_clone.is_empty() && model_name != "auto" {
+                if let Some(serde_json::Value::Object(ref mut options_map)) = request_options {
+                    options_map.insert(
+                        "preferred_agent".to_string(),
+                        serde_json::Value::String(selected_agent_clone.clone()),
+                    );
+                } else {
+                    request_options = Some(serde_json::json!({
+                        "preferred_agent": selected_agent_clone,
+                    }));
+                }
+            }
             let active_gen_guard = ActiveGenerationGuard::new(active_gen_count.clone());
             let sc = stream_client.clone();
             let handle = tokio::spawn(async move {
@@ -286,7 +299,7 @@ impl ChatView {
                         });
                     }
 
-                    if let Some(extra) = fallback_options.clone() {
+                    if let Some(extra) = request_options.clone() {
                         if body.get("options").is_none() {
                             body["options"] = serde_json::json!({});
                         }
@@ -411,7 +424,7 @@ impl ChatView {
                                     &mode_clone,
                                     &phase_clone,
                                     Some(&model_clone),
-                                    fallback_options.clone(),
+                                    request_options.clone(),
                                     None, // history not available in this scope
                                 )
                                 .await
@@ -735,7 +748,7 @@ impl ChatView {
                                 &mode_clone,
                                 &phase_clone,
                                 Some(&model_clone),
-                                fallback_options.clone(),
+                                request_options.clone(),
                                 None, // history not available in this scope
                             )
                             .await

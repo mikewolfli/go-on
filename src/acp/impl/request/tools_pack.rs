@@ -1,5 +1,6 @@
 use super::prompts_pack::{build_prompts_get_tool, build_prompts_list_tool};
 use super::*;
+use crate::orchestration::skill_import::{SkillImportPolicy, SkillImportRequest, SkillImportStore};
 
 pub(super) fn skill_import_policy(server: &AcpServer) -> SkillImportPolicy {
     SkillImportPolicy::from_runtime(&server.runtime_config)
@@ -372,6 +373,105 @@ pub(crate) async fn execute_mcp_tool_call(
                 "query": query,
                 "results": results,
                 "total": results.len(),
+            }))
+        }
+        "import_skill" => {
+            let request: SkillImportRequest = serde_json::from_value(arguments.clone())
+                .context("invalid params for import_skill: expected { source: { ... } }")?;
+            let policy = skill_import_policy(server);
+            if !policy.enabled {
+                anyhow::bail!("skill import is disabled by security policy");
+            }
+            let mut store = SkillImportStore::load(policy)?;
+            match store.import_skill(request).await {
+                Ok(record) => {
+                    store.save()?;
+                    Ok(json!({
+                        "ok": true,
+                        "action": "import",
+                        "name": record.name,
+                        "version": record.version,
+                        "description": record.description,
+                        "source": record.source,
+                        "source_ref": record.source_ref,
+                        "enabled": record.enabled,
+                    }))
+                }
+                Err(e) => {
+                    anyhow::bail!("skill import failed: {e}")
+                }
+            }
+        }
+        "github_search_skills" => {
+            let query = arguments
+                .get("query")
+                .and_then(|v| v.as_str())
+                .context("missing required field: query")?;
+            let max_results = arguments
+                .get("max_results")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(10)
+                .min(20)
+                .max(1) as usize;
+
+            // Try GitHub API first, with a short timeout
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .user_agent("go-on/1.0")
+                .build()
+                .context("failed to build HTTP client for GitHub search")?;
+
+            let encoded_query = query.replace(" ", "+");
+
+            // Search GitHub repos with go-on-skill topic
+            let url = format!(
+                "https://api.github.com/search/repositories?q={encoded_query}+topic:go-on-skill&sort=stars&order=desc&per_page={max_results}"
+            );
+
+            let resp = client.get(&url).send().await;
+            let items = match resp {
+                Ok(r) if r.status().is_success() => {
+                    let body: serde_json::Value = r.json().await.unwrap_or_default();
+                    body.get("items")
+                        .and_then(|v| v.as_array())
+                        .cloned()
+                        .unwrap_or_default()
+                }
+                _ => {
+                    // GitHub API rate-limited or unavailable — search via `go-on` topic
+                    // as fallback
+                    let fallback_url = format!(
+                        "https://api.github.com/search/repositories?q={encoded_query}+topic:go-on&sort=stars&order=desc&per_page={max_results}"
+                    );
+                    match client.get(&fallback_url).send().await {
+                        Ok(r) if r.status().is_success() => {
+                            let body: serde_json::Value = r.json().await.unwrap_or_default();
+                            body.get("items")
+                                .and_then(|v| v.as_array())
+                                .cloned()
+                                .unwrap_or_default()
+                        }
+                        _ => Vec::new(),
+                    }
+                }
+            };
+
+            let results: Vec<serde_json::Value> = items.iter().map(|item| {
+                json!({
+                    "repo": item.get("full_name").and_then(|v| v.as_str()).unwrap_or(""),
+                    "description": item.get("description").and_then(|v| v.as_str()).unwrap_or(""),
+                    "stars": item.get("stargazers_count").and_then(|v| v.as_u64()).unwrap_or(0),
+                    "url": item.get("html_url").and_then(|v| v.as_str()).unwrap_or(""),
+                    "language": item.get("language").and_then(|v| v.as_str()).unwrap_or(""),
+                    "topics": item.get("topics").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|t| t.as_str().map(String::from)).collect::<Vec<_>>()).unwrap_or_default(),
+                })
+            }).collect();
+
+            Ok(json!({
+                "ok": true,
+                "query": query,
+                "total": results.len(),
+                "results": results,
             }))
         }
         _ => {

@@ -154,7 +154,9 @@ impl BackendClient {
         {
             Ok(result) => result,
             Err(_elapsed) => {
-                eprintln!("[fetch_models] models.list timed out after 500ms, returning stale cache");
+                eprintln!(
+                    "[fetch_models] models.list timed out after 500ms, returning stale cache"
+                );
                 return stale_cached.unwrap_or_default();
             }
         };
@@ -799,6 +801,18 @@ impl BackendClient {
             "input_schema": schema_value,
         });
         self.rpc_call("skill.create", Some(params)).await
+    }
+
+    /// Import a skill from a remote URL or GitHub repo via the backend's skill.import RPC.
+    /// The backend handles downloading, SHA-256 verification, and manifest validation.
+    ///
+    /// For GitHub repos, use `{"source": {"Github": {"repo": "owner/repo", "ref": "main"}}}`.
+    /// For direct URLs, use `{"source": {"Url": {"url": "https://..."}}}`.
+    pub async fn import_skill(&self, source: serde_json::Value) -> Result<Value, String> {
+        let params = serde_json::json!({
+            "source": source
+        });
+        self.rpc_call("skill.import", Some(params)).await
     }
 
     pub async fn list_skills(&self) -> Result<Value, String> {

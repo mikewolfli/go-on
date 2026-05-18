@@ -833,6 +833,10 @@ maintenance_interval_seconds = 60
 health_interval_seconds = 120
 shutdown_drain_seconds = 30
 sqlite_vacuum_interval_cycles = 60
+skills_import_enabled = true
+skills_allowed_sources = ["github.com/*", "raw.githubusercontent.com/*", "https://*"]
+skills_require_sha256 = false
+skills_allow_floating_ref = true
 acp_http_bind_addr = "{bind_addr}"
 
 [autotune]
@@ -1205,11 +1209,14 @@ impl eframe::App for GoOnApp {
 
         // Setup screen
         if self.show_setup {
-            let done = self.setup_view.show(ctx, &self.i18n, &mut self.config);
+            let done = self
+                .setup_view
+                .show(ctx, &self.i18n, &mut self.config, &self.backend);
             if done {
                 self.show_setup = false;
                 self.has_providers = has_valid_providers(&self.config);
                 save_app_config(&self.config);
+                self.sync_shared_config_if_needed();
                 // Restart backend so it picks up the new API key from env
                 self.restart_backend();
             }
@@ -1586,6 +1593,9 @@ impl eframe::App for GoOnApp {
                             );
                             if changed {
                                 save_app_config(&self.config);
+                                // Sync shared config BEFORE restart so spawn_backend
+                                // uses the updated provider list, not the stale snapshot.
+                                self.sync_shared_config_if_needed();
                                 self.restart_backend();
                             }
                         }
@@ -1759,18 +1769,31 @@ impl GoOnApp {
 impl Drop for GoOnApp {
     fn drop(&mut self) {
         // Abort any in-flight chat generation tasks.
-        // Wrap in catch_unwind so backend child is killed even if stop_sending panics.
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.chat_view.stop_sending();
         }));
 
         if let Some(mut child) = self.backend_child.take() {
             eprintln!("Shutting down go-on backend (PID: {})...", child.id());
+            // Try graceful shutdown first (SIGTERM on Unix)
             let _ = child.kill();
-            // Don't block shutdown on backend process exit
-            std::thread::spawn(move || {
-                let _ = child.wait();
-            });
+            // Wait up to 3 seconds for clean exit, then force kill.
+            let pid = child.id();
+            for _ in 0..30 {
+                match child.try_wait() {
+                    Ok(Some(_)) => {
+                        eprintln!("Backend process {} exited cleanly.", pid);
+                        return;
+                    }
+                    Ok(None) => {}
+                    Err(_) => break,
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            // Force kill if still running
+            eprintln!("Backend {} did not exit gracefully, force killing...", pid);
+            let _ = child.kill();
+            let _ = child.wait();
         }
         self.backend_crash_count = 0;
     }

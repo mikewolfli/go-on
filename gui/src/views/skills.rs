@@ -531,22 +531,8 @@ impl SkillsView {
                             let backend_clone = backend.clone();
                             let ctx_clone = ctx.clone();
                             let url_clone = url.clone();
-                            let fallback_name = i18n.t("skills.import.unnamed").to_string();
-                            let imported_from_tpl =
-                                i18n.t("skills.import.importedFrom").to_string();
-                            let invalid_url = i18n.t("skills.import.invalidUrl").to_string();
-                            let http_client_error =
-                                i18n.t("skills.import.httpClientError").to_string();
-                            let fetch_error = i18n.t("skills.import.fetchError").to_string();
-                            let http_status_error =
-                                i18n.t("skills.import.httpStatusError").to_string();
-                            let invalid_manifest =
-                                i18n.t("skills.import.invalidManifest").to_string();
-                            let missing_prompt_template =
-                                i18n.t("skills.import.missingPromptTemplate").to_string();
-                            let serialize_schema_error =
-                                i18n.t("skills.import.serializeSchemaError").to_string();
                             let rpc_error = i18n.t("skills.error.rpc").to_string();
+                            let invalid_url = i18n.t("skills.import.invalidUrl").to_string();
 
                             tokio::spawn(async move {
                                 let result = async {
@@ -556,97 +542,83 @@ impl SkillsView {
                                         return Err(invalid_url);
                                     }
 
-                                    let http = reqwest::Client::builder()
-                                        .timeout(Duration::from_secs(15))
-                                        .build()
-                                        .map_err(|e| format!("{}: {e}", http_client_error))?;
-
-                                    let resp = http
-                                        .get(&url_clone)
-                                        .send()
-                                        .await
-                                        .map_err(|e| format!("{}: {e}", fetch_error))?;
-                                    let resp = resp
-                                        .error_for_status()
-                                        .map_err(|e| format!("{}: {e}", http_status_error))?;
-                                    let manifest: serde_json::Value = resp
-                                        .json()
-                                        .await
-                                        .map_err(|e| format!("{}: {e}", invalid_manifest))?;
-
-                                    let name = manifest
-                                        .get("name")
-                                        .and_then(serde_json::Value::as_str)
-                                        .or_else(|| {
-                                            url_clone
-                                                .split('/')
-                                                .next_back()
-                                                .filter(|s| !s.is_empty())
+                                    // Determine import source: GitHub repo or direct URL
+                                    let source = if let Some(repo_path) = url_clone
+                                        .strip_prefix("https://github.com/")
+                                        .or_else(|| url_clone.strip_prefix("http://github.com/"))
+                                    {
+                                        // GitHub repo URL: extract owner/repo
+                                        let repo = repo_path
+                                            .trim_start_matches('/')
+                                            .split('/')
+                                            .take(2)
+                                            .collect::<Vec<_>>()
+                                            .join("/");
+                                        let repo = repo.trim_end_matches(".git").to_string();
+                                        serde_json::json!({
+                                            "kind": "github",
+                                            "repo": repo,
+                                            "ref": "main"
                                         })
-                                        .unwrap_or(&fallback_name)
-                                        .to_string();
+                                    } else {
+                                        // Direct URL
+                                        serde_json::json!({
+                                            "kind": "url",
+                                            "url": url_clone
+                                        })
+                                    };
 
-                                    let description = manifest
-                                        .get("description")
-                                        .and_then(serde_json::Value::as_str)
-                                        .map(ToString::to_string)
-                                        .unwrap_or_else(|| {
-                                            imported_from_tpl.replace("{}", &url_clone)
-                                        });
-
-                                    let prompt_template = manifest
-                                        .get("prompt_template")
-                                        .or_else(|| manifest.get("prompt"))
-                                        .and_then(serde_json::Value::as_str)
-                                        .ok_or(missing_prompt_template)?
-                                        .to_string();
-
-                                    let input_schema = manifest
-                                        .get("input_schema")
-                                        .cloned()
-                                        .unwrap_or_else(|| serde_json::json!({"query":"string"}));
-                                    let input_schema_str = serde_json::to_string(&input_schema)
-                                        .map_err(|e| format!("{}: {e}", serialize_schema_error))?;
-
-                                    // Add timeout to prevent hanging
+                                    // Use backend's skill.import RPC (handles GitHub and URLs)
                                     match tokio::time::timeout(
-                                        std::time::Duration::from_secs(15),
-                                        backend_clone.create_skill(
-                                            &name,
-                                            &description,
-                                            &prompt_template,
-                                            &input_schema_str,
-                                        ),
+                                        std::time::Duration::from_secs(30),
+                                        backend_clone.import_skill(source),
                                     )
                                     .await
                                     {
-                                        Ok(result) => {
-                                            result.map_err(|e| format!("{}: {e}", rpc_error))?
+                                        Ok(Ok(result)) => {
+                                            // Prefer 'name' from backend response; fall back
+                                            // to the repo/name portion of the URL for robustness.
+                                            let fallback_name = url_clone
+                                                .trim_end_matches('/')
+                                                .rsplit('/')
+                                                .next()
+                                                .unwrap_or("imported")
+                                                .to_string();
+                                            let name = result
+                                                .get("name")
+                                                .and_then(serde_json::Value::as_str)
+                                                .filter(|s| !s.is_empty())
+                                                .unwrap_or(&fallback_name)
+                                                .to_string();
+                                            let description = result
+                                                .get("description")
+                                                .and_then(serde_json::Value::as_str)
+                                                .unwrap_or("")
+                                                .to_string();
+                                            let version = result
+                                                .get("version")
+                                                .and_then(serde_json::Value::as_str)
+                                                .map(ToString::to_string);
+                                            Ok(SkillRecord {
+                                                name: Some(name),
+                                                description: Some(description),
+                                                version,
+                                                enabled: Some(false),
+                                                imported_at: Some(
+                                                    std::time::SystemTime::now()
+                                                        .duration_since(std::time::UNIX_EPOCH)
+                                                        .unwrap_or_default()
+                                                        .as_secs(),
+                                                ),
+                                            })
+                                        }
+                                        Ok(Err(e)) => {
+                                            Err(format!("{}: {e}", rpc_error))
                                         }
                                         Err(_) => {
-                                            eprintln!(
-                                                "Warning: import skill create_skill timed out"
-                                            );
-                                            return Err(format!("{}: timeout", rpc_error));
+                                            Err(format!("{}: timeout", rpc_error))
                                         }
-                                    };
-
-                                    Ok(SkillRecord {
-                                        name: Some(name),
-                                        description: Some(description),
-                                        version: manifest
-                                            .get("version")
-                                            .and_then(serde_json::Value::as_str)
-                                            .map(ToString::to_string)
-                                            .or_else(|| Some("1".to_string())),
-                                        enabled: Some(true),
-                                        imported_at: Some(
-                                            std::time::SystemTime::now()
-                                                .duration_since(std::time::UNIX_EPOCH)
-                                                .unwrap_or_default()
-                                                .as_secs(),
-                                        ),
-                                    })
+                                    }
                                 }
                                 .await;
 

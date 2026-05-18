@@ -1,5 +1,7 @@
+use crate::backend::BackendClient;
 use crate::config::{save_app_config, AppConfig, ProviderConfig};
 use crate::i18n::I18n;
+use std::sync::mpsc;
 
 fn provider_label(i18n: &I18n, provider: &str) -> String {
     let key = format!("provider.{}", provider.to_lowercase());
@@ -17,21 +19,157 @@ pub struct SetupView {
     selected_model: String,
     error_msg: String,
     success_msg: String,
+    remote_models: std::collections::HashMap<String, Vec<String>>,
+    models_loaded: bool,
+    provider_names: Vec<String>,
+    catalog_loaded: bool,
+    pending_rx: mpsc::Receiver<std::collections::HashMap<String, Vec<String>>>,
+    pending_tx: mpsc::SyncSender<std::collections::HashMap<String, Vec<String>>>,
+    catalog_rx: mpsc::Receiver<Vec<String>>,
+    catalog_tx: mpsc::SyncSender<Vec<String>>,
 }
 
 impl SetupView {
     pub fn new() -> Self {
+        let (pending_tx, pending_rx) = mpsc::sync_channel(1);
+        let (catalog_tx, catalog_rx) = mpsc::sync_channel(1);
         Self {
             selected_provider: "openai".to_string(),
             api_key: String::new(),
             selected_model: "auto".to_string(),
             error_msg: String::new(),
             success_msg: String::new(),
+            remote_models: std::collections::HashMap::new(),
+            models_loaded: false,
+            provider_names: crate::views::providers::PROVIDER_NAMES
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect(),
+            catalog_loaded: false,
+            pending_rx,
+            pending_tx,
+            catalog_rx,
+            catalog_tx,
         }
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, i18n: &I18n, config: &mut AppConfig) -> bool {
+    fn ensure_models_loaded(&mut self, backend: &BackendClient, ctx: &egui::Context) {
+        if self.models_loaded {
+            return;
+        }
+        self.models_loaded = true;
+        let backend_clone = backend.clone();
+        let tx = self.pending_tx.clone();
+        let ctx_clone = ctx.clone();
+        tokio::spawn(async move {
+            let models = match tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                backend_clone.fetch_models(),
+            )
+            .await
+            {
+                Ok(m) => m,
+                Err(_) => std::collections::HashMap::new(),
+            };
+            let _ = tx.try_send(models);
+            ctx_clone.request_repaint();
+        });
+
+        if !self.catalog_loaded {
+            self.catalog_loaded = true;
+            let backend_clone = backend.clone();
+            let tx = self.catalog_tx.clone();
+            let ctx_clone = ctx.clone();
+            tokio::spawn(async move {
+                let names = match tokio::time::timeout(
+                    std::time::Duration::from_secs(3),
+                    backend_clone.provider_catalog(),
+                )
+                .await
+                {
+                    Ok(Ok(value)) => value
+                        .get("catalog")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            let mut names = items
+                                .iter()
+                                .filter_map(|item| {
+                                    item.get("name").and_then(serde_json::Value::as_str)
+                                })
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>();
+                            names.sort();
+                            names.dedup();
+                            names
+                        })
+                        .unwrap_or_default(),
+                    _ => Vec::new(),
+                };
+                let _ = tx.try_send(names);
+                ctx_clone.request_repaint();
+            });
+        }
+    }
+
+    fn available_models_for_selected_provider(&self) -> Vec<String> {
+        let mut models = Vec::<String>::new();
+        models.push("auto".to_string());
+
+        if let Some(remote) = self.remote_models.iter().find_map(|(name, models)| {
+            if name.eq_ignore_ascii_case(&self.selected_provider) {
+                Some(models.clone())
+            } else {
+                None
+            }
+        }) {
+            for model in remote {
+                if !model.trim().is_empty() && model != "auto" {
+                    models.push(model);
+                }
+            }
+        }
+
+        for fallback in crate::views::providers::models_for_provider(&self.selected_provider) {
+            if *fallback != "auto" {
+                models.push((*fallback).to_string());
+            }
+        }
+
+        let mut deduped = Vec::<String>::new();
+        let mut seen = std::collections::HashSet::<String>::new();
+        for model in models {
+            if seen.insert(model.clone()) {
+                deduped.push(model);
+            }
+        }
+        deduped
+    }
+
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        i18n: &I18n,
+        config: &mut AppConfig,
+        backend: &BackendClient,
+    ) -> bool {
         let mut done = false;
+
+        self.ensure_models_loaded(backend, ctx);
+        if let Ok(models) = self.pending_rx.try_recv() {
+            self.remote_models = models;
+        }
+        if let Ok(names) = self.catalog_rx.try_recv() {
+            if !names.is_empty() {
+                self.provider_names = names;
+                if !self
+                    .provider_names
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(&self.selected_provider))
+                {
+                    self.selected_provider = self.provider_names[0].clone();
+                }
+            }
+        }
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical_centered(|ui| {
@@ -52,10 +190,11 @@ impl SetupView {
 
                 ui.horizontal(|ui| {
                     ui.label(i18n.t("setup.provider"));
+                    let provider_options = self.provider_names.clone();
                     egui::ComboBox::from_id_salt("provider_sel")
                         .selected_text(provider_label(i18n, &self.selected_provider))
                         .show_ui(ui, |ui| {
-                            for p in crate::views::providers::PROVIDER_NAMES {
+                            for p in &provider_options {
                                 ui.selectable_value(
                                     &mut self.selected_provider,
                                     p.to_string(),
@@ -82,17 +221,9 @@ impl SetupView {
                     egui::ComboBox::from_id_salt("model_sel")
                         .selected_text(&self.selected_model)
                         .show_ui(ui, |ui| {
-                            // FIXME: This hardcoded model list should be fetched from the
-                            //        backend's provider.catalog endpoint in a future refactor.
-                            let models = [
-                                "auto",
-                                "gpt-4o",
-                                "gpt-4o-mini",
-                                "claude-sonnet-4-20250514",
-                                "deepseek-chat",
-                            ];
-                            for m in &models {
-                                ui.selectable_value(&mut self.selected_model, m.to_string(), *m);
+                            let models = self.available_models_for_selected_provider();
+                            for m in models {
+                                ui.selectable_value(&mut self.selected_model, m.clone(), m);
                             }
                         });
                 });
