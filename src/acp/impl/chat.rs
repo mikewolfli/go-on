@@ -1212,23 +1212,32 @@ pub(crate) async fn process_chat_request(
         }
     };
 
-    // ── P3: System prompt enhancement for skill creation capability ───────
-    // After all context has been merged into messages, inject instructions
-    // about the skill creation system so the AI knows it can autonomously
-    // propose and create reusable skills.
+    // ── Skill system prompt enhancement ────────────────────────────────
+    // Injects instructions about the skill system so the AI can discover,
+    // create, and invoke skills autonomously.
     let agent_messages = {
         if let Ok(registry) = server.skill_registry.lock() {
             let skill_count = registry.list().len();
             let skill_instruction = format!(
-                "\n\n## Skill Creation Capability\n\
-                You have access to a skill system. There are currently {} registered skill(s).\n\
-                When you notice the user repeatedly asking for similar tasks, you can propose creating a reusable skill.\n\
-                To create a skill, call the `skill-creator` tool with: name, description, prompt_template, and input_schema.\n\
-                Skills you create will be available in future conversations.\n\
-                When proposing a new skill, explain what it does and ask for user confirmation before creating it.",
+                r#"
+
+## Skill System
+
+You have access to {} registered skill(s). Skills are reusable templates that automate common tasks.
+
+### How to Use Skills
+1. **Discover** — Call `skill-finder(query, top_k)` to search for skills matching the user's intent.
+2. **Evaluate** — Review the returned skill name, description, score, and input_schema.
+3. **Execute** — If a skill matches well (score > 0.6), call it by its name with the required input parameters.
+4. **Create** — If no existing skill fits, propose creating one via `skill-creator(name, description, prompt_template, input_schema)`.
+
+### Important Rules
+- When multiple skills seem relevant, pick the one with the HIGHEST score.
+- When a user request could match several skills, call `skill-finder` first, then choose the single best match.
+- If the best match has score < 0.4, do NOT use it. Instead, ask the user for clarification or create a new skill.
+- NEVER call multiple skills at once for the same request. Pick one and execute it."#,
                 skill_count
             );
-            // Merge into the system message (first message with role "system")
             merge_context_into_messages(&agent_messages, Some(skill_instruction))
         } else {
             agent_messages
@@ -3033,6 +3042,58 @@ async fn run_agent_collecting(
                 // If the LLM responded with tool calls, execute each
                 // registered skill and append the results to the response.
                 const MAX_TOOL_CALLS_PER_AGENT: usize = 100;
+                // ── Skill dedup: prevent AI from calling multiple skills at once ──
+                // When the LLM tries to invoke several skills for the same request,
+                // pick the single best one automatically. This stops indecisive AI
+                // behavior where multiple nearly-identical skills are invoked together.
+                let tool_calls = {
+                    // Identify which tool calls are skills vs. built-in tools.
+                    // Built-in tools (skill-finder, goon_*, etc.) are excluded
+                    // from the multi-call dedup check.
+                    let is_builtin = |name: &str| -> bool {
+                        name == "skill-finder"
+                            || name == "skill-creator"
+                            || name == "acp_trace_get"
+                            || name == "acp_debug_panel_get"
+                            || name.starts_with("goon_")
+                    };
+                    let skill_names: Vec<&str> = tool_calls
+                        .iter()
+                        .filter(|(name, _)| !is_builtin(name))
+                        .map(|(name, _)| name.as_str())
+                        .collect();
+                    if skill_names.len() > 1 {
+                        // Multiple skills called at once — pick the best one by score.
+                        let best = server.skill_registry.lock().ok().and_then(|registry| {
+                            skill_names
+                                .iter()
+                                .filter_map(|name| {
+                                    let score = registry.score_of(name).unwrap_or(0.5);
+                                    registry.get(name).map(|_| (name.to_string(), score))
+                                })
+                                .max_by(|a, b| {
+                                    a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                                })
+                        });
+                        if let Some((best_name, _)) = best {
+                            warn!(
+                                "skill dedup: AI called {} skills ({}), auto-selecting '{}'",
+                                skill_names.len(),
+                                skill_names.join(", "),
+                                best_name
+                            );
+                            tool_calls
+                                .into_iter()
+                                .filter(|(name, _)| *name == best_name)
+                                .collect::<Vec<_>>()
+                        } else {
+                            tool_calls
+                        }
+                    } else {
+                        tool_calls
+                    }
+                };
+
                 if tool_calls.len() >= MAX_TOOL_CALLS_PER_AGENT {
                     warn!(
                         "run_agent_collecting: tool_calls limit reached ({}), truncating",

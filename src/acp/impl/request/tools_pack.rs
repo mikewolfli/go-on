@@ -85,6 +85,25 @@ pub(super) fn build_mcp_tool_descriptors(server: &AcpServer) -> Vec<Value> {
             "description": "Rollback imported skill to a specified version",
             "input_schema": {"type": "object", "required": ["name", "version"]}
         }),
+        json!({
+            "name": "skill-finder",
+            "description": "Search for registered skills by description or intent. Returns matching skills with their names, descriptions, performance scores, and input schemas. The AI can use this tool to discover which skills are available for a given task before invoking them.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural language description of what the user wants to accomplish"
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "Maximum number of matching skills to return (default 5, max 20)",
+                        "default": 5
+                    }
+                },
+                "required": ["query"]
+            }
+        }),
     ];
 
     let registry = ToolRegistry::new();
@@ -232,7 +251,77 @@ pub(crate) async fn execute_mcp_tool_call(
         "goon_metrics_errors_summary" => Ok(metrics_errors_summary_payload(server, arguments)),
         "goon_skill_update" => skill_update_payload(server, arguments),
         "goon_skill_version_list" => skill_version_list_payload(server, arguments),
-        "goon_skill_version_rollback" => skill_version_rollback_payload(server, arguments),
+        "skill-finder" => {
+            let query = arguments
+                .get("query")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let top_k = arguments
+                .get("top_k")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(5)
+                .min(20) as usize;
+
+            let mut results: Vec<Value> = Vec::new();
+            if let Ok(registry) = server.skill_registry.lock() {
+                for skill in registry.list().iter().take(top_k) {
+                    let score = registry.score_of(&skill.name).unwrap_or(0.5);
+                    // Simple TF-like match: score higher when query tokens appear in
+                    // the skill name or description.
+                    let query_lower = query.to_ascii_lowercase();
+                    let name_lower = skill.name.to_ascii_lowercase();
+                    let desc_lower = skill.description.to_ascii_lowercase();
+                    let match_score = if query_lower.is_empty() {
+                        0.0
+                    } else if name_lower.contains(&query_lower) || desc_lower.contains(&query_lower)
+                    {
+                        // Boost for direct substring matches
+                        (score * 0.7 + 0.3).clamp(0.0, 1.0)
+                    } else {
+                        // Try word-level matching
+                        let query_words: Vec<&str> = query_lower.split_whitespace().collect();
+                        let name_words: Vec<&str> = name_lower.split_whitespace().collect();
+                        let desc_words: Vec<&str> = desc_lower.split_whitespace().collect();
+                        let all_words: Vec<&str> = name_words
+                            .iter()
+                            .chain(desc_words.iter())
+                            .copied()
+                            .collect();
+                        let matches = query_words.iter().filter(|w| all_words.contains(w)).count();
+                        if matches > 0 {
+                            let ratio = matches as f64 / query_words.len() as f64;
+                            (score * 0.5 + ratio * 0.5).clamp(0.0, 1.0)
+                        } else {
+                            score * 0.3 // Low match = low relevance
+                        }
+                    };
+                    results.push(json!({
+                        "name": skill.name,
+                        "description": skill.description,
+                        "score": (match_score * 100.0).round() / 100.0,
+                        "input_schema": skill.input_schema,
+                        "total_calls": skill.total_calls,
+                        "success_calls": skill.success_calls,
+                        "failure_calls": skill.failure_calls,
+                        "average_latency_ms": skill.average_latency_ms,
+                    }));
+                }
+            }
+            // Sort by score descending
+            results.sort_by(|a, b| {
+                b.get("score")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0)
+                    .partial_cmp(&a.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            Ok(json!({
+                "ok": true,
+                "query": query,
+                "results": results,
+                "total": results.len(),
+            }))
+        }
         _ => {
             let registry = ToolRegistry::new();
             if let Some(tool) = registry.get(name) {

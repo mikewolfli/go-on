@@ -151,6 +151,14 @@ description = "Review — code review, quality check, verify correctness"
 agents = []
 fallback = true
 
+# High-risk phases can use multi-agent voting for extra safety.
+# Uncomment the lines below to enable voting for this phase:
+# high_risk_vote_enabled = true
+# high_risk_vote_threshold = 1       # Always trigger voting in review
+# high_risk_vote_min_agents = 2      # At least 2 agents must vote
+# high_risk_vote_max_agents = 4
+# high_risk_escalate_multi_model_enabled = true
+
 [phases.review.options]
 request_timeout_seconds = 120
 review_timeout_policy = "reject"

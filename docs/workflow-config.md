@@ -198,3 +198,149 @@ go-on looks for `config.toml` in this order:
 4. `%APPDATA%/go-on/config.toml` (Windows)
 
 Template files are located in `config/templates/` in the project directory.
+
+---
+
+## 9. High-Risk Multi-Agent Voting
+
+For high-risk phases (e.g., medical, legal, financial, security-critical code),
+go-on supports **multi-agent joint processing** where multiple AI providers
+independently generate responses and vote on the best result.
+
+### How It Works
+
+1. **Risk detection** — The system analyzes the user's message for domain
+   keywords (medical, legal, financial, etc.) and decision keywords
+   (delete, modify, approve, authorize, etc.).
+2. **Multi-agent execution** — When risk exceeds the configured threshold,
+   multiple agents (up to `high_risk_vote_max_agents`) independently
+   generate responses in parallel.
+3. **Voting** — Responses are deduplicated and ranked. The one with the
+   most consensus wins.
+4. **Escalation** — If no clear consensus (tie), additional models can be
+   invoked to break the tie.
+
+### High-Risk Options
+
+These options can be set per-phase or globally via `extra`:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `high_risk_vote_enabled` | bool | `true` | Enable high-risk detection |
+| `high_risk_vote_threshold` | usize | `2` | Risk score threshold to trigger voting (matches keywords) |
+| `high_risk_domain_keywords` | string[] | `["medical","legal","financial",...]` | Domain keywords that increase risk score |
+| `high_risk_decision_keywords` | string[] | `["delete","modify","approve",...]` | Decision keywords that increase risk score |
+| `high_risk_multi_agent_vote_enabled` | bool | `true` | Enable multi-agent voting when high risk |
+| `high_risk_vote_min_agents` | usize | `2` | Minimum agents to vote (clamped 1-6) |
+| `high_risk_vote_max_agents` | usize | `3` | Maximum agents to vote |
+| `high_risk_escalate_multi_model_enabled` | bool | `true` | Enable escalation on tie |
+| `high_risk_escalate_models_per_agent` | usize | `2` | Extra models per agent on escalation |
+| `high_risk_escalate_max_agents` | usize | `3` | Max agents on escalation |
+
+### Example: Multi-Agent Review Phase
+
+```toml
+[phases.review]
+description = "Review — security-critical code review with multi-agent voting"
+agents = []
+fallback = true
+
+[phases.review.options]
+request_timeout_seconds = 180
+review_timeout_seconds = 90
+review_timeout_policy = "reject"
+review_min_response_chars = 12
+cache_enabled = true
+vector_enabled = true
+phase_max_inflight = 16
+global_max_inflight = 128
+high_risk_vote_enabled = true
+high_risk_vote_threshold = 1     # Always trigger voting for review phase
+high_risk_vote_min_agents = 2     # At least 2 agents must vote
+high_risk_vote_max_agents = 4     # Up to 4 agents participate
+high_risk_escalate_multi_model_enabled = true
+```
+
+### Example: Medical/Clinical Question (General Workflow)
+
+```toml
+[phases.executing]
+description = "Executing — generate clinical analysis with multi-agent verification"
+agents = []
+fallback = true
+
+[phases.executing.options]
+request_timeout_seconds = 300
+review_timeout_seconds = 180
+cache_enabled = false          # Disable cache for sensitive data
+vector_enabled = true
+phase_max_inflight = 8
+global_max_inflight = 128
+high_risk_vote_enabled = true
+high_risk_vote_threshold = 2
+high_risk_vote_min_agents = 3  # Three agents for critical decisions
+high_risk_vote_max_agents = 5
+high_risk_escalate_multi_model_enabled = true
+high_risk_escalate_models_per_agent = 3
+```
+
+### Voting Flow
+
+```
+User sends high-risk query
+        │
+        ▼
+┌─────────────────────────────┐
+│  Risk Assessment            │
+│  - Domain keyword check     │
+│  - Decision keyword check   │
+│  - Score ≥ threshold?       │
+└─────────────┬───────────────┘
+              │
+      ┌───────┴───────┐
+      ▼               ▼
+  Low Risk        High Risk
+  (single          │
+   agent)          ▼
+          ┌──────────────────┐
+          │ Multi-Agent Vote  │
+          │ Agent A → resp A  │
+          │ Agent B → resp B  │
+          │ Agent C → resp C  │
+          └────────┬─────────┘
+                   │
+                   ▼
+          ┌──────────────────┐
+          │ Dedup & Rank      │
+          │ - Normalize text  │
+          │ - Count votes     │
+          │ - Pick winner     │
+          └────────┬─────────┘
+                   │
+          ┌────────┴────────┐
+          ▼                 ▼
+      Consensus?         No consensus?
+          │                 │
+          ▼                 ▼
+     Return result    Escalation round
+                      (more models)
+                           │
+                           ▼
+                      Return best result
+```
+
+### Default High-Risk Keywords
+
+**Domain keywords** that trigger risk detection:
+`medical`, `diagnosis`, `clinical`, `prescription`, `treatment`, `surgery`,
+`healthcare`, `legal`, `contract`, `litigation`, `financial`, `investment`,
+`trading`, `compliance`, `security`, `authentication`, `authorization`,
+`encryption`, `infrastructure`, `deployment`, `production`
+
+**Decision keywords** that amplify risk:
+`delete`, `drop`, `remove`, `modify`, `alter`, `override`, `approve`,
+`authorize`, `grant`, `revoke`, `execute`, `deploy`, `release`, `publish`,
+`terminate`, `shutdown`
+
+These defaults can be overridden per-phase via `high_risk_domain_keywords`
+and `high_risk_decision_keywords` options.
