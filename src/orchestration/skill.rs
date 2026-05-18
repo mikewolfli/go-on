@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -35,12 +36,32 @@ pub struct SkillVersionRecord {
     pub timestamp_ms: u64,
 }
 
+/// A serializable snapshot of a prompt-based skill for disk persistence.
+///
+/// This record is written to a JSON file whenever a prompt-based skill
+/// is created or removed, so that skills survive a backend restart.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedPromptSkill {
+    pub name: String,
+    pub description: String,
+    pub prompt_template: String,
+    pub input_schema: HashMap<String, String>,
+    pub created_at: i64,
+}
+
 #[derive(Default)]
 pub struct SkillRegistry {
     skills: HashMap<String, Arc<dyn Skill>>,
     stats: HashMap<String, SkillRuntimeStats>,
     /// Skill evolution history keyed by skill name
     pub evolution_history: HashMap<String, Vec<SkillVersionRecord>>,
+    /// Optional path to persist prompt-based skills to disk.
+    /// When set, skills created via `create_skill_from_prompt` are saved
+    /// automatically and reloaded at startup.
+    persistence_path: Option<PathBuf>,
+    /// Original data for prompt-based skills, keyed by name.
+    /// Used to serialize skills back to disk without downcasting.
+    prompt_skill_data: HashMap<String, SavedPromptSkill>,
 }
 
 impl std::fmt::Debug for SkillRegistry {
@@ -49,6 +70,8 @@ impl std::fmt::Debug for SkillRegistry {
             .field("skills", &self.skills.keys().collect::<Vec<_>>())
             .field("stats", &self.stats)
             .field("evolution_history", &self.evolution_history)
+            .field("persistence_path", &self.persistence_path)
+            .field("prompt_skill_count", &self.prompt_skill_data.len())
             .finish()
     }
 }
@@ -168,6 +191,7 @@ impl SkillRegistry {
         if removed {
             self.stats.remove(name);
             self.evolution_history.remove(name); // Clean up history too
+            self.prompt_skill_data.remove(name);
         }
         removed
     }
@@ -244,6 +268,7 @@ impl SkillRegistry {
     /// Create a new skill from a prompt template.
     ///
     /// Generates a `PromptBasedSkill` that wraps the given prompt into a Skill trait.
+    /// The skill is automatically persisted to disk if `persistence_path` is set.
     pub fn create_skill_from_prompt(
         &mut self,
         name: &str,
@@ -263,12 +288,34 @@ impl SkillRegistry {
             name: name.to_string(),
             description: description.to_string(),
             prompt_template: prompt_template.to_string(),
-            input_schema,
+            input_schema: input_schema.clone(),
             timeout_secs: 120,
             max_retries: 2,
         };
 
         self.register(Arc::new(skill))?;
+
+        // Store original data for disk persistence
+        self.prompt_skill_data.insert(
+            name.to_string(),
+            SavedPromptSkill {
+                name: name.to_string(),
+                description: description.to_string(),
+                prompt_template: prompt_template.to_string(),
+                input_schema,
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64,
+            },
+        );
+
+        // Persist to disk if persistence path is configured
+        if self.persistence_path.is_some() {
+            if let Err(e) = self.save_prompt_skills_to_disk() {
+                tracing::warn!("Failed to persist prompt skills: {}", e);
+            }
+        }
 
         // Record evolution
         self.evolution_history
@@ -374,6 +421,86 @@ impl SkillRegistry {
     /// List all known skill names (for discovery).
     pub fn list_skills(&self) -> Vec<String> {
         self.skills.keys().cloned().collect()
+    }
+
+    // -----------------------------------------------------------------------
+    // Disk persistence for prompt-based skills
+    // -----------------------------------------------------------------------
+
+    /// Set the persistence path for prompt-based skills.
+    /// When set, `create_skill_from_prompt` will automatically persist.
+    pub fn set_persistence_path(&mut self, path: PathBuf) {
+        self.persistence_path = Some(path);
+    }
+
+    /// Load saved prompt skills from disk and register them in the registry.
+    ///
+    /// This is intended to be called once at startup, after setting
+    /// the persistence path. Skills that were previously saved to disk
+    /// (e.g. from `create_skill_from_prompt`) are recreated and registered.
+    pub fn load_prompt_skills_from_disk(&mut self) -> Result<()> {
+        let Some(ref path) = self.persistence_path else {
+            return Ok(());
+        };
+        if !path.exists() {
+            return Ok(());
+        }
+        let content =
+            std::fs::read_to_string(path).with_context(|| "failed to read prompt skills file")?;
+        let saved: Vec<SavedPromptSkill> =
+            serde_json::from_str(&content).context("failed to parse prompt skills file")?;
+        for entry in saved {
+            let name = entry.name.clone();
+            let ps = PromptBasedSkill {
+                name: name.clone(),
+                description: entry.description.clone(),
+                prompt_template: entry.prompt_template.clone(),
+                input_schema: entry.input_schema.clone(),
+                timeout_secs: 120,
+                max_retries: 2,
+            };
+            self.prompt_skill_data.insert(name.clone(), entry);
+            self.skills.insert(name.clone(), Arc::new(ps));
+            self.stats.entry(name).or_default();
+        }
+        Ok(())
+    }
+
+    /// Save all prompt-based skills to disk.
+    ///
+    /// Only skills tracked in `prompt_skill_data` are persisted.
+    /// This includes skills created via `create_skill_from_prompt`
+    /// and SKILL.md imports.
+    pub fn save_prompt_skills_to_disk(&self) -> Result<()> {
+        let Some(ref path) = self.persistence_path else {
+            return Ok(());
+        };
+        let saved: Vec<&SavedPromptSkill> = self.prompt_skill_data.values().collect();
+        if saved.is_empty() {
+            // If the file exists but there are no prompt skills, remove it
+            if path.exists() {
+                let _ = std::fs::remove_file(path);
+            }
+            return Ok(());
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        let content =
+            serde_json::to_string_pretty(&saved).context("failed to serialize prompt skills")?;
+        std::fs::write(path, content)
+            .with_context(|| format!("failed to write {}", path.display()))?;
+        Ok(())
+    }
+
+    /// Remove a prompt-based skill from the registry and persist the change.
+    pub fn remove_prompt_skill(&mut self, name: &str) -> Result<()> {
+        self.skills.remove(name);
+        self.stats.remove(name);
+        self.evolution_history.remove(name);
+        self.prompt_skill_data.remove(name);
+        self.save_prompt_skills_to_disk()
     }
 }
 

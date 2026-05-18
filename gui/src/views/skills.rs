@@ -234,6 +234,8 @@ impl SkillsView {
                             self.import_url.clear();
                             self.show_import = false;
                             self.success = i18n.t("skills.import.success").to_string();
+                            // Refresh the full list from backend to ensure consistency
+                            self.initialized = false;
                         }
                         Err(e) => {
                             self.success.clear();

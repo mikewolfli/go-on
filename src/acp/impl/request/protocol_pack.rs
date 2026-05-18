@@ -447,7 +447,14 @@ pub(super) async fn handle_skill_remove(
     let unregistered = server
         .skill_registry
         .lock()
-        .map(|mut registry| registry.unregister(&name))
+        .map(|mut registry| {
+            let unregistered = registry.unregister(&name);
+            // Persist prompt skill removal to disk
+            if let Err(e) = registry.save_prompt_skills_to_disk() {
+                tracing::warn!("Failed to persist prompt skills after removal: {}", e);
+            }
+            unregistered
+        })
         .unwrap_or(false);
     store.save()?;
     record_skill_admin_audit("remove", &name, true, "removed imported skill record");

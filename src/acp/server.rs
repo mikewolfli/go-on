@@ -503,7 +503,17 @@ impl ServerBuilder {
             self.memory_response_cache.unwrap_or_default(),
         ));
         let memory_store = Arc::new(StdMutex::new(MemoryStore::new(MemoryPolicy::default())));
-        let skill_registry = Arc::new(StdMutex::new(SkillRegistry::default()));
+
+        // Initialize skill registry with disk-persisted prompt-based skills
+        let mut registry = SkillRegistry::default();
+        let prompt_skills_path =
+            std::path::PathBuf::from("./skills-cache").join("prompt_skills.json");
+        registry.set_persistence_path(prompt_skills_path);
+        if let Err(e) = registry.load_prompt_skills_from_disk() {
+            tracing::warn!("Failed to load prompt skills from disk: {}", e);
+        }
+        let skill_registry = Arc::new(StdMutex::new(registry));
+
         let telemetry_runtime = Arc::new(StdMutex::new(TelemetryRuntime::new(
             &RuntimeConfig::default(),
         )));

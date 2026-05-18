@@ -310,7 +310,17 @@ pub fn new_acp_server(
                 failure_prevention: Arc::new(StdMutex::new(failure_prevention_state)),
                 flow_model_selector: Arc::new(StdMutex::new(FlowModelSelector {})),
                 memory_store: Arc::new(StdMutex::new(MemoryStore::new(MemoryPolicy::default()))),
-                skill_registry: Arc::new(StdMutex::new(SkillRegistry::default())),
+                skill_registry: {
+                    let mut registry = SkillRegistry::default();
+                    let prompt_skills_path =
+                        std::path::PathBuf::from(&runtime_config.skills_cache_dir)
+                            .join("prompt_skills.json");
+                    registry.set_persistence_path(prompt_skills_path);
+                    if let Err(e) = registry.load_prompt_skills_from_disk() {
+                        tracing::warn!("Failed to load prompt skills from disk: {}", e);
+                    }
+                    Arc::new(StdMutex::new(registry))
+                },
                 pua_enforcement_plan: Arc::new(StdMutex::new(crate::pua::PuaEnforcementPlan {
                     escalation_level: String::new(),
                     mandatory_roles: Vec::new(),
