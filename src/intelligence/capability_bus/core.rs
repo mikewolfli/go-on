@@ -775,8 +775,10 @@ impl CapabilityBus {
                     ],
                 };
             }
-            _ => {
-                warn!("unknown PolicyVerdict variant in decide(): {:?}", verdict);
+            PolicyVerdict::Allow
+            | PolicyVerdict::Review(_)
+            | PolicyVerdict::AllowWithConstraints(_) => {
+                // Allowed — continue to agent selection.
             }
         }
 
@@ -822,6 +824,11 @@ impl CapabilityBus {
         };
 
         let selected_agent = self.select_best_agent(&candidate_agents, sensing);
+        tracing::info!(
+            candidates = ?candidate_agents,
+            selected = ?selected_agent,
+            "capability_bus agent selection"
+        );
 
         // Step B2: Consult WorkflowRegistry for workflow-based routing metadata
         let workflow_preset = self.workflow_registry.as_ref().and_then(|wr| {
@@ -926,7 +933,9 @@ impl CapabilityBus {
         if candidates.is_empty() {
             return None;
         }
-        // Score each candidate by reputation (higher is better)
+        // Score each candidate by reputation (higher is better).
+        // Default score for unknown agents is 0.5 (neutral trust) rather than
+        // 1.0 (max trust) to avoid favoring untested agents over proven ones.
         let mut scored: Vec<(&String, f64)> = candidates
             .iter()
             .map(|name| {
@@ -935,7 +944,7 @@ impl CapabilityBus {
                     .iter()
                     .find(|r| r.agent == *name)
                     .map(|r| r.score)
-                    .unwrap_or(1.0);
+                    .unwrap_or(0.5);
                 (name, score)
             })
             .collect();

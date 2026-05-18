@@ -74,77 +74,6 @@ fn find_backend_binary() -> Option<std::path::PathBuf> {
     })
 }
 
-/// Double-buffer frame cache: stores the last rendered frame hash for each tab
-/// and the timestamp of last render. If a tab's content hasn't changed since
-/// its last render, we skip re-rendering it and reuse the cached frame.
-struct FrameCache {
-    /// Per-tab frame hash (computed from key state fields)
-    tab_hashes: std::collections::HashMap<String, u64>,
-    /// Last time each tab was fully rendered
-    tab_last_render: std::collections::HashMap<String, Instant>,
-    /// Minimum interval between full re-renders of the same tab (ms)
-    min_render_interval_ms: u64,
-}
-
-impl FrameCache {
-    fn new() -> Self {
-        Self {
-            tab_hashes: std::collections::HashMap::new(),
-            tab_last_render: std::collections::HashMap::new(),
-            min_render_interval_ms: 33, // ~30 FPS max
-        }
-    }
-
-    /// Returns true if the tab should be re-rendered (content changed or
-    /// debounce interval elapsed). Returns false to skip rendering and
-    /// use the cached frame.
-    fn should_render(&mut self, tab: &str, content_hash: u64) -> bool {
-        let now = Instant::now();
-        let min_elapsed = Duration::from_millis(self.min_render_interval_ms);
-
-        // Always render if this is the first frame
-        let last_render = self
-            .tab_last_render
-            .get(tab)
-            .copied()
-            .unwrap_or(Instant::now());
-        let elapsed = now.duration_since(last_render);
-
-        // Skip rendering if not enough time has passed since last render
-        if elapsed < min_elapsed {
-            // But still allow if content hash changed (important update)
-            if let Some(last_hash) = self.tab_hashes.get(tab) {
-                if *last_hash == content_hash {
-                    return false; // Content unchanged + debounce = skip
-                }
-            }
-        }
-
-        // Update tracking
-        self.tab_hashes.insert(tab.to_string(), content_hash);
-        self.tab_last_render.insert(tab.to_string(), now);
-        true
-    }
-
-    /// Compute a content hash for a tab based on key state fields
-    fn compute_hash(config: &AppConfig, tab: &str, has_backend: bool, sending: bool) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        tab.hash(&mut hasher);
-        config.theme.hash(&mut hasher);
-        config.language.hash(&mut hasher);
-        config.backend_url.hash(&mut hasher);
-        has_backend.hash(&mut hasher);
-        sending.hash(&mut hasher);
-        config.features.monitor.hash(&mut hasher);
-        config.features.chat.hash(&mut hasher);
-        config.features.skills.hash(&mut hasher);
-        config.features.workflow.hash(&mut hasher);
-        config.features.providers_ops.hash(&mut hasher);
-        hasher.finish()
-    }
-}
-
 pub struct GoOnApp {
     pub config: AppConfig,
     config_shared: Arc<AppConfig>,
@@ -196,16 +125,6 @@ pub struct GoOnApp {
     backend_crash_count: u8,
     /// Consecutive backend health poll failures for progressive backoff
     consecutive_poll_failures: u8,
-    /// Double-buffer frame cache — tracks per-tab frame hashes to skip
-    /// re-rendering unchanged content and eliminate flicker.
-    frame_cache: FrameCache,
-    /// Back-buffer for double-buffered rendering. When true, we render to
-    /// the back-buffer first, then swap to front on next frame.
-    #[allow(dead_code)]
-    back_buffer_active: bool,
-    /// Force a full re-render of the active tab on next frame (used after
-    /// backend data updates).
-    force_render_pending: bool,
 }
 
 /// Detect system locale from environment variables.
@@ -688,8 +607,9 @@ impl GoOnApp {
             }
         }
 
-        // Single pass: collect both provider TOML blocks and agent names simultaneously.
-        let (provider_lines, agent_names): (Vec<String>, Vec<String>) = config
+        // Single pass: collect provider TOML blocks (agent names are no longer needed
+        // in the config output since phases use empty agent lists for capability-bus routing).
+        let (provider_lines, _agent_names): (Vec<String>, Vec<String>) = config
             .providers
             .iter()
             .filter(|p| {
@@ -797,32 +717,64 @@ api_key_env = "{}"
             String::new()
         } else {
             let agents_toml = provider_lines.join("\n");
-            let agents_list = if agent_names.is_empty() {
-                "[]".to_string()
-            } else {
-                let quoted: Vec<String> =
-                    agent_names.iter().map(|n| format!("\"{}\"", n)).collect();
-                format!("[{}]", quoted.join(", "))
-            };
+            let phases_list = "[\"planning\", \"coding\", \"review\", \"delivery\"]";
             format!(
                 r#"{agents_toml}
 
 [flow]
 name = "go-on-gui"
-phases = ["coding"]
+workflow_type = "dev"
+phases = {phases_list}
+
+[phases.planning]
+description = "Planning — analyze requirements, design solution"
+agents = []
+fallback = true
+
+[phases.planning.options]
+request_timeout_seconds = 120
+review_timeout_seconds = 60
+cache_enabled = true
+vector_enabled = true
+phase_max_inflight = 8
+global_max_inflight = 128
 
 [phases.coding]
-description = "Coding phase with configured providers"
-agents = {agents_list}
+description = "Coding — implement features, write code"
+agents = []
 fallback = true
 
 [phases.coding.options]
 request_timeout_seconds = 300
-review_timeout_seconds = 60
+review_timeout_seconds = 120
 cache_enabled = true
 vector_enabled = true
 phase_max_inflight = 24
 global_max_inflight = 128
+
+[phases.review]
+description = "Review — verify, validate, check quality"
+agents = []
+fallback = true
+
+[phases.review.options]
+request_timeout_seconds = 120
+review_timeout_policy = "reject"
+review_min_response_chars = 12
+cache_enabled = true
+vector_enabled = true
+phase_max_inflight = 16
+global_max_inflight = 128
+
+[phases.delivery]
+description = "Delivery — finalize, summarize, present results"
+agents = []
+fallback = false
+
+[phases.delivery.options]
+request_timeout_seconds = 90
+phase_max_inflight = 8
+global_max_inflight = 64
 "#
             )
         };
@@ -932,6 +884,7 @@ state_path = "acp_autotune_state.json"
 
     /// Detect the localized window title based on the saved config language.
     /// Called once at startup before the I18n instance is created.
+    #[allow(dead_code)]
     pub fn detect_initial_window_title(config: &AppConfig) -> String {
         if config.language == "zh-CN" {
             "Go-On 图形界面".to_string()
@@ -1009,9 +962,6 @@ state_path = "acp_autotune_state.json"
             consecutive_poll_failures: 0,
             blocked_tab_toast_shown: None,
             ui_state,
-            frame_cache: FrameCache::new(),
-            back_buffer_active: false,
-            force_render_pending: true,
         }
     }
 
@@ -1129,10 +1079,9 @@ state_path = "acp_autotune_state.json"
         self.last_backend_ui_commit = Instant::now();
 
         if changed {
-            // Mark that we have pending updates — the next frame will check
-            // the frame cache and re-render only if content actually changed.
-            self.force_render_pending = true;
-            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            // Signal egui that new data arrived; the frame cache in update()
+            // will debounce and skip rendering if content hasn't materially changed.
+            ctx.request_repaint();
         }
     }
 
@@ -1206,37 +1155,22 @@ impl eframe::App for GoOnApp {
         let _frame_start = std::time::Instant::now();
 
         self.sync_shared_config_if_needed();
-
         self.i18n.switch(self.current_lang());
-        // Only apply theme when it actually changes — calling ctx.set_style() every
-        // frame invalidates egui's text cache and forces a full re-layout each frame.
+
+        // ── Frame rate governor ───────────────────────────────────────────
+        // Only apply theme on actual change — ctx.set_style() invalidates
+        // egui's text cache and forces full re-layout.
         if self.last_applied_theme != self.config_shared.theme {
             self.last_applied_theme = self.config_shared.theme.clone();
             let theme = crate::theme::Theme::from_name(&self.config_shared.theme);
             theme.apply(ctx);
         }
-        // ── Double-buffer frame cache ────────────────────────────────────
-        // Compute a content hash for the current tab. If the content hasn't
-        // changed since the last render and we're still within the debounce
-        // interval, skip rendering entirely to eliminate flicker.
-        let has_backend = self.has_providers;
-        let is_sending = self.chat_view.sending;
-        let content_hash =
-            FrameCache::compute_hash(&self.config, &self.active_tab, has_backend, is_sending);
-        let should_render = self.force_render_pending
-            || self
-                .frame_cache
-                .should_render(&self.active_tab, content_hash);
-        self.force_render_pending = false;
 
-        // When using double-buffer mode: if should_render is false, we still
-        // need to emit a minimal frame to keep the window responsive (mouse
-        // cursor, window decorations). We do this by only rendering the
-        // toolbar and skipping the main content area.
-        let render_full = should_render || self.show_setup;
-
-        // No periodic repaint — egui redraws on user interaction automatically.
-        // Async callbacks (health poll, streaming) call ctx.request_repaint() when data arrives.
+        // ── Periodic repaint at ~10 FPS minimum ─────────────────────────
+        // Ensure the UI keeps rendering even when there are no async callbacks
+        // firing. Without this, egui will draw only the initial frame and then
+        // stop (black screen) until something external triggers request_repaint().
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
 
         // Reap zombie child if backend exited
         if let Some(ref mut child) = self.backend_child {
@@ -1499,155 +1433,146 @@ impl eframe::App for GoOnApp {
                 });
         }
 
-        // ── Main content: double-buffered rendering ─────────────────────
-        // When `render_full` is false, the content hash hasn't changed and we
-        // skip re-rendering the main content area. The toolbar and background
-        // are still drawn to keep the window responsive. This eliminates
-        // flicker from unnecessary re-layout of unchanged content.
-        if !render_full {
-            // Emit a minimal CentralPanel to keep egui's layout stable
-            egui::CentralPanel::default().show(ctx, |_| {});
-        } else {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                egui::ScrollArea::vertical()
-                    .id_salt("main_scroll") // Stable ID prevents scroll state reset on tab switches
-                    .show(ui, |ui| {
-                        let has_backend = self.has_providers;
-                        match self.active_tab.as_str() {
-                            "monitor" => {
-                                let mon_alerts = self.config.features.monitor_history_alerts;
-                                self.monitor_view.show(
-                                    ui,
-                                    &self.i18n,
-                                    has_backend,
-                                    &self.backend,
-                                    mon_alerts,
-                                );
-                            }
-                            "chat" => {
-                                let stability = &self.config.ui_stability;
-                                let autotune_chain = self.config.features.autotune_chain_injection;
-                                self.chat_view.show(
-                                    ui,
-                                    &self.i18n,
-                                    &self.backend,
-                                    ctx,
-                                    autotune_chain,
-                                    ChatUiRuntimeConfig {
-                                        repaint_interval_ms: stability.chat_repaint_interval_ms,
-                                        stream_chunk_flush_ms: stability.chat_stream_chunk_flush_ms,
-                                        max_pending_events_per_frame: stability
-                                            .chat_max_pending_events_per_frame,
-                                    },
-                                );
-                            }
-                            "skills" => {
-                                let skills_lifecycle = self.config.features.skills_lifecycle;
-                                self.skills_view.show(
-                                    ui,
-                                    &self.i18n,
-                                    &self.backend,
-                                    ctx,
-                                    skills_lifecycle,
-                                );
-                                if self.ui_state.skills_show_create != self.skills_view.show_create
-                                    || self.ui_state.skills_show_import
-                                        != self.skills_view.show_import
-                                {
-                                    self.ui_state.skills_show_create = self.skills_view.show_create;
-                                    self.ui_state.skills_show_import = self.skills_view.show_import;
-                                    self.ui_state.save();
-                                }
-                            }
-                            "settings" => {
-                                SettingsView::show(ui, &self.i18n, &mut self.config);
-                                if self.config.backend_url != self.backend_url_original {
-                                    ui.add_space(8.0);
-                                    ui.separator();
-                                    ui.add_space(4.0);
-                                    if ui
-                                        .button("🔄 ".to_string() + &self.i18n.t("app.restart"))
-                                        .clicked()
-                                    {
-                                        self.backend_url_original = self.config.backend_url.clone();
-                                        self.restart_backend();
-                                    }
-                                    ui.label(
-                                        egui::RichText::new(self.i18n.t("settings.backendUrlHint"))
-                                            .weak(),
-                                    );
-                                }
-                            }
-                            "workflow" => {
-                                let workflow_run_center = self.config.features.workflow_run_center;
-                                self.workflow_view.show(
-                                    ui,
-                                    &self.i18n,
-                                    ctx,
-                                    &self.backend,
-                                    workflow_run_center,
-                                );
-                                if self.ui_state.workflow_run_status_filter
-                                    != self.workflow_view.run_status_filter
-                                    || self.ui_state.workflow_selected_run_id
-                                        != self.workflow_view.selected_run_id
-                                {
-                                    self.ui_state.workflow_run_status_filter =
-                                        self.workflow_view.run_status_filter.clone();
-                                    self.ui_state.workflow_selected_run_id =
-                                        self.workflow_view.selected_run_id.clone();
-                                    self.ui_state.save();
-                                }
-                            }
-                            "autotune" => self.autotune_view.show(ui, &self.i18n),
-                            "security" => {
-                                self.security_view.show(ui, &self.i18n, &self.backend, ctx)
-                            }
-                            "config" => {
-                                let config_safe_mode = self.config.features.config_safe_mode;
-                                self.config_editor_view.show(
-                                    ui,
-                                    &self.i18n,
-                                    &mut self.config,
-                                    config_safe_mode,
-                                );
-                                if self.config_editor_view.applied {
-                                    self.config_editor_view.applied = false;
-                                    self.chat_view.reset_loaded_state();
-                                    self.restart_backend();
-                                }
-                            }
-                            "providers" => {
-                                let providers_ops_enabled = self.config.features.providers_ops;
-                                let changed = self.providers_view.show(
-                                    ui,
-                                    &self.i18n,
-                                    &mut self.config,
-                                    &self.backend,
-                                    ctx,
-                                    providers_ops_enabled,
-                                );
-                                if changed {
-                                    save_app_config(&self.config);
-                                    self.restart_backend();
-                                }
-                            }
-                            "about" => {
-                                self.about_view.show(
-                                    ui,
-                                    &self.i18n,
-                                    self.monitor_view.health.as_ref(),
-                                    self.backend_child.as_ref().map(std::process::Child::id),
-                                );
-                            }
-                            _ => {
-                                ui.heading(&self.active_tab);
-                                ui.label(self.i18n.t("app.unknownTab"));
+        // ── Main content ────────────────────────────────────────────────
+        // Rendered every frame that passes the incremental renderer gate.
+        // The WGPU back-buffer retains the previous frame when no changes
+        // are needed, so there is no flicker from empty frames.
+        egui::CentralPanel::default().show(ctx, |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("main_scroll") // Stable ID prevents scroll state reset on tab switches
+                .show(ui, |ui| {
+                    let has_backend = self.has_providers;
+                    match self.active_tab.as_str() {
+                        "monitor" => {
+                            let mon_alerts = self.config.features.monitor_history_alerts;
+                            self.monitor_view.show(
+                                ui,
+                                &self.i18n,
+                                has_backend,
+                                &self.backend,
+                                mon_alerts,
+                            );
+                        }
+                        "chat" => {
+                            let stability = &self.config.ui_stability;
+                            let autotune_chain = self.config.features.autotune_chain_injection;
+                            self.chat_view.show(
+                                ui,
+                                &self.i18n,
+                                &self.backend,
+                                ctx,
+                                autotune_chain,
+                                ChatUiRuntimeConfig {
+                                    repaint_interval_ms: stability.chat_repaint_interval_ms,
+                                    stream_chunk_flush_ms: stability.chat_stream_chunk_flush_ms,
+                                    max_pending_events_per_frame: stability
+                                        .chat_max_pending_events_per_frame,
+                                },
+                            );
+                        }
+                        "skills" => {
+                            let skills_lifecycle = self.config.features.skills_lifecycle;
+                            self.skills_view.show(
+                                ui,
+                                &self.i18n,
+                                &self.backend,
+                                ctx,
+                                skills_lifecycle,
+                            );
+                            if self.ui_state.skills_show_create != self.skills_view.show_create
+                                || self.ui_state.skills_show_import != self.skills_view.show_import
+                            {
+                                self.ui_state.skills_show_create = self.skills_view.show_create;
+                                self.ui_state.skills_show_import = self.skills_view.show_import;
+                                self.ui_state.save();
                             }
                         }
-                    });
-            });
-        }
+                        "settings" => {
+                            SettingsView::show(ui, &self.i18n, &mut self.config);
+                            if self.config.backend_url != self.backend_url_original {
+                                ui.add_space(8.0);
+                                ui.separator();
+                                ui.add_space(4.0);
+                                if ui
+                                    .button("🔄 ".to_string() + &self.i18n.t("app.restart"))
+                                    .clicked()
+                                {
+                                    self.backend_url_original = self.config.backend_url.clone();
+                                    self.restart_backend();
+                                }
+                                ui.label(
+                                    egui::RichText::new(self.i18n.t("settings.backendUrlHint"))
+                                        .weak(),
+                                );
+                            }
+                        }
+                        "workflow" => {
+                            let workflow_run_center = self.config.features.workflow_run_center;
+                            self.workflow_view.show(
+                                ui,
+                                &self.i18n,
+                                ctx,
+                                &self.backend,
+                                workflow_run_center,
+                            );
+                            if self.ui_state.workflow_run_status_filter
+                                != self.workflow_view.run_status_filter
+                                || self.ui_state.workflow_selected_run_id
+                                    != self.workflow_view.selected_run_id
+                            {
+                                self.ui_state.workflow_run_status_filter =
+                                    self.workflow_view.run_status_filter.clone();
+                                self.ui_state.workflow_selected_run_id =
+                                    self.workflow_view.selected_run_id.clone();
+                                self.ui_state.save();
+                            }
+                        }
+                        "autotune" => self.autotune_view.show(ui, &self.i18n),
+                        "security" => self.security_view.show(ui, &self.i18n, &self.backend, ctx),
+                        "config" => {
+                            let config_safe_mode = self.config.features.config_safe_mode;
+                            self.config_editor_view.show(
+                                ui,
+                                &self.i18n,
+                                &mut self.config,
+                                config_safe_mode,
+                            );
+                            if self.config_editor_view.applied {
+                                self.config_editor_view.applied = false;
+                                self.chat_view.reset_loaded_state();
+                                self.restart_backend();
+                            }
+                        }
+                        "providers" => {
+                            let providers_ops_enabled = self.config.features.providers_ops;
+                            let changed = self.providers_view.show(
+                                ui,
+                                &self.i18n,
+                                &mut self.config,
+                                &self.backend,
+                                ctx,
+                                providers_ops_enabled,
+                            );
+                            if changed {
+                                save_app_config(&self.config);
+                                self.restart_backend();
+                            }
+                        }
+                        "about" => {
+                            self.about_view.show(
+                                ui,
+                                &self.i18n,
+                                self.monitor_view.health.as_ref(),
+                                self.backend_child.as_ref().map(std::process::Child::id),
+                            );
+                        }
+                        _ => {
+                            ui.heading(&self.active_tab);
+                            ui.label(self.i18n.t("app.unknownTab"));
+                        }
+                    }
+                });
+        });
 
         // Frame timing diagnostics — rate limited to at most once per second
         let frame_elapsed = _frame_start.elapsed();

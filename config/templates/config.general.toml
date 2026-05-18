@@ -1,0 +1,186 @@
+# ============================================================
+# go-on General Workflow Config Template
+#   Workflow type: "general" — for general-purpose Q&A,
+#   analysis, research, document processing, and tasks
+#   that do NOT involve software development.
+#
+#   How to use:
+#     1. Copy to config.toml
+#     2. Add your AI provider API keys
+#     3. Run: go-on --config config.toml
+# ============================================================
+
+# ── General workflow starts in the "gathering" phase.
+#     The capability bus routes each subtask to the best-suited
+#     agent registered below.
+default_phase = "gathering"
+model_selection_mode = "adaptive"
+
+[protocol]
+# "acp_http" for HTTP API, "acp_stdio" for stdin/stdout (IDE integration)
+mode = "acp_http"
+
+# ── Cache ─────────────────────────────────────────────────────────────
+[cache]
+enabled = true
+path = "acp_cache.sqlite3"
+default_ttl_seconds = 3600
+max_entries = 5000
+
+# ── Vector Store (semantic memory) ────────────────────────────────────
+[vector]
+enabled = true
+auto_mode = true
+path = "acp_vector.sqlite3"
+dimensions = 192
+min_query_chars = 80
+top_k = 2
+min_similarity = 0.82
+max_snippet_chars = 800
+max_entries = 10000
+summary_enabled = true
+summary_trigger_messages = 8
+summary_max_chars = 1200
+
+# ── Runtime ───────────────────────────────────────────────────────────
+[runtime]
+acp_http_bind_addr = "127.0.0.1:8090"
+maintenance_interval_seconds = 60
+health_interval_seconds = 120
+shutdown_drain_seconds = 30
+sqlite_vacuum_interval_cycles = 60
+production_strict = false
+i18n_enabled = true
+i18n_default_language = "en_US"
+skills_enabled = true
+skills_cache_dir = "skills_cache"
+governance_enabled = true
+governance_policy_mode = "advisory"
+
+# ── AI Providers (agents) ─────────────────────────────────────────────
+# Add your API keys here. The capability bus will automatically select
+# the best provider for each task based on reputation and capability.
+#
+# IMPORTANT: agents are NOT bound to specific phases — they are registered
+# globally and the system's CapabilityBus routes tasks dynamically.
+#
+[agents]
+
+# Example: OpenAI
+# [agents.openai]
+# type = "openai"
+# api_key_env = "OPENAI_API_KEY"
+# model = "gpt-4o"
+# supports_system = true
+
+# Example: Anthropic Claude
+# [agents.anthropic]
+# type = "claude"
+# api_key_env = "ANTHROPIC_API_KEY"
+# model = "claude-sonnet-4-20250514"
+# supports_system = true
+
+# Example: DeepSeek
+# [agents.deepseek]
+# type = "deepseek"
+# api_key_env = "DEEPSEEK_API_KEY"
+# model = "deepseek-chat"
+# supports_system = true
+
+# Example: Gemini
+# [agents.gemini]
+# type = "gemini"
+# api_key_env = "GEMINI_API_KEY"
+# model = "gemini-2.5-flash"
+
+# Example: Compatible provider (SiliconFlow, Groq, etc.)
+# [agents.siliconflow]
+# type = "openai_compatible"
+# url = "https://api.siliconflow.cn/v1"
+# api_key_env = "SILICONFLOW_API_KEY"
+# model = "deepseek-ai/DeepSeek-V3.2"
+# supports_system = true
+
+# ── Flow Configuration ────────────────────────────────────────────────
+# The "general" workflow has 5 phases:
+#   gathering  → collect requirements, ask clarifying questions
+#   thinking   → analyze, reason, plan
+#   executing  → generate output (text, analysis, reports)
+#   validating → verify quality, check facts
+#   closing    → summarize, deliver final result
+#
+# Phase agents are LEFT EMPTY — the system's CapabilityBus will
+# dynamically select the best provider for each phase based on the
+# task context and provider capabilities.
+[flow]
+name = "General Purpose"
+workflow_type = "general"
+phases = ["gathering", "thinking", "executing", "validating", "closing"]
+
+# ── Phase Definitions ─────────────────────────────────────────────────
+# Each phase has an empty agent list, meaning the CapabilityBus
+# dynamically routes tasks to the best agent. Do NOT hardcode
+# agent names here — let the bus handle selection.
+
+[phases.gathering]
+description = "Gathering — collect requirements, understand context"
+agents = []
+fallback = true
+
+[phases.gathering.options]
+request_timeout_seconds = 120
+review_timeout_seconds = 60
+cache_enabled = true
+vector_enabled = true
+phase_max_inflight = 8
+global_max_inflight = 128
+
+[phases.thinking]
+description = "Thinking — analyze, reason, research"
+agents = []
+fallback = true
+
+[phases.thinking.options]
+request_timeout_seconds = 180
+review_timeout_seconds = 90
+cache_enabled = true
+vector_enabled = true
+phase_max_inflight = 8
+global_max_inflight = 128
+
+[phases.executing]
+description = "Executing — generate output, produce results"
+agents = []
+fallback = true
+
+[phases.executing.options]
+request_timeout_seconds = 300
+review_timeout_seconds = 120
+cache_enabled = true
+vector_enabled = true
+phase_max_inflight = 24
+global_max_inflight = 128
+
+[phases.validating]
+description = "Validating — verify, fact-check, review quality"
+agents = []
+fallback = true
+
+[phases.validating.options]
+request_timeout_seconds = 120
+review_timeout_policy = "reject"
+review_min_response_chars = 12
+cache_enabled = true
+vector_enabled = true
+phase_max_inflight = 16
+global_max_inflight = 128
+
+[phases.closing]
+description = "Closing — summarize, deliver final result"
+agents = []
+fallback = false
+
+[phases.closing.options]
+request_timeout_seconds = 90
+phase_max_inflight = 8
+global_max_inflight = 64

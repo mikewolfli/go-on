@@ -10,9 +10,10 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use tracing::warn;
 
 use crate::agent::{Agent, AgentRegistry};
-use crate::config::{AppConfig, PhaseConfig, PhaseOptions, WorkflowType};
+use crate::config::{AppConfig, PhaseConfig, PhaseOptions};
 use crate::error::ProxyError;
 use crate::pua::merge_phase_principles;
 
@@ -117,20 +118,9 @@ impl FlowManager {
             .or(requested_phase)
             .unwrap_or_else(|| self.config.default_phase.clone());
 
-        let workflow_type = self.config.flow.workflow_type.clone();
-
-        // S16 free mode guard: unknown phase should silently fall back to default
-        if workflow_type == WorkflowType::Free
-            && !self
-                .config
-                .flow
-                .phases
-                .iter()
-                .any(|name| name == &phase_name)
-        {
-            phase_name = self.config.default_phase.clone();
-        }
-
+        // Unknown phase: silently fall back to the configured default phase.
+        // This prevents errors when a GUI session has a stale phase value
+        // (e.g. "act" from an older config) that no longer exists in [flow].phases.
         if !self
             .config
             .flow
@@ -138,7 +128,12 @@ impl FlowManager {
             .iter()
             .any(|name| name == &phase_name)
         {
-            return Err(ProxyError::PhaseNotFound(phase_name).into());
+            let fallback = self.config.default_phase.clone();
+            warn!(
+                "phase '{}' not in [flow].phases ({:?}), falling back to default '{}'",
+                phase_name, self.config.flow.phases, fallback
+            );
+            phase_name = fallback;
         }
 
         let phase_cfg = self
@@ -357,17 +352,22 @@ mod tests {
     }
 
     #[test]
-    fn resolve_unknown_phase_fails() {
+    fn resolve_unknown_phase_falls_back_to_default() {
         let config = Arc::new(build_test_config(Some(true)));
         let registry = make_registry(Arc::clone(&config));
         let flow = FlowManager::new(Arc::clone(&config), None);
 
+        // Unknown phase should fall back to default instead of error.
         let result = flow.resolve(Some("delivery".to_string()), &registry);
-        assert!(result.is_err(), "unknown phase must fail");
-        let err_text = result.err().expect("error must exist").to_string();
         assert!(
-            err_text.contains("phase not found: delivery"),
-            "unexpected error: {err_text}"
+            result.is_ok(),
+            "unknown phase should fall back to default, got: {:?}",
+            result.err()
+        );
+        let routing = result.unwrap();
+        assert_eq!(
+            routing.phase.phase_name, "coding",
+            "should fall back to default phase 'coding'"
         );
     }
 

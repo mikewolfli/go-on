@@ -1580,7 +1580,11 @@ pub(super) async fn handle_governance_status(
         crate::config::WorkflowType::Dev => 4,
         crate::config::WorkflowType::General => 5,
         crate::config::WorkflowType::Free => 0,
-        crate::config::WorkflowType::Custom | crate::config::WorkflowType::Auto => app_config
+        crate::config::WorkflowType::Auto => app_config
+            .as_ref()
+            .map(|cfg| cfg.flow.phases.len())
+            .unwrap_or(4),
+        crate::config::WorkflowType::Custom => app_config
             .as_ref()
             .map(|cfg| cfg.flow.phases.len())
             .unwrap_or(0),
@@ -1589,10 +1593,15 @@ pub(super) async fn handle_governance_status(
         crate::config::WorkflowType::Dev => "coding".to_string(),
         crate::config::WorkflowType::General => "executing".to_string(),
         crate::config::WorkflowType::Free => String::new(),
-        crate::config::WorkflowType::Custom | crate::config::WorkflowType::Auto => app_config
+        crate::config::WorkflowType::Auto => app_config
             .as_ref()
             .and_then(|cfg| cfg.effective_default_phase())
             .unwrap_or("coding")
+            .to_string(),
+        crate::config::WorkflowType::Custom => app_config
+            .as_ref()
+            .and_then(|cfg| cfg.effective_default_phase())
+            .unwrap_or("executing")
             .to_string(),
     };
     let compliance_config = app_config

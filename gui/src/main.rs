@@ -21,7 +21,6 @@ fn font_cache_path() -> Option<std::path::PathBuf> {
 
 fn read_cached_font_path() -> Option<String> {
     let path = font_cache_path()?;
-    // Limit font cache read to 4KB to prevent OOM on corrupted/malicious files
     let metadata = std::fs::metadata(&path).ok()?;
     if metadata.len() > 4096 {
         eprintln!(
@@ -49,36 +48,58 @@ fn write_cached_font_path(path: &str) {
     let _ = std::fs::write(cache_path, path);
 }
 
+/// Returns `true` if the file at `path` has a `.ttc` extension.
+/// TTC (TrueType Collection) files contain multiple fonts in one container
+/// and are NOT supported by egui::FontData. Loading them corrupts the atlas.
+fn is_ttc(path: &str) -> bool {
+    path.ends_with(".ttc") || path.ends_with(".TTC")
+}
+
+/// Load a CJK font into egui's FontDefinitions, trying known system paths.
+///
+/// Skips `.ttc` files because egui::FontData does not handle multi-font
+/// containers — loading a TTC corrupts the font atlas (black screen).
 fn load_cjk_font(fonts: &mut egui::FontDefinitions) -> bool {
-    // Try common Chinese fonts on Linux and macOS, plus user-installed paths
     let home_dir = std::env::var("HOME")
         .ok()
         .or_else(|| std::env::var("USERPROFILE").ok())
         .unwrap_or_default();
+
+    // Known CJK font paths across Linux, macOS, and Windows.
+    // IMPORTANT: .ttc paths are kept for cross-platform coverage but are
+    // SKIPPED at load time if a .ttf/.otf alternative is found first.
+    // On some systems (e.g. macOS) all CJK fonts are .ttc — those systems
+    // will fall through to the user font directory search below.
     let cjk_fonts = [
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        // ── Linux (TTF/OTF — safe) ──
         "/usr/share/fonts/opentype/noto/NotoSansCJKSC-Regular.otf",
         "/usr/share/fonts/truetype/noto/NotoSansCJKsc-Regular.otf",
         "/usr/share/fonts/opentype/wqy-microhei/WenQuanYiMicroHei.ttf",
-        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
         "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-        "/System/Library/Fonts/PingFang.ttc",
-        "/System/Library/Fonts/STHeiti Light.ttc",
+        // ── macOS (TTF — safe) ──
         "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
-        "C:\\Windows\\Fonts\\msyh.ttc",
-        "C:\\Windows\\Fonts\\simsun.ttc",
+        // ── Linux (TTC — fallback, may be skipped) ──
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
         "/usr/local/share/fonts/noto/NotoSansCJK-Regular.ttc",
         "/usr/local/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        // ── macOS (TTC — fallback) ──
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/STHeiti Light.ttc",
+        // ── Windows (TTC — fallback) ──
+        "C:\\Windows\\Fonts\\msyh.ttc",
+        "C:\\Windows\\Fonts\\simsun.ttc",
     ];
-
-    // Also check user home directory font paths
     let user_fonts: Vec<String> = if !home_dir.is_empty() {
         vec![
+            // TTF/OTF user fonts first (safe)
+            format!("{home_dir}/.fonts/WenQuanYiMicroHei.ttf"),
+            format!("{home_dir}/.fonts/NotoSansCJKSC-Regular.otf"),
+            // TTC user fonts (fallback, may be skipped)
             format!("{home_dir}/.fonts/NotoSansCJK-Regular.ttc"),
             format!("{home_dir}/.fonts/wqy-microhei.ttc"),
-            format!("{home_dir}/.fonts/WenQuanYiMicroHei.ttf"),
             format!("{home_dir}/.local/share/fonts/NotoSansCJK-Regular.ttc"),
             format!("{home_dir}/.local/share/fonts/wqy-microhei.ttc"),
         ]
@@ -89,53 +110,102 @@ fn load_cjk_font(fonts: &mut egui::FontDefinitions) -> bool {
     let mut cjk_found = false;
     let mut loaded_font_path: Option<String> = None;
 
-    // Helper: load a single font file into the egui font definitions
-    let load_font = |fonts: &mut egui::FontDefinitions, path: &str| -> bool {
-        if let Ok(font_data) = std::fs::read(path) {
-            fonts.font_data.insert(
-                "cjk".to_owned(),
-                std::sync::Arc::new(egui::FontData::from_owned(font_data)),
-            );
-            if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-                family.insert(0, "cjk".to_owned());
-            }
-            if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
-                family.insert(0, "cjk".to_owned());
-            }
-            true
-        } else {
-            false
+    // Helper: attempt to load a font from `path`. Returns true on success.
+    // Silently skips TTC files (egui does not support multi-font containers).
+    let try_load = |fonts: &mut egui::FontDefinitions, path: &str| -> bool {
+        if is_ttc(path) {
+            return false;
         }
+        let font_data = match std::fs::read(path) {
+            Ok(d) => d,
+            Err(_) => return false,
+        };
+        fonts.font_data.insert(
+            "cjk".to_owned(),
+            std::sync::Arc::new(egui::FontData::from_owned(font_data)),
+        );
+        if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+            family.insert(0, "cjk".to_owned());
+        }
+        if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+            family.insert(0, "cjk".to_owned());
+        }
+        true
     };
 
-    // First, try the cached path from previous successful startup.
+    // 1. Try cached font path first
     if let Some(cached_path) = read_cached_font_path() {
-        if std::path::Path::new(&cached_path).exists() && load_font(fonts, &cached_path) {
+        if std::path::Path::new(&cached_path).exists() && try_load(fonts, &cached_path) {
             cjk_found = true;
             loaded_font_path = Some(cached_path.clone());
             eprintln!("Loaded CJK font from cache: {}", cached_path);
         }
     }
 
-    // Check system font paths first (cached list)
+    // 2. Try system paths
     if !cjk_found {
         for path in &cjk_fonts {
-            if load_font(fonts, path) {
+            if try_load(fonts, path) {
                 cjk_found = true;
                 loaded_font_path = Some((*path).to_string());
-                eprintln!("Loaded CJK font from: {}", path);
                 break;
             }
         }
     }
-    // Then check user font paths if system fonts not found
+
+    // 3. Try user font directories
     if !cjk_found {
         for path in &user_fonts {
-            if load_font(fonts, path) {
+            if try_load(fonts, path) {
                 cjk_found = true;
                 loaded_font_path = Some(path.clone());
-                eprintln!("Loaded CJK font from user dir: {}", path);
                 break;
+            }
+        }
+    }
+
+    // 4. If no CJK font found yet, try scanning common system font directories
+    //    for any .ttf/.otf file that looks like a CJK font.
+    if !cjk_found {
+        let search_dirs = [
+            "/usr/share/fonts",
+            "/usr/local/share/fonts",
+            "/System/Library/Fonts",
+        ];
+        for dir in &search_dirs {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let path_str = path.to_string_lossy();
+                    if is_ttc(&path_str) {
+                        continue;
+                    }
+                    // Check if filename suggests CJK
+                    let name = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    if name.contains("cjk")
+                        || name.contains("chinese")
+                        || name.contains("han")
+                        || name.contains("noto")
+                        || name.contains("wqy")
+                        || name.contains("wenquan")
+                        || name.contains("droid")
+                        || name.contains("fallback")
+                        || name.contains("arialuni")
+                    {
+                        if try_load(fonts, &path_str) {
+                            cjk_found = true;
+                            loaded_font_path = Some(path_str.to_string());
+                            break;
+                        }
+                    }
+                }
+                if cjk_found {
+                    break;
+                }
             }
         }
     }
@@ -143,127 +213,57 @@ fn load_cjk_font(fonts: &mut egui::FontDefinitions) -> bool {
     if let Some(path) = loaded_font_path {
         write_cached_font_path(&path);
     }
-
     cjk_found
 }
 
-/// Auto-detect common VPN proxy ports and set HTTPS_PROXY if found.
-/// Works on Linux, macOS, and Windows — covers ClashX, v2ray/Xray, SS/SSR, Surge, Quantumult, etc.
-/// This allows the app to access GitHub through the user's VPN without manual config.
-///
-/// # Safety
-///
-/// This function uses `std::env::set_var()` which is documented as **undefined behavior**
-/// in multi-threaded contexts. The backend provides a thread-safe alternative:
-/// [`set_secret_override`](crate::shared::secret_override::set_secret_override).
-/// However, this function runs **before any threads are spawned** (called from `main()`
-/// before `eframe::run_native`), so there is exactly one thread at this point.
-/// The HTTPS_PROXY env var must be set as a real environment variable for `reqwest` to
-/// pick it up automatically (the override map is only consulted by `get_secret()` calls
-/// within go-on's own code). If the override map were used here, `reqwest`'s proxy resolution
-/// would not see it, defeating the purpose.
-///
-/// For these two reasons — single-threaded context and the need for a real env var visible
-/// to external libraries — `set_var()` is sound here.
 fn auto_detect_proxy() {
     if std::env::var("HTTPS_PROXY").is_ok() || std::env::var("https_proxy").is_ok() {
-        return; // User already configured a proxy
+        return;
     }
-
-    // Cross-platform common proxy ports (Linux, macOS, Windows)
-    let common_proxies: &[&str] = &[
-        // ── ViewTurbo (all platforms) ──
+    let proxies: &[&str] = &[
         "http://127.0.0.1:15732",
-        // ── Clash / Clash Meta (all platforms) ──
         "http://127.0.0.1:7890",
-        "socks5://127.0.0.1:7890",
-        // ── ClashX / ClashX Pro (macOS) ──
         "http://127.0.0.1:25519",
-        // ── clash-verge / Clash Nyanpasu (all platforms) ──
-        "http://127.0.0.1:33210",
-        // ── v2ray / Xray (all platforms) ──
         "http://127.0.0.1:10809",
-        "socks5://127.0.0.1:10808",
-        "http://127.0.0.1:10808",
-        // ── V2RayU (macOS) ──
-        "http://127.0.0.1:2080",
-        // ── Qv2ray (all platforms) ──
-        "http://127.0.0.1:11223",
-        // ── SS / SSR (all platforms) ──
+        "http://127.0.0.1:10809",
         "http://127.0.0.1:1087",
-        "socks5://127.0.0.1:1086",
-        // ── Standard HTTP/SOCKS proxy ──
         "http://127.0.0.1:1080",
-        "socks5://127.0.0.1:1080",
-        // ── Surge (macOS) ──
-        "http://127.0.0.1:6152",
-        // ── Quantumult X (macOS) ──
-        "http://127.0.0.1:1082",
-        // ── Stash (macOS) ──
-        "http://127.0.0.1:9090",
-        // ── Sing-box (all platforms) ──
-        "http://127.0.0.1:11451",
-        // ── Hiddify (all platforms) ──
-        "http://127.0.0.1:9876",
-        // ── Nekoray / Nekobox (all platforms) ──
-        "http://127.0.0.1:10811",
-        // ── Trojan (all platforms) ──
-        "http://127.0.0.1:1081",
-        // ── Windows VPN apps ──
-        "http://127.0.0.1:51080", // SSTap
-        "http://127.0.0.1:11280", // Netch
-        "http://127.0.0.1:28080", // WinXray
-        "http://127.0.0.1:38443", // Proxifier
-        "http://127.0.0.1:8222",  // ProxyCap
     ];
-
-    for proxy_url in common_proxies {
-        // Extract host:port from URL
+    for proxy_url in proxies {
         let addr = proxy_url
             .trim_start_matches("http://")
-            .trim_start_matches("https://")
-            .trim_start_matches("socks5://")
-            .trim_start_matches("socks4://");
+            .trim_start_matches("socks5://");
         if let Some(port_str) = addr.split(':').nth(1) {
             if let Ok(port) = port_str.parse::<u16>() {
-                let socket_addr = match format!("127.0.0.1:{port}").parse() {
-                    Ok(addr) => addr,
-                    Err(_) => continue,
-                };
-                // Quick TCP connect to see if anything is listening
-                if std::net::TcpStream::connect_timeout(
-                    &socket_addr,
-                    std::time::Duration::from_millis(100),
-                )
-                .is_ok()
-                {
-                    // SAFETY: single-threaded context (called before any threads are spawned
-                    // in main()) and we need real env vars for reqwest's proxy resolution.
-                    // See the doc comment on `auto_detect_proxy` for full rationale.
-                    std::env::set_var("HTTPS_PROXY", proxy_url);
-                    std::env::set_var("https_proxy", proxy_url);
-                    eprintln!("auto_detect_proxy: found proxy at {proxy_url}, set HTTPS_PROXY.");
-                    return;
+                if let Ok(socket_addr) = format!("127.0.0.1:{port}").parse() {
+                    if std::net::TcpStream::connect_timeout(
+                        &socket_addr,
+                        std::time::Duration::from_millis(100),
+                    )
+                    .is_ok()
+                    {
+                        std::env::set_var("HTTPS_PROXY", proxy_url);
+                        std::env::set_var("https_proxy", proxy_url);
+                        eprintln!(
+                            "auto_detect_proxy: found proxy at {proxy_url}, set HTTPS_PROXY."
+                        );
+                        return;
+                    }
                 }
             }
         }
     }
 }
 
-/// Generate a simple 64×64 RGBA icon programmatically:
-/// blue circle with "GO" letters in the center
 fn make_icon() -> egui::IconData {
-    let w: u32 = 64;
-    let h: u32 = 64;
+    let (w, h) = (64u32, 64u32);
     let cx = w as f32 / 2.0;
     let cy = h as f32 / 2.0;
     let r = cx - 2.0;
     let mut rgba = Vec::with_capacity((w * h * 4) as usize);
     for y in 0..h {
         for x in 0..w {
-            let dx = x as f32 - cx;
-            let dy = y as f32 - cy;
-            let dist = (dx * dx + dy * dy).sqrt();
+            let dist = ((x as f32 - cx).powi(2) + (y as f32 - cy).powi(2)).sqrt();
             if dist < r - 1.0 {
                 rgba.extend_from_slice(&[32, 120, 220, 255]);
             } else if dist < r + 1.0 {
@@ -298,7 +298,6 @@ fn load_embedded_icon() -> Option<egui::IconData> {
         height,
     })
 }
-
 #[cfg(not(has_app_icon))]
 fn load_embedded_icon() -> Option<egui::IconData> {
     None
@@ -306,11 +305,8 @@ fn load_embedded_icon() -> Option<egui::IconData> {
 
 #[tokio::main]
 async fn main() -> eframe::Result<()> {
-    // Auto-detect VPN proxy so reqwest can reach GitHub for Copilot auth
     auto_detect_proxy();
-
     let icon = load_embedded_icon().unwrap_or_else(make_icon);
-    // Load config to detect language for localized window title
     let config = crate::config::load_app_config();
     let title = app::GoOnApp::detect_initial_window_title(&config);
     let options = eframe::NativeOptions {
@@ -319,45 +315,28 @@ async fn main() -> eframe::Result<()> {
             .with_inner_size([1200.0, 800.0])
             .with_min_inner_size([640.0, 480.0])
             .with_icon(icon),
-        // Explicitly keep vsync on to avoid tearing/jitter on most desktops.
         vsync: true,
-        // Pin renderer choice to avoid backend switching differences across environments.
-        renderer: eframe::Renderer::default(),
+        // Explicitly use glow (OpenGL) backend for Linux compatibility
+        renderer: eframe::Renderer::Glow,
         ..Default::default()
     };
-
-    match eframe::run_native(
+    let result = eframe::run_native(
         "Go-On GUI",
         options,
         Box::new(|cc| {
-            // Load Chinese-capable font for CJK text rendering
             let mut fonts = egui::FontDefinitions::default();
             if !load_cjk_font(&mut fonts) {
-                eprintln!(
-                    "WARNING: No CJK font found! Chinese/Japanese/Korean text may show as boxes.\n"
-                );
-                eprintln!("  Install a CJK font such as noto-fonts-cjk or wqy-microhei:");
-                eprintln!("    Debian/Ubuntu: sudo apt install fonts-noto-cjk");
-                eprintln!("    Fedora:         sudo dnf install google-noto-cjk-fonts");
-                eprintln!("    Arch:           sudo pacman -S noto-fonts-cjk");
-                eprintln!("    macOS:          Already bundled with the system.");
-                eprintln!();
-                eprintln!("  Or place a .ttf/.ttc file in ~/.fonts/ or /usr/local/share/fonts/");
+                eprintln!("WARNING: No CJK font found! Text may show as boxes.");
             }
             cc.egui_ctx.set_fonts(fonts);
             Ok(Box::new(GoOnApp::new(config)))
         }),
-    ) {
+    );
+    match result {
         Ok(_) => Ok(()),
         Err(e) => {
-            eprintln!("FATAL: Failed to start GUI: {}", e);
-            eprintln!();
-            eprintln!("Troubleshooting:");
-            eprintln!("  - Ensure a display server is running (X11/Wayland on Linux)");
-            eprintln!("  - On macOS, run from the .app bundle, not a symlink");
-            eprintln!("  - On Windows, ensure DirectX or Vulkan drivers are installed");
-            eprintln!("  - Try setting WINIT_UNIX_BACKEND=x11 on Wayland");
-            Err(Into::into(e))
+            eprintln!("FATAL: GUI error: {e}");
+            Err(e)
         }
     }
 }

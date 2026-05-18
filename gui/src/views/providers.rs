@@ -541,7 +541,7 @@ impl ProvidersView {
                 if let Err(e) = tx.try_send(msg) {
                     eprintln!("WARN: providers try_send failed: {:?}", e);
                 }
-                ctx_clone.request_repaint_after(Duration::from_millis(16));
+                ctx_clone.request_repaint();
             });
         }
     }
@@ -763,7 +763,7 @@ impl ProvidersView {
                                             }
                                         }
                                     }
-                                    ctx_clone.request_repaint_after(Duration::from_millis(16));
+                                    ctx_clone.request_repaint();
                                 });
                             }
 
@@ -1002,7 +1002,7 @@ impl ProvidersView {
                                             if let Err(e) = tx.try_send(msg) {
                                                 eprintln!("WARN: providers try_send failed: {:?}", e);
                                             }
-                                            ctx_clone.request_repaint_after(Duration::from_millis(16));
+                                            ctx_clone.request_repaint();
                                         });
                                     }
                                 } else {
@@ -1073,7 +1073,7 @@ impl ProvidersView {
                                         if let Err(e) = tx.try_send(msg) {
                                             eprintln!("WARN: providers try_send failed: {:?}", e);
                                         }
-                                        ctx_clone.request_repaint_after(Duration::from_millis(16));
+                                        ctx_clone.request_repaint();
                                     });
                                 }
                             }
@@ -1182,7 +1182,7 @@ impl ProvidersView {
                                                     if let Err(e) = tx_push.try_send(String::new()) {
                                                         eprintln!("WARN: providers try_send failed: {:?}", e);
                                                     }
-                                                    ctx_push.request_repaint_after(Duration::from_millis(16));
+                                                    ctx_push.request_repaint();
                                                 });
                                             }
                                         }
@@ -1308,7 +1308,7 @@ impl ProvidersView {
                                                 if let Err(e) = tx.try_send(msg) {
                                                     eprintln!("WARN: providers try_send failed: {:?}", e);
                                                 }
-                                                ctx_clone.request_repaint_after(Duration::from_millis(16));
+                                                ctx_clone.request_repaint();
                                             });
                                         }
                                     }
@@ -1393,7 +1393,7 @@ impl ProvidersView {
                                     if let Err(e) = tx.try_send(msg) {
                                         eprintln!("WARN: providers try_send failed: {:?}", e);
                                     }
-                                    ctx_clone.request_repaint_after(Duration::from_millis(16));
+                                    ctx_clone.request_repaint();
                                 });
                             }
                             if ops_enabled
@@ -1449,7 +1449,7 @@ impl ProvidersView {
                                     if let Err(e) = tx.try_send(msg) {
                                         eprintln!("WARN: providers try_send failed: {:?}", e);
                                     }
-                                    ctx_clone.request_repaint_after(Duration::from_millis(16));
+                                    ctx_clone.request_repaint();
                                 });
                             }
                             if ops_enabled
@@ -1512,7 +1512,7 @@ impl ProvidersView {
                                     if let Err(e) = tx.try_send(msg) {
                                         eprintln!("WARN: providers try_send failed: {:?}", e);
                                     }
-                                    ctx_clone.request_repaint_after(Duration::from_millis(16));
+                                    ctx_clone.request_repaint();
                                 });
                             }
                             if ops_enabled
@@ -1570,7 +1570,7 @@ impl ProvidersView {
                                     if let Err(e) = tx.try_send(msg) {
                                         eprintln!("WARN: providers try_send failed: {:?}", e);
                                     }
-                                    ctx_clone.request_repaint_after(Duration::from_millis(16));
+                                    ctx_clone.request_repaint();
                                 });
                             }
                             let delete_label = if self.pending_delete_confirmation == Some(idx) {
@@ -1675,7 +1675,7 @@ impl ProvidersView {
                         if let Err(e) = tx.try_send("Config reloaded for copilot.".to_string()) {
                             eprintln!("WARN: providers try_send failed: {:?}", e);
                         }
-                        ctx_clone.request_repaint_after(Duration::from_millis(16));
+                        ctx_clone.request_repaint();
                     });
                 }
 
@@ -1750,7 +1750,7 @@ impl ProvidersView {
                                     }
                                 }
                             }
-                            ctx_clone.request_repaint_after(Duration::from_millis(16));
+                            ctx_clone.request_repaint();
                         });
                     } else if !self.copilot_poll_repaint_requested {
                         // Schedule repaint for the exact moment the next poll is due.

@@ -2090,7 +2090,17 @@ impl AppConfig {
                     Some(self.default_phase.as_str())
                 }
             }
-            WorkflowType::Auto | WorkflowType::Dev => {
+            WorkflowType::Dev => {
+                // Development workflow always starts in a coding-oriented phase.
+                if self.default_phase.trim().is_empty() {
+                    Some("coding")
+                } else {
+                    Some(self.default_phase.as_str())
+                }
+            }
+            WorkflowType::Auto => {
+                // Auto-detected workflow: use configured default or fall back
+                // to "coding" (the most common entry point).
                 if self.default_phase.trim().is_empty() {
                     Some("coding")
                 } else {
@@ -2536,6 +2546,7 @@ pub fn default_non_ai_config_toml() -> String {
         "",
         "[flow]",
         "name = \"Autopilot Adaptive\"",
+        "workflow_type = \"auto\"",
         "phases = [\"planning\", \"coding\", \"review\", \"delivery\"]",
         "",
         "[phases.planning]",

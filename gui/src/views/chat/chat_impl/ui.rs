@@ -253,7 +253,7 @@ impl ChatView {
                             if let Err(e) = tx.try_send(PendingResponse::Phases(list)) {
                                 eprintln!("WARN: chat ui try_send failed: {:?}", e);
                             }
-                            ctx_clone.request_repaint_after(std::time::Duration::from_millis(16));
+                            ctx_clone.request_repaint();
                         }
                     }
                     _ => {
@@ -285,11 +285,11 @@ impl ChatView {
                         if let Err(e) = tx.try_send(PendingResponse::Models(models)) {
                             eprintln!("WARN: chat ui try_send failed: {:?}", e);
                         }
-                        ctx_clone.request_repaint_after(std::time::Duration::from_millis(16));
+                        ctx_clone.request_repaint();
                     }
                     Err(_) => {
                         eprintln!("Warning: Failed to load models from backend (timeout)");
-                        ctx_clone.request_repaint_after(std::time::Duration::from_millis(3000));
+                        ctx_clone.request_repaint();
                     }
                 }
             });

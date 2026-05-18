@@ -178,7 +178,7 @@ impl MonitorView {
                                 send_with_retry(&tx, "__metrics_error__:timeout".to_string());
                             }
                         }
-                        ctx_clone.request_repaint_after(Duration::from_millis(16));
+                        ctx_clone.request_repaint();
                     });
                 }
 
@@ -305,7 +305,7 @@ impl MonitorView {
                                     if !payload.1.is_empty() {
                                         send_with_retry(&tx, payload.1);
                                     }
-                                    ctx_clone.request_repaint_after(Duration::from_millis(16));
+                                    ctx_clone.request_repaint();
                                 });
                             }
                             if ui
@@ -353,7 +353,7 @@ impl MonitorView {
                                     if !payload.1.is_empty() {
                                         send_with_retry(&tx, payload.1);
                                     }
-                                    ctx_clone.request_repaint_after(Duration::from_millis(16));
+                                    ctx_clone.request_repaint();
                                 });
                             }
                         });

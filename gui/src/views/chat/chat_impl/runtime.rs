@@ -594,9 +594,10 @@ impl ChatView {
                                             .await;
                                         }
                                     }
-                                    "result" => {
+                                    "result" | "done" => {
                                         final_content = data
                                             .get("response")
+                                            .or_else(|| data.get("content"))
                                             .and_then(|v| v.as_str())
                                             .map(ToOwned::to_owned);
                                         final_thinking = data

@@ -157,7 +157,7 @@ impl SkillsView {
                         &tx,
                         SkillsUpdate::List(Vec::new(), Some(format!("{}: timeout", fetch_failed))),
                     );
-                    ctx_clone.request_repaint_after(Duration::from_millis(16));
+                    ctx_clone.request_repaint();
                     return;
                 }
             };
@@ -177,7 +177,7 @@ impl SkillsView {
                     );
                 }
             }
-            ctx_clone.request_repaint_after(Duration::from_millis(16));
+            ctx_clone.request_repaint();
         });
     }
 
@@ -475,7 +475,7 @@ impl SkillsView {
                                     SkillsUpdate::Create(Err(format!("{}: {}", rpc_error, e)))
                                 }
                             });
-                            ctx_clone.request_repaint_after(Duration::from_millis(16));
+                            ctx_clone.request_repaint();
                         });
                     }
                 }
@@ -651,7 +651,7 @@ impl SkillsView {
                                 .await;
 
                                 send_update(&tx, SkillsUpdate::Import(result));
-                                ctx_clone.request_repaint_after(Duration::from_millis(16));
+                                ctx_clone.request_repaint();
                             });
                         }
                     }
@@ -770,7 +770,7 @@ impl SkillsView {
                                         }
                                     }
                                 }
-                                ctx_clone.request_repaint_after(Duration::from_millis(16));
+                                ctx_clone.request_repaint();
                             });
                         }
                     });
@@ -900,7 +900,7 @@ impl SkillsView {
                                     text: msg,
                                     is_error,
                                 });
-                                ctx_clone.request_repaint_after(Duration::from_millis(16));
+                                ctx_clone.request_repaint();
                             });
                         }
                         if ui.button(i18n.t("skills.lifecycle.delete")).clicked()
@@ -939,7 +939,7 @@ impl SkillsView {
                                     text: msg,
                                     is_error,
                                 });
-                                ctx_clone.request_repaint_after(Duration::from_millis(16));
+                                ctx_clone.request_repaint();
                             });
                         }
                         if ui.button(i18n.t("skills.lifecycle.versions")).clicked()
@@ -1025,7 +1025,7 @@ impl SkillsView {
                                         });
                                     }
                                 }
-                                ctx_clone.request_repaint_after(Duration::from_millis(16));
+                                ctx_clone.request_repaint();
                             });
                         }
                     });
@@ -1124,7 +1124,7 @@ impl SkillsView {
                                     text: msg,
                                     is_error,
                                 });
-                                ctx_clone.request_repaint_after(Duration::from_millis(16));
+                                ctx_clone.request_repaint();
                         });
                     }
 
@@ -1181,7 +1181,7 @@ impl SkillsView {
                             text: msg,
                             is_error,
                         });
-                        ctx_clone.request_repaint_after(Duration::from_millis(16));
+                        ctx_clone.request_repaint();
                     });
                 }
 
@@ -1275,7 +1275,7 @@ impl SkillsView {
                                 text: msg,
                                 is_error,
                             });
-                            ctx_clone.request_repaint_after(Duration::from_millis(16));
+                            ctx_clone.request_repaint();
                         });
                     }
                 });

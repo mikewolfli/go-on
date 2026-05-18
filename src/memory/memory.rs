@@ -83,7 +83,48 @@ impl MemoryStore {
         }
     }
 
+    /// Get the maximum number of entries allowed for a given memory class.
+    fn class_max_size(&self, class: &MemoryClass) -> usize {
+        match class {
+            MemoryClass::Transient => self.policy.transient_max_size,
+            MemoryClass::Episodic => self.policy.episodic_max_size,
+            MemoryClass::Semantic => self.policy.semantic_max_size,
+            MemoryClass::ProjectState => self.policy.project_state_max_size,
+            MemoryClass::Observation => self.policy.observation_max_size,
+        }
+    }
+
+    /// Store a memory entry, enforcing per-class capacity limits.
+    ///
+    /// If the class already has `max_size` entries, the oldest entry
+    /// (by timestamp) is evicted to make room for the new one.
     pub fn store(&mut self, entry: MemoryEntry) {
+        let class = entry.class.clone();
+        let max_size = self.class_max_size(&class);
+
+        // If an entry with the same id already exists, update it without eviction.
+        if self.entries.contains_key(&entry.id) {
+            self.entries.insert(entry.id.clone(), entry);
+            return;
+        }
+
+        // Count existing entries of this class.
+        let class_count = self.entries.values().filter(|e| e.class == class).count();
+
+        if class_count >= max_size {
+            // Evict the oldest entry of this class.
+            let oldest_id: Option<String> = self
+                .entries
+                .values()
+                .filter(|e| e.class == class)
+                .min_by(|a, b| a.timestamp.cmp(&b.timestamp))
+                .map(|e| e.id.clone());
+
+            if let Some(id) = oldest_id {
+                self.entries.remove(&id);
+            }
+        }
+
         self.entries.insert(entry.id.clone(), entry);
     }
 
@@ -96,8 +137,37 @@ impl MemoryStore {
             .collect()
     }
 
+    /// Run garbage collection: remove entries that fail `should_retain`.
     pub fn gc(&mut self) {
         self.entries.retain(|_, e| self.policy.should_retain(e));
+    }
+
+    /// Enforce capacity limits across all classes after bulk operations.
+    /// Evicts the oldest entries per class that exceed their max_size.
+    pub fn enforce_capacity(&mut self) {
+        let classes = [
+            MemoryClass::Transient,
+            MemoryClass::Episodic,
+            MemoryClass::Semantic,
+            MemoryClass::ProjectState,
+            MemoryClass::Observation,
+        ];
+        for class in classes {
+            let max_size = self.class_max_size(&class);
+            // Collect ids sorted by timestamp (oldest first).
+            let mut entries: Vec<(String, String)> = self
+                .entries
+                .iter()
+                .filter(|(_, e)| e.class == class)
+                .map(|(id, e)| (id.clone(), e.timestamp.clone()))
+                .collect();
+            entries.sort_by(|a, b| a.1.cmp(&b.1));
+            if entries.len() > max_size {
+                for (id, _) in entries.iter().take(entries.len() - max_size) {
+                    self.entries.remove(id);
+                }
+            }
+        }
     }
 
     /// Promote high-usefulness entries up one memory class level.

@@ -359,11 +359,16 @@ impl ChatView {
         // Load persistent UI state before constructing ChatView
         let ui_state = GlobalUiState::load();
 
-        // Use saved mode if non-empty (overrides session default)
-        let saved_mode = if !ui_state.selected_mode.is_empty() {
+        // Final mode: persisted ui_state > session default > "ask"
+        let valid_modes = ["ask", "plan", "edit", "safeguard", "full_auto"];
+        let saved_mode = if !ui_state.selected_mode.is_empty()
+            && valid_modes.contains(&ui_state.selected_mode.as_str())
+        {
             ui_state.selected_mode.clone()
-        } else {
+        } else if valid_modes.contains(&initial_mode.as_str()) {
             initial_mode
+        } else {
+            "ask".to_string()
         };
 
         // Deserialize model_stats from saved JSON if present
@@ -677,14 +682,14 @@ impl ChatView {
                 // Adjust show_thinking_idx if it points at or after the removed message
                 if self.show_thinking_idx == Some(idx) {
                     self.show_thinking_idx = None;
-                } else if self.show_thinking_idx.map_or(false, |i| i > idx) {
+                } else if self.show_thinking_idx.is_some_and(|i| i > idx) {
                     self.show_thinking_idx = Some(self.show_thinking_idx.unwrap() - 1);
                 }
                 // Adjust edit_msg_idx similarly
                 if self.edit_msg_idx == Some(idx) {
                     self.edit_msg_idx = None;
                     self.edit_msg_buf.clear();
-                } else if self.edit_msg_idx.map_or(false, |i| i > idx) {
+                } else if self.edit_msg_idx.is_some_and(|i| i > idx) {
                     self.edit_msg_idx = Some(self.edit_msg_idx.unwrap() - 1);
                 }
             }

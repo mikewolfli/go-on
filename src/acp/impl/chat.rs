@@ -992,7 +992,14 @@ pub(crate) async fn process_chat_request(
         }
 
         if let Some(ref agent) = decision.selected_agent {
-            // Move the CapabilityBus-recommended agent to the front of the list
+            // Prune to only the capability-bus-recommended agent.
+            // SAFETY: retain before reorder — if the agent is not in the list
+            // we fall through to the phase-level agents unchanged.
+            if resolved.agents.iter().any(|(name, _)| name == agent) {
+                resolved.agents.retain(|(name, _)| name == agent);
+            }
+            // reorder is now redundant since retain already reduced to one,
+            // but kept for clarity in case retain logic changes in future.
             let _ = reorder_agents_with_priority(&mut resolved.agents, agent);
         }
         // Record the routing decision as an observable event
@@ -1342,7 +1349,8 @@ pub(crate) async fn process_chat_request(
                     let total_chars = response_text.chars().count();
                     emit_stream_chunk(server, Some(observer), meta, &response_text, 1, total_chars)
                         .await?;
-                    emit_stream_done(server, Some(observer), meta, 1, total_chars, 0u64).await?;
+                    emit_stream_done(server, Some(observer), meta, 1, total_chars, 0u64, None)
+                        .await?;
                 }
 
                 agent_attempts.push(json!({
@@ -1970,7 +1978,16 @@ pub(crate) async fn process_chat_request(
             };
             let total_chars = response_text.chars().count();
             emit_stream_chunk(server, Some(observer), meta, &response_text, 1, total_chars).await?;
-            emit_stream_done(server, Some(observer), meta, 1, total_chars, 0u64).await?;
+            emit_stream_done(
+                server,
+                Some(observer),
+                meta,
+                1,
+                total_chars,
+                0u64,
+                selected_model_name.clone(),
+            )
+            .await?;
         }
     }
 
@@ -3009,6 +3026,7 @@ async fn run_agent_collecting(
                     chunk_index,
                     total_chars,
                     stream_started.elapsed().as_millis() as u64,
+                    selected_model.clone(),
                 )
                 .await?;
                 // ── Execute tool calls ────────────────────────────────
@@ -3167,6 +3185,9 @@ async fn emit_stream_done(
     chunk_index: usize,
     total_chars: usize,
     duration_ms: u64,
+    // Actual model name reported by the agent (e.g. "gemini-2.5-pro" for copilot).
+    // Passed through to SSE payload so the GUI can display it.
+    selected_model: Option<String>,
 ) -> Result<()> {
     let Some(observer) = observer else {
         return Ok(());
@@ -3193,18 +3214,24 @@ async fn emit_stream_done(
 
     if let Some(sender) = &observer.sse_sender {
         // NOTE: This SSE frame structure should match helpers/metrics::stream_done_notification
+        let mut payload = json!({
+            "agent": meta.agent_name,
+            "chunks": chunk_index,
+            "done": true,
+            "duration_ms": duration_ms,
+            "phase": meta.phase_name,
+            "total_chars": total_chars,
+            "trace_id": meta.trace_id,
+        });
+        if let Some(ref m) = selected_model {
+            if let Some(obj) = payload.as_object_mut() {
+                obj.insert("selected_model".to_string(), json!(m));
+            }
+        }
         let _ = sender
             .send(StreamFrame {
                 event: STREAM_EVENT_DONE.to_string(),
-                payload: json!({
-                    "agent": meta.agent_name,
-                    "chunks": chunk_index,
-                    "done": true,
-                    "duration_ms": duration_ms,
-                    "phase": meta.phase_name,
-                    "total_chars": total_chars,
-                    "trace_id": meta.trace_id,
-                }),
+                payload,
             })
             .await;
     }
