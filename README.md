@@ -87,9 +87,9 @@ The `profile-multi-users-server` adds full multi-user security across both ACP+H
 
 | Profile | `cargo check` | `cargo clippy -D warnings` | `cargo test` |
 |---------|:-----------:|:------------------------:|:----------:|
-| **profile-local** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **991 passed** |
-| **profile-simple-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **991 passed** |
-| **profile-multi-users-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **991 passed** |
+| **profile-local** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **999 passed** |
+| **profile-simple-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **999 passed** |
+| **profile-multi-users-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **999 passed** |
 
 ### CI Gate Status (GitHub Actions)
 | Step | Result |
@@ -97,7 +97,7 @@ The `profile-multi-users-server` adds full multi-user security across both ACP+H
 | `cargo check --all-targets` | ✅ 0 errors, 0 warnings |
 | `cargo clippy -D warnings` (3 profiles) | ✅ 0 errors each |
 | Unit tests (816) | ✅ All passed |
-| Integration tests (175) | ✅ All passed |
+| Integration tests (183) | ✅ All passed |
 | GUI EGUI compile + test | ✅ 0 errors |
 | VS Code addon compile + lint + contract | ✅ 0 errors |
 
@@ -116,11 +116,16 @@ Cross-platform (Windows, Linux, macOS):
 - 0 `panic!()` / `todo!()` / `unimplemented!()` in production code ✅
 - 0 `unwrap()` / `.expect()` in production code ✅
 - 37 `.expect("lock poisoned")` calls replaced with poison recovery ✅
+- All `lock().ok()?` replaced with explicit poison recovery + `tracing::error!` ✅
+- `ScheduledTask` `Ord`/`Eq` consistency fixed for `BinaryHeap` contract compliance ✅
 - All internal channels bounded (`mpsc::sync_channel`) — no unbounded memory growth ✅
+- SSE parser capped at 1MB/line and 4MB/event to prevent OOM ✅
 - Chat sessions capped at 1000 messages — automatic oldest-message eviction ✅
 - Backend: auto-restart on crash with exponential backoff (3→96s) ✅
 - Optional rule file warnings downgraded from WARN to DEBUG — no log noise ✅
 - 3 build profiles (local, simple-server, multi-users-server) all at 0 warnings ✅
+- `production_strict` mode enforces tenant budget limits (non-strict warns only) ✅
+- `LockGuard` pattern (`unwrap_or_else(poison)` with recovery) across all subsystems ✅
 
 ## Repository Layout
 
@@ -172,6 +177,7 @@ Cross-platform (Windows, Linux, macOS):
 ### Configuration & Scripts
 - `config/` — Configuration files (`config.toml`, `config.production.toml`)
   Provider specs are hardcoded in `built_in_provider_specs()` within `src/core/config.rs` and `src/core/setup.rs`.
+  `provider.catalog` RPC exposes all provider metadata at runtime for GUI and VS Code extension.
 - `scripts/` — Quality/release gate scripts and deployment utilities
   - `scripts/deploy/nginx/` — Ingress and TLS reverse-proxy templates
 

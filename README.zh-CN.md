@@ -85,9 +85,9 @@ cargo run --manifest-path gui/Cargo.toml
 
 | 配置文件 | `cargo check` | `cargo clippy -D warnings` | `cargo test` |
 |---------|:-----------:|:------------------------:|:----------:|
-| **profile-local** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **991 通过** |
-| **profile-simple-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **991 通过** |
-| **profile-multi-users-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **991 通过** |
+| **profile-local** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **999 通过** |
+| **profile-simple-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **999 通过** |
+| **profile-multi-users-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **999 通过** |
 
 ### CI 门禁状态（GitHub Actions）
 | 步骤 | 结果 |
@@ -95,7 +95,7 @@ cargo run --manifest-path gui/Cargo.toml
 | `cargo check --all-targets` | ✅ 0 errors, 0 warnings |
 | `cargo clippy -D warnings`（3 个配置文件） | ✅ 全部 0 errors |
 | 单元测试（816） | ✅ 全部通过 |
-| 集成测试（175） | ✅ 全部通过 |
+| 集成测试（183） | ✅ 全部通过 |
 | GUI EGUI 编译 + 测试 | ✅ 0 errors |
 | VS Code 插件编译 + 代码检查 + 合约测试 | ✅ 0 errors |
 
@@ -114,11 +114,16 @@ cargo run --manifest-path gui/Cargo.toml
 - 生产代码中 0 个 `panic!()` / `todo!()` / `unimplemented!()` ✅
 - 生产代码中 0 个 `unwrap()` / `.expect()` ✅
 - 37 个 `.expect("lock poisoned")` 调用已替换为中毒恢复 ✅
+- 所有 `lock().ok()?` 替换为显式中毒恢复 + `tracing::error!` ✅
+- `ScheduledTask` `Ord`/`Eq` 一致性修复，满足 `BinaryHeap` 契约 ✅
 - 所有内部通道已绑定（`mpsc::sync_channel`）— 无内存无限制增长 ✅
+- SSE 解析器限制为 1MB/行 和 4MB/事件，防止 OOM ✅
 - 对话会话上限 1000 条消息 — 自动淘汰最旧消息 ✅
 - 后端：崩溃后自动重启（指数退避 3→96 秒）✅
 - 可选规则文件降级为 DEBUG 级别 — 无日志噪音 ✅
 - 3 个构建配置文件（local/simple-server/multi-users-server）均为 0 warnings ✅
+- `production_strict` 模式强制执行租户预算限制（非严格模式仅警告）✅
+- `LockGuard` 模式（`unwrap_or_else(poison)` 带恢复）覆盖全子系统 ✅
 
 ## 仓库结构
 
@@ -170,6 +175,7 @@ cargo run --manifest-path gui/Cargo.toml
 ### 配置与脚本
 - `config/` — 配置文件（`config.toml`、`config.production.toml`）
   Provider 规格说明硬编码在 `src/core/config.rs` 和 `src/core/setup.rs` 的 `built_in_provider_specs()` 函数中。
+  `provider.catalog` RPC 在运行时暴露所有 provider 元数据供 GUI 和 VS Code 扩展查询。
 - `scripts/` — 质量门禁、发布门禁脚本与部署工具
   - `scripts/deploy/nginx/` — 入口网关与 TLS 反向代理模板
 
