@@ -32,7 +32,9 @@ fn normalize_mcp_method(method: &str) -> String {
     }
     match method {
         "initialize" => "mcp.initialize".to_string(),
-        "notifications/initialized" | "notifications_initialized" => "mcp.initialize".to_string(),
+        "notifications/initialized" | "notifications_initialized" => {
+            "mcp.notifications_initialized".to_string()
+        }
         "ping" => "mcp.ping".to_string(),
         _ if method.starts_with("tools/") => format!("mcp.tools.{}", &method[6..]),
         _ if method.starts_with("resources/") => format!("mcp.resources.{}", &method[10..]),
@@ -444,6 +446,10 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             match method.as_ref() {
                 "initialize" => protocol_pack::handle_initialize(server, request_id).await,
                 "mcp.initialize" => protocol_pack::handle_mcp_initialize(server, request_id).await,
+                "mcp.notifications_initialized" => {
+                    // MCP notification — no response expected per JSON-RPC spec
+                    Ok(())
+                }
                 "mcp.tools.list" => protocol_pack::handle_mcp_tools_list(server, request_id).await,
                 "mcp.tools.call" => {
                     protocol_pack::handle_mcp_tools_call(

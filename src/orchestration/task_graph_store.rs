@@ -253,7 +253,7 @@ impl TaskGraphStore {
                 retries: 0,
             };
             graph.add_node(node);
-            graph.add_edge(root_id.clone(), node_id);
+            let _ = graph.add_edge(root_id.clone(), node_id);
         }
 
         Ok(Some(graph))
@@ -482,7 +482,7 @@ impl TaskGraphStore {
                 retries: 0,
             };
             graph.add_node(node);
-            graph.add_edge(root_id.clone(), node_id);
+            let _ = graph.add_edge(root_id.clone(), node_id);
         }
 
         Ok(Some(graph))
@@ -528,7 +528,7 @@ mod tests {
             retries: 0,
         };
         graph.add_node(child);
-        graph.add_edge("root".to_string(), "child-1".to_string());
+        let _ = graph.add_edge("root".to_string(), "child-1".to_string());
 
         (graph_id, graph)
     }

@@ -135,14 +135,20 @@ pub enum GateCondition {
 impl GateCondition {
     /// Evaluate this condition against the given `GateContext`.
     /// Returns `true` when the condition is satisfied (gate should pass).
+    ///
+    /// If `ctx` has `max_input_tokens` or `max_output_tokens` set (Some),
+    /// those override the hardcoded gate thresholds. This allows per-request
+    /// or per-model token budget overrides.
     pub fn evaluate(&self, ctx: &GateContext) -> bool {
         match self {
             GateCondition::TokenBudget {
                 max_input,
                 max_output,
             } => {
-                ctx.estimated_input_tokens <= *max_input
-                    && ctx.estimated_output_tokens <= *max_output
+                let effective_max_input = ctx.max_input_tokens.unwrap_or(*max_input);
+                let effective_max_output = ctx.max_output_tokens.unwrap_or(*max_output);
+                ctx.estimated_input_tokens <= effective_max_input
+                    && ctx.estimated_output_tokens <= effective_max_output
             }
             GateCondition::CacheAvailable => ctx.has_cache_hit,
             GateCondition::LowComplexity { max_keywords } => ctx.keywords.len() <= *max_keywords,
@@ -501,6 +507,8 @@ mod tests {
         let ctx = GateContext {
             estimated_input_tokens: 800,
             estimated_output_tokens: 300,
+            max_input_tokens: None,
+            max_output_tokens: None,
             ..Default::default()
         };
         assert!(cond.evaluate(&ctx));
@@ -515,6 +523,8 @@ mod tests {
         let ctx = GateContext {
             estimated_input_tokens: 1200,
             estimated_output_tokens: 300,
+            max_input_tokens: None,
+            max_output_tokens: None,
             ..Default::default()
         };
         assert!(!cond.evaluate(&ctx));
@@ -529,6 +539,8 @@ mod tests {
         let ctx = GateContext {
             estimated_input_tokens: 800,
             estimated_output_tokens: 600,
+            max_input_tokens: None,
+            max_output_tokens: None,
             ..Default::default()
         };
         assert!(!cond.evaluate(&ctx));
@@ -628,6 +640,8 @@ mod tests {
         );
         let ctx = GateContext {
             estimated_input_tokens: 1000,
+            max_input_tokens: None,
+            max_output_tokens: None,
             ..Default::default()
         };
         assert!(matches!(gate.evaluate(&ctx), TokenGateVerdict::Reject(_)));

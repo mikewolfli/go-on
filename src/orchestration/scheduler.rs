@@ -5,7 +5,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 // ──────────────────────────────────────────────
 // Types
@@ -58,6 +58,9 @@ impl Ord for ScheduledTask {
         self.effective_priority()
             .partial_cmp(&other.effective_priority())
             .unwrap_or(Ordering::Equal)
+            // Tie-break by task_id to satisfy the BinaryHeap contract:
+            // Eq(a,b) == true  →  cmp(a,b) == Equal
+            .then_with(|| self.task_id.cmp(&other.task_id))
         // BinaryHeap is a max-heap: the "greatest" element per Ord is at the top.
         // Higher effective_priority should be "greater", so we do NOT reverse.
     }
@@ -204,15 +207,32 @@ impl TaskScheduler {
 
         // We need to find the highest-priority task matching the role.
         // BinaryHeap only gives us the top, so we pop and re-push non-matching ones.
-        let mut queue = self.queue.lock().ok()?;
+        let mut queue = match self.queue.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::error!("scheduler queue mutex poisoned, recovering");
+                poisoned.into_inner()
+            }
+        };
         let mut buffer: Vec<ScheduledTask> = Vec::new();
         let mut result: Option<ScheduledTask> = None;
 
         while let Some(task) = queue.pop() {
-            if self.active_tasks.lock().ok()?.contains(&task.task_id) {
-                // Should not happen, but skip if already active
-                buffer.push(task);
-                continue;
+            match self.active_tasks.lock() {
+                Ok(active) => {
+                    if active.contains(&task.task_id) {
+                        buffer.push(task);
+                        continue;
+                    }
+                }
+                Err(poisoned) => {
+                    tracing::error!("scheduler active_tasks mutex poisoned, recovering");
+                    let active = poisoned.into_inner();
+                    if active.contains(&task.task_id) {
+                        buffer.push(task);
+                        continue;
+                    }
+                }
             }
             if task.role == role {
                 result = Some(task);
@@ -328,6 +348,15 @@ impl TaskScheduler {
             }
         }
 
+        // Read max_retries before removing
+        let max_retries = self
+            .task_map
+            .lock()
+            .map_err(|e| anyhow!("Lock error: {}", e))?
+            .get(task_id)
+            .map(|t| t.max_retries)
+            .unwrap_or(0);
+
         // Permanently remove
         self.task_map
             .lock()
@@ -337,7 +366,10 @@ impl TaskScheduler {
             .lock()
             .map_err(|e| anyhow!("Lock error: {}", e))?
             .total_failed += 1;
-        warn!("Task {} failed permanently", task_id);
+        error!(
+            "Task {} failed permanently after {} retries",
+            task_id, max_retries
+        );
         Ok(())
     }
 
@@ -526,8 +558,20 @@ impl AgentWorkerScheduler {
     pub fn assign_next(&self, role: &str) -> Option<(String, ScheduledTask)> {
         // Find an idle worker for this role
         let idle_worker = {
-            let workers = self.workers.lock().ok()?;
-            let assignments = self.assignments.lock().ok()?;
+            let workers = match self.workers.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    tracing::error!("scheduler workers mutex poisoned, recovering");
+                    poisoned.into_inner()
+                }
+            };
+            let assignments = match self.assignments.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    tracing::error!("scheduler assignments mutex poisoned, recovering");
+                    poisoned.into_inner()
+                }
+            };
             workers
                 .get(role)?
                 .iter()

@@ -345,7 +345,9 @@ impl BrainLoop {
         let confidence = if issues.is_empty() {
             1.0
         } else {
-            (1.0 - (issues.len() as f64).min(issues.len() as f64) * 0.2).max(0.1)
+            // Each issue reduces confidence by 0.2, with a max penalty cap of 5 issues
+            let penalty = (issues.len() as f64 * 0.2).min(1.0);
+            (1.0 - penalty).max(0.1)
         };
 
         let reflection = BrainLoopReflection {

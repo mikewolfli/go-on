@@ -510,7 +510,7 @@ impl SecurityGovernor {
                         required_review: false,
                         escalation_level: "normal".into(),
                         matched_policy: Some(id),
-                        reasons: vec![format!("Denied by policy '{}': {}", name, "")],
+                        reasons: vec![format!("Denied by policy '{}'", name)],
                     }
                 }
                 PolicyAction::RequireReview => {

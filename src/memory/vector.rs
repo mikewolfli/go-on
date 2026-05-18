@@ -487,6 +487,10 @@ impl VectorStore {
 /// SAFETY: `db`, `pz_err_msg`, and `p_err_msg` are valid pointers
 /// provided by the SQLite runtime.
 #[cfg(not(feature = "backend-postgres"))]
+// SAFETY: This FFI function is called by SQLite during `sqlite3_auto_extension`.
+// The raw C pointers (`_db`, `_pz_err_msg`, `_p_err_msg`) are passed by SQLite
+// and are guaranteed valid at call time. The implementation ignores them and
+// delegates to `sqlite3_vec_init()`, which is the upstream sqlite-vec init function.
 unsafe extern "C" fn sqlite3_vec_init_auto_extension(
     _db: *mut rusqlite::ffi::sqlite3,
     _pz_err_msg: *mut *mut std::os::raw::c_char,
@@ -505,8 +509,15 @@ unsafe extern "C" fn sqlite3_vec_init_auto_extension(
 #[cfg(not(feature = "backend-postgres"))]
 fn register_sqlite_vec_auto_extension() {
     static REGISTER: Once = Once::new();
-    REGISTER.call_once(|| unsafe {
-        sqlite3_auto_extension(Some(sqlite3_vec_init_auto_extension));
+    REGISTER.call_once(|| {
+        // SAFETY: `sqlite3_auto_extension` is a SQLite C API that registers a
+        // callback to run on every future `sqlite3_open`. The callback function
+        // pointer (`sqlite3_vec_init_auto_extension`) is a valid C ABI function.
+        // This is called at most once due to `Once`, before any database connections
+        // are opened, so there is no race on the internal SQLite data structures.
+        unsafe {
+            sqlite3_auto_extension(Some(sqlite3_vec_init_auto_extension));
+        }
     });
 }
 

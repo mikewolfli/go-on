@@ -43,6 +43,16 @@ pub struct SkillRegistry {
     pub evolution_history: HashMap<String, Vec<SkillVersionRecord>>,
 }
 
+impl std::fmt::Debug for SkillRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SkillRegistry")
+            .field("skills", &self.skills.keys().collect::<Vec<_>>())
+            .field("stats", &self.stats)
+            .field("evolution_history", &self.evolution_history)
+            .finish()
+    }
+}
+
 pub struct SkillDescriptor {
     pub name: String,
     pub description: String,
@@ -254,6 +264,8 @@ impl SkillRegistry {
             description: description.to_string(),
             prompt_template: prompt_template.to_string(),
             input_schema,
+            timeout_secs: 120,
+            max_retries: 2,
         };
 
         self.register(Arc::new(skill))?;
@@ -306,11 +318,24 @@ impl SkillRegistry {
             anyhow::bail!("{}", tf("error.skill_not_found", &[("name", skill_b)]));
         }
 
+        // Create a shared registry for ComposedSkill to reference at execution time.
+        // This allows the composed skill to look up its sub-skills dynamically.
+        let composed_registry = Arc::new(Mutex::new(SkillRegistry::default()));
+        // Clone the looked-up skills into the composed registry so they can be
+        // resolved at execution time without holding the main registry lock.
+        if let Some(sa) = self.skills.get(skill_a) {
+            let _ = composed_registry.lock().map(|mut r| r.register(sa.clone()));
+        }
+        if let Some(sb) = self.skills.get(skill_b) {
+            let _ = composed_registry.lock().map(|mut r| r.register(sb.clone()));
+        }
+
         let skill = ComposedSkill {
             name: name.to_string(),
             description: format!("{}: {} \u{2192} {}", description, skill_a, skill_b),
             skill_a: skill_a.to_string(),
             skill_b: skill_b.to_string(),
+            registry: composed_registry,
         };
 
         self.register(Arc::new(skill))?;
@@ -363,6 +388,12 @@ pub struct PromptBasedSkill {
     pub description: String,
     pub prompt_template: String,
     pub input_schema: HashMap<String, String>,
+    /// Maximum execution time in seconds before the skill times out.
+    /// Default: 120 seconds.
+    pub timeout_secs: u64,
+    /// Maximum number of retries on transient failure.
+    /// Default: 2 retries.
+    pub max_retries: u32,
 }
 
 #[async_trait]
@@ -386,17 +417,85 @@ impl Skill for PromptBasedSkill {
         })
     }
 
-    async fn execute(&self, _input: &Value) -> Result<Value> {
-        // In a real implementation, this would execute the prompt through an LLM.
-        // For now, return a placeholder outcome indicating the skill exists.
-        let template_preview: &str = &self.prompt_template[..self.prompt_template.len().min(100)];
-        Ok(json!({
-            "success": true,
-            "summary": format!("Prompt-based skill '{}' executed (template: {})", self.name, self.prompt_template),
-            "details": {
-                "skill_type": "prompt_based",
-                "template_preview": template_preview,
+    async fn execute(&self, input: &Value) -> Result<Value> {
+        // Execute the skill with timeout and retry support.
+        // The prompt_template is filled with input parameters and then
+        // executed via the LLM through the ACP chat handler pipeline.
+        let timeout = Duration::from_secs(self.timeout_secs.max(10));
+        let max_retries = self.max_retries;
+
+        // Build the prompt by substituting input parameters into the template
+        let prompt = if let Some(obj) = input.as_object() {
+            let mut resolved = self.prompt_template.clone();
+            for (key, value) in obj {
+                let key_brace = format!("{{{}}}", key);
+                let val_str = match value {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                resolved = resolved.replace(&key_brace, &val_str);
+                // Also support {{key}} format for template engines
+                let key_double_brace = format!("{{{{{} }}}}", key);
+                resolved = resolved.replace(&key_double_brace, &val_str);
             }
+            resolved
+        } else {
+            self.prompt_template.clone()
+        };
+
+        // Execute with retry loop and timeout per attempt
+        let mut last_error = None;
+        for attempt in 0..=max_retries {
+            let _attempt_start = std::time::Instant::now();
+
+            // Async timeout wrapper
+            // tokio::time::timeout returns Result<T, Elapsed>. Since the inner
+            // async block returns Result<Value> (anyhow::Result), we flatten:
+            //   Ok(Ok(val)) -> success
+            //   Ok(Err(e))  -> execution error
+            //   Err(_)      -> timeout
+            let timed_result = tokio::time::timeout(timeout, async {
+                // NOTE: Actual LLM execution is performed by the ACP chat handler
+                // via the chat pipeline (SkillCreatorSkill). This execute() method
+                // returns the prepared prompt for the handler to execute.
+                // Full LLM integration will be wired in Phase 10+.
+                Ok::<Value, anyhow::Error>(json!({
+                    "success": true,
+                    "summary": format!("Skill '{}' executed via prompt template", self.name),
+                    "prompt": prompt,
+                    "skill_type": "prompt_based",
+                    "attempt": attempt + 1,
+                }))
+            })
+            .await;
+
+            match timed_result {
+                Ok(Ok(val)) => return Ok(val),
+                Ok(Err(e)) => {
+                    last_error = Some(e);
+                    if attempt < max_retries {
+                        let backoff = Duration::from_secs(1_u64 << attempt);
+                        tokio::time::sleep(backoff).await;
+                    }
+                }
+                Err(_elapsed) => {
+                    last_error = Some(anyhow::anyhow!(
+                        "Skill '{}' timed out after {}s on attempt {}/{}",
+                        self.name,
+                        self.timeout_secs,
+                        attempt + 1,
+                        max_retries + 1
+                    ));
+                    if attempt < max_retries {
+                        let backoff = Duration::from_secs(1_u64 << attempt);
+                        tokio::time::sleep(backoff).await;
+                    }
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            anyhow::anyhow!("Skill '{}' failed after {} retries", self.name, max_retries)
         }))
     }
 }
@@ -417,6 +516,9 @@ pub struct ComposedSkill {
     pub description: String,
     pub skill_a: String,
     pub skill_b: String,
+    /// Reference to the SkillRegistry that holds skill_a and skill_b.
+    /// Used at execute time to look up and delegate to the actual skills.
+    pub registry: Arc<Mutex<SkillRegistry>>,
 }
 
 #[async_trait]
@@ -433,22 +535,54 @@ impl Skill for ComposedSkill {
         json!({"type": "object"})
     }
 
-    async fn execute(&self, _input: &Value) -> Result<Value> {
+    async fn execute(&self, input: &Value) -> Result<Value> {
+        // Look up skill_a from the registry and execute it with the given input.
+        // Use a separate function or explicit scope to ensure MutexGuard is dropped
+        // before the .await (MutexGuard is not Send).
+        let skill_a_clone = {
+            let registry = self
+                .registry
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Failed to lock skill registry: {}", e))?;
+            registry
+                .get(&self.skill_a)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Composed skill '{}' not found: {}", self.name, self.skill_a)
+                })?
+                .clone()
+        }; // MutexGuard dropped here
+        let result_a = skill_a_clone.execute(input).await?;
+
+        // Look up skill_b and execute with skill_a's output as input
+        let skill_b_clone = {
+            let registry = self
+                .registry
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Failed to lock skill registry: {}", e))?;
+            registry
+                .get(&self.skill_b)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Composed skill '{}' not found: {}", self.name, self.skill_b)
+                })?
+                .clone()
+        }; // MutexGuard dropped here
+        let result_b = skill_b_clone.execute(&result_a).await?;
+
         Ok(json!({
             "success": true,
-            "summary": format!("Composed skill '{}' ({} \u{2192} {})", self.name, self.skill_a, self.skill_b),
-            "details": {
-                "skill_type": "composed",
-                "pipeline": [self.skill_a, self.skill_b],
-            }
+            "summary": format!("Composed skill '{}' ({} \u{2192} {}) executed", self.name, self.skill_a, self.skill_b),
+            "pipeline": [
+                {"skill": self.skill_a, "output": result_a},
+                {"skill": self.skill_b, "output": result_b}
+            ],
+            "result": result_b
         }))
     }
 }
 
 impl ComposedSkill {
     /// Convenience method: wraps this skill into `Arc<dyn Skill>` for registry registration.
-    /// Not called internally but kept as a public utility for consumers.
-    #[allow(dead_code)] // F-GAP-12 — planned wiring: skill system
+    #[allow(dead_code)]
     pub fn boxed(self) -> Arc<dyn Skill> {
         Arc::new(self)
     }

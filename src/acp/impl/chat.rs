@@ -795,10 +795,23 @@ pub(crate) async fn process_chat_request(
     // from the user session when auth is enabled, or falls back to default).
     let tenant_id = &ctx.tenant_id;
     if let Ok(mut budget) = server.tenant_budget.lock() {
-        if let Err(e) = budget.check_can_start(tenant_id) {
-            warn!("tenant budget limit reached for {}: {}", tenant_id, e);
-            // Continue anyway — the enforcer records usage after execution;
-            // a hard block would need to be policy-driven.
+        if server.runtime_config.production_strict {
+            if let Err(e) = budget.check_can_start(tenant_id) {
+                warn!("tenant budget limit reached for {}: {}", tenant_id, e);
+                return Err(anyhow::anyhow!(
+                    "tenant '{}' at resource limit: {}",
+                    tenant_id,
+                    e
+                ));
+            }
+        } else {
+            // Non-strict mode: warn but allow through.
+            if let Err(e) = budget.check_can_start(tenant_id) {
+                warn!(
+                    "tenant budget limit reached for {}: {} (non-strict, allowing)",
+                    tenant_id, e
+                );
+            }
         }
         budget.start_task(tenant_id);
     }
@@ -2399,7 +2412,7 @@ pub(crate) async fn process_chat_request(
                     retries: 0,
                 };
                 task_graph.add_node(tool_node);
-                task_graph.add_edge(
+                let _ = task_graph.add_edge(
                     format!("chat-{}-root", conversation_id),
                     format!("chat-{}-tools", conversation_id),
                 );
@@ -2419,7 +2432,7 @@ pub(crate) async fn process_chat_request(
                     retries: 0,
                 };
                 task_graph.add_node(memory_node);
-                task_graph.add_edge(
+                let _ = task_graph.add_edge(
                     format!("chat-{}-root", conversation_id),
                     format!("chat-{}-memory", conversation_id),
                 );

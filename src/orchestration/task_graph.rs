@@ -61,8 +61,81 @@ impl TaskGraph {
     pub fn add_node(&mut self, node: TaskNode) {
         self.nodes.insert(node.id.clone(), node);
     }
-    pub fn add_edge(&mut self, from: String, to: String) {
-        self.edges.entry(from).or_default().insert(to);
+    /// Add a directed edge from `from` to `to`.
+    /// Returns `Err` if adding this edge would create a cycle.
+    pub fn add_edge(&mut self, from: String, to: String) -> Result<(), String> {
+        // Quick self-loop check
+        if from == to {
+            return Err(format!("self-loop edge not allowed: {} -> {}", from, to));
+        }
+        // Check if edge already exists
+        if self
+            .edges
+            .get(&from)
+            .is_some_and(|edges| edges.contains(&to))
+        {
+            return Ok(()); // Edge already exists, no-op
+        }
+        // Temporarily add the edge and check for cycles using DFS
+        self.edges
+            .entry(from.clone())
+            .or_default()
+            .insert(to.clone());
+        if self.has_cycle() {
+            // Rollback: remove the edge we just added
+            if let Some(edges) = self.edges.get_mut(&from) {
+                edges.remove(&to);
+                if edges.is_empty() {
+                    self.edges.remove(&from);
+                }
+            }
+            return Err(format!(
+                "adding edge {} -> {} would create a cycle",
+                from, to
+            ));
+        }
+        Ok(())
+    }
+
+    /// Check whether the graph contains a cycle using DFS.
+    /// Returns `true` if a cycle is detected.
+    pub fn has_cycle(&self) -> bool {
+        let mut visited: HashSet<String> = HashSet::new();
+        let mut recursion_stack: HashSet<String> = HashSet::new();
+
+        for node_id in self.nodes.keys() {
+            if !visited.contains(node_id)
+                && self.dfs_cycle_check(node_id, &mut visited, &mut recursion_stack)
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn dfs_cycle_check(
+        &self,
+        node_id: &str,
+        visited: &mut HashSet<String>,
+        recursion_stack: &mut HashSet<String>,
+    ) -> bool {
+        visited.insert(node_id.to_string());
+        recursion_stack.insert(node_id.to_string());
+
+        if let Some(neighbors) = self.edges.get(node_id) {
+            for neighbor in neighbors {
+                if !visited.contains(neighbor) {
+                    if self.dfs_cycle_check(neighbor, visited, recursion_stack) {
+                        return true;
+                    }
+                } else if recursion_stack.contains(neighbor) {
+                    return true;
+                }
+            }
+        }
+
+        recursion_stack.remove(node_id);
+        false
     }
     pub fn get_node(&self, id: &str) -> Option<&TaskNode> {
         self.nodes.get(id)

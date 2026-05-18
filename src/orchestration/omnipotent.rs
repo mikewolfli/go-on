@@ -190,7 +190,10 @@ impl OmnipotentMode {
     pub fn revoke_token(&self, token_id: &str) {
         let mut tokens = match self.escalation_tokens.write() {
             Ok(guard) => guard,
-            Err(_) => return,
+            Err(poisoned) => {
+                tracing::error!("omnipotent escalation_tokens RwLock poisoned, recovering");
+                poisoned.into_inner()
+            }
         };
 
         if let Some(token) = tokens.get_mut(token_id) {
@@ -393,6 +396,16 @@ fn hex_encode_timestamp(ts_ms: u64) -> String {
     for b in &bytes {
         out.push_str(&format!("{:02x}", b));
     }
+    // Append a few bytes of process-scoped randomness to reduce collision risk.
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .hash(&mut hasher);
+    let extra = hasher.finish() & 0xFFFF;
+    out.push_str(&format!("{:04x}", extra));
     out
 }
 

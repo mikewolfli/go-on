@@ -364,8 +364,8 @@ async fn handle_http_connection(
                     cfg.max_age_seconds
                 ));
 
-                write_http_json_response(socket, 200, serde_json::json!({"ok": true}), &extra)
-                    .await?;
+                // CORS preflight — return 204 No Content per HTTP spec
+                write_http_json_response(socket, 204, serde_json::json!(null), &extra).await?;
                 return Ok(());
             }
         }

@@ -31,7 +31,10 @@ pub struct AuditLogEntry {
     pub retention_policy: Option<String>,
 }
 
-/// Audit log sink for collecting decision traces
+/// Audit log sink for collecting decision traces.
+///
+/// NOTE: `AuditLog` uses `&mut self` methods — it is NOT thread-safe.
+/// Wrap in `Arc<Mutex<AuditLog>>` when sharing across threads.
 pub struct AuditLog {
     entries: VecDeque<AuditLogEntry>,
     max_entries: usize,

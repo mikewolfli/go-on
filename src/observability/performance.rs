@@ -437,6 +437,12 @@ fn get_memory_usage() -> u64 {
     };
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
+    // SAFETY: `GetCurrentProcess` returns a pseudo-handle (always valid, never null).
+    // `PROCESS_MEMORY_COUNTERS` is a Win32 POD struct initialized with `zeroed()`
+    // (which sets cb=0 as per Win32 convention), then cb is set to the struct size.
+    // `K32GetProcessMemoryInfo` writes into `counters` via raw pointer — the size
+    // parameter ensures no buffer overflow. The function is safe to call from any
+    // thread (it reads process-level metrics, not thread-local state).
     unsafe {
         let handle = GetCurrentProcess();
         let mut counters: PROCESS_MEMORY_COUNTERS = zeroed();

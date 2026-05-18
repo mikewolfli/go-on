@@ -17,8 +17,8 @@ mod tests;
 pub use schema::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpResource, McpTool, ServerInfo};
 pub use tools::error_codes;
 
-/// MCP Protocol Version
-pub const MCP_VERSION: &str = "2024-11-05";
+/// MCP Protocol Version — latest stable spec
+pub const MCP_VERSION: &str = "2025-03-26";
 
 /// MCP Server implementation — struct IS used via new/new_with_acp, serve, etc.
 pub struct McpServer {
