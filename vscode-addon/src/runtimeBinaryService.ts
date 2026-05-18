@@ -11,6 +11,11 @@ import * as os from "os";
 import * as tar from "tar";
 import AdmZip = require("adm-zip");
 
+// Trusted SHA-256 checksum for offline verification.
+// Set this to a known-good hash and uncomment the verification call to
+// eliminate the MITM risk inherent in downloading checksums from the same server.
+// const TRUSTED_RUNTIME_SHA256: string | null = null;
+
 export interface RuntimeResolution {
   executablePath: string;
   runtimeDir: string;
@@ -137,6 +142,18 @@ async function downloadTextFile(
   });
 }
 
+/**
+ * NOTE: Security design limitation — the checksum is downloaded from the same server
+ * as the archive itself, meaning a MITM attacker who can compromise the download
+ * can also serve a matching checksum. This makes the checksum verification a
+ * tamper-detection layer rather than a true authenticity guarantee.
+ *
+ * RECOMMENDATION: For production deployments, implement offline checksum verification
+ * by embedding a known-good SHA-256 hash in the extension (e.g. pinned in source code
+ * or fetched over a separate, trusted channel). Additionally, consider certificate
+ * pinning for the GitHub Releases API endpoint (github.com) to mitigate MITM risks
+ * at the TLS layer.
+ */
 async function verifyArchiveChecksum(
   archivePath: string,
   checksumUrl: string,
@@ -162,7 +179,7 @@ async function verifyArchiveChecksum(
     });
     throw new Error(
       `Integrity check failed: expected SHA-256 ${expectedHash}, got ${actualHash}. ` +
-      "The downloaded archive may be corrupted or tampered with.",
+        "The downloaded archive may be corrupted or tampered with.",
     );
   }
 }

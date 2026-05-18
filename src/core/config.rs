@@ -153,29 +153,29 @@ fn default_learning_speed() -> String {
     "adaptive".to_string()
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct ProviderSpec {
-    name: String,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ProviderSpec {
+    pub(crate) name: String,
     #[serde(rename = "type")]
-    agent_type: String,
+    pub(crate) agent_type: String,
     #[serde(default)]
-    url: Option<String>,
+    pub(crate) url: Option<String>,
     #[serde(default)]
-    chat_path: Option<String>,
+    pub(crate) chat_path: Option<String>,
     #[serde(default)]
-    model: Option<String>,
+    pub(crate) model: Option<String>,
     #[serde(default)]
-    api_key_env: Option<String>,
+    pub(crate) api_key_env: Option<String>,
     #[serde(default)]
-    secret_key_env: Option<String>,
+    pub(crate) secret_key_env: Option<String>,
     #[serde(default)]
-    anthropic_version: Option<String>,
+    pub(crate) anthropic_version: Option<String>,
     #[serde(default)]
-    max_tokens: Option<u32>,
+    pub(crate) max_tokens: Option<u32>,
     #[serde(default)]
-    supports_system: Option<bool>,
+    pub(crate) supports_system: Option<bool>,
     #[serde(default)]
-    supports_vision: Option<bool>,
+    pub(crate) supports_vision: Option<bool>,
 }
 
 impl ProviderSpec {
@@ -186,29 +186,12 @@ impl ProviderSpec {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct ProviderCapabilityCatalog {
-    providers: Vec<ProviderSpec>,
-}
-
 static PROVIDER_SPECS: OnceLock<Vec<ProviderSpec>> = OnceLock::new();
 
-fn provider_specs() -> &'static [ProviderSpec] {
-    PROVIDER_SPECS.get_or_init(load_provider_specs).as_slice()
-}
-
-fn load_provider_specs() -> Vec<ProviderSpec> {
-    // Use compile-time embedded providers.toml — always available,
-    // no runtime file dependency needed. Falls back to built-in specs
-    // only if the TOML parsing somehow fails.
-    if let Ok(catalog) =
-        toml::from_str::<ProviderCapabilityCatalog>(crate::core::EMBEDDED_PROVIDERS_TOML)
-    {
-        if !catalog.providers.is_empty() {
-            return catalog.providers;
-        }
-    }
-    built_in_provider_specs()
+pub(crate) fn provider_specs() -> &'static [ProviderSpec] {
+    PROVIDER_SPECS
+        .get_or_init(built_in_provider_specs)
+        .as_slice()
 }
 
 fn built_in_provider_specs() -> Vec<ProviderSpec> {
@@ -269,7 +252,7 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
         ProviderSpec {
             name: "deepseek".to_string(),
             agent_type: "deepseek".to_string(),
-            url: Some("https://api.deepseek.com/v1".to_string()),
+            url: Some("https://api.deepseek.com".to_string()),
             chat_path: None,
             model: Some("deepseek-v4-flash".to_string()),
             api_key_env: Some("DEEPSEEK_API_KEY".to_string()),
@@ -362,7 +345,7 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
             agent_type: "doubao".to_string(),
             url: Some("https://ark.cn-beijing.volces.com/api/v3".to_string()),
             chat_path: Some("/chat/completions".to_string()),
-            model: Some("doubao-1.5-pro-32k-250115".to_string()),
+            model: Some("doubao-1.5-pro-256k-250115".to_string()),
             api_key_env: Some("DOUBAO_API_KEY".to_string()),
             secret_key_env: None,
             anthropic_version: None,
@@ -669,6 +652,20 @@ fn built_in_provider_specs() -> Vec<ProviderSpec> {
             anthropic_version: None,
             max_tokens: None,
             supports_system: None,
+            supports_vision: None,
+        },
+        // ── X.AI / Grok ──────────────────────────────────────
+        ProviderSpec {
+            name: "xai".to_string(),
+            agent_type: "openai_compatible".to_string(),
+            url: Some("https://api.x.ai/v1".to_string()),
+            chat_path: None,
+            model: Some("grok-3".to_string()),
+            api_key_env: Some("XAI_API_KEY".to_string()),
+            secret_key_env: None,
+            anthropic_version: None,
+            max_tokens: None,
+            supports_system: Some(true),
             supports_vision: None,
         },
     ]

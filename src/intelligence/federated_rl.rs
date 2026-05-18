@@ -404,7 +404,10 @@ impl FederatedRL {
         }
 
         {
-            let round = inner.rounds.get(round_id).unwrap();
+            let round = inner
+                .rounds
+                .get(round_id)
+                .expect("round must exist because contains_key check passed above");
             if round.status != DistillationStatus::InProgress
                 && round.status != DistillationStatus::Pending
             {
@@ -424,7 +427,10 @@ impl FederatedRL {
         let contributor_count: u32;
 
         {
-            let round = inner.rounds.get(round_id).unwrap();
+            let round = inner
+                .rounds
+                .get(round_id)
+                .expect("round must exist because contains_key check passed above");
             contributed_ids = round.contributed_policy_ids.clone();
             contributor_count = round.contributor_count;
         }
@@ -485,7 +491,10 @@ impl FederatedRL {
         // Step 4 — update the round record (borrow scope ensures no aliasing).
         let completed_ms = now_ms();
         {
-            let round = inner.rounds.get_mut(round_id).unwrap();
+            let round = inner
+                .rounds
+                .get_mut(round_id)
+                .expect("round must exist because contains_key check passed above");
             round.status = DistillationStatus::Completed;
             round.completed_ms = completed_ms;
             round.merged_policy = Some(merged_policy);
@@ -493,7 +502,11 @@ impl FederatedRL {
 
         inner.last_merge_ms = completed_ms;
 
-        Ok(inner.rounds.get(round_id).unwrap().clone())
+        Ok(inner
+            .rounds
+            .get(round_id)
+            .expect("round must exist because it was just updated above")
+            .clone())
     }
 
     // ── Round querying ────────────────────────────────────────────────────

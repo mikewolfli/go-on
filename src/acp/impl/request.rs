@@ -7,8 +7,40 @@ fn get_protocol_mode(server: &AcpServer) -> RequestDispatchMode {
 }
 
 /// Returns true if the method belongs to the MCP protocol.
+/// Standard MCP methods (initialize, tools/list, tools/call, etc.)
+/// may be sent without the "mcp." prefix in MCP-only mode.
 fn is_mcp_request(method: &str) -> bool {
-    method.starts_with("mcp.") || method == "mcp.initialize"
+    method.starts_with("mcp.")
+        || method == "mcp.initialize"
+        || method == "initialize"
+        || method == "notifications/initialized"
+        || method.starts_with("tools/")
+        || method.starts_with("resources/")
+        || method.starts_with("prompts/")
+        || method.starts_with("logging/")
+        || method.starts_with("sampling/")
+        || method == "ping"
+}
+
+/// Convert a standard MCP method name to its "mcp." prefixed form
+/// if it isn't already prefixed. Used in Mcp dispatch mode so that
+/// standard MCP clients (which send `initialize`, `tools/list`, etc.)
+/// are routed to the ACP dispatch's `mcp.*` handler.
+fn normalize_mcp_method(method: &str) -> String {
+    if method.starts_with("mcp.") {
+        return method.to_string();
+    }
+    match method {
+        "initialize" => "mcp.initialize".to_string(),
+        "notifications/initialized" | "notifications_initialized" => "mcp.initialize".to_string(),
+        "ping" => "mcp.ping".to_string(),
+        _ if method.starts_with("tools/") => format!("mcp.tools.{}", &method[6..]),
+        _ if method.starts_with("resources/") => format!("mcp.resources.{}", &method[10..]),
+        _ if method.starts_with("prompts/") => format!("mcp.prompts.{}", &method[8..]),
+        _ if method.starts_with("logging/") => format!("mcp.logging.{}", &method[8..]),
+        _ if method.starts_with("sampling/") => format!("mcp.sampling.{}", &method[9..]),
+        _ => method.to_string(),
+    }
 }
 
 /// Returns true if the method belongs to the ACP/A2A protocol.
@@ -100,7 +132,9 @@ fn is_acp_request(method: &str) -> bool {
                 | "provider.capabilities"
                 | "provider.copilot_device_code"
                 | "provider.copilot_device_code_poll"
-            | "phase.policy.replay"
+                | "provider.catalog"
+                | "runtime.restart"
+                | "phase.policy.replay"
             | "primary_secondary.summary"
             | "summary/primary_secondary"
             | "governance.status"
@@ -130,6 +164,7 @@ fn is_acp_request(method: &str) -> bool {
 // These functions take `AcpServer` as the first parameter to maintain
 // compatibility with the original implementation.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
@@ -270,31 +305,35 @@ pub(crate) fn append_trace_event(event: TraceEvent) {
 pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Result<()> {
     // Adaptive protocol dispatch: route to ACP, MCP, or Auto based on config.
     let protocol_mode = get_protocol_mode(server);
-    let method = request.method.as_str();
+    let request_method = request.method.clone();
+    let mut method: Cow<'_, str> = Cow::Borrowed(&request_method);
     match protocol_mode {
         RequestDispatchMode::Acp => {
-            if !is_acp_request(method) {
+            if !is_acp_request(method.as_ref()) {
                 return send_error(
                     server,
                     request.id,
                     -32601,
-                    tf("error.acp_mode_unsupported", &[("method", method)]),
+                    tf("error.acp_mode_unsupported", &[("method", method.as_ref())]),
                     None,
                 )
                 .await;
             }
         }
         RequestDispatchMode::Mcp => {
-            if !is_mcp_request(method) {
+            if !is_mcp_request(method.as_ref()) {
                 return send_error(
                     server,
                     request.id,
                     -32601,
-                    tf("error.mcp_mode_unsupported", &[("method", method)]),
+                    tf("error.mcp_mode_unsupported", &[("method", method.as_ref())]),
                     None,
                 )
                 .await;
             }
+            // Normalize standard MCP method names (e.g. `tools/list` -> `mcp.tools.list`)
+            // so the dispatch switch below can route them to the correct handler.
+            method = Cow::Owned(normalize_mcp_method(method.as_ref()));
         }
         RequestDispatchMode::Auto => {
             // If MCP method, prefer MCP branch; otherwise fall through to ACP.
@@ -303,11 +342,11 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
     }
 
     let pua_engine = PuaRuleEngine::new(server.pua_enforcement_plan.clone());
-    let task_type = infer_task_type(method, &request.params);
+    let task_type = infer_task_type(method.as_ref(), &request.params);
     let task_context = TaskContext {
         task_type: task_type.clone(),
         file_count: infer_file_count(&request.params),
-        risk_score: infer_risk_score(method, &task_type),
+        risk_score: infer_risk_score(method.as_ref(), &task_type),
     };
     let dynamic_compass = DynamicQualityCompass::default();
     let dynamic_checks = dynamic_compass.get_checks(&task_context);
@@ -316,7 +355,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
         .map(|check| check.description.clone())
         .collect::<Vec<_>>();
 
-    if let Err(violation) = pua_engine.check_red_lines(method) {
+    if let Err(violation) = pua_engine.check_red_lines(method.as_ref()) {
         return send_error(
             server,
             request.id,
@@ -325,15 +364,15 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             Some(json!({
                 "type": "pua_violation",
                 "kind": format!("{:?}", violation.kind),
-                "method": method,
+                "method": method.as_ref(),
                 "detail": violation.detail,
                 "quality_compass": dynamic_check_descriptions,
             })),
         )
         .await;
     }
-    if let Some(stage) = infer_pua_stage(method) {
-        let completed_actions = extract_pua_completed_actions(&request.params, method);
+    if let Some(stage) = infer_pua_stage(method.as_ref()) {
+        let completed_actions = extract_pua_completed_actions(&request.params, method.as_ref());
         let required_actions = pua_engine.collect_evidence(stage);
         let report = if required_actions.is_empty() {
             build_pua_execution_report(
@@ -365,7 +404,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                         "type": "pua_violation",
                         "kind": format!("{:?}", violation.kind),
                         "stage": stage,
-                        "method": method,
+                        "method": method.as_ref(),
                         "detail": violation.detail,
                         "quality_compass": dynamic_check_descriptions,
                     })),
@@ -399,10 +438,10 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
         0,
     );
     let request_id = request.id.clone();
-    let dispatch_method = request.method.clone();
+    // Use the potentially normalized method for dispatch.
     let result = DISPATCH_REQUEST_METHOD
-        .scope(dispatch_method, async {
-            match request.method.as_str() {
+        .scope(method.to_string(), async {
+            match method.as_ref() {
                 "initialize" => protocol_pack::handle_initialize(server, request_id).await,
                 "mcp.initialize" => protocol_pack::handle_mcp_initialize(server, request_id).await,
                 "mcp.tools.list" => protocol_pack::handle_mcp_tools_list(server, request_id).await,
@@ -974,6 +1013,14 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     )
                     .await
                 }
+                "provider.catalog" => {
+                    runtime_pack::handle_provider_catalog(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
                 "provider.list_models" => {
                     runtime_pack::handle_provider_list_models(
                         server,
@@ -996,7 +1043,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             }
         })
         .await
-        .map_err(|error| attach_request_dispatch_context(error, request.method.as_str()));
+        .map_err(|error| attach_request_dispatch_context(error, method.as_ref()));
 
     let duration_ms = started.elapsed().as_millis() as u64;
     let success = result.is_ok() && !take_error_response_mark(&trace.request_id);

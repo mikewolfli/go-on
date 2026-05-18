@@ -140,6 +140,7 @@ impl AnthropicAgent {
 
         let temperature = option_f64(&options, "temperature");
         let top_p = option_f64(&options, "top_p");
+        let top_k = option_u64(&options, "top_k");
 
         let mut payload = json!({
             "model": model,
@@ -158,6 +159,39 @@ impl AnthropicAgent {
 
         if let Some(value) = top_p {
             payload["top_p"] = Value::from(value);
+        }
+
+        if let Some(value) = top_k {
+            payload["top_k"] = Value::from(value);
+        }
+
+        // Forward thinking parameter if present
+        // Anthropic's extended thinking can be a simple enabled string or an object with type and budget_tokens
+        if let Some(thinking) = option_string(&options, "thinking") {
+            payload["thinking"] = Value::String(thinking);
+        } else if let Some(thinking) = options.as_ref().and_then(|map| map.get("thinking")) {
+            // Also support object-style thinking (e.g. {"type": "enabled", "budget_tokens": 16000})
+            if thinking.is_object() {
+                payload["thinking"] = thinking.clone();
+            }
+        }
+
+        // Forward metadata parameter if present (e.g. user_id)
+        if let Some(metadata) = options
+            .as_ref()
+            .and_then(|map| map.get("metadata"))
+            .and_then(|v| v.as_object())
+        {
+            payload["metadata"] = Value::Object(metadata.clone());
+        }
+
+        // Forward stop_sequences parameter if present
+        if let Some(stop_sequences) = options
+            .as_ref()
+            .and_then(|map| map.get("stop_sequences"))
+            .and_then(|v| v.as_array())
+        {
+            payload["stop_sequences"] = Value::Array(stop_sequences.clone());
         }
 
         // Forward tools parameter if present

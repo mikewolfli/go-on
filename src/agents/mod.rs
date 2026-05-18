@@ -47,6 +47,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use futures_util::StreamExt;
 use serde_json::Value;
+use tracing::warn;
 
 pub use ai21::Ai21Agent;
 pub use aleph::AlephAgent;
@@ -171,6 +172,8 @@ pub fn apply_openai_common_options(payload: &mut Value, options: &Option<HashMap
         "parallel_tool_calls",
         "function_call",
         "functions",
+        "reasoning_effort",
+        "max_completion_tokens",
     ];
 
     for key in KEYS {
@@ -206,14 +209,30 @@ pub(crate) enum SseEventAction {
     Stop,
 }
 
+/// Maximum SSE line length to prevent unbounded memory growth
+/// from malicious or buggy servers. 1 MB per line is generous
+/// for any legitimate use case.
+const MAX_SSE_LINE_BYTES: usize = 1_048_576;
+
+/// Maximum SSE event data size (aggregated `data:` lines).
+/// 4 MB total per event is sufficient for any LLM response chunk.
+const MAX_SSE_EVENT_DATA_BYTES: usize = 4 * 1_048_576;
+
 #[derive(Default)]
 struct SseEventParser {
     buffer: String,
     event_data_lines: Vec<String>,
+    event_data_total_bytes: usize,
 }
 
 impl SseEventParser {
-    fn push_chunk(&mut self, chunk: &str) -> Vec<String> {
+    fn push_chunk(&mut self, chunk: &str) -> Result<Vec<String>> {
+        if self.buffer.len() + chunk.len() > MAX_SSE_LINE_BYTES * 2 {
+            return Err(anyhow::anyhow!(
+                "SSE buffer exceeded maximum size ({} bytes)",
+                MAX_SSE_LINE_BYTES * 2
+            ));
+        }
         self.buffer.push_str(chunk);
         let mut events = Vec::new();
 
@@ -233,6 +252,18 @@ impl SseEventParser {
                 continue;
             }
 
+            if line.len() > MAX_SSE_LINE_BYTES {
+                // Truncate and discard — this is a DoS prevention measure.
+                warn!(
+                    "SSE line exceeds maximum length ({} bytes), discarding",
+                    MAX_SSE_LINE_BYTES
+                );
+                self.buffer.clear();
+                self.event_data_lines.clear();
+                self.event_data_total_bytes = 0;
+                return Err(anyhow::anyhow!("SSE line exceeded maximum allowed length"));
+            }
+
             if line.starts_with(':') {
                 continue;
             }
@@ -243,11 +274,24 @@ impl SseEventParser {
             };
 
             if field == "data" {
-                self.event_data_lines.push(value.to_string());
+                let data = value.to_string();
+                self.event_data_total_bytes += data.len();
+                if self.event_data_total_bytes > MAX_SSE_EVENT_DATA_BYTES {
+                    warn!(
+                        "SSE event data exceeds maximum size ({} bytes), discarding",
+                        MAX_SSE_EVENT_DATA_BYTES
+                    );
+                    self.event_data_lines.clear();
+                    self.event_data_total_bytes = 0;
+                    return Err(anyhow::anyhow!(
+                        "SSE event data exceeded maximum allowed size"
+                    ));
+                }
+                self.event_data_lines.push(data);
             }
         }
 
-        events
+        Ok(events)
     }
 
     fn finish(&mut self) -> Vec<String> {
@@ -297,10 +341,23 @@ where
 
     while let Some(chunk_result) = stream.next().await {
         let chunk = chunk_result?;
+        // Use lossy conversion for resilience — malformed bytes at chunk
+        // boundaries produce U+FFFD replacement characters rather than
+        // failing the entire stream. Most LLM APIs use ASCII/English text
+        // where this is extremely rare.
         let chunk_text = String::from_utf8_lossy(&chunk);
-        for event in parser.push_chunk(&chunk_text) {
-            if matches!(on_event(&event)?, SseEventAction::Stop) {
-                return Ok(());
+        match parser.push_chunk(&chunk_text) {
+            Ok(events) => {
+                for event in events {
+                    if matches!(on_event(&event)?, SseEventAction::Stop) {
+                        return Ok(());
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("SSE parse error (chunk), continuing stream: {e}");
+                // Reset parser state to recover from malformed data
+                parser = SseEventParser::default();
             }
         }
     }
@@ -509,7 +566,9 @@ mod tests {
     fn sse_parser_joins_multiline_data_and_ignores_comments() {
         let mut parser = SseEventParser::default();
 
-        let events = parser.push_chunk(": ping\r\ndata: first\r\ndata: second\r\n\r\n");
+        let events = parser
+            .push_chunk(": ping\r\ndata: first\r\ndata: second\r\n\r\n")
+            .expect("should parse SSE chunk");
 
         assert_eq!(events, vec!["first\nsecond".to_string()]);
     }
@@ -520,14 +579,21 @@ mod tests {
 
         assert!(parser
             .push_chunk("data: {\"choices\":[{\"delta\":{\"content\":\"he")
+            .expect("should parse")
             .is_empty());
-        assert!(parser.push_chunk("llo\"}}]}\n").is_empty());
-        let events = parser.push_chunk("\n");
+        assert!(parser
+            .push_chunk("llo\"}}]}\n")
+            .expect("should parse")
+            .is_empty());
+        let events = parser.push_chunk("\n").expect("should parse");
 
         assert_eq!(events.len(), 1);
         assert!(events[0].contains("hello"));
 
-        assert!(parser.push_chunk("data: tail without delimiter").is_empty());
+        assert!(parser
+            .push_chunk("data: tail without delimiter")
+            .expect("should parse")
+            .is_empty());
         assert_eq!(parser.finish(), vec!["tail without delimiter".to_string()]);
     }
 

@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
-use crate::agent::{Agent, Message};
+use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 use crate::agents::{apply_openai_common_options, principles_to_text, stream_sse_to_sender};
 
@@ -106,6 +106,47 @@ impl GroqAgent {
 
 #[async_trait]
 impl Agent for GroqAgent {
+    fn available_models(&self) -> Vec<ModelInfo> {
+        vec![
+            ModelInfo {
+                id: "llama-3.3-70b-versatile".to_string(),
+                name: "Llama 3.3 70B Versatile".to_string(),
+                description: "Llama 3.3 70B Versatile (flagship LLM for chat, function calling, and streaming)".to_string(),
+                is_default: self.model == "llama-3.3-70b-versatile",
+                capabilities: vec!["chat".to_string(), "function_calling".to_string(), "streaming".to_string()],
+                context_window: Some(128_000),
+            },
+            ModelInfo {
+                id: "llama-3.1-8b-instant".to_string(),
+                name: "Llama 3.1 8B Instant".to_string(),
+                description: "Llama 3.1 8B Instant (fast, lightweight)".to_string(),
+                is_default: self.model == "llama-3.1-8b-instant",
+                capabilities: vec!["chat".to_string(), "streaming".to_string()],
+                context_window: Some(128_000),
+            },
+            ModelInfo {
+                id: "mixtral-8x7b-32768".to_string(),
+                name: "Mixtral 8x7B 32K".to_string(),
+                description: "Mixtral 8x7B (32K context)".to_string(),
+                is_default: self.model == "mixtral-8x7b-32768",
+                capabilities: vec!["chat".to_string(), "streaming".to_string()],
+                context_window: Some(32_768),
+            },
+            ModelInfo {
+                id: "gemma2-9b-it".to_string(),
+                name: "Gemma 2 9B IT".to_string(),
+                description: "Gemma 2 9B Instruct (8K context)".to_string(),
+                is_default: self.model == "gemma2-9b-it",
+                capabilities: vec!["chat".to_string(), "streaming".to_string()],
+                context_window: Some(8_192),
+            },
+        ]
+    }
+
+    fn supports_model_override(&self) -> bool {
+        true
+    }
+
     async fn chat(
         &self,
         messages: Vec<Message>,

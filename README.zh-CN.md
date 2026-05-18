@@ -169,7 +169,7 @@ cargo run --manifest-path gui/Cargo.toml
 
 ### 配置与脚本
 - `config/` — 配置文件（`config.toml`、`config.production.toml`）
-  Provider 规格说明编译在二进制中，源文件 `src/core/providers_data.toml`。
+  Provider 规格说明硬编码在 `src/core/config.rs` 和 `src/core/setup.rs` 的 `built_in_provider_specs()` 函数中。
 - `scripts/` — 质量门禁、发布门禁脚本与部署工具
   - `scripts/deploy/nginx/` — 入口网关与 TLS 反向代理模板
 

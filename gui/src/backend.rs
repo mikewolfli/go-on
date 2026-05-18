@@ -992,6 +992,20 @@ impl BackendClient {
             .await
     }
 
+    /// Fetch the full provider catalog from backend `provider.catalog` RPC.
+    /// Returns the complete list of all built-in provider specs with metadata
+    /// (URLs, models, API key env vars, capabilities, etc.).
+    ///
+    /// This is the authoritative source for provider metadata — GUI-side
+    /// hardcoded tables (`provider_meta()` in app.rs) should be removed
+    /// in favor of this RPC.
+    #[allow(dead_code)]
+    pub async fn provider_catalog(&self) -> Result<Value, String> {
+        self.rpc_call_quick("provider.catalog", None)
+            .await
+            .ok_or_else(|| "Failed to fetch provider catalog from backend".to_string())
+    }
+
     pub async fn provider_capabilities(
         &self,
         provider: &str,

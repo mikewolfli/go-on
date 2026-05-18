@@ -66,9 +66,9 @@ pub struct ProvidersView {
     copilot_poll_repaint_requested: bool,
 }
 
-/// Provider names for the dropdown (34 total, matching providers.toml)
+/// Provider names for the dropdown (36 total, matching built_in_provider_specs())
 /// This is the CANONICAL source of provider names used throughout the codebase.
-/// `config.rs` and `app.rs` import this to avoid hardcoded lists.
+/// Keep in sync with `src/core/config.rs` built_in_provider_specs().
 pub const PROVIDER_NAMES: &[&str] = &[
     // OpenAI Family (4)
     "openai",
@@ -92,7 +92,7 @@ pub const PROVIDER_NAMES: &[&str] = &[
     "moonshot",
     "minimax",
     "siliconflow",
-    // Other Vendors (15)
+    // Other Vendors (16)
     "ai21",
     "aleph",
     "copilot",
@@ -108,6 +108,7 @@ pub const PROVIDER_NAMES: &[&str] = &[
     "replicate",
     "titan",
     "together",
+    "xai",
 ];
 
 fn provider_label(i18n: &I18n, provider: &str) -> String {
@@ -120,6 +121,9 @@ fn provider_label(i18n: &I18n, provider: &str) -> String {
     }
 }
 
+/// GUI-side hardcoded model suggestions per provider.
+/// This is a known duplicate of the backend's model lists in `built_in_provider_specs()`.
+/// Keep in sync with `src/core/config.rs`.
 fn models_for_provider(provider: &str) -> &'static [&'static str] {
     match provider.to_lowercase().as_str() {
         "deepseek" => &["auto", "deepseek-v4-flash", "deepseek-v4-pro"],
@@ -208,6 +212,7 @@ fn models_for_provider(provider: &str) -> &'static [&'static str] {
         "perplexity" => &["auto", "sonar-pro", "sonar"],
         "replicate" => &["auto", "meta/meta-llama-3-70b-instruct"],
         "together" => &["auto", "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo"],
+        "xai" => &["auto", "grok-3"],
         _ => &["auto"],
     }
 }

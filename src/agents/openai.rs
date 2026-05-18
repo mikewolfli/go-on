@@ -62,6 +62,13 @@ impl OpenAiAgent {
             "stream": true
         });
 
+        // Forward reasoning_effort for o-series reasoning models
+        if let Some(map) = options {
+            if let Some(re) = map.get("reasoning_effort") {
+                payload["reasoning_effort"] = re.clone();
+            }
+        }
+
         apply_openai_common_options(&mut payload, options);
 
         payload
@@ -139,6 +146,57 @@ impl Agent for OpenAiAgent {
     fn available_models(&self) -> Vec<crate::agent::ModelInfo> {
         vec![
             crate::agent::ModelInfo {
+                id: "gpt-4.1".to_string(),
+                name: "GPT-4.1".to_string(),
+                description: "OpenAI GPT-4.1 (1M context)".to_string(),
+                is_default: self.model == "gpt-4.1",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                ],
+                context_window: Some(1_000_000),
+            },
+            crate::agent::ModelInfo {
+                id: "gpt-4.1-mini".to_string(),
+                name: "GPT-4.1 Mini".to_string(),
+                description: "OpenAI GPT-4.1 Mini (1M context)".to_string(),
+                is_default: self.model == "gpt-4.1-mini",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                ],
+                context_window: Some(1_000_000),
+            },
+            crate::agent::ModelInfo {
+                id: "gpt-4.1-nano".to_string(),
+                name: "GPT-4.1 Nano".to_string(),
+                description: "OpenAI GPT-4.1 Nano (1M context)".to_string(),
+                is_default: self.model == "gpt-4.1-nano",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                ],
+                context_window: Some(1_000_000),
+            },
+            crate::agent::ModelInfo {
+                id: "o3-mini".to_string(),
+                name: "o3-mini".to_string(),
+                description: "OpenAI o3-mini (reasoning model)".to_string(),
+                is_default: self.model == "o3-mini",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "reasoning".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                ],
+                context_window: Some(200_000),
+            },
+            crate::agent::ModelInfo {
                 id: "gpt-4o".to_string(),
                 name: "GPT-4o".to_string(),
                 description: "OpenAI GPT-4o (omni model)".to_string(),
@@ -167,7 +225,7 @@ impl Agent for OpenAiAgent {
             crate::agent::ModelInfo {
                 id: "gpt-4-turbo".to_string(),
                 name: "GPT-4 Turbo".to_string(),
-                description: "OpenAI GPT-4 Turbo".to_string(),
+                description: "OpenAI GPT-4 Turbo (legacy)".to_string(),
                 is_default: self.model == "gpt-4-turbo",
                 capabilities: vec![
                     "chat".to_string(),
@@ -180,7 +238,7 @@ impl Agent for OpenAiAgent {
             crate::agent::ModelInfo {
                 id: "gpt-3.5-turbo".to_string(),
                 name: "GPT-3.5 Turbo".to_string(),
-                description: "OpenAI GPT-3.5 Turbo".to_string(),
+                description: "OpenAI GPT-3.5 Turbo [deprecated — will be shut down]".to_string(),
                 is_default: self.model == "gpt-3.5-turbo",
                 capabilities: vec![
                     "chat".to_string(),

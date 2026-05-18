@@ -1,4 +1,5 @@
-import { ChildProcess, spawn, exec } from "child_process";
+import { ChildProcess, spawn } from "child_process";
+import * as http from "http";
 import * as os from "os";
 import * as vscode from "vscode";
 import { i18n, MessageKeys } from "./i18n";
@@ -165,7 +166,7 @@ export class GoOnManager {
       let startupTimeout: NodeJS.Timeout | undefined = setTimeout(() => {
         this.process?.kill();
         reject(new Error("Go-On startup timeout"));
-      }, 10000);
+      }, 30000);
 
       this.process.stdout?.on("data", (data: Buffer) => {
         const output = data.toString();
@@ -197,14 +198,62 @@ export class GoOnManager {
             // Not a complete JSON-RPC response yet, wait for more data.
           }
         }
-
-        if (startupTimeout) {
-          clearTimeout(startupTimeout);
-          startupTimeout = undefined;
-          resolved = true;
-          resolve();
-        }
       });
+
+      // Short delay to let the process initialize before probing
+      setTimeout(() => {
+        if (this.process?.stdin) {
+          // Send a JSON-RPC health probe (works for stdio-based modes:
+          // acp_stdio, mcp_stdio, and adaptive when resolved to stdio).
+          // The server responds with a JSON-RPC result on stdout.
+          const healthRequest: JsonRpcRequest = {
+            jsonrpc: "2.0",
+            id: ++this.requestId,
+            method: "runtime.health",
+          };
+          this.pendingRequests.set(healthRequest.id, {
+            resolve: (_v: unknown) => {
+              if (startupTimeout) {
+                clearTimeout(startupTimeout);
+                startupTimeout = undefined;
+              }
+              if (!resolved) {
+                resolved = true;
+                resolve();
+              }
+            },
+            reject: () => {
+              // Health probe failed via stdin. The process may be running
+              // in HTTP mode (acp_http, mcp_http, or adaptive→http) where
+              // stdin is not consumed. We fall through — the HTTP probe
+              // below will handle this case.
+            },
+          });
+          this.process.stdin.write(JSON.stringify(healthRequest) + "\n");
+        }
+
+        // Also try an HTTP health check (works for HTTP-based modes:
+        // acp_http, mcp_http, and adaptive when resolved to http).
+        const baseUrl = protocolContract.runtime.baseUrl;
+        const healthUrl = `${baseUrl}${protocolContract.runtime.healthPath}`;
+        const healthReq = http.get(healthUrl, (res) => {
+          if (res.statusCode === 200 && startupTimeout && !resolved) {
+            clearTimeout(startupTimeout);
+            startupTimeout = undefined;
+            resolved = true;
+            resolve();
+          }
+          res.resume();
+        });
+        healthReq.on("error", () => {
+          // HTTP health check failed — the server may be running in
+          // stdio mode instead. The health monitoring loop will pick
+          // up any connectivity issues later.
+        });
+        healthReq.setTimeout(3000, () => {
+          healthReq.destroy();
+        });
+      }, 500);
 
       this.process.stderr?.on("data", (data: Buffer) => {
         const text = data.toString();
@@ -265,10 +314,18 @@ export class GoOnManager {
     if (os.platform() === "win32") {
       try {
         await new Promise<void>((resolve, reject) => {
-          const kill = exec(`taskkill /F /T /PID ${proc.pid}`, (err) => {
-            if (err) reject(err);
-            else resolve();
+          const kill = spawn(
+            "taskkill",
+            ["/F", "/T", "/PID", String(proc.pid)],
+            {
+              stdio: "ignore",
+            },
+          );
+          kill.on("exit", (code) => {
+            if (code === 0) resolve();
+            else reject(new Error(`taskkill exited with code ${code}`));
           });
+          kill.on("error", reject);
           kill.unref();
         });
       } catch {

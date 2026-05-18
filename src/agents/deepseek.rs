@@ -16,14 +16,21 @@ use crate::agents::{
 };
 
 pub struct DeepSeekAgent {
+    base_url: String,
     api_key_env: String,
     model: String,
     client: reqwest::Client,
 }
 
 impl DeepSeekAgent {
-    pub fn new(api_key_env: String, model: String, client: reqwest::Client) -> Self {
+    pub fn new(
+        base_url: String,
+        api_key_env: String,
+        model: String,
+        client: reqwest::Client,
+    ) -> Self {
         Self {
+            base_url,
             api_key_env,
             model,
             client,
@@ -78,9 +85,13 @@ impl DeepSeekAgent {
         let api_key = resolve_secret(&self.api_key_env, "deepseek.api_key_env")?;
         let payload = self.build_payload(messages, principles, options);
 
+        let url = format!(
+            "{}/v1/chat/completions",
+            self.base_url.trim_end_matches('/')
+        );
         let response = self
             .client
-            .post("https://api.deepseek.com/v1/chat/completions")
+            .post(url)
             .bearer_auth(api_key)
             .json(&payload)
             .send()
@@ -157,6 +168,14 @@ impl Agent for DeepSeekAgent {
                 ],
                 context_window: Some(128000),
             },
+            ModelInfo {
+                id: "deepseek-r1".to_string(),
+                name: "DeepSeek R1".to_string(),
+                description: "Dedicated reasoning model with chain-of-thought".to_string(),
+                is_default: self.model == "deepseek-r1",
+                capabilities: vec!["chat".to_string(), "reasoning".to_string()],
+                context_window: Some(128000),
+            },
         ]
     }
 
@@ -183,6 +202,7 @@ mod tests {
     #[test]
     fn build_payload_injects_system_principles_and_options() {
         let agent = DeepSeekAgent::new(
+            "https://api.deepseek.com".to_string(),
             "DEEPSEEK_API_KEY".to_string(),
             "deepseek-v4-flash".to_string(),
             reqwest::Client::new(),
@@ -212,6 +232,7 @@ mod tests {
     #[test]
     fn build_payload_without_principles_or_options() {
         let agent = DeepSeekAgent::new(
+            "https://api.deepseek.com".to_string(),
             "DEEPSEEK_API_KEY".to_string(),
             "deepseek-v4-flash".to_string(),
             reqwest::Client::new(),
@@ -229,6 +250,7 @@ mod tests {
     #[test]
     fn available_models_includes_default() {
         let agent = DeepSeekAgent::new(
+            "https://api.deepseek.com".to_string(),
             "DEEPSEEK_API_KEY".to_string(),
             "deepseek-v4-flash".to_string(),
             reqwest::Client::new(),
@@ -251,6 +273,7 @@ mod tests {
     #[test]
     fn build_payload_with_principles_only() {
         let agent = DeepSeekAgent::new(
+            "https://api.deepseek.com".to_string(),
             "DEEPSEEK_API_KEY".to_string(),
             "deepseek-v4-flash".to_string(),
             reqwest::Client::new(),

@@ -25,6 +25,8 @@ type ProtocolSupport = {
   universalSandboxProfileCheckedInMainChain?: boolean;
   universalApprovalCheckpointCheckedInMainChain?: boolean;
   universalCapabilityProfileCheckedInMainChain?: boolean;
+  verification?: string;
+  workflowProfileFields?: string[];
   defaultMode: string;
   autoModeSupportsAcpAndMcp: boolean;
   protocolCapabilityModel: string;

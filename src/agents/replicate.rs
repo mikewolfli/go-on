@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
-use crate::agent::{Agent, Message};
+use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 use crate::agents::{apply_openai_common_options, principles_to_text, stream_sse_to_sender};
 
@@ -109,6 +109,31 @@ impl ReplicateAgent {
 
 #[async_trait]
 impl Agent for ReplicateAgent {
+    fn available_models(&self) -> Vec<ModelInfo> {
+        vec![
+            ModelInfo {
+                id: "meta/meta-llama-3-70b-instruct".to_string(),
+                name: "Meta Llama 3 70B Instruct".to_string(),
+                description: "Meta Llama 3 70B Instruct (128K context)".to_string(),
+                is_default: self.model == "meta/meta-llama-3-70b-instruct",
+                capabilities: vec!["chat".to_string(), "streaming".to_string()],
+                context_window: Some(128_000),
+            },
+            ModelInfo {
+                id: "meta/meta-llama-3-8b-instruct".to_string(),
+                name: "Meta Llama 3 8B Instruct".to_string(),
+                description: "Meta Llama 3 8B Instruct (128K context)".to_string(),
+                is_default: self.model == "meta/meta-llama-3-8b-instruct",
+                capabilities: vec!["chat".to_string(), "streaming".to_string()],
+                context_window: Some(128_000),
+            },
+        ]
+    }
+
+    fn supports_model_override(&self) -> bool {
+        true
+    }
+
     async fn chat(
         &self,
         messages: Vec<Message>,

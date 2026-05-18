@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
-use crate::agent::{Agent, Message};
+use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 use crate::agents::{apply_openai_common_options, principles_to_text, stream_sse_to_sender};
 
@@ -106,6 +106,39 @@ impl TogetherAgent {
 
 #[async_trait]
 impl Agent for TogetherAgent {
+    fn available_models(&self) -> Vec<ModelInfo> {
+        vec![
+            ModelInfo {
+                id: "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo".to_string(),
+                name: "Meta Llama 3.1 70B Instruct Turbo".to_string(),
+                description: "Meta Llama 3.1 70B Instruct Turbo (128K context)".to_string(),
+                is_default: self.model == "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
+                capabilities: vec!["chat".to_string(), "streaming".to_string()],
+                context_window: Some(128_000),
+            },
+            ModelInfo {
+                id: "meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo".to_string(),
+                name: "Meta Llama 3.1 405B Instruct Turbo".to_string(),
+                description: "Meta Llama 3.1 405B Instruct Turbo (128K context)".to_string(),
+                is_default: self.model == "meta-llama/Meta-Llama-3.1-405B-Instruct-Turbo",
+                capabilities: vec!["chat".to_string(), "streaming".to_string()],
+                context_window: Some(128_000),
+            },
+            ModelInfo {
+                id: "mistralai/Mixtral-8x22B-Instruct-v0.1".to_string(),
+                name: "Mixtral 8x22B Instruct v0.1".to_string(),
+                description: "Mixtral 8x22B Instruct v0.1 (64K context)".to_string(),
+                is_default: self.model == "mistralai/Mixtral-8x22B-Instruct-v0.1",
+                capabilities: vec!["chat".to_string(), "streaming".to_string()],
+                context_window: Some(64_000),
+            },
+        ]
+    }
+
+    fn supports_model_override(&self) -> bool {
+        true
+    }
+
     async fn chat(
         &self,
         messages: Vec<Message>,

@@ -56,9 +56,28 @@ impl GeminiAgent {
             if message.role == "system" {
                 system_instruction = Some(message.content.clone());
             } else {
+                // Map "assistant" to Gemini's "model" role
+                let role = if message.role == "assistant" {
+                    "model"
+                } else {
+                    &message.role
+                };
+
+                // Support both plain text and structured parts (for vision/inline_data)
+                let parts = if let Ok(parsed) = serde_json::from_str::<Value>(&message.content) {
+                    if parsed.is_array() {
+                        // Content is a JSON array of parts (e.g., for vision requests)
+                        parsed.as_array().cloned().unwrap_or_default()
+                    } else {
+                        vec![json!({"text": message.content})]
+                    }
+                } else {
+                    vec![json!({"text": message.content})]
+                };
+
                 contents.push(json!({
-                    "role": message.role,
-                    "parts": [{"text": message.content}]
+                    "role": role,
+                    "parts": parts
                 }));
             }
         }
@@ -90,6 +109,29 @@ impl GeminiAgent {
         }
         if generation_config.as_object().is_some_and(|o| !o.is_empty()) {
             payload["generationConfig"] = generation_config;
+        }
+
+        // Forward tools parameter if present (Gemini "tools" array of Tool objects)
+        if let Some(tools) = options
+            .as_ref()
+            .and_then(|map| map.get("tools"))
+            .and_then(|v| v.as_array())
+        {
+            payload["tools"] = Value::Array(tools.clone());
+        }
+
+        // Forward tool_config parameter if present
+        if let Some(tool_config) = options.as_ref().and_then(|map| map.get("tool_config")) {
+            if tool_config.is_object() {
+                payload["tool_config"] = tool_config.clone();
+            }
+        }
+
+        // Forward safety_settings parameter if present
+        if let Some(safety_settings) = options.as_ref().and_then(|map| map.get("safety_settings")) {
+            if safety_settings.is_array() {
+                payload["safety_settings"] = safety_settings.clone();
+            }
         }
 
         payload
@@ -171,6 +213,7 @@ impl Agent for GeminiAgent {
                     "chat".to_string(),
                     "vision".to_string(),
                     "streaming".to_string(),
+                    "tools".to_string(),
                 ],
                 context_window: Some(1_048_576),
             },
@@ -183,6 +226,7 @@ impl Agent for GeminiAgent {
                     "chat".to_string(),
                     "vision".to_string(),
                     "streaming".to_string(),
+                    "tools".to_string(),
                 ],
                 context_window: Some(1_048_576),
             },
@@ -195,6 +239,7 @@ impl Agent for GeminiAgent {
                     "chat".to_string(),
                     "vision".to_string(),
                     "streaming".to_string(),
+                    "tools".to_string(),
                 ],
                 context_window: Some(1_048_576),
             },
@@ -207,6 +252,7 @@ impl Agent for GeminiAgent {
                     "chat".to_string(),
                     "vision".to_string(),
                     "streaming".to_string(),
+                    "tools".to_string(),
                 ],
                 context_window: Some(1_048_576),
             },
@@ -219,6 +265,7 @@ impl Agent for GeminiAgent {
                     "chat".to_string(),
                     "vision".to_string(),
                     "streaming".to_string(),
+                    "tools".to_string(),
                 ],
                 context_window: Some(1_048_576),
             },
@@ -231,6 +278,7 @@ impl Agent for GeminiAgent {
                     "chat".to_string(),
                     "vision".to_string(),
                     "streaming".to_string(),
+                    "tools".to_string(),
                 ],
                 context_window: Some(1_048_576),
             },

@@ -5613,6 +5613,46 @@ pub(super) async fn handle_provider_capabilities(
     }
 }
 
+/// Handle `provider.catalog` RPC — returns the full built-in provider catalog
+/// with all spec metadata (URL, model, api_key_env, capabilities, etc.)
+/// so GUI and VS Code extension can avoid hardcoding provider data.
+pub(super) async fn handle_provider_catalog(
+    server: &AcpServer,
+    _params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let specs = crate::core::config::provider_specs();
+    let catalog: Vec<Value> = specs
+        .iter()
+        .map(|spec| {
+            json!({
+                "name": spec.name,
+                "type": spec.agent_type,
+                "url": spec.url,
+                "chat_path": spec.chat_path,
+                "model": spec.model,
+                "api_key_env": spec.api_key_env,
+                "secret_key_env": spec.secret_key_env,
+                "anthropic_version": spec.anthropic_version,
+                "max_tokens": spec.max_tokens,
+                "supports_system": spec.supports_system,
+                "supports_vision": spec.supports_vision,
+            })
+        })
+        .collect();
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "ok": true,
+            "catalog": catalog,
+            "total": catalog.len(),
+        }),
+    )
+    .await
+}
+
 pub(super) async fn handle_provider_list_models(
     server: &AcpServer,
     params: Value,

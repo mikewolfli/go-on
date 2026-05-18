@@ -13,11 +13,12 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
-use crate::agent::{Agent, Message};
+use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 use crate::agents::{
     apply_openai_common_options, principles_to_text, stream_sse_events, SseEventAction,
 };
+use tracing::warn;
 
 pub struct CohereAgent {
     api_key_env: String,
@@ -124,6 +125,11 @@ impl CohereAgent {
     /// - `{"is_finished": false, "text": "partial token", ...}`
     /// - `{"is_finished": true, "response": {"text": "full text", ...}}`
     fn parse_cohere_event(event: &str) -> anyhow::Result<(SseEventAction, Option<String>)> {
+        // Some Cohere deployments may send [DONE] like OpenAI-compatible APIs
+        if event.trim() == "[DONE]" {
+            return Ok((SseEventAction::Stop, None));
+        }
+
         let value: Value = serde_json::from_str(event)?;
 
         // Check for finish
@@ -146,20 +152,18 @@ impl CohereAgent {
         response: reqwest::Response,
         sender: crate::agent::StreamingSender,
     ) -> anyhow::Result<()> {
-        stream_sse_events(response, move |data| {
-            match Self::parse_cohere_event(data) {
-                Ok((action, maybe_text)) => {
-                    if let Some(text) = maybe_text {
-                        if sender.send(text).is_err() {
-                            return Ok(SseEventAction::Stop);
-                        }
+        stream_sse_events(response, move |data| match Self::parse_cohere_event(data) {
+            Ok((action, maybe_text)) => {
+                if let Some(text) = maybe_text {
+                    if sender.send(text).is_err() {
+                        return Ok(SseEventAction::Stop);
                     }
-                    Ok(action)
                 }
-                Err(_) => {
-                    // If we can't parse, just continue
-                    Ok(SseEventAction::Continue)
-                }
+                Ok(action)
+            }
+            Err(e) => {
+                warn!("cohere SSE parse error: {e}");
+                Ok(SseEventAction::Continue)
             }
         })
         .await
@@ -232,5 +236,42 @@ impl Agent for CohereAgent {
         Err(last_error
             .unwrap_or_else(|| anyhow::anyhow!("{}", request_failed_msg("cohere")))
             .into())
+    }
+
+    fn available_models(&self) -> Vec<ModelInfo> {
+        vec![
+            ModelInfo {
+                id: "command-r-plus-08-2024".to_string(),
+                name: "Command R+ 08-2024".to_string(),
+                description: "Cohere Command R+ 08-2024".to_string(),
+                is_default: self.model == "command-r-plus-08-2024",
+                capabilities: vec!["chat".to_string()],
+                context_window: Some(131072),
+            },
+            ModelInfo {
+                id: "command-r-08-2024".to_string(),
+                name: "Command R 08-2024".to_string(),
+                description: "Cohere Command R 08-2024".to_string(),
+                is_default: self.model == "command-r-08-2024",
+                capabilities: vec!["chat".to_string()],
+                context_window: Some(131072),
+            },
+            ModelInfo {
+                id: "command-light".to_string(),
+                name: "Command Light".to_string(),
+                description: "Cohere Command Light".to_string(),
+                is_default: self.model == "command-light",
+                capabilities: vec!["chat".to_string()],
+                context_window: Some(4096),
+            },
+        ]
+    }
+
+    fn default_model(&self) -> Option<ModelInfo> {
+        self.available_models().into_iter().find(|m| m.is_default)
+    }
+
+    fn supports_model_override(&self) -> bool {
+        true
     }
 }

@@ -764,11 +764,20 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
         }
         "deepseek" => {
             let api_key_env = required_field("deepseek", &config.api_key_env, "api_key_env")?;
+            let base_url = config
+                .url
+                .clone()
+                .unwrap_or_else(|| "https://api.deepseek.com".to_string());
             let model = config
                 .model
                 .clone()
                 .unwrap_or_else(|| "deepseek-v4-flash".to_string());
-            Ok(Arc::new(DeepSeekAgent::new(api_key_env, model, client)))
+            Ok(Arc::new(DeepSeekAgent::new(
+                base_url,
+                api_key_env,
+                model,
+                client,
+            )))
         }
         "wenxin" => {
             let api_key_env = required_field("wenxin", &config.api_key_env, "api_key_env")?;

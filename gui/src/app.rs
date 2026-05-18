@@ -407,7 +407,9 @@ impl GoOnApp {
     /// keyring is unavailable — see `load_secret_value()` in the backend code.
     fn generate_backend_config(path: &std::path::Path, config: &AppConfig) {
         // Canonical provider metadata — maps provider name to (agent_type, url, default_model, supports_system).
-        // This matches `src/core/providers_data.toml` and the backend agent factory in `build_agent()`.
+        // This is the GUI-side hardcoded duplicate of the backend's built_in_provider_specs().
+        // Keep in sync with `src/core/config.rs` and `src/core/setup.rs`.
+        // NOTE: `built_in_provider_specs()` in the backend is the authoritative source.
         fn provider_meta(name: &str) -> (&'static str, Option<&'static str>, &'static str, bool) {
             match name {
                 "openai" => (
@@ -436,7 +438,7 @@ impl GoOnApp {
                 ),
                 "deepseek" => (
                     "deepseek",
-                    Some("https://api.deepseek.com/v1"),
+                    Some("https://api.deepseek.com"),
                     "deepseek-v4-flash",
                     true,
                 ),
@@ -469,7 +471,7 @@ impl GoOnApp {
                 "doubao" => (
                     "doubao",
                     Some("https://ark.cn-beijing.volces.com/api/v3"),
-                    "doubao-1.5-pro-32k-250115",
+                    "doubao-1.5-pro-256k-250115",
                     true,
                 ),
                 "facewall" => (
@@ -594,6 +596,12 @@ impl GoOnApp {
                     Some("https://api.together.xyz/v1"),
                     "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
                     false,
+                ),
+                "xai" => (
+                    "openai_compatible",
+                    Some("https://api.x.ai/v1"),
+                    "grok-3",
+                    true,
                 ),
                 _ => ("openai_compatible", None, "auto", false),
             }

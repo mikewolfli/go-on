@@ -457,8 +457,6 @@ export function activate(context: vscode.ExtensionContext) {
   // Initialize config manager
   const config = vscode.workspace.getConfiguration("go-on");
   const configPath = config.get<string>("configPath", "./config.toml");
-  // Sync VS Code language to app configuration
-  syncLanguageToApp(currentLanguage);
 
   // Initialize config manager and GoOnManager
   (async () => {
@@ -770,7 +768,7 @@ export function activate(context: vscode.ExtensionContext) {
           if (!ready) {
             const action = await vscode.window.showWarningMessage(
               "AI provider is configured but no API key is set. " +
-              "Go-On needs an API key to function.",
+                "Go-On needs an API key to function.",
               "Open Settings",
               "Later",
             );
@@ -813,25 +811,4 @@ export function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {
   if (goOnManager) goOnManager.stop();
-}
-
-/**
- * Sync VS Code language with app configuration
- * This ensures the app uses the same language as VS Code
- */
-async function syncLanguageToApp(language: string): Promise<void> {
-  try {
-    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-
-    if (!workspaceFolder) {
-      return;
-    }
-
-    // Log successful sync
-    goOnOutput.appendLine(
-      `Language synchronized: VS Code ${language} -> App ${language}`,
-    );
-  } catch (error) {
-    goOnOutput.appendLine(`warn: language sync failed: ${error}`);
-  }
 }

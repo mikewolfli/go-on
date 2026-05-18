@@ -21,8 +21,22 @@ impl VendorCategory {
                 vec!["openai", "openai_compatible", "anthropic", "cohere"]
             }
             VendorCategory::ChineseVendors => vec![
-                "deepseek", "wenxin", "qianfan", "qwen", "glm", "yi", "hunyuan", "doubao",
-                "facewall", "langboat", "skywork", "stepfun", "xihu", "moonshot", "minimax",
+                "deepseek",
+                "wenxin",
+                "qianfan",
+                "qwen",
+                "glm",
+                "yi",
+                "hunyuan",
+                "doubao",
+                "facewall",
+                "langboat",
+                "skywork",
+                "stepfun",
+                "xihu",
+                "moonshot",
+                "minimax",
+                "siliconflow",
             ],
             VendorCategory::OtherVendors => vec![
                 "ai21",
@@ -40,6 +54,7 @@ impl VendorCategory {
                 "replicate",
                 "titan",
                 "together",
+                "xai",
             ],
         }
     }

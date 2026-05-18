@@ -171,7 +171,7 @@ Cross-platform (Windows, Linux, macOS):
 
 ### Configuration & Scripts
 - `config/` — Configuration files (`config.toml`, `config.production.toml`)
-  Provider specs are compiled into the binary from `src/core/providers_data.toml`.
+  Provider specs are hardcoded in `built_in_provider_specs()` within `src/core/config.rs` and `src/core/setup.rs`.
 - `scripts/` — Quality/release gate scripts and deployment utilities
   - `scripts/deploy/nginx/` — Ingress and TLS reverse-proxy templates
 

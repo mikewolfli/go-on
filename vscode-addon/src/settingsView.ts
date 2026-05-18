@@ -82,7 +82,7 @@ const BUILTIN_PROVIDER_CATALOG: ProviderCatalogSpec[] = [
     type: "openai",
     group: "openai",
     url: "https://api.openai.com/v1",
-    model: "gpt-4o",
+    model: "gpt-4o-mini",
     api_key_env: "OPENAI_API_KEY",
     supports_system: true,
   },
@@ -119,8 +119,8 @@ const BUILTIN_PROVIDER_CATALOG: ProviderCatalogSpec[] = [
     name: "deepseek",
     type: "deepseek",
     group: "chinese",
-    url: "https://api.deepseek.com/v1",
-    model: "deepseek-chat",
+    url: "https://api.deepseek.com",
+    model: "deepseek-v4-flash",
     api_key_env: "DEEPSEEK_API_KEY",
     supports_system: true,
   },
@@ -136,7 +136,7 @@ const BUILTIN_PROVIDER_CATALOG: ProviderCatalogSpec[] = [
     name: "qianfan",
     type: "qianfan",
     group: "chinese",
-    model: "ERNIE-Bot",
+    model: "ERNIE-4.5-8K",
     api_key_env: "QIANFAN_API_KEY",
     secret_key_env: "QIANFAN_SECRET_KEY",
   },
@@ -145,7 +145,7 @@ const BUILTIN_PROVIDER_CATALOG: ProviderCatalogSpec[] = [
     type: "qwen",
     group: "chinese",
     url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    model: "qwen-max-2025-01-25",
+    model: "qwen-max",
     api_key_env: "QWEN_API_KEY",
     supports_system: true,
   },
@@ -179,7 +179,7 @@ const BUILTIN_PROVIDER_CATALOG: ProviderCatalogSpec[] = [
     group: "chinese",
     url: "https://ark.cn-beijing.volces.com/api/v3",
     chat_path: "/chat/completions",
-    model: "doubao-1.5-pro-32k-250115",
+    model: "doubao-1.5-pro-256k-250115",
     api_key_env: "DOUBAO_API_KEY",
     supports_system: true,
   },
@@ -212,7 +212,7 @@ const BUILTIN_PROVIDER_CATALOG: ProviderCatalogSpec[] = [
     type: "stepfun",
     group: "chinese",
     url: "https://api.stepfun.com/v1",
-    model: "step-2-16k-2505",
+    model: "step-2-16k",
     api_key_env: "STEPFUN_API_KEY",
   },
   {
@@ -252,7 +252,7 @@ const BUILTIN_PROVIDER_CATALOG: ProviderCatalogSpec[] = [
     type: "aleph",
     group: "other",
     url: "https://api.aleph-alpha.com",
-    model: "luminous-base-control",
+    model: "luminous-base",
     api_key_env: "ALEPH_API_KEY",
   },
   {
@@ -283,7 +283,7 @@ const BUILTIN_PROVIDER_CATALOG: ProviderCatalogSpec[] = [
     type: "gemini",
     group: "other",
     url: "https://generativelanguage.googleapis.com/v1beta",
-    model: "gemini-2.5-flash-preview-04-17",
+    model: "gemini-2.5-flash",
     api_key_env: "GEMINI_API_KEY",
   },
   {
@@ -357,6 +357,15 @@ const BUILTIN_PROVIDER_CATALOG: ProviderCatalogSpec[] = [
     url: "https://api.together.xyz/v1",
     model: "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
     api_key_env: "TOGETHER_API_KEY",
+  },
+  {
+    name: "xai",
+    type: "openai_compatible",
+    group: "other",
+    url: "https://api.x.ai/v1",
+    model: "grok-3",
+    api_key_env: "XAI_API_KEY",
+    supports_system: true,
   },
 ];
 
@@ -1043,8 +1052,9 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
 
   private _loadPersistedCopilotState(): PersistedCopilotState {
     return (
-      this.context.workspaceState.get<PersistedCopilotState>(COPILOT_STATE_KEY) ||
-      {}
+      this.context.workspaceState.get<PersistedCopilotState>(
+        COPILOT_STATE_KEY,
+      ) || {}
     );
   }
 
@@ -1348,7 +1358,10 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     });
 
     const poll = async (): Promise<void> => {
-      while (this._pendingCopilotDeviceAuth && !this._pendingCopilotDeviceAuth.cancelRequested) {
+      while (
+        this._pendingCopilotDeviceAuth &&
+        !this._pendingCopilotDeviceAuth.cancelRequested
+      ) {
         if (Date.now() >= expiresAt) {
           this._pendingCopilotDeviceAuth = undefined;
           await this._updatePersistedCopilotState({
@@ -1365,8 +1378,13 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
           return;
         }
 
-        await new Promise((resolve) => setTimeout(resolve, intervalSeconds * 1000));
-        if (!this._pendingCopilotDeviceAuth || this._pendingCopilotDeviceAuth.cancelRequested) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, intervalSeconds * 1000),
+        );
+        if (
+          !this._pendingCopilotDeviceAuth ||
+          this._pendingCopilotDeviceAuth.cancelRequested
+        ) {
           break;
         }
 
@@ -1522,7 +1540,9 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     return merged;
   }
 
-  private async _loadProviderCatalogFromRuntime(): Promise<ProviderCatalogSpec[]> {
+  private async _loadProviderCatalogFromRuntime(): Promise<
+    ProviderCatalogSpec[]
+  > {
     if (!this.manager.isRunning()) {
       return [];
     }
@@ -1530,7 +1550,8 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     try {
       const result = await this.manager.sendRequest("provider.catalog", {});
       const record = asRecord(result);
-      const providers = Array.isArray(record.providers) ? record.providers : [];
+      // Backend returns { "ok": true, "catalog": [...], "total": N }
+      const providers = Array.isArray(record.catalog) ? record.catalog : [];
       const parsed = providers
         .map((item) => asCatalogSpec(item))
         .filter((item): item is ProviderCatalogSpec => Boolean(item));
@@ -1549,7 +1570,9 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       for (const group of groups) {
         const item = asRecord(group);
         const name = String(item.provider || item.agent || "").trim();
-        const modelId = this._modelIdFromRuntime(item.id || item.model_id || item.name);
+        const modelId = this._modelIdFromRuntime(
+          item.id || item.model_id || item.name,
+        );
         if (!name) {
           continue;
         }
@@ -1560,12 +1583,15 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
           byProvider.get(name)?.push(modelId);
         }
       }
-      const parsed = Array.from(byProvider.entries()).map(([name, models]) => ({
-        name,
-        type: name,
-        model: models[0],
-        api_key_env: inferEnvVar(name),
-      } as ProviderCatalogSpec));
+      const parsed = Array.from(byProvider.entries()).map(
+        ([name, models]) =>
+          ({
+            name,
+            type: name,
+            model: models[0],
+            api_key_env: inferEnvVar(name),
+          }) as ProviderCatalogSpec,
+      );
       return parsed;
     } catch {
       return [];
@@ -1628,9 +1654,12 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
 
     if (this.manager.isRunning()) {
       try {
-        const response = await this.manager.sendRequest("provider.list_models", {
-          provider: providerName,
-        });
+        const response = await this.manager.sendRequest(
+          "provider.list_models",
+          {
+            provider: providerName,
+          },
+        );
         const payload = asRecord(response);
         const ids = Array.isArray(payload.model_ids) ? payload.model_ids : [];
         for (const item of ids) {
@@ -1640,7 +1669,9 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
           }
         }
 
-        const runtimeModels = Array.isArray(payload.models) ? payload.models : [];
+        const runtimeModels = Array.isArray(payload.models)
+          ? payload.models
+          : [];
         for (const runtimeModel of runtimeModels) {
           const modelId = this._modelIdFromRuntime(runtimeModel);
           if (modelId) {
@@ -1659,11 +1690,15 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
           const groups = Array.isArray(payload.models) ? payload.models : [];
           for (const group of groups) {
             const record = asRecord(group);
-            const groupProvider = String(record.provider || record.agent || "").trim();
+            const groupProvider = String(
+              record.provider || record.agent || "",
+            ).trim();
             if (groupProvider !== providerName) {
               continue;
             }
-            const modelId = this._modelIdFromRuntime(record.id || record.model_id || record.name);
+            const modelId = this._modelIdFromRuntime(
+              record.id || record.model_id || record.name,
+            );
             if (modelId) {
               modelSet.add(modelId);
             }
@@ -1730,8 +1765,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       modelOptions: modelResolution.modelOptions,
       secretTargets,
       copilotAuth:
-        modelResolution.copilotAuth ||
-        (await this._currentCopilotAuthState()),
+        modelResolution.copilotAuth || (await this._currentCopilotAuthState()),
     };
   }
 

@@ -1,7 +1,6 @@
 import * as vscode from "vscode";
 import { i18n, MessageKeys } from "./i18n";
 
-import { protocolContract } from "./protocolContract";
 import { RuntimeManagerLike } from "./managerTypes";
 
 interface ProbeReport {
@@ -91,7 +90,6 @@ export class StatusMonitor {
         }
       } catch {
         this.consecutiveFailures++;
-        const _failureTerm = protocolContract.statusTerms.healthCheckFailed;
         this.statusBarItem.tooltip = i18n.getMessage(
           MessageKeys.statusBarHealthCheckFailedTooltip,
           [String(this.consecutiveFailures), String(this.maxFailures)],
@@ -162,8 +160,6 @@ export class StatusMonitor {
 
   private updateHealthStatus(health: unknown) {
     // Update tooltip with health information
-    // Keep explicit contract-term reference for cross-surface smoke checks.
-    const _healthyTerm = protocolContract.statusTerms.healthy;
     const healthInfo =
       typeof health === "object"
         ? JSON.stringify(health, null, 2)

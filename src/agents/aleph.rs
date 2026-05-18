@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
-use crate::agent::{Agent, Message};
+use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 use crate::agents::{apply_openai_common_options, principles_to_text, stream_sse_to_sender};
 
@@ -138,5 +138,34 @@ impl Agent for AlephAgent {
         Err(last_error
             .unwrap_or_else(|| anyhow::anyhow!("{}", request_failed_msg("aleph")))
             .into())
+    }
+
+    fn available_models(&self) -> Vec<ModelInfo> {
+        vec![
+            ModelInfo {
+                id: "luminous-base".to_string(),
+                name: "Luminous Base".to_string(),
+                description: "Aleph Alpha Luminous Base".to_string(),
+                is_default: self.model == "luminous-base",
+                capabilities: vec!["chat".to_string()],
+                context_window: Some(2048),
+            },
+            ModelInfo {
+                id: "luminous-extended".to_string(),
+                name: "Luminous Extended".to_string(),
+                description: "Aleph Alpha Luminous Extended".to_string(),
+                is_default: self.model == "luminous-extended",
+                capabilities: vec!["chat".to_string()],
+                context_window: Some(8192),
+            },
+        ]
+    }
+
+    fn default_model(&self) -> Option<ModelInfo> {
+        self.available_models().into_iter().find(|m| m.is_default)
+    }
+
+    fn supports_model_override(&self) -> bool {
+        true
     }
 }

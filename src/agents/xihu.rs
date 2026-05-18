@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
-use crate::agent::{Agent, Message};
+use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 use crate::agents::{apply_openai_common_options, principles_to_text, stream_sse_to_sender};
 
@@ -138,5 +138,34 @@ impl Agent for XihuAgent {
         Err(last_error
             .unwrap_or_else(|| anyhow::anyhow!("{}", request_failed_msg("xihu")))
             .into())
+    }
+
+    fn available_models(&self) -> Vec<ModelInfo> {
+        vec![
+            ModelInfo {
+                id: "xihu-chat".to_string(),
+                name: "Xihu Chat".to_string(),
+                description: "Xihu Chat".to_string(),
+                is_default: self.model == "xihu-chat",
+                capabilities: vec!["chat".to_string()],
+                context_window: Some(8192),
+            },
+            ModelInfo {
+                id: "xihu-chat-large".to_string(),
+                name: "Xihu Chat Large".to_string(),
+                description: "Xihu Chat Large".to_string(),
+                is_default: self.model == "xihu-chat-large",
+                capabilities: vec!["chat".to_string()],
+                context_window: Some(32768),
+            },
+        ]
+    }
+
+    fn default_model(&self) -> Option<ModelInfo> {
+        self.available_models().into_iter().find(|m| m.is_default)
+    }
+
+    fn supports_model_override(&self) -> bool {
+        true
     }
 }

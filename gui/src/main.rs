@@ -150,6 +150,21 @@ fn load_cjk_font(fonts: &mut egui::FontDefinitions) -> bool {
 /// Auto-detect common VPN proxy ports and set HTTPS_PROXY if found.
 /// Works on Linux, macOS, and Windows — covers ClashX, v2ray/Xray, SS/SSR, Surge, Quantumult, etc.
 /// This allows the app to access GitHub through the user's VPN without manual config.
+///
+/// # Safety
+///
+/// This function uses `std::env::set_var()` which is documented as **undefined behavior**
+/// in multi-threaded contexts. The backend provides a thread-safe alternative:
+/// [`set_secret_override`](crate::shared::secret_override::set_secret_override).
+/// However, this function runs **before any threads are spawned** (called from `main()`
+/// before `eframe::run_native`), so there is exactly one thread at this point.
+/// The HTTPS_PROXY env var must be set as a real environment variable for `reqwest` to
+/// pick it up automatically (the override map is only consulted by `get_secret()` calls
+/// within go-on's own code). If the override map were used here, `reqwest`'s proxy resolution
+/// would not see it, defeating the purpose.
+///
+/// For these two reasons — single-threaded context and the need for a real env var visible
+/// to external libraries — `set_var()` is sound here.
 fn auto_detect_proxy() {
     if std::env::var("HTTPS_PROXY").is_ok() || std::env::var("https_proxy").is_ok() {
         return; // User already configured a proxy
@@ -222,6 +237,9 @@ fn auto_detect_proxy() {
                 )
                 .is_ok()
                 {
+                    // SAFETY: single-threaded context (called before any threads are spawned
+                    // in main()) and we need real env vars for reqwest's proxy resolution.
+                    // See the doc comment on `auto_detect_proxy` for full rationale.
                     std::env::set_var("HTTPS_PROXY", proxy_url);
                     std::env::set_var("https_proxy", proxy_url);
                     eprintln!("auto_detect_proxy: found proxy at {proxy_url}, set HTTPS_PROXY.");

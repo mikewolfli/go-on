@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
-use crate::agent::{Agent, Message};
+use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 use crate::agents::{apply_openai_common_options, principles_to_text, stream_sse_to_sender};
 
@@ -106,6 +106,39 @@ impl NimAgent {
 
 #[async_trait]
 impl Agent for NimAgent {
+    fn available_models(&self) -> Vec<ModelInfo> {
+        vec![
+            ModelInfo {
+                id: "meta/llama-3.1-70b-instruct".to_string(),
+                name: "Meta Llama 3.1 70B Instruct".to_string(),
+                description: "Meta Llama 3.1 70B Instruct (128K context)".to_string(),
+                is_default: self.model == "meta/llama-3.1-70b-instruct",
+                capabilities: vec!["chat".to_string(), "streaming".to_string()],
+                context_window: Some(128_000),
+            },
+            ModelInfo {
+                id: "meta/llama-3.1-405b-instruct".to_string(),
+                name: "Meta Llama 3.1 405B Instruct".to_string(),
+                description: "Meta Llama 3.1 405B Instruct (128K context)".to_string(),
+                is_default: self.model == "meta/llama-3.1-405b-instruct",
+                capabilities: vec!["chat".to_string(), "streaming".to_string()],
+                context_window: Some(128_000),
+            },
+            ModelInfo {
+                id: "mistralai/mixtral-8x22b-instruct".to_string(),
+                name: "Mixtral 8x22B Instruct".to_string(),
+                description: "Mixtral 8x22B Instruct (64K context)".to_string(),
+                is_default: self.model == "mistralai/mixtral-8x22b-instruct",
+                capabilities: vec!["chat".to_string(), "streaming".to_string()],
+                context_window: Some(64_000),
+            },
+        ]
+    }
+
+    fn supports_model_override(&self) -> bool {
+        true
+    }
+
     async fn chat(
         &self,
         messages: Vec<Message>,

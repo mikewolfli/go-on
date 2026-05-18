@@ -12,7 +12,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY Cargo.toml Cargo.lock* ./
-COPY src/core/providers_data.toml src/core/
 COPY src/ src/
 
 RUN cargo build --release --no-default-features -F profile-multi-users-server && \

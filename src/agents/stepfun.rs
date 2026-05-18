@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
-use crate::agent::{Agent, Message};
+use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 use crate::agents::{apply_openai_common_options, principles_to_text, stream_sse_to_sender};
 
@@ -138,5 +138,42 @@ impl Agent for StepFunAgent {
         Err(last_error
             .unwrap_or_else(|| anyhow::anyhow!("{}", request_failed_msg("stepfun")))
             .into())
+    }
+
+    fn available_models(&self) -> Vec<ModelInfo> {
+        vec![
+            ModelInfo {
+                id: "step-2-16k".to_string(),
+                name: "Step 2 16K".to_string(),
+                description: "StepFun Step 2 16K".to_string(),
+                is_default: self.model == "step-2-16k",
+                capabilities: vec!["chat".to_string()],
+                context_window: Some(16384),
+            },
+            ModelInfo {
+                id: "step-1-8k".to_string(),
+                name: "Step 1 8K".to_string(),
+                description: "StepFun Step 1 8K".to_string(),
+                is_default: self.model == "step-1-8k",
+                capabilities: vec!["chat".to_string()],
+                context_window: Some(8192),
+            },
+            ModelInfo {
+                id: "step-1-flash".to_string(),
+                name: "Step 1 Flash".to_string(),
+                description: "StepFun Step 1 Flash".to_string(),
+                is_default: self.model == "step-1-flash",
+                capabilities: vec!["chat".to_string()],
+                context_window: Some(8192),
+            },
+        ]
+    }
+
+    fn default_model(&self) -> Option<ModelInfo> {
+        self.available_models().into_iter().find(|m| m.is_default)
+    }
+
+    fn supports_model_override(&self) -> bool {
+        true
     }
 }

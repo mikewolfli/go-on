@@ -433,9 +433,11 @@ mod tests {
     use std::time::Duration;
 
     fn test_manager() -> SessionManager {
-        let mut auth_cfg = AuthConfig::default();
-        auth_cfg.user_auth_enabled = true;
-        auth_cfg.user_auth_token_secret = "test-secret-key".into();
+        let auth_cfg = AuthConfig {
+            user_auth_enabled: true,
+            user_auth_token_secret: "test-secret-key".into(),
+            ..Default::default()
+        };
         SessionManager::with_auth_config(auth_cfg)
     }
 
@@ -671,10 +673,12 @@ mod tests {
 
     #[test]
     fn test_auth_config_from_runtime_config() {
-        let mut cfg = RuntimeConfig::default();
-        cfg.user_auth_enabled = true;
-        cfg.user_auth_token_secret = "my-secret".into();
-        cfg.user_auth_token_ttl_seconds = 7200;
+        let cfg = RuntimeConfig {
+            user_auth_enabled: true,
+            user_auth_token_secret: "my-secret".into(),
+            user_auth_token_ttl_seconds: 7200,
+            ..Default::default()
+        };
 
         let auth_cfg = AuthConfig::from(&cfg);
         assert!(auth_cfg.user_auth_enabled);

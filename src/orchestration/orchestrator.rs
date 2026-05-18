@@ -79,8 +79,7 @@ pub fn select_model_for_task(
 
 /// Estimate request cost in cents based on model ID.
 ///
-/// NOTE: Model costs and latencies should be aligned with providers_data.toml
-/// as the authoritative source. Update when model pricing changes.
+/// NOTE: Model costs and latencies are defined inline below. Update when model pricing changes.
 pub fn estimate_model_cost(model_id: &str) -> u32 {
     match model_id {
         // DeepSeek models
@@ -107,8 +106,7 @@ pub fn estimate_model_cost(model_id: &str) -> u32 {
 
 /// Estimate latency in milliseconds based on model ID.
 ///
-/// NOTE: Model costs and latencies should be aligned with providers_data.toml
-/// as the authoritative source. Update when model pricing changes.
+/// NOTE: Model costs and latencies are defined inline below. Update when model pricing changes.
 pub fn estimate_model_latency(model_id: &str) -> u32 {
     match model_id {
         // Fast models

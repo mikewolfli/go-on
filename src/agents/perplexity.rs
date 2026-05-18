@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
-use crate::agent::{Agent, Message};
+use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 use crate::agents::{apply_openai_common_options, principles_to_text, stream_sse_to_sender};
 
@@ -106,6 +106,47 @@ impl PerplexityAgent {
 
 #[async_trait]
 impl Agent for PerplexityAgent {
+    fn available_models(&self) -> Vec<ModelInfo> {
+        vec![
+            ModelInfo {
+                id: "sonar-pro".to_string(),
+                name: "Sonar Pro".to_string(),
+                description: "Sonar Pro (200K context, chat, streaming, search)".to_string(),
+                is_default: self.model == "sonar-pro",
+                capabilities: vec!["chat".to_string(), "streaming".to_string(), "search".to_string()],
+                context_window: Some(200_000),
+            },
+            ModelInfo {
+                id: "sonar".to_string(),
+                name: "Sonar".to_string(),
+                description: "Sonar (200K context)".to_string(),
+                is_default: self.model == "sonar",
+                capabilities: vec!["chat".to_string(), "streaming".to_string()],
+                context_window: Some(200_000),
+            },
+            ModelInfo {
+                id: "sonar-reasoning-pro".to_string(),
+                name: "Sonar Reasoning Pro".to_string(),
+                description: "Sonar Reasoning Pro (200K context, reasoning)".to_string(),
+                is_default: self.model == "sonar-reasoning-pro",
+                capabilities: vec!["chat".to_string(), "reasoning".to_string(), "streaming".to_string()],
+                context_window: Some(200_000),
+            },
+            ModelInfo {
+                id: "sonar-reasoning".to_string(),
+                name: "Sonar Reasoning".to_string(),
+                description: "Sonar Reasoning (200K context)".to_string(),
+                is_default: self.model == "sonar-reasoning",
+                capabilities: vec!["chat".to_string(), "reasoning".to_string(), "streaming".to_string()],
+                context_window: Some(200_000),
+            },
+        ]
+    }
+
+    fn supports_model_override(&self) -> bool {
+        true
+    }
+
     async fn chat(
         &self,
         messages: Vec<Message>,

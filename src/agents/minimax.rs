@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
-use crate::agent::{Agent, Message};
+use crate::agent::{Agent, Message, ModelInfo};
 use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 use crate::agents::{apply_openai_common_options, principles_to_text, stream_sse_to_sender};
 
@@ -138,5 +138,34 @@ impl Agent for MiniMaxAgent {
         Err(last_error
             .unwrap_or_else(|| anyhow::anyhow!("{}", request_failed_msg("minimax")))
             .into())
+    }
+
+    fn available_models(&self) -> Vec<ModelInfo> {
+        vec![
+            ModelInfo {
+                id: "MiniMax-Text-01".to_string(),
+                name: "MiniMax Text 01".to_string(),
+                description: "MiniMax Text 01".to_string(),
+                is_default: self.model == "MiniMax-Text-01",
+                capabilities: vec!["chat".to_string()],
+                context_window: Some(131072),
+            },
+            ModelInfo {
+                id: "MiniMax-Text-01-mini".to_string(),
+                name: "MiniMax Text 01 Mini".to_string(),
+                description: "MiniMax Text 01 Mini".to_string(),
+                is_default: self.model == "MiniMax-Text-01-mini",
+                capabilities: vec!["chat".to_string()],
+                context_window: Some(131072),
+            },
+        ]
+    }
+
+    fn default_model(&self) -> Option<ModelInfo> {
+        self.available_models().into_iter().find(|m| m.is_default)
+    }
+
+    fn supports_model_override(&self) -> bool {
+        true
     }
 }

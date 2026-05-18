@@ -420,7 +420,7 @@ impl OptimizerRegistry {
         let mut all: Vec<OptimizationSuggestion> = self
             .optimizers
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .iter()
             .map(|opt| opt.optimize(ctx))
             .filter(|s| s.estimated_improvement > 0.0)
@@ -438,7 +438,7 @@ impl OptimizerRegistry {
     pub fn list_optimizers(&self) -> Vec<String> {
         self.optimizers
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .iter()
             .map(|opt| {
                 // We forward to a small helper that extracts the name via optimize.

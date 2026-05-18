@@ -346,7 +346,10 @@ impl L1ExactCache {
 
             // Move to MRU (back of deque)
             if let Some(pos) = self.order.iter().position(|k| k == key) {
-                let k = self.order.remove(pos).unwrap();
+                let k = self
+                    .order
+                    .remove(pos)
+                    .expect("pos is valid because we just found it via position()");
                 self.order.push_back(k);
             }
 
@@ -368,7 +371,10 @@ impl L1ExactCache {
         if self.map.contains_key(&key) {
             // Update existing
             if let Some(pos) = self.order.iter().position(|k| *k == key) {
-                let k = self.order.remove(pos).unwrap();
+                let k = self
+                    .order
+                    .remove(pos)
+                    .expect("pos is valid because we just found it via position()");
                 self.order.push_back(k);
             }
             self.map.insert(key, entry);
