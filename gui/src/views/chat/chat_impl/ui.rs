@@ -501,6 +501,40 @@ impl ChatView {
                 });
         }
 
+        // ── PromptsView commands (always visible, no close needed) ──
+        if CHAT_STAGE6_ENABLE_EXTRA_BUTTONS && !self.prompts_command_templates.is_empty() {
+            egui::Window::new(i18n.t("prompts.title"))
+                .id(egui::Id::new("prompts_commands_window"))
+                .collapsible(true)
+                .default_open(false)
+                .resizable(true)
+                .default_width(360.0)
+                .anchor(egui::Align2::LEFT_TOP, egui::vec2(10.0, 200.0))
+                .show(ctx, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("prompts_cmd_scroll")
+                        .max_height(300.0)
+                        .show(ui, |ui| {
+                            for ct in &self.prompts_command_templates {
+                                let label = format!(
+                                    "{}  — {}",
+                                    ct.command,
+                                    ct.content.lines().next().unwrap_or("")
+                                );
+                                let short_label = if label.len() > 60 {
+                                    format!("{}…", &label[..57])
+                                } else {
+                                    label
+                                };
+                                if ui.button(short_label).on_hover_text(&ct.content).clicked() {
+                                    self.input = ct.content.clone();
+                                    self.show_prompts = false;
+                                }
+                            }
+                        });
+                });
+        }
+
         // ── Main layout: SidePanel + vertical right ──────────
         egui::SidePanel::left("chat_sidebar_panel")
             .default_width(220.0)

@@ -14,5 +14,7 @@ git-repository-url = "https://github.com/mikewolfli/go-on"
 site-url = "/"
 edit-url-template = "https://github.com/mikewolfli/go-on/edit/main/DOC/zh-CN/src/{path}"
 
+[output.pdf]
+
 [preprocessor.links]
-renderers = ["html"]
+renderers = ["html", "pdf"]
