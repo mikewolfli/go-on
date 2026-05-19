@@ -22,6 +22,7 @@ pub struct JsonRpcResponse {
     pub result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<JsonRpcError>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<Value>,
 }
 
@@ -47,6 +48,7 @@ pub struct McpResource {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(rename = "mimeType")]
     pub mime_type: String,
 }
 

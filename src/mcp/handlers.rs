@@ -59,10 +59,12 @@ impl McpServer {
     pub async fn handle_request(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse> {
         let result = match request.method.as_str() {
             "initialize" => Ok(self.handle_initialize(&request).await),
+            "ping" => Ok(json!({})),
             "tools/list" => Ok(self.handle_list_tools(&request).await),
             "tools/call" => self.handle_call_tool(&request).await,
             "resources/list" => Ok(self.handle_list_resources(&request).await),
             "resources/read" => self.handle_read_resource(&request).await,
+            "resources/subscribe" => Ok(json!({"meta": {}})),
             "prompts/list" => Ok(self.handle_list_prompts(&request).await),
             "prompts/get" => Ok(self.handle_get_prompt(&request).await),
             "agents/list" => Ok(self.handle_list_agents(&request).await),
@@ -76,6 +78,24 @@ impl McpServer {
                     id: None,
                     result: None,
                     error: None,
+                });
+            }
+            "logging/setLevel" => {
+                // Accept logging level changes silently.
+                Ok(json!({}))
+            }
+            "completion/complete" => Ok(json!({"completion": []})),
+            "sampling/createMessage" => {
+                warn!("MCP: sampling/createMessage is not supported");
+                return Ok(JsonRpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    result: None,
+                    error: Some(JsonRpcError {
+                        code: super::error_codes::METHOD_NOT_FOUND,
+                        message: "sampling/createMessage is not supported".to_string(),
+                        data: None,
+                    }),
+                    id: request.id,
                 });
             }
             "models/list" => Ok(self.handle_list_models(&request).await),

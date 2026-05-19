@@ -86,6 +86,7 @@ pub async fn write_json_line(server: &AcpServer, value: &Value) -> Result<()> {
     let mut encoded = serde_json::to_vec(value)?;
     encoded.push(b'\n');
     stdout.write_all(&encoded).await?;
+    stdout.flush().await?;
     Ok(())
 }
 
@@ -151,11 +152,16 @@ pub async fn has_input() -> Result<bool> {
     }
 }
 
-/// Windows stub for has_input — always returns false (no stdin polling).
+/// Windows stub for has_input — always returns true (assume input available).
+///
+/// Windows does not support async stdin polling via `AsRawFd` in the same way
+/// Unix does. Rather than blocking indefinitely on a false negative (which
+/// would hang the auto/adaptive mode detection), we optimistically return
+/// `true` so that the caller proceeds to actually read stdin. The actual
+/// read will determine whether input truly exists.
 #[cfg(windows)]
 #[allow(dead_code)] // F-GAP-10 — planned wiring: multi-channel transport I/O
 pub async fn has_input() -> Result<bool> {
-    // Windows does not support async stdin polling via AsRawFd.
-    // Conservatively return false (no input available).
-    Ok(false)
+    // Return true so the caller attempts to read stdin instead of hanging.
+    Ok(true)
 }

@@ -9,11 +9,19 @@ pub struct AppConfig {
     pub backend_url: String,
     pub language: String,
     pub theme: String,
+    /// Protocol mode for backend connection.
+    /// Allowed: "adaptive", "acp_http", "mcp_http", "acp_stdio", "mcp_stdio"
+    #[serde(default = "default_protocol_mode")]
+    pub protocol_mode: String,
     #[serde(default)]
     pub ui_stability: UiStabilityConfig,
     pub features: FeatureToggles,
     pub enterprise: EnterpriseConfig,
     pub providers: Vec<ProviderConfig>,
+}
+
+fn default_protocol_mode() -> String {
+    "acp_http".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,6 +162,7 @@ impl Default for AppConfig {
             backend_url: "http://127.0.0.1:8090".to_string(),
             language: "en".to_string(),
             theme: "简约".to_string(),
+            protocol_mode: "acp_http".to_string(),
             ui_stability: UiStabilityConfig::default(),
             features: FeatureToggles::default(),
             enterprise: EnterpriseConfig::default(),

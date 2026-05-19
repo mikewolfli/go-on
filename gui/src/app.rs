@@ -310,7 +310,7 @@ impl GoOnApp {
                 let mut cmd = std::process::Command::new(&path);
                 cmd.current_dir(&config_dir)
                     .arg("--protocol-mode")
-                    .arg("acp_http")
+                    .arg(&config.protocol_mode)
                     .stdout(std::process::Stdio::null());
 
                 // Inject API keys for ALL configured providers into backend process environment.

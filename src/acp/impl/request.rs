@@ -19,6 +19,7 @@ fn is_mcp_request(method: &str) -> bool {
         || method.starts_with("prompts/")
         || method.starts_with("logging/")
         || method.starts_with("sampling/")
+        || method.starts_with("completion/")
         || method == "ping"
 }
 
@@ -41,6 +42,7 @@ fn normalize_mcp_method(method: &str) -> String {
         _ if method.starts_with("prompts/") => format!("mcp.prompts.{}", &method[8..]),
         _ if method.starts_with("logging/") => format!("mcp.logging.{}", &method[8..]),
         _ if method.starts_with("sampling/") => format!("mcp.sampling.{}", &method[9..]),
+        _ if method.starts_with("completion/") => format!("mcp.completion.{}", &method[11..]),
         _ => method.to_string(),
     }
 }
@@ -51,6 +53,20 @@ fn is_acp_request(method: &str) -> bool {
     matches!(
         method,
         "initialize"
+            // Standard ACP lifecycle methods
+            | "authenticate"
+            | "logout"
+            // Standard ACP session lifecycle methods
+            | "session/new"
+            | "session/load"
+            | "session/prompt"
+            | "session/cancel"
+            | "session/list"
+            | "session/set_mode"
+            | "session/set_config_option"
+            // Protocol-level notifications
+            | "$/cancel_request"
+            // Go-On custom methods (backward compat)
             | "chat"
             | "phase"
             | "phase.status"
@@ -453,14 +469,142 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
         .scope(method.to_string(), async {
             match method.as_ref() {
                 "initialize" => protocol_pack::handle_initialize(server, request_id).await,
+                // Standard ACP session lifecycle methods
+                "session/new" => {
+                    protocol_pack::handle_session_new(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "session/load" => {
+                    protocol_pack::handle_session_load(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "session/prompt" => {
+                    protocol_pack::handle_session_prompt(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "session/cancel" => {
+                    protocol_pack::handle_session_cancel(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "session/list" => {
+                    protocol_pack::handle_session_list(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "session/set_mode" => {
+                    protocol_pack::handle_session_set_mode(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "session/set_config_option" => {
+                    protocol_pack::handle_session_set_config_option(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                // Standard ACP authentication methods
+                "authenticate" => {
+                    protocol_pack::handle_authenticate(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "logout" => {
+                    protocol_pack::handle_logout(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                // Protocol-level notifications
+                "$/cancel_request" => {
+                    protocol_pack::handle_cancel_request(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                // MCP methods bridged through ACP dispatch
                 "mcp.initialize" => protocol_pack::handle_mcp_initialize(server, request_id).await,
                 "mcp.notifications_initialized" => {
                     // MCP notification — no response expected per JSON-RPC spec
                     Ok(())
                 }
+                "mcp.ping" => protocol_pack::handle_mcp_ping(server, request_id).await,
                 "mcp.tools.list" => protocol_pack::handle_mcp_tools_list(server, request_id).await,
                 "mcp.tools.call" => {
                     protocol_pack::handle_mcp_tools_call(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "mcp.resources.list" => {
+                    protocol_pack::handle_mcp_resources_list(server, request_id).await
+                }
+                "mcp.resources.read" => {
+                    protocol_pack::handle_mcp_resources_read(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "mcp.resources.subscribe" => {
+                    protocol_pack::handle_mcp_resources_subscribe(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "mcp.logging.setLevel" => {
+                    protocol_pack::handle_mcp_logging_set_level(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "mcp.completion.complete" => {
+                    protocol_pack::handle_mcp_completion_complete(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "mcp.sampling.createMessage" => {
+                    protocol_pack::handle_mcp_sampling_create_message(
                         server,
                         request.params.unwrap_or_default(),
                         request_id,

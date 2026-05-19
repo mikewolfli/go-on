@@ -72,10 +72,26 @@ pub(super) fn inject_pua_report_into_error_data(data: Option<Value>, encoded: St
 }
 
 pub(super) fn infer_pua_stage(method: &str) -> Option<&'static str> {
-    if matches!(method, "initialize" | "mcp.initialize") {
+    if matches!(
+        method,
+        "initialize"
+            | "mcp.initialize"
+            | "session/new"
+            | "session/load"
+            | "authenticate"
+            | "logout"
+    ) {
         return Some("intake");
     }
-    if matches!(method, "task.plan" | "workflow.clarify") {
+    if matches!(
+        method,
+        "task.plan"
+            | "workflow.clarify"
+            | "session/set_mode"
+            | "session/set_config_option"
+            | "mcp.logging.setLevel"
+            | "mcp.completion.complete"
+    ) {
         return Some("planning");
     }
     if matches!(
@@ -87,10 +103,24 @@ pub(super) fn infer_pua_stage(method: &str) -> Option<&'static str> {
             | "workflow.consult"
             | "mcp.tools.call"
             | "chat"
+            | "session/prompt"
+            | "mcp.sampling.createMessage"
+            | "mcp.resources.read"
     ) {
         return Some("execution");
     }
-    if matches!(method, "health" | "runtime.health" | "metrics.get") {
+    if matches!(
+        method,
+        "health"
+            | "runtime.health"
+            | "metrics.get"
+            | "session/list"
+            | "session/cancel"
+            | "mcp.ping"
+            | "mcp.resources.list"
+            | "mcp.resources.subscribe"
+            | "$/cancel_request"
+    ) {
         return Some("verification");
     }
     None

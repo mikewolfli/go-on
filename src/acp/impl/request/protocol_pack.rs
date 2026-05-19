@@ -3,15 +3,85 @@ use tracing::warn;
 use super::*;
 use crate::mcp::MCP_VERSION;
 
+/// Convert ACP content blocks (from session/prompt) to Go-On chat params (with messages).
+/// ACP sends `prompt: [{type: "text", text: "..."}]`,
+/// Go-On expects `messages: [{role: "user", content: "..."}]`.
+fn acp_prompt_to_chat_params(params: Value) -> Value {
+    // Extract the prompt content blocks from the ACP request
+    let prompt_blocks = params.get("prompt").and_then(|p| p.as_array()).cloned();
+    let session_id = params
+        .get("sessionId")
+        .and_then(|s| s.as_str())
+        .map(|s| s.to_string());
+
+    // Build messages from content blocks
+    let messages: Vec<Value> = match prompt_blocks {
+        Some(blocks) => {
+            let text = blocks
+                .iter()
+                .filter_map(|block| {
+                    if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                        block.get("text").and_then(|t| t.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<&str>>()
+                .join("\n");
+            if text.is_empty() {
+                vec![]
+            } else {
+                vec![json!({"role": "user", "content": text})]
+            }
+        }
+        None => vec![],
+    };
+
+    // Build new params compatible with the chat handler
+    let mut chat_params = json!({
+        "mode": "ask",
+        "messages": messages,
+    });
+
+    // Preserve conversation_id if provided
+    if let Some(cid) = session_id {
+        chat_params["conversation_id"] = json!(cid);
+    }
+
+    chat_params
+}
+
 pub(super) async fn handle_initialize(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
     send_result(
         server,
         request_id,
         json!({
+            // Standard ACP InitializeResponse fields (camelCase)
+            "protocolVersion": 1,
+            "agentInfo": {
+                "name": "go-on",
+                "version": env!("CARGO_PKG_VERSION")
+            },
+            "agentCapabilities": {
+                "loadSession": true,
+                "promptCapabilities": {
+                    "image": false,
+                    "audio": false,
+                    "embeddedContext": false
+                },
+                "mcpCapabilities": {
+                    "http": true,
+                    "sse": false
+                },
+                "sessionCapabilities": {
+                    "list": {},
+                    "additionalDirectories": {}
+                }
+            },
+            // Go-On custom fields (backward compat)
             "name": "go-on",
             "version": env!("CARGO_PKG_VERSION"),
             "protocol": "acp",
-            "protocolVersion": MCP_VERSION,
             "capabilities": {
                 "chat": true,
                 "phase": true,
@@ -44,6 +114,345 @@ pub(super) async fn handle_mcp_initialize(
     )
     .await
 }
+
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Atomic counter for generating unique ACP session IDs.
+static ACP_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+/// Generate a unique session ID for the standard ACP protocol.
+fn generate_acp_session_id() -> String {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let seq = ACP_SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("acp-session-{:x}-{:x}", ts, seq)
+}
+
+/// Handle `session/new` — creates a new ACP session.
+///
+/// Standard ACP: client sends `cwd` + optional `mcpServers`,
+/// agent responds with `sessionId`.
+pub(super) async fn handle_session_new(
+    server: &AcpServer,
+    _params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let session_id = generate_acp_session_id();
+    let modes = build_default_modes();
+
+    send_result(
+        server,
+        request_id,
+        json!({
+            "sessionId": session_id,
+            "modes": modes,
+            "configOptions": [],
+        }),
+    )
+    .await
+}
+
+/// Handle `session/load` — loads an existing session.
+///
+/// Standard ACP: client sends `sessionId` + optional `cwd`,
+/// agent restores the session context and returns available modes/config.
+pub(super) async fn handle_session_load(
+    server: &AcpServer,
+    _params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let modes = build_default_modes();
+    send_result(
+        server,
+        request_id,
+        json!({
+            "modes": modes,
+            "configOptions": [],
+        }),
+    )
+    .await
+}
+
+/// Handle `session/prompt` — processes a user prompt within a session.
+///
+/// Standard ACP: client sends `sessionId` + `prompt` (content blocks),
+/// agent streams notifications and returns a `PromptResponse` with `stopReason`.
+/// Maps to Go-On's internal chat handler for the actual AI processing.
+/// Converts ACP `prompt` content blocks to Go-On `messages` format.
+pub(super) async fn handle_session_prompt(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    use crate::acp::r#impl::chat::{process_chat_request, ChatParams, StreamObserver};
+    use crate::rpc_protocol::chat_trace_context;
+
+    // Convert ACP prompt format to Go-On messages format
+    let chat_params_value = acp_prompt_to_chat_params(params);
+
+    // Parse into ChatParams
+    let chat_params: ChatParams = match serde_json::from_value(chat_params_value) {
+        Ok(p) => p,
+        Err(e) => {
+            return send_error(
+                server,
+                request_id,
+                -32602,
+                format!("invalid chat params: {}", e),
+                None,
+            )
+            .await;
+        }
+    };
+
+    // Create a minimal trace context
+    let pipeline_trace = chat_trace_context(&request_id, "session.prompt");
+
+    // Process chat request directly (bypass chat_handler's own send_result)
+    match process_chat_request(
+        server,
+        &chat_params,
+        Some(StreamObserver::jsonrpc(request_id.clone())),
+        &pipeline_trace,
+        None,
+        None,
+    )
+    .await
+    {
+        Ok(_result) => {
+            // Per ACP spec, PromptResponse contains stopReason.
+            // The actual content is streamed via session/update notifications.
+            // We send the standard ACP response format.
+            send_result(
+                server,
+                request_id,
+                json!({
+                    "stopReason": "endTurn",
+                }),
+            )
+            .await
+        }
+        Err(err) => {
+            let message = err.to_string();
+            if message.to_ascii_lowercase().contains("rate limited") {
+                send_error(server, request_id, -32029, message, None).await
+            } else {
+                send_error(server, request_id, -32603, message, None).await
+            }
+        }
+    }
+}
+
+/// Handle `session/cancel` — cancels an ongoing prompt turn.
+///
+/// Standard ACP notification: client sends `sessionId`,
+/// agent stops processing and returns `StopReason::Cancelled`.
+pub(super) async fn handle_session_cancel(
+    _server: &AcpServer,
+    _params: Value,
+    _request_id: Option<Value>,
+) -> Result<()> {
+    // session/cancel is a notification — no response expected per JSON-RPC spec.
+    // In the future, we can hook into active request cancellation here.
+    // For now, the chat handler detects cancellation via its own mechanisms.
+    Ok(())
+}
+
+/// Handle `session/list` — lists existing sessions.
+///
+/// Standard ACP: client may send optional `cwd` filter,
+/// agent returns list of known sessions.
+pub(super) async fn handle_session_list(
+    server: &AcpServer,
+    _params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    send_result(
+        server,
+        request_id,
+        json!({
+            "sessions": [],
+        }),
+    )
+    .await
+}
+
+/// Handle `session/set_mode` — sets the current mode for a session.
+///
+/// Standard ACP: client sends `sessionId` + `modeId`,
+/// agent switches mode. Returns updated config options per spec.
+pub(super) async fn handle_session_set_mode(
+    server: &AcpServer,
+    _params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    // Per ACP spec, SetSessionModeResponse is empty (mode change confirmed).
+    // Mode state is communicated via session/update notification.
+    send_result(server, request_id, json!({})).await
+}
+
+/// Handle `session/set_config_option` — sets a configuration option for a session.
+///
+/// Standard ACP: client sends `sessionId` + `configId` + `value`,
+/// agent applies the option and returns updated config options list.
+pub(super) async fn handle_session_set_config_option(
+    server: &AcpServer,
+    _params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    send_result(
+        server,
+        request_id,
+        json!({
+            "configOptions": [],
+        }),
+    )
+    .await
+}
+
+/// Build the default set of session modes.
+fn build_default_modes() -> serde_json::Value {
+    json!({
+        "currentModeId": "ask",
+        "availableModes": [
+            {
+                "id": "ask",
+                "name": "Ask",
+                "description": "Q&A assistant — general questions"
+            },
+            {
+                "id": "plan",
+                "name": "Plan",
+                "description": "Planning mode — structured task breakdown"
+            },
+            {
+                "id": "edit",
+                "name": "Edit",
+                "description": "Edit/review mode — code changes"
+            },
+            {
+                "id": "full_auto",
+                "name": "Full Auto",
+                "description": "Fully autonomous — agent runs without user confirmation"
+            }
+        ]
+    })
+}
+
+// ── Standard ACP authentication handlers ──────────────────────────────────
+
+/// Handle `authenticate` — authenticates the client.
+/// Standard ACP: client sends `methodId`, agent performs auth and returns success.
+pub(super) async fn handle_authenticate(
+    server: &AcpServer,
+    _params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    // Default implementation: all auth succeeds (auth is optional).
+    // If entry_auth is enabled, it's handled at the HTTP/transport layer.
+    send_result(server, request_id, json!({})).await
+}
+
+/// Handle `logout` — terminates the current authenticated session.
+pub(super) async fn handle_logout(
+    server: &AcpServer,
+    _params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    send_result(server, request_id, json!({})).await
+}
+
+/// Handle `$/cancel_request` — protocol-level request cancellation notification.
+/// JSON-RPC notification: client can cancel an in-flight request by ID.
+/// No response expected per JSON-RPC spec.
+pub(super) async fn handle_cancel_request(
+    _server: &AcpServer,
+    _params: Value,
+    _request_id: Option<Value>,
+) -> Result<()> {
+    // $/cancel_request is a notification — no response expected.
+    // Future enhancement: route cancellation to the active request handler.
+    Ok(())
+}
+
+// ── MCP bridge handlers (mcp.* methods routed through ACP dispatch) ──────
+
+/// Handle `mcp.ping` — health check ping.
+pub(super) async fn handle_mcp_ping(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
+    send_result(server, request_id, json!({})).await
+}
+
+/// Handle `mcp.resources.list` — list available resources.
+pub(super) async fn handle_mcp_resources_list(
+    server: &AcpServer,
+    request_id: Option<Value>,
+) -> Result<()> {
+    send_result(server, request_id, json!({"resources": []})).await
+}
+
+/// Handle `mcp.resources.read` — read a specific resource by URI.
+pub(super) async fn handle_mcp_resources_read(
+    server: &AcpServer,
+    _params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    send_error(
+        server,
+        request_id,
+        -32602,
+        "Resource reading via MCP bridge is not supported; use the dedicated MCP server instead"
+            .to_string(),
+        None,
+    )
+    .await
+}
+
+/// Handle `mcp.resources.subscribe` — subscribe to resource changes.
+pub(super) async fn handle_mcp_resources_subscribe(
+    server: &AcpServer,
+    _params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    send_result(server, request_id, json!({})).await
+}
+
+/// Handle `mcp.logging.setLevel` — set the MCP logging level.
+pub(super) async fn handle_mcp_logging_set_level(
+    server: &AcpServer,
+    _params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    send_result(server, request_id, json!({})).await
+}
+
+/// Handle `mcp.completion.complete` — complete a text input.
+pub(super) async fn handle_mcp_completion_complete(
+    server: &AcpServer,
+    _params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    send_result(server, request_id, json!({"completion": []})).await
+}
+
+/// Handle `mcp.sampling.createMessage` — create a sampling request.
+pub(super) async fn handle_mcp_sampling_create_message(
+    server: &AcpServer,
+    _params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    send_error(
+        server,
+        request_id,
+        -32602,
+        "Sampling via MCP bridge is not supported; use the chat/session API instead".to_string(),
+        None,
+    )
+    .await
+}
+
+// ── MCP tool handlers ────────────────────────────────────────────────────
 
 pub(super) async fn handle_mcp_tools_list(
     server: &AcpServer,

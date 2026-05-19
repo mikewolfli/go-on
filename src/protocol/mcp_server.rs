@@ -608,18 +608,38 @@ async fn write_http_json_response(
     body: serde_json::Value,
     extra_headers: &str,
 ) -> Result<()> {
-    let body_text = serde_json::to_string(&body)?;
     let status_text = match status {
         200 => "OK",
+        202 => "Accepted",
+        204 => "No Content",
         400 => "Bad Request",
         401 => "Unauthorized",
         403 => "Forbidden",
         405 => "Method Not Allowed",
         500 => "Internal Server Error",
         503 => "Service Unavailable",
-        _ => "OK",
+        other => return Err(anyhow::anyhow!("unsupported HTTP status code: {}", other)),
     };
 
+    // 204 No Content MUST NOT include a message body per HTTP/1.1 §6.4.1
+    if status == 204 {
+        let mut response = format!(
+            "HTTP/1.1 {} {}\r\nConnection: close\r\n",
+            status, status_text,
+        );
+        if !extra_headers.is_empty() {
+            response.push_str(extra_headers);
+            if !extra_headers.ends_with("\r\n") {
+                response.push_str("\r\n");
+            }
+        }
+        response.push_str("\r\n");
+        socket.write_all(response.as_bytes()).await?;
+        socket.flush().await?;
+        return Ok(());
+    }
+
+    let body_text = serde_json::to_string(&body)?;
     let mut response = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
         status,

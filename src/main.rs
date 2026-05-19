@@ -1923,8 +1923,8 @@ async fn start_server(
                 cli.verbose > 0,
                 Some(Arc::clone(&config)),
             ));
-            let shutdown_notify = Arc::clone(&acp_server.shutdown_notify);
-            if let Err(e) = start_background_tasks(&acp_server, Arc::clone(&shutdown_notify)).await
+            if let Err(e) =
+                start_background_tasks(&acp_server, Arc::clone(&acp_server.shutdown_notify)).await
             {
                 error!("Failed to start MCP background tasks: {}", e);
             }
