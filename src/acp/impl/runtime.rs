@@ -2934,7 +2934,9 @@ async fn route_http_post(
                     };
 
                     // Create a pipe to capture the JSON-RPC response written to server.output
-                    let (pipe_writer, mut pipe_reader) = tokio::io::duplex(65536);
+                    // Buffer must be large enough to hold all notifications + final response.
+                    // AI responses with tool results can exceed 64KB, so use 10MB.
+                    let (pipe_writer, mut pipe_reader) = tokio::io::duplex(10 * 1024 * 1024);
 
                     // Temporarily swap stdout with the pipe writer
                     {

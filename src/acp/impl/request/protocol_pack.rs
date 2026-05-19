@@ -3,51 +3,37 @@ use tracing::warn;
 use super::*;
 use crate::mcp::MCP_VERSION;
 
-/// Convert ACP content blocks (from session/prompt) to Go-On chat params (with messages).
+/// Build Go-On chat params from ACP prompt content blocks.
 /// ACP sends `prompt: [{type: "text", text: "..."}]`,
-/// Go-On expects `messages: [{role: "user", content: "..."}]`.
-fn acp_prompt_to_chat_params(params: Value) -> Value {
-    // Extract the prompt content blocks from the ACP request
-    let prompt_blocks = params.get("prompt").and_then(|p| p.as_array()).cloned();
-    let session_id = params
-        .get("sessionId")
-        .and_then(|s| s.as_str())
-        .map(|s| s.to_string());
-
-    // Build messages from content blocks
-    let messages: Vec<Value> = match prompt_blocks {
-        Some(blocks) => {
-            let text = blocks
-                .iter()
-                .filter_map(|block| {
-                    if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-                        block.get("text").and_then(|t| t.as_str())
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<&str>>()
-                .join("\n");
-            if text.is_empty() {
-                vec![]
-            } else {
-                vec![json!({"role": "user", "content": text})]
-            }
-        }
-        None => vec![],
+/// returns Go-On chat params: `{mode, messages: [{role, content}], conversation_id}`.
+fn build_chat_params_from_acp(params: Value) -> Value {
+    let prompt_blocks = params.get("prompt").and_then(|p| p.as_array());
+    let text = match prompt_blocks {
+        Some(blocks) => blocks
+            .iter()
+            .filter_map(|block| {
+                if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                    block.get("text").and_then(|t| t.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<&str>>()
+            .join("\n"),
+        None => String::new(),
     };
-
-    // Build new params compatible with the chat handler
+    let messages: Vec<Value> = if text.is_empty() {
+        vec![]
+    } else {
+        vec![json!({"role": "user", "content": text})]
+    };
     let mut chat_params = json!({
         "mode": "ask",
         "messages": messages,
     });
-
-    // Preserve conversation_id if provided
-    if let Some(cid) = session_id {
+    if let Some(cid) = params.get("sessionId").and_then(|s| s.as_str()) {
         chat_params["conversation_id"] = json!(cid);
     }
-
     chat_params
 }
 
@@ -136,11 +122,18 @@ fn generate_acp_session_id() -> String {
 /// agent responds with `sessionId`.
 pub(super) async fn handle_session_new(
     server: &AcpServer,
-    _params: Value,
+    params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
     let session_id = generate_acp_session_id();
-    let modes = build_default_modes();
+    let mut modes = build_default_modes();
+
+    // If client specified an initial mode, use it
+    if let Some(mode_id) = params.get("mode").and_then(|m| m.as_str()) {
+        if let Some(obj) = modes.as_object_mut() {
+            obj.insert("currentModeId".to_string(), json!(mode_id));
+        }
+    }
 
     send_result(
         server,
@@ -148,7 +141,23 @@ pub(super) async fn handle_session_new(
         json!({
             "sessionId": session_id,
             "modes": modes,
-            "configOptions": [],
+            "configOptions": [
+                {
+                    "id": "mode",
+                    "name": "Chat Mode",
+                    "description": "Select interaction mode",
+                    "category": "mode",
+                    "type": "select",
+                    "currentValue": "ask",
+                    "options": [
+                        {"value": "ask", "name": "Ask / 对话"},
+                        {"value": "plan", "name": "Plan / 计划"},
+                        {"value": "edit", "name": "Edit / 编辑"},
+                        {"value": "safeguard", "name": "Safeguard / 安全"},
+                        {"value": "full_auto", "name": "Full Auto / 全自动"}
+                    ]
+                }
+            ],
         }),
     )
     .await
@@ -186,13 +195,13 @@ pub(super) async fn handle_session_prompt(
     params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    use crate::acp::r#impl::chat::{process_chat_request, ChatParams, StreamObserver};
+    // Use process_chat_request for proper agent selection via the Capability Bus.
+    // This ensures correct agent routing and orchestration.
+    use crate::acp::r#impl::chat::{process_chat_request, ChatParams};
     use crate::rpc_protocol::chat_trace_context;
 
-    // Convert ACP prompt format to Go-On messages format
-    let chat_params_value = acp_prompt_to_chat_params(params);
-
-    // Parse into ChatParams
+    // Build Go-On chat params from ACP prompt
+    let chat_params_value = build_chat_params_from_acp(params);
     let chat_params: ChatParams = match serde_json::from_value(chat_params_value) {
         Ok(p) => p,
         Err(e) => {
@@ -207,39 +216,22 @@ pub(super) async fn handle_session_prompt(
         }
     };
 
-    // Create a minimal trace context
     let pipeline_trace = chat_trace_context(&request_id, "session.prompt");
 
-    // Process chat request directly (bypass chat_handler's own send_result)
-    match process_chat_request(
-        server,
-        &chat_params,
-        Some(StreamObserver::jsonrpc(request_id.clone())),
-        &pipeline_trace,
-        None,
-        None,
-    )
-    .await
-    {
+    tracing::info!("ACP session/prompt: delegating to process_chat_request");
+
+    match process_chat_request(server, &chat_params, None, &pipeline_trace, None, None).await {
         Ok(_result) => {
-            // Per ACP spec, PromptResponse contains stopReason.
-            // The actual content is streamed via session/update notifications.
-            // We send the standard ACP response format.
-            send_result(
-                server,
-                request_id,
-                json!({
-                    "stopReason": "endTurn",
-                }),
-            )
-            .await
+            tracing::info!("ACP session/prompt: completed successfully");
+            send_result(server, request_id, json!({"stopReason": "end_turn"})).await
         }
         Err(err) => {
-            let message = err.to_string();
-            if message.to_ascii_lowercase().contains("rate limited") {
-                send_error(server, request_id, -32029, message, None).await
+            let msg = err.to_string();
+            tracing::warn!("ACP session/prompt: error: {}", msg);
+            if msg.to_ascii_lowercase().contains("rate limited") {
+                send_error(server, request_id, -32029, msg, None).await
             } else {
-                send_error(server, request_id, -32603, message, None).await
+                send_error(server, request_id, -32603, msg, None).await
             }
         }
     }
@@ -319,22 +311,27 @@ fn build_default_modes() -> serde_json::Value {
         "availableModes": [
             {
                 "id": "ask",
-                "name": "Ask",
+                "name": "Ask / 对话",
                 "description": "Q&A assistant — general questions"
             },
             {
                 "id": "plan",
-                "name": "Plan",
+                "name": "Plan / 计划",
                 "description": "Planning mode — structured task breakdown"
             },
             {
                 "id": "edit",
-                "name": "Edit",
+                "name": "Edit / 编辑",
                 "description": "Edit/review mode — code changes"
             },
             {
+                "id": "safeguard",
+                "name": "Safeguard / 安全",
+                "description": "Safety-first — escalation on high-risk operations"
+            },
+            {
                 "id": "full_auto",
-                "name": "Full Auto",
+                "name": "Full Auto / 全自动",
                 "description": "Fully autonomous — agent runs without user confirmation"
             }
         ]
