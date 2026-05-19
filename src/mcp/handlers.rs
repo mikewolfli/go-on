@@ -66,6 +66,18 @@ impl McpServer {
             "prompts/list" => Ok(self.handle_list_prompts(&request).await),
             "prompts/get" => Ok(self.handle_get_prompt(&request).await),
             "agents/list" => Ok(self.handle_list_agents(&request).await),
+            "notifications/initialized" => {
+                // MCP notification — no response expected per JSON-RPC spec.
+                // Zed's context_server client logs an error for id:null responses,
+                // so we skip sending any response at all.
+                info!("MCP: received notifications/initialized (no response sent)");
+                return Ok(JsonRpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id: None,
+                    result: None,
+                    error: None,
+                });
+            }
             "models/list" => Ok(self.handle_list_models(&request).await),
             _ => {
                 warn!("MCP: unknown method '{}'", request.method);

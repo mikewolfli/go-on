@@ -37,7 +37,7 @@ pub struct JsonRpcError {
 pub struct McpTool {
     pub name: String,
     pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", rename = "inputSchema")]
     pub input_schema: Option<Value>,
 }
 
