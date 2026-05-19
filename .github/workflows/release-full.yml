@@ -69,51 +69,25 @@ jobs:
       - name: Build EGUI GUI
         run: cargo build --release --locked --manifest-path gui/Cargo.toml 2>&1
 
-      - name: Prepare package (Linux/macOS)
-        if: runner.os != 'Windows'
+      - name: Package
         shell: bash
         run: |
-          PKG_DIR="dist/go-on-${{ matrix.platform }}"
-          mkdir -p "${PKG_DIR}/backend"
-
-          cp "target/release/${{ matrix.backend_bin }}" "${PKG_DIR}/backend/"
-          cp "target/release/${{ matrix.gui_bin }}" "${PKG_DIR}/"
-          cp "gui/icon.ico" "${PKG_DIR}/icon.ico"
-          cp -r "RULES" "${PKG_DIR}/backend/rules"
-          cp -r "languages" "${PKG_DIR}/backend/languages"
-          cp -r "prompts" "${PKG_DIR}/prompts"
-          cp -r "prompts" "${PKG_DIR}/backend/prompts"
-          cp "config/config.toml" "${PKG_DIR}/backend/config.toml"
-
-      - name: Prepare package (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $pkgDir = "dist/go-on-${{ matrix.platform }}"
-          New-Item -ItemType Directory -Force -Path "$pkgDir/backend" | Out-Null
-
-          Copy-Item "target/release/${{ matrix.backend_bin }}" "$pkgDir/backend/"
-          Copy-Item "target/release/${{ matrix.gui_bin }}" "$pkgDir/"
-          Copy-Item "gui/icon.ico" "$pkgDir/icon.ico"
-          Copy-Item "RULES" "$pkgDir/backend/rules" -Recurse -Force
-          Copy-Item "languages" "$pkgDir/backend/languages" -Recurse -Force
-          Copy-Item "prompts" "$pkgDir/prompts" -Recurse -Force
-          Copy-Item "prompts" "$pkgDir/backend/prompts" -Recurse -Force
-          Copy-Item "config/config.toml" "$pkgDir/backend/config.toml"
-
-      - name: Archive package (Linux/macOS)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
+          PKG="dist/go-on-${{ matrix.platform }}"
+          mkdir -p "$PKG/backend"
+          cp "target/release/${{ matrix.backend_bin }}" "$PKG/backend/"
+          cp "gui/target/release/${{ matrix.gui_bin }}" "$PKG/"
+          cp "gui/icon.ico" "$PKG/"
+          cp -r RULES "$PKG/backend/rules"
+          cp -r languages "$PKG/backend/"
+          cp -r prompts "$PKG/"
+          cp -r prompts "$PKG/backend/prompts"
+          cp config/config.toml "$PKG/backend/"
           mkdir -p dist/out
-          tar -C dist -czf "dist/out/go-on-${{ matrix.platform }}.tar.gz" "go-on-${{ matrix.platform }}"
-
-      - name: Archive package (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist/out | Out-Null
-          Compress-Archive -Path "dist/go-on-${{ matrix.platform }}/*" -DestinationPath "dist/out/go-on-${{ matrix.platform }}.zip" -Force
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cd dist && 7z a -tzip "out/go-on-${{ matrix.platform }}.zip" "go-on-${{ matrix.platform }}" && cd ..
+          else
+            tar -C dist -czf "dist/out/go-on-${{ matrix.platform }}.tar.gz" "go-on-${{ matrix.platform }}"
+          fi
 
       - name: Upload release package
         uses: softprops/action-gh-release@v3
