@@ -1,6 +1,7 @@
 use tracing::warn;
 
 use super::*;
+use crate::mcp::MCP_VERSION;
 
 pub(super) async fn handle_initialize(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
     send_result(
@@ -10,6 +11,7 @@ pub(super) async fn handle_initialize(server: &AcpServer, request_id: Option<Val
             "name": "go-on",
             "version": env!("CARGO_PKG_VERSION"),
             "protocol": "acp",
+            "protocolVersion": MCP_VERSION,
             "capabilities": {
                 "chat": true,
                 "phase": true,
@@ -32,7 +34,7 @@ pub(super) async fn handle_mcp_initialize(
         server,
         request_id,
         json!({
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": MCP_VERSION,
             "capabilities": {},
             "serverInfo": {
                 "name": "go-on",

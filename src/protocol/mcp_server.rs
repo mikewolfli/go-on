@@ -91,6 +91,11 @@ impl McpStdioServer {
                     let response = self.mcp_server.handle_request(request).await;
                     match response {
                         Ok(resp) => {
+                            // MCP notifications (JSON-RPC with id=null) must not produce
+                            // any response per JSON-RPC 2.0 spec (§notifications).
+                            if resp.id.is_none() {
+                                continue;
+                            }
                             let mut stdout = stdout.lock().await;
                             let response_line = serde_json::to_string(&resp)?;
                             stdout.write_all(response_line.as_bytes()).await?;
@@ -554,6 +559,17 @@ async fn handle_http_connection(
 
     let response = mcp_server.handle_request(request).await?;
     debug!("MCP HTTP: dispatched {} {} -> ok", method, path);
+
+    // MCP notifications (JSON-RPC with id=null) must not produce
+    // any response per JSON-RPC 2.0 spec (§notifications).
+    if response.id.is_none() {
+        // Must still send some HTTP response to satisfy the TCP layer,
+        // but it should be a 202 Accepted with no body.
+        let empty_body = serde_json::Value::Null;
+        write_http_json_response(socket, 202, empty_body, &cors_headers).await?;
+        return Ok(());
+    }
+
     write_http_json_response(socket, 200, serde_json::to_value(response)?, &cors_headers).await?;
 
     Ok(())
