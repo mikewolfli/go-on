@@ -9,7 +9,12 @@ use std::mem;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, LazyLock, Mutex as StdMutex};
+
+/// Serializes concurrent `/rpc` calls to prevent pipe-swapping race conditions.
+/// `server.output` is a global singleton — without this guard, two concurrent
+/// `/rpc` requests would corrupt each other's response capture pipes.
+static RPC_SERIAL: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 use anyhow::Result;
 use reqwest;
@@ -2678,13 +2683,7 @@ async fn route_http_get(
             .await?;
         }
         _ if extract_response_id_from_path(path).is_some() => {
-            let response_id = match extract_response_id_from_path(path) {
-                Some(id) => id,
-                None => {
-                    warn!("Failed to extract response ID from path: {}", path);
-                    return Ok(());
-                }
-            };
+            let response_id = extract_response_id_from_path(path).expect("guard ensured Some; qed");
             handle_response_get(socket, server, response_id, cors_headers).await?;
         }
         _ => {
@@ -2918,6 +2917,12 @@ async fn route_http_post(
                     .await?;
                 }
                 "/rpc" => {
+                    // SERIALIZED: Only one /rpc call at a time.
+                    // server.output is a global singleton used for pipe-based response
+                    // capture. Without this lock, concurrent /rpc calls would corrupt
+                    // the pipe assignment (swap-in → dispatch → swap-out is not atomic).
+                    let _rpc_guard = RPC_SERIAL.lock().await;
+
                     let request: JsonRpcRequest = match serde_json::from_value(body) {
                         Ok(r) => r,
                         Err(e) => {

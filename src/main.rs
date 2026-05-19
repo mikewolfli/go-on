@@ -301,6 +301,11 @@ struct Cli {
     /// Start interactive terminal chat session (like Claude Code / Codex)
     #[arg(short = 'a', long, default_value_t = false)]
     chat: bool,
+
+    /// Enable low-memory mode: reduce cache/vector/inflight limits to
+    /// absolute minimum to avoid OOM killer (SIGKILL) on memory-constrained systems.
+    #[arg(long, default_value_t = false)]
+    low_memory: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1349,6 +1354,23 @@ async fn run() -> Result<()> {
     let _performance_monitor = performance::init_performance_monitoring();
     info!("performance monitoring initialized");
 
+    // ── Pre-startup memory health check ──────────────────────────────────────
+    // Warn or abort if system memory is too low to run safely.
+    {
+        let health = crate::observability::memory_health::check_startup_memory();
+        crate::observability::memory_health::print_memory_health(&health);
+        if let crate::observability::memory_health::MemoryHealth::Critical { .. } = health {
+            anyhow::bail!(
+                "Aborting startup: system memory is critically low. \
+                 Try closing other applications, or use --low-memory flag"
+            );
+        }
+    }
+
+    // ── Runtime memory pressure monitor ─────────────────────────────────────
+    // Background task that logs warnings when memory pressure increases.
+    crate::observability::memory_health::start_memory_monitor();
+
     // Determine configuration file path
     let config_path = match cli.config {
         Some(ref path) => path.clone(),
@@ -1764,6 +1786,50 @@ async fn start_server(
         }
     }
 
+    // ── Memory-aware resource limiting ───────────────────────────────────────
+    // Adjust cache/vector limits based on available system memory.
+    // This prevents OOM kills on memory-constrained systems.
+    let user_cache_max = config.cache.as_ref().map(|c| c.max_entries);
+    let user_vector_max = config.vector.as_ref().map(|v| v.max_entries);
+
+    let (safe_cache_max, safe_vector_max, _safe_inflight_max) =
+        crate::observability::memory_health::estimate_safe_limits(
+            user_cache_max,
+            user_vector_max,
+            None,
+            cli.low_memory,
+        );
+
+    // Clone and adjust cache config with safe limits
+    let mut adjusted_cache_cfg = config.cache.clone();
+    if let Some(ref mut cache_cfg) = adjusted_cache_cfg {
+        if cache_cfg.max_entries > safe_cache_max {
+            info!(
+                "reducing cache max_entries from {} to {} (memory-aware)",
+                cache_cfg.max_entries, safe_cache_max
+            );
+            cache_cfg.max_entries = safe_cache_max;
+        }
+    }
+
+    // Clone and adjust vector config with safe limits
+    let mut adjusted_vector_cfg = config.vector.clone();
+    if let Some(ref mut vector_cfg) = adjusted_vector_cfg {
+        if vector_cfg.max_entries > safe_vector_max {
+            info!(
+                "reducing vector max_entries from {} to {} (memory-aware)",
+                vector_cfg.max_entries, safe_vector_max
+            );
+            vector_cfg.max_entries = safe_vector_max;
+        }
+    }
+
+    // Log the applied limits
+    info!(
+        "memory-aware limits applied: cache_max={}, vector_max={}",
+        safe_cache_max, safe_vector_max
+    );
+
     // Initialize StartupContext (load project context once per process)
     let startup_cfg = crate::orchestration::startup_context::StartupContextConfig {
         enabled: true,
@@ -1776,8 +1842,8 @@ async fn start_server(
     });
 
     let (cache, vector_store, (autotune_state, autotune_config, autotune_state_path)) = tokio::try_join!(
-        initialize_cache(config_path.to_path_buf(), config.cache.clone()),
-        initialize_vector_store(config_path.to_path_buf(), config.vector.clone()),
+        initialize_cache(config_path.to_path_buf(), adjusted_cache_cfg),
+        initialize_vector_store(config_path.to_path_buf(), adjusted_vector_cfg),
         initialize_autotune(config_path.to_path_buf(), config.autotune.clone()),
     )?;
 

@@ -545,9 +545,9 @@ pub(crate) fn parse_skill_md(content: &[u8]) -> Result<SkillImportManifest> {
     let mut version = "1.0.0".to_string();
 
     // Try to parse YAML frontmatter (between --- delimiters)
-    let remaining = if text.starts_with("---") {
-        if let Some(end) = text[3..].find("\n---") {
-            let frontmatter = &text[3..3 + end];
+    let remaining = if let Some(after_prefix) = text.strip_prefix("---") {
+        if let Some(end) = after_prefix.find("\n---") {
+            let frontmatter = &after_prefix[..end];
             for line in frontmatter.lines() {
                 if let Some((key, value)) = line.split_once(':') {
                     let key = key.trim().to_lowercase();

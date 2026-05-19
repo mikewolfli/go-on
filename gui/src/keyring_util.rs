@@ -6,105 +6,96 @@ pub const REDACTED_API_KEY: &str = "********";
 ///
 /// Keyring entries use the format `go-on/{provider}_api_key`.
 ///
-/// ## Platform backends
-///   - **Linux**: `keyring` crate → libsecret (Secret Service)
-///   - **Windows**: `keyring` crate → Credential Manager
-///   - **macOS**: `security-framework` crate directly → Keychain (with ACL set to
-///     system default groups so subsequent reads do NOT pop a password prompt).
+/// Uses the `keyring` crate on all platforms:
+///   - **macOS**: Keychain (via `apple-native` feature)
+///   - **Linux**: libsecret (Secret Service)
+///   - **Windows**: Credential Manager
 ///
 /// The GUI also keeps `api_key` in `config.providers` as a fallback so that if the
-/// system keyring is unavailable (e.g. headless, macOS prompt blocked) the key can
-/// still be injected into the backend process environment at startup.
+/// system keyring is unavailable the key can still be injected into the backend
+/// process environment at startup.
 use anyhow::Result;
 
-// ── macOS: use security-framework directly for ACL control ────────────────
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  macOS: keyring crate + security CLI for ACL                             ║
+// ║                                                                          ║
+// ║  IMPORTANT: DO NOT REMOVE this platform block!                            ║
+// ║                                                                          ║
+// ║  The keyring crate stores/reads passwords via the macOS Keychain.        ║
+// ║  HOWEVER, by default macOS restricts keychain item access to the         ║
+// ║  creating process only. When our background backend process tries to     ║
+// ║  read the keychain item, macOS silently denies access because no         ║
+// ║  visible dialog can be shown to the user for permission approval.        ║
+// ║                                                                          ║
+// ║  Without `ensure_item_accessible()`, the result is:                      ║
+// ║    - Keyring write succeeds                                              ║
+// ║    - Keyring read from the same binary also fails (!)                     ║
+// ║    - The backend shows "deepseek: not ready"                            ║
+// ║    - User sees "API key missing" even though it was just stored          ║
+// ║                                                                          ║
+// ║  The fix: after writing via `keyring::Entry::set_password()`, run:       ║
+// ║    security set-key-partition-list -S apple-tool:,apple: -k ""          ║
+// ║      -D "go-on ({account})" login.keychain                              ║
+// ║  This adds the standard system partition groups to the keychain item's   ║
+// ║  ACL, allowing any process in those groups (including our headless       ║
+// ║  backend) to read the password without prompting.                        ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
 #[cfg(target_os = "macos")]
 mod platform {
     use anyhow::Result;
-    use security_framework::os::macos::keychain::{SecKeychain, SecPreferencesDomain};
+    use std::process::Command;
 
-    const SERVICE: &str = "go-on";
+    /// Configure the keychain item's ACL so ANY process (not just the creator)
+    /// can read the password without triggering the macOS permission dialog.
+    /// This is essential for the backend (a headless child process) to access
+    /// API keys stored in the login keychain.
+    fn ensure_item_accessible(account: &str) {
+        // `security set-key-partition-list` modifies the ACL partition list
+        // of a keychain item identified by its description (-D).
+        // -S "apple-tool:,apple:" adds the two standard system partition groups
+        //    that all macOS processes (GUI and CLI) are automatically members of.
+        // Without this step, macOS Keychain Services will reject reads from
+        // the backend because it's not the process that originally created the item.
+        let _ = Command::new("security")
+            .args(&[
+                "set-key-partition-list",
+                "-S",
+                "apple-tool:,apple:",
+                "-k",
+                "", // empty keychain password (uses login keychain)
+                "-D",
+                &format!("go-on ({})", account),
+                "login.keychain",
+            ])
+            .output();
+    }
 
     pub fn store_api_key(provider: &str, api_key: &str) -> Result<()> {
         let account = format!("{}_api_key", provider);
-        let keychain = SecKeychain::default_for_domain(SecPreferencesDomain::User)
-            .map_err(|e| anyhow::anyhow!("failed to open login keychain: {}", e))?;
-
-        // If item already exists, update its password.
-        if let Ok((_pass, item)) = keychain.find_generic_password(SERVICE, &account) {
-            item.set_password(api_key.as_bytes())
-                .map_err(|e| anyhow::anyhow!("failed to set password: {}", e))?;
-            // Ensure access control is permissive (no pop-up on next read).
-            set_item_accessible(&item)?;
-            return Ok(());
-        }
-
-        // Create new item.
-        keychain
-            .set_generic_password(SERVICE, &account, api_key.as_bytes())
-            .map_err(|e| anyhow::anyhow!("failed to create keychain entry: {}", e))?;
-
-        // Immediately set access control so future reads don't prompt.
-        if let Ok((_, item)) = keychain.find_generic_password(SERVICE, &account) {
-            let _ = set_item_accessible(&item);
-        }
+        let entry = keyring::Entry::new("go-on", &account)?;
+        entry.set_password(api_key)?;
+        ensure_item_accessible(&account);
         Ok(())
     }
 
     pub fn store_secret_key(provider: &str, secret_key: &str) -> Result<()> {
         let account = format!("{}_secret_key", provider);
-        let keychain = SecKeychain::default_for_domain(SecPreferencesDomain::User)
-            .map_err(|e| anyhow::anyhow!("failed to open login keychain: {}", e))?;
-
-        if let Ok((_pass, item)) = keychain.find_generic_password(SERVICE, &account) {
-            item.set_password(secret_key.as_bytes())
-                .map_err(|e| anyhow::anyhow!("failed to set password: {}", e))?;
-            set_item_accessible(&item)?;
-            return Ok(());
-        }
-
-        keychain
-            .set_generic_password(SERVICE, &account, secret_key.as_bytes())
-            .map_err(|e| anyhow::anyhow!("failed to create keychain entry: {}", e))?;
-
-        if let Ok((_, item)) = keychain.find_generic_password(SERVICE, &account) {
-            let _ = set_item_accessible(&item);
-        }
-        Ok(())
-    }
-
-    fn set_item_accessible(
-        item: &security_framework::os::macos::keychain::SecKeychainItem,
-    ) -> Result<()> {
-        // Create an access object with no specific trusted apps, but with the
-        // standard system groups ("apple-tool:", "apple:") that macOS UI tools
-        // and the current process are automatically members of.
-        //
-        // This prevents the "X wants to use your confidential information" dialog.
-        let access = security_framework::os::macos::access::SecAccess::create_with_label(
-            "go-on",
-            &[],                        // no per-app restriction
-            &["apple-tool:", "apple:"], // system partition groups
-        )
-        .map_err(|e| anyhow::anyhow!("failed to create SecAccess: {}", e))?;
-
-        item.set_access(&access)
-            .map_err(|e| anyhow::anyhow!("failed to set keychain access: {}", e))?;
+        let entry = keyring::Entry::new("go-on", &account)?;
+        entry.set_password(secret_key)?;
+        ensure_item_accessible(&account);
         Ok(())
     }
 
     pub fn get_api_key(provider: &str) -> Option<String> {
         let account = format!("{}_api_key", provider);
-        let keychain = SecKeychain::default_for_domain(SecPreferencesDomain::User).ok()?;
-        let (password, _item) = keychain.find_generic_password(SERVICE, &account).ok()?;
-        String::from_utf8(password.to_vec()).ok()
+        let entry = keyring::Entry::new("go-on", &account).ok()?;
+        entry.get_password().ok()
     }
 
     pub fn get_secret_key(provider: &str) -> Option<String> {
         let account = format!("{}_secret_key", provider);
-        let keychain = SecKeychain::default_for_domain(SecPreferencesDomain::User).ok()?;
-        let (password, _item) = keychain.find_generic_password(SERVICE, &account).ok()?;
-        String::from_utf8(password.to_vec()).ok()
+        let entry = keyring::Entry::new("go-on", &account).ok()?;
+        entry.get_password().ok()
     }
 
     pub fn has_api_key(provider: &str) -> bool {
@@ -113,24 +104,20 @@ mod platform {
 
     pub fn delete_api_key(provider: &str) -> Result<()> {
         let account = format!("{}_api_key", provider);
-        let keychain = SecKeychain::default_for_domain(SecPreferencesDomain::User)?;
-        if let Ok((_, item)) = keychain.find_generic_password(SERVICE, &account) {
-            item.delete()?;
-        }
+        let entry = keyring::Entry::new("go-on", &account)?;
+        entry.delete_credential()?;
         Ok(())
     }
 
     pub fn delete_secret_key(provider: &str) -> Result<()> {
         let account = format!("{}_secret_key", provider);
-        let keychain = SecKeychain::default_for_domain(SecPreferencesDomain::User)?;
-        if let Ok((_, item)) = keychain.find_generic_password(SERVICE, &account) {
-            item.delete()?;
-        }
+        let entry = keyring::Entry::new("go-on", &account)?;
+        entry.delete_credential()?;
         Ok(())
     }
 }
 
-// ── Linux / Windows: use the keyring crate ───────────────────────────────
+// ── Linux / Windows: use the keyring crate only ───────────────────────────
 #[cfg(not(target_os = "macos"))]
 mod platform {
     use anyhow::Result;

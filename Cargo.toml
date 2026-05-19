@@ -21,9 +21,10 @@ path = "src/lib.rs"
 # profile-multi-users-server: multi-user production; PostgreSQL cache + pgvector
 #                             All sub-buses (tool, observability, optimization, memory, protocol, orchestration, distributed-memory)
 #
-# Compile-time validation is implicit via Cargo's feature conflict mechanics.
-# Only one profile should be selected at a time (enforced by convention).
-# No explicit #[cfg] assertions exist in main.rs.
+# Compile-time validation in src/lib.rs via compile_error!() assertions.
+# Enforces:
+#   1. Exactly one profile must be selected (fail if zero or >1).
+#   2. backend-sqlite and backend-postgres cannot both be enabled.
 #
 # Build examples:
 #   cargo build                                                    # uses default profile-local

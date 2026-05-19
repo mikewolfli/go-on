@@ -17,7 +17,7 @@ model_selection_mode = "adaptive"
 
 [protocol]
 # "acp_http" for HTTP API, "acp_stdio" for stdin/stdout (IDE integration)
-mode = "acp_http"
+mode = "acp_stdio"
 
 # ── Cache ─────────────────────────────────────────────────────────────
 [cache]

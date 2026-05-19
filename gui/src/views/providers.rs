@@ -1136,7 +1136,7 @@ impl ProvidersView {
                                     }
                                     save_app_config(config);
                                     self.status = format!(
-                                        "{} '{}' {}.",
+                                        "{} '{}' {}",
                                         i18n.t("providers.api_key"),
                                         provider_label(i18n, &name),
                                         i18n.t("providers.updated")

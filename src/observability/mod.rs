@@ -13,8 +13,12 @@
 
 #![allow(clippy::module_inception)]
 
+pub mod memory_health;
 pub mod observability;
 pub mod performance;
 pub mod provenance;
 pub mod telemetry;
 pub mod telemetry_enhanced;
+
+// Re-exports are not needed; consumers use full crate paths.
+// See main.rs for usage: crate::observability::memory_health::*

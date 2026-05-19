@@ -224,7 +224,7 @@ fn build_provider_dependency_component(config: &AppConfig) -> ComponentReport {
         let secret_env_var = agent_config.secret_key_env.as_deref();
         let agent_name = agent_key;
 
-        if env_var.is_empty() {
+        if env_var.is_empty() && secret_env_var.is_none_or(|s| s.is_empty()) {
             continue;
         }
 
@@ -283,6 +283,8 @@ fn build_provider_dependency_component(config: &AppConfig) -> ComponentReport {
 }
 
 fn secret_ref_ready(secret_ref: &str) -> bool {
+    // Use get_secret() which checks in-memory override map first, then env vars.
+    // This ensures API keys set via GUI/CLI secret overrides are properly detected.
     if secret_ref.starts_with("keyring://") {
         let locator = secret_ref.trim_start_matches("keyring://");
         if let Some((service, account)) = locator.split_once('/') {
@@ -296,15 +298,20 @@ fn secret_ref_ready(secret_ref: &str) -> bool {
                 return true;
             }
 
+            // Also check env var fallback via get_secret() for in-memory overrides
             return keyring_env_fallback_candidates(service, account)
                 .into_iter()
-                .any(|var| std::env::var(var).is_ok_and(|v| !v.is_empty()));
+                .any(|var| {
+                    crate::shared::secret_override::get_secret(&var)
+                        .is_some_and(|v| !v.trim().is_empty())
+                });
         }
 
         return false;
     }
 
-    std::env::var(secret_ref).is_ok_and(|v| !v.is_empty())
+    // Direct secret ref: check override map + env var
+    crate::shared::secret_override::get_secret(secret_ref).is_some_and(|v| !v.trim().is_empty())
 }
 
 fn keyring_lookup_accounts(service: &str, account: &str) -> Vec<(String, String)> {
@@ -324,9 +331,15 @@ fn keyring_lookup_accounts(service: &str, account: &str) -> Vec<(String, String)
 fn keyring_env_fallback_candidates(service: &str, account: &str) -> Vec<String> {
     let mut candidates = Vec::new();
 
-    if service == "go-on" && (account == "copilot_api_key" || account == "github_copilot_token") {
-        candidates.push("GITHUB_COPILOT_TOKEN".to_string());
-        candidates.push("GITHUB_TOKEN".to_string());
+    if service == "go-on" {
+        if account == "openai_api_key" || account == "openai_compatible_api_key" {
+            candidates.push("OPENAI_API_KEY".to_string());
+            candidates.push("OPENAI_COMPATIBLE_API_KEY".to_string());
+        }
+        if account == "copilot_api_key" || account == "github_copilot_token" {
+            candidates.push("GITHUB_COPILOT_TOKEN".to_string());
+            candidates.push("GITHUB_TOKEN".to_string());
+        }
     }
 
     candidates.push(account.replace('-', "_").to_ascii_uppercase());

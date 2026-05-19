@@ -16,22 +16,25 @@ mode = "acp_http"
 [cache]
 enabled = true
 path = "acp_cache.sqlite3"
-default_ttl_seconds = 3600
-max_entries = 5000
+default_ttl_seconds = 1800
+# REDUCED: 5000 -> 2000 to lower memory usage (prevents OOM on 8 GB systems)
+max_entries = 2000
 
 [vector]
 enabled = true
 auto_mode = true
 path = "acp_vector.sqlite3"
-dimensions = 192
-min_query_chars = 80
+dimensions = 128
+# REDUCED: 80 -> 120 to reduce vector store operations per query
+min_query_chars = 120
 top_k = 2
 min_similarity = 0.82
-max_snippet_chars = 800
-max_entries = 10000
-summary_enabled = true
-summary_trigger_messages = 8
-summary_max_chars = 1200
+max_snippet_chars = 600
+# REDUCED: 10000 -> 3000 to lower memory pressure
+max_entries = 3000
+# REDUCED: 8 -> 4 to produce fewer embeddings
+summary_trigger_messages = 4
+summary_max_chars = 800
 
 [runtime]
 acp_http_bind_addr = "127.0.0.1:8090"
@@ -57,7 +60,7 @@ governance_policy_mode = "advisory"
 [agents.deepseek]
 type = "deepseek"
 api_key_env = "keyring://go-on/deepseek_api_key"
-model = "deepseek-chat"
+model = "deepseek-v4-flash"
 supports_system = true
 
 [flow]
@@ -75,8 +78,10 @@ review_timeout_seconds = 60
 cache_enabled = true
 vector_enabled = true
 summary_enabled = true
-phase_max_inflight = 8
-global_max_inflight = 128
+# REDUCED: 8 -> 4 to lower concurrent memory usage
+phase_max_inflight = 4
+# REDUCED: 128 -> 32 to prevent memory spikes from many concurrent operations
+global_max_inflight = 32
 
 [phases.act]
 description = "Act — execute, generate, implement"
@@ -89,8 +94,10 @@ review_timeout_seconds = 120
 cache_enabled = true
 vector_enabled = true
 summary_enabled = true
-phase_max_inflight = 24
-global_max_inflight = 128
+# REDUCED: 24 -> 8 to lower concurrent memory usage
+phase_max_inflight = 8
+# REDUCED: 128 -> 32
+global_max_inflight = 32
 
 [phases.check]
 description = "Check — verify, validate, review results"
@@ -104,8 +111,10 @@ review_min_response_chars = 12
 cache_enabled = true
 vector_enabled = true
 summary_enabled = true
-phase_max_inflight = 16
-global_max_inflight = 128
+# REDUCED: 16 -> 6
+phase_max_inflight = 6
+# REDUCED: 128 -> 32
+global_max_inflight = 32
 
 [phases.done]
 description = "Done — finalize, deliver, complete"
@@ -115,5 +124,7 @@ fallback = false
 [phases.done.options]
 request_timeout_seconds = 90
 summary_enabled = true
-phase_max_inflight = 8
-global_max_inflight = 64
+# REDUCED: 8 -> 4
+phase_max_inflight = 4
+# REDUCED: 64 -> 16
+global_max_inflight = 16

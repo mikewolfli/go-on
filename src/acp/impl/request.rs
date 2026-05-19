@@ -167,8 +167,18 @@ fn is_acp_request(method: &str) -> bool {
              | "debug_panel.get"
              | "debug.panel.get"
             // MCP-bridge methods that ACP stdio also dispatches
+            // (all 11 mcp.* methods that have dispatch handlers)
+            | "mcp.initialize"
+            | "mcp.notifications_initialized"
+            | "mcp.ping"
             | "mcp.tools.list"
             | "mcp.tools.call"
+            | "mcp.resources.list"
+            | "mcp.resources.read"
+            | "mcp.resources.subscribe"
+            | "mcp.logging.setLevel"
+            | "mcp.completion.complete"
+            | "mcp.sampling.createMessage"
             | "models.list"
             | "models/list"
             | "provider.configure"

@@ -1,0 +1,127 @@
+# ============================================================
+# go-on Low-Memory Configuration (for memory-constrained systems)
+#   Use when: system has < 4 GB RAM or you see SIGKILL/OOM errors
+#   Usage:    go-on --low-memory --config config.low-memory.toml
+#   Or:       cargo run-local-lowmem  (uses release build + low mem)
+# ============================================================
+#
+# This config aggressively reduces all memory-hungry settings:
+# - Tiny cache (500 entries max)
+# - Tiny vector store (500 entries max)
+# - Low concurrency (max 8 inflight globally)
+# - Disabled non-essential features (skills import, autotune)
+# - Reduced vector dimensions (128)
+# - Shorter timeouts to free resources faster
+
+default_phase = "think"
+model_selection_mode = "adaptive"
+
+[protocol]
+mode = "acp_http"
+
+[cache]
+enabled = true
+path = "acp_cache.sqlite3"
+default_ttl_seconds = 600         # 10 min cache TTL (reduced from 1800)
+max_entries = 500                  # Absolute minimum (reduced from 2000)
+
+[vector]
+enabled = true
+auto_mode = false                  # Manual mode for predictable behavior
+path = "acp_vector.sqlite3"
+dimensions = 128                   # Low dimensions
+min_query_chars = 200              # Fewer vector searches
+top_k = 1                         # Minimum results
+min_similarity = 0.85
+max_snippet_chars = 400
+max_entries = 500                  # Absolute minimum (reduced from 3000)
+summary_enabled = true
+summary_trigger_messages = 10      # Reduce embedding frequency
+summary_max_chars = 600
+
+[autotune]
+enabled = false                    # Disable autotune (saves background CPU/memory)
+
+[runtime]
+acp_http_bind_addr = "127.0.0.1:8090"
+maintenance_interval_seconds = 120 # Less frequent maintenance
+health_interval_seconds = 300
+shutdown_drain_seconds = 15
+sqlite_vacuum_interval_cycles = 120 # Less frequent VACUUM
+entry_auth_enabled = false
+entry_rate_limit_rpm = 120          # Lower rate limit
+entry_rate_limit_burst = 30
+production_strict = false
+otel_enabled = false               # Disable OpenTelemetry (saves memory)
+skills_enabled = true
+skills_import_enabled = false
+skills_allowed_sources = ["local:*"]
+skills_require_sha256 = true
+skills_cache_dir = "skills_cache"
+governance_enabled = true
+governance_policy_mode = "advisory"
+
+[agents]
+[agents.deepseek]
+type = "deepseek"
+api_key_env = "keyring://go-on/deepseek_api_key"
+model = "deepseek-v4-flash"
+supports_system = true
+
+[flow]
+name = "Low Memory Adaptive"
+phases = ["think", "act", "check", "done"]
+
+[phases.think]
+description = "Think — analyze, plan, gather context"
+agents = ["deepseek"]
+fallback = true
+
+[phases.think.options]
+request_timeout_seconds = 60       # Shorter timeouts free resources faster
+review_timeout_seconds = 30
+cache_enabled = true
+vector_enabled = true
+summary_enabled = true
+phase_max_inflight = 2             # Minimum concurrency
+global_max_inflight = 8            # Absolute minimum global cap
+
+[phases.act]
+description = "Act — execute, generate, implement"
+agents = ["deepseek"]
+fallback = true
+
+[phases.act.options]
+request_timeout_seconds = 120      # Reduced from 300
+review_timeout_seconds = 60
+cache_enabled = true
+vector_enabled = true
+summary_enabled = true
+phase_max_inflight = 4
+global_max_inflight = 8
+
+[phases.check]
+description = "Check — verify, validate, review results"
+agents = ["deepseek"]
+fallback = true
+
+[phases.check.options]
+request_timeout_seconds = 60
+review_timeout_policy = "reject"
+review_min_response_chars = 12
+cache_enabled = true
+vector_enabled = true
+summary_enabled = true
+phase_max_inflight = 2
+global_max_inflight = 8
+
+[phases.done]
+description = "Done — finalize, deliver, complete"
+agents = []
+fallback = false
+
+[phases.done.options]
+request_timeout_seconds = 45
+summary_enabled = true
+phase_max_inflight = 2
+global_max_inflight = 8

@@ -9,6 +9,19 @@ pub mod i18n;
 // ── Profile mutual exclusion ──────────────────────────────────────────────
 // Exactly ONE profile must be selected. The Cargo feature system does not
 // enforce mutual exclusion at the dependency level, so we check explicitly.
+
+// Fail if no profile is selected (e.g. `cargo build --no-default-features`).
+#[cfg(not(any(
+    feature = "profile-local",
+    feature = "profile-simple-server",
+    feature = "profile-multi-users-server",
+)))]
+compile_error!(
+    "No profile feature is enabled. Exactly one must be selected: \
+     profile-local, profile-simple-server, or profile-multi-users-server"
+);
+
+// Fail if more than one profile is selected simultaneously.
 #[cfg(any(
     all(feature = "profile-local", feature = "profile-simple-server"),
     all(feature = "profile-local", feature = "profile-multi-users-server"),

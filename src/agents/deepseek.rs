@@ -146,15 +146,35 @@ impl Agent for DeepSeekAgent {
             .into())
     }
 
+    /// Returns the currently available DeepSeek models per their official API docs:
+    ///   https://api-docs.deepseek.com/quick_start/pricing
+    ///
+    /// As of 2025, DeepSeek offers exactly two production models:
+    ///   - deepseek-v4-flash  (fast, non-thinking, function calling)
+    ///   - deepseek-v4-pro    (pro, thinking/reasoning, function calling)
+    ///
+    /// IMPORTANT: Do NOT add fictional model IDs like "deepseek-r1" or "deepseek-chat"
+    /// as separate entries. The config alias "deepseek-chat" resolves to deepseek-v4-flash
+    /// via is_default. If DeepSeek releases new models, update this list from their
+    /// OFFICIAL documentation only — never from blog posts, rumors, or third-party lists.
     fn available_models(&self) -> Vec<ModelInfo> {
         vec![
             ModelInfo {
                 id: "deepseek-v4-flash".to_string(),
                 name: "DeepSeek V4 Flash".to_string(),
-                description: "Latest fast model, non-thinking mode".to_string(),
-                is_default: self.model == "deepseek-v4-flash",
+                description: "Latest fast model, non-thinking mode, function calling".to_string(),
+                // Config templates use "deepseek-chat" as an alias for the default model.
+                // DO NOT add "deepseek-chat" as a separate model entry — it is NOT a real
+                // API model ID. DeepSeek's API only recognizes "deepseek-v4-flash" and
+                // "deepseek-v4-pro". The alias is matched here so configs using the
+                // legacy name still work and resolve to v4-flash.
+                // Official docs: https://api-docs.deepseek.com/quick_start/pricing
+                // Context: 1M tokens (1,048,576), Max output: 384K tokens
+                is_default: self.model == "deepseek-v4-flash"
+                    || self.model == "deepseek-chat"
+                    || self.model.is_empty(),
                 capabilities: vec!["chat".to_string(), "function_calling".to_string()],
-                context_window: Some(128000),
+                context_window: Some(1_048_576),
             },
             ModelInfo {
                 id: "deepseek-v4-pro".to_string(),
@@ -166,15 +186,8 @@ impl Agent for DeepSeekAgent {
                     "reasoning".to_string(),
                     "function_calling".to_string(),
                 ],
-                context_window: Some(128000),
-            },
-            ModelInfo {
-                id: "deepseek-r1".to_string(),
-                name: "DeepSeek R1".to_string(),
-                description: "Dedicated reasoning model with chain-of-thought".to_string(),
-                is_default: self.model == "deepseek-r1",
-                capabilities: vec!["chat".to_string(), "reasoning".to_string()],
-                context_window: Some(128000),
+                // Official docs: same 1M context for v4-pro
+                context_window: Some(1_048_576),
             },
         ]
     }

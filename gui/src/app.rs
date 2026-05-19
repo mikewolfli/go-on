@@ -314,7 +314,9 @@ impl GoOnApp {
                     .stdout(std::process::Stdio::null());
 
                 // Inject API keys for ALL configured providers into backend process environment.
-                // Priority: keyring > config file > inherited env.
+                // Priority: config file (fast) > keyring (slow on macOS) > inherited env.
+                // Keyring is only checked when the config doesn't have a usable key,
+                // since macOS Keychain access is ~100ms slower per call.
                 for provider in &config.providers {
                     let provider_lower = provider.name.to_lowercase();
                     let derived_var = format!("{}_API_KEY", provider_lower.to_uppercase());
@@ -324,27 +326,25 @@ impl GoOnApp {
                         _ => &derived_var,
                     };
 
-                    // Try keyring first
-                    let mut key = crate::keyring_util::get_api_key(&provider_lower);
+                    // 1. Config file (fast, no I/O). Use this directly if available.
+                    let mut key =
+                        if !provider.api_key.is_empty() && provider.api_key != REDACTED_API_KEY {
+                            Some(provider.api_key.clone())
+                        } else {
+                            None
+                        };
 
-                    // Log when keyring fails (useful for debugging macOS keychain issues)
+                    // 2. Keyring (slow on macOS — Keychain access per call).
+                    // Only hit keyring when config doesn't have the key.
                     if key.is_none() {
+                        key = crate::keyring_util::get_api_key(&provider_lower);
                         #[cfg(debug_assertions)]
-                        eprintln!(
-                            "backend: keyring returned no key for '{}', falling back to config",
-                            provider_lower
-                        );
+                        if key.is_none() {
+                            eprintln!("backend: keyring returned no key for '{}'", provider_lower);
+                        }
                     }
 
-                    // Fallback: config file api_key (only clone if needed)
-                    if key.is_none()
-                        && !provider.api_key.is_empty()
-                        && provider.api_key != REDACTED_API_KEY
-                    {
-                        key = Some(provider.api_key.clone());
-                    }
-
-                    // Fallback: inherited env var
+                    // 3. Inherited env var (from parent process)
                     if key.is_none() {
                         key = std::env::var(env_var).ok().filter(|v| !v.is_empty());
                     }
@@ -861,6 +861,11 @@ state_path = "acp_autotune_state.json"
             self.backend_crash_count = self.backend_crash_count.saturating_add(1);
             eprintln!("Restarting backend (old PID: {})...", child.id());
             let _ = child.kill();
+            // Wait briefly for the old process to release port 8090 before
+            // spawning the new one, preventing EADDRINUSE.
+            // Uses thread::sleep which blocks the UI thread briefly (~300ms)
+            // but is the simplest reliable approach across all platforms.
+            std::thread::sleep(std::time::Duration::from_millis(300));
             // Don't block UI thread waiting for backend to exit.
             // Spawn a background thread to reap the zombie.
             let pid = child.id();

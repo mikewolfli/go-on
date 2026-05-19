@@ -411,8 +411,7 @@ pub(crate) async fn execute_mcp_tool_call(
                 .get("max_results")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(10)
-                .min(20)
-                .max(1) as usize;
+                .clamp(1, 20) as usize;
 
             // Try GitHub API first, with a short timeout
             let client = reqwest::Client::builder()

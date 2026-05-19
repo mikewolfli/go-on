@@ -549,9 +549,9 @@ impl ChatView {
         let avail = ui.available_size();
         let right_w = avail.x.max(200.0);
         let right_h = avail.y.max(200.0);
-        // Reserve input area (260px) up front for stable height calculation
-        // Includes: error(~20px) + attachments(~20px) + input_scroll(100px) + counter(20px) + buttons(40px) + spacing(~40px)
-        let msg_h = (right_h - 260.0).max(80.0);
+        // Messages get remaining height after mode row (~50px) and input area (~260px)
+        // Minimum 40px so messages are always visible even on small windows.
+        let msg_h = (right_h - 310.0).max(40.0);
 
         ui.allocate_ui(egui::vec2(right_w, right_h), |ui| {
             // ── Mode/Model row (top, fixed) ────────────
@@ -704,17 +704,15 @@ impl ChatView {
                 ui.separator();
             }
 
-            // ── Messages area: fixed height from outer pre-computed value ─
-            if msg_h > 80.0 {
-                egui::ScrollArea::vertical()
-                    .id_salt("chat_messages_scroll")
-                    .auto_shrink([false; 2])
-                    .max_height(msg_h)
-                    .stick_to_bottom(true)
-                    .show(ui, |ui| {
-                        self.show_messages(ui, i18n);
-                    });
-            }
+            // ── Messages area ─
+            egui::ScrollArea::vertical()
+                .id_salt("chat_messages_scroll")
+                .auto_shrink([false; 2])
+                .max_height(msg_h)
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    self.show_messages(ui, i18n);
+                });
 
             ui.separator();
 

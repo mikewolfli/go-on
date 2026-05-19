@@ -481,7 +481,24 @@ fn get_memory_usage() -> u64 {
     0
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(target_os = "macos")]
+fn get_memory_usage() -> u64 {
+    // Read RSS from `ps -o rss=` which works on macOS without extra dependencies.
+    // The output is in KB, so multiply by 1024 to get bytes.
+    if let Ok(output) = std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+        .output()
+    {
+        if let Ok(rss_str) = String::from_utf8(output.stdout) {
+            if let Ok(kb) = rss_str.trim().parse::<u64>() {
+                return kb.saturating_mul(1024);
+            }
+        }
+    }
+    0
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 fn get_memory_usage() -> u64 {
     0
 }

@@ -382,6 +382,21 @@ impl Agent for AnthropicAgent {
     fn available_models(&self) -> Vec<crate::agent::ModelInfo> {
         vec![
             crate::agent::ModelInfo {
+                id: "claude-sonnet-4-20250514".to_string(),
+                name: "Claude Sonnet 4 (20250514)".to_string(),
+                description: "Anthropic's best combination of speed and intelligence".to_string(),
+                is_default: self.model == "claude-sonnet-4-20250514",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "vision".to_string(),
+                    "reasoning".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                    "extended_thinking".to_string(),
+                ],
+                context_window: Some(1_000_000),
+            },
+            crate::agent::ModelInfo {
                 id: "claude-opus-4-7".to_string(),
                 name: "Claude Opus 4.7".to_string(),
                 description:
