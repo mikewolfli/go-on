@@ -94,7 +94,7 @@ jobs:
       - name: Install dependencies
         run: npm --prefix vscode-addon ci
       - name: TypeScript compile
-        run: npx --prefix vscode-addon tsc --noEmit
+        run: cd vscode-addon && npx tsc --noEmit
       - name: Lint
         run: npm --prefix vscode-addon run lint
       - name: Contract smoke
