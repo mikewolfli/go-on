@@ -220,7 +220,14 @@ pub(super) async fn handle_session_prompt(
 
     tracing::info!("ACP session/prompt: delegating to process_chat_request");
 
-    match process_chat_request(server, &chat_params, None, &pipeline_trace, None, None).await {
+    // Wrap process_chat_request in a 60-second total timeout to prevent hangs
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        process_chat_request(server, &chat_params, None, &pipeline_trace, None, None),
+    )
+    .await;
+
+    match result {
         Ok(_result) => {
             tracing::info!("ACP session/prompt: completed successfully");
             send_result(server, request_id, json!({"stopReason": "end_turn"})).await
