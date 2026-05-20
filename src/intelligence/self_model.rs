@@ -5,20 +5,14 @@
 //! `Arc<Mutex<>>` for thread-safe access.
 
 use crate::i18n::runtime::tf;
+use crate::intelligence::lock_guard;
+use crate::intelligence::now_ms;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 
 /// Lock a Mutex, recovering from poison with a log.
-fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
-    match mtx.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            tracing::error!("self_model mutex poisoned, recovering");
-            poisoned.into_inner()
-        }
-    }
-}
+// Uses shared `crate::intelligence::lock_guard`.
 
 // ---------------------------------------------------------------------------
 // Data Structures
@@ -387,18 +381,6 @@ impl SelfModelCore {
             last_update_ms: inner.last_update_ms,
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Returns the current timestamp in milliseconds since the Unix epoch.
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------

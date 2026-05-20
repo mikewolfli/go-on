@@ -6,9 +6,9 @@
 //!
 //! All mutable state is guarded behind `Arc<Mutex<>>`.
 
+use crate::intelligence::now_ms;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -18,6 +18,10 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// Lock a Mutex, recovering from poison by clearing the mutex data and logging a warning.
+///
+/// NOTE: This version is intentionally distinct from the shared
+/// `crate::intelligence::lock_guard` because it requires `T: Default`
+/// and resets the value to its default on poison.
 fn lock_guard<T: Default>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
     match mtx.lock() {
         Ok(guard) => guard,
@@ -28,13 +32,6 @@ fn lock_guard<T: Default>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
             guard
         }
     }
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
 }
 
 // ---------------------------------------------------------------------------

@@ -14,7 +14,6 @@ pub mod task_plan;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -83,10 +82,7 @@ impl ArtifactLedger {
 }
 
 fn now_ts() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+    crate::acp::prelude::now_ts()
 }
 
 // ── Re-exports ────────────────────────────────────────────────────────────

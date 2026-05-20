@@ -225,7 +225,7 @@ pub struct Plan {
 // Permission types
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(transparent)]
 pub struct PermissionOptionId(pub String);
 impl PermissionOptionId {
@@ -267,7 +267,7 @@ pub struct RequestPermissionRequest {
 // Terminal types
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(transparent)]
 pub struct TerminalId(pub String);
 impl TerminalId {

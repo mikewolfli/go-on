@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 /// Stdio variant is untagged (legacy format without explicit type field).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum McpServer {
+pub enum McpServerConfig {
     /// HTTP transport (requires agent mcpCapabilities.http).
     Http(McpServerHttp),
     /// SSE transport (requires agent mcpCapabilities.sse).
@@ -65,8 +65,8 @@ impl McpServerStdio {
     }
 }
 
-impl From<McpServerStdio> for McpServer {
+impl From<McpServerStdio> for McpServerConfig {
     fn from(s: McpServerStdio) -> Self {
-        McpServer::Stdio(s)
+        McpServerConfig::Stdio(s)
     }
 }

@@ -708,11 +708,7 @@ impl Skill for ComposedSkill {
 }
 
 impl ComposedSkill {
-    /// Convenience method: wraps this skill into `Arc<dyn Skill>` for registry registration.
-    #[allow(dead_code)]
-    pub fn boxed(self) -> Arc<dyn Skill> {
-        Arc::new(self)
-    }
+    // Future convenience methods for skill composition go here.
 }
 
 // ---------------------------------------------------------------------------

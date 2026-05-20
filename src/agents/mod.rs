@@ -12,6 +12,7 @@ pub mod deepquest;
 pub mod deepseek;
 pub mod facewall;
 #[cfg(any(
+    feature = "sub-bus-tool",
     feature = "profile-simple-server",
     feature = "profile-multi-users-server"
 ))]

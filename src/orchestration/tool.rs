@@ -43,6 +43,7 @@ pub struct ToolOutput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RetryPolicy {
     pub max_retries: usize,
     pub retry_on_failure: bool,
@@ -57,6 +58,7 @@ pub enum ToolRiskLevel {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ToolCapabilityProfile {
     pub capability: String,
     pub risk_level: ToolRiskLevel,

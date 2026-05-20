@@ -4,10 +4,10 @@
 //! version history, and performance trends. This module enables monitoring
 //! of agent capability maturity and automatic promotion/deprecation decisions.
 
+use crate::intelligence::now_ms;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 // ─── Evolution data types ────────────────────────────────────────────────────
 
@@ -355,14 +355,6 @@ fn linear_regression_slope(versions: &[CapabilityVersion]) -> f64 {
     } else {
         num / den
     }
-}
-
-/// Current time in milliseconds since Unix epoch.
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

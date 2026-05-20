@@ -244,7 +244,7 @@ impl ObservabilityBus {
         error: Option<String>,
         token_cost: u64,
     ) {
-        let now = Self::now_ms();
+        let now = crate::intelligence::now_ms();
 
         // --- 1. Push trace event into the ring buffer ---
         {
@@ -422,18 +422,6 @@ impl ObservabilityBus {
         let len = events.len();
         let start = len.saturating_sub(count);
         events.range(start..).cloned().collect()
-    }
-
-    // -----------------------------------------------------------------------
-    // Internal helpers
-    // -----------------------------------------------------------------------
-
-    /// Monotonic timestamp in milliseconds (epoch-based for human readability).
-    fn now_ms() -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64
     }
 }
 

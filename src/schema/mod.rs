@@ -27,6 +27,7 @@ mod agent;
 mod client;
 mod content;
 mod mcp;
+mod skills;
 
 #[allow(unused_imports)]
 pub use agent::*;
@@ -36,6 +37,8 @@ pub use client::*;
 pub use content::*;
 #[allow(unused_imports)]
 pub use mcp::*;
+#[allow(unused_imports)]
+pub use skills::*;
 
 use serde::{Deserialize, Serialize};
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -76,7 +79,7 @@ impl ProtocolVersion {
 
 pub type Meta = serde_json::Map<String, serde_json::Value>;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct Implementation {
     pub name: String,
@@ -97,7 +100,7 @@ impl Implementation {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvVariable {
     pub name: String,
@@ -115,7 +118,7 @@ impl EnvVariable {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpHeader {
     pub name: String,
@@ -133,10 +136,17 @@ impl HttpHeader {
     }
 }
 
+// NOTE: All standard ACP methods are fully implemented. Handlers live in
+// protocol_pack.rs and dispatch entries in request.rs:
+//   - session/resume, session/close — session lifecycle management
+//   - session/request_permission — permission response handler
+//   - terminal/create, terminal/output, terminal/release, terminal/kill,
+//     terminal/wait_for_exit — full terminal process management
 pub struct AcpMethodNames;
 impl AcpMethodNames {
     pub const INITIALIZE: &'static str = "initialize";
     pub const AUTHENTICATE: &'static str = "authenticate";
+    pub const LOGOUT: &'static str = "logout";
     pub const SESSION_NEW: &'static str = "session/new";
     pub const SESSION_LOAD: &'static str = "session/load";
     pub const SESSION_PROMPT: &'static str = "session/prompt";
@@ -165,6 +175,11 @@ impl SessionModeId {
         Self(id.into())
     }
 }
+impl From<String> for SessionModeId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
 impl From<&str> for SessionModeId {
     fn from(s: &str) -> Self {
         Self(s.to_string())
@@ -177,6 +192,11 @@ pub struct SessionConfigId(pub String);
 impl SessionConfigId {
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
+    }
+}
+impl From<String> for SessionConfigId {
+    fn from(s: String) -> Self {
+        Self(s)
     }
 }
 impl From<&str> for SessionConfigId {
@@ -193,6 +213,11 @@ impl SessionConfigValueId {
         Self(id.into())
     }
 }
+impl From<String> for SessionConfigValueId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
 impl From<&str> for SessionConfigValueId {
     fn from(s: &str) -> Self {
         Self(s.to_string())
@@ -205,6 +230,11 @@ pub struct SessionConfigGroupId(pub String);
 impl SessionConfigGroupId {
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
+    }
+}
+impl From<String> for SessionConfigGroupId {
+    fn from(s: String) -> Self {
+        Self(s)
     }
 }
 impl From<&str> for SessionConfigGroupId {

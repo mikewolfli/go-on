@@ -2,7 +2,6 @@
 //!
 //! # Status
 //! Complete implementation ready for CapabilityBus integration (ARCH-13).
-//! Currently zero-call — all items are intentionally public for future wiring.
 
 use std::collections::{HashMap, VecDeque};
 

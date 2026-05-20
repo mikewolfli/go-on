@@ -1,6 +1,6 @@
 //! MCP (Model Context Protocol) compatibility layer.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::acp::server::AcpServer;
 use crate::agent::AgentRegistry;
@@ -14,7 +14,10 @@ mod tools;
 #[cfg(test)]
 mod tests;
 
-pub use schema::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpResource, McpTool, ServerInfo};
+pub use schema::{
+    JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpCallToolResult, McpInitializeResult,
+    McpListResourcesResult, McpListToolsResult, McpResource, McpTool, ServerInfo, JSONRPC_VERSION,
+};
 pub use tools::error_codes;
 
 /// MCP Protocol Version — latest stable spec
@@ -29,6 +32,10 @@ pub struct McpServer {
     /// background tasks, response cache, vector store, autotune, observability,
     /// and shutdown notification.
     pub acp_server: Option<Arc<AcpServer>>,
+
+    /// Current logging level, set via logging/setLevel.
+    /// F-GAP-10 — planned wiring: expose level to subsystem log filters.
+    pub logging_level: Arc<Mutex<Option<String>>>,
 }
 
 impl McpServer {
@@ -46,6 +53,7 @@ impl McpServer {
                 name: server_name,
                 version: server_version,
             },
+            logging_level: Arc::new(Mutex::new(None)),
             acp_server: None,
         }
     }
@@ -65,6 +73,7 @@ impl McpServer {
                 name: server_name,
                 version: server_version,
             },
+            logging_level: Arc::new(Mutex::new(None)),
             acp_server,
         }
     }

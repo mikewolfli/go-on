@@ -26,6 +26,7 @@ impl From<&str> for ContentBlock {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct TextContent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Annotations>,
@@ -87,6 +88,7 @@ pub struct ResourceLink {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct EmbeddedResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Annotations>,

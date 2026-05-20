@@ -10,7 +10,9 @@ use crate::tool::ToolInput;
 
 use super::tools::validate_required_arguments;
 use super::{
-    JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpResource, McpServer, McpTool, MCP_VERSION,
+    JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpCallToolResult, McpInitializeResult,
+    McpListResourcesResult, McpListToolsResult, McpResource, McpServer, McpTool, JSONRPC_VERSION,
+    MCP_VERSION,
 };
 
 /// Signals an invalid / missing parameter in an MCP request.
@@ -64,7 +66,14 @@ impl McpServer {
             "tools/call" => self.handle_call_tool(&request).await,
             "resources/list" => Ok(self.handle_list_resources(&request).await),
             "resources/read" => self.handle_read_resource(&request).await,
-            "resources/subscribe" => Ok(json!({"meta": {}})),
+            "resources/subscribe" => {
+                // F-GAP-10 — planned wiring: persistent subscription tracking.
+                info!(
+                    "MCP: resource subscription requested (params: {:?})",
+                    request.params
+                );
+                Ok(json!({"meta": {}}))
+            }
             "prompts/list" => Ok(self.handle_list_prompts(&request).await),
             "prompts/get" => Ok(self.handle_get_prompt(&request).await),
             "agents/list" => Ok(self.handle_list_agents(&request).await),
@@ -74,25 +83,44 @@ impl McpServer {
                 // so we skip sending any response at all.
                 info!("MCP: received notifications/initialized (no response sent)");
                 return Ok(JsonRpcResponse {
-                    jsonrpc: "2.0".to_string(),
+                    jsonrpc: JSONRPC_VERSION.to_string(),
                     id: None,
                     result: None,
                     error: None,
                 });
             }
             "logging/setLevel" => {
-                // Accept logging level changes silently.
+                let level = request
+                    .params
+                    .as_ref()
+                    .and_then(|p| p.get("level"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                if let Some(ref lvl) = level {
+                    *self.logging_level.lock().unwrap() = Some(lvl.clone());
+                    info!("MCP: logging level set to {}", lvl);
+                }
+                // F-GAP-10 — planned wiring: propagate level to subsystem log filters.
                 Ok(json!({}))
             }
-            "completion/complete" => Ok(json!({"completion": []})),
+            "completion/complete" => {
+                // F-GAP-10 — planned wiring: argument name completion.
+                warn!("MCP: completion/complete is not yet implemented");
+                Ok(json!({
+                    "completion": {
+                        "values": [],
+                        "total": 0
+                    }
+                }))
+            }
             "sampling/createMessage" => {
                 warn!("MCP: sampling/createMessage is not supported");
                 return Ok(JsonRpcResponse {
-                    jsonrpc: "2.0".to_string(),
+                    jsonrpc: JSONRPC_VERSION.to_string(),
                     result: None,
                     error: Some(JsonRpcError {
                         code: super::error_codes::METHOD_NOT_FOUND,
-                        message: "sampling/createMessage is not supported".to_string(),
+                        message: "sampling/createMessage is not supported — use the ACP protocol or configure a provider directly".to_string(),
                         data: None,
                     }),
                     id: request.id,
@@ -104,7 +132,7 @@ impl McpServer {
                 let error_data =
                     inject_platform_profiles_if_absent(json!({}), "mcp.unknown_method");
                 return Ok(JsonRpcResponse {
-                    jsonrpc: "2.0".to_string(),
+                    jsonrpc: JSONRPC_VERSION.to_string(),
                     result: None,
                     error: Some(JsonRpcError {
                         code: super::error_codes::METHOD_NOT_FOUND,
@@ -136,7 +164,7 @@ impl McpServer {
         };
 
         Ok(JsonRpcResponse {
-            jsonrpc: "2.0".to_string(),
+            jsonrpc: JSONRPC_VERSION.to_string(),
             result: response_result,
             error: response_error,
             id: request.id,
@@ -144,18 +172,16 @@ impl McpServer {
     }
 
     async fn handle_initialize(&self, _request: &JsonRpcRequest) -> Value {
-        json!({
-            "protocolVersion": MCP_VERSION,
-            "capabilities": {
+        serde_json::to_value(McpInitializeResult::new(
+            MCP_VERSION,
+            json!({
                 "resources": {},
                 "tools": {},
                 "prompts": {}
-            },
-            "serverInfo": {
-                "name": self.server_info.name,
-                "version": self.server_info.version,
-            }
-        })
+            }),
+            self.server_info.clone(),
+        ))
+        .expect("McpInitializeResult is always serializable")
     }
 
     async fn handle_list_tools(&self, _request: &JsonRpcRequest) -> Value {
@@ -203,10 +229,14 @@ impl McpServer {
 
         let count = tools.len();
         info!("MCP: Listing {} tools/skills", count);
-        json!({
-            "tools": tools,
-            "x_skills_available": self.skill_registry().is_some(),
-        })
+        let tools_value: Vec<Value> = tools
+            .into_iter()
+            .map(|t| serde_json::to_value(t).expect("McpTool is always serializable"))
+            .collect();
+        let mut result = serde_json::to_value(McpListToolsResult::new(tools_value))
+            .expect("McpListToolsResult is always serializable");
+        result["x_skills_available"] = json!(self.skill_registry().is_some());
+        result
     }
 
     async fn handle_call_tool(&self, request: &JsonRpcRequest) -> Result<Value> {
@@ -258,10 +288,11 @@ impl McpServer {
                         "workflow executed via mcp",
                         "mcp_stdio",
                     );
-                    return Ok(json!({
-                        "content": [{"type": "text", "text": format!("Workflow executed for task: {}", task)}],
-                        "structuredContent": json!({"ok": true, "task": task}),
-                    }));
+                    return Ok(serde_json::to_value(McpCallToolResult::new(
+                        vec![json!({"type": "text", "text": format!("Workflow executed for task: {}", task)})],
+                        Some(json!({"ok": true, "task": task})),
+                    ))
+                    .expect("McpCallToolResult is always serializable"));
                 }
                 "workflow_ask" => {
                     let task = tool_input
@@ -290,10 +321,11 @@ impl McpServer {
                         "workflow.ask executed via mcp",
                         "mcp_stdio",
                     );
-                    return Ok(json!({
-                        "content": [{"type": "text", "text": format!("Workflow.ask completed for: {}", task)}],
-                        "structuredContent": json!({"ok": true, "task": task}),
-                    }));
+                    return Ok(serde_json::to_value(McpCallToolResult::new(
+                        vec![json!({"type": "text", "text": format!("Workflow.ask completed for: {}", task)})],
+                        Some(json!({"ok": true, "task": task})),
+                    ))
+                    .expect("McpCallToolResult is always serializable"));
                 }
                 "workflow_generate" => {
                     let task = tool_input
@@ -318,10 +350,11 @@ impl McpServer {
                         "workflow.generate executed via mcp",
                         "mcp_stdio",
                     );
-                    return Ok(json!({
-                        "content": [{"type": "text", "text": format!("Workflow generated for: {}", task)}],
-                        "structuredContent": json!({"ok": true, "task": task}),
-                    }));
+                    return Ok(serde_json::to_value(McpCallToolResult::new(
+                        vec![json!({"type": "text", "text": format!("Workflow generated for: {}", task)})],
+                        Some(json!({"ok": true, "task": task})),
+                    ))
+                    .expect("McpCallToolResult is always serializable"));
                 }
                 _ => {} // Fall through to tool_registry + skill_registry
             }
@@ -354,14 +387,18 @@ impl McpServer {
                 "tool executed via mcp",
                 "mcp_stdio",
             );
-            return Ok(json!({
-                "content": [{
-                    "type": "text",
-                    "text": serde_json::to_string(&result)?
-                }],
-                "structuredContent": result,
-                "isError": false,
-            }));
+            let result_value: Value = serde_json::to_value(&result)?;
+            return Ok(serde_json::to_value(
+                McpCallToolResult::new(
+                    vec![json!({
+                        "type": "text",
+                        "text": serde_json::to_string(&result)?,
+                    })],
+                    Some(result_value),
+                )
+                .with_is_error(false),
+            )
+            .expect("McpCallToolResult is always serializable"));
         }
 
         // Step 2: Try skill registry fallback
@@ -403,11 +440,16 @@ impl McpServer {
 
                 info!("MCP: Skill '{}' returned: {:?}", resolved_name, result);
 
-                let mut response = json!({
-                    "content": [{"type": "text", "text": serde_json::to_string_pretty(&result)?}],
-                    "structuredContent": result,
-                    "isError": false,
-                });
+                let mut response = serde_json::to_value(
+                    McpCallToolResult::new(
+                        vec![
+                            json!({"type": "text", "text": serde_json::to_string_pretty(&result)?}),
+                        ],
+                        Some(result),
+                    )
+                    .with_is_error(false),
+                )
+                .expect("McpCallToolResult is always serializable");
                 if resolved_name != tool_name {
                     response["x_resolved_skill"] = json!(resolved_name);
                 }
@@ -424,22 +466,25 @@ impl McpServer {
     }
 
     async fn handle_list_resources(&self, _request: &JsonRpcRequest) -> Value {
-        let resources = vec![
-            McpResource {
+        let resources: Vec<Value> = vec![
+            serde_json::to_value(McpResource {
                 uri: "go-on://agents".to_string(),
                 name: "Available Agents".to_string(),
                 description: Some("List of deployed agents".to_string()),
                 mime_type: "application/json".to_string(),
-            },
-            McpResource {
+            })
+            .expect("McpResource is always serializable"),
+            serde_json::to_value(McpResource {
                 uri: "go-on://tools".to_string(),
                 name: "Available Tools".to_string(),
                 description: Some("List of available tools".to_string()),
                 mime_type: "application/json".to_string(),
-            },
+            })
+            .expect("McpResource is always serializable"),
         ];
 
-        json!({ "resources": resources })
+        serde_json::to_value(McpListResourcesResult::new(resources))
+            .expect("McpListResourcesResult is always serializable")
     }
 
     async fn handle_read_resource(&self, request: &JsonRpcRequest) -> Result<Value> {

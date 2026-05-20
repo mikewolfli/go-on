@@ -688,11 +688,7 @@ impl MultiChannelTransport {
 
     /// Current time in milliseconds since Unix epoch.
     fn now_ms() -> u64 {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64
+        crate::acp::prelude::now_ts_ms() as u64
     }
 
     /// Build a minimal TransportMessage with default QoS and auto-generated id.

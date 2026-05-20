@@ -4,9 +4,10 @@
 //! All mutable state is guarded behind `Arc<Mutex<>>` for thread-safe
 //! concurrent access.
 
+use crate::intelligence::lock_guard;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 
 use crate::intelligence::now_ms;
 
@@ -151,17 +152,6 @@ struct Inner {
     reflexions: Vec<ReflexionRecord>,
     total_reflexions: u64,
     next_reflexion_id: u64,
-}
-
-/// Acquire a lock on the inner mutex, recovering from poison.
-fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
-    match mtx.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            tracing::warn!("consciousness mutex poisoned, recovering");
-            poisoned.into_inner()
-        }
-    }
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────

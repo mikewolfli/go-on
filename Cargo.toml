@@ -12,14 +12,15 @@ path = "src/lib.rs"
 # Exactly ONE profile must be selected. Default is profile-local.
 #
 # profile-local: single-user local tool; SQLite cache + adaptive vector store
-#                Only minimal sub-buses (core dual buses: HarnessBus + CapabilityBus)
-#                Fastest startup, minimal dependencies
+#                Core sub-buses: tool, orchestration, observability, optimization
+#                Fast startup, minimal external dependencies
 #
 # profile-simple-server: single-server deployment; SQLite cache + required sqlite-vec
-#                        Core dual buses + orchestration/reputation
+#                        All sub-buses except distributed-memory
+#                        Full capability bus for production readiness
 #
 # profile-multi-users-server: multi-user production; PostgreSQL cache + pgvector
-#                             All sub-buses (tool, observability, optimization, memory, protocol, orchestration, distributed-memory)
+#                             All sub-buses, including distributed-memory
 #
 # Compile-time validation in src/lib.rs via compile_error!() assertions.
 # Enforces:
@@ -43,9 +44,32 @@ sub-bus-orchestration = []
 sub-bus-distributed-memory = []
 
 # Profile definitions (mutually exclusive via compile-time assertions)
-profile-local = ["backend-sqlite"]
-profile-simple-server = ["backend-sqlite", "sub-bus-orchestration", "sub-bus-tool"]
-profile-multi-users-server = ["backend-postgres", "sub-bus-tool", "sub-bus-observability", "sub-bus-optimization", "sub-bus-memory", "sub-bus-protocol", "sub-bus-orchestration", "sub-bus-distributed-memory"]
+profile-local = [
+    "backend-sqlite",
+    "sub-bus-tool",
+    "sub-bus-orchestration",
+    "sub-bus-observability",
+    "sub-bus-optimization",
+]
+profile-simple-server = [
+    "backend-sqlite",
+    "sub-bus-tool",
+    "sub-bus-orchestration",
+    "sub-bus-observability",
+    "sub-bus-optimization",
+    "sub-bus-memory",
+    "sub-bus-protocol",
+]
+profile-multi-users-server = [
+    "backend-postgres",
+    "sub-bus-tool",
+    "sub-bus-observability",
+    "sub-bus-optimization",
+    "sub-bus-memory",
+    "sub-bus-protocol",
+    "sub-bus-orchestration",
+    "sub-bus-distributed-memory",
+]
 
 # Backend implementations
 backend-sqlite = ["dep:rusqlite", "dep:sqlite-vec"]

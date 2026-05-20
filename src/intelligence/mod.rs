@@ -16,10 +16,18 @@
 /// Many intelligence sub-modules previously defined their own `now_ms()` or `now_ts()`
 /// with identical bodies. Use this shared helper instead of duplicating.
 pub fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+    crate::acp::prelude::now_ts_ms() as u64
+}
+
+/// Acquire a lock on a `Mutex`, recovering from a poisoned state with a warning.
+pub fn lock_guard<T>(mtx: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    match mtx.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("intelligence mutex poisoned, recovering");
+            poisoned.into_inner()
+        }
+    }
 }
 
 pub mod adaptive_selector;
@@ -32,8 +40,7 @@ pub mod capability_bus;
 pub mod capability_graph;
 pub mod consciousness;
 pub mod evaluation;
-#[cfg(feature = "profile-multi-users-server")]
-pub mod learning_center;
+
 pub mod model_selector;
 pub mod quality_models;
 pub mod reinforcement;

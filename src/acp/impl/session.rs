@@ -3,10 +3,10 @@
 //! Provides token-based authentication, session lifecycle management,
 //! and automatic cleanup of expired sessions.
 
+use crate::acp::prelude::now_ts_ms as now_ms;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
 
@@ -413,14 +413,6 @@ fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Return the current timestamp in milliseconds since the Unix epoch.
-fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
-}
 
 // ---------------------------------------------------------------------------
 // Tests

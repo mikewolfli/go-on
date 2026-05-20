@@ -3,9 +3,9 @@
 //! This module provides utility functions for metrics collection,
 //! streaming notifications, and Prometheus metric formatting.
 
-use std::collections::HashMap;
 #[cfg(test)]
-use std::time::{SystemTime, UNIX_EPOCH};
+use crate::acp::prelude::{now_ts, now_ts_ms};
+use std::collections::HashMap;
 
 use serde_json::{json, Map, Value};
 
@@ -138,26 +138,6 @@ pub fn classify_agent_failure(err: &anyhow::Error) -> &'static str {
         return "panic";
     }
     "other"
-}
-
-/// Get current timestamp in seconds
-#[cfg(test)]
-#[allow(dead_code)]
-pub fn now_ts() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-}
-
-/// Get current timestamp in milliseconds
-#[cfg(test)]
-#[allow(dead_code)]
-pub fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
 }
 
 /// Escape Prometheus label value

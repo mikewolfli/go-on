@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::Mutex;
 #[cfg(not(feature = "backend-postgres"))]
 use std::sync::Once;
-use std::time::{SystemTime, UNIX_EPOCH};
+use crate::acp::prelude::now_ts;
 
 use anyhow::Result;
 #[cfg(feature = "backend-postgres")]
@@ -639,12 +639,7 @@ fn build_memory_key(phase: &str, query_text: &str) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn now_ts() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-}
+
 
 #[cfg(all(test, not(feature = "backend-postgres")))]
 mod tests {

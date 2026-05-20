@@ -542,13 +542,21 @@ export class GoOnManager {
           ) {
             (async () => {
               try {
-                const httpUrl = `http://127.0.0.1:8090`;
+                const httpUrl = `${protocolContract.runtime.baseUrl}/rpc`;
                 const httpResponse = await (globalThis as any).fetch(httpUrl, {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: requestStr,
                 });
-                const result = await httpResponse.json();
+                const envelope = await httpResponse.json();
+                // Extract the inner result from the JSON-RPC envelope
+                // to match the stdin path's response shape.
+                const result =
+                  envelope &&
+                  typeof envelope === "object" &&
+                  "result" in envelope
+                    ? envelope.result
+                    : envelope;
                 if (this.pendingRequests.has(id)) {
                   const pending = this.pendingRequests.get(id);
                   this.pendingRequests.delete(id);

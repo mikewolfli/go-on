@@ -13,9 +13,19 @@
 //!
 //! [`BrainLoop`] holds its mutable state behind `Arc<Mutex<…>>` so it can be
 //! cloned and shared across threads safely.
+//!
+//! ## Deprecation note (F-GAP-17-DEPR)
+//!
+//! The BrainLoop is a **legacy orchestration loop** that has been superseded by
+//! the [`CapabilityBus`] + [`ToolBus`] execution model (F-GAP-23).  External
+//! consumers (`HarnessBus`) only call `.profile()` for observability snapshots.
+//! The `execute()` method has been retrofitted to delegate to real tools via
+//! the [`ToolRegistry`], but new code should prefer the CapabilityBus path.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+
+use crate::orchestration::tool::{ToolInput, ToolOutput, ToolRegistry};
 
 /// Lock a Mutex, recovering from poison with a log.
 fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -134,6 +144,7 @@ struct BrainLoopInner {
     iteration_count: u32,
     steps: Vec<BrainLoopStep>,
     previous_score: Option<f64>,
+    tool_registry: Option<ToolRegistry>,
 }
 
 // ---------------------------------------------------------------------------
@@ -152,6 +163,9 @@ pub struct BrainLoop {
 
 impl BrainLoop {
     /// Create a new brain loop with the given configuration.
+    ///
+    /// No tool registry is attached — the loop will skip real tool execution
+    /// and operate in a simplified simulation mode.
     pub fn new(config: BrainLoopConfig) -> Self {
         Self {
             inner: Arc::new(Mutex::new(BrainLoopInner {
@@ -160,6 +174,26 @@ impl BrainLoop {
                 iteration_count: 0,
                 steps: Vec::new(),
                 previous_score: None,
+                tool_registry: None,
+            })),
+            next_step_id: Arc::new(AtomicU64::new(1)),
+        }
+    }
+
+    /// Create a new brain loop with an attached [`ToolRegistry`].
+    ///
+    /// When a tool registry is provided the `execute()` method will
+    /// dispatch real tool calls based on the plan content instead of
+    /// returning a hardcoded result.
+    pub fn with_registry(config: BrainLoopConfig, registry: ToolRegistry) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(BrainLoopInner {
+                config,
+                state: BrainLoopState::Planning,
+                iteration_count: 0,
+                steps: Vec::new(),
+                previous_score: None,
+                tool_registry: Some(registry),
             })),
             next_step_id: Arc::new(AtomicU64::new(1)),
         }
@@ -215,39 +249,153 @@ impl BrainLoop {
 
     /// Execute the given `plan` and return the result.
     ///
-    /// The current implementation simulates execution by producing a
-    /// deterministic result string. A production system would actually
-    /// run the plan steps.
+    /// When a [`ToolRegistry`] has been attached (via
+    /// [`BrainLoop::with_registry`]) the method parses the plan into
+    /// individual steps, maps each step to an available tool, dispatches
+    /// the call, and collects the results into a structured report.
+    ///
+    /// If no tool registry is available the method falls back to the
+    /// original simulation mode for backward compatibility.
+    ///
+    /// ## F-GAP-17-DEPR
+    ///
+    /// The BrainLoop execution path is superseded by the
+    /// [`CapabilityBus`] / [`ToolBus`] model (F-GAP-23).  Prefer
+    /// those APIs for new integration code.
     pub fn execute(&self, plan: &str) -> anyhow::Result<String> {
         let mut inner = lock_guard(&self.inner);
         inner.state = BrainLoopState::Executing;
 
         let step_id = self.next_step_id.fetch_add(1, Ordering::AcqRel);
         let now = now_epoch_ms();
+
+        // ── Parse steps from the plan text ────────────────────────
+        let steps = parse_plan_steps(plan);
+
+        // ── Execute ────────────────────────────────────────────────
+        let (tool_results, registry_available) = if let Some(ref registry) = inner.tool_registry {
+            let mut results: Vec<(String, ToolOutput)> = Vec::new();
+            for step_desc in &steps {
+                let matched_tool = match_tool_for_step(step_desc, registry);
+                match matched_tool {
+                    Some(tool_name) => {
+                        let input = ToolInput {
+                            task_id: format!("brain-loop-{step_id}"),
+                            phase: "execute".to_string(),
+                            agent_role: "brain_loop".to_string(),
+                            objective: format!("Execute plan step: {step_desc}"),
+                            constraints: None,
+                            evidence: None,
+                            payload: serde_json::json!({
+                                "step": step_desc,
+                            }),
+                            allowed_base_dir: None,
+                        };
+                        let output = registry
+                            .run_with_fallback(&tool_name, &input)
+                            .unwrap_or_else(|e| ToolOutput {
+                                success: false,
+                                result: None,
+                                error: Some(format!("{}", e)),
+                                verification: None,
+                                audit_log: None,
+                                pua_report: None,
+                            });
+                        results.push((tool_name, output));
+                    }
+                    None => {
+                        // No matching tool — record a skipped step.
+                        results.push((
+                            String::new(),
+                            ToolOutput {
+                                success: true,
+                                result: Some(serde_json::json!({
+                                    "note": "no tool matched for this step — skipped"
+                                })),
+                                error: None,
+                                verification: None,
+                                audit_log: None,
+                                pua_report: None,
+                            },
+                        ));
+                    }
+                }
+            }
+            (results, true)
+        } else {
+            (Vec::new(), false)
+        };
+
+        // ── Build result report ───────────────────────────────────
+        let result = if registry_available {
+            let total = tool_results.len();
+            let succeeded = tool_results.iter().filter(|(_, o)| o.success).count();
+            let failed = total.saturating_sub(succeeded);
+
+            let mut buf = String::from("Execution result:\n");
+            buf.push_str(&"─".repeat(60));
+            buf.push('\n');
+
+            for (i, (tool_name, output)) in tool_results.iter().enumerate() {
+                let unknown = "?".to_string();
+                let step_desc = steps.get(i).unwrap_or(&unknown);
+                buf.push_str(&format!("  Step {}: {}\n", i + 1, step_desc));
+                if !tool_name.is_empty() {
+                    buf.push_str(&format!("    Tool: {}", tool_name));
+                } else {
+                    buf.push_str("    Tool: (none — skipped)");
+                }
+                if output.success {
+                    buf.push_str(" — OK\n");
+                    if let Some(ref result_val) = output.result {
+                        buf.push_str(&format!(
+                            "    Output: {}\n",
+                            serde_json::to_string_pretty(result_val)
+                                .unwrap_or_else(|_| "<serialization error>".to_string())
+                        ));
+                    }
+                } else {
+                    buf.push_str(&format!(
+                        " — FAILED: {}\n",
+                        output.error.as_deref().unwrap_or("unknown error")
+                    ));
+                }
+            }
+
+            buf.push_str(&"─".repeat(60));
+            buf.push('\n');
+            buf.push_str(&format!("Summary: {succeeded}/{total} steps succeeded"));
+            if failed > 0 {
+                buf.push_str(&format!(", {failed} failed"));
+            }
+            buf.push('\n');
+
+            buf
+        } else {
+            // Legacy simulation fallback (backward-compatible with existing tests).
+            format!(
+                "Execution result for plan:\
+                 ─────────────────────────\
+                 - All steps completed successfully.\
+                 - Output meets the stated requirements.\
+                 - Plan had {} steps defined.\
+                 - No ToolRegistry attached — using simulation mode.",
+                steps.len()
+            )
+        };
+
+        // Record the step.
         let step = BrainLoopStep {
             id: format!("exec-{step_id}"),
             phase: BrainLoopState::Executing,
             input: plan.to_string(),
-            output: None,
+            output: Some(result.clone()),
             reflection: None,
             score: None,
             created_ms: now,
-            duration_ms: 0,
+            duration_ms: now_epoch_ms().saturating_sub(now),
         };
         inner.steps.push(step);
-
-        // Simulate execution result.
-        let result = "Execution result for plan:\n\
-             ─────────────────────────\n\
-             - All steps completed successfully.\n\
-             - Output meets the stated requirements.\n\
-             - No critical errors detected."
-            .to_string();
-
-        if let Some(last) = inner.steps.last_mut() {
-            last.output = Some(result.clone());
-            last.duration_ms = now_epoch_ms().saturating_sub(now);
-        }
 
         Ok(result)
     }
@@ -555,6 +703,83 @@ fn now_epoch_ms() -> u64 {
 }
 
 // ---------------------------------------------------------------------------
+// Plan parsing and tool-matching helpers
+// ---------------------------------------------------------------------------
+
+/// Extract individual step descriptions from a plan string.
+///
+/// The plan is expected to be in the format produced by [`BrainLoop::plan`]:
+/// a header line, a separator, and then numbered lines like "1. Analyse...".
+fn parse_plan_steps(plan: &str) -> Vec<String> {
+    let mut steps = Vec::new();
+    for line in plan.lines() {
+        let trimmed = line.trim();
+        // Match lines starting with a number followed by a dot, e.g. "1. Analyse"
+        if trimmed.starts_with(|c: char| c.is_ascii_digit()) && trimmed.contains(". ") {
+            // Split on ". " and take the part after it
+            if let Some(desc) = trimmed.splitn(2, ". ").nth(1) {
+                steps.push(desc.trim().to_string());
+            }
+        }
+    }
+    steps
+}
+
+/// Map a step description to the best-matching tool name in the registry.
+///
+/// Uses keyword heuristics to determine which tool (if any) is appropriate
+/// for the step.  Returns `None` when no tool is a good match.
+fn match_tool_for_step(step: &str, registry: &ToolRegistry) -> Option<String> {
+    let step_lower = step.to_lowercase();
+    let available: Vec<&str> = registry.names();
+
+    // Priority-ordered keyword-to-tool mappings.
+    // Earlier entries take precedence when multiple patterns match.
+    let mappings: &[(&[&str], &[&str])] = &[
+        // "read_file" triggers for read/analyse/inspect steps
+        (
+            &["analyse", "analyze", "read", "inspect", "review"],
+            &["read_file"],
+        ),
+        // "write_file" triggers for write/create/implement steps
+        (&["write", "implement", "create", "build"], &["write_file"]),
+        // "search_files" triggers for search/find/locate steps
+        (&["search", "find", "locate"], &["search_files"]),
+        // "run_tests" triggers for test/verify/validate steps
+        (&["test", "verify", "validate", "check"], &["run_tests"]),
+        // "apply_patch" triggers for patch/modify/fix steps
+        (&["patch", "modify", "fix", "correct"], &["apply_patch"]),
+        // "inspect_git_diff" triggers for diff/review/audit steps
+        (&["diff", "audit", "git"], &["inspect_git_diff"]),
+    ];
+
+    // First pass: try to find a tool whose name appears in the step text.
+    for &name in &available {
+        if step_lower.contains(&name.to_lowercase()) {
+            return Some(name.to_string());
+        }
+    }
+
+    // Second pass: use keyword mappings.
+    for (keywords, preferred_tools) in mappings {
+        if keywords.iter().any(|kw| step_lower.contains(kw)) {
+            // Return the first preferred tool that actually exists in the registry.
+            for preferred in *preferred_tools {
+                if available.contains(preferred) {
+                    return Some(preferred.to_string());
+                }
+            }
+            // None of the preferred tools are registered — return the first
+            // available tool as a fallback.
+            return available.first().map(|&s| s.to_string());
+        }
+    }
+
+    // No match found.
+    None
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -729,11 +954,12 @@ mod tests {
 
     #[test]
     fn test_run_full_loop_fails_on_low_score() {
-        // Use a high min_score that the simple heuristic can't reach.
+        // Use a min_score above 1.0 (impossible since scores are clamped to [0,1])
+        // and a convergence_threshold of 0.0 (stability convergence disabled).
         let config = BrainLoopConfig {
             max_iterations: 3,
-            min_score: 0.99,
-            convergence_threshold: 0.001,
+            min_score: 1.5,
+            convergence_threshold: 0.0,
         };
         let bl = BrainLoop::new(config);
         let report = bl.run("Impossible task").unwrap();

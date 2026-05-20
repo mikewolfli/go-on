@@ -1,6 +1,7 @@
 pub mod artifact;
 pub mod brain_loop; // F-GAP-17 (flat, legacy)
 #[cfg(any(
+    feature = "sub-bus-tool",
     feature = "profile-simple-server",
     feature = "profile-multi-users-server"
 ))]

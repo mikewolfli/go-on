@@ -64,6 +64,15 @@ fn is_acp_request(method: &str) -> bool {
             | "session/list"
             | "session/set_mode"
             | "session/set_config_option"
+            | "session/resume"
+            | "session/close"
+            | "session/request_permission"
+            // Terminal methods
+            | "terminal/create"
+            | "terminal/output"
+            | "terminal/release"
+            | "terminal/kill"
+            | "terminal/wait_for_exit"
             // Protocol-level notifications
             | "$/cancel_request"
             // Go-On custom methods (backward compat)
@@ -536,6 +545,30 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     )
                     .await
                 }
+                "session/resume" => {
+                    protocol_pack::handle_session_resume(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "session/close" => {
+                    protocol_pack::handle_session_close(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "session/request_permission" => {
+                    protocol_pack::handle_session_request_permission(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
                 // Standard ACP authentication methods
                 "authenticate" => {
                     protocol_pack::handle_authenticate(
@@ -615,6 +648,47 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                 }
                 "mcp.sampling.createMessage" => {
                     protocol_pack::handle_mcp_sampling_create_message(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                // Terminal methods
+                "terminal/create" => {
+                    protocol_pack::handle_terminal_create(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "terminal/output" => {
+                    protocol_pack::handle_terminal_output(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "terminal/release" => {
+                    protocol_pack::handle_terminal_release(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "terminal/kill" => {
+                    protocol_pack::handle_terminal_kill(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                    )
+                    .await
+                }
+                "terminal/wait_for_exit" => {
+                    protocol_pack::handle_terminal_wait_for_exit(
                         server,
                         request.params.unwrap_or_default(),
                         request_id,

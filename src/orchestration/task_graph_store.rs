@@ -9,7 +9,6 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use serde_json;
@@ -492,10 +491,7 @@ impl TaskGraphStore {
 // ─── Shared helpers (both backends) ─────────────────────────────────────────
 
 fn now_ts() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+    crate::acp::prelude::now_ts()
 }
 
 // ─── Tests (SQLite only) ────────────────────────────────────────────────────

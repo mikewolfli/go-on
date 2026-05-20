@@ -32,6 +32,22 @@ pub async fn send_result(server: &AcpServer, id: Option<Value>, result: Value) -
     .await
 }
 
+
+/// Send an empty JSON object `{}` as a successful result.
+pub async fn send_empty_ok(server: &AcpServer, id: Option<Value>) -> Result<()> {
+    send_result(server, id, serde_json::Value::Object(serde_json::Map::new())).await
+}
+
+/// Serialize a typed struct and send it as a result.
+pub async fn send_typed<T: serde::Serialize>(
+    server: &AcpServer,
+    id: Option<Value>,
+    value: &T,
+) -> Result<()> {
+    let result = serde_json::to_value(value)?;
+    send_result(server, id, result).await
+}
+
 /// Send error response
 ///
 /// This function replaces the `AcpServer::send_error` method.

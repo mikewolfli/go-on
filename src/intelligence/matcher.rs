@@ -3,10 +3,10 @@
 //! Matches incoming tasks against known scenarios to provide pre-configured
 //! routing decisions, tool selections, and execution strategies.
 
+use crate::intelligence::now_ms;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 fn lock_mutex_recover<'a, T>(mtx: &'a Mutex<T>, name: &str) -> MutexGuard<'a, T> {
     match mtx.lock() {
@@ -464,14 +464,6 @@ fn max_rule_categories(scenario: &Scenario) -> u32 {
         count += 1;
     }
     count
-}
-
-/// Current wall-clock timestamp in milliseconds since the Unix epoch.
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 use std::time::Instant;

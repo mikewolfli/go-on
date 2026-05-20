@@ -5,22 +5,12 @@
 //! changes over time. All state is guarded behind `Arc<Mutex<>>`.
 
 use crate::i18n::runtime::tf;
+use crate::intelligence::lock_guard;
+use crate::intelligence::now_ms;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard};
-
-/// Lock a Mutex, recovering from poison with a log.
-fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
-    match mtx.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            tracing::error!("world_model mutex poisoned, recovering");
-            poisoned.into_inner()
-        }
-    }
-}
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
 
 // ---------------------------------------------------------------------------
 // Causal inference & prediction
@@ -751,18 +741,6 @@ impl WorldModel {
             stale_entity_count,
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Returns the current timestamp in milliseconds since the Unix epoch.
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------

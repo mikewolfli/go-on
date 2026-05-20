@@ -256,16 +256,6 @@ pub fn task_budget_for_target(target: Option<&str>) -> TaskBudget {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskQueue {
-    pub task_id: String,
-    pub priority: u32,
-    pub state: String, // "queued", "running", "completed"
-    pub created_at: String,
-    pub started_at: Option<String>,
-    pub completed_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutonomousEditAuditEntry {
     pub timestamp: String,
     pub agent: String,

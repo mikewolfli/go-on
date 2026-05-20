@@ -4,21 +4,12 @@
 //! triggers corrective actions.  All mutable state is guarded behind
 //! `Arc<Mutex<>>` for thread-safe concurrent access.
 
+use crate::intelligence::lock_guard;
+use crate::intelligence::now_ms;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, MutexGuard};
-
-/// Lock a Mutex, recovering from poison with a log.
-fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
-    match mtx.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            tracing::error!("metacognitive mutex poisoned, recovering");
-            poisoned.into_inner()
-        }
-    }
-}
+use std::sync::{Arc, Mutex};
 
 // ── Reflection level ────────────────────────────────────────────────────────
 
@@ -752,15 +743,6 @@ impl MetacognitiveController {
                 .as_millis() as u64,
         })
     }
-}
-
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────

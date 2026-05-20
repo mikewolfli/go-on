@@ -9,7 +9,8 @@
 compile_error!("features 'backend-sqlite' and 'backend-postgres' cannot be enabled simultaneously");
 
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::acp::prelude::now_ts;
 
 use anyhow::Result;
 
@@ -309,13 +310,6 @@ impl ResponseCache {
             avg_hits_per_entry,
         })
     }
-}
-
-fn now_ts() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 #[cfg(all(test, not(feature = "backend-postgres")))]

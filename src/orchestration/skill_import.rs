@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
@@ -649,10 +648,7 @@ pub(crate) fn parse_skill_md(content: &[u8]) -> Result<SkillImportManifest> {
 }
 
 fn now_ts() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
-        .unwrap_or(0)
+    crate::acp::prelude::now_ts()
 }
 
 /// A remote skill that wraps an MCP endpoint as a Skill trait implementation.

@@ -7,7 +7,6 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 // ---------------------------------------------------------------------------
 // Core data types
@@ -861,10 +860,7 @@ impl FaultToleranceEngine {
 // ---------------------------------------------------------------------------
 
 fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+    crate::acp::prelude::now_ts_ms() as u64
 }
 
 // ---------------------------------------------------------------------------

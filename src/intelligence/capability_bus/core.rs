@@ -22,6 +22,7 @@
 //!  14. DistributedMemoryBus  (new in Phase 4)
 
 #[cfg(any(
+    feature = "sub-bus-tool",
     feature = "profile-simple-server",
     feature = "profile-multi-users-server"
 ))]
@@ -53,6 +54,7 @@ use crate::intelligence::evolution_graph::{EvolutionGraph, EvolutionStage, Trend
 use crate::intelligence::federated_rl::FederatedRL;
 use crate::intelligence::matcher::ScenarioMatcher;
 use crate::intelligence::metacognitive::MetacognitiveController;
+use crate::intelligence::now_ms;
 use crate::intelligence::reinforcement::learning::{
     ExperienceKnowledgeBase, QLearningAgent, RewardFunction, RlTaskExecutionMetrics, SuccessCase,
 };
@@ -61,6 +63,7 @@ use crate::intelligence::self_model::SelfModelCore;
 use crate::intelligence::world_model::WorldModel;
 use crate::observability::provenance::{make_entry, ProvenanceLedger};
 #[cfg(any(
+    feature = "sub-bus-tool",
     feature = "profile-simple-server",
     feature = "profile-multi-users-server"
 ))]
@@ -421,12 +424,14 @@ pub struct CapabilityBus {
 
     /// Agent factory — dynamic sub-agent creation (F-GAP-13)
     #[cfg(any(
+        feature = "sub-bus-tool",
         feature = "profile-simple-server",
         feature = "profile-multi-users-server"
     ))]
     pub agent_factory: Arc<Mutex<AgentFactory>>,
     /// Orchestration council — multi-agent voting governance (F-GAP-15)
     #[cfg(any(
+        feature = "sub-bus-tool",
         feature = "profile-simple-server",
         feature = "profile-multi-users-server"
     ))]
@@ -496,11 +501,13 @@ impl CapabilityBus {
             discovery: DiscoveryCenter::new(),
             consensus: ConsensusEngine::new(Default::default()),
             #[cfg(any(
+                feature = "sub-bus-tool",
                 feature = "profile-simple-server",
                 feature = "profile-multi-users-server"
             ))]
             agent_factory: Arc::new(Mutex::new(AgentFactory::new(AgentFactoryConfig::default()))),
             #[cfg(any(
+                feature = "sub-bus-tool",
                 feature = "profile-simple-server",
                 feature = "profile-multi-users-server"
             ))]
@@ -806,8 +813,9 @@ impl CapabilityBus {
             })
             .unwrap_or_default();
 
-        // In server profiles, merge runtime-created sub-agent templates from AgentFactory.
+        // In profiles with tool bus, merge runtime-created sub-agent templates from AgentFactory.
         #[cfg(any(
+            feature = "sub-bus-tool",
             feature = "profile-simple-server",
             feature = "profile-multi-users-server"
         ))]
@@ -1578,6 +1586,7 @@ impl CapabilityBus {
             }
 
             #[cfg(any(
+                feature = "sub-bus-tool",
                 feature = "profile-simple-server",
                 feature = "profile-multi-users-server"
             ))]
@@ -1650,12 +1659,4 @@ impl Drop for FlowGuard<'_> {
     fn drop(&mut self) {
         self.bus.complete_flow(self.flow_id, self.task_id);
     }
-}
-
-/// Current wall-clock time in milliseconds since Unix epoch.
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }

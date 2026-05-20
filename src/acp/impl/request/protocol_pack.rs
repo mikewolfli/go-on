@@ -2,6 +2,9 @@ use tracing::warn;
 
 use super::*;
 use crate::mcp::MCP_VERSION;
+use crate::schema::{
+    ImportedSkillRecordView, ModelsListResponse, PhaseResponse, SkillActionResponse,
+};
 
 #[derive(Debug, Clone, Default)]
 struct AcpSessionState {
@@ -11,10 +14,65 @@ struct AcpSessionState {
     config_options: HashMap<String, Value>,
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Internal chat parameter types — replace json!() for ACP→Go-On param building
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Serialize)]
+struct ChatMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+struct InternalChatParams {
+    mode: String,
+    messages: Vec<ChatMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conversation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    options: Option<Value>,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Skill response types — replace json!() in all skill.* handlers
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase / Models response types
+// ═══════════════════════════════════════════════════════════════════════════════
+
 static ACP_SESSION_STATE: OnceLock<StdMutex<HashMap<String, AcpSessionState>>> = OnceLock::new();
 
 fn acp_session_state() -> &'static StdMutex<HashMap<String, AcpSessionState>> {
     ACP_SESSION_STATE.get_or_init(|| StdMutex::new(HashMap::new()))
+}
+
+static ACP_PERMISSION_STATE: OnceLock<
+    StdMutex<HashMap<String, crate::schema::PermissionOptionId>>,
+> = OnceLock::new();
+
+fn acp_permission_state() -> &'static StdMutex<HashMap<String, crate::schema::PermissionOptionId>> {
+    ACP_PERMISSION_STATE.get_or_init(|| StdMutex::new(HashMap::new()))
+}
+
+/// Tracks a spawned terminal process.
+struct TerminalProcess {
+    /// The child process handle.
+    child: std::process::Child,
+    /// Captured stdout + stderr output so far.
+    output_buffer: Vec<u8>,
+    /// Whether the process has exited.
+    exited: bool,
+    /// Exit status captured when process exited.
+    exit_code: Option<i32>,
+}
+
+static ACP_TERMINAL_STATE: OnceLock<StdMutex<HashMap<String, TerminalProcess>>> = OnceLock::new();
+
+fn acp_terminal_state() -> &'static StdMutex<HashMap<String, TerminalProcess>> {
+    ACP_TERMINAL_STATE.get_or_init(|| StdMutex::new(HashMap::new()))
 }
 
 fn normalize_acp_mode(value: Option<&str>) -> String {
@@ -136,33 +194,50 @@ fn acp_prompt_to_text(params: &Value) -> String {
 /// Returns Go-On chat params: `{mode, messages: [{role, content}], conversation_id}`.
 fn build_chat_params_from_acp(params: Value, session_state: &AcpSessionState) -> Value {
     let text = acp_prompt_to_text(&params);
-    let messages: Vec<Value> = if text.is_empty() {
+    let messages = if text.is_empty() {
         vec![]
     } else {
-        vec![json!({"role": "user", "content": text})]
+        vec![ChatMessage {
+            role: "user".to_string(),
+            content: text,
+        }]
     };
-    let mut chat_params = json!({
-        "mode": normalize_acp_mode(Some(session_state.mode.as_str())),
-        "messages": messages,
+    let conversation_id = params
+        .get("sessionId")
+        .and_then(|s| s.as_str())
+        .map(|s| s.to_string());
+    let options = session_state.cwd.as_ref().map(|cwd| {
+        let mut extra = serde_json::Map::new();
+        extra.insert("cwd".to_string(), Value::String(cwd.clone()));
+        extra.insert(
+            "additional_directories".to_string(),
+            Value::Array(
+                session_state
+                    .additional_directories
+                    .iter()
+                    .map(|d| Value::String(d.clone()))
+                    .collect(),
+            ),
+        );
+        let mut options = serde_json::Map::new();
+        options.insert("extra".to_string(), Value::Object(extra));
+        Value::Object(options)
     });
-    if let Some(cid) = params.get("sessionId").and_then(|s| s.as_str()) {
-        chat_params["conversation_id"] = json!(cid);
-    }
-    if let Some(cwd) = session_state.cwd.as_ref() {
-        chat_params["options"] = json!({
-            "extra": {
-                "cwd": cwd,
-                "additional_directories": session_state.additional_directories,
-            }
-        });
-    }
-    chat_params
+
+    serde_json::to_value(InternalChatParams {
+        mode: normalize_acp_mode(Some(session_state.mode.as_str())),
+        messages,
+        conversation_id,
+        options,
+    })
+    .unwrap_or_default()
 }
 
 pub(super) async fn handle_initialize(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
     use crate::schema::{
         AgentCapabilities, Implementation, InitializeResponse, McpCapabilities, PromptCapabilities,
         ProtocolVersion, SessionCapabilities, SessionCloseCapabilities, SessionListCapabilities,
+        SessionResumeCapabilities,
     };
 
     let resp = InitializeResponse::new(ProtocolVersion::V1)
@@ -183,32 +258,29 @@ pub(super) async fn handle_initialize(server: &AcpServer, request_id: Option<Val
             session_capabilities: SessionCapabilities {
                 list: Some(SessionListCapabilities { meta: None }),
                 close: Some(SessionCloseCapabilities { meta: None }),
+                resume: Some(SessionResumeCapabilities { meta: None }),
                 ..Default::default()
             },
             ..Default::default()
         });
 
-    crate::acp::r#impl::io::send_result(server, request_id, serde_json::to_value(&resp).unwrap())
-        .await
+    crate::acp::r#impl::io::send_result(server, request_id, serde_json::to_value(&resp)?).await
 }
 
 pub(super) async fn handle_mcp_initialize(
     server: &AcpServer,
     request_id: Option<Value>,
 ) -> Result<()> {
-    crate::acp::r#impl::io::send_result(
-        server,
-        request_id,
-        json!({
-            "protocolVersion": MCP_VERSION,
-            "capabilities": {},
-            "serverInfo": {
-                "name": "go-on",
-                "version": env!("CARGO_PKG_VERSION")
-            }
-        }),
-    )
-    .await
+    use crate::mcp::{McpInitializeResult, ServerInfo};
+    let result = McpInitializeResult::new(
+        MCP_VERSION,
+        serde_json::Map::new().into(),
+        ServerInfo {
+            name: "go-on".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        },
+    );
+    crate::acp::r#impl::io::send_result(server, request_id, serde_json::to_value(&result)?).await
 }
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -224,6 +296,17 @@ fn generate_acp_session_id() -> String {
         .as_nanos();
     let seq = ACP_SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("acp-session-{:x}-{:x}", ts, seq)
+}
+
+static ACP_TERMINAL_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+fn generate_terminal_id() -> String {
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let seq = ACP_TERMINAL_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("terminal-{:x}-{:x}", ts, seq)
 }
 
 /// Handle `session/new` — creates a new ACP session.
@@ -262,13 +345,15 @@ pub(super) async fn handle_session_new(
         );
     }
 
+    let config_options = build_model_config_options(server);
+
     crate::acp::r#impl::io::send_result(
         server,
         request_id,
         serde_json::to_value(
             &crate::schema::NewSessionResponse::new(crate::schema::SessionId::new(session_id))
                 .modes(modes)
-                .config_options(vec![]),
+                .config_options(config_options),
         )
         .unwrap(),
     )
@@ -297,12 +382,14 @@ pub(super) async fn handle_session_load(
     let mut modes = build_default_modes();
     modes.current_mode_id = crate::schema::SessionModeId::new(current_mode);
 
+    let config_options = build_model_config_options(server);
+
     crate::acp::r#impl::io::send_result(
         server,
         request_id,
         serde_json::to_value(&crate::schema::LoadSessionResponse {
             modes: Some(modes),
-            config_options: None,
+            config_options: Some(config_options),
             meta: None,
         })
         .unwrap(),
@@ -517,6 +604,27 @@ pub(super) async fn handle_session_prompt(
 /// Handle `session/cancel` — cancels an ongoing prompt turn.
 ///
 /// Standard ACP notification: client sends `sessionId`,
+
+/// Send a typed session/update notification chunk.
+/// Uses schema types to ensure correct JSON-RPC wire format.
+async fn send_chunk(server: &AcpServer, session_id: &str, chunk_type: &str, text: &str) {
+    use crate::schema::{
+        ContentBlock, ContentChunk, SessionNotification, SessionUpdate, TextContent,
+    };
+    let update = match chunk_type {
+        "agent_thought_chunk" => SessionUpdate::AgentThoughtChunk(ContentChunk::new(
+            ContentBlock::Text(TextContent::new(text)),
+        )),
+        _ => SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+            TextContent::new(text),
+        ))),
+    };
+    let notif = SessionNotification::new(session_id.into(), update);
+    if let Ok(value) = serde_json::to_value(&notif) {
+        let _ = crate::acp::r#impl::io::send_notification(server, "session/update", value).await;
+    }
+}
+
 /// agent stops processing and returns `StopReason::Cancelled`.
 pub(super) async fn handle_session_cancel(
     _server: &AcpServer,
@@ -560,6 +668,9 @@ pub(super) async fn handle_session_set_mode(
     params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
+    use crate::schema::{
+        CurrentModeUpdate, SessionId, SessionNotification, SessionUpdate, SetSessionModeResponse,
+    };
     let session_id = params
         .get("sessionId")
         .and_then(Value::as_str)
@@ -567,15 +678,134 @@ pub(super) async fn handle_session_set_mode(
     let mode_id = normalize_acp_mode(params.get("modeId").and_then(Value::as_str));
     if !session_id.is_empty() {
         if let Ok(mut state) = acp_session_state().lock() {
-            state.entry(session_id.to_string()).or_default().mode = mode_id;
+            state.entry(session_id.to_string()).or_default().mode = mode_id.clone();
+        }
+        // Send session/update notification with CurrentModeUpdate so the
+        // client (e.g. Zed) can reflect the mode change in its UI immediately.
+        let notif = SessionNotification::new(
+            SessionId::new(session_id.to_string()),
+            SessionUpdate::CurrentModeUpdate(CurrentModeUpdate {
+                current_mode_id: crate::schema::SessionModeId::new(mode_id),
+                meta: None,
+            }),
+        );
+        if let Ok(value) = serde_json::to_value(&notif) {
+            let _ =
+                crate::acp::r#impl::io::send_notification(server, "session/update", value).await;
         }
     }
     crate::acp::r#impl::io::send_result(
         server,
         request_id,
-        serde_json::to_value(&crate::schema::SetSessionModeResponse { meta: None }).unwrap(),
+        serde_json::to_value(&SetSessionModeResponse { meta: None })?,
     )
     .await
+}
+
+/// Handle `session/resume` — resumes an existing session.
+pub(super) async fn handle_session_resume(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    use crate::schema::{ResumeSessionResponse, SessionModeId};
+    let session_id = params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let cwd = params
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToString::to_string);
+
+    let (current_mode, _additional_dirs) = if !session_id.is_empty() {
+        if let Ok(mut state) = acp_session_state().lock() {
+            let entry = state.entry(session_id.to_string()).or_default();
+            if let Some(ref new_cwd) = cwd {
+                entry.cwd = Some(new_cwd.clone());
+            }
+            (entry.mode.clone(), entry.additional_directories.clone())
+        } else {
+            ("ask".to_string(), vec![])
+        }
+    } else {
+        ("ask".to_string(), vec![])
+    };
+
+    let mut modes = build_default_modes();
+    modes.current_mode_id = SessionModeId::new(current_mode);
+    let config_options = build_model_config_options(server);
+
+    crate::acp::r#impl::io::send_result(
+        server,
+        request_id,
+        serde_json::to_value(&ResumeSessionResponse {
+            modes: Some(modes),
+            config_options: Some(config_options),
+            meta: None,
+        })?,
+    )
+    .await
+}
+
+/// Handle `session/close` — closes and cleans up a session.
+pub(super) async fn handle_session_close(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let session_id = params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !session_id.is_empty() {
+        if let Ok(mut state) = acp_session_state().lock() {
+            state.remove(session_id);
+        }
+    }
+    crate::acp::r#impl::io::send_typed(
+        server,
+        request_id,
+        &crate::schema::CloseSessionResponse { meta: None },
+    )
+    .await
+}
+
+/// Handle `session/request_permission` — client responds to a permission request.
+///
+/// During tool execution, the agent may request user permission for sensitive
+/// operations. The server sends a permission request notification to the client,
+/// and the client responds via this handler. The response is stored so the
+/// waiting tool execution can resume with the user's decision.
+pub(super) async fn handle_session_request_permission(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    use crate::schema::PermissionOptionId;
+    let session_id = params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let option_id = params
+        .get("optionId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    if !session_id.is_empty() && !option_id.is_empty() {
+        // Store the permission decision so the waiting tool execution can pick it up.
+        if let Ok(mut permissions) = acp_permission_state().lock() {
+            permissions.insert(
+                session_id.to_string(),
+                PermissionOptionId::new(option_id.to_string()),
+            );
+        }
+    }
+
+    // Return empty success — the client just needs acknowledgement.
+    crate::acp::r#impl::io::send_empty_ok(server, request_id).await
 }
 
 /// Handle `session/set_config_option` — sets a configuration option for a session.
@@ -621,6 +851,58 @@ pub(super) async fn handle_session_set_config_option(
     .await
 }
 
+/// Build config options for model selection, populated from the agent registry.
+///
+/// Returns a single `SessionConfigOption` of kind `Select` containing all
+/// available models grouped by provider, with "Auto" as the default value.
+/// When set to "Auto", the CapabilityBus selects the best model automatically.
+fn build_model_config_options(server: &AcpServer) -> Vec<crate::schema::SessionConfigOption> {
+    use crate::schema::{
+        SessionConfigGroupId, SessionConfigId, SessionConfigKind, SessionConfigOption,
+        SessionConfigOptionCategory, SessionConfigSelect, SessionConfigSelectGroup,
+        SessionConfigSelectOption, SessionConfigSelectOptions, SessionConfigValueId,
+    };
+
+    let mut groups: Vec<SessionConfigSelectGroup> = Vec::new();
+
+    if let Some(registry) = server.agent_registry() {
+        for (agent_name, _default, models) in registry.models() {
+            if models.is_empty() {
+                continue;
+            }
+            let options: Vec<SessionConfigSelectOption> = models
+                .into_iter()
+                .map(|m| SessionConfigSelectOption {
+                    value: SessionConfigValueId::new(m.id.clone()),
+                    name: m.name,
+                    description: Some(m.id.clone()),
+                    meta: None,
+                })
+                .collect();
+            groups.push(SessionConfigSelectGroup {
+                group: SessionConfigGroupId::new(agent_name.clone()),
+                name: agent_name,
+                options,
+                meta: None,
+            });
+        }
+    }
+
+    vec![SessionConfigOption {
+        id: SessionConfigId::new("model"),
+        name: "Model / 模型".to_string(),
+        description: Some(
+            "AI model to use. \"Auto\" lets the capability bus select the best model.".to_string(),
+        ),
+        category: Some(SessionConfigOptionCategory::Model),
+        kind: SessionConfigKind::Select(SessionConfigSelect {
+            current_value: SessionConfigValueId::new("auto"),
+            options: SessionConfigSelectOptions::Grouped(groups),
+        }),
+        meta: None,
+    }]
+}
+
 /// Build the default set of session modes.
 fn build_default_modes() -> crate::schema::SessionModeState {
     use crate::schema::{SessionMode, SessionModeId, SessionModeState};
@@ -650,9 +932,12 @@ pub(super) async fn handle_authenticate(
     _params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    // Default implementation: all auth succeeds (auth is optional).
-    // If entry_auth is enabled, it's handled at the HTTP/transport layer.
-    crate::acp::r#impl::io::send_result(server, request_id, json!({})).await
+    crate::acp::r#impl::io::send_typed(
+        server,
+        request_id,
+        &crate::schema::AuthenticateResponse::new(),
+    )
+    .await
 }
 
 /// Handle `logout` — terminates the current authenticated session.
@@ -661,7 +946,12 @@ pub(super) async fn handle_logout(
     _params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    crate::acp::r#impl::io::send_result(server, request_id, json!({})).await
+    crate::acp::r#impl::io::send_typed(
+        server,
+        request_id,
+        &crate::schema::LogoutResponse { meta: None },
+    )
+    .await
 }
 
 /// Handle `$/cancel_request` — protocol-level request cancellation notification.
@@ -681,7 +971,7 @@ pub(super) async fn handle_cancel_request(
 
 /// Handle `mcp.ping` — health check ping.
 pub(super) async fn handle_mcp_ping(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
-    crate::acp::r#impl::io::send_result(server, request_id, json!({})).await
+    crate::acp::r#impl::io::send_empty_ok(server, request_id).await
 }
 
 /// Handle `mcp.resources.list` — list available resources.
@@ -689,7 +979,9 @@ pub(super) async fn handle_mcp_resources_list(
     server: &AcpServer,
     request_id: Option<Value>,
 ) -> Result<()> {
-    crate::acp::r#impl::io::send_result(server, request_id, json!({"resources": []})).await
+    use crate::mcp::McpListResourcesResult;
+    let result = McpListResourcesResult::new(vec![]);
+    crate::acp::r#impl::io::send_result(server, request_id, serde_json::to_value(&result)?).await
 }
 
 /// Handle `mcp.resources.read` — read a specific resource by URI.
@@ -715,7 +1007,7 @@ pub(super) async fn handle_mcp_resources_subscribe(
     _params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    crate::acp::r#impl::io::send_result(server, request_id, json!({})).await
+    crate::acp::r#impl::io::send_empty_ok(server, request_id).await
 }
 
 /// Handle `mcp.logging.setLevel` — set the MCP logging level.
@@ -724,7 +1016,7 @@ pub(super) async fn handle_mcp_logging_set_level(
     _params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    crate::acp::r#impl::io::send_result(server, request_id, json!({})).await
+    crate::acp::r#impl::io::send_empty_ok(server, request_id).await
 }
 
 /// Handle `mcp.completion.complete` — complete a text input.
@@ -733,7 +1025,7 @@ pub(super) async fn handle_mcp_completion_complete(
     _params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    crate::acp::r#impl::io::send_result(server, request_id, json!({"completion": []})).await
+    crate::acp::r#impl::io::send_empty_ok(server, request_id).await
 }
 
 /// Handle `mcp.sampling.createMessage` — create a sampling request.
@@ -758,16 +1050,10 @@ pub(super) async fn handle_mcp_tools_list(
     server: &AcpServer,
     request_id: Option<Value>,
 ) -> Result<()> {
+    use crate::mcp::McpListToolsResult;
     let tools = build_mcp_tool_descriptors(server);
-
-    crate::acp::r#impl::io::send_result(
-        server,
-        request_id,
-        json!({
-            "tools": tools
-        }),
-    )
-    .await
+    let result = McpListToolsResult::new(tools);
+    crate::acp::r#impl::io::send_result(server, request_id, serde_json::to_value(&result)?).await
 }
 
 pub(super) async fn handle_mcp_tools_call(
@@ -775,6 +1061,8 @@ pub(super) async fn handle_mcp_tools_call(
     params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
+    use crate::mcp::McpCallToolResult;
+
     let name = params
         .get("name")
         .and_then(|value| value.as_str())
@@ -783,7 +1071,7 @@ pub(super) async fn handle_mcp_tools_call(
     let arguments = params
         .get("arguments")
         .cloned()
-        .unwrap_or_else(|| json!({}));
+        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
 
     let structured = match execute_mcp_tool_call(server, name, &arguments).await {
         Ok(structured) => structured,
@@ -801,15 +1089,11 @@ pub(super) async fn handle_mcp_tools_call(
     };
     record_mcp_tool_audit(name, &arguments, true, "tool executed successfully");
 
-    crate::acp::r#impl::io::send_result(
-        server,
-        request_id,
-        json!({
-            "content": [{"type": "text", "text": structured.to_string()}],
-            "structuredContent": structured
-        }),
-    )
-    .await
+    let mut content = serde_json::Map::new();
+    content.insert("type".to_string(), Value::String("text".to_string()));
+    content.insert("text".to_string(), Value::String(structured.to_string()));
+    let result = McpCallToolResult::new(vec![Value::Object(content)], Some(structured));
+    crate::acp::r#impl::io::send_result(server, request_id, serde_json::to_value(&result)?).await
 }
 
 fn record_mcp_tool_audit(name: &str, arguments: &Value, success: bool, reason: &str) {
@@ -896,17 +1180,18 @@ fn open_skill_import_store(server: &AcpServer) -> Result<SkillImportStore> {
 }
 
 fn normalize_imported_record(record: ImportedSkillRecord) -> Value {
-    json!({
-        "name": record.name,
-        "version": record.version,
-        "description": record.description,
-        "source": record.source,
-        "source_ref": record.source_ref,
-        "sha256": record.sha256,
-        "manifest_path": record.manifest_path,
-        "enabled": record.enabled,
-        "imported_at": record.imported_at,
-    })
+    let resp = ImportedSkillRecordView {
+        name: record.name,
+        version: record.version,
+        description: record.description,
+        source: record.source,
+        source_ref: record.source_ref,
+        sha256: record.sha256,
+        manifest_path: record.manifest_path,
+        enabled: record.enabled,
+        imported_at: record.imported_at,
+    };
+    serde_json::to_value(&resp).unwrap_or_default()
 }
 
 static SKILL_VERSION_HISTORY: OnceLock<StdMutex<HashMap<String, Vec<Value>>>> = OnceLock::new();
@@ -951,25 +1236,41 @@ fn build_skill_version_snapshot(
     updated_by: &str,
     change_summary: &str,
 ) -> Value {
-    let updated_at = crate::acp::prelude::now_ts();
-    json!({
-        "name": record.name,
-        "version": manifest
-            .get("version")
-            .and_then(Value::as_str)
-            .unwrap_or(record.version.as_str()),
-        "description": manifest
-            .get("description")
-            .and_then(Value::as_str)
-            .unwrap_or(record.description.as_str()),
-        "input_schema": manifest.get("input_schema").cloned().unwrap_or_else(|| json!({"type":"object"})),
-        "prompt_template": manifest.get("prompt_template").cloned().unwrap_or(Value::Null),
-        "manifest_path": record.manifest_path,
-        "saved_at": updated_at,
-        "updated_at": updated_at,
-        "updated_by": updated_by,
-        "change_summary": change_summary,
-    })
+    let updated_at = crate::acp::prelude::now_ts().to_string();
+    let version = manifest
+        .get("version")
+        .and_then(Value::as_str)
+        .unwrap_or(record.version.as_str())
+        .to_string();
+    let description = manifest
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or(record.description.as_str())
+        .to_string();
+    let default_schema = {
+        let mut m = serde_json::Map::new();
+        m.insert("type".to_string(), Value::String("object".to_string()));
+        Value::Object(m)
+    };
+    let input_schema = manifest
+        .get("input_schema")
+        .cloned()
+        .unwrap_or(default_schema);
+    let prompt_template = manifest.get("prompt_template").cloned();
+
+    let snapshot = crate::schema::SkillVersionSnapshot {
+        name: record.name.clone(),
+        version,
+        description,
+        input_schema: Some(input_schema),
+        prompt_template,
+        manifest_path: record.manifest_path.clone(),
+        saved_at: updated_at.clone(),
+        updated_at,
+        updated_by: updated_by.to_string(),
+        change_summary: change_summary.to_string(),
+    };
+    serde_json::to_value(&snapshot).unwrap_or_default()
 }
 
 fn push_skill_version_snapshot(name: &str, snapshot: Value) {
@@ -1063,17 +1364,22 @@ pub(super) async fn handle_skill_import(
         true,
         "imported skill manifest with supply-chain checks",
     );
-    crate::acp::r#impl::io::send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "action": "import",
-            "name": imported_name,
-            "skill": normalize_imported_record(imported)
-        }),
-    )
-    .await
+    let payload = serde_json::to_value(SkillActionResponse {
+        ok: true,
+        action: "import".to_string(),
+        name: Some(imported_name),
+        skill: Some(normalize_imported_record(imported)),
+        total: None,
+        enabled: None,
+        disabled: None,
+        skills: None,
+        removed: None,
+        unregistered: None,
+        version: None,
+        versions: None,
+    })
+    .unwrap_or_default();
+    crate::acp::r#impl::io::send_result(server, request_id, payload).await
 }
 
 pub(super) async fn handle_skill_list_imported(
@@ -1098,19 +1404,22 @@ pub(super) async fn handle_skill_list_imported(
         true,
         "listed imported skills",
     );
-    crate::acp::r#impl::io::send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "action": "list_imported",
-            "total": total,
-            "enabled": enabled,
-            "disabled": disabled,
-            "skills": skills,
-        }),
-    )
-    .await
+    let payload = serde_json::to_value(SkillActionResponse {
+        ok: true,
+        action: "list_imported".to_string(),
+        name: None,
+        skill: None,
+        total: Some(total),
+        enabled: Some(enabled),
+        disabled: Some(disabled),
+        skills: Some(skills),
+        removed: None,
+        unregistered: None,
+        version: None,
+        versions: None,
+    })
+    .unwrap_or_default();
+    crate::acp::r#impl::io::send_result(server, request_id, payload).await
 }
 
 pub(super) async fn handle_skill_enabled_toggle(
@@ -1151,17 +1460,22 @@ pub(super) async fn handle_skill_enabled_toggle(
     };
     store.save()?;
     record_skill_admin_audit(action, &name, true, "updated imported skill state");
-    crate::acp::r#impl::io::send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "action": action,
-            "name": name,
-            "skill": normalize_imported_record(updated),
-        }),
-    )
-    .await
+    let payload = serde_json::to_value(SkillActionResponse {
+        ok: true,
+        action: action.to_string(),
+        name: Some(name),
+        skill: Some(normalize_imported_record(updated)),
+        total: None,
+        enabled: None,
+        disabled: None,
+        skills: None,
+        removed: None,
+        unregistered: None,
+        version: None,
+        versions: None,
+    })
+    .unwrap_or_default();
+    crate::acp::r#impl::io::send_result(server, request_id, payload).await
 }
 
 pub(super) async fn handle_skill_remove(
@@ -1205,18 +1519,22 @@ pub(super) async fn handle_skill_remove(
     store.save()?;
     record_skill_admin_audit("remove", &name, true, "removed imported skill record");
 
-    crate::acp::r#impl::io::send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "action": "remove",
-            "removed": removed,
-            "unregistered": unregistered,
-            "name": name,
-        }),
-    )
-    .await
+    let payload = serde_json::to_value(SkillActionResponse {
+        ok: true,
+        action: "remove".to_string(),
+        name: Some(name),
+        skill: None,
+        total: None,
+        enabled: None,
+        disabled: None,
+        skills: None,
+        removed: Some(removed),
+        unregistered: Some(unregistered),
+        version: None,
+        versions: None,
+    })
+    .unwrap_or_default();
+    crate::acp::r#impl::io::send_result(server, request_id, payload).await
 }
 
 pub(super) async fn handle_skill_create(
@@ -1278,15 +1596,22 @@ pub(super) async fn handle_skill_create(
     }
 
     record_skill_admin_audit("create", &name, true, "created skill from prompt template");
-    crate::acp::r#impl::io::send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "name": name,
-        }),
-    )
-    .await
+    let payload = serde_json::to_value(SkillActionResponse {
+        ok: true,
+        action: "create".to_string(),
+        name: Some(name),
+        skill: None,
+        total: None,
+        enabled: None,
+        disabled: None,
+        skills: None,
+        removed: None,
+        unregistered: None,
+        version: None,
+        versions: None,
+    })
+    .unwrap_or_default();
+    crate::acp::r#impl::io::send_result(server, request_id, payload).await
 }
 
 pub(super) async fn handle_skill_update(
@@ -1326,14 +1651,14 @@ pub(super) fn skill_update_payload(server: &AcpServer, params: &Value) -> Result
     );
 
     if let Some(description) = params.get("description").and_then(Value::as_str) {
-        manifest["description"] = json!(description);
+        manifest["description"] = Value::String(description.to_string());
         record.description = description.to_string();
     }
     if let Some(schema) = params.get("input_schema") {
         manifest["input_schema"] = schema.clone();
     }
-    if let Some(prompt_template) = params.get("prompt_template").and_then(Value::as_str) {
-        manifest["prompt_template"] = json!(prompt_template);
+    if let Some(prompt) = params.get("prompt_template").and_then(Value::as_str) {
+        manifest["prompt_template"] = Value::String(prompt.to_string());
     }
 
     let current_version = manifest
@@ -1345,7 +1670,7 @@ pub(super) fn skill_update_payload(server: &AcpServer, params: &Value) -> Result
         .and_then(Value::as_str)
         .map(ToString::to_string)
         .unwrap_or_else(|| bump_patch_version(current_version));
-    manifest["version"] = json!(target_version.clone());
+    manifest["version"] = Value::String(target_version.clone());
     record.version = target_version;
 
     save_skill_manifest(&record.manifest_path, &manifest)?;
@@ -1363,12 +1688,21 @@ pub(super) fn skill_update_payload(server: &AcpServer, params: &Value) -> Result
     store.save()?;
 
     record_skill_admin_audit("update", &name, true, "updated imported skill manifest");
-    Ok(json!({
-        "ok": true,
-        "action": "update",
-        "name": name,
-        "skill": normalize_imported_record(record),
-    }))
+    Ok(serde_json::to_value(SkillActionResponse {
+        ok: true,
+        action: "update".to_string(),
+        name: Some(name),
+        skill: Some(normalize_imported_record(record)),
+        total: None,
+        enabled: None,
+        disabled: None,
+        skills: None,
+        removed: None,
+        unregistered: None,
+        version: None,
+        versions: None,
+    })
+    .unwrap_or_default())
 }
 
 pub(super) async fn handle_skill_version_list(
@@ -1420,11 +1754,21 @@ pub(super) fn skill_version_list_payload(server: &AcpServer, params: &Value) -> 
     ));
 
     record_skill_admin_audit("version.list", &name, true, "listed skill versions");
-    Ok(json!({
-        "ok": true,
-        "name": name,
-        "versions": versions,
-    }))
+    Ok(serde_json::to_value(SkillActionResponse {
+        ok: true,
+        action: "version.list".to_string(),
+        name: Some(name),
+        skill: None,
+        total: None,
+        enabled: None,
+        disabled: None,
+        skills: None,
+        removed: None,
+        unregistered: None,
+        version: None,
+        versions: Some(versions),
+    })
+    .unwrap_or_default())
 }
 
 pub(super) async fn handle_skill_version_rollback(
@@ -1497,7 +1841,7 @@ pub(super) fn skill_version_rollback_payload(server: &AcpServer, params: &Value)
     if let Some(prompt_template) = snapshot.get("prompt_template") {
         manifest["prompt_template"] = prompt_template.clone();
     }
-    manifest["version"] = json!(target_version);
+    manifest["version"] = Value::String(target_version.to_string());
     record.version = target_version.to_string();
 
     save_skill_manifest(&record.manifest_path, &manifest)?;
@@ -1519,13 +1863,21 @@ pub(super) fn skill_version_rollback_payload(server: &AcpServer, params: &Value)
         true,
         "rolled back imported skill version",
     );
-    Ok(json!({
-        "ok": true,
-        "action": "rollback",
-        "name": name,
-        "version": target_version,
-        "skill": normalize_imported_record(record),
-    }))
+    Ok(serde_json::to_value(SkillActionResponse {
+        ok: true,
+        action: "rollback".to_string(),
+        name: Some(name),
+        skill: Some(normalize_imported_record(record)),
+        total: None,
+        enabled: None,
+        disabled: None,
+        skills: None,
+        removed: None,
+        unregistered: None,
+        version: Some(target_version.to_string()),
+        versions: None,
+    })
+    .unwrap_or_default())
 }
 
 fn governance_action_label(action: GovernanceAction) -> &'static str {
@@ -1585,31 +1937,49 @@ pub(super) async fn handle_phase(
         .phase_rate_limiter
         .lock()
         .map(|guard| {
-            json!({
-                "tracked": guard.tracked_phases(),
-                "buckets": guard.snapshot(),
-            })
+            let mut m = serde_json::Map::new();
+            m.insert(
+                "tracked".to_string(),
+                Value::Number(guard.tracked_phases().into()),
+            );
+            m.insert(
+                "buckets".to_string(),
+                serde_json::to_value(guard.snapshot()).unwrap_or_default(),
+            );
+            Value::Object(m)
         })
-        .unwrap_or_else(|_| json!({"tracked": 0, "buckets": {}}));
+        .unwrap_or_else(|_| {
+            let mut m = serde_json::Map::new();
+            m.insert("tracked".to_string(), Value::Number(0.into()));
+            m.insert("buckets".to_string(), Value::Object(serde_json::Map::new()));
+            Value::Object(m)
+        });
 
     let inflight = server
         .inflight_limiter
         .lock()
         .map(|guard| {
             let (global, phase) = guard.snapshot();
-            json!({"global": global, "phase": phase})
+            let mut m = serde_json::Map::new();
+            m.insert("global".to_string(), Value::Number(global.into()));
+            m.insert(
+                "phase".to_string(),
+                serde_json::to_value(phase).unwrap_or_default(),
+            );
+            Value::Object(m)
         })
-        .unwrap_or_else(|_| json!({"global": 0, "phase": {}}));
+        .unwrap_or_else(|_| {
+            let mut m = serde_json::Map::new();
+            m.insert("global".to_string(), Value::Number(0.into()));
+            m.insert("phase".to_string(), Value::Object(serde_json::Map::new()));
+            Value::Object(m)
+        });
 
-    crate::acp::r#impl::io::send_result(
-        server,
-        request_id,
-        json!({
-            "rate_limiter": rate_limiter,
-            "inflight": inflight,
-        }),
-    )
-    .await
+    let response = PhaseResponse {
+        rate_limiter,
+        inflight,
+    };
+    crate::acp::r#impl::io::send_result(server, request_id, serde_json::to_value(&response)?).await
 }
 
 pub(super) async fn handle_models_list(
@@ -1626,27 +1996,264 @@ pub(super) async fn handle_models_list(
                 .into_iter()
                 .flat_map(|(provider_name, _default_model, models)| {
                     models.into_iter().map(move |m| {
-                        json!({
-                            "id": m.id,
-                            "name": m.name,
-                            "description": m.description,
-                            "provider": provider_name.clone(),
-                            "is_default": m.is_default,
-                            "capabilities": m.capabilities,
-                            "context_window": m.context_window,
-                        })
+                        let mut model = serde_json::Map::new();
+                        model.insert("id".to_string(), Value::String(m.id));
+                        model.insert("name".to_string(), Value::String(m.name));
+                        model.insert("description".to_string(), Value::String(m.description));
+                        model.insert("provider".to_string(), Value::String(provider_name.clone()));
+                        model.insert("is_default".to_string(), Value::Bool(m.is_default));
+                        model.insert(
+                            "capabilities".to_string(),
+                            Value::Array(m.capabilities.into_iter().map(Value::String).collect()),
+                        );
+                        if let Some(cw) = m.context_window {
+                            model.insert(
+                                "context_window".to_string(),
+                                Value::Number((cw as u64).into()),
+                            );
+                        }
+                        Value::Object(model)
                     })
                 })
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
 
+    let response = ModelsListResponse { models };
+    crate::acp::r#impl::io::send_result(server, request_id, serde_json::to_value(&response)?).await
+}
+
+/// Handle `terminal/create` — spawns a new terminal process.
+pub(super) async fn handle_terminal_create(
+    _server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let command = params
+        .get("command")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let args: Vec<String> = params
+        .get("args")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let cwd = params
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+
+    let terminal_id = generate_terminal_id();
+
+    let mut cmd = std::process::Command::new(&command);
+    cmd.args(&args);
+    if let Some(ref dir) = cwd {
+        cmd.current_dir(dir);
+    }
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    let child = cmd
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("failed to spawn terminal process '{}': {}", command, e))?;
+
+    if let Ok(mut state) = acp_terminal_state().lock() {
+        state.insert(
+            terminal_id.clone(),
+            TerminalProcess {
+                child,
+                output_buffer: Vec::new(),
+                exited: false,
+                exit_code: None,
+            },
+        );
+    }
+
     crate::acp::r#impl::io::send_result(
-        server,
+        _server,
         request_id,
-        json!({
-            "models": models
-        }),
+        serde_json::to_value(&crate::schema::CreateTerminalResponse {
+            terminal_id: crate::schema::TerminalId::new(&terminal_id),
+            meta: None,
+        })?,
+    )
+    .await
+}
+
+/// Handle `terminal/output` — reads buffered terminal output.
+pub(super) async fn handle_terminal_output(
+    _server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let terminal_id = params
+        .get("terminalId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    let (output, truncated, exit_status) = if let Ok(mut state) = acp_terminal_state().lock() {
+        if let Some(proc) = state.get_mut(terminal_id) {
+            // Try to read any available stdout/stderr
+            if let Some(ref mut stdout) = proc.child.stdout {
+                use std::io::Read;
+                let mut buf = [0u8; 4096];
+                loop {
+                    match stdout.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => proc.output_buffer.extend_from_slice(&buf[..n]),
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(_) => break,
+                    }
+                }
+            }
+            if let Some(ref mut stderr) = proc.child.stderr {
+                use std::io::Read;
+                let mut buf = [0u8; 4096];
+                loop {
+                    match stderr.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => proc.output_buffer.extend_from_slice(&buf[..n]),
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(_) => break,
+                    }
+                }
+            }
+
+            // Check if process has exited
+            let exit_code = proc.child.try_wait().ok().flatten().map(|status| {
+                proc.exited = true;
+                status.code()
+            });
+            if let Some(code) = exit_code {
+                proc.exit_code = code;
+            }
+
+            let output_str = String::from_utf8_lossy(&proc.output_buffer).to_string();
+            let is_truncated = proc.output_buffer.len() > 65536;
+            let exit = proc
+                .exit_code
+                .map(|code| crate::schema::TerminalExitStatus {
+                    exit_code: Some(code as u32),
+                    signal: None,
+                    meta: None,
+                });
+
+            (output_str, is_truncated, exit)
+        } else {
+            (String::new(), false, None)
+        }
+    } else {
+        (String::new(), false, None)
+    };
+
+    crate::acp::r#impl::io::send_result(
+        _server,
+        request_id,
+        serde_json::to_value(&crate::schema::TerminalOutputResponse {
+            output,
+            truncated,
+            exit_status,
+            meta: None,
+        })?,
+    )
+    .await
+}
+
+/// Handle `terminal/release` — releases terminal resources.
+pub(super) async fn handle_terminal_release(
+    _server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let terminal_id = params
+        .get("terminalId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    if !terminal_id.is_empty() {
+        if let Ok(mut state) = acp_terminal_state().lock() {
+            if let Some(mut proc) = state.remove(terminal_id) {
+                // Kill the process if still running
+                let _ = proc.child.kill();
+                let _ = proc.child.wait();
+            }
+        }
+    }
+
+    crate::acp::r#impl::io::send_empty_ok(_server, request_id).await
+}
+
+/// Handle `terminal/kill` — kills a terminal process.
+pub(super) async fn handle_terminal_kill(
+    _server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let terminal_id = params
+        .get("terminalId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    if !terminal_id.is_empty() {
+        if let Ok(mut state) = acp_terminal_state().lock() {
+            if let Some(proc) = state.get_mut(terminal_id) {
+                let _ = proc.child.kill();
+            }
+        }
+    }
+
+    crate::acp::r#impl::io::send_empty_ok(_server, request_id).await
+}
+
+/// Handle `terminal/wait_for_exit` — waits for a terminal process to exit.
+pub(super) async fn handle_terminal_wait_for_exit(
+    _server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+) -> Result<()> {
+    let terminal_id = params
+        .get("terminalId")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+
+    let exit_code = if !terminal_id.is_empty() {
+        // Spawn a blocking task to wait for the process
+        let tid = terminal_id.clone();
+        tokio::task::spawn_blocking(move || -> Option<i32> {
+            if let Ok(mut state) = acp_terminal_state().lock() {
+                if let Some(proc) = state.get_mut(&tid) {
+                    let status = proc.child.wait().ok()?;
+                    proc.exited = true;
+                    let code = status.code();
+                    proc.exit_code = code;
+                    return code;
+                }
+            }
+            None
+        })
+        .await
+        .unwrap_or(None)
+    } else {
+        None
+    };
+
+    crate::acp::r#impl::io::send_result(
+        _server,
+        request_id,
+        serde_json::to_value(&crate::schema::WaitForTerminalExitResponse {
+            exit_status: crate::schema::TerminalExitStatus {
+                exit_code: exit_code.map(|c| c as u32),
+                signal: None,
+                meta: None,
+            },
+            meta: None,
+        })?,
     )
     .await
 }

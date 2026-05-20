@@ -7,11 +7,12 @@
 //! All mutable state is guarded behind `Arc<Mutex<…>>` for thread-safe
 //! access across asynchronous boundaries.
 
+use crate::intelligence::lock_guard;
+use crate::intelligence::now_ms;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
 
 // ── ID generation ───────────────────────────────────────────────────────────
 
@@ -26,13 +27,6 @@ fn generate_policy_id() -> String {
 fn generate_round_id() -> String {
     let n = ROUND_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("round-{}", n)
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
 }
 
 // ── Error type ──────────────────────────────────────────────────────────────
@@ -195,17 +189,6 @@ struct Inner {
 }
 
 // ── FederatedRL engine ──────────────────────────────────────────────────────
-
-/// Acquire a lock on the inner mutex, recovering from poison.
-fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
-    match mtx.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            tracing::warn!("federated_rl mutex poisoned, recovering");
-            poisoned.into_inner()
-        }
-    }
-}
 
 /// Thread-safe federated reinforcement learning engine.
 ///

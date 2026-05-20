@@ -22,6 +22,7 @@
 //!   full peer set and shared‑entry machinery is active.
 
 use crate::i18n::runtime::tf;
+use crate::intelligence::now_ms;
 use serde::{Deserialize, Serialize};
 use tracing;
 
@@ -895,14 +896,6 @@ fn uuid_v4() -> String {
         (0x8000 | ((r1 >> 4) & 0x3FFF)) as u16,
         r1 & 0x0000_FFFF_FFFF,
     )
-}
-
-/// Current wall clock in milliseconds since Unix epoch.
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
 }
 
 /// Return the local node identifier.

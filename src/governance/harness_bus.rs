@@ -905,7 +905,7 @@ impl HarnessBus {
         storage_path: Option<PathBuf>,
     ) -> Self {
         let feedback_collector = storage_path.map(PuaFeedbackCollector::new);
-        Self {
+        let bus = HarnessBus {
             evaluator: PolicyEvaluator::new(
                 rule_engine,
                 sandbox_level,
@@ -926,7 +926,14 @@ impl HarnessBus {
             brain_runner: Arc::new(BrainLoopRunner::new(BrainLoopRunnerConfig::default())),
             resilience_engine: Arc::new(HyperResilienceEngine::new(ResilienceConfig::default())),
             fault_tolerance: Arc::new(FaultToleranceEngine::new(FaultToleranceConfig::default())),
-        }
+        };
+
+        // Start background health checks for the resilience engine.
+        // This spawns a tokio task that periodically probes circuit breakers
+        // and triggers self-healing when degradation is detected.
+        bus.resilience_engine.start_health_checks();
+
+        bus
     }
 
     /// Pre-route evaluation — primary entry point called by CapabilityBus.

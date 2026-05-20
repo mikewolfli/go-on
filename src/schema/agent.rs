@@ -2,14 +2,14 @@
 //! Mirrors `agent-client-protocol-schema` v0.13.2 `src/v1/agent.rs`.
 
 use crate::schema::{
-    content::ContentBlock, Implementation, McpServer, Meta, ProtocolVersion, SessionConfigGroupId,
-    SessionConfigId, SessionConfigValueId, SessionId, SessionModeId,
+    content::ContentBlock, Implementation, McpServerConfig, Meta, ProtocolVersion,
+    SessionConfigGroupId, SessionConfigId, SessionConfigValueId, SessionId, SessionModeId,
 };
 use serde::{Deserialize, Serialize};
 
 // ── Authentication ────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(transparent)]
 pub struct AuthMethodId(pub String);
 impl AuthMethodId {
@@ -37,6 +37,25 @@ pub enum AuthMethod {
 }
 
 // ── Initialize ────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthenticateResponse {
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
+}
+impl AuthenticateResponse {
+    pub fn new() -> Self {
+        Self { meta: None }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LogoutResponse {
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -90,7 +109,7 @@ impl InitializeResponse {
 pub struct NewSessionRequest {
     pub cwd: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mcp_servers: Vec<McpServer>,
+    pub mcp_servers: Vec<McpServerConfig>,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
 }
@@ -129,7 +148,7 @@ impl NewSessionResponse {
 #[serde(rename_all = "camelCase")]
 pub struct LoadSessionRequest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mcp_servers: Vec<McpServer>,
+    pub mcp_servers: Vec<McpServerConfig>,
     pub cwd: String,
     pub session_id: SessionId,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
@@ -481,7 +500,7 @@ pub struct ResumeSessionRequest {
     pub session_id: SessionId,
     pub cwd: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mcp_servers: Vec<McpServer>,
+    pub mcp_servers: Vec<McpServerConfig>,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
 }

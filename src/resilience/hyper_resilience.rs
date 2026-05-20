@@ -22,7 +22,6 @@ fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
         }
     }
 }
-use std::time::{SystemTime, UNIX_EPOCH};
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -49,16 +48,7 @@ pub enum FailureMode {
     TimeoutStorm,
 }
 
-/// State of a single circuit breaker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum CircuitState {
-    /// Circuit is operating normally — requests are allowed.
-    Closed,
-    /// Circuit is tripped — requests are blocked.
-    Open,
-    /// Circuit is testing recovery — a limited number of requests are allowed.
-    HalfOpen,
-}
+pub use crate::optimization::failure_prevention::CircuitBreakerState as CircuitState;
 
 /// System-wide degradation level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, PartialOrd)]
@@ -93,6 +83,10 @@ pub struct CircuitBreaker {
     pub recovery_timeout_ms: u64,
     pub last_failure_ms: u64,
     pub half_open_attempts: u64,
+    /// The failure mode of the most recent failure.
+    pub last_failure_mode: Option<FailureMode>,
+    /// Rolling history of recent failure modes (most recent first, max 10).
+    pub failure_history: Vec<FailureMode>,
 }
 
 /// A group of nodes forming a failover set with one primary and one or more replicas.
@@ -257,6 +251,8 @@ impl HyperResilienceEngine {
                 recovery_timeout_ms,
                 last_failure_ms: 0,
                 half_open_attempts: 0,
+                last_failure_mode: None,
+                failure_history: Vec::new(),
             },
         );
         Ok(())
@@ -265,7 +261,21 @@ impl HyperResilienceEngine {
     /// Record a failure against the named circuit breaker.
     ///
     /// Returns the new state of the circuit breaker after applying the failure.
+    /// Uses `FailureMode::ResourceExhaustion` as the default failure mode.
     pub fn record_failure(&self, breaker_name: &str) -> Result<CircuitState> {
+        self.record_failure_with_mode(breaker_name, FailureMode::ResourceExhaustion)
+    }
+
+    /// Record a failure with a specific `FailureMode` classification.
+    ///
+    /// Returns the new state of the circuit breaker after applying the failure.
+    /// The failure mode is stored on the circuit breaker for diagnostics
+    /// and is included in the failure history (rolling window of 10).
+    pub fn record_failure_with_mode(
+        &self,
+        breaker_name: &str,
+        failure_mode: FailureMode,
+    ) -> Result<CircuitState> {
         let mut inner = lock_guard(&self.inner);
         let cb = inner
             .circuit_breakers
@@ -273,6 +283,13 @@ impl HyperResilienceEngine {
             .with_context(|| format!("Circuit breaker '{}' not found", breaker_name))?;
 
         let now = now_millis();
+
+        // Track failure mode
+        cb.last_failure_mode = Some(failure_mode);
+        cb.failure_history.push(failure_mode);
+        if cb.failure_history.len() > 10 {
+            cb.failure_history.remove(0);
+        }
 
         match cb.state {
             CircuitState::Closed => {
@@ -613,21 +630,120 @@ impl HyperResilienceEngine {
         }
     }
 
-    /// Start background health checks (simulated).
+    /// Start background health checks. Spawns a tokio task that periodically
+    /// probes all circuit breakers, assesses system health from real execution
+    /// data, and automatically triggers self-healing for degraded components.
     ///
-    /// In a real deployment this would spawn a background task that periodically
-    /// evaluates system metrics and triggers self-healing. Here we simply mark
-    /// the engine as having health checks running.
-    #[allow(dead_code)] // Public API — reserved for background health-check integration
-    pub fn start_health_checks(&self) {
-        // TODO: Replace simulated health metrics with real health-check
-        // probes that ping each registered circuit breaker / failover
-        // group and update `system_health` accordingly.
+    /// Requires the engine to be wrapped in an `Arc`. Call this once during
+    /// server startup. Safe to call multiple times — subsequent calls are
+    /// no-ops.
+    pub fn start_health_checks(self: &Arc<Self>) {
         let mut inner = lock_guard(&self.inner);
+        if inner.health_checks_running {
+            return;
+        }
         inner.health_checks_running = true;
-        // Simulated: adjust metrics to reflect "monitored" state.
-        inner.simulated_avg_latency_ms = 8.0;
-        inner.simulated_error_rate = 0.0005;
+        let interval_ms = inner.config.health_check_interval_ms;
+        drop(inner);
+
+        let engine = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut timer = tokio::time::interval(tokio::time::Duration::from_millis(interval_ms));
+            // Skip the first tick (immediate) to give startup time
+            timer.tick().await;
+            loop {
+                timer.tick().await;
+                engine.health_check_cycle();
+            }
+        });
+    }
+
+    /// Run a single health-check cycle.
+    ///
+    /// 1. Probes all circuit breakers — transitions those past their recovery
+    ///    timeout from `Open` → `HalfOpen`.
+    /// 2. Assesses overall system health from real circuit breaker states.
+    /// 3. If degradation is `Constrained` or higher and self-healing is
+    ///    enabled, automatically executes `ClearCircuitBreaker` on all open
+    ///    breakers.
+    ///
+    /// This method is safe to call from any thread.
+    pub fn health_check_cycle(&self) {
+        // ── Phase 1: Probe all circuit breakers ────────────────────────────
+        let breaker_names: Vec<String> = {
+            let inner = lock_guard(&self.inner);
+            inner.circuit_breakers.keys().cloned().collect()
+        };
+        for name in &breaker_names {
+            self.probe(name);
+        }
+
+        // ── Phase 2: Assess system health ──────────────────────────────────
+        let health = self.system_health();
+
+        // Update real metrics instead of simulated ones
+        {
+            let mut inner = lock_guard(&self.inner);
+            // Calculate real error rate from circuit breaker states
+            let total = inner.circuit_breakers.len();
+            let open = inner
+                .circuit_breakers
+                .values()
+                .filter(|cb| matches!(cb.state, CircuitState::Open))
+                .count();
+            let half_open = inner
+                .circuit_breakers
+                .values()
+                .filter(|cb| matches!(cb.state, CircuitState::HalfOpen))
+                .count();
+
+            if total > 0 {
+                inner.simulated_error_rate = open as f64 / total as f64;
+            } else {
+                inner.simulated_error_rate = 0.0;
+            }
+            // Estimate latency from half-open attempts (higher when failing)
+            inner.simulated_avg_latency_ms = if half_open > 0 {
+                15.0 + (half_open as f64 * 5.0)
+            } else {
+                8.0
+            };
+        }
+
+        // ── Phase 3: Auto-heal if degraded ────────────────────────────────
+        if health.level >= DegradationLevel::Constrained {
+            let healing_enabled = lock_guard(&self.inner).config.self_healing_enabled;
+            if healing_enabled {
+                for name in &breaker_names {
+                    let is_open = {
+                        let inner = lock_guard(&self.inner);
+                        inner
+                            .circuit_breakers
+                            .get(name)
+                            .map(|cb| matches!(cb.state, CircuitState::Open))
+                            .unwrap_or(false)
+                    };
+                    if is_open {
+                        match self.execute_healing(SelfHealingAction::ClearCircuitBreaker, name) {
+                            Ok(report) => {
+                                tracing::info!(
+                                    "health-check: auto-healed breaker '{}': {}",
+                                    name,
+                                    report.result
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "health-check: auto-heal failed for '{}': {}",
+                                    name,
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Record an execution outcome (success/failure) against a named circuit
@@ -655,6 +771,8 @@ impl HyperResilienceEngine {
                 recovery_timeout_ms: config.recovery_timeout_ms,
                 last_failure_ms: 0,
                 half_open_attempts: 0,
+                last_failure_mode: None,
+                failure_history: Vec::new(),
             };
             inner.circuit_breakers.insert(breaker_name.to_string(), cb);
         }
@@ -676,10 +794,7 @@ impl HyperResilienceEngine {
 
 /// Return the current time in milliseconds since the Unix epoch.
 fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+    crate::acp::prelude::now_ts_ms() as u64
 }
 
 // ---------------------------------------------------------------------------

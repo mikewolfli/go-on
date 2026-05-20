@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex as StdMutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::acp::prelude::now_ts;
 
 #[derive(Debug, Clone)]
 pub(crate) struct MemoryCachedResponse {
@@ -90,11 +91,4 @@ impl MemoryResponseCache {
             }
         }
     }
-}
-
-fn now_ts() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }

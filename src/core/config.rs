@@ -1132,11 +1132,7 @@ fn default_autotune_config() -> AutoTuneConfig {
 
 /// Helper function to get current timestamp
 fn now_ts() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
+    crate::acp::prelude::now_ts()
 }
 
 /// Configuration warning severity levels

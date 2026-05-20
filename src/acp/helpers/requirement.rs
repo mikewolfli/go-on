@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use serde_json::{json, Value};
 
 use crate::{
+    acp::prelude::now_ts,
     orchestration::task_router::TaskRouter,
     reinforcement::{
         persist_governance_policy, persist_requirement_contract, ArtifactLedger,
@@ -111,14 +112,7 @@ fn parse_string_list(value: Option<&Value>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Get current timestamp
-#[allow(dead_code)] // F-GAP-02 — reserved for timestamp contract generation
-fn now_ts() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
-}
+
 
 /// Parse requirement contract from request parameters
 pub fn parse_requirement_contract_from_params(
