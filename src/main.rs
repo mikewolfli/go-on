@@ -67,6 +67,7 @@ mod optimization;
 mod orchestration;
 mod protocol;
 mod resilience;
+mod schema;
 mod shared;
 
 pub use crate::agents::agent;

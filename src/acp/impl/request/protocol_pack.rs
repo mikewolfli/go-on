@@ -160,38 +160,36 @@ fn build_chat_params_from_acp(params: Value, session_state: &AcpSessionState) ->
 }
 
 pub(super) async fn handle_initialize(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
-    // Use io::send_result to avoid injecting platform_context into ACP responses.
-    // Only return standard ACP InitializeResponse fields.  Go-On custom fields
-    // (name, version, protocol, capabilities) are removed because Zed's ACP
-    // client may reject unknown fields.
-    crate::acp::r#impl::io::send_result(
-        server,
-        request_id,
-        json!({
-            "protocolVersion": 1,
-            "agentInfo": {
-                "name": "go-on",
-                "version": env!("CARGO_PKG_VERSION")
+    use crate::schema::{
+        AgentCapabilities, Implementation, InitializeResponse, McpCapabilities, PromptCapabilities,
+        ProtocolVersion, SessionCapabilities, SessionCloseCapabilities, SessionListCapabilities,
+    };
+
+    let resp = InitializeResponse::new(ProtocolVersion::V1)
+        .agent_info(Implementation::new("go-on", env!("CARGO_PKG_VERSION")))
+        .agent_capabilities(AgentCapabilities {
+            load_session: true,
+            prompt_capabilities: PromptCapabilities {
+                image: false,
+                audio: false,
+                embedded_context: false,
+                ..Default::default()
             },
-            "agentCapabilities": {
-                "loadSession": true,
-                "promptCapabilities": {
-                    "image": false,
-                    "audio": false,
-                    "embeddedContext": false
-                },
-                "mcpCapabilities": {
-                    "http": true,
-                    "sse": false
-                },
-                "sessionCapabilities": {
-                    "list": true,
-                    "additionalDirectories": []
-                }
-            }
-        }),
-    )
-    .await
+            mcp_capabilities: McpCapabilities {
+                http: true,
+                sse: false,
+                ..Default::default()
+            },
+            session_capabilities: SessionCapabilities {
+                list: Some(SessionListCapabilities { meta: None }),
+                close: Some(SessionCloseCapabilities { meta: None }),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+    crate::acp::r#impl::io::send_result(server, request_id, serde_json::to_value(&resp).unwrap())
+        .await
 }
 
 pub(super) async fn handle_mcp_initialize(
@@ -238,7 +236,7 @@ pub(super) async fn handle_session_new(
     request_id: Option<Value>,
 ) -> Result<()> {
     let session_id = generate_acp_session_id();
-    let mut modes = build_default_modes();
+    let modes = build_default_modes();
     let current_mode = normalize_acp_mode(params.get("mode").and_then(|m| m.as_str()));
     let cwd = params
         .get("cwd")
@@ -248,9 +246,9 @@ pub(super) async fn handle_session_new(
         .map(ToString::to_string);
     let additional_directories = extract_additional_directories(&params);
 
-    if let Some(obj) = modes.as_object_mut() {
-        obj.insert("currentModeId".to_string(), json!(current_mode.clone()));
-    }
+    // Update current mode on the typed SessionModeState
+    let mut modes = modes;
+    modes.current_mode_id = crate::schema::SessionModeId::new(current_mode.clone());
 
     if let Ok(mut state) = acp_session_state().lock() {
         state.insert(
@@ -267,27 +265,12 @@ pub(super) async fn handle_session_new(
     crate::acp::r#impl::io::send_result(
         server,
         request_id,
-        json!({
-            "sessionId": session_id,
-            "modes": modes,
-            "configOptions": [
-                {
-                    "id": "mode",
-                    "name": "Chat Mode",
-                    "description": "Select interaction mode",
-                    "category": "mode",
-                    "type": "select",
-                    "currentValue": current_mode,
-                    "options": [
-                        {"value": "ask", "name": "Ask / 对话"},
-                        {"value": "plan", "name": "Plan / 计划"},
-                        {"value": "edit", "name": "Edit / 编辑"},
-                        {"value": "safeguard", "name": "Safeguard / 安全"},
-                        {"value": "full_auto", "name": "Full Auto / 全自动"}
-                    ]
-                }
-            ]
-        }),
+        serde_json::to_value(
+            &crate::schema::NewSessionResponse::new(crate::schema::SessionId::new(session_id))
+                .modes(modes)
+                .config_options(vec![]),
+        )
+        .unwrap(),
     )
     .await
 }
@@ -312,33 +295,17 @@ pub(super) async fn handle_session_load(
         .unwrap_or_default();
     let current_mode = normalize_acp_mode(Some(stored.mode.as_str()));
     let mut modes = build_default_modes();
-    if let Some(obj) = modes.as_object_mut() {
-        obj.insert("currentModeId".to_string(), json!(current_mode.clone()));
-    }
+    modes.current_mode_id = crate::schema::SessionModeId::new(current_mode);
 
     crate::acp::r#impl::io::send_result(
         server,
         request_id,
-        json!({
-            "modes": modes,
-            "configOptions": [
-                {
-                    "id": "mode",
-                    "name": "Chat Mode",
-                    "description": "Select interaction mode",
-                    "category": "mode",
-                    "type": "select",
-                    "currentValue": current_mode,
-                    "options": [
-                        {"value": "ask", "name": "Ask / 对话"},
-                        {"value": "plan", "name": "Plan / 计划"},
-                        {"value": "edit", "name": "Edit / 编辑"},
-                        {"value": "safeguard", "name": "Safeguard / 安全"},
-                        {"value": "full_auto", "name": "Full Auto / 全自动"}
-                    ]
-                }
-            ]
-        }),
+        serde_json::to_value(&crate::schema::LoadSessionResponse {
+            modes: Some(modes),
+            config_options: None,
+            meta: None,
+        })
+        .unwrap(),
     )
     .await
 }
@@ -429,44 +396,101 @@ pub(super) async fn handle_session_prompt(
                 "ACP session/prompt: completed successfully"
             );
 
-            // Send session/update notification with the response content.
-            // Zed's ACP client expects AgentMessageChunk notifications before
-            // the final PromptResponse.  Without this notification, Zed shows
-            // no output and the chat appears to hang.
+            // ── ACP session/update notification ──────────────────────────────
+            // Verified against agent-client-protocol-schema v0.13.2 source:
+            //   https://github.com/agentclientprotocol/agent-client-protocol
+            //   File: src/v1/client.rs
+            //
+            // SessionNotification struct (rename_all = "camelCase"):
+            //   { "sessionId": SessionId, "update": SessionUpdate, "_meta": Option<Meta> }
+            //
+            // SessionUpdate enum (tag = "sessionUpdate", rename_all = "snake_case"):
+            //   "agent_message_chunk"  -> regular text (ContentChunk.content = single ContentBlock)
+            //   "agent_thought_chunk"  -> thinking/reasoning (ContentChunk.content = single ContentBlock)
+            //
+            // ContentChunk struct (rename_all = "camelCase"):
+            //   pub content: ContentBlock  -- single ContentBlock, NOT Vec!
+            //
+            // ContentBlock::Text: { "type": "text", "text": "..." }
+            //
+            // CRITICAL: The JSON-RPC method name is "session/update" (with slash),
+            // defined as: pub(crate) const SESSION_UPDATE_NOTIFICATION: &str = "session/update";
+            //
+            // DO NOT change "session/update" to "sessionUpdate" or any other variant!
+            // ────────────────────────────────────────────────────────────────────
             if let Some(ref sid) = session_id_for_notification {
-                // Send a session/update notification per ACP spec.
-                // SessionUpdate enum uses tag="sessionUpdate" with snake_case variants.
-                // ContentChunk uses camelCase fields with a "content" ContentBlock.
-                let _ = crate::acp::r#impl::io::send_notification(
-                    server,
-                    "session/update",
-                    json!({
-                        "sessionId": sid,
-                        "update": {
-                            "sessionUpdate": "agent_message_chunk",
-                            "content": {
-                                "type": "text",
-                                "text": response_text,
-                            }
-                        }
-                    }),
-                )
-                .await;
+                // Parse the response into segments: <thinking> blocks are
+                // sent as agent_thought_chunk, everything else as agent_message_chunk.
+                // This lets Zed render thinking in a collapsible box rather than
+                // as raw text.
+                let re = regex::Regex::new(r"<thinking>(.*?)</thinking>").unwrap();
+                let mut last_end = 0;
+                let sid = sid.as_str();
+
+                for cap in re.captures_iter(response_text) {
+                    let m = cap.get(0).unwrap();
+                    let thought_content = cap.get(1).unwrap().as_str();
+
+                    // Send text before this thinking block as a regular message chunk
+                    let before = &response_text[last_end..m.start()];
+                    let before = before.trim();
+                    if !before.is_empty() {
+                        send_chunk(server, sid, "agent_message_chunk", before).await;
+                    }
+
+                    // Send the thinking block as a thought chunk
+                    if !thought_content.is_empty() {
+                        send_chunk(server, sid, "agent_thought_chunk", thought_content).await;
+                    }
+
+                    last_end = m.end();
+                }
+
+                // Send any remaining text after the last thinking block
+                let after = response_text[last_end..].trim();
+                if !after.is_empty() {
+                    send_chunk(server, sid, "agent_message_chunk", after).await;
+                }
+
+                // If nothing was sent at all (empty response or only empty segments),
+                // send a fallback message so Zed has something to display.
+                if last_end == 0 && response_text.trim().is_empty() {
+                    send_chunk(server, sid, "agent_message_chunk", "").await;
+                }
             }
 
-            // Build the PromptResponse.
-            // - stopReason: required by ACP spec (end_turn = normal completion)
-            // - contentBlocks: included for HTTP RPC path backward compat;
-            //   Zed ignores this field and uses the session/update content.
-            let prompt_response = json!({
-                "stopReason": "end_turn",
-                "contentBlocks": [
-                    {
-                        "type": "text",
-                        "text": response_text,
-                    }
-                ],
-            });
+            // ── ACP PromptResponse ──────────────────────────────────────────
+            // Verified against agent-client-protocol-schema v0.13.2 source:
+            //   File: src/v1/agent.rs
+            //
+            // PromptResponse struct (rename_all = "camelCase"):
+            //   {
+            //     "stopReason": "end_turn",       // REQUIRED; StopReason enum
+            //     "userMessageId": String,         // only with unstable_message_id feature
+            //     "usage": Usage,                  // only with unstable_session_usage feature
+            //     "_meta": Option<Meta>
+            //   }
+            //
+            // StopReason enum (rename_all = "snake_case"):
+            //   EndTurn       -> "end_turn"        // snake_case, NOT "endTurn"!
+            //   MaxTokens     -> "max_tokens"
+            //   MaxTurnRequests -> "max_turn_requests"
+            //   Refusal       -> "refusal"
+            //   Cancelled     -> "cancelled"
+            //
+            // IMPORTANT: StopReason uses snake_case serialization, NOT camelCase!
+            // DO NOT change "end_turn" to "endTurn" - that is WRONG.
+            //
+            // PromptResponse has NO "contentBlocks" field in the stable spec.
+            // The content is delivered exclusively via session/update notifications.
+            // However, sending contentBlocks in the response does NO harm --
+            // Zed's ACP client simply ignores it and reads from the notification.
+            // We keep contentBlocks for HTTP RPC backward compatibility.
+            // ─────────────────────────────────────────────────────────────────
+            let prompt_response = serde_json::to_value(&crate::schema::PromptResponse::new(
+                crate::schema::StopReason::EndTurn,
+            ))
+            .unwrap();
 
             // Use io::send_result directly to bypass inject_platform_profiles_if_absent.
             // The chat_pack::send_result adds a "platform_context" field that Zed's
@@ -517,9 +541,12 @@ pub(super) async fn handle_session_list(
     crate::acp::r#impl::io::send_result(
         server,
         request_id,
-        json!({
-            "sessions": [],
-        }),
+        serde_json::to_value(&crate::schema::ListSessionsResponse {
+            sessions: vec![],
+            next_cursor: None,
+            meta: None,
+        })
+        .unwrap(),
     )
     .await
 }
@@ -543,7 +570,12 @@ pub(super) async fn handle_session_set_mode(
             state.entry(session_id.to_string()).or_default().mode = mode_id;
         }
     }
-    crate::acp::r#impl::io::send_result(server, request_id, json!({})).await
+    crate::acp::r#impl::io::send_result(
+        server,
+        request_id,
+        serde_json::to_value(&crate::schema::SetSessionModeResponse { meta: None }).unwrap(),
+    )
+    .await
 }
 
 /// Handle `session/set_config_option` — sets a configuration option for a session.
@@ -580,45 +612,33 @@ pub(super) async fn handle_session_set_config_option(
     crate::acp::r#impl::io::send_result(
         server,
         request_id,
-        json!({
-            "configOptions": []
-        }),
+        serde_json::to_value(&crate::schema::SetSessionConfigOptionResponse {
+            config_options: vec![],
+            meta: None,
+        })
+        .unwrap(),
     )
     .await
 }
 
 /// Build the default set of session modes.
-fn build_default_modes() -> serde_json::Value {
-    json!({
-        "currentModeId": "ask",
-        "availableModes": [
-            {
-                "id": "ask",
-                "name": "Ask / 对话",
-                "description": "Q&A assistant — general questions"
-            },
-            {
-                "id": "plan",
-                "name": "Plan / 计划",
-                "description": "Planning mode — structured task breakdown"
-            },
-            {
-                "id": "edit",
-                "name": "Edit / 编辑",
-                "description": "Edit/review mode — code changes"
-            },
-            {
-                "id": "safeguard",
-                "name": "Safeguard / 安全",
-                "description": "Safety-first — escalation on high-risk operations"
-            },
-            {
-                "id": "full_auto",
-                "name": "Full Auto / 全自动",
-                "description": "Fully autonomous — agent runs without user confirmation"
-            }
-        ]
-    })
+fn build_default_modes() -> crate::schema::SessionModeState {
+    use crate::schema::{SessionMode, SessionModeId, SessionModeState};
+    SessionModeState::new(
+        SessionModeId::new("ask"),
+        vec![
+            SessionMode::new(SessionModeId::new("ask"), "Ask / 对话")
+                .description("Q&A assistant — general questions"),
+            SessionMode::new(SessionModeId::new("plan"), "Plan / 计划")
+                .description("Planning mode — structured task breakdown"),
+            SessionMode::new(SessionModeId::new("edit"), "Edit / 编辑")
+                .description("Edit/review mode — code changes"),
+            SessionMode::new(SessionModeId::new("safeguard"), "Safeguard / 安全")
+                .description("Safety-first — escalation on high-risk operations"),
+            SessionMode::new(SessionModeId::new("full_auto"), "Full Auto / 全自动")
+                .description("Fully autonomous — agent runs without user confirmation"),
+        ],
+    )
 }
 
 // ── Standard ACP authentication handlers ──────────────────────────────────
