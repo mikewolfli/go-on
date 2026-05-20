@@ -2916,10 +2916,10 @@ async fn route_http_post(
                     )
                     .await?;
                 }
-                "/rpc" => {
-                    // SERIALIZED: Only one /rpc call at a time.
+                "/" | "/rpc" => {
+                    // SERIALIZED: Only one RPC call at a time.
                     // server.output is a global singleton used for pipe-based response
-                    // capture. Without this lock, concurrent /rpc calls would corrupt
+                    // capture. Without this lock, concurrent RPC calls would corrupt
                     // the pipe assignment (swap-in → dispatch → swap-out is not atomic).
                     let _rpc_guard = RPC_SERIAL.lock().await;
 
@@ -2930,7 +2930,7 @@ async fn route_http_post(
                                 socket,
                                 400,
                                 serde_json::json!({"error": format!("invalid RPC request: {}", e)}),
-                                "rpc",
+                                path,
                                 cors_headers,
                             )
                             .await?;
@@ -2963,7 +2963,7 @@ async fn route_http_post(
                             socket,
                             500,
                             serde_json::json!({"error": format!("RPC dispatch error: {}", err)}),
-                            "rpc",
+                            path,
                             cors_headers,
                         )
                         .await?;
@@ -2979,7 +2979,11 @@ async fn route_http_post(
                         );
                     }
 
-                    // Read the captured RPC response from the pipe
+                    // Read the captured RPC response from the pipe.
+                    // The pipe may contain multiple JSON-RPC messages
+                    // (notifications such as chat.stream.chunk + final response).
+                    // Parse line by line and find the last line that is a
+                    // valid JSON-RPC response (has "id" field).
                     let mut response_bytes = Vec::new();
                     tokio::time::timeout(
                         std::time::Duration::from_secs(60),
@@ -2989,9 +2993,24 @@ async fn route_http_post(
                     .map_err(|e| anyhow::anyhow!("RPC pipe read error: {e}"))?;
 
                     let response_str = String::from_utf8_lossy(&response_bytes);
-                    let response_value: serde_json::Value =
-                        serde_json::from_str(response_str.trim())
-                            .unwrap_or_else(|_| serde_json::json!({"raw": response_str.to_string()}));
+                    // Parse each line; find the last JSON value that has an "id" field
+                    // (i.e. a JSON-RPC response, not a notification).
+                    let response_value: serde_json::Value = {
+                        let mut last_response =
+                            serde_json::json!({"raw": response_str.to_string()});
+                        for line in response_str.lines() {
+                            let trimmed = line.trim();
+                            if trimmed.is_empty() {
+                                continue;
+                            }
+                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                                if val.get("id").is_some() {
+                                    last_response = val;
+                                }
+                            }
+                        }
+                        last_response
+                    };
 
                     write_http_json_response(socket, 200, response_value, cors_headers).await?;
                 }

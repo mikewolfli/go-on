@@ -3,46 +3,171 @@ use tracing::warn;
 use super::*;
 use crate::mcp::MCP_VERSION;
 
-/// Build Go-On chat params from ACP prompt content blocks.
-/// ACP sends `prompt: [{type: "text", text: "..."}]`,
-/// returns Go-On chat params: `{mode, messages: [{role, content}], conversation_id}`.
-fn build_chat_params_from_acp(params: Value) -> Value {
-    let prompt_blocks = params.get("prompt").and_then(|p| p.as_array());
-    let text = match prompt_blocks {
-        Some(blocks) => blocks
-            .iter()
-            .filter_map(|block| {
-                if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-                    block.get("text").and_then(|t| t.as_str())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<&str>>()
-            .join("\n"),
-        None => String::new(),
+#[derive(Debug, Clone, Default)]
+struct AcpSessionState {
+    cwd: Option<String>,
+    mode: String,
+    additional_directories: Vec<String>,
+    config_options: HashMap<String, Value>,
+}
+
+static ACP_SESSION_STATE: OnceLock<StdMutex<HashMap<String, AcpSessionState>>> = OnceLock::new();
+
+fn acp_session_state() -> &'static StdMutex<HashMap<String, AcpSessionState>> {
+    ACP_SESSION_STATE.get_or_init(|| StdMutex::new(HashMap::new()))
+}
+
+fn normalize_acp_mode(value: Option<&str>) -> String {
+    match value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("ask") => "ask".to_string(),
+        Some("plan") => "plan".to_string(),
+        Some("edit") => "edit".to_string(),
+        Some("safe") | Some("safeguard") => "safeguard".to_string(),
+        Some("full-auto") | Some("full_auto") | Some("fullauto") => "full_auto".to_string(),
+        Some(other) => other.to_string(),
+        None => "ask".to_string(),
+    }
+}
+
+fn extract_additional_directories(params: &Value) -> Vec<String> {
+    params
+        .get("additionalDirectories")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn session_state_for_prompt(params: &Value) -> AcpSessionState {
+    let session_id = params.get("sessionId").and_then(Value::as_str);
+    let stored = session_id.and_then(|session_id| {
+        acp_session_state()
+            .lock()
+            .ok()
+            .and_then(|state| state.get(session_id).cloned())
+    });
+
+    let mut state = stored.unwrap_or_default();
+    if let Some(cwd) = params.get("cwd").and_then(Value::as_str) {
+        let cwd = cwd.trim();
+        if !cwd.is_empty() {
+            state.cwd = Some(cwd.to_string());
+        }
+    }
+    let prompt_mode = params
+        .get("mode")
+        .and_then(Value::as_str)
+        .or_else(|| params.get("modeId").and_then(Value::as_str));
+    state.mode = normalize_acp_mode(prompt_mode.or(Some(state.mode.as_str())));
+
+    let additional_directories = extract_additional_directories(params);
+    if !additional_directories.is_empty() {
+        state.additional_directories = additional_directories;
+    }
+    state
+}
+
+fn acp_prompt_to_text(params: &Value) -> String {
+    let Some(blocks) = params.get("prompt").and_then(Value::as_array) else {
+        return String::new();
     };
+
+    let mut segments = Vec::new();
+    for block in blocks {
+        match block.get("type").and_then(Value::as_str) {
+            Some("text") => {
+                if let Some(text) = block.get("text").and_then(Value::as_str) {
+                    let text = text.trim();
+                    if !text.is_empty() {
+                        segments.push(text.to_string());
+                    }
+                }
+            }
+            Some("resource_link") => {
+                let name = block
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("resource");
+                if let Some(uri) = block.get("uri").and_then(Value::as_str) {
+                    segments.push(format!("[attached resource] {}\n{}", name, uri));
+                }
+            }
+            Some("resource") => {
+                if let Some(resource) = block.get("resource") {
+                    if let Some(text) = resource.get("text").and_then(Value::as_str) {
+                        let uri = resource
+                            .get("uri")
+                            .and_then(Value::as_str)
+                            .unwrap_or("resource");
+                        segments.push(format!("[attached resource content] {}\n{}", uri, text));
+                    } else if let Some(uri) = resource.get("uri").and_then(Value::as_str) {
+                        segments.push(format!("[attached resource] {}", uri));
+                    }
+                }
+            }
+            Some("image") => {
+                segments.push("[attached image]".to_string());
+            }
+            Some("audio") => {
+                segments.push("[attached audio]".to_string());
+            }
+            _ => {}
+        }
+    }
+
+    segments.join("\n\n")
+}
+
+/// Build Go-On chat params from ACP prompt content blocks.
+/// ACP sends `prompt: [{type: "text", text: "..."}]`, and may also include
+/// resource/resource_link blocks when the user attaches files or selections.
+/// Returns Go-On chat params: `{mode, messages: [{role, content}], conversation_id}`.
+fn build_chat_params_from_acp(params: Value, session_state: &AcpSessionState) -> Value {
+    let text = acp_prompt_to_text(&params);
     let messages: Vec<Value> = if text.is_empty() {
         vec![]
     } else {
         vec![json!({"role": "user", "content": text})]
     };
     let mut chat_params = json!({
-        "mode": "ask",
+        "mode": normalize_acp_mode(Some(session_state.mode.as_str())),
         "messages": messages,
     });
     if let Some(cid) = params.get("sessionId").and_then(|s| s.as_str()) {
         chat_params["conversation_id"] = json!(cid);
     }
+    if let Some(cwd) = session_state.cwd.as_ref() {
+        chat_params["options"] = json!({
+            "extra": {
+                "cwd": cwd,
+                "additional_directories": session_state.additional_directories,
+            }
+        });
+    }
     chat_params
 }
 
 pub(super) async fn handle_initialize(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
-    send_result(
+    // Use io::send_result to avoid injecting platform_context into ACP responses.
+    // Only return standard ACP InitializeResponse fields.  Go-On custom fields
+    // (name, version, protocol, capabilities) are removed because Zed's ACP
+    // client may reject unknown fields.
+    crate::acp::r#impl::io::send_result(
         server,
         request_id,
         json!({
-            // Standard ACP InitializeResponse fields (camelCase)
             "protocolVersion": 1,
             "agentInfo": {
                 "name": "go-on",
@@ -60,22 +185,9 @@ pub(super) async fn handle_initialize(server: &AcpServer, request_id: Option<Val
                     "sse": false
                 },
                 "sessionCapabilities": {
-                    "list": {},
-                    "additionalDirectories": {}
+                    "list": true,
+                    "additionalDirectories": []
                 }
-            },
-            // Go-On custom fields (backward compat)
-            "name": "go-on",
-            "version": env!("CARGO_PKG_VERSION"),
-            "protocol": "acp",
-            "capabilities": {
-                "chat": true,
-                "phase": true,
-                "metrics": true,
-                "shutdown": true,
-                "health": true,
-                "debug_panel": true,
-                "mcp_adapter": true,
             }
         }),
     )
@@ -86,7 +198,7 @@ pub(super) async fn handle_mcp_initialize(
     server: &AcpServer,
     request_id: Option<Value>,
 ) -> Result<()> {
-    send_result(
+    crate::acp::r#impl::io::send_result(
         server,
         request_id,
         json!({
@@ -127,15 +239,32 @@ pub(super) async fn handle_session_new(
 ) -> Result<()> {
     let session_id = generate_acp_session_id();
     let mut modes = build_default_modes();
+    let current_mode = normalize_acp_mode(params.get("mode").and_then(|m| m.as_str()));
+    let cwd = params
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let additional_directories = extract_additional_directories(&params);
 
-    // If client specified an initial mode, use it
-    if let Some(mode_id) = params.get("mode").and_then(|m| m.as_str()) {
-        if let Some(obj) = modes.as_object_mut() {
-            obj.insert("currentModeId".to_string(), json!(mode_id));
-        }
+    if let Some(obj) = modes.as_object_mut() {
+        obj.insert("currentModeId".to_string(), json!(current_mode.clone()));
     }
 
-    send_result(
+    if let Ok(mut state) = acp_session_state().lock() {
+        state.insert(
+            session_id.clone(),
+            AcpSessionState {
+                cwd,
+                mode: current_mode.clone(),
+                additional_directories,
+                config_options: HashMap::new(),
+            },
+        );
+    }
+
+    crate::acp::r#impl::io::send_result(
         server,
         request_id,
         json!({
@@ -148,7 +277,7 @@ pub(super) async fn handle_session_new(
                     "description": "Select interaction mode",
                     "category": "mode",
                     "type": "select",
-                    "currentValue": "ask",
+                    "currentValue": current_mode,
                     "options": [
                         {"value": "ask", "name": "Ask / 对话"},
                         {"value": "plan", "name": "Plan / 计划"},
@@ -157,7 +286,7 @@ pub(super) async fn handle_session_new(
                         {"value": "full_auto", "name": "Full Auto / 全自动"}
                     ]
                 }
-            ],
+            ]
         }),
     )
     .await
@@ -169,16 +298,46 @@ pub(super) async fn handle_session_new(
 /// agent restores the session context and returns available modes/config.
 pub(super) async fn handle_session_load(
     server: &AcpServer,
-    _params: Value,
+    params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    let modes = build_default_modes();
-    send_result(
+    let session_id = params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let stored = acp_session_state()
+        .lock()
+        .ok()
+        .and_then(|state| state.get(session_id).cloned())
+        .unwrap_or_default();
+    let current_mode = normalize_acp_mode(Some(stored.mode.as_str()));
+    let mut modes = build_default_modes();
+    if let Some(obj) = modes.as_object_mut() {
+        obj.insert("currentModeId".to_string(), json!(current_mode.clone()));
+    }
+
+    crate::acp::r#impl::io::send_result(
         server,
         request_id,
         json!({
             "modes": modes,
-            "configOptions": [],
+            "configOptions": [
+                {
+                    "id": "mode",
+                    "name": "Chat Mode",
+                    "description": "Select interaction mode",
+                    "category": "mode",
+                    "type": "select",
+                    "currentValue": current_mode,
+                    "options": [
+                        {"value": "ask", "name": "Ask / 对话"},
+                        {"value": "plan", "name": "Plan / 计划"},
+                        {"value": "edit", "name": "Edit / 编辑"},
+                        {"value": "safeguard", "name": "Safeguard / 安全"},
+                        {"value": "full_auto", "name": "Full Auto / 全自动"}
+                    ]
+                }
+            ]
         }),
     )
     .await
@@ -200,12 +359,20 @@ pub(super) async fn handle_session_prompt(
     use crate::acp::r#impl::chat::{process_chat_request, ChatParams};
     use crate::rpc_protocol::chat_trace_context;
 
+    let session_state = session_state_for_prompt(&params);
+
+    // Extract sessionId before params is consumed by build_chat_params_from_acp
+    let session_id_for_notification = params
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
     // Build Go-On chat params from ACP prompt
-    let chat_params_value = build_chat_params_from_acp(params);
+    let chat_params_value = build_chat_params_from_acp(params, &session_state);
     let chat_params: ChatParams = match serde_json::from_value(chat_params_value) {
         Ok(p) => p,
         Err(e) => {
-            return send_error(
+            return crate::acp::r#impl::io::send_error(
                 server,
                 request_id,
                 -32602,
@@ -220,26 +387,105 @@ pub(super) async fn handle_session_prompt(
 
     tracing::info!("ACP session/prompt: delegating to process_chat_request");
 
-    // Wrap process_chat_request in a 60-second total timeout to prevent hangs
+    // IMPORTANT: Zed's ACP client requires content to be streamed via
+    // `session/update` notifications BEFORE the final PromptResponse.
+    // Go-On's proprietary "chat.stream.chunk" format is NOT understood by Zed.
+    //
+    // Strategy:
+    // 1. Call process_chat_request with `None` stream observer
+    //    (avoids proprietary chat.stream.chunk notifications on the wire)
+    // 2. Collect the full response text
+    // 3. Send ONE `session/update` notification with the complete response
+    //    as an AgentMessageChunk (Zed displays this)
+    // 4. Respond with PromptResponse containing stopReason
+    //    (contentBlocks included for HTTP RPC backward compatibility)
+    //
+    // For true incremental streaming, use the /chat/stream SSE endpoint.
+    // Wrap in a generous timeout to allow long-running agent chains.
+
     let result = tokio::time::timeout(
-        std::time::Duration::from_secs(60),
-        process_chat_request(server, &chat_params, None, &pipeline_trace, None, None),
+        std::time::Duration::from_secs(300),
+        process_chat_request(
+            server,
+            &chat_params,
+            None, // no streaming — avoid proprietary notifications on JSON-RPC
+            &pipeline_trace,
+            None,
+            None,
+        ),
     )
     .await;
 
     match result {
-        Ok(_result) => {
-            tracing::info!("ACP session/prompt: completed successfully");
-            send_result(server, request_id, json!({"stopReason": "end_turn"})).await
+        Ok(Ok(chat_result)) => {
+            // Extract the actual AI response text from the chat result
+            let response_text = chat_result
+                .get("response")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            tracing::info!(
+                response_chars = response_text.chars().count(),
+                "ACP session/prompt: completed successfully"
+            );
+
+            // Send session/update notification with the response content.
+            // Zed's ACP client expects AgentMessageChunk notifications before
+            // the final PromptResponse.  Without this notification, Zed shows
+            // no output and the chat appears to hang.
+            if let Some(ref sid) = session_id_for_notification {
+                // Send a session/update notification per ACP spec.
+                // SessionUpdate enum uses tag="sessionUpdate" with snake_case variants.
+                // ContentChunk uses camelCase fields with a "content" ContentBlock.
+                let _ = crate::acp::r#impl::io::send_notification(
+                    server,
+                    "session/update",
+                    json!({
+                        "sessionId": sid,
+                        "update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": {
+                                "type": "text",
+                                "text": response_text,
+                            }
+                        }
+                    }),
+                )
+                .await;
+            }
+
+            // Build the PromptResponse.
+            // - stopReason: required by ACP spec (end_turn = normal completion)
+            // - contentBlocks: included for HTTP RPC path backward compat;
+            //   Zed ignores this field and uses the session/update content.
+            let prompt_response = json!({
+                "stopReason": "end_turn",
+                "contentBlocks": [
+                    {
+                        "type": "text",
+                        "text": response_text,
+                    }
+                ],
+            });
+
+            // Use io::send_result directly to bypass inject_platform_profiles_if_absent.
+            // The chat_pack::send_result adds a "platform_context" field that Zed's
+            // ACP client does not expect and fails to parse.
+            crate::acp::r#impl::io::send_result(server, request_id, prompt_response).await
         }
-        Err(err) => {
+        Ok(Err(err)) => {
             let msg = err.to_string();
             tracing::warn!("ACP session/prompt: error: {}", msg);
             if msg.to_ascii_lowercase().contains("rate limited") {
-                send_error(server, request_id, -32029, msg, None).await
+                crate::acp::r#impl::io::send_error(server, request_id, -32029, msg, None).await
             } else {
-                send_error(server, request_id, -32603, msg, None).await
+                crate::acp::r#impl::io::send_error(server, request_id, -32603, msg, None).await
             }
+        }
+        Err(_elapsed) => {
+            let msg = "prompt request timed out after 300s".to_string();
+            tracing::warn!("ACP session/prompt: timeout");
+            crate::acp::r#impl::io::send_error(server, request_id, -32030, msg, None).await
         }
     }
 }
@@ -268,7 +514,7 @@ pub(super) async fn handle_session_list(
     _params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    send_result(
+    crate::acp::r#impl::io::send_result(
         server,
         request_id,
         json!({
@@ -284,12 +530,20 @@ pub(super) async fn handle_session_list(
 /// agent switches mode. Returns updated config options per spec.
 pub(super) async fn handle_session_set_mode(
     server: &AcpServer,
-    _params: Value,
+    params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    // Per ACP spec, SetSessionModeResponse is empty (mode change confirmed).
-    // Mode state is communicated via session/update notification.
-    send_result(server, request_id, json!({})).await
+    let session_id = params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let mode_id = normalize_acp_mode(params.get("modeId").and_then(Value::as_str));
+    if !session_id.is_empty() {
+        if let Ok(mut state) = acp_session_state().lock() {
+            state.entry(session_id.to_string()).or_default().mode = mode_id;
+        }
+    }
+    crate::acp::r#impl::io::send_result(server, request_id, json!({})).await
 }
 
 /// Handle `session/set_config_option` — sets a configuration option for a session.
@@ -298,14 +552,36 @@ pub(super) async fn handle_session_set_mode(
 /// agent applies the option and returns updated config options list.
 pub(super) async fn handle_session_set_config_option(
     server: &AcpServer,
-    _params: Value,
+    params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    send_result(
+    let session_id = params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let config_id = params
+        .get("configId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let value = params.get("value").cloned().unwrap_or(Value::Null);
+
+    if !session_id.is_empty() && !config_id.is_empty() {
+        if let Ok(mut state) = acp_session_state().lock() {
+            let session = state.entry(session_id.to_string()).or_default();
+            session
+                .config_options
+                .insert(config_id.to_string(), value.clone());
+            if config_id == "mode" {
+                session.mode = normalize_acp_mode(value.as_str());
+            }
+        }
+    }
+
+    crate::acp::r#impl::io::send_result(
         server,
         request_id,
         json!({
-            "configOptions": [],
+            "configOptions": []
         }),
     )
     .await
@@ -356,7 +632,7 @@ pub(super) async fn handle_authenticate(
 ) -> Result<()> {
     // Default implementation: all auth succeeds (auth is optional).
     // If entry_auth is enabled, it's handled at the HTTP/transport layer.
-    send_result(server, request_id, json!({})).await
+    crate::acp::r#impl::io::send_result(server, request_id, json!({})).await
 }
 
 /// Handle `logout` — terminates the current authenticated session.
@@ -365,7 +641,7 @@ pub(super) async fn handle_logout(
     _params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    send_result(server, request_id, json!({})).await
+    crate::acp::r#impl::io::send_result(server, request_id, json!({})).await
 }
 
 /// Handle `$/cancel_request` — protocol-level request cancellation notification.
@@ -385,7 +661,7 @@ pub(super) async fn handle_cancel_request(
 
 /// Handle `mcp.ping` — health check ping.
 pub(super) async fn handle_mcp_ping(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
-    send_result(server, request_id, json!({})).await
+    crate::acp::r#impl::io::send_result(server, request_id, json!({})).await
 }
 
 /// Handle `mcp.resources.list` — list available resources.
@@ -393,7 +669,7 @@ pub(super) async fn handle_mcp_resources_list(
     server: &AcpServer,
     request_id: Option<Value>,
 ) -> Result<()> {
-    send_result(server, request_id, json!({"resources": []})).await
+    crate::acp::r#impl::io::send_result(server, request_id, json!({"resources": []})).await
 }
 
 /// Handle `mcp.resources.read` — read a specific resource by URI.
@@ -402,7 +678,7 @@ pub(super) async fn handle_mcp_resources_read(
     _params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    send_error(
+    crate::acp::r#impl::io::send_error(
         server,
         request_id,
         -32602,
@@ -419,7 +695,7 @@ pub(super) async fn handle_mcp_resources_subscribe(
     _params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    send_result(server, request_id, json!({})).await
+    crate::acp::r#impl::io::send_result(server, request_id, json!({})).await
 }
 
 /// Handle `mcp.logging.setLevel` — set the MCP logging level.
@@ -428,7 +704,7 @@ pub(super) async fn handle_mcp_logging_set_level(
     _params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    send_result(server, request_id, json!({})).await
+    crate::acp::r#impl::io::send_result(server, request_id, json!({})).await
 }
 
 /// Handle `mcp.completion.complete` — complete a text input.
@@ -437,7 +713,7 @@ pub(super) async fn handle_mcp_completion_complete(
     _params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    send_result(server, request_id, json!({"completion": []})).await
+    crate::acp::r#impl::io::send_result(server, request_id, json!({"completion": []})).await
 }
 
 /// Handle `mcp.sampling.createMessage` — create a sampling request.
@@ -446,7 +722,7 @@ pub(super) async fn handle_mcp_sampling_create_message(
     _params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    send_error(
+    crate::acp::r#impl::io::send_error(
         server,
         request_id,
         -32602,
@@ -464,7 +740,7 @@ pub(super) async fn handle_mcp_tools_list(
 ) -> Result<()> {
     let tools = build_mcp_tool_descriptors(server);
 
-    send_result(
+    crate::acp::r#impl::io::send_result(
         server,
         request_id,
         json!({
@@ -493,12 +769,19 @@ pub(super) async fn handle_mcp_tools_call(
         Ok(structured) => structured,
         Err(err) => {
             record_mcp_tool_audit(name, &arguments, false, &err.to_string());
-            return send_error(server, request_id, -32602, err.to_string(), None).await;
+            return crate::acp::r#impl::io::send_error(
+                server,
+                request_id,
+                -32602,
+                err.to_string(),
+                None,
+            )
+            .await;
         }
     };
     record_mcp_tool_audit(name, &arguments, true, "tool executed successfully");
 
-    send_result(
+    crate::acp::r#impl::io::send_result(
         server,
         request_id,
         json!({
@@ -692,7 +975,14 @@ pub(super) async fn handle_skill_import(
         Ok(record) => record,
         Err(err) => {
             record_skill_admin_audit("import", "skill.import", false, &err.to_string());
-            return send_error(server, request_id, -32602, err.to_string(), None).await;
+            return crate::acp::r#impl::io::send_error(
+                server,
+                request_id,
+                -32602,
+                err.to_string(),
+                None,
+            )
+            .await;
         }
     };
     store.save()?;
@@ -753,7 +1043,7 @@ pub(super) async fn handle_skill_import(
         true,
         "imported skill manifest with supply-chain checks",
     );
-    send_result(
+    crate::acp::r#impl::io::send_result(
         server,
         request_id,
         json!({
@@ -788,7 +1078,7 @@ pub(super) async fn handle_skill_list_imported(
         true,
         "listed imported skills",
     );
-    send_result(
+    crate::acp::r#impl::io::send_result(
         server,
         request_id,
         json!({
@@ -814,7 +1104,14 @@ pub(super) async fn handle_skill_enabled_toggle(
         Ok(name) => name,
         Err(err) => {
             record_skill_admin_audit(action, "skill.toggle", false, &err.to_string());
-            return send_error(server, request_id, -32602, err.to_string(), None).await;
+            return crate::acp::r#impl::io::send_error(
+                server,
+                request_id,
+                -32602,
+                err.to_string(),
+                None,
+            )
+            .await;
         }
     };
     let mut store = open_skill_import_store(server)?;
@@ -822,12 +1119,19 @@ pub(super) async fn handle_skill_enabled_toggle(
         Ok(record) => record,
         Err(err) => {
             record_skill_admin_audit(action, &name, false, &err.to_string());
-            return send_error(server, request_id, -32602, err.to_string(), None).await;
+            return crate::acp::r#impl::io::send_error(
+                server,
+                request_id,
+                -32602,
+                err.to_string(),
+                None,
+            )
+            .await;
         }
     };
     store.save()?;
     record_skill_admin_audit(action, &name, true, "updated imported skill state");
-    send_result(
+    crate::acp::r#impl::io::send_result(
         server,
         request_id,
         json!({
@@ -849,7 +1153,14 @@ pub(super) async fn handle_skill_remove(
         Ok(name) => name,
         Err(err) => {
             record_skill_admin_audit("remove", "skill.remove", false, &err.to_string());
-            return send_error(server, request_id, -32602, err.to_string(), None).await;
+            return crate::acp::r#impl::io::send_error(
+                server,
+                request_id,
+                -32602,
+                err.to_string(),
+                None,
+            )
+            .await;
         }
     };
     let mut store = open_skill_import_store(server)?;
@@ -857,7 +1168,7 @@ pub(super) async fn handle_skill_remove(
     if !removed {
         let reason = tf("error.imported_skill_not_found", &[("name", &name)]);
         record_skill_admin_audit("remove", &name, false, &reason);
-        return send_error(server, request_id, -32602, reason, None).await;
+        return crate::acp::r#impl::io::send_error(server, request_id, -32602, reason, None).await;
     }
     let unregistered = server
         .skill_registry
@@ -874,7 +1185,7 @@ pub(super) async fn handle_skill_remove(
     store.save()?;
     record_skill_admin_audit("remove", &name, true, "removed imported skill record");
 
-    send_result(
+    crate::acp::r#impl::io::send_result(
         server,
         request_id,
         json!({
@@ -897,7 +1208,14 @@ pub(super) async fn handle_skill_create(
         Ok(name) => name,
         Err(err) => {
             record_skill_admin_audit("create", "skill.create", false, &err.to_string());
-            return send_error(server, request_id, -32602, err.to_string(), None).await;
+            return crate::acp::r#impl::io::send_error(
+                server,
+                request_id,
+                -32602,
+                err.to_string(),
+                None,
+            )
+            .await;
         }
     };
     let description = params
@@ -929,11 +1247,18 @@ pub(super) async fn handle_skill_create(
     // Lock is dropped before await
     if let Err(err) = result {
         record_skill_admin_audit("create", &name, false, &err.to_string());
-        return send_error(server, request_id, -32602, err.to_string(), None).await;
+        return crate::acp::r#impl::io::send_error(
+            server,
+            request_id,
+            -32602,
+            err.to_string(),
+            None,
+        )
+        .await;
     }
 
     record_skill_admin_audit("create", &name, true, "created skill from prompt template");
-    send_result(
+    crate::acp::r#impl::io::send_result(
         server,
         request_id,
         json!({
@@ -950,8 +1275,11 @@ pub(super) async fn handle_skill_update(
     request_id: Option<Value>,
 ) -> Result<()> {
     match skill_update_payload(server, &params) {
-        Ok(payload) => send_result(server, request_id, payload).await,
-        Err(err) => send_error(server, request_id, -32602, err.to_string(), None).await,
+        Ok(payload) => crate::acp::r#impl::io::send_result(server, request_id, payload).await,
+        Err(err) => {
+            crate::acp::r#impl::io::send_error(server, request_id, -32602, err.to_string(), None)
+                .await
+        }
     }
 }
 
@@ -1029,8 +1357,11 @@ pub(super) async fn handle_skill_version_list(
     request_id: Option<Value>,
 ) -> Result<()> {
     match skill_version_list_payload(server, &params) {
-        Ok(payload) => send_result(server, request_id, payload).await,
-        Err(err) => send_error(server, request_id, -32602, err.to_string(), None).await,
+        Ok(payload) => crate::acp::r#impl::io::send_result(server, request_id, payload).await,
+        Err(err) => {
+            crate::acp::r#impl::io::send_error(server, request_id, -32602, err.to_string(), None)
+                .await
+        }
     }
 }
 
@@ -1082,8 +1413,11 @@ pub(super) async fn handle_skill_version_rollback(
     request_id: Option<Value>,
 ) -> Result<()> {
     match skill_version_rollback_payload(server, &params) {
-        Ok(payload) => send_result(server, request_id, payload).await,
-        Err(err) => send_error(server, request_id, -32602, err.to_string(), None).await,
+        Ok(payload) => crate::acp::r#impl::io::send_result(server, request_id, payload).await,
+        Err(err) => {
+            crate::acp::r#impl::io::send_error(server, request_id, -32602, err.to_string(), None)
+                .await
+        }
     }
 }
 
@@ -1213,9 +1547,9 @@ pub(super) async fn handle_chat(
         Err(err) => {
             let message = err.to_string();
             if message.to_ascii_lowercase().contains("rate limited") {
-                send_error(server, request_id, -32029, message, None).await
+                crate::acp::r#impl::io::send_error(server, request_id, -32029, message, None).await
             } else {
-                send_error(server, request_id, -32603, message, None).await
+                crate::acp::r#impl::io::send_error(server, request_id, -32603, message, None).await
             }
         }
     }
@@ -1247,7 +1581,7 @@ pub(super) async fn handle_phase(
         })
         .unwrap_or_else(|_| json!({"global": 0, "phase": {}}));
 
-    send_result(
+    crate::acp::r#impl::io::send_result(
         server,
         request_id,
         json!({
@@ -1287,7 +1621,7 @@ pub(super) async fn handle_models_list(
         })
         .unwrap_or_default();
 
-    send_result(
+    crate::acp::r#impl::io::send_result(
         server,
         request_id,
         json!({
