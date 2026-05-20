@@ -536,14 +536,18 @@ export class GoOnManager {
         if (!canWrite) {
           this._outputChannel?.appendLine("[warn] RPC stdin backpressure");
           // Fallback to HTTP if available
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const g = globalThis as any;
           if (
             typeof globalThis !== "undefined" &&
-            typeof (globalThis as any).fetch === "function"
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            typeof g.fetch === "function"
           ) {
             (async () => {
               try {
                 const httpUrl = `${protocolContract.runtime.baseUrl}/rpc`;
-                const httpResponse = await (globalThis as any).fetch(httpUrl, {
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-call,@typescript-eslint/no-unsafe-assignment
+                const httpResponse = await g.fetch(httpUrl, {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: requestStr,
@@ -649,7 +653,7 @@ export class GoOnManager {
         { skipProviderGuard: true },
       );
       const result = catalog as Record<string, unknown>;
-      const providers = result?.providers as
+      const providers = result?.catalog as
         | Array<Record<string, unknown>>
         | undefined;
       if (!Array.isArray(providers)) return null;

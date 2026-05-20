@@ -5744,6 +5744,34 @@ pub(super) async fn handle_provider_list_models(
     .await
 }
 
+/// Configure a keychain item's ACL so ANY process (not just the creator)
+/// can read the password without triggering the macOS permission dialog.
+/// This is essential for the backend (a headless child process) to access
+/// API keys stored in the login keychain.
+///
+/// Matches by service name (`-d "go-on"`) because the `keyring` crate stores
+/// the service as "go-on" but does NOT set a custom keychain "description" field.
+/// Using `-D` (description) would therefore be a silent no-op.
+#[cfg(target_os = "macos")]
+fn ensure_keyring_item_accessible(_account: &str) {
+    use std::process::Command;
+    let _ = Command::new("security")
+        .args([
+            "set-key-partition-list",
+            "-S",
+            "apple:default,apple:toolbar,apple:unknown,apple:keychain:basic",
+            "-k",
+            "",
+            "-d",
+            "go-on",
+            "login.keychain",
+        ])
+        .output();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn ensure_keyring_item_accessible(_account: &str) {}
+
 /// Handle provider configuration request from GUI or other clients.
 /// Stores the provider config to system keyring.
 pub(super) async fn handle_provider_configure(
@@ -5787,6 +5815,8 @@ pub(super) async fn handle_provider_configure(
             Ok(entry) => {
                 if let Err(e) = entry.set_password(api_key) {
                     tracing::warn!("failed to save API key for '{}' to keyring: {}", name, e);
+                } else {
+                    ensure_keyring_item_accessible(&account);
                 }
             }
             Err(e) => tracing::warn!("failed to open keyring entry for '{}': {}", name, e),
@@ -5808,9 +5838,11 @@ pub(super) async fn handle_provider_configure(
                 Ok(entry) => {
                     if let Err(e) = entry.set_password(api_key) {
                         tracing::warn!(
-                            "failed to save Copilot token to keyring account github_copilot_token: {}",
-                            e
-                        );
+                                "failed to save Copilot token to keyring account github_copilot_token: {}",
+                                e
+                            );
+                    } else {
+                        ensure_keyring_item_accessible("github_copilot_token");
                     }
                 }
                 Err(e) => {
@@ -5827,6 +5859,8 @@ pub(super) async fn handle_provider_configure(
             Ok(entry) => {
                 if let Err(e) = entry.set_password(secret_key) {
                     tracing::warn!("failed to save secret key for '{}' to keyring: {}", name, e);
+                } else {
+                    ensure_keyring_item_accessible(&account);
                 }
             }
             Err(e) => tracing::warn!("failed to open keyring entry for '{}': {}", name, e),
@@ -6086,6 +6120,8 @@ pub(super) async fn handle_copilot_device_code_poll(
                                         "failed to save Copilot token to keyring account copilot_api_key: {}",
                                         e
                                     );
+                                } else {
+                                    ensure_keyring_item_accessible("copilot_api_key");
                                 }
                             }
                             Err(e) => {
@@ -6103,6 +6139,8 @@ pub(super) async fn handle_copilot_device_code_poll(
                                         "failed to save Copilot token to keyring account github_copilot_token: {}",
                                         e
                                     );
+                                } else {
+                                    ensure_keyring_item_accessible("github_copilot_token");
                                 }
                             }
                             Err(e) => {

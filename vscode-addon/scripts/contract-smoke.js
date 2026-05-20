@@ -1273,9 +1273,9 @@ assert.ok(
     "protocolContract.errors.requestErrorContextPrefix",
   ),
 );
-assert.ok(monitorSource.includes("protocolContract.statusTerms.healthy"));
-assert.ok(
-  monitorSource.includes("protocolContract.statusTerms.healthCheckFailed"),
-);
+// Refactored: statusMonitor now uses i18n keys + direct string checks
+assert.ok(monitorSource.includes('"health.probes"'));
+assert.ok(monitorSource.includes('"runtime.health"'));
+assert.ok(monitorSource.includes('"provider_dependencies"'));
 
 console.log("VS Code addon contract smoke passed");

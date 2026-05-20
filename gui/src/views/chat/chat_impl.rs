@@ -90,6 +90,10 @@ pub struct ChatView {
     templates_bootstrapped: bool,
     /// Command templates from the PromptsView, used as fallback for `/` commands.
     pub prompts_command_templates: Vec<crate::views::prompts::CommandTemplate>,
+    /// Full prompt category collection for the category browser.
+    pub prompt_collection: Vec<crate::views::prompts::PromptCategory>,
+    /// Currently selected category ID in the prompt browser.
+    prompt_selected_category: Option<String>,
     // Feature 9: search (sessions + messages)
     pub session_search_query: String,
     // Save serialization guards (AtomicBool ensures no concurrent file writes)
@@ -436,6 +440,8 @@ impl ChatView {
             template_search_query: String::new(),
             templates_bootstrapped: false,
             prompts_command_templates: Vec::new(),
+            prompt_collection: Vec::new(),
+            prompt_selected_category: None,
             // Feature 9
             session_search_query: String::new(),
             // Save guards
@@ -963,6 +969,8 @@ mod tests {
             template_search_query: String::new(),
             templates_bootstrapped: false,
             prompts_command_templates: Vec::new(),
+            prompt_collection: Vec::new(),
+            prompt_selected_category: None,
             session_search_query: String::new(),
             session_save_in_flight: Arc::new(AtomicBool::new(false)),
             template_save_in_flight: Arc::new(AtomicBool::new(false)),

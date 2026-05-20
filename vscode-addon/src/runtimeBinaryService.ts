@@ -100,7 +100,8 @@ function attachDownloadTimeout(request: ClientRequest, url: string) {
  * in VS Code settings. The checksum downloaded from the same server as the
  * archive adds no additional security against MITM attacks.
  */
-async function verifyArchiveChecksum(
+// eslint-disable-next-line @typescript-eslint/no-unused-vars,no-unused-vars
+async function _verifyArchiveChecksum(
   _archivePath: string,
   _checksumUrl: string,
 ): Promise<void> {

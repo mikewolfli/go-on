@@ -2,10 +2,9 @@ use crate::backend::{BackendClient, ProviderCapabilityModel};
 use crate::config::{save_app_config, AppConfig, ProviderConfig};
 use crate::i18n::I18n;
 use crate::views::security_prefs;
-use keyring;
 use serde_json::Value;
 use std::sync::mpsc;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
 pub struct ProvidersView {
@@ -63,8 +62,6 @@ pub struct ProvidersView {
     copilot_token_stored: bool,
     /// Status message for the copilot auth section
     copilot_status: String,
-    /// Flag to trigger config reload after copilot auth completes
-    copilot_needs_reload: bool,
     /// Whether we've already scheduled a repaint for the current polling cycle.
     /// Avoids calling request_repaint_after every frame while polling.
     copilot_poll_repaint_requested: bool,
@@ -314,14 +311,8 @@ fn provider_requires_secret(provider: &str) -> bool {
 }
 
 fn build_copilot_http_client() -> reqwest::Client {
-    // Strategy 1: direct connection (no proxy) — most reliable for github.com
-    // Do this FIRST so a bad proxy config doesn't poison the OnceLock cache.
-    if let Ok(client) = reqwest::Client::builder().no_proxy().build() {
-        eprintln!("INFO: copilot auth using direct connection (no proxy)");
-        return client;
-    }
-
-    // Strategy 2: env var proxy (HTTPS_PROXY, HTTP_PROXY, ALL_PROXY)
+    // Strategy 1: user-configured env var proxy (HTTPS_PROXY, HTTP_PROXY, ALL_PROXY)
+    // Check this FIRST so users can explicitly route copilot auth through a proxy.
     let env_vars = [
         "HTTPS_PROXY",
         "https_proxy",
@@ -351,39 +342,46 @@ fn build_copilot_http_client() -> reqwest::Client {
         }
     }
 
-    // Strategy 3: common local proxy ports
-    let common_proxies: [&str; 8] = [
-        "http://127.0.0.1:7890",
-        "socks5://127.0.0.1:7890",
-        "http://127.0.0.1:10809",
-        "socks5://127.0.0.1:10809",
-        "http://127.0.0.1:10808",
+    // Strategy 2: common local proxy ports (same list as backend's build_github_client)
+    // Try HTTP probes first, then SOCKS5 probes for the same ports.
+    let http_proxies: [&str; 6] = [
         "http://127.0.0.1:15732",
+        "http://127.0.0.1:7890",
+        "http://127.0.0.1:10809",
+        "http://127.0.0.1:10808",
         "http://127.0.0.1:1080",
         "http://127.0.0.1:33210",
     ];
-    for url in common_proxies {
-        if url.starts_with("socks") {
-            if let Ok(proxy) = reqwest::Proxy::all(url) {
+    for url in http_proxies {
+        for make_proxy in [
+            reqwest::Proxy::all,
+            reqwest::Proxy::https,
+            reqwest::Proxy::http,
+        ] {
+            if let Ok(proxy) = make_proxy(url) {
                 if let Ok(client) = reqwest::Client::builder().proxy(proxy).build() {
                     eprintln!("INFO: copilot auth using proxy {}", url);
                     return client;
                 }
             }
-        } else {
-            for make_proxy in [
-                reqwest::Proxy::all,
-                reqwest::Proxy::https,
-                reqwest::Proxy::http,
-            ] {
-                if let Ok(proxy) = make_proxy(url) {
-                    if let Ok(client) = reqwest::Client::builder().proxy(proxy).build() {
-                        eprintln!("INFO: copilot auth using proxy {}", url);
-                        return client;
-                    }
-                }
+        }
+    }
+
+    // SOCKS5 probes for common proxy ports
+    let socks_proxies: [&str; 2] = ["socks5://127.0.0.1:7890", "socks5://127.0.0.1:10809"];
+    for url in socks_proxies {
+        if let Ok(proxy) = reqwest::Proxy::all(url) {
+            if let Ok(client) = reqwest::Client::builder().proxy(proxy).build() {
+                eprintln!("INFO: copilot auth using proxy {}", url);
+                return client;
             }
         }
+    }
+
+    // Strategy 3: direct connection (no proxy) — fallback for users without a proxy
+    if let Ok(client) = reqwest::Client::builder().no_proxy().build() {
+        eprintln!("INFO: copilot auth using direct connection (no proxy)");
+        return client;
     }
 
     // Strategy 4: no proxy + accept invalid certs (for broken corporate cert stores)
@@ -404,6 +402,18 @@ fn build_copilot_http_client() -> reqwest::Client {
 }
 
 static COPILOT_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+/// Thread-safe store for Copilot tokens, replacing std::env::set_var
+/// which is UB in multi-threaded Rust programs.
+static COPILOT_TOKENS: OnceLock<RwLock<std::collections::HashMap<String, String>>> =
+    OnceLock::new();
+
+fn set_copilot_token(key: &str, value: &str) {
+    let store = COPILOT_TOKENS.get_or_init(|| RwLock::new(std::collections::HashMap::new()));
+    if let Ok(mut map) = store.write() {
+        map.insert(key.to_string(), value.to_string());
+    }
+}
 
 impl ProvidersView {
     pub fn new() -> Self {
@@ -445,7 +455,6 @@ impl ProvidersView {
             copilot_access_token: String::new(),
             copilot_token_stored: false,
             copilot_status: String::new(),
-            copilot_needs_reload: false,
             copilot_poll_repaint_requested: false,
         }
     }
@@ -555,8 +564,6 @@ impl ProvidersView {
                                 i18n.t("providers.copilot_authorized").to_string();
                             self.new_key = self.copilot_access_token.clone();
                             self.copilot_token_stored = true;
-                            // Request config reload to refresh monitoring status
-                            self.copilot_needs_reload = true;
                             // Immediately persist to keyring so the token survives app restart
                             // even if the user doesn't click Save.
                             //
@@ -570,15 +577,14 @@ impl ProvidersView {
                                 eprintln!("Warning: failed to store Copilot token in keyring (copilot_api_key): {e}");
                             }
                             // Also write to github_copilot_token for backend compatibility
-                            if let Err(e) = keyring::Entry::new("go-on", "github_copilot_token")
-                                .and_then(|entry| entry.set_password(token))
-                            {
+                            // with macOS ACL configured so the backend process can read it.
+                            if let Err(e) = crate::keyring_util::store_copilot_token(token) {
                                 eprintln!("Warning: failed to store Copilot token in keyring (github_copilot_token): {e}");
                             }
-                            // Also set env vars so CopilotAgent can read them immediately
-                            // if the backend process reads from inherited env.
-                            std::env::set_var("GITHUB_TOKEN", token);
-                            std::env::set_var("GITHUB_COPILOT_TOKEN", token);
+                            // Store tokens in thread-safe map so CopilotAgent can read them
+                            // without the UB of std::env::set_var.
+                            set_copilot_token("GITHUB_TOKEN", token);
+                            set_copilot_token("GITHUB_COPILOT_TOKEN", token);
                         }
                     } else if let Some(error) = resp.get("error").and_then(Value::as_str) {
                         self.copilot_last_poll_result = format!("oauth_error={}", error);
@@ -754,12 +760,6 @@ impl ProvidersView {
             .auto_shrink([false; 2])
             .show(ui, |ui| {
                 self.process_pending(i18n);
-                // If Copilot OAuth just completed, trigger a backend restart
-                // so the new token is picked up immediately.
-                if self.copilot_needs_reload {
-                    self.copilot_needs_reload = false;
-                    changed = true;
-                }
                 self.ensure_models_loaded(backend, ctx);
                 self.refresh_security_cache();
 
@@ -1205,6 +1205,7 @@ impl ProvidersView {
                                 config.providers.push(ProviderConfig {
                                     name: name.clone(),
                                     api_key: key.clone(),
+                                    secret_key: String::new(),
                                     model: model.clone(),
                                     validated: true,
                                     label: label_clean.clone(),
@@ -1827,13 +1828,19 @@ impl ProvidersView {
                 }
 
                 if let Some(idx) = remove_idx {
-                    // Clean up keyring entry before removing from config
+                    // Clean up keyring entries before removing from config
                     if let Some(removed) = config.providers.get(idx) {
-                        // Only delete keyring entry if this is the LAST provider with this name,
+                        // Only delete keyring entries if this is the LAST provider with this name,
                         // otherwise other labeled instances would lose their shared key.
                         let remaining = config.providers.iter().filter(|p| p.name == removed.name).count();
                         if remaining <= 1 {
                             let _ = crate::keyring_util::delete_api_key(&removed.name.to_lowercase());
+                            // Also clean up secret_key for dual-auth providers (wenxin, qianfan)
+                            let _ = crate::keyring_util::delete_secret_key(&removed.name.to_lowercase());
+                            // For copilot, also clean up github_copilot_token alias
+                            if removed.name.to_lowercase() == "copilot" {
+                                let _ = crate::keyring_util::delete_copilot_token();
+                            }
                         }
                     }
                     config.providers.remove(idx);
@@ -1848,21 +1855,6 @@ impl ProvidersView {
 
                 if !self.status.is_empty() {
                     ui.label(&self.status);
-                }
-
-                // ── Trigger config reload after copilot auth ──
-                if self.copilot_needs_reload {
-                    self.copilot_needs_reload = false;
-                    let tx = self.pending_tx.clone();
-                    let backend_clone = backend.clone();
-                    let ctx_clone = ctx.clone();
-                    tokio::spawn(async move {
-                        let _ = backend_clone.reload_config().await;
-                        if let Err(e) = tx.try_send("Config reloaded for copilot.".to_string()) {
-                            eprintln!("WARN: providers try_send failed: {:?}", e);
-                        }
-                        ctx_clone.request_repaint();
-                    });
                 }
 
                 // ── Copilot Device Code auto-poll (uses system proxy) ──

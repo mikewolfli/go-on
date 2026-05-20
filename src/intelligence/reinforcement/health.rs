@@ -331,15 +331,19 @@ fn keyring_lookup_accounts(service: &str, account: &str) -> Vec<(String, String)
 fn keyring_env_fallback_candidates(service: &str, account: &str) -> Vec<String> {
     let mut candidates = Vec::new();
 
-    if service == "go-on" {
-        if account == "openai_api_key" || account == "openai_compatible_api_key" {
-            candidates.push("OPENAI_API_KEY".to_string());
-            candidates.push("OPENAI_COMPATIBLE_API_KEY".to_string());
-        }
-        if account == "copilot_api_key" || account == "github_copilot_token" {
-            candidates.push("GITHUB_COPILOT_TOKEN".to_string());
-            candidates.push("GITHUB_TOKEN".to_string());
-        }
+    // NOTE: Must stay in sync with agent.rs load_secret_value() fallback logic.
+    // service is NOT checked for openai to maximize backward compatibility for
+    // users whose keyring entries may use different service names.
+    if account == "openai_api_key" {
+        candidates.push("OPENAI_API_KEY".to_string());
+    }
+    if account == "openai_compatible_api_key" {
+        candidates.push("OPENAI_COMPATIBLE_API_KEY".to_string());
+        candidates.push("OPENAI_API_KEY".to_string());
+    }
+    if service == "go-on" && (account == "copilot_api_key" || account == "github_copilot_token") {
+        candidates.push("GITHUB_COPILOT_TOKEN".to_string());
+        candidates.push("GITHUB_TOKEN".to_string());
     }
 
     candidates.push(account.replace('-', "_").to_ascii_uppercase());

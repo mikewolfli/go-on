@@ -1814,7 +1814,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     const copilotConfigEnvVar =
       provider === "copilot" && (await this._readCopilotToken())
         ? `keyring://go-on/${COPILOT_SECRET_NAME}`
-        : normalizedEnvVar;
+        : `keyring://go-on/${secretNameForEnvVar(normalizedEnvVar)}`;
 
     const configPath = this._resolveConfigPath();
     let content = "";
@@ -1829,7 +1829,9 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       url: matched.url,
       chat_path: matched.chat_path,
       api_key_env: copilotConfigEnvVar,
-      secret_key_env: matched.secret_key_env,
+      secret_key_env: matched.secret_key_env
+        ? `keyring://go-on/${secretNameForEnvVar(matched.secret_key_env)}`
+        : undefined,
       anthropic_version: matched.anthropic_version,
       model: normalizedModel,
       max_tokens: matched.max_tokens,
@@ -2170,6 +2172,28 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
         name: secretNameForEnvVar(envVarName),
         value: apiKey,
       });
+      this.manager.setRuntimeEnvOverrides?.({ [envVarName]: apiKey });
+
+      // 1b. Handle secret key for dual-auth providers (e.g. wenxin, qianfan)
+      const catalog = await this._loadProviderCatalog();
+      const matched = catalog.find((item) => item.name === provider);
+      if (matched?.secret_key_env) {
+        const secretKey = await vscode.window.showInputBox({
+          prompt: `Enter the secret key for ${provider} (${matched.secret_key_env})`,
+          password: true,
+          ignoreFocusOut: true,
+          placeHolder: matched.secret_key_env,
+        });
+        if (secretKey !== undefined && secretKey !== "") {
+          await vscode.commands.executeCommand("go-on.keyringSet", {
+            name: secretNameForEnvVar(matched.secret_key_env),
+            value: secretKey,
+          });
+          this.manager.setRuntimeEnvOverrides?.({
+            [matched.secret_key_env]: secretKey,
+          });
+        }
+      }
 
       // 2. Save provider selection to config.toml
       await this._saveProviderSelection(provider, "auto", envVarName);

@@ -1192,11 +1192,19 @@ impl eframe::App for GoOnApp {
             theme.apply(ctx);
         }
 
-        // ── Periodic repaint at ~10 FPS minimum ─────────────────────────
-        // Ensure the UI keeps rendering even when there are no async callbacks
-        // firing. Without this, egui will draw only the initial frame and then
-        // stop (black screen) until something external triggers request_repaint().
-        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        // ── Minimal repaint governor ────────────────────────────────
+        // DO NOT force continuous repaints — they cause screen flickering
+        // on every frame. Each async subsystem (health polling, chat
+        // streaming, provider status) already calls ctx.request_repaint()
+        // when it has new data. User interactions (mouse, keyboard) are
+        // handled by egui's event system automatically.
+        //
+        // Only schedule a very infrequent wake-up (2s) to keep the GL
+        // context alive on macOS, so the first frame after an event
+        // doesn't feel sluggish. This is invisible to the user.
+        if !self.pending_refresh && !self.chat_view.sending {
+            ctx.request_repaint_after(std::time::Duration::from_secs(2));
+        }
 
         // Reap zombie child if backend exited
         if let Some(ref mut child) = self.backend_child {
@@ -1498,6 +1506,8 @@ impl eframe::App for GoOnApp {
                                     self.prompts_view.command_version;
                                 self.chat_view.prompts_command_templates =
                                     self.prompts_view.command_templates.clone();
+                                self.chat_view.prompt_collection =
+                                    self.prompts_view.collection.clone();
                             }
                             self.chat_view.show(
                                 ui,

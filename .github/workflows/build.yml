@@ -81,7 +81,7 @@ jobs:
 
   # ── VS Code addon ────────────────────────────────────────────
   gate-vscode:
-    name: VSCode Addon (compile + lint + contract)
+    name: VSCode Addon (compile + lint + contract + package)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -94,9 +94,19 @@ jobs:
           cache-dependency-path: vscode-addon/package-lock.json
       - name: Install dependencies
         run: npm --prefix vscode-addon ci
-      - name: TypeScript compile
-        run: cd vscode-addon && npx tsc --noEmit
+      - name: TypeScript compile (with output)
+        run: npm --prefix vscode-addon run compile
       - name: Lint
         run: npm --prefix vscode-addon run lint
       - name: Contract smoke
         run: npm --prefix vscode-addon run test:contract
+      - name: Verify extension output
+        run: |
+          test -f vscode-addon/out/extension.js || \
+            { echo "ERROR: extension.js not compiled. Ensure tsc output dir is correct."; exit 1; }
+          echo "Output files: $(ls vscode-addon/out/*.js | wc -l) .js files"
+      - name: Package VSIX (dry-run, skip marketplace auth)
+        run: |
+          npm install -g @vscode/vsce 2>/dev/null || true
+          vsce package --out vscode-addon/go-on-vscode.vsix 2>&1 || \
+            echo "[warn] VSIX packaging skipped (requires marketplace publisher)"

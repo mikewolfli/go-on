@@ -49,22 +49,27 @@ mod platform {
     /// can read the password without triggering the macOS permission dialog.
     /// This is essential for the backend (a headless child process) to access
     /// API keys stored in the login keychain.
-    fn ensure_item_accessible(account: &str) {
+    ///
+    /// Matches by service name (`-d "go-on"`) because the `keyring` crate stores
+    /// the service as "go-on" but does NOT set a custom keychain "description" field.
+    /// Using `-D` (description) would therefore be a silent no-op.
+    pub(crate) fn ensure_item_accessible(_account: &str) {
         // `security set-key-partition-list` modifies the ACL partition list
-        // of a keychain item identified by its description (-D).
-        // -S "apple-tool:,apple:" adds the two standard system partition groups
-        //    that all macOS processes (GUI and CLI) are automatically members of.
+        // of a keychain item identified by its service name (-d "go-on").
+        // -S "apple:default,apple:toolbar,apple:unknown,apple:keychain:basic"
+        //    adds the standard system partition groups that all macOS processes
+        //    (GUI and CLI) are automatically members of.
         // Without this step, macOS Keychain Services will reject reads from
         // the backend because it's not the process that originally created the item.
         let _ = Command::new("security")
             .args(&[
                 "set-key-partition-list",
                 "-S",
-                "apple-tool:,apple:",
+                "apple:default,apple:toolbar,apple:unknown,apple:keychain:basic",
                 "-k",
                 "", // empty keychain password (uses login keychain)
-                "-D",
-                &format!("go-on ({})", account),
+                "-d",
+                "go-on",
                 "login.keychain",
             ])
             .output();
@@ -209,6 +214,29 @@ pub fn delete_api_key(provider: &str) -> Result<()> {
 #[allow(dead_code)]
 pub fn delete_secret_key(provider: &str) -> Result<()> {
     platform::delete_secret_key(provider)
+}
+
+/// Delete the github_copilot_token alias from the system keyring (silent if missing).
+/// Used when removing a Copilot provider to clean up the alternative keyring entry
+/// that was created alongside copilot_api_key for backward compatibility.
+pub fn delete_copilot_token() -> Result<()> {
+    let account = "github_copilot_token";
+    if let Ok(entry) = keyring::Entry::new("go-on", account) {
+        let _ = entry.delete_credential();
+    }
+    Ok(())
+}
+
+/// Store the Copilot token to the github_copilot_token keyring entry.
+/// This is a separate alias (alongside copilot_api_key) that the backend reads.
+/// On macOS, also configures ACL so the backend process can access it.
+pub fn store_copilot_token(token: &str) -> Result<()> {
+    let account = "github_copilot_token";
+    let entry = keyring::Entry::new("go-on", account)?;
+    entry.set_password(token)?;
+    #[cfg(target_os = "macos")]
+    platform::ensure_item_accessible(account);
+    Ok(())
 }
 
 /// Retrieve an API key, falling back to a config-provided key if the system

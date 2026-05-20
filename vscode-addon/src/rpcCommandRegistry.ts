@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 import { i18n, MessageKeys } from "./i18n";
-import { isRecord, asRecord } from "./utils";
+import { asRecord } from "./utils";
 
 interface RpcCommandRegistryDeps {
   isRunning: () => boolean;
@@ -223,9 +223,9 @@ export function registerRpcCommands(
         );
         const replay = asRecord(result.replay);
         const records = asArray(replay.records).length;
-        const workflow = Number(replay.workflow_events ?? 0);
-        const pua = Number(replay.pua_events ?? 0);
-        const hasBus = replay.latest_learning_bus ? "yes" : "no";
+        const workflow = Number(replay.workflow_records ?? 0);
+        const pua = Number(replay.pua_records ?? 0);
+        const hasBus = replay.learning_bus ? "yes" : "no";
         vscode.window.showInformationMessage(
           i18n.getMessage(MessageKeys.rpcCommandResult, [
             "learning.replay",
@@ -629,14 +629,13 @@ export function registerRpcCommands(
 
       try {
         const result = asRecord(await deps.sendRequest("selector.status"));
-        const mode = String(result.mode ?? "unknown");
         const selector = asRecord(result.selector);
         const models = asArray(selector.models);
         const topModel = models.length > 0 ? asRecord(models[0]) : {};
         vscode.window.showInformationMessage(
           i18n.getMessage(MessageKeys.rpcCommandResult, [
             "selector.status",
-            `mode=${mode}, exploration_bias=${Number(selector.exploration_bias ?? 0).toFixed(2)}, tracked_models=${Number(selector.tracked_models ?? 0)}, total_observations=${Number(selector.total_observations ?? 0)}, top_model=${String(topModel.model_id ?? "-")}, top_score=${Number(topModel.ucb_score ?? 0).toFixed(3)}`,
+            `exploration_bias=${Number(selector.exploration_bias ?? 0).toFixed(2)}, tracked_models=${Number(selector.tracked_models ?? 0)}, total_observations=${Number(selector.total_observations ?? 0)}, top_model=${String(topModel.model_id ?? "-")}, top_score=${Number(topModel.ucb_score ?? 0).toFixed(3)}`,
           ]),
         );
       } catch (error: unknown) {

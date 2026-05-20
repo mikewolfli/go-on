@@ -340,12 +340,12 @@ class ConfigManager {
         copilot: {
           type: "copilot",
           url: "http://127.0.0.1:8080",
-          api_key_env: "GITHUB_COPILOT_TOKEN",
+          api_key_env: "keyring://go-on/github_copilot_token",
           region: "us",
         },
         deepseek: {
           type: "deepseek",
-          api_key_env: "DEEPSEEK_API_KEY",
+          api_key_env: "keyring://go-on/deepseek_api_key",
           model: "deepseek-chat",
           region: "cn",
         },

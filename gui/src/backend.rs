@@ -762,6 +762,7 @@ impl BackendClient {
         self.rpc_call("runtime.restart", None).await
     }
 
+    #[allow(dead_code)]
     pub async fn reload_config(&self) -> Result<Value, String> {
         self.rpc_call("config.reload", None).await
     }
@@ -1128,5 +1129,6 @@ pub struct SkillRecord {
     pub description: Option<String>,
     pub version: Option<String>,
     pub enabled: Option<bool>,
+    #[serde(alias = "importedAt")]
     pub imported_at: Option<u64>,
 }

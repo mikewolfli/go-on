@@ -69,6 +69,22 @@ jobs:
       - name: Build EGUI GUI
         run: cargo build --release --locked --manifest-path gui/Cargo.toml
 
+      # ── VS Code addon ──────────────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: vscode-addon/package-lock.json
+
+      - name: Build VS Code addon
+        shell: bash
+        run: |
+          cd vscode-addon
+          npm ci
+          npm run compile
+          npx vsce package --out go-on-vscode.vsix
+
       - name: Package
         shell: bash
         run: |
@@ -83,6 +99,9 @@ jobs:
           cp -r prompts "$PKG/backend/prompts"
           cp config/config.toml "$PKG/backend/"
           cp config/zed-config.toml "$PKG/backend/"
+          # Include VS Code addon (platform-independent, same .vsix for all)
+          cp vscode-addon/go-on-vscode.vsix "$PKG/"
+          cp contracts/editor-capability-matrix.json "$PKG/"
           mkdir -p dist/out
           if [ "${{ runner.os }}" = "Windows" ]; then
             cd dist && 7z a -tzip "out/go-on-${{ matrix.platform }}.zip" "go-on-${{ matrix.platform }}" && cd ..
@@ -95,5 +114,6 @@ jobs:
         with:
           files: |
             dist/out/go-on-${{ matrix.platform }}.${{ matrix.archive_ext }}
+            vscode-addon/go-on-vscode.vsix
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

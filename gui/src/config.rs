@@ -147,6 +147,10 @@ pub struct ProviderConfig {
     /// API key stored directly in config (fallback when keyring unavailable).
     /// Can be empty if key is only in system keyring.
     pub api_key: String,
+    /// Secret key stored directly in config (fallback when keyring unavailable).
+    /// Can be empty if key is only in system keyring.
+    #[serde(default)]
+    pub secret_key: String,
     pub model: String,
     pub validated: bool,
     /// Optional unique label to distinguish multiple entries of the same provider.
@@ -253,6 +257,11 @@ pub fn load_app_config() -> AppConfig {
                     .and_then(|k| k.as_str())
                     .unwrap_or("")
                     .to_string();
+                let secret_key = old_p
+                    .get("secret_key")
+                    .and_then(|k| k.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 let model = old_p
                     .get("model")
                     .and_then(|m| m.as_str())
@@ -270,6 +279,7 @@ pub fn load_app_config() -> AppConfig {
                 config.providers.push(ProviderConfig {
                     name,
                     api_key,
+                    secret_key,
                     model,
                     validated,
                     label,
@@ -344,6 +354,7 @@ pub fn load_app_config() -> AppConfig {
                     config.providers.push(ProviderConfig {
                         name: provider_name.to_string(),
                         api_key: kk.clone(),
+                        secret_key: String::new(),
                         model: "auto".to_string(),
                         validated: true,
                         label: String::new(),
@@ -351,6 +362,64 @@ pub fn load_app_config() -> AppConfig {
                     changed = true;
                     eprintln!(
                         "load_config: added '{}' to config from keyring",
+                        provider_name
+                    );
+                }
+            }
+        }
+
+        // ── Secret key sync (parallel to api_key sync above) ────────────────
+        let config_secret = config
+            .providers
+            .iter()
+            .find(|p| p.name == *provider_name)
+            .map(|p| p.secret_key.clone())
+            .unwrap_or_default();
+        let keyring_secret = crate::keyring_util::get_secret_key(provider_name);
+
+        // If config has secret but keyring doesn't → write to keyring
+        if !config_secret.is_empty()
+            && config_secret != REDACTED_API_KEY
+            && keyring_secret.is_none()
+        {
+            eprintln!(
+                "load_config: keyring missing secret_key for '{}', copying from config",
+                provider_name
+            );
+            if let Err(e) = crate::keyring_util::store_secret_key(provider_name, &config_secret) {
+                eprintln!(
+                    "keyring: failed to store secret_key for '{}': {}",
+                    provider_name, e
+                );
+            }
+        }
+
+        // If keyring has secret but config doesn't → write to config
+        if let Some(ks) = &keyring_secret {
+            if !ks.is_empty() && config_secret.is_empty() {
+                if let Some(p) = config
+                    .providers
+                    .iter_mut()
+                    .find(|p| p.name == *provider_name)
+                {
+                    p.secret_key = ks.clone();
+                    changed = true;
+                    eprintln!(
+                        "load_config: config missing secret_key for '{}', copying from keyring",
+                        provider_name
+                    );
+                } else {
+                    config.providers.push(ProviderConfig {
+                        name: provider_name.to_string(),
+                        api_key: String::new(),
+                        secret_key: ks.clone(),
+                        model: "auto".to_string(),
+                        validated: true,
+                        label: String::new(),
+                    });
+                    changed = true;
+                    eprintln!(
+                        "load_config: added '{}' to config from keyring (with secret_key)",
                         provider_name
                     );
                 }

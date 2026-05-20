@@ -229,7 +229,13 @@ fn load_cjk_font(fonts: &mut egui::FontDefinitions) -> bool {
 }
 
 async fn auto_detect_proxy() {
-    if std::env::var("HTTPS_PROXY").is_ok() || std::env::var("https_proxy").is_ok() {
+    if std::env::var("HTTPS_PROXY").is_ok()
+        || std::env::var("https_proxy").is_ok()
+        || std::env::var("HTTP_PROXY").is_ok()
+        || std::env::var("http_proxy").is_ok()
+        || std::env::var("ALL_PROXY").is_ok()
+        || std::env::var("all_proxy").is_ok()
+    {
         return;
     }
     let proxies: &[&str] = &[
@@ -239,6 +245,8 @@ async fn auto_detect_proxy() {
         "http://127.0.0.1:10809",
         "http://127.0.0.1:1087",
         "http://127.0.0.1:1080",
+        "http://127.0.0.1:10808",
+        "http://127.0.0.1:33210",
     ];
     // Spawn all connection attempts in parallel so the total time is ~100ms
     // instead of 700ms sequential. Each task is a tokio::spawn using
@@ -277,7 +285,11 @@ async fn auto_detect_proxy() {
         if let Ok(Some(proxy_url)) = task.await {
             std::env::set_var("HTTPS_PROXY", &proxy_url);
             std::env::set_var("https_proxy", &proxy_url);
-            eprintln!("auto_detect_proxy: found proxy at {proxy_url}, set HTTPS_PROXY.");
+            std::env::set_var("HTTP_PROXY", &proxy_url);
+            std::env::set_var("http_proxy", &proxy_url);
+            std::env::set_var("ALL_PROXY", &proxy_url);
+            std::env::set_var("all_proxy", &proxy_url);
+            eprintln!("auto_detect_proxy: found proxy at {proxy_url}, set all proxy env vars.");
             return;
         }
     }

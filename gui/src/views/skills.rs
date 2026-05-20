@@ -163,7 +163,11 @@ impl SkillsView {
             };
             match result {
                 Ok(val) => {
-                    let items = val.as_array().cloned().unwrap_or_default();
+                    let items = val
+                        .get("skills")
+                        .and_then(serde_json::Value::as_array)
+                        .cloned()
+                        .unwrap_or_default();
                     let skills: Vec<SkillRecord> = items
                         .iter()
                         .filter_map(|v| serde_json::from_value(v.clone()).ok())

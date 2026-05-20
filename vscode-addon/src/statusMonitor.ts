@@ -127,13 +127,17 @@ export class StatusMonitor {
         "health.probes",
       )) as ProbeReport;
       const probes = probeResult?.probes;
-      const dependencies = Array.isArray(probes?.dependencies)
-        ? (probes!.dependencies as Array<any>)
+      const dependencies: Array<Record<string, unknown>> = Array.isArray(
+        probes?.dependencies,
+      )
+        ? (probes!.dependencies as Array<Record<string, unknown>>)
         : [];
       const providerComponent = dependencies.find(
-        (dep: any) => dep?.name === "provider_dependencies",
+        (dep: Record<string, unknown>) => dep?.name === "provider_dependencies",
       );
-      const providerDetails = providerComponent?.details;
+      const providerDetails = providerComponent?.details as
+        | { ready?: number; total?: number; [key: string]: unknown }
+        | undefined;
       const hasProviderConfig =
         providerDetails !== undefined && (providerDetails.total ?? 0) > 0;
       const providerReady =

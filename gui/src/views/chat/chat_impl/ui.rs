@@ -1,4 +1,5 @@
 use super::*;
+use std::hash::{Hash, Hasher};
 
 /// Map mode ID to its i18n key for display.
 fn mode_display_key(mode_id: &str) -> String {
@@ -22,17 +23,18 @@ impl ChatView {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
         let painter = ui.painter();
         let dark = ui.visuals().dark_mode;
+        // Zed-style: subtle avatar colors
         let color = if is_user {
             if dark {
-                egui::Color32::from_rgb(32, 112, 210)
+                egui::Color32::from_rgb(40, 100, 200)
             } else {
-                egui::Color32::from_rgb(10, 106, 255)
+                egui::Color32::from_rgb(0, 95, 240)
             }
         } else {
             if dark {
-                egui::Color32::from_rgb(20, 90, 60)
+                egui::Color32::from_rgb(60, 64, 74)
             } else {
-                egui::Color32::from_rgb(20, 120, 70)
+                egui::Color32::from_rgb(180, 183, 190)
             }
         };
         painter.circle_filled(rect.center(), size / 2.0, color);
@@ -221,9 +223,12 @@ impl ChatView {
         // Process any pending async responses (non-blocking)
         self.process_pending(i18n);
 
-        // Keep streaming repaint cadence stable (60 FPS during streaming) to match Zed.
+        // Smooth streaming repaint cadence (30 FPS). 60 FPS caused screen flickering
+        // due to egui's full-frame rebuild — 30 FPS is visually smooth while eliminating
+        // flicker and reducing CPU/GPU load. The main frame governor in app.rs also
+        // accelerates to 100ms during streaming for responsiveness.
         if self.sending {
-            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            ctx.request_repaint_after(std::time::Duration::from_millis(33));
         }
 
         // Lazy initialization of templates and name refresh
@@ -251,7 +256,10 @@ impl ChatView {
                 .await
                 {
                     Ok(Ok(baseline)) => {
-                        let phases = baseline
+                        // Try to load phases from backend config baseline response.
+                        // The backend may not include "flow.phases", so fall back to
+                        // the hardcoded default phases that the GUI always generates.
+                        let phases: Vec<String> = baseline
                             .get("config")
                             .and_then(|c| c.get("flow"))
                             .and_then(|f| f.get("phases"))
@@ -260,13 +268,19 @@ impl ChatView {
                                 arr.iter()
                                     .filter_map(|v| v.as_str().map(String::from))
                                     .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_else(|| {
+                                vec![
+                                    "planning".to_string(),
+                                    "coding".to_string(),
+                                    "review".to_string(),
+                                    "delivery".to_string(),
+                                ]
                             });
-                        if let Some(list) = phases {
-                            if let Err(e) = tx.try_send(PendingResponse::Phases(list)) {
-                                eprintln!("WARN: chat ui try_send failed: {:?}", e);
-                            }
-                            ctx_clone.request_repaint();
+                        if let Err(e) = tx.try_send(PendingResponse::Phases(phases)) {
+                            eprintln!("WARN: chat ui try_send failed: {:?}", e);
                         }
+                        ctx_clone.request_repaint();
                     }
                     _ => {
                         #[cfg(debug_assertions)]
@@ -372,55 +386,158 @@ impl ChatView {
                 });
         }
 
-        // ── Prompt templates window (floating) ───────────────
+        // ── Prompt Category Browser (Zed-style) ──────────────
         if CHAT_STAGE6_ENABLE_EXTRA_BUTTONS && self.show_prompts {
-            egui::Window::new(i18n.t("chat.promptTemplates"))
-                .id(egui::Id::new("quick_prompts_window"))
-                .collapsible(false)
-                .resizable(true)
-                .default_width(520.0)
-                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.template_search_query)
-                                .hint_text(i18n.t("chat.searchTemplates"))
-                                .desired_width(220.0),
-                        );
-                        if ui.button(i18n.t("chat.templateNew")).clicked() {
-                            self.selected_template_idx = None;
-                            self.template_name_buf.clear();
-                            self.template_command_buf.clear();
-                            self.template_content_buf.clear();
-                        }
-                    });
-                    ui.separator();
-                    ui.columns(2, |columns| {
-                        columns[0].vertical(|ui| {
-                            let query = self.template_search_query.to_ascii_lowercase();
+            let has_collection = !self.prompt_collection.is_empty();
+            let has_custom = !self.prompt_templates.is_empty();
+            if !has_collection && !has_custom {
+                // Nothing to show — close the window
+                self.show_prompts = false;
+            } else {
+                let cat_id = egui::Id::new("prompt_category_browser");
+                let win_w = if has_collection { 640.0 } else { 400.0 };
+                egui::Window::new(i18n.t("chat.promptTemplates"))
+                    .id(cat_id)
+                    .collapsible(false)
+                    .resizable(true)
+                    .default_width(win_w)
+                    .default_height(420.0)
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .show(ctx, |ui| {
+                        // Search bar
+                        let dark = ui.visuals().dark_mode;
+                        let muted = if dark {
+                            egui::Color32::from_rgb(140, 142, 150)
+                        } else {
+                            egui::Color32::from_rgb(110, 112, 120)
+                        };
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.template_search_query)
+                                    .hint_text(i18n.t("chat.searchTemplates"))
+                                    .desired_width(260.0),
+                            );
+                            if has_custom {
+                                if ui.button("✚").on_hover_text(i18n.t("chat.templateNew")).clicked() {
+                                    self.selected_template_idx = None;
+                                    self.template_name_buf.clear();
+                                    self.template_command_buf.clear();
+                                    self.template_content_buf.clear();
+                                }
+                            }
+                        });
+                        ui.separator();
+
+                        let query = self.template_search_query.to_ascii_lowercase();
+
+                        if has_collection {
+                            // ── Two-column: categories | templates ──
+                            ui.columns(2, |cols| {
+                                // Left: category list
+                                egui::ScrollArea::vertical()
+                                    .id_salt("prompt_cat_list")
+                                    .max_height(320.0)
+                                    .show(&mut cols[0], |ui| {
+                                        for cat in &self.prompt_collection {
+                                            let cat_id_str = &cat.id;
+                                            // Filter: count visible templates
+                                            let visible_count = if query.is_empty() {
+                                                cat.templates.len()
+                                            } else {
+                                                cat.templates.iter().filter(|t| {
+                                                    t.title.to_ascii_lowercase().contains(&query)
+                                                        || t.tags.iter().any(|tag| tag.to_ascii_lowercase().contains(&query))
+                                                }).count()
+                                            };
+                                            if visible_count == 0 && !query.is_empty() {
+                                                continue;
+                                            }
+                                            let is_sel = self.prompt_selected_category
+                                                .as_deref() == Some(cat_id_str);
+                                            let label = format!("{}  {} ({})", cat.icon, cat.name, visible_count);
+                                            if ui.selectable_label(is_sel, &label).clicked() {
+                                                self.prompt_selected_category = Some(cat_id_str.clone());
+                                            }
+                                        }
+                                    });
+
+                                // Right: template list for selected category
+                                egui::ScrollArea::vertical()
+                                    .id_salt("prompt_tpl_list")
+                                    .max_height(320.0)
+                                    .show(&mut cols[1], |ui| {
+                                        let mut inserted = false;
+                                        if let Some(ref sel_id) = self.prompt_selected_category {
+                                            if let Some(cat) = self.prompt_collection.iter().find(|c| &c.id == sel_id) {
+                                                for tpl in &cat.templates {
+                                                    if !query.is_empty()
+                                                        && !tpl.title.to_ascii_lowercase().contains(&query)
+                                                        && !tpl.tags.iter().any(|t| t.to_ascii_lowercase().contains(&query))
+                                                    {
+                                                        continue;
+                                                    }
+                                                    let tpl_bg = if dark {
+                                                        egui::Color32::from_rgb(36, 38, 44)
+                                                    } else {
+                                                        egui::Color32::from_rgb(245, 246, 248)
+                                                    };
+                                                    let response = egui::Frame::new()
+                                                        .fill(tpl_bg)
+                                                        .corner_radius(6.0)
+                                                        .inner_margin(egui::Margin::symmetric(10i8, 8i8))
+                                                        .show(ui, |ui| {
+                                                            ui.set_min_width(240.0);
+                                                            ui.label(egui::RichText::new(&tpl.title).strong().size(13.0));
+                                                            ui.add_space(2.0);
+                                                            ui.label(egui::RichText::new(&tpl.description).size(11.0).color(muted));
+                                                            if !tpl.tags.is_empty() {
+                                                                ui.add_space(4.0);
+                                                                ui.horizontal_wrapped(|ui| {
+                                                                    for tag in &tpl.tags {
+                                                                        ui.label(
+                                                                            egui::RichText::new(format!("#{}", tag))
+                                                                                .size(9.0)
+                                                                                .color(egui::Color32::from_rgb(100, 140, 200)),
+                                                                        );
+                                                                    }
+                                                                });
+                                                            }
+                                                        });
+                                                    if response.response.clicked() {
+                                                        self.input = tpl.content.clone();
+                                                        self.show_prompts = false;
+                                                        inserted = true;
+                                                    }
+                                                    if inserted { break; }
+                                                    ui.add_space(4.0);
+                                                }
+                                            }
+                                        } else {
+                                            ui.colored_label(muted, i18n.t("chat.selectCategoryHint"));
+                                        }
+                                        if !inserted && query.is_empty() && self.prompt_selected_category.is_none() {
+                                            // Auto-select first non-empty category
+                                            if let Some(first) = self.prompt_collection.first() {
+                                                self.prompt_selected_category = Some(first.id.clone());
+                                            }
+                                        }
+                                    });
+                            });
+                        } else if has_custom {
+                            // Only custom templates — show simple list
                             let mut pick_idx = None;
                             for (idx, tpl) in self.prompt_templates.iter().enumerate() {
-                                if !query.is_empty()
-                                    && !tpl.name.to_ascii_lowercase().contains(&query)
-                                    && !tpl.command.to_ascii_lowercase().contains(&query)
-                                {
-                                    continue;
-                                }
-                                if ui
-                                    .selectable_label(
-                                        self.selected_template_idx == Some(idx),
-                                        format!("{}  {}", tpl.command, tpl.name),
-                                    )
-                                    .clicked()
-                                {
+                                if ui.selectable_label(
+                                    self.selected_template_idx == Some(idx),
+                                    format!("{}  {}", tpl.command, tpl.name),
+                                ).clicked() {
                                     pick_idx = Some(idx);
                                 }
                             }
                             if let Some(idx) = pick_idx {
                                 self.load_template_into_editor(idx);
                             }
-                        });
-                        columns[1].vertical(|ui| {
+                            ui.separator();
                             ui.label(i18n.t("chat.templateName"));
                             ui.text_edit_singleline(&mut self.template_name_buf);
                             ui.label(i18n.t("chat.templateCommand"));
@@ -428,10 +545,9 @@ impl ChatView {
                             ui.label(i18n.t("chat.templateBody"));
                             ui.add(
                                 egui::TextEdit::multiline(&mut self.template_content_buf)
-                                    .desired_rows(10)
+                                    .desired_rows(8)
                                     .desired_width(ui.available_width()),
                             );
-                            ui.label(i18n.t("chat.templatePlaceholderHint"));
                             ui.horizontal(|ui| {
                                 if ui.button(i18n.t("chat.templateInsert")).clicked() {
                                     self.input = self.template_content_buf.clone();
@@ -439,100 +555,27 @@ impl ChatView {
                                 }
                                 if ui.button(i18n.t("chat.templateSave")).clicked() {
                                     let name = self.template_name_buf.trim().to_string();
-                                    let command =
-                                        Self::normalize_command(&self.template_command_buf);
+                                    let cmd = Self::normalize_command(&self.template_command_buf);
                                     let content = self.template_content_buf.trim().to_string();
-                                    if name.is_empty() || command.is_empty() || content.is_empty() {
-                                        self.error = i18n.t("chat.templateValidation").to_string();
-                                    } else if self.prompt_templates.iter().enumerate().any(
-                                        |(idx, t)| {
-                                            t.command == command
-                                                && Some(idx) != self.selected_template_idx
-                                        },
-                                    ) {
-                                        self.error = i18n.t("chat.templateDuplicate").to_string();
-                                    } else {
-                                        let tpl = PromptTemplate {
-                                            id: self
-                                                .selected_template_idx
-                                                .and_then(|idx| {
-                                                    self.prompt_templates
-                                                        .get(idx)
-                                                        .map(|t| t.id.clone())
-                                                })
-                                                .unwrap_or_else(|| {
-                                                    let id =
-                                                        format!("tpl_{}", self.next_template_id);
-                                                    self.next_template_id += 1;
-                                                    id
-                                                }),
-                                            name,
-                                            command,
-                                            content,
-                                        };
-                                        if let Some(idx) = self.selected_template_idx {
-                                            self.prompt_templates[idx] = tpl;
-                                        } else {
-                                            self.prompt_templates.push(tpl);
-                                            self.selected_template_idx =
-                                                Some(self.prompt_templates.len() - 1);
-                                        }
+                                    if !name.is_empty() && !cmd.is_empty() && !content.is_empty() {
+                                        self.prompt_templates.push(PromptTemplate {
+                                            id: format!("tpl_{}", self.next_template_id),
+                                            name, command: cmd, content,
+                                        });
+                                        self.next_template_id += 1;
                                         self.save_templates_to_disk();
                                         self.error.clear();
                                     }
                                 }
-                                if ui.button(i18n.t("chat.templateDelete")).clicked() {
-                                    if let Some(idx) = self.selected_template_idx.take() {
-                                        if idx < self.prompt_templates.len() {
-                                            self.prompt_templates.remove(idx);
-                                            self.save_templates_to_disk();
-                                            self.template_name_buf.clear();
-                                            self.template_command_buf.clear();
-                                            self.template_content_buf.clear();
-                                        }
-                                    }
-                                }
                             });
-                        });
-                    });
-                    if ui.button(i18n.t("chat.close")).clicked() {
-                        self.show_prompts = false;
-                    }
-                });
-        }
+                        }
 
-        // ── PromptsView commands (always visible, no close needed) ──
-        if CHAT_STAGE6_ENABLE_EXTRA_BUTTONS && !self.prompts_command_templates.is_empty() {
-            egui::Window::new(i18n.t("prompts.title"))
-                .id(egui::Id::new("prompts_commands_window"))
-                .collapsible(true)
-                .default_open(false)
-                .resizable(true)
-                .default_width(360.0)
-                .anchor(egui::Align2::LEFT_TOP, egui::vec2(10.0, 200.0))
-                .show(ctx, |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("prompts_cmd_scroll")
-                        .max_height(300.0)
-                        .show(ui, |ui| {
-                            for ct in &self.prompts_command_templates {
-                                let label = format!(
-                                    "{}  — {}",
-                                    ct.command,
-                                    ct.content.lines().next().unwrap_or("")
-                                );
-                                let short_label = if label.len() > 60 {
-                                    format!("{}…", &label[..57])
-                                } else {
-                                    label
-                                };
-                                if ui.button(short_label).on_hover_text(&ct.content).clicked() {
-                                    self.input = ct.content.clone();
-                                    self.show_prompts = false;
-                                }
-                            }
-                        });
-                });
+                        ui.separator();
+                        if ui.button(i18n.t("chat.close")).clicked() {
+                            self.show_prompts = false;
+                        }
+                    });
+            }
         }
 
         // ── Main layout: SidePanel + vertical right ──────────
@@ -555,17 +598,18 @@ impl ChatView {
 
         ui.allocate_ui(egui::vec2(right_w, right_h), |ui| {
             // ── Mode/Model row (top, fixed) ────────────
+            // Zed-style: compact mode row with subtle background
             if CHAT_STAGE6_ENABLE_MODE_ROW {
                 let dark = ui.visuals().dark_mode;
                 let bg = if dark {
-                    egui::Color32::from_rgb(36, 38, 44)
+                    egui::Color32::from_rgb(30, 32, 38)
                 } else {
-                    egui::Color32::from_rgb(240, 242, 245)
+                    egui::Color32::from_rgb(245, 246, 248)
                 };
                 let fg = if dark {
-                    egui::Color32::from_rgb(220, 224, 234)
+                    egui::Color32::from_rgb(190, 194, 204)
                 } else {
-                    egui::Color32::from_rgb(34, 34, 34)
+                    egui::Color32::from_rgb(80, 82, 90)
                 };
                 egui::Frame::new()
                     .fill(bg)
@@ -1338,12 +1382,60 @@ impl ChatView {
         let mut last_ts: u64 = 0;
         let mut last_time_str = String::new();
 
-        // Sync rendered_content_hashes length with current message count
+        // ── Dirty-check: skip re-rendering unchanged messages ────────
+        // Compare a running hash of each message's content+thinking against
+        // the last-rendered hash.  If unchanged AND the message is not
+        // the last assistant message (which may still be streaming), skip
+        // the full markdown parse + layout to eliminate flicker.
         let msg_count = self.messages().len();
         self.rendered_content_hashes.resize(msg_count, 0);
 
-        // Use a scope to borrow messages immutably for the loop
+        // The last assistant message (if sending or the most recent one) is
+        // always re-rendered because it may be receiving streaming updates.
+        // All earlier messages use hash comparison.
+        let last_assistant_idx: Option<usize> = if self.sending {
+            // During streaming, the last assistant message is actively updating
+            Some(msg_count.saturating_sub(1))
+        } else if msg_count > 0 && self.messages()[msg_count - 1].role != "user" {
+            Some(msg_count - 1)
+        } else {
+            None
+        };
+
         for msg_idx in start_idx..msg_count {
+            // Compute content hash for dirty check
+            {
+                let msgs = self.messages();
+                if msg_idx < msgs.len() {
+                    let m = &msgs[msg_idx];
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    m.content.hash(&mut hasher);
+                    m.thinking.hash(&mut hasher);
+                    let current_hash = hasher.finish();
+                    let prev_hash = self.rendered_content_hashes[msg_idx];
+                    let is_last = last_assistant_idx == Some(msg_idx);
+                    if current_hash == prev_hash && !is_last {
+                        // Content unchanged, render a thin placeholder instead
+                        // of re-running the full markdown pipeline.
+                        let (is_user, timestamp, model_name) =
+                            { (m.role == "user", m.timestamp, m.model.clone()) };
+                        Self::render_collapsed_bubble(
+                            ui,
+                            i18n,
+                            is_user,
+                            timestamp,
+                            &model_name,
+                            muted_text,
+                            weak_text,
+                            dark_mode,
+                        );
+                        continue;
+                    }
+                    self.rendered_content_hashes[msg_idx] = current_hash;
+                }
+            }
+
+            // Full render for changed or last message
             let (
                 is_user,
                 timestamp,
@@ -1433,24 +1525,24 @@ impl ChatView {
                 continue;
             }
 
+            // Zed-style: subtle colors — user gets a clean accent, AI gets neutral
             let (bubble_color, text_color) = if is_user {
                 let bc = if dark_mode {
-                    egui::Color32::from_rgb(32, 112, 210)
+                    egui::Color32::from_rgb(30, 100, 200)
                 } else {
-                    egui::Color32::from_rgb(10, 106, 255)
+                    egui::Color32::from_rgb(0, 100, 250)
                 };
                 (bc, egui::Color32::WHITE)
             } else {
-                // Green background for AI messages (more prominent)
                 let bc = if dark_mode {
-                    egui::Color32::from_rgb(20, 90, 60)
+                    egui::Color32::from_rgb(42, 46, 56)
                 } else {
-                    egui::Color32::from_rgb(200, 240, 210)
+                    egui::Color32::from_rgb(235, 237, 241)
                 };
                 let tc = if dark_mode {
-                    egui::Color32::from_rgb(240, 244, 248)
+                    egui::Color32::from_rgb(212, 216, 226)
                 } else {
-                    egui::Color32::from_rgb(20, 20, 24)
+                    egui::Color32::from_rgb(30, 32, 38)
                 };
                 (bc, tc)
             };
@@ -1797,5 +1889,83 @@ impl ChatView {
                 }
             }
         }
+    }
+
+    /// Render a thin collapsed bubble for messages whose content has not changed
+    /// since the last frame.  Skips the expensive markdown parse + layout pass
+    /// to eliminate screen flickering on idle frames.
+    fn render_collapsed_bubble(
+        ui: &mut egui::Ui,
+        i18n: &I18n,
+        is_user: bool,
+        timestamp: u64,
+        model_name: &str,
+        muted_text: egui::Color32,
+        weak_text: egui::Color32,
+        dark_mode: bool,
+    ) {
+        let (bubble_color, text_color) = if is_user {
+            let bc = if dark_mode {
+                egui::Color32::from_rgb(30, 100, 200)
+            } else {
+                egui::Color32::from_rgb(0, 100, 250)
+            };
+            (bc, egui::Color32::WHITE)
+        } else {
+            let bc = if dark_mode {
+                egui::Color32::from_rgb(42, 46, 56)
+            } else {
+                egui::Color32::from_rgb(235, 237, 241)
+            };
+            let tc = if dark_mode {
+                egui::Color32::from_rgb(212, 216, 226)
+            } else {
+                egui::Color32::from_rgb(30, 32, 38)
+            };
+            (bc, tc)
+        };
+
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.add_space(if is_user { 60.0 } else { 8.0 });
+            Self::draw_role_avatar(ui, is_user);
+            ui.add_space(6.0);
+
+            egui::Frame::new()
+                .fill(bubble_color)
+                .corner_radius(12.0)
+                .inner_margin(egui::Margin::symmetric(14i8, 6i8))
+                .show(ui, |ui| {
+                    // Model name + timestamp line
+                    if !model_name.is_empty() {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("🤖 {}", model_name))
+                                    .size(11.0)
+                                    .color(weak_text),
+                            );
+                            if timestamp > 0 {
+                                let ts = chrono::DateTime::from_timestamp(timestamp as i64, 0)
+                                    .map(|dt| dt.format("%H:%M").to_string())
+                                    .unwrap_or_default();
+                                ui.label(egui::RichText::new(ts).size(10.0).color(muted_text));
+                            }
+                        });
+                        ui.add_space(2.0);
+                    }
+                    // Placeholder text
+                    ui.label(
+                        egui::RichText::new(if is_user {
+                            i18n.t("chat.userMessagePlaceholder")
+                        } else {
+                            i18n.t("chat.assistantMessagePlaceholder")
+                        })
+                        .color(text_color)
+                        .size(11.0),
+                    );
+                });
+            ui.add_space(if is_user { 8.0 } else { 60.0 });
+        });
+        ui.add_space(4.0);
     }
 }

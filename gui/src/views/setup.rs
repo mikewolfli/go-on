@@ -323,6 +323,7 @@ impl SetupView {
                             config.providers.push(ProviderConfig {
                                 name: self.selected_provider.clone(),
                                 api_key: api_key.clone(),
+                                secret_key: String::new(),
                                 model: self.selected_model.clone(),
                                 validated: true,
                                 label: String::new(),
