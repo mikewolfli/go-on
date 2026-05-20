@@ -121,7 +121,7 @@ fn build_chat_messages(task: &AgentTaskEnvelope) -> Vec<Message> {
 #[derive(Default)]
 pub struct AskModeRuntime {
     /// Optional agent registry to pick a default chat agent.
-    /// If not provided, run() falls back to a stub response.
+    /// If not provided, run() falls back to a graceful informational response.
     pub agent_registry: Option<Arc<AgentRegistry>>,
     /// Name of the agent to use for chat (defaults to first available).
     pub agent_name: Option<String>,
@@ -200,13 +200,15 @@ impl ModeRuntime for AskModeRuntime {
             }
         }
 
-        // Fallback: return stub result
+        // Graceful degradation: no agent available — return informational response
+        warn!("[Ask Mode] No agent available — falling back to informational response");
         Ok(AgentTaskResult {
             success: true,
             output: Some(serde_json::json!({
                 "mode": "ask",
                 "task_id": task_id.clone(),
-                "status": "completed",
+                "status": "unavailable",
+                "note": "No suitable Ask mode agent was available in the registry",
                 "message": format!("Task '{}' processed in Ask mode (no agent available)", objective)
             })),
             error: None,
@@ -296,13 +298,15 @@ impl ModeRuntime for EditModeRuntime {
             }
         }
 
-        // Fallback stub
+        // Graceful degradation: no agent available — return informational response
+        warn!("[Edit Mode] No agent available — falling back to informational response");
         Ok(AgentTaskResult {
             success: true,
             output: Some(serde_json::json!({
                 "mode": "edit",
                 "task_id": task_id,
-                "status": "completed",
+                "status": "unavailable",
+                "note": "No suitable Edit mode agent was available in the registry",
                 "stages": ["plan", "patch", "verify"],
                 "message": format!("Edit task '{}' completed with verification", objective)
             })),
@@ -425,13 +429,15 @@ impl ModeRuntime for AgentModeRuntime {
             }
         }
 
-        // Fallback stub
+        // Graceful degradation: no agent available — return informational response
+        warn!("[Agent Mode] No agent available — falling back to informational response");
         Ok(AgentTaskResult {
             success: true,
             output: Some(serde_json::json!({
                 "mode": "agent",
                 "task_id": task_id,
-                "status": "completed",
+                "status": "unavailable",
+                "note": "No suitable Agent mode agent was available in the registry",
                 "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
                 "max_tool_calls": 20,
                 "message": format!("Agent task '{}' ready for execution", objective)
@@ -525,13 +531,15 @@ impl ModeRuntime for FullAutoModeRuntime {
             }
         }
 
-        // Fallback stub
+        // Graceful degradation: no agent available — return informational response
+        warn!("[FullAuto Mode] No agent available — falling back to informational response");
         Ok(AgentTaskResult {
             success: true,
             output: Some(serde_json::json!({
                 "mode": "fullauto",
                 "task_id": task_id,
-                "status": "completed",
+                "status": "unavailable",
+                "note": "No suitable FullAuto mode agent was available in the registry",
                 "execution_level": "full_autonomy",
                 "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
                 "max_tool_calls": 50,
@@ -672,13 +680,15 @@ impl ModeRuntime for SafeGuardModeRuntime {
             }
         }
 
-        // Fallback stub
+        // Graceful degradation: no agent available — return informational response
+        warn!("[SafeGuard Mode] No agent available — falling back to informational response");
         Ok(AgentTaskResult {
             success: true,
             output: Some(serde_json::json!({
                 "mode": "safeguard",
                 "task_id": task_id,
-                "status": "completed",
+                "status": "unavailable",
+                "note": "No suitable SafeGuard mode agent was available in the registry",
                 "is_high_risk": false,
                 "safety_level": "enhanced",
                 "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],

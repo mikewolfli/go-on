@@ -2,20 +2,20 @@
 
 English | [简体中文](README.zh-CN.md)
 
-go-on is a Rust runtime for **ACP/MCP-oriented agent orchestration, governance, and production-safe operations**,
-with full i18n support and a modular multi-bus architecture spanning 14 capability buses and 21+ F-GAP modules.
+**go-on** is a Rust runtime for **ACP/MCP-oriented agent orchestration, governance, and production-safe operations** — your all-in-one AI agent runtime.
 
-## Version
+- 🖥️ **Desktop GUI** — monitor, chat, skills & tools management
+- 🧠 **14-bus intelligence core** — CapabilityBus + HarnessBus closed-loop governance
+- 🌐 **Full i18n** — English, Simplified Chinese, Traditional Chinese (448+ keys each)
+- 🛡️ **Safeguard Mode** — AI-powered risk assessment for high-stakes decisions
+- 🔌 **Multi-Protocol** — ACP + MCP, stdio + HTTP, single-user to multi-user cluster
+- 🤖 **35+ AI providers** — OpenAI, Anthropic, DeepSeek, Gemini, Groq, Ollama and more
 
-- Core runtime: **1.0.0**
-- GUI desktop: **1.0.0**
-- VS Code addon: **1.0.0**
-- Default feature: `profile-local`
-- Alternative feature scaffolds: `profile-simple-server`, `profile-multi-users-server`
+---
 
 ## GUI Desktop App
 
-The EGUI-based desktop GUI (`gui/`) provides monitoring, chat, skills management, and settings:
+The EGUI-based desktop GUI (`gui/`) provides real-time monitoring, multi-session chat, skills management, and visual configuration — no terminal needed.
 
 ```bash
 cargo run --manifest-path gui/Cargo.toml
@@ -35,269 +35,100 @@ cargo run --manifest-path gui/Cargo.toml
 |:---:|
 | ![Skills](snapshots/skills.png) |
 
-### Features
+### GUI Features
 - **Monitor tab**: Backend health, AI provider status, real-time metrics
-- **Chat tab**: Multi-session conversations with phase/mode selection, file attachments, and dynamic AI status indicators; multi-model support per session; automatic message pruning (max 1000 messages per session)
-- **Skills tab**: Create and manage AI skills, including the built-in skill-creator
-- **Settings tab**: Provider management with dynamic env var injection (35 providers), GUI config editor with JSON validation (`gui_config.json`), 6 themes, language switching (en/zh-CN/zh-TW)
-- **Backend Connection**: ACP+HTTP JSON-RPC, automatic health polling
-- **Keyring**: Dual storage (system keyring + config file) — API keys stored in system keyring by default, config file as fallback
-- **Auto-restart**: Backend auto-restarts on crash with exponential backoff (3→96s); crash count resets on successful health check
-- **Risk Decision & Safeguard Mode**: AI-powered content risk assessment. When the backend detects high-risk topics (medical, legal, financial, security, etc.), it displays a **Risk Decision panel** in the Chat view showing the risk score, strategy (multi-model vote, multi-agent vote, escalation), review requirements, and specific reasons. This enables informed human oversight of sensitive AI interactions.
+- **Chat tab**: Multi-session conversations with phase/mode selection, file attachments, multi-model support, automatic message pruning (max 1000/session), dynamic AI status indicators
+- **Skills tab**: Create and manage AI skills with built-in skill-creator
+- **Settings tab**: Provider management (35 providers), GUI config editor, 6 themes, language switching (en/zh-CN/zh-TW)
+- **Risk Decision Panel**: When the backend detects high-risk topics (medical, legal, financial, security, etc.), a **Risk Decision panel** shows the risk score, strategy (multi-model vote, multi-agent vote, escalation), review requirements, and specific reasons — enabling informed human oversight
+- **Keyring**: Dual storage (system keyring + config file)
+- **Auto-restart**: Backend auto-restarts on crash with exponential backoff (3→96s)
 
-## Build Profiles
-
-Three build profiles support different deployment scenarios:
-
-| Profile | Backend | Target | Build Command |
-|---------|---------|--------|---------------|
-| `profile-local` | SQLite + sqlite-vec | Single-user local tool | `cargo build` (default) |
-| `profile-simple-server` | SQLite + sqlite-vec | Single-server deployment | `cargo build --no-default-features -F profile-simple-server` |
-| `profile-multi-users-server` | PostgreSQL + pgvector | Multi-user production | `cargo build --no-default-features -F profile-multi-users-server` |
-
-### Multi-User Server Features
-
-The `profile-multi-users-server` adds full multi-user security across both ACP+HTTP and MCP+HTTP transport paths:
-
-| Feature | Description |
-|---------|-------------|
-| **CORS Support** | Configurable allowed origins, preflight (OPTIONS) handling, headers on all HTTP/SSE responses |
-| **Entry Auth (Gateway)** | Shared API key via `Authorization: Bearer`, `X-Api-Key`, or `X-Go-On-Key` headers |
-| **User Auth (HMAC Tokens)** | Per-user JWT-like tokens with HMAC-SHA256 signing, auto-provisioning, configurable TTL |
-| **RBAC Authorization** | Role-based access control (admin/user/viewer/monitor) with per-endpoint permission checks |
-| **Tenant Budget Enforcement** | Per-tenant daily token/concurrent task/API call quotas with auto-provisioning |
-| **Conversation Isolation** | Namespaced conversation IDs with tenant prefix to prevent cross-user data leakage |
-| **Shutdown Drain** | Configurable drain period (seconds) for in-flight connections during graceful shutdown |
-| **Signal Handling** | SIGINT (Ctrl+C) and SIGTERM on all platforms for clean shutdown |
-| **Hot-Reload Config** | Runtime configuration reload via `config.reload` RPC (agent/cache/vector changes require restart) |
-
-**Secret Management (Thread-Safe):**
-- `SECRET_OVERRIDE_MAP` — in-memory `HashMap` replaces `std::env::set_var()` (documented UB in multi-threaded contexts)
-- `KEYRING_CACHE` — 30-second TTL cache for keyring lookups to avoid blocking I/O in async hot paths
-- `crate::shared::secret_override::get_secret(key)` — first checks the override map, then falls back to `std::env::var()`
-
-**Security Compliance:**
-- ✅ 0 `std::env::set_var()` calls in production code
-- ✅ 0 `.expect("lock poisoned")` panics — all lock poison recovered via `unwrap_or_else(|e| e.into_inner())`
-- ✅ 0 `unsafe` blocks in production code
-- ✅ All HTTP responses (JSON, SSE, error) include CORS headers
-- ✅ MCP HTTP server shares the same auth pipeline as ACP HTTP server
-
-## Verification Status (Phase 4+ — 50+ Rounds of Deep Scan Complete)
-
-| Profile | `cargo check` | `cargo clippy -D warnings` | `cargo test` |
-|---------|:-----------:|:------------------------:|:----------:|
-| **profile-local** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **999 passed** |
-| **profile-simple-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **999 passed** |
-| **profile-multi-users-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **999 passed** |
-
-### CI Gate Status (GitHub Actions)
-| Step | Result |
-|------|--------|
-| `cargo check --all-targets` | ✅ 0 errors, 0 warnings |
-| `cargo clippy -D warnings` (3 profiles) | ✅ 0 errors each |
-| Unit tests (816) | ✅ All passed |
-| Integration tests (183) | ✅ All passed |
-| GUI EGUI compile + test | ✅ 0 errors |
-| VS Code addon compile + lint + contract | ✅ 0 errors |
-
-Cross-platform (Windows, Linux, macOS):
-- All platform-specific code has matching fallback implementations (Unix `AsRawFd` ✅ Windows stub ✅)
-- Memory reading: Linux `/proc/self/status` ✅ Windows `windows-sys` ✅ Fallback returns 0 ✅
-- ANSI color codes disabled on Windows (`#[cfg(not(target_os = "windows"))]`) ✅
-- Signal handling: SIGTERM on Unix, SIGINT (Ctrl+C) on all platforms ✅
-- GUI paths use `directories` crate for platform-appropriate data dirs ✅
-- vscode-addon: `activationEvents` set, `.exe`/`.bat` platform-aware defaults ✅
-
-### Thread Safety & Production Hardening
-- All `Mutex::lock().unwrap()` replaced with poison-recovering pattern ✅
-- All `std::env::set_var()` replaced with thread-safe `set_secret_override()` ✅
-- 0 `unsafe` blocks in production code ✅
-- 0 `panic!()` / `todo!()` / `unimplemented!()` in production code ✅
-- 0 `unwrap()` / `.expect()` in production code ✅
-- 37 `.expect("lock poisoned")` calls replaced with poison recovery ✅
-- All `lock().ok()?` replaced with explicit poison recovery + `tracing::error!` ✅
-- `ScheduledTask` `Ord`/`Eq` consistency fixed for `BinaryHeap` contract compliance ✅
-- All internal channels bounded (`mpsc::sync_channel`) — no unbounded memory growth ✅
-- SSE parser capped at 1MB/line and 4MB/event to prevent OOM ✅
-- Chat sessions capped at 1000 messages — automatic oldest-message eviction ✅
-- Backend: auto-restart on crash with exponential backoff (3→96s) ✅
-- Optional rule file warnings downgraded from WARN to DEBUG — no log noise ✅
-- 3 build profiles (local, simple-server, multi-users-server) all at 0 warnings ✅
-- `production_strict` mode enforces tenant budget limits (non-strict warns only) ✅
-- `LockGuard` pattern (`unwrap_or_else(poison)` with recovery) across all subsystems ✅
-
-## Repository Layout
-
-### Core Directories
-- `src/` — Backend runtime implementation (Rust)
-  - `src/acp/` — ACP server, request routing, workflow/task/chat/checkpoint handling
-    - `src/acp/impl/cors.rs` — CORS support module (configurable origins, preflight, response headers)
-    - `src/acp/impl/session.rs` — User session management (HMAC-SHA256 tokens, RBAC integration, tenant isolation)
-  - `src/agents/` — Provider adapters (OpenAI, Anthropic, DeepSeek, Ollama, etc.) and agent contracts
-    - `src/agents/factory/` — AgentFactory with feature-gated profile selection
-  - `src/core/` — Config, setup, readiness, error model
-  - `src/governance/` — Policy/rule governance, audit, security governor, drift protection
-    - `src/governance/drift/` — Drift protection engine (F-GAP-26)
-    - `src/governance/harness_bus.rs` — HarnessBus governance entry
-  - `src/intelligence/` — Selectors, RL, quality models, capability bus, discovery, consensus
-    - `src/intelligence/capability_bus/` — **14 sub-buses** (core + tool + observability + optimization + memory + protocol + orchestration + distributed_memory)
-    - `src/intelligence/discovery.rs` — DiscoveryCenter (F-GAP-11)
-    - `src/intelligence/matcher.rs` — ScenarioMatcher (F-GAP-12)
-    - `src/intelligence/evolution_graph.rs` — EvolutionGraph (F-GAP-18)
-    - `src/intelligence/metacognitive.rs` — MetacognitiveController (F-GAP-22)
-    - `src/intelligence/self_model.rs` — SelfModelCore (F-GAP-21)
-    - `src/intelligence/consensus.rs` — ConsensusEngine (F-GAP-16)
-    - `src/intelligence/consciousness.rs` — ConsciousnessMetrics (F-GAP-25)
-    - `src/intelligence/world_model.rs` — WorldModel pipeline (F-GAP-23)
-    - `src/intelligence/continuous_learning.rs` — ContinuousLearningCenter (F-GAP-24)
-  - `src/orchestration/` — Flow/mode/router/orchestration, brain loop, omnipotent mode
-    - `src/orchestration/loop/brain_loop.rs` — Brain Loop engine (F-GAP-17)
-    - `src/orchestration/council/` — OrchestrationCouncil (F-GAP-15)
-    - `src/orchestration/omnipotent.rs` — OmnipotentMode (F-GAP-09)
-    - `src/orchestration/artifact.rs` — ArtifactLayer (F-GAP-10)
-    - `src/orchestration/skill_import.rs` — RemoteSkill (F-GAP-10)
-    - `src/orchestration/scheduler.rs` — TaskScheduler (ARCH-02)
-    - `src/orchestration/task_graph_store.rs` — TaskGraphStore (F-GAP-03)
-  - `src/fault_tolerance.rs` — FaultToleranceEngine (F-GAP-28), cross-node fault isolation & auto-recovery
-  - `src/resilience/` — HyperResilienceEngine (F-GAP-27)
-    - `src/resilience/hyper_resilience.rs` — Circuit breaker, failover, self-healing
-  - `src/i18n/` — Language runtime (~95% i18n coverage across all backend modules)
-  - `src/mcp/` — MCP adapter helpers
-  - `src/memory/` — Cache and vector store abstractions
-  - `src/observability/` — Metrics/trace/performance helpers
-  - `src/optimization/` — Cost/speed/reliability optimization
-  - `src/protocol/` — Protocol server, JSON-RPC support, multi-channel transport
-    - `src/protocol/mcp_server.rs` — MCP stdio + HTTP server with full CORS/auth/RBAC integration
-  - `src/shared/` — Shared types, protocol mode, tool descriptors, thread-safe secret management
-    - `src/shared/secret_override.rs` — `SECRET_OVERRIDE_MAP` + `KEYRING_CACHE` (thread-safe `set_var` replacement)
-- `gui/` — EGUI (Rust native) desktop GUI
-- `vscode-addon/` — VS Code extension with i18n (en_US, zh_CN, zh_TW)
-
-### Configuration & Scripts
-- `config/` — Configuration files (`config.toml`, `config.production.toml`)
-  Provider specs are hardcoded in `built_in_provider_specs()` within `src/core/config.rs` and `src/core/setup.rs`.
-  `provider.catalog` RPC exposes all provider metadata at runtime for GUI and VS Code extension.
-- `scripts/` — Quality/release gate scripts and deployment utilities
-  - `scripts/deploy/nginx/` — Ingress and TLS reverse-proxy templates
-
-### Documentation
-- `docs/` — Comprehensive project documentation
-  - `docs/blueprints/` — Blueprint documents (blue1.md to blue38.md and FAULT1)
-  - `docs/design/` — Design documents (FUTURE1-6, future-last)
-  - `docs/guides/` — Implementation guides (MCP, PUA, migration, GUI, model selection)
-  - `docs/reports/` — Evaluation and code review reports
-- `DOC/` — Project documentation in book format
-
-### Testing & Development
-- `tests/` — Integration tests and test artifacts
-  - `tests/artifacts/` — Test artifacts and benchmark results
-  - `tests/requests/` — NDJSON scenario benchmarks and replay inputs
-  - Integration tests: ACP RPC, protocol consistency, transport parity, OpenAI compat matrix, PUA contract smoke
-- `test_i18n/` — Internationalization test suites
-
-### Resources
-- `languages/` — Runtime i18n resources (en_US, zh_CN, zh_TW — 448+ keys each)
-  - `languages/rules/` — PUA coding rules
-- `RULES/` — Governance and coding rule packs
-- `contracts/` — Editor capability matrix and contracts
-
-## Runtime Protocol Modes
-
-`[protocol].mode` supports 5 values:
-
-- `adaptive` (recommended default) — dual-stack protocol, request-type aware routing
-- `acp_stdio` — ACP over stdio
-- `acp_http` — ACP over HTTP
-- `mcp_stdio` — MCP over stdio
-- `mcp_http` — MCP over HTTP
-
-Example:
-
-```toml
-[protocol]
-mode = "adaptive"
-```
+---
 
 ## Architecture: Multi-Bus Capability System
 
 go-on implements a **14-bus architecture** centered on `CapabilityBus` and `HarnessBus`:
 
-### Core Buses (Phase 0-3)
-| Bus | Module | Description |
-|:----|--------|-------------|
-| **CapabilityBus** | `capability_bus/core.rs` | Central intelligence bus; orchestrates sense/decide/evolve lifecycle |
-| **HarnessBus** | `governance/harness_bus.rs` | Governance entry; policy evaluation, drift/resilience/security checks |
+### Core Buses
+| Bus | Description |
+|:----|-------------|
+| **CapabilityBus** | Central intelligence bus; orchestrates sense → decide → act → feedback → evolve |
+| **HarnessBus** | Governance entry; policy evaluation, drift/resilience/security checks |
 
-### Sub-Buses (Phase 4)
-| Bus | Module | Description |
-|:----|--------|-------------|
-| **ToolBus** | `capability_bus/tool_bus.rs` | Unified tool/skill invocation, capability matrix, agent-tool matching |
-| **ObservabilityBus** | `capability_bus/observability_bus.rs` | Unified observability: latency, error rates, agent health |
-| **OptimizationBus** | `capability_bus/optimization_bus.rs` | Cost/speed/reliability recommendation, circuit breaker |
-| **MemoryBus** | `capability_bus/memory_bus.rs` | Cascading cache (L1→L2→L3), vector store lookup |
-| **ProtocolBus** | `capability_bus/protocol_bus.rs` | Protocol-aware routing, health/latency tracking |
-| **OrchestrationBus** | `capability_bus/orchestration_bus.rs` | Flow/mode/router orchestration, mode recommendation |
-| **DistributedMemoryBus** | `capability_bus/distributed_memory_bus.rs` | Cross-node memory sharing (feature-gated) |
+### Sub-Buses
+| Bus | Description |
+|:----|-------------|
+| **ToolBus** | Unified tool/skill invocation, capability matrix, agent-tool matching |
+| **ObservabilityBus** | Latency, error rates, agent health |
+| **OptimizationBus** | Cost/speed/reliability recommendation, circuit breaker |
+| **MemoryBus** | Cascading cache (L1 memory → L2 SQLite → L3 vector store) |
+| **ProtocolBus** | Protocol-aware routing, health/latency tracking |
+| **OrchestrationBus** | Flow/mode/router orchestration, mode recommendation |
+| **DistributedMemoryBus** | Cross-node memory sharing (multi-user profile) |
 
-### F-GAP Modules (Phase 4 — 21/21 Complete ✅)
+### F-GAP Cognitive Modules (21/21 Complete ✅)
 
-| F-GAP | Module | Location | Status |
-|:-----:|--------|----------|:------:|
-| 09 | OmnipotentMode | `orchestration/omnipotent.rs` | ✅ 20 tests |
-| 10 | ArtifactLayer + RemoteSkill | `orchestration/artifact.rs`, `orchestration/skill_import.rs` | ✅ 13 tests |
-| 11 | DiscoveryCenter | `intelligence/discovery.rs` | ✅ 11 tests |
-| 12 | ScenarioMatcher | `intelligence/matcher.rs` | ✅ 9 tests |
-| 13 | AgentFactory | `agents/factory/` | ✅ Feature-gated |
-| 14 | SecurityGovernor | `governance/security_governor.rs` | ✅ |
-| 15 | OrchestrationCouncil | `orchestration/council/` | ✅ 22 tests |
-| 16 | ConsensusEngine | `intelligence/consensus.rs` | ✅ 20 tests |
-| 17 | BrainLoop | `orchestration/loop/brain_loop.rs` | ✅ 32 tests |
-| 18 | EvolutionGraph | `intelligence/evolution_graph.rs` | ✅ 12 tests |
-| 19 | FederatedRL | `intelligence/reinforcement/federated.rs` | ✅ 27 tests |
-| 20 | DistributedMemory (network) | `capability_bus/distributed_memory_bus.rs` | ✅ Enhanced |
-| 21 | SelfModelCore | `intelligence/self_model.rs` | ✅ 12 tests |
-| 22 | MetacognitiveController | `intelligence/metacognitive.rs` | ✅ 12 tests |
-| 23 | WorldModel | `intelligence/world_model.rs` | ✅ |
-| 24 | ContinuousLearning | `intelligence/continuous_learning.rs` | ✅ |
-| 25 | ConsciousnessMetrics | `intelligence/consciousness.rs` | ✅ 12 tests |
-| 26 | DriftProtection | `governance/drift/drift_protection.rs` | ✅ 12 tests |
-| 27 | HyperResilience | `resilience/hyper_resilience.rs` | ✅ |
-| 28 | FaultTolerance | `fault_tolerance.rs` | ✅ 20 tests (incl. E2E, 500-node stress) |
-| 29 | MultiChannelTransport | `protocol/transport.rs` | ✅ 37 tests (QoS, Dedup, Peek) |
+| Module | Description |
+|:-------|-------------|
+| OmnipotentMode | Self-healing task execution |
+| BrainLoop | Plan → Execute → Reflect → Replan |
+| ConsensusEngine | Multi-agent voting governance |
+| SelfModelCore | System self-awareness & capability tracking |
+| ConsciousnessMetrics | Agent consciousness state machine |
+| MetacognitiveController | Observation-driven reflection & action |
+| WorldModel | Entity/event/relationship pipeline |
+| DiscoveryCenter | Cross-session pattern mining |
+| EvolutionGraph | Capability lifecycle & trend tracking |
+| FederatedRL | Distributed reinforcement learning |
+| DriftProtection | Goal/capability/behavior drift detection |
+| HyperResilience | Circuit breaker, failover, self-healing |
+| FaultTolerance | Cross-node fault isolation & auto-recovery |
+| MultiChannelTransport | QoS-aware, deduplication, message peek |
 
 ### 38-Dimensional Full Star Rating
 
 ```
-Governance & Compliance (5/5):    ★★★★★ ProvenanceLedger, DriftProtection, PolicyEvaluator, TokenLayerChain, SecurityGovernor
-Resilience & Fault Tolerance (2/2):★★★★★ HyperResilienceEngine, FaultToleranceEngine
-Orchestration & Execution (6/6):  ★★★★★ OrchestrationBus, TaskScheduler, ExecutionGraph, OmnipotentMode, ArtifactLayer, BrainLoop
-Routing & Scheduling (7/7):       ★★★★★ CapabilityGraph, ReputationStore, QLearningAgent, ScenarioMatcher, DiscoveryCenter, WorkflowRegistry, AgentFactory
+Governance & Compliance (5/5):    ★★★★★ Provenance, Drift, Policy, Token, Security
+Resilience & Fault Tolerance (2/2):★★★★★ HyperResilience, FaultTolerance
+Orchestration & Execution (6/6):  ★★★★★ OrchestrationBus, Scheduler, ExecutionGraph,
+                                        OmnipotentMode, ArtifactLayer, BrainLoop
+Routing & Scheduling (7/7):       ★★★★★ CapabilityGraph, Reputation, QLearning,
+                                        ScenarioMatcher, Discovery, WorkflowRegistry, AgentFactory
 Protocol & Transport (2/2):       ★★★★★ ProtocolBus, MultiChannelTransport
 Memory & Cache (2/2):             ★★★★★ MemoryBus, DistributedMemoryBus
 Observability & Optimization (3/3):★★★★★ ObservabilityBus, OptimizationBus, ToolBus
-Intelligent Cognition (5/5):      ★★★★★ Deep Knowledge Distillation, Deep RL, Skill Retention, AI Evolution, Self-built Skills
-Self-Cognition (5/5):             ★★★★★ SelfModelCore, ConsciousnessMetrics, MetacognitiveController, WorldModel, ConsensusEngine
+Intelligent Cognition (5/5):      ★★★★★ Knowledge Distillation, Deep RL, Skill Retention,
+                                        AI Evolution, Self-built Skills
+Self-Cognition (5/5):             ★★★★★ SelfModel, Consciousness, Metacognitive,
+                                        WorldModel, Consensus
 ───────────────────────────────────────────────────────────────────────────────────
 Total (38/38):                    100% ★★★★★
 ```
 
-### Overall Completion Rate
+---
 
+## Runtime Protocol Modes
+
+5 modes for any integration scenario:
+
+| Mode | Description |
+|:-----|-------------|
+| `adaptive` (default) | Dual-stack protocol, request-type aware routing |
+| `acp_stdio` / `acp_http` | ACP over stdio or HTTP |
+| `mcp_stdio` / `mcp_http` | MCP over stdio or HTTP |
+
+Example config:
+```toml
+[protocol]
+mode = "adaptive"
 ```
-Phase 0: Core Dual Buses         ████████████████████ 100%
-Phase 1: Sub-Bus Integration     ████████████████████ 100%
-Phase 2: Remaining Fixes         ████████████████████ 100%
-Phase 3: ARCH Extension Points   ████████████████████ 100%
-Phase 4: FutureDesign (F-GAP)    ████████████████████ 100% (21/21)
-Phase 5: Production Hardening    ████████████████████ 100%
-────────────────────────────────────────────────────────
-Overall:                         ████████████████████ 100%
-```
+
+---
 
 ## Internationalization (i18n)
 
-go-on provides full i18n coverage (~95%) across the Rust backend:
+Full i18n coverage (~95%) across the entire backend:
 
 | Language | File | Keys |
 |:---------|:-----|:----:|
@@ -305,239 +136,31 @@ go-on provides full i18n coverage (~95%) across the Rust backend:
 | Chinese (Simplified) | `languages/zh_CN.json` | 448+ |
 | Chinese (Traditional) | `languages/zh_TW.json` | 448+ |
 
-Covered layers:
-- **ACP/MCP HTTP error responses** — 100%
-- **Agent provider modules** (OpenAI, Anthropic, DeepSeek, Ollama, etc.) — 100%
-- **Config validation** (~50 strings) — 100%
-- **CLI setup messages** — 100%
-- **API handler errors** — 100%
-- **Orchestration** (tool, skill, brain loop) — 100%
-- **GUI (Vue/TypeScript)** — ~98%
-- **VS Code addon** — 70+ MessageKeys in 3 languages
+Coverage: ACP/MCP HTTP errors ✅, Agent provider modules ✅, Config validation ✅, CLI setup ✅, API handler errors ✅, Orchestration ✅
+
+---
 
 ## Quick Start
 
-### 1) Build
-
 ```bash
-cargo build
-```
-
-### 2) First-time Setup (auto-detected)
-
-Just run `go-on` — if no config or AI providers are found, it will prompt interactively:
-
-```bash
-# Run with default config path (~/.config/go-on/config.toml)
+# Clone & run (auto-creates config if none found)
+git clone https://github.com/your-org/go-on
+cd go-on
 cargo run
-```
 
-For non-interactive environments (GUI, CI), the backend auto-creates a bootstrap config and starts.
+# Or start the desktop GUI
+cargo run --manifest-path gui/Cargo.toml
 
-Manual setup:
-
-```bash
-cargo run -- --init
-cargo run -- --init --setup-level quick
-cargo run -- --init --setup-level custom
-```
-
-### 3) Validate Configuration
-
-```bash
-cargo run -- --check
-```
-
-### 4) Start Runtime
-
-- Linux/macOS: `./scripts/start-go-on.sh`
-- Windows: `scripts/start-go-on.bat`
-
-Or start manually in any protocol mode:
-
-```bash
-# ACP over HTTP (default health endpoint at http://127.0.0.1:8090)
-cargo run -- --mode acp_http --bind 127.0.0.1:8090
-
-# MCP over stdio (for Claude Code / Codex integration)
-cargo run -- --mode mcp_stdio
-```
-
-### 5) Terminal Chat Mode (like Claude Code / Codex)
-
-```bash
-# Start interactive terminal chat (uses config.toml from current directory)
-go-on -a
-# or
+# Terminal chat mode (like Claude Code / Codex)
 go-on --chat
 ```
 
-If your config file is in a different location:
+First run auto-detects your environment — if no AI providers are configured, the setup wizard will guide you interactively.
 
-```bash
-go-on -c /path/to/config.toml -a
-```
+Default health endpoint: `http://127.0.0.1:8090/health`
 
-AI agents read API keys automatically from the system keyring. If no agents are configured, the setup wizard will guide you.
-
-Default health endpoint:
-
-- `http://127.0.0.1:8090/health`
-
-## Production Baseline
-
-Production-oriented template:
-
-- `config/config.production.toml`
-
-Current baseline includes:
-
-- Loopback bind by default
-- Entry auth + entry rate limiting options
-- Strict production fail-fast (`runtime.production_strict = true`)
-- OTEL-related runtime settings
-
-### API Key Setup (production mode)
-
-When running with `config/config.production.toml`, entry authentication is enabled by default.
-Set the following environment variable **before** starting the server:
-
-```bash
-# Linux / macOS
-export GO_ON_ENTRY_API_KEY="your-secret-key-here"
-./scripts/start-go-on.sh
-```
-
-```powershell
-# Windows
-$env:GO_ON_ENTRY_API_KEY = "your-secret-key-here"
-scripts\start-go-on.bat
-```
-
-All RPC requests must include the key in the `Authorization` header:
-
-```
-Authorization: Bearer your-secret-key-here
-```
-
-If this variable is missing or empty the server will reject all requests with error code `-32003` (`AuthRequired`).
-
-> **Security**: Never commit secret values to version control. Use environment variables, a secrets manager, or a keyring-backed injector.
-
-### Multi-User Server Setup
-
-When running with `config/config.multi-users-server.toml`:
-
-```bash
-# Build
-cargo build --no-default-features -F profile-multi-users-server
-
-# Set required environment variables
-export GO_ON_ENTRY_API_KEY="your-entry-api-key"           # Gateway auth (required)
-export GO_ON_USER_AUTH_TOKEN_SECRET="your-strong-secret"  # HMAC token signing (recommended)
-export DB_USER="postgres"                                  # PostgreSQL user
-export DB_PASS="your-db-password"                         # PostgreSQL password
-export DB_HOST="localhost"                                 # PostgreSQL host
-
-# Start
-./target/release/go-on --config config/config.multi-users-server.toml
-```
-
-**Issue a user token** (for programmatic access):
- ```bash
- # Via RPC (after server starts)
- curl -X POST http://127.0.0.1:8090/rpc \
-   -H "Authorization: Bearer $GO_ON_ENTRY_API_KEY" \
-   -H "Content-Type: application/json" \
-   -d '{"jsonrpc":"2.0","id":1,"method":"issue_token","params":{"user_id":"alice","roles":["admin"],"ttl_seconds":86400}}'
- ```
-
-**CORS Configuration**: Allowed origins default to empty (CORS disabled). To enable:
- ```toml
- [runtime]
- cors_allowed_origins = ["https://my-frontend.example.com"]
- # Or for development:
- # cors_allowed_origins = ["*"]
- ```
-
-Ingress and TLS templates:
-
-- `scripts/deploy/nginx/go-on.conf`
-- `scripts/deploy/nginx/README.md`
-
-Release readiness checklist:
-
-- `docs/RELEASE_READINESS.md`
-
-## Scenario and Gate Tooling
-
-Scenario replay assets are in `tests/requests/` (runtime health, governance, cost, harness, security, release drill, etc.).
-
-Gate scripts (located in `scripts/`):
-
-- `scripts/run-quality-gate.sh`
-- `scripts/run-quality-gate.ps1`
-- `scripts/run-release-readiness-gate.sh`
-- `scripts/run-release-readiness-gate.ps1`
-- `scripts/test_ci.sh`
-
-## Cross-surface Components
-
-- GUI desktop console docs: `gui/README.md`
-- VS Code addon docs: `vscode-addon/README.md`
-
-Both are aligned with backend RPC surface and governance/health workflows.
-
-## Common Runtime RPC Groups
-
-Representative groups currently exposed:
-
-- **Core/runtime**: `initialize`, `shutdown`, `runtime.health`, `runtime.stability`, `config.reload`
-- **Safety/governance**: `governance.status`, `governance.plan.get`, `governance.plan.update`, `governance.audit.recent`, `security.baseline`
-- **Observability**: `metrics.get`, `metrics.prometheus`, `trace.get`, `trace.metrics`, `observability.alerts`, `health.probes`
-- **Reliability**: `breaker.status`, `breaker.reset`, `breaker.recovery`, `maintenance.gc`
-- **Workflow/task**: `workflow.execute`, `task.plan`, `task.execute`
-- **Learning/intelligence**: `learning.summary`, `learning.replay`, `learning.guardrail`, `selector.status`, `knowledge.distill`, `rl.alignment.offline_eval`, `hardness.status`
-- **Optimization/ops**: `cost.status`, `config.baseline`, `error.contract`, `build.repro`, `data.lifecycle`, `harness.status`, `optimization.peak`, `quality.baseline`
-
-## Related Documentation
-
-Comprehensive documentation is organized in the `docs/` directory:
-
-### Blueprints (`docs/blueprints/`)
-- `blue1.md` to `blue38.md` — Implementation blueprints and progress ledger
-- `FAULT1.MD` — Fault tolerance blueprint
-- `server-blue1.md` — Server architecture blueprint
-
-### Design Documents (`docs/design/`)
-- `design.md` — System design overview
-- `FUTURE.md` to `FUTURE6.md` — Future planning documents
-- `future-last.md` — Comprehensive future improvement plan
-
-### Guides (`docs/guides/`)
-- `README-PUA-UNIVERSAL.md` — PUA universal implementation guide
-- `MCP_LAYER.md` — MCP layer implementation details
-- `GO-ON_PUA_IMPLEMENTATION.md` — PUA implementation specifics
-- `IMPLEMENTATION_STATUS.md` — Current implementation status
-- `MIGRATION_STATUS.md` — Migration status and plans
-- `PHASE_10_COMPLETE_IMPLEMENTATION.md` — Phase 10 implementation details
-- `ENHANCEMENT_OPPORTUNITIES.md` — Enhancement opportunities (CN/EN)
-- `MODEL_SELECTION.md` — Model selection guide
-- `GUI_FIRST_RUN.md` — GUI first run guide
-
-### Reports (`docs/reports/`)
-- `PROJECT_EVALUATION_REPORT.md` — Comprehensive project evaluation
-- `CODE_REVIEW_FINAL_REPORT.md` — Code review findings
-- `PHASE_10_DELIVERY_REPORT.md` — Phase 10 delivery report
-- `MIGRATION_FINAL_SUMMARY.md` — Migration summary
-
-### Other Key Documents
-- `docs/RELEASE_READINESS.md` — Release readiness checklist
-- `docs/RULES.md` — Project rules and guidelines
-- `docs/DEVELOPMENT_RULES.md` — Development rules and standards
-- `docs/CLAUDE.md` — Claude.ai integration guide
-- `docs/SAFEGUARD_MODE.md` — Safeguard mode documentation
+---
 
 ## License
 
-This project is licensed under MIT or BSD (your choice).
+MIT or BSD (your choice).

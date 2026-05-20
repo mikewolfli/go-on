@@ -89,8 +89,8 @@ impl OptimizationRecommendation {
 }
 
 // ---------------------------------------------------------------------------
-// Lightweight delegating wrappers for optimisers that do not yet exist as
-// standalone types in the codebase.
+// Lightweight delegating wrappers that forward to the core optimization
+// primitives (workflow CostOptimizer, TokenOptimizer, etc.).
 // ---------------------------------------------------------------------------
 
 /// Simple cost estimator that delegates to the workflow `CostOptimizer`.

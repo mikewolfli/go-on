@@ -11,9 +11,8 @@ use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
-/// Lock a Mutex, recovering from poison with a log.
+// Lock a Mutex, recovering from poison with a log.
 // Uses shared `crate::intelligence::lock_guard`.
-
 // ---------------------------------------------------------------------------
 // Data Structures
 // ---------------------------------------------------------------------------

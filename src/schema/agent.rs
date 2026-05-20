@@ -379,7 +379,7 @@ pub struct FileSystemCapabilities {
     pub meta: Option<Meta>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentCapabilities {
     #[serde(default)]
@@ -393,19 +393,7 @@ pub struct AgentCapabilities {
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
 }
-impl Default for AgentCapabilities {
-    fn default() -> Self {
-        Self {
-            load_session: false,
-            prompt_capabilities: PromptCapabilities::default(),
-            mcp_capabilities: McpCapabilities::default(),
-            session_capabilities: SessionCapabilities::default(),
-            meta: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptCapabilities {
     #[serde(default)]
@@ -417,18 +405,8 @@ pub struct PromptCapabilities {
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
 }
-impl Default for PromptCapabilities {
-    fn default() -> Self {
-        Self {
-            image: false,
-            audio: false,
-            embedded_context: false,
-            meta: None,
-        }
-    }
-}
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct McpCapabilities {
     #[serde(default)]
@@ -438,17 +416,8 @@ pub struct McpCapabilities {
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
 }
-impl Default for McpCapabilities {
-    fn default() -> Self {
-        Self {
-            http: false,
-            sse: false,
-            meta: None,
-        }
-    }
-}
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionCapabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -460,19 +429,8 @@ pub struct SessionCapabilities {
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
 }
-impl Default for SessionCapabilities {
-    fn default() -> Self {
-        Self {
-            list: None,
-            resume: None,
-            close: None,
-            meta: None,
-        }
-    }
-}
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionListCapabilities {
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,

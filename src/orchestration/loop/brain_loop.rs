@@ -717,7 +717,7 @@ fn parse_plan_steps(plan: &str) -> Vec<String> {
         // Match lines starting with a number followed by a dot, e.g. "1. Analyse"
         if trimmed.starts_with(|c: char| c.is_ascii_digit()) && trimmed.contains(". ") {
             // Split on ". " and take the part after it
-            if let Some(desc) = trimmed.splitn(2, ". ").nth(1) {
+            if let Some(desc) = trimmed.split_once(". ").map(|(_, d)| d) {
                 steps.push(desc.trim().to_string());
             }
         }

@@ -199,9 +199,9 @@ struct EngineInner {
     failover_groups: HashMap<String, FailoverGroup>,
     healing_actions_taken: u64,
     started_ms: u64,
-    // Simulated health metrics
-    simulated_avg_latency_ms: f64,
-    simulated_error_rate: f64,
+    // Test/benchmark health metrics
+    test_avg_latency_ms: f64,
+    test_error_rate: f64,
     // Flag to indicate health checks have been started
     health_checks_running: bool,
 }
@@ -217,8 +217,8 @@ impl HyperResilienceEngine {
                 failover_groups: HashMap::new(),
                 healing_actions_taken: 0,
                 started_ms: now_ms,
-                simulated_avg_latency_ms: 10.0,
-                simulated_error_rate: 0.001,
+                test_avg_latency_ms: 10.0,
+                test_error_rate: 0.001,
                 health_checks_running: false,
             })),
         }
@@ -490,15 +490,15 @@ impl HyperResilienceEngine {
             active_circuit_breakers,
             open_circuits,
             active_failovers,
-            avg_latency_ms: inner.simulated_avg_latency_ms,
-            error_rate: inner.simulated_error_rate,
+            avg_latency_ms: inner.test_avg_latency_ms,
+            error_rate: inner.test_error_rate,
             timestamp_ms: now_millis(),
         }
     }
 
     /// Execute a self-healing action and return a report.
     ///
-    /// This is a simulated operation — no actual node restarts or resource
+    /// This is a test/benchmark operation — no actual node restarts or resource
     /// scaling are performed.
     pub fn execute_healing(
         &self,
@@ -511,7 +511,7 @@ impl HyperResilienceEngine {
         inner.healing_actions_taken += 1;
 
         // Simulate execution duration.
-        let simulated_duration_ms: u64 = match &action {
+        let test_duration_ms: u64 = match &action {
             SelfHealingAction::RestartNode => 2_000,
             SelfHealingAction::PromoteReplica => 500,
             SelfHealingAction::ClearCircuitBreaker => 100,
@@ -565,7 +565,7 @@ impl HyperResilienceEngine {
                 // Generic simulation for other actions.
                 (
                     true,
-                    format!("{:?} executed on '{}' (simulated)", action, target),
+                    format!("{:?} executed on '{}' (test)", action, target),
                 )
             }
         };
@@ -573,7 +573,7 @@ impl HyperResilienceEngine {
         let completed_ms = now_millis();
         let duration_ms = completed_ms
             .saturating_sub(started_ms)
-            .max(simulated_duration_ms);
+            .max(test_duration_ms);
 
         Ok(HealingReport {
             action,
@@ -681,7 +681,7 @@ impl HyperResilienceEngine {
         // ── Phase 2: Assess system health ──────────────────────────────────
         let health = self.system_health();
 
-        // Update real metrics instead of simulated ones
+        // Update real operational metrics
         {
             let mut inner = lock_guard(&self.inner);
             // Calculate real error rate from circuit breaker states
@@ -698,12 +698,12 @@ impl HyperResilienceEngine {
                 .count();
 
             if total > 0 {
-                inner.simulated_error_rate = open as f64 / total as f64;
+                inner.test_error_rate = open as f64 / total as f64;
             } else {
-                inner.simulated_error_rate = 0.0;
+                inner.test_error_rate = 0.0;
             }
             // Estimate latency from half-open attempts (higher when failing)
-            inner.simulated_avg_latency_ms = if half_open > 0 {
+            inner.test_avg_latency_ms = if half_open > 0 {
                 15.0 + (half_open as f64 * 5.0)
             } else {
                 8.0

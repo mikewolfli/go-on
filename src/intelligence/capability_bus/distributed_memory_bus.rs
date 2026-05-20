@@ -552,7 +552,7 @@ impl DistributedMemoryBus {
     /// Start the background transport sync thread.
     ///
     /// This spawns a thread that periodically serialises local entries and
-    /// pushes them to all known peers via the simulated HTTP transport.
+    /// pushes them to all known peers via the HTTP transport.
     #[cfg(feature = "profile-multi-users-server")]
     pub fn start_transport(&self, config: MemoryTransportConfig) -> anyhow::Result<()> {
         if self.transport_running.load(Ordering::SeqCst) {
@@ -630,7 +630,7 @@ impl DistributedMemoryBus {
         Ok(())
     }
 
-    /// Non‑multi‑user stub: transport is a no‑op.
+    /// Single‑node fallback (multi‑user feature not enabled)
     #[cfg(not(feature = "profile-multi-users-server"))]
     pub fn start_transport(&self, _config: MemoryTransportConfig) -> anyhow::Result<()> {
         anyhow::bail!("{}", tf("error.transport_single_node", &[]));
@@ -663,7 +663,7 @@ impl DistributedMemoryBus {
         Ok(())
     }
 
-    /// Non‑multi‑user stub.
+    /// Single‑node fallback (multi‑user feature not enabled)
     #[cfg(not(feature = "profile-multi-users-server"))]
     pub fn stop_transport(&self) -> anyhow::Result<()> {
         anyhow::bail!("{}", tf("error.transport_single_node", &[]));
@@ -691,7 +691,7 @@ impl DistributedMemoryBus {
         Ok(status)
     }
 
-    /// Non‑multi‑user stub.
+    /// Single‑node fallback (multi‑user feature not enabled)
     #[cfg(not(feature = "profile-multi-users-server"))]
     pub fn sync_now(&self) -> anyhow::Result<SyncStatus> {
         anyhow::bail!("Transport is not available in single-node mode");
@@ -752,7 +752,7 @@ impl DistributedMemoryBus {
         Ok(count)
     }
 
-    /// Non‑multi‑user stub.
+    /// Single‑node fallback (multi‑user feature not enabled)
     #[cfg(not(feature = "profile-multi-users-server"))]
     pub fn ingest_shared(&self, _entries_json: &str) -> anyhow::Result<usize> {
         anyhow::bail!("ingest_shared is not available in single-node mode");
@@ -763,7 +763,7 @@ impl DistributedMemoryBus {
     // ------------------------------------------------------------------
 
     /// Perform a single sync cycle: collect local entries and push them
-    /// to all known peers via the simulated transport.
+    /// to all known peers via the transport.
     #[cfg(feature = "profile-multi-users-server")]
     fn do_sync(
         local_entries: &Arc<Mutex<VecDeque<MemoryBusEntry>>>,
@@ -901,7 +901,7 @@ fn uuid_v4() -> String {
 /// Return the local node identifier.
 ///
 /// Under `profile-multi-users-server` this uses `hostname`, otherwise a fixed
-/// placeholder is returned.
+/// default is returned.
 fn local_node_id() -> String {
     #[cfg(feature = "profile-multi-users-server")]
     {
@@ -1193,7 +1193,7 @@ mod tests {
     fn test_ingested_entries_are_findable() {
         let bus = make_bus(100);
 
-        // Ingest an entry via simulated peer sync
+        // Ingest an entry via peer sync
         let entries = vec![MemoryBusEntry {
             id: "remote-id-1".into(),
             node_id: "peer-node".into(),

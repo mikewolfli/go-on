@@ -1245,7 +1245,7 @@ mod tests {
 
         // Inject crash on node-5 — severity 9 sets node to Offline
         engine
-            .report_fault("node-5", FaultType::Crash, 9, "simulated crash")
+            .report_fault("node-5", FaultType::Crash, 9, "test crash")
             .unwrap();
         let p = engine.profile();
         assert_eq!(
@@ -1358,7 +1358,7 @@ mod tests {
 
         // Crash node-5 — severity 9 marks node offline
         let crashed = "node-5";
-        ft.report_fault(crashed, FaultType::Crash, 9, "simulated crash")
+        ft.report_fault(crashed, FaultType::Crash, 9, "test crash")
             .unwrap();
         let profile = ft.profile();
         assert_eq!(

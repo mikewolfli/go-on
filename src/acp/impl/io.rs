@@ -32,10 +32,14 @@ pub async fn send_result(server: &AcpServer, id: Option<Value>, result: Value) -
     .await
 }
 
-
 /// Send an empty JSON object `{}` as a successful result.
 pub async fn send_empty_ok(server: &AcpServer, id: Option<Value>) -> Result<()> {
-    send_result(server, id, serde_json::Value::Object(serde_json::Map::new())).await
+    send_result(
+        server,
+        id,
+        serde_json::Value::Object(serde_json::Map::new()),
+    )
+    .await
 }
 
 /// Serialize a typed struct and send it as a result.
@@ -168,7 +172,7 @@ pub async fn has_input() -> Result<bool> {
     }
 }
 
-/// Windows stub for has_input — always returns true (assume input available).
+/// Windows fallback for has_input — always returns true (assume input available).
 ///
 /// Windows does not support async stdin polling via `AsRawFd` in the same way
 /// Unix does. Rather than blocking indefinitely on a false negative (which

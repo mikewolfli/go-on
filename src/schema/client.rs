@@ -199,7 +199,7 @@ pub enum ToolCallStatus {
 #[serde(untagged)]
 pub enum ToolCallContent {
     Text(String),
-    Content(Content),
+    Content(Box<Content>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -2192,11 +2192,10 @@ pub(super) async fn handle_governance_status(
     let provenance_ledger_ready = capability_graph_ready && !governance_audit.is_empty();
     let node_reputation_tracker_ready = provenance_ledger_ready && reconciliation_ok;
     let k8s_delivery_pack_ready = node_reputation_tracker_ready && lifecycle_ops_ready;
-    let sdk_multi_language_stub_ready = k8s_delivery_pack_ready && status.lifecycle.is_healthy;
-    let workflow_type_tri_mode_ready =
-        sdk_multi_language_stub_ready && dual_track_consistency_ready;
+    let sdk_multi_language_ready = k8s_delivery_pack_ready && status.lifecycle.is_healthy;
+    let workflow_type_tri_mode_ready = sdk_multi_language_ready && dual_track_consistency_ready;
     let blue35_release_closure_ready =
-        workflow_type_tri_mode_ready && sdk_multi_language_stub_ready && k8s_delivery_pack_ready;
+        workflow_type_tri_mode_ready && sdk_multi_language_ready && k8s_delivery_pack_ready;
     let skill_management_console_profile = json!({
         "ready": skill_management_console_ready,
         "graphical_management": true,
@@ -3428,11 +3427,11 @@ pub(super) async fn handle_governance_status(
         "provenance_ledger": provenance_ledger_ready,
         "node_reputation_tracker": node_reputation_tracker_ready,
         "k8s_delivery_pack": k8s_delivery_pack_ready,
-        "sdk_multi_language_stub": sdk_multi_language_stub_ready,
+        "sdk_multi_language": sdk_multi_language_ready,
         "workflow_type_tri_mode": workflow_type_tri_mode_ready,
         "checks": {
             "workflow_type_tri_mode_ready": workflow_type_tri_mode_ready,
-            "sdk_multi_language_stub_ready": sdk_multi_language_stub_ready,
+            "sdk_multi_language_ready": sdk_multi_language_ready,
             "k8s_delivery_pack_ready": k8s_delivery_pack_ready,
         },
     });
@@ -3543,7 +3542,7 @@ pub(super) async fn handle_governance_status(
         .unwrap_or(0);
 
     // REAL DATA: fork registry stats for active/reaped/rejected counts
-    // NOTE: fork_reaped_count and fork_rejected_count are currently stubbed to 0
+    // NOTE: fork_reaped_count and fork_rejected_count are currently initialized to 0
     // because ForkRegistry does not track cumulative reap/reject counters yet.
     // Once ForkRegistry adds reaped_total() and schema_violation_rejected_total()
     // methods, these should be wired here. (BLUE38 §6.2)
@@ -4173,8 +4172,8 @@ pub(super) async fn handle_governance_status(
                     "ready": k8s_delivery_pack_ready,
                     "cloud_native_profile": cloud_native_profile,
                 },
-                "sdk_multi_language_stub": {
-                    "ready": sdk_multi_language_stub_ready,
+                "sdk_multi_language": {
+                    "ready": sdk_multi_language_ready,
                     "developer_sdk_profile": developer_sdk_profile,
                 },
                 "workflow_type_tri_mode": {

@@ -7083,14 +7083,14 @@ fn blue35_governance_profiles_present_for_s1_s16() {
         "cloud_native_profile must include health_endpoint_ready"
     );
 
-    // S15: sdk_multi_language_stub with developer_sdk_profile
+    // S15: sdk_multi_language with developer_sdk_profile
     assert!(
-        gov["sdk_multi_language_stub"].is_object(),
-        "governance should include sdk_multi_language_stub"
+        gov["sdk_multi_language"].is_object(),
+        "governance should include sdk_multi_language"
     );
     assert!(
-        gov["sdk_multi_language_stub"]["developer_sdk_profile"].is_object(),
-        "sdk_multi_language_stub must include developer_sdk_profile"
+        gov["sdk_multi_language"]["developer_sdk_profile"].is_object(),
+        "sdk_multi_language must include developer_sdk_profile"
     );
 
     // S16: workflow_type_tri_mode with workflow_profile
@@ -7195,8 +7195,8 @@ fn blue35_readiness_profiles_present_for_s1_s17() {
         "readiness.k8s_delivery_pack must be object"
     );
     assert!(
-        r["sdk_multi_language_stub"].is_object(),
-        "readiness.sdk_multi_language_stub must be object"
+        r["sdk_multi_language"].is_object(),
+        "readiness.sdk_multi_language must be object"
     );
     assert!(
         r["workflow_type_tri_mode"].is_object(),

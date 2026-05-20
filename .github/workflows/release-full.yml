@@ -11,8 +11,8 @@ permissions:
   contents: write
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
   build-package-and-upload:
@@ -26,7 +26,7 @@ jobs:
             gui_bin: go-on-gui-egui
             archive_ext: tar.gz
           - os: macos-latest
-            platform: macos-x64
+            platform: macos-arm64
             backend_bin: go-on
             gui_bin: go-on-gui-egui
             archive_ext: tar.gz
@@ -62,12 +62,12 @@ jobs:
           touch config/acp_cache.sqlite3
           touch config/acp_vector.sqlite3
 
-      # ── Build ────────────────────────────────────────────────
+      # ── Build (default profile: profile-local) ───────────────
       - name: Build backend (release)
-        run: cargo build --release --locked 2>&1
+        run: cargo build --release --locked
 
       - name: Build EGUI GUI
-        run: cargo build --release --locked --manifest-path gui/Cargo.toml 2>&1
+        run: cargo build --release --locked --manifest-path gui/Cargo.toml
 
       - name: Package
         shell: bash
@@ -90,7 +90,7 @@ jobs:
           fi
 
       - name: Upload release package
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/out/go-on-${{ matrix.platform }}.${{ matrix.archive_ext }}

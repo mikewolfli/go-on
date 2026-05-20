@@ -7,7 +7,6 @@ on:
   pull_request:
     branches: [main]
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: short
   RUSTFLAGS: ""
@@ -38,11 +37,13 @@ jobs:
 
       # ── Profile: local ────────────────────────────────────────
       - name: Check (profile-local)
-        run: cargo check --all-targets 2>&1
+        run: cargo check --all-targets --locked
       - name: Clippy (profile-local)
         run: cargo clippy --no-default-features -F profile-local -- -D warnings
-      - name: Unit tests (profile-local)
-        run: cargo test --no-default-features -F profile-local --bin go-on 2>&1
+      - name: Lib unit tests (profile-local)
+        run: cargo test --no-default-features -F profile-local --lib
+      - name: Bin unit tests (profile-local)
+        run: cargo test --no-default-features -F profile-local --bin go-on
 
       # ── Profile: simple-server ────────────────────────────────
       - name: Clippy (profile-simple-server)
@@ -55,7 +56,7 @@ jobs:
       # ── Integration tests ─────────────────────────────────────
       - name: Integration tests
         timeout-minutes: 30
-        run: cargo test --no-default-features -F profile-local --test acp_runtime_rpc_integration -- --test-threads=1 --nocapture 2>&1
+        run: cargo test --no-default-features -F profile-local --test acp_runtime_rpc_integration -- --test-threads=1 --nocapture
         env:
           GO_ON_ENABLE_LOCAL_TEST_AGENTS: "1"
 
@@ -74,9 +75,9 @@ jobs:
           workspaces: "gui -> gui/target"
           shared-key: "go-on-gui"
       - name: Check EGUI GUI
-        run: cargo check --all-targets --manifest-path gui/Cargo.toml 2>&1
+        run: cargo check --all-targets --manifest-path gui/Cargo.toml
       - name: Test EGUI GUI
-        run: cargo test --manifest-path gui/Cargo.toml 2>&1
+        run: cargo test --manifest-path gui/Cargo.toml
 
   # ── VS Code addon ────────────────────────────────────────────
   gate-vscode:

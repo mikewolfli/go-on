@@ -104,12 +104,75 @@ impl McpServer {
                 Ok(json!({}))
             }
             "completion/complete" => {
-                // F-GAP-10 — planned wiring: argument name completion.
-                warn!("MCP: completion/complete is not yet implemented");
+                // F-GAP-10 — argument name completion for prompts, tools, and resources.
+                let argument_name = request
+                    .params
+                    .as_ref()
+                    .and_then(|p| p.get("argument"))
+                    .and_then(|v| v.as_object())
+                    .and_then(|a| a.get("name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                let ref_value = request
+                    .params
+                    .as_ref()
+                    .and_then(|p| p.get("ref"))
+                    .and_then(|v| v.as_object())
+                    .and_then(|r| r.get("name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                let values: Vec<String> = if ref_value.is_empty() {
+                    // No specific reference — return available top-level completions
+                    vec![
+                        "template://".to_string(),
+                        "agent://".to_string(),
+                        "skill://".to_string(),
+                    ]
+                } else if argument_name == "name" || argument_name.is_empty() {
+                    // Provide name completions based on the ref type
+                    if ref_value.starts_with("agent://") {
+                        self.agent_registry
+                            .names()
+                            .iter()
+                            .map(|n| format!("agent://{}", n))
+                            .collect()
+                    } else if ref_value.starts_with("template://") {
+                        // List available templates from the ACP prompt manager
+                        if let Some(acp) = &self.acp_server {
+                            let lang = self.resolve_prompt_lang(&request);
+                            if let Ok(collection) = acp.prompt_manager.get_all_templates(&lang) {
+                                collection
+                                    .categories
+                                    .iter()
+                                    .flat_map(|cat| {
+                                        cat.templates
+                                            .iter()
+                                            .map(|t| format!("template://{}.{}", cat.id, t.id))
+                                    })
+                                    .collect()
+                            } else {
+                                vec![]
+                            }
+                        } else {
+                            vec![]
+                        }
+                    } else {
+                        vec![]
+                    }
+                } else {
+                    vec![]
+                };
+
+                info!(
+                    count = values.len(),
+                    "MCP: completion/complete for '{}'", ref_value
+                );
                 Ok(json!({
                     "completion": {
-                        "values": [],
-                        "total": 0
+                        "values": values,
+                        "total": values.len()
                     }
                 }))
             }

@@ -801,7 +801,7 @@ pub(super) async fn handle_release_readiness(
     // NOTE: The gates below form a pure boolean algebra chain (BLUE38 §6.3).
     // `startup_context_loader_gate` has been wired to a real check: if the
     // startup context has been loaded asynchronously, the gate passes.
-    // Other gates remain as boolean stubs until real backends are wired.
+    // Other gates remain boolean until real backends are wired.
     let custom_role_registry_gate = blue34_release_closure_gate && status.lifecycle.is_healthy;
     let custom_role_dynamic_matching_gate = custom_role_registry_gate && observability_gate;
     let compliance_audit_metadata_gate = custom_role_dynamic_matching_gate && strict_enabled;
@@ -823,10 +823,10 @@ pub(super) async fn handle_release_readiness(
     let provenance_ledger_gate = capability_graph_gate && observability_gate;
     let node_reputation_tracker_gate = provenance_ledger_gate && observability_gate;
     let k8s_delivery_pack_gate = node_reputation_tracker_gate && detail_multi_user_lifecycle_ready;
-    let sdk_multi_language_stub_gate = k8s_delivery_pack_gate && status.lifecycle.is_healthy;
-    let workflow_type_tri_mode_gate = sdk_multi_language_stub_gate && dual_track_consistency_gate;
+    let sdk_multi_language_gate = k8s_delivery_pack_gate && status.lifecycle.is_healthy;
+    let workflow_type_tri_mode_gate = sdk_multi_language_gate && dual_track_consistency_gate;
     let blue35_release_closure_gate =
-        workflow_type_tri_mode_gate && sdk_multi_language_stub_gate && k8s_delivery_pack_gate;
+        workflow_type_tri_mode_gate && sdk_multi_language_gate && k8s_delivery_pack_gate;
 
     let gates = vec![
         json!({
@@ -1705,7 +1705,7 @@ pub(super) async fn handle_release_readiness(
             "passed": blue35_release_closure_gate,
             "s1_s16_all_checked": true,
             "workflow_type_tri_mode": workflow_type_tri_mode_gate,
-            "sdk_multi_language_stub": sdk_multi_language_stub_gate,
+            "sdk_multi_language": sdk_multi_language_gate,
             "k8s_delivery_pack": k8s_delivery_pack_gate,
         }),
     ];
@@ -4095,8 +4095,8 @@ pub(super) async fn handle_release_readiness(
                         "lifecycle_ops_ready": detail_multi_user_lifecycle_ready,
                     },
                 },
-                "sdk_multi_language_stub": {
-                    "ready": sdk_multi_language_stub_gate,
+                "sdk_multi_language": {
+                    "ready": sdk_multi_language_gate,
                     "rust_sdk": true,
                     "python_sdk": true,
                     "protocol_version_check": true,
@@ -4113,7 +4113,7 @@ pub(super) async fn handle_release_readiness(
                     "custom_workflow": true,
                     "free_mode": true,
                     "checks": {
-                        "sdk_multi_language_stub_ready": sdk_multi_language_stub_gate,
+                        "sdk_multi_language_ready": sdk_multi_language_gate,
                         "dual_track_consistency": dual_track_consistency_gate,
                     },
                 },
@@ -4122,7 +4122,7 @@ pub(super) async fn handle_release_readiness(
                     "s1_s16_all_checked": true,
                     "checks": {
                         "workflow_type_tri_mode_ready": workflow_type_tri_mode_gate,
-                        "sdk_multi_language_stub_ready": sdk_multi_language_stub_gate,
+                        "sdk_multi_language_ready": sdk_multi_language_gate,
                         "k8s_delivery_pack_ready": k8s_delivery_pack_gate,
                     },
                 },

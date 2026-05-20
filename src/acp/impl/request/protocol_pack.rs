@@ -351,7 +351,7 @@ pub(super) async fn handle_session_new(
         server,
         request_id,
         serde_json::to_value(
-            &crate::schema::NewSessionResponse::new(crate::schema::SessionId::new(session_id))
+            crate::schema::NewSessionResponse::new(crate::schema::SessionId::new(session_id))
                 .modes(modes)
                 .config_options(config_options),
         )
@@ -574,7 +574,7 @@ pub(super) async fn handle_session_prompt(
             // Zed's ACP client simply ignores it and reads from the notification.
             // We keep contentBlocks for HTTP RPC backward compatibility.
             // ─────────────────────────────────────────────────────────────────
-            let prompt_response = serde_json::to_value(&crate::schema::PromptResponse::new(
+            let prompt_response = serde_json::to_value(crate::schema::PromptResponse::new(
                 crate::schema::StopReason::EndTurn,
             ))
             .unwrap();
@@ -600,10 +600,6 @@ pub(super) async fn handle_session_prompt(
         }
     }
 }
-
-/// Handle `session/cancel` — cancels an ongoing prompt turn.
-///
-/// Standard ACP notification: client sends `sessionId`,
 
 /// Send a typed session/update notification chunk.
 /// Uses schema types to ensure correct JSON-RPC wire format.
