@@ -264,7 +264,43 @@ pub(super) async fn handle_initialize(server: &AcpServer, request_id: Option<Val
             ..Default::default()
         });
 
-    crate::acp::r#impl::io::send_result(server, request_id, serde_json::to_value(&resp)?).await
+    let mut value = serde_json::to_value(&resp)?;
+
+    // ── Backward-compat legacy fields ─────────────────────────────────
+    // The previous hardcoded json!() response included top-level fields
+    // that clients (tests, older IDE integrations) depend on.
+    // Merge them into the new structured response so old callers still work.
+    if let Some(obj) = value.as_object_mut() {
+        // "name" was used as a quick-access alias for agent_info.name
+        obj.insert("name".to_string(), serde_json::json!("go-on"));
+        // "protocol" identified the wire protocol
+        obj.insert("protocol".to_string(), serde_json::json!("acp"));
+        // "version" top-level alias
+        obj.insert(
+            "version".to_string(),
+            serde_json::json!(env!("CARGO_PKG_VERSION")),
+        );
+        // "capabilities" — flatten the chat/phase/health/etc. booleans
+        let caps_obj = serde_json::json!({
+            "chat": true,
+            "phase": true,
+            "metrics": true,
+            "shutdown": true,
+            "health": true,
+            "debug_panel": true,
+            "mcp_adapter": true,
+        });
+        obj.insert("capabilities".to_string(), caps_obj);
+    }
+
+    // Inject platform context (schema_version, profile_class, etc.) using the
+    // same shared infrastructure used by other handlers.
+    let method = super::DISPATCH_REQUEST_METHOD
+        .try_with(|m| m.clone())
+        .unwrap_or_else(|_| "initialize".to_string());
+    let value = super::inject_platform_profiles_if_absent(value, &method);
+
+    crate::acp::r#impl::io::send_result(server, request_id, value).await
 }
 
 pub(super) async fn handle_mcp_initialize(
@@ -1049,7 +1085,13 @@ pub(super) async fn handle_mcp_tools_list(
     use crate::mcp::McpListToolsResult;
     let tools = build_mcp_tool_descriptors(server);
     let result = McpListToolsResult::new(tools);
-    crate::acp::r#impl::io::send_result(server, request_id, serde_json::to_value(&result)?).await
+    let value = serde_json::to_value(&result)?;
+    // Inject platform context for consistency with other handlers.
+    let method = super::DISPATCH_REQUEST_METHOD
+        .try_with(|m| m.clone())
+        .unwrap_or_else(|_| "mcp.tools.list".to_string());
+    let value = super::inject_platform_profiles_if_absent(value, &method);
+    crate::acp::r#impl::io::send_result(server, request_id, value).await
 }
 
 pub(super) async fn handle_mcp_tools_call(

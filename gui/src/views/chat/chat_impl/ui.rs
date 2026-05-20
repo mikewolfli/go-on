@@ -221,9 +221,9 @@ impl ChatView {
         // Process any pending async responses (non-blocking)
         self.process_pending(i18n);
 
-        // Keep streaming repaint cadence stable (~30 FPS) to avoid high-frequency jitter.
+        // Keep streaming repaint cadence stable (60 FPS during streaming) to match Zed.
         if self.sending {
-            ctx.request_repaint_after(self.stream_repaint_interval);
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
 
         // Lazy initialization of templates and name refresh
@@ -1310,36 +1310,64 @@ impl ChatView {
             ui.add_space(4.0);
         }
 
-        // ── Global thinking toggle ──
-        let msgs = self.messages().to_vec();
-        let has_thinking = msgs.iter().any(|m| !m.thinking.is_empty());
-        if has_thinking {
-            ui.horizontal(|ui| {
-                if ui
-                    .selectable_label(
-                        self.show_all_thinking,
-                        format!("💭 {}", i18n.t("chat.showAllThinking")),
-                    )
-                    .clicked()
-                {
-                    self.show_all_thinking = !self.show_all_thinking;
-                    if !self.show_all_thinking {
-                        self.show_thinking_idx = None;
+        // ── Global thinking toggle (borrow-free check) ──
+        {
+            let msgs_ref = self.messages();
+            let has_thinking = msgs_ref.iter().any(|m| !m.thinking.is_empty());
+            if has_thinking {
+                ui.horizontal(|ui| {
+                    if ui
+                        .selectable_label(
+                            self.show_all_thinking,
+                            format!("💭 {}", i18n.t("chat.showAllThinking")),
+                        )
+                        .clicked()
+                    {
+                        self.show_all_thinking = !self.show_all_thinking;
+                        if !self.show_all_thinking {
+                            self.show_thinking_idx = None;
+                        }
                     }
-                }
-            });
-            ui.add_space(4.0);
+                });
+                ui.add_space(4.0);
+            }
         }
 
-        // Show ALL messages (no pagination)
+        // Show ALL messages. Avoid full Vec clone — iterate by index directly.
         let dark_mode = ui.visuals().dark_mode;
-        // Cache formatted timestamps to avoid re-allocating per message per frame
         let mut last_ts: u64 = 0;
         let mut last_time_str = String::new();
-        for (msg_idx, msg) in msgs.iter().enumerate() {
-            if msg_idx < start_idx {
-                continue;
-            }
+
+        // Sync rendered_content_hashes length with current message count
+        let msg_count = self.messages().len();
+        self.rendered_content_hashes.resize(msg_count, 0);
+
+        // Use a scope to borrow messages immutably for the loop
+        for msg_idx in start_idx..msg_count {
+            let (
+                is_user,
+                timestamp,
+                model_name,
+                content_text,
+                has_thinking,
+                thinking_text,
+                risk_decision,
+            ) = {
+                let msgs = self.messages();
+                if msg_idx >= msgs.len() {
+                    continue;
+                }
+                let m = &msgs[msg_idx];
+                (
+                    m.role == "user",
+                    m.timestamp,
+                    m.model.clone(),
+                    m.content.clone(),
+                    !m.thinking.is_empty() && m.role != "user",
+                    m.thinking.clone(),
+                    m.risk_decision.clone(),
+                )
+            };
             // ── Edit mode: show TextEdit instead of bubble ────────
             if self.edit_msg_idx == Some(msg_idx) {
                 ui.add_space(4.0);
@@ -1405,7 +1433,6 @@ impl ChatView {
                 continue;
             }
 
-            let is_user = msg.role == "user";
             let (bubble_color, text_color) = if is_user {
                 let bc = if dark_mode {
                     egui::Color32::from_rgb(32, 112, 210)
@@ -1428,75 +1455,50 @@ impl ChatView {
                 (bc, tc)
             };
 
-            let time_str = if msg.timestamp == last_ts {
+            let time_str = if timestamp == last_ts {
                 last_time_str.as_str()
             } else {
-                last_ts = msg.timestamp;
-                last_time_str = format_absolute_time(msg.timestamp);
+                last_ts = timestamp;
+                last_time_str = format_absolute_time(timestamp);
                 last_time_str.as_str()
-            };
-            let model_name = msg.model.clone();
-
-            // Clone content once — used for display_text AND context menu (avoids borrowing msg in closures)
-            let ctx_content = msg.content.clone();
-            let _ctx_plain = Self::markdown_to_plain_text(&ctx_content);
-
-            // Single clone: compute display_text once, keep content reference for context menu
-            let display_text = if CHAT_DISABLE_MARKDOWN_RENDER {
-                Self::markdown_to_plain_text(&ctx_content)
-            } else {
-                ctx_content.clone()
             };
 
             // Consecutive same-role grouping: hide avatar/name/timestamp
-            let prev_same_role = msg_idx > 0 && msgs[msg_idx - 1].role == msg.role;
+            let prev_same_role = msg_idx > 0
+                && self
+                    .messages()
+                    .get(msg_idx - 1)
+                    .map(|m| (m.role == "user") == is_user)
+                    .unwrap_or(false);
 
-            // Timestamp row (hidden for consecutive same-role messages)
+            // Zed-style: show avatar + name header (hidden for consecutive same-role)
+            let name_label = if is_user {
+                i18n.t("chat.you").to_string()
+            } else if !model_name.is_empty() {
+                model_name.clone()
+            } else {
+                "AI".to_string()
+            };
             if !prev_same_role {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(time_str).color(weak_text).size(11.0));
-                    if !model_name.is_empty() {
-                        ui.label(
-                            egui::RichText::new(&model_name)
-                                .color(muted_text)
-                                .size(10.0),
-                        );
-                    }
+                    Self::draw_role_avatar(ui, is_user);
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new(&name_label).strong().size(13.0));
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(time_str).color(weak_text).size(10.0));
                 });
+                ui.add_space(2.0);
             }
 
-            // Bubble content width: restrict to a reasonable max so text wraps
-            // Leave space for avatar and margins (about 60px total)
-            let max_bubble_width = (ui.available_width() - 60.0).clamp(200.0, 800.0);
+            // Bubble content width
+            let max_bubble_width = (ui.available_width() - 40.0).clamp(200.0, 800.0);
 
-            // Pre-compute the timestamp for context menu use
-            let msg_timestamp = msg.timestamp;
-
-            // Helper to find real message index in session messages
-            let _find_in_messages =
-                |msgs_slice: &[Message], ts: u64, content: &str| -> Option<usize> {
-                    msgs_slice
-                        .iter()
-                        .position(|m| m.timestamp == ts && m.content == content)
-                };
-
-            // Pre-compute msg/self values before closures to avoid borrow conflicts
-            // with mutable self access in context_menu (nested closure).
-            let msg_thinking = msg.thinking.clone();
-            let msg_has_thinking = !msg_thinking.is_empty() && !is_user;
-            let _msg_timestamp_val = msg_timestamp;
-            let _msg_model_val = msg.model.clone();
             let enable_markdown_val = self.enable_markdown;
-            let _active_session_val = self.active_session;
             // All messages left-aligned — color differentiates user vs AI.
+            // Zed-style: no extra avatar indent for consecutive, bubble with min spacing
+            let indent = if prev_same_role { 28.0 } else { 0.0 };
             ui.horizontal_top(|ui| {
-                if !prev_same_role {
-                    Self::draw_role_avatar(ui, is_user);
-                    ui.add_space(6.0);
-                } else {
-                    // Indent to align with messages that have avatars
-                    ui.add_space(36.0);
-                }
+                ui.add_space(indent);
                 ui.vertical(|ui| {
                     ui.set_max_width(max_bubble_width);
                     egui::Frame::new()
@@ -1506,22 +1508,7 @@ impl ChatView {
                         .show(ui, |ui| {
                             ui.set_max_width(max_bubble_width - 20.0);
 
-                            // Inline action bar (no context_menu overlay that blocks clicks)
-                            let ctx_session_msgs = self.messages().to_vec();
-                            let _ctx_content = msg.content.clone();
-                            let _ctx_plain = Self::markdown_to_plain_text(&msg.content);
-                            let _copy = |s: &str| i18n.t(s).to_string();
-                            // Show agent/model name above assistant messages
-                            if !is_user && !_msg_model_val.is_empty() {
-                                ui.horizontal(|ui| {
-                                    ui.add_space(2.0);
-                                    ui.colored_label(
-                                        egui::Color32::from_rgb(130, 140, 160),
-                                        &_msg_model_val,
-                                    );
-                                });
-                            }
-
+                            // Inline action bar
                             ui.horizontal(|ui| {
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::TOP),
@@ -1531,67 +1518,85 @@ impl ChatView {
                                             .on_hover_text(i18n.t("chat.copyMessage"))
                                             .clicked()
                                         {
-                                            ui.ctx().copy_text(msg.content.clone());
+                                            ui.ctx().copy_text(content_text.clone());
                                         }
                                         if ui
                                             .button("✏️")
                                             .on_hover_text(i18n.t("chat.edit"))
                                             .clicked()
                                         {
-                                            if let Some(idx) =
-                                                ctx_session_msgs.iter().position(|m| {
-                                                    m.timestamp == msg_timestamp
-                                                        && m.content == msg.content
-                                                })
-                                            {
-                                                self.edit_msg_idx = Some(idx);
-                                                self.edit_msg_buf = msg.content.clone();
-                                            }
+                                            self.edit_msg_idx = Some(msg_idx);
+                                            self.edit_msg_buf = content_text.clone();
                                         }
                                         if ui
                                             .button("🗑")
                                             .on_hover_text(i18n.t("chat.delete"))
                                             .clicked()
                                         {
-                                            if let Some(idx) =
-                                                ctx_session_msgs.iter().position(|m| {
-                                                    m.timestamp == msg_timestamp
-                                                        && m.content == msg.content
-                                                })
-                                            {
-                                                self.remove_message_at(idx);
-                                                self.save_sessions_to_disk();
-                                            }
+                                            self.remove_message_at(msg_idx);
+                                            self.save_sessions_to_disk();
                                         }
                                     },
                                 );
                             });
 
-                            let trunc_hint = i18n.t("chat.largeMessageTruncated").to_string();
-                            Self::render_markdown(
-                                ui,
-                                &display_text,
-                                &i18n.t("chat.copyCode"),
-                                enable_markdown_val,
-                                text_color,
-                                &trunc_hint,
-                            );
-
-                            if let Some(risk_decision) = msg.risk_decision.as_ref() {
-                                ui.add_space(6.0);
-                                Self::render_risk_decision_summary(ui, i18n, risk_decision);
+                            // ── Content-hash cached markdown rendering ──
+                            let hash = {
+                                use std::hash::{Hash, Hasher};
+                                let mut h = std::collections::hash_map::DefaultHasher::new();
+                                content_text.hash(&mut h);
+                                h.finish()
+                            };
+                            let cached = self
+                                .rendered_content_hashes
+                                .get(msg_idx)
+                                .copied()
+                                .unwrap_or(0);
+                            let content_changed = cached != hash;
+                            if msg_idx < self.rendered_content_hashes.len() {
+                                self.rendered_content_hashes[msg_idx] = hash;
                             }
 
-                            // ── Thinking section (Cherry Studio style) ──
-                            // Uses a styled header bar with toggle icon, label, and stats.
-                            // Click anywhere on the bar to expand/collapse the thinking content.
-                            if msg_has_thinking {
+                            // ── Streaming cursor: append ▊ to last AI message during streaming ──
+                            let is_streaming = self.sending
+                                && !is_user
+                                && msg_idx == self.messages().len().saturating_sub(1);
+                            let display_content = if is_streaming && !content_text.is_empty() {
+                                format!("{}▊", content_text)
+                            } else {
+                                content_text.clone()
+                            };
+
+                            if !content_changed && !content_text.is_empty() && !self.sending {
+                                // Content unchanged and not streaming — skip markdown parse
+                                ui.label(egui::RichText::new(&display_content).color(text_color));
+                            } else {
+                                let trunc_hint_msg =
+                                    i18n.t("chat.largeMessageTruncated").to_string();
+                                Self::render_markdown(
+                                    ui,
+                                    &display_content,
+                                    &i18n.t("chat.copyCode"),
+                                    enable_markdown_val,
+                                    text_color,
+                                    &trunc_hint_msg,
+                                );
+                            }
+
+                            if let Some(ref rd) = risk_decision {
+                                ui.add_space(6.0);
+                                Self::render_risk_decision_summary(ui, i18n, rd);
+                            }
+
+                            // ── Thinking section ──
+                            if has_thinking {
                                 ui.add_space(6.0);
 
                                 let is_expanded = self.show_all_thinking
                                     || self.show_thinking_idx == Some(msg_idx);
                                 let toggle_icon = if is_expanded { "▼" } else { "▶" };
-                                let char_count = msg_thinking.chars().count();
+                                let char_count = thinking_text.chars().count();
+                                let trunc_hint = i18n.t("chat.largeMessageTruncated").to_string();
 
                                 // Theme-aware colors for the thinking header
                                 let (bar_bg, bar_border, bar_text, accent) = if dark {
@@ -1713,7 +1718,7 @@ impl ChatView {
                                         .show(ui, |ui| {
                                             Self::render_markdown(
                                                 ui,
-                                                &msg_thinking,
+                                                &thinking_text,
                                                 &i18n.t("chat.copyCode"),
                                                 enable_markdown_val,
                                                 weak_text,
@@ -1735,7 +1740,7 @@ impl ChatView {
                                                             .clicked()
                                                         {
                                                             ui.ctx()
-                                                                .copy_text(msg_thinking.clone());
+                                                                .copy_text(thinking_text.clone());
                                                         }
                                                     },
                                                 );

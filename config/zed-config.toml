@@ -1,0 +1,179 @@
+# ============================================================
+# go-on Development Workflow Config Template
+#   Workflow type: "dev" — for software development tasks:
+#   planning, coding, code review, and delivery.
+#
+#   How to use:
+#     1. Copy to config.toml
+#     2. Add your AI provider API keys
+#     3. Run: go-on --config config.toml
+# ============================================================
+
+# ── Development workflow starts in the "planning" phase.
+#     The capability bus routes each subtask to the best-suited
+#     agent registered below.
+default_phase = "planning"
+model_selection_mode = "adaptive"
+
+[protocol]
+# "acp_http" for HTTP API, "acp_stdio" for stdin/stdout (IDE integration)
+mode = "acp_stdio"
+
+# ── Cache ─────────────────────────────────────────────────────────────
+[cache]
+enabled = true
+path = "acp_cache.sqlite3"
+default_ttl_seconds = 3600
+max_entries = 5000
+
+# ── Vector Store (semantic memory) ────────────────────────────────────
+[vector]
+enabled = true
+auto_mode = true
+path = "acp_vector.sqlite3"
+dimensions = 192
+min_query_chars = 80
+top_k = 2
+min_similarity = 0.82
+max_snippet_chars = 800
+max_entries = 10000
+summary_enabled = true
+summary_trigger_messages = 8
+summary_max_chars = 1200
+
+# ── Runtime ───────────────────────────────────────────────────────────
+[runtime]
+#acp_http_bind_addr = "127.0.0.1:8090"
+maintenance_interval_seconds = 60
+health_interval_seconds = 120
+shutdown_drain_seconds = 30
+sqlite_vacuum_interval_cycles = 60
+production_strict = false
+i18n_enabled = true
+i18n_default_language = "en_US"
+skills_enabled = true
+skills_cache_dir = "skills_cache"
+governance_enabled = true
+governance_policy_mode = "advisory"
+
+# ── AI Providers (agents) ─────────────────────────────────────────────
+# Add your API keys here. The capability bus will automatically select
+# the best provider for each task based on reputation and capability.
+#
+# IMPORTANT: agents are NOT bound to specific phases — they are registered
+# globally and the system's CapabilityBus routes tasks dynamically.
+#
+[agents]
+
+# Example: OpenAI
+# [agents.openai]
+# type = "openai"
+# api_key_env = "OPENAI_API_KEY"
+# model = "gpt-4o"
+# supports_system = true
+
+# Example: DeepSeek
+# [agents.deepseek]
+# type = "deepseek"
+# api_key_env = "DEEPSEEK_API_KEY"
+# model = "deepseek-chat"
+# supports_system = true
+
+# Example: Anthropic Claude
+# [agents.anthropic]
+# type = "claude"
+# api_key_env = "ANTHROPIC_API_KEY"
+# model = "claude-sonnet-4-20250514"
+# supports_system = true
+
+# Example: Gemini
+# [agents.gemini]
+# type = "gemini"
+# api_key_env = "GEMINI_API_KEY"
+# model = "gemini-2.5-flash"
+
+# Example: Compatible provider (SiliconFlow, Groq, etc.)
+# [agents.siliconflow]
+# type = "openai_compatible"
+# url = "https://api.siliconflow.cn/v1"
+# api_key_env = "SILICONFLOW_API_KEY"
+# model = "deepseek-ai/DeepSeek-V3.2"
+# supports_system = true
+
+# ── Flow Configuration ────────────────────────────────────────────────
+# The "dev" workflow has 4 phases:
+#   planning  → analyze requirements, design architecture, plan implementation
+#   coding    → write code, implement features, fix bugs
+#   review    → review code, verify quality, check for issues
+#   delivery  → summarize changes, prepare deliverables
+#
+# Phase agents are LEFT EMPTY — the system's CapabilityBus will
+# dynamically select the best provider for each phase based on the
+# task context and provider capabilities.
+[flow]
+name = "Development"
+workflow_type = "dev"
+phases = ["planning", "coding", "review", "delivery"]
+
+# ── Phase Definitions ─────────────────────────────────────────────────
+# Each phase has an empty agent list, meaning the CapabilityBus
+# dynamically routes tasks to the best agent. Do NOT hardcode
+# agent names here — let the bus handle selection.
+
+[phases.planning]
+description = "Planning — analyze requirements, design solution architecture"
+agents = []
+fallback = true
+
+[phases.planning.options]
+request_timeout_seconds = 180
+review_timeout_seconds = 90
+cache_enabled = true
+vector_enabled = true
+phase_max_inflight = 8
+global_max_inflight = 128
+
+[phases.coding]
+description = "Coding — implement features, write code, fix bugs"
+agents = []
+fallback = true
+
+[phases.coding.options]
+request_timeout_seconds = 300
+review_timeout_seconds = 120
+cache_enabled = true
+vector_enabled = true
+phase_max_inflight = 24
+global_max_inflight = 128
+
+[phases.review]
+description = "Review — code review, quality check, verify correctness"
+agents = []
+fallback = true
+
+# High-risk phases can use multi-agent voting for extra safety.
+# Uncomment the lines below to enable voting for this phase:
+# high_risk_vote_enabled = true
+# high_risk_vote_threshold = 1       # Always trigger voting in review
+# high_risk_vote_min_agents = 2      # At least 2 agents must vote
+# high_risk_vote_max_agents = 4
+# high_risk_escalate_multi_model_enabled = true
+
+[phases.review.options]
+request_timeout_seconds = 120
+review_timeout_policy = "reject"
+review_min_response_chars = 12
+cache_enabled = true
+vector_enabled = true
+phase_max_inflight = 16
+global_max_inflight = 128
+
+[phases.delivery]
+description = "Delivery — finalize, summarize changes, prepare output"
+agents = []
+fallback = false
+
+[phases.delivery.options]
+request_timeout_seconds = 90
+phase_max_inflight = 8
+global_max_inflight = 64

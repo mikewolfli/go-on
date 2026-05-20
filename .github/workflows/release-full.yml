@@ -82,6 +82,7 @@ jobs:
           cp -r prompts "$PKG/"
           cp -r prompts "$PKG/backend/prompts"
           cp config/config.toml "$PKG/backend/"
+          cp config/zed-config.toml "$PKG/backend/"
           mkdir -p dist/out
           if [ "${{ runner.os }}" = "Windows" ]; then
             cd dist && 7z a -tzip "out/go-on-${{ matrix.platform }}.zip" "go-on-${{ matrix.platform }}" && cd ..

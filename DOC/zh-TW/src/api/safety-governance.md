@@ -1,1 +1,0 @@
-../../../src/zh-TW/api/safety-governance.md

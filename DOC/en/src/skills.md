@@ -1,1 +1,0 @@
-../../src/en/skills.md

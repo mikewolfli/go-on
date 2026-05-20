@@ -806,7 +806,7 @@ default_phase = "coding"
 model_selection_mode = "adaptive"
 
 [protocol]
-mode = "acp_http"
+mode = "{protocol_mode}"
 
 [cache]
 enabled = true
@@ -844,7 +844,10 @@ enabled = false
 evaluate_interval = 20
 state_path = "acp_autotune_state.json"
 
-{agent_section}"#
+{agent_section}"#,
+            protocol_mode = config.protocol_mode,
+            bind_addr = bind_addr,
+            agent_section = agent_section,
         );
 
         match std::fs::write(path, &toml) {

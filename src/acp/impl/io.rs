@@ -62,6 +62,14 @@ pub async fn send_error(
     message: String,
     data: Option<Value>,
 ) -> Result<()> {
+    // Inject platform context into error data for consistency with chat_pack::send_error.
+    // Always inject even when data is None (creates a minimal context object).
+    let data = Some(
+        crate::acp::r#impl::request::inject_platform_profiles_if_absent(
+            data.unwrap_or(serde_json::Value::Object(serde_json::Map::new())),
+            "acp.error",
+        ),
+    );
     write_response(
         server,
         JsonRpcResponse {

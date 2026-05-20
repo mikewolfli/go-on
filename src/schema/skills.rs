@@ -31,7 +31,6 @@ use serde_json::Value;
 /// Generic skill action response used by all skill.* handlers.
 /// All optional fields are omitted when None via skip_serializing_if.
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SkillActionResponse {
     pub ok: bool,
     pub action: String,
@@ -152,7 +151,6 @@ pub struct SkillVersionSnapshot {
 
 /// Phase status response.
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct PhaseResponse {
     pub rate_limiter: Value,
     pub inflight: Value,
@@ -169,7 +167,6 @@ impl PhaseResponse {
 
 /// Models list response.
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ModelsListResponse {
     pub models: Vec<Value>,
 }

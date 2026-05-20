@@ -1,1 +1,0 @@
-../../src/zh-CN/setup-wizard.md

@@ -21,7 +21,7 @@ Zed 当前可以用两大类方式接入 `go-on`：
       "command": "go-on",
       "args": [
         "--config",
-        "/absolute/path/to/config.toml",
+        "/absolute/path/to/zed-config.toml",
         "--protocol-mode",
         "acp_stdio",
         "--verbose"
@@ -41,7 +41,7 @@ Windows 示例：
       "command": "D:/Workspace/RustWorkspace/go-on/target/debug/go-on.exe",
       "args": [
         "--config",
-        "D:/Workspace/RustWorkspace/go-on/config.toml",
+        "D:/Workspace/RustWorkspace/go-on/zed-config.toml",
         "--protocol-mode",
         "acp_stdio"
       ]
@@ -63,13 +63,13 @@ Windows 示例：
 先手动启动后端：
 
 ```bash
-go-on --config config.toml --protocol-mode acp_http --acp-http-bind 127.0.0.1:8090
+go-on --config zed-config.toml --protocol-mode acp_http --acp-http-bind 127.0.0.1:8090
 ```
 
 如果想让同一个后端同时兼顾 MCP 风格客户端，建议改成：
 
 ```bash
-go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:8090
+go-on --config zed-config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:8090
 ```
 
 然后把 Zed 的 external-agent 风格配置指向运行时根地址：
@@ -149,8 +149,8 @@ http://127.0.0.1:8090/health
 不要先怪 Zed 配置，先验证后端：
 
 ```bash
-go-on --config config.toml --status
-go-on --config config.toml --validate-config
+go-on --config zed-config.toml --status
+go-on --config zed-config.toml --validate-config
 ```
 
 HTTP 模式下，至少手工确认：
@@ -182,4 +182,4 @@ GET http://127.0.0.1:8090/v1/models
 
 - `/health` 能通，但 Zed 仍拒绝 ACP，多半是当前运行时模式偏 MCP-only。
 - `/v1/models` 能通，但实际聊天失败，多半是 Provider 没就绪，先看 `go-on --status`。
-- stdio 模式一启动就失败，先检查可执行文件路径和 `config.toml` 路径。
+- stdio 模式一启动就失败，先检查可执行文件路径和 `zed-config.toml` 路径。

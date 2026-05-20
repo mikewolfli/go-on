@@ -3,8 +3,6 @@
 //! This module provides utility functions for metrics collection,
 //! streaming notifications, and Prometheus metric formatting.
 
-#[cfg(test)]
-use crate::acp::prelude::{now_ts, now_ts_ms};
 use std::collections::HashMap;
 
 use serde_json::{json, Map, Value};

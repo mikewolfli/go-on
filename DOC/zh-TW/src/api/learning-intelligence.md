@@ -1,1 +1,0 @@
-../../../src/zh-TW/api/learning-intelligence.md

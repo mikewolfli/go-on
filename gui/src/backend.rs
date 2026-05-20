@@ -596,7 +596,7 @@ impl BackendClient {
         model: Option<&str>,
         options_extra: Option<Value>,
         history: Option<Vec<Value>>,
-    ) -> Result<(String, String, String, Option<Value>), String> {
+    ) -> Result<(String, String, String, Option<String>, Option<Value>), String> {
         let phase_val = if phase.is_empty() {
             serde_json::Value::Null
         } else {
@@ -700,6 +700,12 @@ impl BackendClient {
             .unwrap_or("")
             .to_string();
 
+        let selected_model = value
+            .get("selected_model")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+
         let risk_decision = value.get("risk_decision").cloned();
 
         if response_text.is_empty() && thinking_text.is_empty() {
@@ -707,10 +713,17 @@ impl BackendClient {
                 "(empty)".to_string(),
                 String::new(),
                 agent_text,
+                selected_model,
                 risk_decision,
             ))
         } else {
-            Ok((response_text, thinking_text, agent_text, risk_decision))
+            Ok((
+                response_text,
+                thinking_text,
+                agent_text,
+                selected_model,
+                risk_decision,
+            ))
         }
     }
 

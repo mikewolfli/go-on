@@ -3,14 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 
-echo "=== Building English ==="
-mdbook build "$ROOT/en"
-
-echo "=== Building Simplified Chinese ==="
-mdbook build "$ROOT/zh-CN"
-
-echo "=== Building Traditional Chinese ==="
-mdbook build "$ROOT/zh-TW"
+echo "=== Building Documentation (English / 中文 / 繁體中文) ==="
+mdbook build "$ROOT"
 
 echo ""
 echo "=== Done ==="

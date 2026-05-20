@@ -112,6 +112,9 @@ pub struct ChatView {
     stream_repaint_interval: std::time::Duration,
     max_pending_events_per_frame: usize,
     stream_client: reqwest::Client,
+    /// Per-message content hash cache: skips re-parsing unchanged messages.
+    /// Key = message index, value = hash of content last rendered.
+    rendered_content_hashes: Vec<u64>,
 }
 
 impl ChatView {
@@ -466,6 +469,7 @@ impl ChatView {
                         .build()
                         .unwrap_or_else(|_| reqwest::Client::new())
                 }),
+            rendered_content_hashes: Vec::new(),
         }
     }
 
@@ -978,6 +982,7 @@ mod tests {
             show_token_details: true,
             model_stats: std::collections::HashMap::new(),
             stream_client: reqwest::Client::new(),
+            rendered_content_hashes: Vec::new(),
         }
     }
 

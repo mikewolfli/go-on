@@ -21,7 +21,7 @@ Recommended backend command:
       "command": "go-on",
       "args": [
         "--config",
-        "/absolute/path/to/config.toml",
+        "/absolute/path/to/zed-config.toml",
         "--protocol-mode",
         "acp_stdio",
         "--verbose"
@@ -41,7 +41,7 @@ Windows example:
       "command": "D:/Workspace/RustWorkspace/go-on/target/debug/go-on.exe",
       "args": [
         "--config",
-        "D:/Workspace/RustWorkspace/go-on/config.toml",
+        "D:/Workspace/RustWorkspace/go-on/zed-config.toml",
         "--protocol-mode",
         "acp_stdio"
       ]
@@ -63,13 +63,13 @@ Use this when you want one long-running shared backend process.
 Start the backend first:
 
 ```bash
-go-on --config config.toml --protocol-mode acp_http --acp-http-bind 127.0.0.1:8090
+go-on --config zed-config.toml --protocol-mode acp_http --acp-http-bind 127.0.0.1:8090
 ```
 
 If you want one runtime that can also satisfy MCP-style clients, use `adaptive` instead:
 
 ```bash
-go-on --config config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:8090
+go-on --config zed-config.toml --protocol-mode adaptive --acp-http-bind 127.0.0.1:8090
 ```
 
 Then point Zed's external-agent style integration at the runtime base URL:
@@ -181,12 +181,12 @@ one per mode, each hardcoding the mode via backend routing:
     "go-on-ask": {
       "type": "custom",
       "command": "go-on",
-      "args": ["--config", "./config.toml", "--protocol-mode", "acp_stdio"]
+      "args": ["--config", "./zed-config.toml", "--protocol-mode", "acp_stdio"]
     },
     "go-on-full-auto": {
       "type": "custom",
       "command": "go-on",
-      "args": ["--config", "./config.toml", "--protocol-mode", "acp_stdio"]
+      "args": ["--config", "./zed-config.toml", "--protocol-mode", "acp_stdio"]
     }
   }
 }
@@ -223,8 +223,8 @@ This ensures compatibility with any ACP client that does not send a mode.
 Before blaming Zed configuration, verify the backend:
 
 ```bash
-go-on --config config.toml --status
-go-on --config config.toml --validate-config
+go-on --config zed-config.toml --status
+go-on --config zed-config.toml --validate-config
 ```
 
 For HTTP mode, verify endpoints manually:
@@ -256,4 +256,4 @@ GET http://127.0.0.1:8090/v1/models
 
 - If `/health` works but Zed still rejects ACP, the configured runtime mode may be MCP-only.
 - If `/v1/models` works but model chat fails, check provider readiness in `go-on --status`.
-- If stdio mode fails immediately, verify the executable path and `config.toml` path first.
+- If stdio mode fails immediately, verify the executable path and `zed-config.toml` path first.

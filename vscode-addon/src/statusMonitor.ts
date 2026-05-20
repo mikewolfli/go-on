@@ -7,10 +7,18 @@ const DEFAULT_HEALTH_INTERVAL_SECONDS = 300;
 
 interface ProbeReport {
   probes?: {
-    provider_dependencies?: {
-      ready: boolean;
+    dependencies?: Array<{
+      name: string;
+      status?: string;
+      message?: string;
+      details?: {
+        ready?: number;
+        degraded?: number;
+        total?: number;
+        [key: string]: unknown;
+      };
       [key: string]: unknown;
-    };
+    }>;
     [key: string]: unknown;
   };
   [key: string]: unknown;
@@ -119,9 +127,17 @@ export class StatusMonitor {
         "health.probes",
       )) as ProbeReport;
       const probes = probeResult?.probes;
-      const providerDep = probes?.provider_dependencies;
-      const hasProviderConfig = providerDep !== undefined;
-      const providerReady = hasProviderConfig && providerDep!.ready;
+      const dependencies = Array.isArray(probes?.dependencies)
+        ? (probes!.dependencies as Array<any>)
+        : [];
+      const providerComponent = dependencies.find(
+        (dep: any) => dep?.name === "provider_dependencies",
+      );
+      const providerDetails = providerComponent?.details;
+      const hasProviderConfig =
+        providerDetails !== undefined && (providerDetails.total ?? 0) > 0;
+      const providerReady =
+        hasProviderConfig && (providerDetails.ready ?? 0) > 0;
 
       if (hasProviderConfig && !providerReady) {
         this.statusBarItem.text = "$(warning) Go-On Chat";

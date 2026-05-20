@@ -1,1 +1,0 @@
-../../../src/zh-TW/deployment/local.md

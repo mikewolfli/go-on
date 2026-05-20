@@ -1,1 +1,0 @@
-../../src/zh-TW/zed.md

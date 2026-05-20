@@ -428,18 +428,20 @@ impl ChatView {
                                     None, // history not available in this scope
                                 )
                                 .await
-                                .map(|(content, thinking, agent, risk_decision)| {
-                                    PendingResponse::ChatCompleted {
-                                        generation_id,
-                                        content,
-                                        thinking,
-                                        agent,
-                                        model: None,
-                                        conversation_id: None,
-                                        branch_id: None,
-                                        risk_decision,
-                                    }
-                                })
+                                .map(
+                                    |(content, thinking, agent, selected_model, risk_decision)| {
+                                        PendingResponse::ChatCompleted {
+                                            generation_id,
+                                            content,
+                                            thinking,
+                                            agent,
+                                            model: selected_model,
+                                            conversation_id: None,
+                                            branch_id: None,
+                                            risk_decision,
+                                        }
+                                    },
+                                )
                                 .unwrap_or_else(|e| PendingResponse::Error {
                                     generation_id: Some(generation_id),
                                     message: format!("stream error: {err}; fallback: {e}"),
@@ -752,18 +754,20 @@ impl ChatView {
                                 None, // history not available in this scope
                             )
                             .await
-                            .map(|(content, thinking, agent, risk_decision)| {
-                                PendingResponse::ChatCompleted {
-                                    generation_id,
-                                    content,
-                                    thinking,
-                                    agent,
-                                    model: None,
-                                    conversation_id: None,
-                                    branch_id: None,
-                                    risk_decision,
-                                }
-                            })
+                            .map(
+                                |(content, thinking, agent, selected_model, risk_decision)| {
+                                    PendingResponse::ChatCompleted {
+                                        generation_id,
+                                        content,
+                                        thinking,
+                                        agent,
+                                        model: selected_model,
+                                        conversation_id: None,
+                                        branch_id: None,
+                                        risk_decision,
+                                    }
+                                },
+                            )
                             .unwrap_or_else(|e| PendingResponse::Error {
                                 generation_id: Some(generation_id),
                                 message: format!("request error: {err}; fallback: {e}"),
