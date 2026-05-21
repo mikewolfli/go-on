@@ -7,7 +7,7 @@ use crate::widgets::cache::CachedView;
 use std::cell::RefCell;
 
 thread_local! {
-    static SETTINGS_CACHE: RefCell<CachedView> = const { RefCell::new(CachedView::new()) };
+    static SETTINGS_CACHE: RefCell<CachedView> = RefCell::new(CachedView::new());
 }
 
 pub struct SettingsView;

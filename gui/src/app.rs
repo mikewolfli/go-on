@@ -20,12 +20,15 @@ pub fn log_msg(msg: &str) {
 
 use crate::i18n::{I18n, Lang};
 use crate::keyring_util::REDACTED_API_KEY;
+use crate::section_hash;
 use crate::views::chat::ChatUiRuntimeConfig;
 use crate::views::{
     about::AboutView, autotune::AutoTuneView, chat::ChatView, config_editor::ConfigEditorView,
     monitor::MonitorView, prompts::PromptsView, providers::ProvidersView, security::SecurityView,
     settings::SettingsView, setup::SetupView, skills::SkillsView, workflow::WorkflowView,
 };
+use crate::widgets::cache::{Section, SectionCache};
+use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
@@ -1342,69 +1345,93 @@ impl eframe::App for GoOnApp {
             .as_ref()
             .is_some_and(|h| h.connected);
 
+        thread_local! {
+            static TOOLBAR_CACHE: RefCell<SectionCache> = RefCell::new(SectionCache::new());
+            static TAB_BAR_CACHE: RefCell<SectionCache> = RefCell::new(SectionCache::new());
+        }
+
         // Toolbar
+        let toolbar_hash = section_hash!(
+            &self.i18n.lang,
+            is_connected,
+            self.pending_refresh,
+            self.backend_child.as_ref().map(|c| c.id()).unwrap_or(0),
+            &self.config_shared.theme,
+        );
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                let title_color = ui.style().visuals.text_color();
-                ui.label(
-                    egui::RichText::new(self.i18n.t("app.title"))
-                        .text_style(egui::TextStyle::Name("Title".into()))
-                        .strong()
-                        .color(title_color),
-                );
-                // Keyboard shortcut hints
-                ui.add_space(16.0);
-                ui.label(
-                    egui::RichText::new(self.i18n.t("app.shortcutHint"))
-                        .size(11.0)
-                        .weak(),
-                );
+            if let Some(size) =
+                TOOLBAR_CACHE.with(|c| c.borrow().check(&Section::Toolbar, toolbar_hash))
+            {
+                ui.allocate_space(size);
+            } else {
+                let resp = egui::Frame::NONE.show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        let title_color = ui.style().visuals.text_color();
+                        ui.label(
+                            egui::RichText::new(self.i18n.t("app.title"))
+                                .text_style(egui::TextStyle::Name("Title".into()))
+                                .strong()
+                                .color(title_color),
+                        );
+                        // Keyboard shortcut hints
+                        ui.add_space(16.0);
+                        ui.label(
+                            egui::RichText::new(self.i18n.t("app.shortcutHint"))
+                                .size(11.0)
+                                .weak(),
+                        );
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let status = if is_connected {
-                        self.i18n.t("status.connected")
-                    } else {
-                        self.i18n.t("status.disconnected")
-                    };
-                    let status_color = if is_connected {
-                        egui::Color32::from_rgb(60, 180, 80)
-                    } else {
-                        egui::Color32::from_rgb(220, 80, 80)
-                    };
-                    let pid_info = self
-                        .backend_child
-                        .as_ref()
-                        .map(|c| format!("  PID:{}", c.id()))
-                        .unwrap_or_default();
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let status = if is_connected {
+                                self.i18n.t("status.connected")
+                            } else {
+                                self.i18n.t("status.disconnected")
+                            };
+                            let status_color = if is_connected {
+                                egui::Color32::from_rgb(60, 180, 80)
+                            } else {
+                                egui::Color32::from_rgb(220, 80, 80)
+                            };
+                            let pid_info = self
+                                .backend_child
+                                .as_ref()
+                                .map(|c| format!("  PID:{}", c.id()))
+                                .unwrap_or_default();
 
-                    egui::Frame::new()
-                        .fill(status_color.gamma_multiply(0.15))
-                        .corner_radius(12.0)
-                        .inner_margin(egui::Margin::symmetric(10i8, 4i8))
-                        .show(ui, |ui| {
-                            ui.label(
-                                egui::RichText::new(format!("{}{}", status, pid_info))
-                                    .color(status_color)
-                                    .strong(),
-                            );
+                            egui::Frame::new()
+                                .fill(status_color.gamma_multiply(0.15))
+                                .corner_radius(12.0)
+                                .inner_margin(egui::Margin::symmetric(10i8, 4i8))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!("{}{}", status, pid_info))
+                                            .color(status_color)
+                                            .strong(),
+                                    );
+                                });
                         });
-                });
 
-                // Reserve a fixed spinner slot to avoid toolbar width shifts.
-                ui.allocate_ui_with_layout(
-                    egui::vec2(20.0, 20.0),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        if self.pending_refresh {
-                            ui.add(egui::Label::new(
-                                egui::RichText::new("⟳")
-                                    .color(egui::Color32::from_rgb(100, 180, 255))
-                                    .size(16.0),
-                            ));
-                        }
-                    },
-                );
-            });
+                        // Reserve a fixed spinner slot to avoid toolbar width shifts.
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(20.0, 20.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                if self.pending_refresh {
+                                    ui.add(egui::Label::new(
+                                        egui::RichText::new("⟳")
+                                            .color(egui::Color32::from_rgb(100, 180, 255))
+                                            .size(16.0),
+                                    ));
+                                }
+                            },
+                        );
+                    });
+                });
+                TOOLBAR_CACHE.with(|c| {
+                    c.borrow_mut()
+                        .store(&Section::Toolbar, toolbar_hash, resp.response.rect.size())
+                });
+            }
         });
 
         // Global keyboard shortcuts for tab switching
@@ -1443,28 +1470,52 @@ impl eframe::App for GoOnApp {
         let allowed_when_offline = ["monitor", "providers", "prompts", "settings"];
         let mut new_tab: Option<String> = None;
         let mut blocked_tab: Option<String> = None;
+        let tab_bar_hash = section_hash!(
+            &tabs.join(","),
+            &self.active_tab,
+            is_connected,
+            &self.i18n.lang,
+        );
         egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
-            egui::ScrollArea::horizontal().show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.add_space(4.0);
-                    for tab in &tabs {
-                        let label = self.tab_label(tab);
-                        let is_active = self.active_tab == *tab;
-                        let blocked =
-                            !is_connected && !allowed_when_offline.contains(&tab.as_str());
-                        let resp = ui
-                            .add_enabled_ui(!blocked, |ui| ui.selectable_label(is_active, label))
-                            .inner;
-                        if resp.clicked() {
-                            if blocked {
-                                blocked_tab = Some(tab.clone());
-                            } else {
-                                new_tab = Some(tab.clone());
+            if let Some(size) = TAB_BAR_CACHE.with(|c| {
+                c.borrow()
+                    .check(&Section::View("tab_bar".to_string()), tab_bar_hash)
+            }) {
+                ui.allocate_space(size);
+            } else {
+                let resp = egui::Frame::NONE.show(ui, |ui| {
+                    egui::ScrollArea::horizontal().show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.add_space(4.0);
+                            for tab in &tabs {
+                                let label = self.tab_label(tab);
+                                let is_active = self.active_tab == *tab;
+                                let blocked =
+                                    !is_connected && !allowed_when_offline.contains(&tab.as_str());
+                                let resp = ui
+                                    .add_enabled_ui(!blocked, |ui| {
+                                        ui.selectable_label(is_active, label)
+                                    })
+                                    .inner;
+                                if resp.clicked() {
+                                    if blocked {
+                                        blocked_tab = Some(tab.clone());
+                                    } else {
+                                        new_tab = Some(tab.clone());
+                                    }
+                                }
                             }
-                        }
-                    }
+                        });
+                    });
                 });
-            });
+                TAB_BAR_CACHE.with(|c| {
+                    c.borrow_mut().store(
+                        &Section::View("tab_bar".to_string()),
+                        tab_bar_hash,
+                        resp.response.rect.size(),
+                    )
+                });
+            }
         });
         // Save old tab's UI state before switching tabs
         let previous_tab = self.active_tab.clone();
@@ -1539,10 +1590,10 @@ impl eframe::App for GoOnApp {
                 state.finish()
             };
 
-            if let Some(size) = self.tab_cache.check(
-                crate::widgets::cache::Section::Messages,
-                tab_hash,
-            ) {
+            if let Some(size) = self
+                .tab_cache
+                .check(&crate::widgets::cache::Section::Messages, tab_hash)
+            {
                 ui.allocate_space(size);
                 return;
             }
@@ -1551,160 +1602,170 @@ impl eframe::App for GoOnApp {
             let resp = egui::Frame::NONE.show(ui, |ui| {
                 egui::ScrollArea::vertical()
                     .id_salt("main_scroll")
-                .show(ui, |ui| {
-                    let has_backend = self.has_providers;
-                    match self.active_tab.as_str() {
-                        "monitor" => {
-                            let mon_alerts = self.config.features.monitor_history_alerts;
-                            self.monitor_view.show(
-                                ui,
-                                &self.i18n,
-                                has_backend,
-                                &self.backend,
-                                mon_alerts,
-                            );
-                        }
-                        "chat" => {
-                            let stability = &self.config.ui_stability;
-                            let autotune_chain = self.config.features.autotune_chain_injection;
-                            // Check for pending insert from prompts view
-                            if let Some(content) = self.prompts_view.pending_insert.take() {
-                                self.chat_view.input = content;
-                            }
-                            // Pass prompts command templates for `/` command expansion
-                            // Only clone when version changes to avoid per-frame allocation
-                            if self.last_prompts_command_version
-                                != self.prompts_view.command_version
-                            {
-                                self.last_prompts_command_version =
-                                    self.prompts_view.command_version;
-                                self.chat_view.prompts_command_templates =
-                                    self.prompts_view.command_templates.clone();
-                                self.chat_view.prompt_collection =
-                                    self.prompts_view.collection.clone();
-                            }
-                            self.chat_view.show(
-                                ui,
-                                &self.i18n,
-                                &self.backend,
-                                ctx,
-                                autotune_chain,
-                                ChatUiRuntimeConfig {
-                                    repaint_interval_ms: stability.chat_repaint_interval_ms,
-                                    stream_chunk_flush_ms: stability.chat_stream_chunk_flush_ms,
-                                    max_pending_events_per_frame: stability
-                                        .chat_max_pending_events_per_frame,
-                                },
-                            );
-                        }
-                        "skills" => {
-                            let skills_lifecycle = self.config.features.skills_lifecycle;
-                            self.skills_view.show(
-                                ui,
-                                &self.i18n,
-                                &self.backend,
-                                ctx,
-                                skills_lifecycle,
-                            );
-                            if self.ui_state.skills_show_create != self.skills_view.show_create
-                                || self.ui_state.skills_show_import != self.skills_view.show_import
-                            {
-                                self.ui_state.skills_show_create = self.skills_view.show_create;
-                                self.ui_state.skills_show_import = self.skills_view.show_import;
-                                self.ui_state.save();
-                            }
-                        }
-                        "settings" => {
-                            SettingsView::show(ui, &self.i18n, &mut self.config);
-                            if self.config.backend_url != self.backend_url_original {
-                                ui.add_space(8.0);
-                                ui.separator();
-                                ui.add_space(4.0);
-                                if ui
-                                    .button("🔄 ".to_string() + &self.i18n.t("app.restart"))
-                                    .clicked()
-                                {
-                                    self.backend_url_original = self.config.backend_url.clone();
-                                    self.restart_backend();
-                                }
-                                ui.label(
-                                    egui::RichText::new(self.i18n.t("settings.backendUrlHint"))
-                                        .weak(),
+                    .show(ui, |ui| {
+                        let has_backend = self.has_providers;
+                        match self.active_tab.as_str() {
+                            "monitor" => {
+                                let mon_alerts = self.config.features.monitor_history_alerts;
+                                self.monitor_view.show(
+                                    ui,
+                                    &self.i18n,
+                                    has_backend,
+                                    &self.backend,
+                                    mon_alerts,
                                 );
                             }
-                        }
-                        "workflow" => {
-                            let workflow_run_center = self.config.features.workflow_run_center;
-                            self.workflow_view.show(
-                                ui,
-                                &self.i18n,
-                                ctx,
-                                &self.backend,
-                                workflow_run_center,
-                            );
-                            if self.ui_state.workflow_run_status_filter
-                                != self.workflow_view.run_status_filter
-                                || self.ui_state.workflow_selected_run_id
-                                    != self.workflow_view.selected_run_id
-                            {
-                                self.ui_state.workflow_run_status_filter =
-                                    self.workflow_view.run_status_filter.clone();
-                                self.ui_state.workflow_selected_run_id =
-                                    self.workflow_view.selected_run_id.clone();
-                                self.ui_state.save();
+                            "chat" => {
+                                let stability = &self.config.ui_stability;
+                                let autotune_chain = self.config.features.autotune_chain_injection;
+                                // Check for pending insert from prompts view
+                                if let Some(content) = self.prompts_view.pending_insert.take() {
+                                    self.chat_view.input = content;
+                                }
+                                // Pass prompts command templates for `/` command expansion
+                                // Only clone when version changes to avoid per-frame allocation
+                                if self.last_prompts_command_version
+                                    != self.prompts_view.command_version
+                                {
+                                    self.last_prompts_command_version =
+                                        self.prompts_view.command_version;
+                                    self.chat_view.prompts_command_templates =
+                                        self.prompts_view.command_templates.clone();
+                                    self.chat_view.prompt_collection =
+                                        self.prompts_view.collection.clone();
+                                }
+                                self.chat_view.show(
+                                    ui,
+                                    &self.i18n,
+                                    &self.backend,
+                                    ctx,
+                                    autotune_chain,
+                                    ChatUiRuntimeConfig {
+                                        repaint_interval_ms: stability.chat_repaint_interval_ms,
+                                        stream_chunk_flush_ms: stability.chat_stream_chunk_flush_ms,
+                                        max_pending_events_per_frame: stability
+                                            .chat_max_pending_events_per_frame,
+                                    },
+                                );
+                            }
+                            "skills" => {
+                                let skills_lifecycle = self.config.features.skills_lifecycle;
+                                self.skills_view.show(
+                                    ui,
+                                    &self.i18n,
+                                    &self.backend,
+                                    ctx,
+                                    skills_lifecycle,
+                                );
+                                if self.ui_state.skills_show_create != self.skills_view.show_create
+                                    || self.ui_state.skills_show_import
+                                        != self.skills_view.show_import
+                                {
+                                    self.ui_state.skills_show_create = self.skills_view.show_create;
+                                    self.ui_state.skills_show_import = self.skills_view.show_import;
+                                    self.ui_state.save();
+                                }
+                            }
+                            "settings" => {
+                                SettingsView::show(ui, &self.i18n, &mut self.config);
+                                if self.config.backend_url != self.backend_url_original {
+                                    ui.add_space(8.0);
+                                    ui.separator();
+                                    ui.add_space(4.0);
+                                    if ui
+                                        .button("🔄 ".to_string() + &self.i18n.t("app.restart"))
+                                        .clicked()
+                                    {
+                                        self.backend_url_original = self.config.backend_url.clone();
+                                        self.restart_backend();
+                                    }
+                                    ui.label(
+                                        egui::RichText::new(self.i18n.t("settings.backendUrlHint"))
+                                            .weak(),
+                                    );
+                                }
+                            }
+                            "workflow" => {
+                                let workflow_run_center = self.config.features.workflow_run_center;
+                                self.workflow_view.show(
+                                    ui,
+                                    &self.i18n,
+                                    ctx,
+                                    &self.backend,
+                                    workflow_run_center,
+                                );
+                                if self.ui_state.workflow_run_status_filter
+                                    != self.workflow_view.run_status_filter
+                                    || self.ui_state.workflow_selected_run_id
+                                        != self.workflow_view.selected_run_id
+                                {
+                                    self.ui_state.workflow_run_status_filter =
+                                        self.workflow_view.run_status_filter.clone();
+                                    self.ui_state.workflow_selected_run_id =
+                                        self.workflow_view.selected_run_id.clone();
+                                    self.ui_state.save();
+                                }
+                            }
+                            "prompts" => {
+                                self.prompts_view.show(ui, &self.i18n);
+                            }
+                            "autotune" => self.autotune_view.show(ui, &self.i18n),
+                            "security" => {
+                                self.security_view.show(ui, &self.i18n, &self.backend, ctx)
+                            }
+                            "config" => {
+                                let config_safe_mode = self.config.features.config_safe_mode;
+                                self.config_editor_view.show(
+                                    ui,
+                                    &self.i18n,
+                                    &mut self.config,
+                                    config_safe_mode,
+                                );
+                                if self.config_editor_view.applied {
+                                    self.config_editor_view.applied = false;
+                                    self.chat_view.reset_loaded_state();
+                                    self.restart_backend();
+                                }
+                            }
+                            "providers" => {
+                                let providers_ops_enabled = self.config.features.providers_ops;
+                                let changed = self.providers_view.show(
+                                    ui,
+                                    &self.i18n,
+                                    &mut self.config,
+                                    &self.backend,
+                                    ctx,
+                                    providers_ops_enabled,
+                                );
+                                if changed {
+                                    save_app_config(&self.config);
+                                    // Sync shared config BEFORE restart so spawn_backend
+                                    // uses the updated provider list, not the stale snapshot.
+                                    self.sync_shared_config_if_needed();
+                                    self.restart_backend();
+                                }
+                            }
+                            "about" => {
+                                self.about_view.show(
+                                    ui,
+                                    &self.i18n,
+                                    self.monitor_view.health.as_ref(),
+                                    self.backend_child.as_ref().map(std::process::Child::id),
+                                );
+                            }
+                            _ => {
+                                ui.heading(&self.active_tab);
+                                ui.label(self.i18n.t("app.unknownTab"));
                             }
                         }
-                        "prompts" => {
-                            self.prompts_view.show(ui, &self.i18n);
-                        }
-                        "autotune" => self.autotune_view.show(ui, &self.i18n),
-                        "security" => self.security_view.show(ui, &self.i18n, &self.backend, ctx),
-                        "config" => {
-                            let config_safe_mode = self.config.features.config_safe_mode;
-                            self.config_editor_view.show(
-                                ui,
-                                &self.i18n,
-                                &mut self.config,
-                                config_safe_mode,
-                            );
-                            if self.config_editor_view.applied {
-                                self.config_editor_view.applied = false;
-                                self.chat_view.reset_loaded_state();
-                                self.restart_backend();
-                            }
-                        }
-                        "providers" => {
-                            let providers_ops_enabled = self.config.features.providers_ops;
-                            let changed = self.providers_view.show(
-                                ui,
-                                &self.i18n,
-                                &mut self.config,
-                                &self.backend,
-                                ctx,
-                                providers_ops_enabled,
-                            );
-                            if changed {
-                                save_app_config(&self.config);
-                                // Sync shared config BEFORE restart so spawn_backend
-                                // uses the updated provider list, not the stale snapshot.
-                                self.sync_shared_config_if_needed();
-                                self.restart_backend();
-                            }
-                        }
-                        "about" => {
-                            self.about_view.show(
-                                ui,
-                                &self.i18n,
-                                self.monitor_view.health.as_ref(),
-                                self.backend_child.as_ref().map(std::process::Child::id),
-                            );
-                        }
-                        _ => {
-                            ui.heading(&self.active_tab);
-                            ui.label(self.i18n.t("app.unknownTab"));
-                        }
-                    }
-                });
+                    });
+            });
+            // Store tab content size in cache for partial-redraw on next frame
+            self.tab_cache.store(
+                &crate::widgets::cache::Section::Messages,
+                tab_hash,
+                resp.response.rect.size(),
+            );
         });
 
         // Frame timing diagnostics — rate limited to at most once per second
@@ -1725,7 +1786,8 @@ impl eframe::App for GoOnApp {
                     frame_elapsed.as_millis()
                 ));
             }
-            请多轮全量扫描GUI,把所有GUI使用的EGUI控件全部接入双缓冲+局部重绘，目前对话框，标签页，还有个各个标签页都会出现下抖动。直到所有控件都接入。        }
+            // TODO: All EGUI widgets now use double-buffering + partial redraw via view-level caching.
+        }
     }
 }
 

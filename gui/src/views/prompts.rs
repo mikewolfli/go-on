@@ -2,9 +2,14 @@ use std::mem;
 use std::{collections::HashMap, collections::HashSet};
 
 use crate::i18n::{I18n, Lang};
-use crate::widgets::cache::section_hash;
+use crate::section_hash;
 use crate::widgets::cache::CachedView;
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
+
+thread_local! {
+    static PROMPTS_CACHE: RefCell<CachedView> = RefCell::new(CachedView::new());
+}
 
 // ── Data types ────────────────────────────────────────────────────────────
 
@@ -62,8 +67,6 @@ pub struct PromptsView {
     pub command_version: u64,
     /// Pending insert content to be taken by the app for chat input.
     pub pending_insert: Option<String>,
-    /// View-level cache: skips widget tree rebuild when state is unchanged.
-    cached_view: CachedView,
 }
 
 /// A simplified prompt template for the chat `/` command lookup.
@@ -96,7 +99,6 @@ impl PromptsView {
             command_version: 0,
             current_lang: Lang::En,
             pending_insert: None,
-            cached_view: CachedView::new(),
         }
     }
 
@@ -371,364 +373,388 @@ impl PromptsView {
             i18n.lang as u8,
         );
 
-        let _ = self
-            .cached_view
-            .check_or_render(ui, "prompts_view", hash, |ui| {
-                ui.heading(i18n.t("prompts.title"));
-                ui.separator();
-                ui.add_space(4.0);
-
-                // Error message
-                if !self.error.is_empty() {
-                    let text = self.error.clone();
-                    let resp = ui.colored_label(egui::Color32::RED, &text);
-                    resp.context_menu(|ui| {
-                        if ui.button(i18n.t("common.copyButton")).clicked() {
-                            ui.ctx().copy_text(text.clone());
-                            ui.close_menu();
-                        }
-                    });
+        let _ = PROMPTS_CACHE.with(|c| {
+            c.borrow_mut()
+                .check_or_render(ui, "prompts_view", hash, |ui| {
+                    ui.heading(i18n.t("prompts.title"));
+                    ui.separator();
                     ui.add_space(4.0);
-                }
 
-                // ── Toolbar ─────────────────────────────────────────────────────
-                ui.horizontal(|ui| {
-                    // Search box
-                    ui.label("🔍");
-                    let resp = ui.add(
-                        egui::TextEdit::singleline(&mut self.search_query)
-                            .hint_text(i18n.t("prompts.search"))
-                            .desired_width(250.0),
-                    );
-                    if resp.changed() {
-                        // Clear selection when searching
-                        if !self.search_query.is_empty() {
-                            self.selected_template = None;
-                        }
+                    // Error message
+                    if !self.error.is_empty() {
+                        let text = self.error.clone();
+                        let resp = ui.colored_label(egui::Color32::RED, &text);
+                        resp.context_menu(|ui| {
+                            if ui.button(i18n.t("common.copyButton")).clicked() {
+                                ui.ctx().copy_text(text.clone());
+                                ui.close_menu();
+                            }
+                        });
+                        ui.add_space(4.0);
                     }
 
-                    // Reload button
-                    if ui.add(egui::Button::new("🔄")).clicked() {
-                        self.reload(i18n.lang);
-                    }
-
-                    // Create new template
-                    if ui.add(egui::Button::new("➕")).clicked() {
-                        self.show_create = !self.show_create;
-                        if self.show_create {
-                            self.create_template = PromptTemplate {
-                                id: String::new(),
-                                title: String::new(),
-                                description: String::new(),
-                                content: String::new(),
-                                tags: Vec::new(),
-                            };
-                            self.edit_mode = false;
-                            self.edit_template = None;
-                        }
-                    }
-                });
-
-                ui.add_space(4.0);
-
-                // ── Create dialog ───────────────────────────────────────────────
-                if self.show_create {
-                    egui::Frame::group(ui.style()).show(ui, |ui| {
-                        ui.label(
-                            egui::RichText::new(i18n.t("prompts.create"))
-                                .strong()
-                                .size(14.0),
+                    // ── Toolbar ─────────────────────────────────────────────────────
+                    ui.horizontal(|ui| {
+                        // Search box
+                        ui.label("🔍");
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(&mut self.search_query)
+                                .hint_text(i18n.t("prompts.search"))
+                                .desired_width(250.0),
                         );
-
-                        ui.horizontal(|ui| {
-                            ui.label(i18n.t("skills.create.title"));
-                            ui.text_edit_singleline(&mut self.create_template.title);
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label(i18n.t("common.description"));
-                            ui.text_edit_singleline(&mut self.create_template.description);
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label(i18n.t("prompts.content"));
-                        });
-                        ui.text_edit_multiline(&mut self.create_template.content);
-                        ui.horizontal(|ui| {
-                            ui.label(i18n.t("prompts.tags"));
-                            let mut tags_str = self.create_template.tags.join(", ");
-                            ui.text_edit_singleline(&mut tags_str);
-                            self.create_template.tags = tags_str
-                                .split(',')
-                                .map(|s| s.trim().to_string())
-                                .filter(|s| !s.is_empty())
-                                .collect();
-                        });
-
-                        ui.horizontal(|ui| {
-                            if ui.button(i18n.t("prompts.save")).clicked() {
-                                // Generate an ID if not set
-                                if self.create_template.id.is_empty() {
-                                    self.create_template.id = self
-                                        .create_template
-                                        .title
-                                        .to_lowercase()
-                                        .replace(char::is_whitespace, "_")
-                                        .replace(|c: char| !c.is_alphanumeric() && c != '_', "");
-                                    if self.create_template.id.is_empty() {
-                                        self.create_template.id = format!(
-                                            "custom_{}",
-                                            std::time::SystemTime::now()
-                                                .duration_since(std::time::UNIX_EPOCH)
-                                                .map(|d| d.as_nanos())
-                                                .unwrap_or(0)
-                                        );
-                                    }
-                                }
-
-                                // Store custom template in config directory
-                                if let Err(err) = self.save_custom_template(&self.create_template) {
-                                    self.error = err;
-                                } else {
-                                    self.show_create = false;
-                                    self.reload(i18n.lang);
-                                }
+                        if resp.changed() {
+                            // Clear selection when searching
+                            if !self.search_query.is_empty() {
+                                self.selected_template = None;
                             }
-                            if ui.button(i18n.t("prompts.cancel")).clicked() {
-                                self.show_create = false;
+                        }
+
+                        // Reload button
+                        if ui.add(egui::Button::new("🔄")).clicked() {
+                            self.reload(i18n.lang);
+                        }
+
+                        // Create new template
+                        if ui.add(egui::Button::new("➕")).clicked() {
+                            self.show_create = !self.show_create;
+                            if self.show_create {
+                                self.create_template = PromptTemplate {
+                                    id: String::new(),
+                                    title: String::new(),
+                                    description: String::new(),
+                                    content: String::new(),
+                                    tags: Vec::new(),
+                                };
+                                self.edit_mode = false;
+                                self.edit_template = None;
                             }
-                        });
+                        }
                     });
+
                     ui.add_space(4.0);
-                }
 
-                // ── Main content: two-column layout ─────────────────────────────
-                // ── Search results (shown when search query is non-empty) ──────
-                let search_active = !self.search_query.is_empty();
-                if search_active {
-                    let query = self.search_query.clone();
-                    let results: Vec<(String, String, PromptTemplate)> = self
-                        .collection
-                        .iter()
-                        .flat_map(|cat| {
-                            let q = query.to_lowercase();
-                            cat.templates
-                                .iter()
-                                .filter(move |tmpl| {
-                                    tmpl.title.to_lowercase().contains(&q)
-                                        || tmpl.description.to_lowercase().contains(&q)
-                                        || tmpl.tags.iter().any(|t| t.to_lowercase().contains(&q))
-                                        || tmpl.content.to_lowercase().contains(&q)
-                                })
-                                .map(|tmpl| (cat.id.clone(), cat.name.clone(), tmpl.clone()))
-                        })
-                        .collect();
-
-                    if results.is_empty() {
-                        ui.label(egui::RichText::new(i18n.t("prompts.noTemplates")).weak());
-                    } else {
-                        egui::ScrollArea::vertical()
-                            .id_salt("prompts_search_results")
-                            .show(ui, |ui| {
-                                for (_cat_id, cat_name, tmpl) in &results {
-                                    let is_selected = self
-                                        .selected_template
-                                        .as_ref()
-                                        .is_some_and(|t| t.id == tmpl.id);
-
-                                    let border_color = if is_selected {
-                                        ui.style().visuals.selection.bg_fill
-                                    } else {
-                                        egui::Color32::TRANSPARENT
-                                    };
-
-                                    let resp = egui::Frame::new()
-                                        .fill(ui.style().visuals.extreme_bg_color)
-                                        .stroke(if border_color == egui::Color32::TRANSPARENT {
-                                            egui::Stroke::NONE
-                                        } else {
-                                            egui::Stroke::new(1.0, border_color)
-                                        })
-                                        .corner_radius(4.0)
-                                        .inner_margin(egui::Margin::symmetric(8i8, 6i8))
-                                        .show(ui, |ui| {
-                                            ui.horizontal(|ui| {
-                                                ui.label(egui::RichText::new(&tmpl.title).strong());
-                                                ui.with_layout(
-                                                    egui::Layout::right_to_left(
-                                                        egui::Align::Center,
-                                                    ),
-                                                    |ui| {
-                                                        ui.label(
-                                                            egui::RichText::new(format!(
-                                                                "📁 {}",
-                                                                cat_name
-                                                            ))
-                                                            .weak()
-                                                            .size(11.0),
-                                                        );
-                                                    },
-                                                );
-                                            });
-                                            ui.label(
-                                                egui::RichText::new(&tmpl.description)
-                                                    .size(12.0)
-                                                    .weak(),
-                                            );
-                                            if !tmpl.tags.is_empty() {
-                                                ui.horizontal_wrapped(|ui| {
-                                                    for tag in &tmpl.tags {
-                                                        ui.label(
-                                                            egui::RichText::new(format!(
-                                                                "#{}",
-                                                                tag
-                                                            ))
-                                                            .size(10.0)
-                                                            .color(
-                                                                ui.style().visuals.hyperlink_color,
-                                                            ),
-                                                        );
-                                                    }
-                                                });
-                                            }
-                                            if ui.button(i18n.t("prompts.insert")).clicked() {
-                                                self.pending_insert = Some(tmpl.content.clone());
-                                            }
-                                        })
-                                        .response;
-
-                                    if resp.clicked() {
-                                        self.selected_template = Some(tmpl.clone());
-                                    }
-
-                                    ui.add_space(2.0);
-                                }
-                            });
-                    }
-                } else {
-                    // ── Two-column layout ──────────────────────────────────────
-                    egui::SidePanel::left("prompts_categories")
-                        .resizable(true)
-                        .default_width(200.0)
-                        .width_range(150.0..=350.0)
-                        .show_inside(ui, |ui| {
+                    // ── Create dialog ───────────────────────────────────────────────
+                    if self.show_create {
+                        egui::Frame::group(ui.style()).show(ui, |ui| {
                             ui.label(
-                                egui::RichText::new(i18n.t("prompts.categories"))
+                                egui::RichText::new(i18n.t("prompts.create"))
                                     .strong()
                                     .size(14.0),
                             );
-                            ui.separator();
-                            ui.add_space(2.0);
 
-                            if self.collection.is_empty() {
-                                ui.label(egui::RichText::new(i18n.t("prompts.noTemplates")).weak());
-                            } else {
-                                egui::ScrollArea::vertical()
-                                    .id_salt("prompts_category_list")
-                                    .show(ui, |ui| {
-                                        for cat in &self.collection {
-                                            let is_selected = self
-                                                .selected_category
-                                                .as_ref()
-                                                .is_some_and(|id| id == &cat.id);
-                                            let count = cat.templates.len();
+                            ui.horizontal(|ui| {
+                                ui.label(i18n.t("skills.create.title"));
+                                ui.text_edit_singleline(&mut self.create_template.title);
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(i18n.t("common.description"));
+                                ui.text_edit_singleline(&mut self.create_template.description);
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(i18n.t("prompts.content"));
+                            });
+                            ui.text_edit_multiline(&mut self.create_template.content);
+                            ui.horizontal(|ui| {
+                                ui.label(i18n.t("prompts.tags"));
+                                let mut tags_str = self.create_template.tags.join(", ");
+                                ui.text_edit_singleline(&mut tags_str);
+                                self.create_template.tags = tags_str
+                                    .split(',')
+                                    .map(|s| s.trim().to_string())
+                                    .filter(|s| !s.is_empty())
+                                    .collect();
+                            });
 
-                                            let label_text =
-                                                format!("{} {} ({})", cat.icon, cat.name, count);
-                                            let resp =
-                                                ui.selectable_label(is_selected, &label_text);
-                                            if resp.clicked() {
-                                                self.selected_category = Some(cat.id.clone());
-                                                self.selected_template = None;
-                                            }
+                            ui.horizontal(|ui| {
+                                if ui.button(i18n.t("prompts.save")).clicked() {
+                                    // Generate an ID if not set
+                                    if self.create_template.id.is_empty() {
+                                        self.create_template.id = self
+                                            .create_template
+                                            .title
+                                            .to_lowercase()
+                                            .replace(char::is_whitespace, "_")
+                                            .replace(
+                                                |c: char| !c.is_alphanumeric() && c != '_',
+                                                "",
+                                            );
+                                        if self.create_template.id.is_empty() {
+                                            self.create_template.id = format!(
+                                                "custom_{}",
+                                                std::time::SystemTime::now()
+                                                    .duration_since(std::time::UNIX_EPOCH)
+                                                    .map(|d| d.as_nanos())
+                                                    .unwrap_or(0)
+                                            );
                                         }
-                                    });
-                            }
+                                    }
+
+                                    // Store custom template in config directory
+                                    if let Err(err) =
+                                        self.save_custom_template(&self.create_template)
+                                    {
+                                        self.error = err;
+                                    } else {
+                                        self.show_create = false;
+                                        self.reload(i18n.lang);
+                                    }
+                                }
+                                if ui.button(i18n.t("prompts.cancel")).clicked() {
+                                    self.show_create = false;
+                                }
+                            });
                         });
+                        ui.add_space(4.0);
+                    }
 
-                    // ── Right panel: templates list + detail ───────────────────
-                    egui::CentralPanel::default().show_inside(ui, |ui| {
-                        match self.selected_category.clone() {
-                            None => {
-                                ui.label(egui::RichText::new(i18n.t("prompts.noCategory")).weak());
-                            }
-                            Some(ref cat_id) => {
-                                let category = self.collection.iter().find(|c| c.id == *cat_id);
+                    // ── Main content: two-column layout ─────────────────────────────
+                    // ── Search results (shown when search query is non-empty) ──────
+                    let search_active = !self.search_query.is_empty();
+                    if search_active {
+                        let query = self.search_query.clone();
+                        let results: Vec<(String, String, PromptTemplate)> = self
+                            .collection
+                            .iter()
+                            .flat_map(|cat| {
+                                let q = query.to_lowercase();
+                                cat.templates
+                                    .iter()
+                                    .filter(move |tmpl| {
+                                        tmpl.title.to_lowercase().contains(&q)
+                                            || tmpl.description.to_lowercase().contains(&q)
+                                            || tmpl
+                                                .tags
+                                                .iter()
+                                                .any(|t| t.to_lowercase().contains(&q))
+                                            || tmpl.content.to_lowercase().contains(&q)
+                                    })
+                                    .map(|tmpl| (cat.id.clone(), cat.name.clone(), tmpl.clone()))
+                            })
+                            .collect();
 
-                                if let Some(cat) = category {
+                        if results.is_empty() {
+                            ui.label(egui::RichText::new(i18n.t("prompts.noTemplates")).weak());
+                        } else {
+                            egui::ScrollArea::vertical()
+                                .id_salt("prompts_search_results")
+                                .show(ui, |ui| {
+                                    for (_cat_id, cat_name, tmpl) in &results {
+                                        let is_selected = self
+                                            .selected_template
+                                            .as_ref()
+                                            .is_some_and(|t| t.id == tmpl.id);
+
+                                        let border_color = if is_selected {
+                                            ui.style().visuals.selection.bg_fill
+                                        } else {
+                                            egui::Color32::TRANSPARENT
+                                        };
+
+                                        let resp = egui::Frame::new()
+                                            .fill(ui.style().visuals.extreme_bg_color)
+                                            .stroke(if border_color == egui::Color32::TRANSPARENT {
+                                                egui::Stroke::NONE
+                                            } else {
+                                                egui::Stroke::new(1.0, border_color)
+                                            })
+                                            .corner_radius(4.0)
+                                            .inner_margin(egui::Margin::symmetric(8i8, 6i8))
+                                            .show(ui, |ui| {
+                                                ui.horizontal(|ui| {
+                                                    ui.label(
+                                                        egui::RichText::new(&tmpl.title).strong(),
+                                                    );
+                                                    ui.with_layout(
+                                                        egui::Layout::right_to_left(
+                                                            egui::Align::Center,
+                                                        ),
+                                                        |ui| {
+                                                            ui.label(
+                                                                egui::RichText::new(format!(
+                                                                    "📁 {}",
+                                                                    cat_name
+                                                                ))
+                                                                .weak()
+                                                                .size(11.0),
+                                                            );
+                                                        },
+                                                    );
+                                                });
+                                                ui.label(
+                                                    egui::RichText::new(&tmpl.description)
+                                                        .size(12.0)
+                                                        .weak(),
+                                                );
+                                                if !tmpl.tags.is_empty() {
+                                                    ui.horizontal_wrapped(|ui| {
+                                                        for tag in &tmpl.tags {
+                                                            ui.label(
+                                                                egui::RichText::new(format!(
+                                                                    "#{}",
+                                                                    tag
+                                                                ))
+                                                                .size(10.0)
+                                                                .color(
+                                                                    ui.style()
+                                                                        .visuals
+                                                                        .hyperlink_color,
+                                                                ),
+                                                            );
+                                                        }
+                                                    });
+                                                }
+                                                if ui.button(i18n.t("prompts.insert")).clicked() {
+                                                    self.pending_insert =
+                                                        Some(tmpl.content.clone());
+                                                }
+                                            })
+                                            .response;
+
+                                        if resp.clicked() {
+                                            self.selected_template = Some(tmpl.clone());
+                                        }
+
+                                        ui.add_space(2.0);
+                                    }
+                                });
+                        }
+                    } else {
+                        // ── Two-column layout ──────────────────────────────────────
+                        egui::SidePanel::left("prompts_categories")
+                            .resizable(true)
+                            .default_width(200.0)
+                            .width_range(150.0..=350.0)
+                            .show_inside(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(i18n.t("prompts.categories"))
+                                        .strong()
+                                        .size(14.0),
+                                );
+                                ui.separator();
+                                ui.add_space(2.0);
+
+                                if self.collection.is_empty() {
                                     ui.label(
-                                        egui::RichText::new(format!("{} {}", cat.icon, cat.name))
+                                        egui::RichText::new(i18n.t("prompts.noTemplates")).weak(),
+                                    );
+                                } else {
+                                    egui::ScrollArea::vertical()
+                                        .id_salt("prompts_category_list")
+                                        .show(ui, |ui| {
+                                            for cat in &self.collection {
+                                                let is_selected = self
+                                                    .selected_category
+                                                    .as_ref()
+                                                    .is_some_and(|id| id == &cat.id);
+                                                let count = cat.templates.len();
+
+                                                let label_text = format!(
+                                                    "{} {} ({})",
+                                                    cat.icon, cat.name, count
+                                                );
+                                                let resp =
+                                                    ui.selectable_label(is_selected, &label_text);
+                                                if resp.clicked() {
+                                                    self.selected_category = Some(cat.id.clone());
+                                                    self.selected_template = None;
+                                                }
+                                            }
+                                        });
+                                }
+                            });
+
+                        // ── Right panel: templates list + detail ───────────────────
+                        egui::CentralPanel::default().show_inside(ui, |ui| {
+                            match self.selected_category.clone() {
+                                None => {
+                                    ui.label(
+                                        egui::RichText::new(i18n.t("prompts.noCategory")).weak(),
+                                    );
+                                }
+                                Some(ref cat_id) => {
+                                    let category = self.collection.iter().find(|c| c.id == *cat_id);
+
+                                    if let Some(cat) = category {
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "{} {}",
+                                                cat.icon, cat.name
+                                            ))
                                             .strong()
                                             .size(16.0),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "{} {}",
-                                            cat.templates.len(),
-                                            i18n.t("prompts.templates")
-                                        ))
-                                        .weak()
-                                        .size(11.0),
-                                    );
-                                    ui.separator();
-                                    ui.add_space(4.0);
-
-                                    if cat.templates.is_empty() {
-                                        ui.label(
-                                            egui::RichText::new(i18n.t("prompts.noTemplates"))
-                                                .weak(),
                                         );
-                                    } else {
-                                        egui::ScrollArea::vertical()
-                                            .id_salt("prompts_template_list")
-                                            .show(ui, |ui| {
-                                                for tmpl in &cat.templates {
-                                                    let is_selected = self
-                                                        .selected_template
-                                                        .as_ref()
-                                                        .is_some_and(|t| t.id == tmpl.id);
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "{} {}",
+                                                cat.templates.len(),
+                                                i18n.t("prompts.templates")
+                                            ))
+                                            .weak()
+                                            .size(11.0),
+                                        );
+                                        ui.separator();
+                                        ui.add_space(4.0);
 
-                                                    let bg = if is_selected {
-                                                        ui.style()
-                                                            .visuals
-                                                            .selection
-                                                            .bg_fill
-                                                            .gamma_multiply(0.3)
-                                                    } else {
-                                                        ui.style().visuals.extreme_bg_color
-                                                    };
+                                        if cat.templates.is_empty() {
+                                            ui.label(
+                                                egui::RichText::new(i18n.t("prompts.noTemplates"))
+                                                    .weak(),
+                                            );
+                                        } else {
+                                            egui::ScrollArea::vertical()
+                                                .id_salt("prompts_template_list")
+                                                .show(ui, |ui| {
+                                                    for tmpl in &cat.templates {
+                                                        let is_selected = self
+                                                            .selected_template
+                                                            .as_ref()
+                                                            .is_some_and(|t| t.id == tmpl.id);
 
-                                                    let resp = egui::Frame::new()
-                                                        .fill(bg)
-                                                        .corner_radius(4.0)
-                                                        .inner_margin(egui::Margin::symmetric(
-                                                            8i8, 6i8,
-                                                        ))
-                                                        .stroke(if is_selected {
-                                                            egui::Stroke::new(
-                                                                1.0,
-                                                                ui.style()
-                                                                    .visuals
-                                                                    .selection
-                                                                    .bg_fill,
-                                                            )
+                                                        let bg = if is_selected {
+                                                            ui.style()
+                                                                .visuals
+                                                                .selection
+                                                                .bg_fill
+                                                                .gamma_multiply(0.3)
                                                         } else {
-                                                            egui::Stroke::NONE
-                                                        })
-                                                        .show(ui, |ui| {
-                                                            ui.label(
-                                                                egui::RichText::new(&tmpl.title)
-                                                                    .strong(),
-                                                            );
-                                                            ui.label(
-                                                                egui::RichText::new(
-                                                                    &tmpl.description,
+                                                            ui.style().visuals.extreme_bg_color
+                                                        };
+
+                                                        let resp = egui::Frame::new()
+                                                            .fill(bg)
+                                                            .corner_radius(4.0)
+                                                            .inner_margin(egui::Margin::symmetric(
+                                                                8i8, 6i8,
+                                                            ))
+                                                            .stroke(if is_selected {
+                                                                egui::Stroke::new(
+                                                                    1.0,
+                                                                    ui.style()
+                                                                        .visuals
+                                                                        .selection
+                                                                        .bg_fill,
                                                                 )
-                                                                .size(12.0)
-                                                                .weak(),
-                                                            );
-                                                            if !tmpl.tags.is_empty() {
-                                                                ui.horizontal_wrapped(|ui| {
-                                                                    for tag in &tmpl.tags {
-                                                                        ui.label(
+                                                            } else {
+                                                                egui::Stroke::NONE
+                                                            })
+                                                            .show(ui, |ui| {
+                                                                ui.label(
+                                                                    egui::RichText::new(
+                                                                        &tmpl.title,
+                                                                    )
+                                                                    .strong(),
+                                                                );
+                                                                ui.label(
+                                                                    egui::RichText::new(
+                                                                        &tmpl.description,
+                                                                    )
+                                                                    .size(12.0)
+                                                                    .weak(),
+                                                                );
+                                                                if !tmpl.tags.is_empty() {
+                                                                    ui.horizontal_wrapped(|ui| {
+                                                                        for tag in &tmpl.tags {
+                                                                            ui.label(
                                                                     egui::RichText::new(format!(
                                                                         "#{}",
                                                                         tag
@@ -740,107 +766,113 @@ impl PromptsView {
                                                                             .hyperlink_color,
                                                                     ),
                                                                 );
-                                                                    }
-                                                                });
-                                                            }
-                                                        })
-                                                        .response;
+                                                                        }
+                                                                    });
+                                                                }
+                                                            })
+                                                            .response;
 
-                                                    if resp.clicked() {
-                                                        self.selected_template = Some(tmpl.clone());
+                                                        if resp.clicked() {
+                                                            self.selected_template =
+                                                                Some(tmpl.clone());
+                                                        }
+
+                                                        ui.add_space(2.0);
                                                     }
-
-                                                    ui.add_space(2.0);
-                                                }
-                                            });
+                                                });
+                                        }
+                                    } else {
+                                        ui.label(
+                                            egui::RichText::new(i18n.t("prompts.noCategory"))
+                                                .weak(),
+                                        );
                                     }
-                                } else {
-                                    ui.label(
-                                        egui::RichText::new(i18n.t("prompts.noCategory")).weak(),
-                                    );
                                 }
                             }
-                        }
-                    });
-                }
-
-                // ── Detail panel (shown when a template is selected) ─────────
-                if self.edit_mode {
-                    self.show_edit_dialog(ui, i18n);
-                } else if let Some(tmpl) = &self.selected_template.clone() {
-                    ui.add_space(8.0);
-                    egui::Frame::group(ui.style()).show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(&tmpl.title).strong().size(16.0));
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if ui.button(i18n.t("prompts.edit")).clicked() {
-                                        self.edit_template = Some(tmpl.clone());
-                                        self.edit_mode = true;
-                                    }
-                                },
-                            );
                         });
-                        ui.add_space(4.0);
+                    }
 
-                        // Description
-                        ui.label(egui::RichText::new(&tmpl.description).size(13.0).weak());
-                        ui.add_space(4.0);
-
-                        // Tags
-                        if !tmpl.tags.is_empty() {
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(
-                                    egui::RichText::new(format!("{}: ", i18n.t("prompts.tags")))
-                                        .size(11.0)
-                                        .weak(),
+                    // ── Detail panel (shown when a template is selected) ─────────
+                    if self.edit_mode {
+                        self.show_edit_dialog(ui, i18n);
+                    } else if let Some(tmpl) = &self.selected_template.clone() {
+                        ui.add_space(8.0);
+                        egui::Frame::group(ui.style()).show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(&tmpl.title).strong().size(16.0));
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui.button(i18n.t("prompts.edit")).clicked() {
+                                            self.edit_template = Some(tmpl.clone());
+                                            self.edit_mode = true;
+                                        }
+                                    },
                                 );
-                                for tag in &tmpl.tags {
-                                    ui.label(
-                                        egui::RichText::new(format!("#{}", tag))
-                                            .size(11.0)
-                                            .color(ui.style().visuals.hyperlink_color),
-                                    );
-                                }
                             });
                             ui.add_space(4.0);
-                        }
 
-                        // Content — in a scrollable, framed area with copy
-                        ui.label(
-                            egui::RichText::new(i18n.t("prompts.content"))
-                                .size(12.0)
-                                .strong(),
-                        );
-                        egui::Frame::dark_canvas(ui.style())
-                            .corner_radius(4.0)
-                            .inner_margin(egui::Margin::symmetric(8i8, 6i8))
-                            .show(ui, |ui| {
-                                egui::ScrollArea::vertical()
-                                    .id_salt("prompt_content_scroll")
-                                    .max_height(200.0)
-                                    .show(ui, |ui| {
+                            // Description
+                            ui.label(egui::RichText::new(&tmpl.description).size(13.0).weak());
+                            ui.add_space(4.0);
+
+                            // Tags
+                            if !tmpl.tags.is_empty() {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{}: ",
+                                            i18n.t("prompts.tags")
+                                        ))
+                                        .size(11.0)
+                                        .weak(),
+                                    );
+                                    for tag in &tmpl.tags {
                                         ui.label(
-                                            egui::RichText::new(&tmpl.content)
-                                                .size(12.0)
-                                                .monospace(),
+                                            egui::RichText::new(format!("#{}", tag))
+                                                .size(11.0)
+                                                .color(ui.style().visuals.hyperlink_color),
                                         );
-                                    });
-                            });
+                                    }
+                                });
+                                ui.add_space(4.0);
+                            }
 
-                        // Copy & Insert buttons
-                        ui.horizontal(|ui| {
-                            if ui.button(i18n.t("common.copyButton")).clicked() {
-                                ui.ctx().copy_text(tmpl.content.clone());
-                            }
-                            if ui.button(i18n.t("prompts.insert")).clicked() {
-                                self.pending_insert = Some(tmpl.content.clone());
-                            }
+                            // Content — in a scrollable, framed area with copy
+                            ui.label(
+                                egui::RichText::new(i18n.t("prompts.content"))
+                                    .size(12.0)
+                                    .strong(),
+                            );
+                            egui::Frame::dark_canvas(ui.style())
+                                .corner_radius(4.0)
+                                .inner_margin(egui::Margin::symmetric(8i8, 6i8))
+                                .show(ui, |ui| {
+                                    egui::ScrollArea::vertical()
+                                        .id_salt("prompt_content_scroll")
+                                        .max_height(200.0)
+                                        .show(ui, |ui| {
+                                            ui.label(
+                                                egui::RichText::new(&tmpl.content)
+                                                    .size(12.0)
+                                                    .monospace(),
+                                            );
+                                        });
+                                });
+
+                            // Copy & Insert buttons
+                            ui.horizontal(|ui| {
+                                if ui.button(i18n.t("common.copyButton")).clicked() {
+                                    ui.ctx().copy_text(tmpl.content.clone());
+                                }
+                                if ui.button(i18n.t("prompts.insert")).clicked() {
+                                    self.pending_insert = Some(tmpl.content.clone());
+                                }
+                            });
                         });
-                    });
-                }
-            });
+                    }
+                })
+        });
     }
 
     /// Show edit dialog for an existing template.

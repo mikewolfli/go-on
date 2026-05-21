@@ -515,7 +515,7 @@ impl ChatView {
         &mut self.sessions[idx]
     }
 
-    fn messages(&self) -> &[Message] {
+    pub fn messages(&self) -> &[Message] {
         if self.active_session < self.sessions.len() {
             &self.sessions[self.active_session].messages
         } else if !self.sessions.is_empty() {

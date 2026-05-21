@@ -62,15 +62,12 @@ impl SetupView {
         let tx = self.pending_tx.clone();
         let ctx_clone = ctx.clone();
         tokio::spawn(async move {
-            let models = match tokio::time::timeout(
+            let models: std::collections::HashMap<String, Vec<String>> = tokio::time::timeout(
                 std::time::Duration::from_secs(3),
                 backend_clone.fetch_models(),
             )
             .await
-            {
-                Ok(m) => m,
-                Err(_) => std::collections::HashMap::new(),
-            };
+            .unwrap_or_default();
             let _ = tx.try_send(models);
             ctx_clone.request_repaint();
         });

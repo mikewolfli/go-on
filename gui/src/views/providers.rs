@@ -1,11 +1,18 @@
 use crate::backend::{BackendClient, ProviderCapabilityModel};
 use crate::config::{save_app_config, AppConfig, ProviderConfig};
 use crate::i18n::I18n;
+use crate::section_hash;
 use crate::views::security_prefs;
+use crate::widgets::cache::{hash_bool, hash_combine, hash_str, CachedView, Section, SectionCache};
 use serde_json::Value;
+use std::cell::RefCell;
 use std::sync::mpsc;
 use std::sync::{OnceLock, RwLock};
 use std::time::{Duration, Instant};
+
+thread_local! {
+    static COPILOT_AUTH_CACHE: RefCell<SectionCache> = RefCell::new(SectionCache::new());
+}
 
 pub struct ProvidersView {
     /// Selected provider name from a predefined list (for Add)
@@ -65,6 +72,7 @@ pub struct ProvidersView {
     /// Whether we've already scheduled a repaint for the current polling cycle.
     /// Avoids calling request_repaint_after every frame while polling.
     copilot_poll_repaint_requested: bool,
+    pub cached_view: CachedView,
 }
 
 /// Provider names for the dropdown (36 total, matching built_in_provider_specs())
@@ -456,6 +464,7 @@ impl ProvidersView {
             copilot_token_stored: false,
             copilot_status: String::new(),
             copilot_poll_repaint_requested: false,
+            cached_view: CachedView::new(),
         }
     }
 
@@ -767,14 +776,98 @@ impl ProvidersView {
                 let redact_keys = self.cached_security.redact_api_keys_in_ui;
                 let confirm_dangerous = self.cached_security.confirm_dangerous_actions;
 
-                ui.heading(i18n.t("providers.title"));
-                ui.separator();
-                ui.add_space(8.0);
+                // ── Cached rendering ────────────────────────────────────────
+                // Compute content hash AFTER process_pending, ensure_models_loaded,
+                // and refresh_security_cache so that any state changes are reflected.
+                let mut hash = hash_combine(
+                    hash_str(&self.selected_provider),
+                    hash_str(&self.new_key.len().to_string()),
+                );
+                hash = hash_combine(hash, hash_str(&self.new_secret_key.len().to_string()));
+                hash = hash_combine(hash, hash_str(&self.new_model));
+                hash = hash_combine(hash, hash_str(&self.new_label));
+                hash = hash_combine(hash, hash_str(&self.update_target.to_string()));
+                hash = hash_combine(hash, hash_str(&self.status));
+                hash = hash_combine(hash, hash_bool(self.sending));
+                hash = hash_combine(hash, hash_str(
+                    &self.pending_delete_confirmation.map(|i| i.to_string()).unwrap_or_default()
+                ));
 
-                // ── Add new provider section ──────────────────────────────────
-                // Basic key CRUD is always available (not gated by ops_enabled).
-                // ops_enabled only controls advanced operations like test/capabilities.
-                {
+                // Provider names
+                for name in &self.provider_names {
+                    hash = hash_combine(hash, hash_str(name));
+                }
+
+                // Provider ops status
+                for (k, v) in &self.provider_ops_status {
+                    hash = hash_combine(hash, hash_str(k));
+                    hash = hash_combine(hash, hash_str(v));
+                }
+
+                // Provider capabilities (non-sensitive fields)
+                for (k, models) in &self.provider_capabilities {
+                    hash = hash_combine(hash, hash_str(k));
+                    for m in models {
+                        hash = hash_combine(hash, hash_str(&m.id));
+                        if let Some(ref n) = m.name {
+                            hash = hash_combine(hash, hash_str(n));
+                        }
+                        if let Some(ref c) = m.context_window {
+                            hash = hash_combine(hash, hash_str(&c.to_string()));
+                        }
+                        if let Some(ref t) = m.tool_calling {
+                            hash = hash_combine(hash, hash_bool(*t));
+                        }
+                        if let Some(ref v) = m.vision {
+                            hash = hash_combine(hash, hash_bool(*v));
+                        }
+                        if let Some(ref ct) = m.cost_tier {
+                            hash = hash_combine(hash, hash_str(ct));
+                        }
+                    }
+                }
+
+                // Cached security prefs
+                hash = hash_combine(hash, hash_bool(self.cached_security.redact_api_keys_in_ui));
+                hash = hash_combine(hash, hash_bool(self.cached_security.confirm_dangerous_actions));
+
+                // Copilot state
+                hash = hash_combine(hash, hash_str(
+                    &self.copilot_device_state.clone().unwrap_or_default()
+                ));
+                hash = hash_combine(hash, hash_str(&self.copilot_status));
+                hash = hash_combine(hash, hash_str(&self.copilot_device_code));
+                hash = hash_combine(hash, hash_str(&self.copilot_user_code));
+                hash = hash_combine(hash, hash_str(&self.copilot_verification_uri));
+                hash = hash_combine(hash, hash_str(&self.copilot_poll_interval.to_string()));
+                hash = hash_combine(hash, hash_str(&self.copilot_poll_attempts.to_string()));
+                hash = hash_combine(hash, hash_str(&self.copilot_slow_down_count.to_string()));
+                hash = hash_combine(hash, hash_str(&self.copilot_last_poll_result));
+                hash = hash_combine(hash, hash_bool(!self.copilot_access_token.is_empty()));
+                hash = hash_combine(hash, hash_bool(self.copilot_token_stored));
+
+                // Config providers (non-sensitive fields + key length)
+                for p in &config.providers {
+                    hash = hash_combine(hash, hash_str(&p.name));
+                    hash = hash_combine(hash, hash_str(&p.model));
+                    hash = hash_combine(hash, hash_bool(p.validated));
+                    hash = hash_combine(hash, hash_str(&p.label));
+                    hash = hash_combine(hash, hash_str(&p.api_key.len().to_string()));
+                }
+
+                // Cache check: skip widget tree rebuild on cache hit
+                if let Some(cached_size) = self.cached_view.check_size("providers", hash) {
+                    ui.allocate_space(cached_size);
+                } else {
+                    let resp = egui::Frame::NONE.show(ui, |ui| {
+                        ui.heading(i18n.t("providers.title"));
+                        ui.separator();
+                        ui.add_space(8.0);
+
+                        // ── Add new provider section ──────────────────────────────────
+                        // Basic key CRUD is always available (not gated by ops_enabled).
+                        // ops_enabled only controls advanced operations like test/capabilities.
+                        {
                     ui.label(i18n.t("providers.add_new"));
                     ui.horizontal(|ui| {
                         ui.label(i18n.t("providers.provider"));
@@ -962,6 +1055,22 @@ impl ProvidersView {
                                     .resizable(false)
                                     .collapsible(false)
                                     .show(ui.ctx(), |ui| {
+                                        let copilot_hash = section_hash!(
+                                            state.as_str(),
+                                            &self.copilot_verification_uri,
+                                            &self.copilot_user_code,
+                                            &self.copilot_status,
+                                            self.copilot_poll_attempts,
+                                            self.copilot_poll_interval,
+                                            self.copilot_slow_down_count,
+                                            &self.copilot_last_poll_result,
+                                            &self.copilot_access_token,
+                                        );
+
+                                        if let Some(size) = COPILOT_AUTH_CACHE.with(|c| c.borrow().check(&Section::View("copilot_auth".to_string()), copilot_hash)) {
+                                            ui.allocate_space(size);
+                                        } else {
+                                            let resp = egui::Frame::NONE.show(ui, |ui| {
                                         match state.as_str() {
                                             "requesting" => {
                                                 ui.horizontal(|ui| {
@@ -1049,6 +1158,9 @@ impl ProvidersView {
                                                 });
                                             }
                                             _ => {}
+                                        }
+                                            });
+                                            COPILOT_AUTH_CACHE.with(|c| c.borrow_mut().store(&Section::View("copilot_auth".to_string()), copilot_hash, resp.response.rect.size()));
                                         }
                                     });
                                 if !open {
@@ -1855,6 +1967,9 @@ impl ProvidersView {
 
                 if !self.status.is_empty() {
                     ui.label(&self.status);
+                }
+                    });
+                    self.cached_view.store_size("providers", hash, resp.response.rect.size());
                 }
 
                 // ── Copilot Device Code auto-poll (uses system proxy) ──

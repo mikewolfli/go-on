@@ -1,10 +1,16 @@
-use crate::backend::{BackendClient, SkillRecord};
-use crate::i18n::I18n;
-use crate::views::security_prefs;
-use crate::widgets::cache::section_hash;
-use crate::widgets::cache::CachedView;
+use std::cell::RefCell;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
+
+use crate::backend::{BackendClient, SkillRecord};
+use crate::i18n::I18n;
+use crate::section_hash;
+use crate::views::security_prefs;
+use crate::widgets::cache::{Section, SectionCache};
+
+thread_local! {
+    static SKILLS_CACHE: RefCell<SectionCache> = RefCell::new(SectionCache::new());
+}
 
 /// Send a SkillsUpdate over a SyncSender, retrying up to 3 times with a 5 ms sleep between attempts.
 /// If all retries fail, a warning is printed to stderr.
@@ -62,8 +68,6 @@ pub struct SkillsView {
     cached_security: security_prefs::SecurityPrefs,
     /// Timestamp of the last security prefs load.
     security_last_load: Instant,
-    /// View-level cache: skips widget tree rebuild when state is unchanged.
-    pub cached_view: CachedView,
 }
 
 impl SkillsView {
@@ -95,7 +99,6 @@ impl SkillsView {
             pending_tx,
             cached_security: security_prefs::load(),
             security_last_load: Instant::now(),
-            cached_view: CachedView::new(),
         }
     }
 
@@ -323,7 +326,13 @@ impl SkillsView {
             self.initialized,
         );
 
-        let _ = self.cached_view.check_or_render(ui, "skills_view", hash, |ui| {
+        // Check cache: if content unchanged, skip full render and just allocate space
+        if let Some(size) = SKILLS_CACHE.with(|c| c.borrow().check(&Section::SkillsList, hash)) {
+            ui.allocate_space(size);
+            return;
+        }
+
+        let resp = egui::Frame::NONE.show(ui, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
         if !self.initialized {
             self.initialized = true;
@@ -1307,6 +1316,10 @@ impl SkillsView {
             });
         }
         });
+        });
+        SKILLS_CACHE.with(|c| {
+            c.borrow_mut()
+                .store(&Section::SkillsList, hash, resp.response.rect.size())
         });
     }
 }

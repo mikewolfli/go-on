@@ -16,6 +16,10 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 ///
 /// String-based variants (`View`, `Dialog`, `Frame`) let callers
 /// create ad-hoc cache slots without modifying this enum.
+///
+/// Many variants are reserved for future use; `#[allow(dead_code)]`
+/// suppresses the warning so CI (`-D warnings`) passes.
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Section {
     // ── Existing variants ────────────────────────────────────
@@ -73,6 +77,9 @@ pub enum Section {
     PromptsDetail,
     PromptsCreateDialog,
 
+    // ── Skills view sections ────────────────────────────────
+    SkillsList,
+
     // ── Generic views ────────────────────────────────────────
     AboutFrame,
     SecurityPrefs,
@@ -108,16 +115,16 @@ impl SectionCache {
     /// Check whether a section's content hash matches.
     /// Returns `Some(cached_size)` on hit, `None` on miss.
     /// On miss, the caller MUST render and then call `store()`.
-    pub fn check(&self, section: Section, hash: u64) -> Option<egui::Vec2> {
+    pub fn check(&self, section: &Section, hash: u64) -> Option<egui::Vec2> {
         self.entries
-            .get(&section)
+            .get(section)
             .and_then(|e| if e.hash == hash { Some(e.size) } else { None })
     }
 
     /// Store the rendered size for a section + content hash.
-    pub fn store(&mut self, section: Section, hash: u64, rendered_size: egui::Vec2) {
+    pub fn store(&mut self, section: &Section, hash: u64, rendered_size: egui::Vec2) {
         self.entries.insert(
-            section,
+            section.clone(),
             CacheEntry {
                 hash,
                 size: rendered_size,
@@ -126,11 +133,13 @@ impl SectionCache {
     }
 
     /// Remove a section from the cache (force re-render).
+    #[allow(dead_code)]
     pub fn invalidate(&mut self, section: Section) {
         self.entries.remove(&section);
     }
 
     /// Clear all cached entries.
+    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.entries.clear();
     }
@@ -210,6 +219,7 @@ impl CachedView {
 macro_rules! section_hash {
     ($($val:expr),+ $(,)?) => {{
         use std::hash::Hash as _;
+        use std::hash::Hasher as _;
         let mut state = std::collections::hash_map::DefaultHasher::new();
         $(
             $val.hash(&mut state);

@@ -62,6 +62,7 @@ impl AutoTuneView {
         })
     }
 
+    #[allow(dead_code)]
     fn save_state(&self) {
         let path = Self::state_path();
         if let Some(parent) = path.parent() {
@@ -90,8 +91,8 @@ impl AutoTuneView {
 
                 // Compute hash from render-relevant state
                 let hash = crate::section_hash!(
-                    self.state.temperature,
-                    self.state.top_p,
+                    self.state.temperature.to_bits(),
+                    self.state.top_p.to_bits(),
                     self.state.max_tokens,
                     self.state.aggressive,
                     self.saved_at.map(|t| t.elapsed().as_secs() / 2),
