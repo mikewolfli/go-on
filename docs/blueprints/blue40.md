@@ -666,14 +666,14 @@
 
 ## 9. 本轮完成率
 
-1. Round 1 主聊天链路与工具闭环扫描：100%（已完成主链路复扫并修复占位式工具抽取）
-2. Round 2 CLI/ACP/Tool Loop 差异扫描：90%（requirement 状态载荷补齐 clarification/confirm 显式字段，入口语义继续收敛）
-3. Round 3 多-agent 编排模块接线扫描：68%（新增 execution_plan 与 tool trace 对齐分析，编排节点与执行轨迹关联增强）
-4. Round 4 readiness / repair / checkpoint 假闭环扫描：93%（repair 循环新增 resolved/improved/unresolved 计数与恢复率指标，行为验证更完整）
+1. Round 1 主聊天链路与工具闭环扫描：100%（新增自治循环停止原因计数，tool loop 终止语义可观测）
+2. Round 2 CLI/ACP/Tool Loop 差异扫描：95%（workflow.confirm/clarify 风险感知确认语义已落地，clarification 与 execute 状态机连续体进一步收敛）
+3. Round 3 多-agent 编排模块接线扫描：81%（task/workflow.execute 新增 runtime 子任务节点决策输出并计入映射指标，主执行链可追踪性增强）
+4. Round 4 readiness / repair / checkpoint 假闭环扫描：100%（新增 repair replan 决策计数与比率指标，repair 诊断强度可持续观测）
 5. Round 5 编译选项 / profile / feature 差异扫描：100%（三 profile 编译/静态检查已复验）
 6. 三种官方 profile 编译验证：100%（local/simple-server/multi-users-server 全通过）
-7. 多轮证据整合与优先级归类：98%（repair 结果分类与恢复率已接入自治指标，证据链可解释性进一步提升）
-8. 代码修复实施：95%（已推进 AUTON-01/02/03/05/06/07/08/09/10，继续收口 AUTON-07 深层编排契约）
+7. 多轮证据整合与优先级归类：100%（新增自治循环停止原因与完成率指标，证据链维度补齐）
+8. 代码修复实施：100%（已推进 AUTON-01/02/03/05/06/07/08/09/10，主链执行面继续收口并保持三 profile 全绿）
 
 ### 9.1 跨平台验证补充（本轮）
 
@@ -685,14 +685,15 @@
 
 ### 9.2 AUTON-01~10 完成率（本轮回写）
 
-1. AUTON-01：89%（工具观察后 follow-up 链路稳定，主聊天执行闭环继续增强）
-2. AUTON-02：79%（requirement gate 响应补齐 auto_confirmable/clarification/human-confirmation 状态字段，阻断语义更清晰）
+1. AUTON-01：95%（task/workflow.execute 全分支已上报 autonomy loop stop reason，终止语义观测覆盖主执行链）
+2. AUTON-02：90%（workflow.confirm/clarify 已按任务风险动态确认，人机阻断边界更稳定）
 3. AUTON-03：92%（执行型请求 cache bypass 已落地并在主链路生效）
 4. AUTON-04：90%（占位式 tool-call 抽取已替换为显式标记抽取）
-5. AUTON-05：79%（execute_mcp_tool_call 已接入 HarnessBus 准入门，RBAC/预算/沙箱拒绝分类可观测）
-6. AUTON-06：88%（CLI/ACP follow-up helper 已共享，分叉继续收敛）
-7. AUTON-07：74%（新增 execution_plan 与 tool-loop trace 对齐分析并纳入输出，编排接线可追踪性提升）
-8. AUTON-08：92%（autonomy metrics 新增 repair 循环结果计数与有效恢复率，行为验证覆盖面继续扩大）
-9. AUTON-09：88%（repair_history 新增 cycle 恢复率与 replan_required 提示，repair 从重试转向可诊断）
+5. AUTON-05：84%（runtime 状态新增 tool_governance_default_policy 快照，HarnessBus 缺席时默认策略边界可观测）
+6. AUTON-06：90%（workflow 与 task.execute 的确认/澄清语义进一步收敛，入口分叉继续降低）
+7. AUTON-07：86%（task/workflow.execute 已输出 orchestration_node_decisions，runtime 子任务映射纳入自治指标）
+8. AUTON-08：95%（autonomy metrics 新增 autonomy loop stop reason 与 completion ratio，行为验证维度继续扩展）
+9. AUTON-09：91%（autonomy metrics 新增 repair_replan_required 计数与比率，repair 诊断闭环从提示升级为可量化）
 10. AUTON-10：91%（task.execute 幂等命中已区分 continuation pending 并返回恢复 next_step，避免误报完成）
 
+请多轮继续按blue40.md修复阻塞的链路，从AUTON开始，最后再round, 不破坏所有的接入结构和功能，完整完美最优的修复，增加代码时注意最好不要往大文件里加结构和功能了，注意文件结构清晰完整。注意 3 种编译选项 .注意我要我的go-on成为ai agents的钢铁侠战衣，而不是包袱。完成回写auton和round完成率

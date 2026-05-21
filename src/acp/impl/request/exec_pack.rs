@@ -582,6 +582,8 @@ fn build_repair_history_response(context: &RepairContext) -> Value {
     } else {
         (resolved_cycles + improved_cycles) as f64 / total_cycles as f64
     };
+    let replan_required = unresolved_cycles > 0;
+    crate::acp::helpers::autonomy_metrics::record_repair_replan_decision(replan_required);
 
     let diagnosis_summary = json!({
         "total_actions": context.repair_actions.len(),
@@ -592,8 +594,8 @@ fn build_repair_history_response(context: &RepairContext) -> Value {
         "improved_cycles": improved_cycles,
         "unresolved_cycles": unresolved_cycles,
         "repair_effective_ratio": repair_effective_ratio,
-        "replan_required": unresolved_cycles > 0,
-        "next_action_hint": if unresolved_cycles > 0 {
+        "replan_required": replan_required,
+        "next_action_hint": if replan_required {
             "promote remaining failures from retry to reroute/replan"
         } else {
             "continue execution flow"
@@ -1122,6 +1124,39 @@ pub(crate) async fn handle_workflow_execute(
             .unwrap_or("requirement_contract")
             .to_string();
         let next_step = blocked_payload["next_step"].clone();
+        if matches!(
+            requirement_continuation.kind,
+            crate::acp::helpers::requirement_continuation::RequirementContinuationKind::
+                ClarificationRequired
+        ) {
+            crate::acp::helpers::autonomy_metrics::record_autonomy_loop_stop_reason(
+                "incomplete",
+            );
+            complete_workflow_run(
+                &run_id,
+                "waiting_clarification",
+                Some(reason.clone()),
+                Vec::new(),
+            );
+            return send_result(
+                server,
+                request_id,
+                json!({
+                    "ok": true,
+                    "run_id": run_id,
+                    "run_status": "waiting_clarification",
+                    "status": "clarification_required",
+                    "kind": kind,
+                    "reason": reason,
+                    "next_step": next_step,
+                    "requirement_gate": blocked_payload,
+                    "requirement_continuation": requirement_continuation.next_step,
+                }),
+            )
+            .await;
+        }
+
+        crate::acp::helpers::autonomy_metrics::record_autonomy_loop_stop_reason("failed");
         complete_workflow_run(&run_id, "failed", Some(reason.clone()), Vec::new());
         return send_error(
             server,
@@ -1508,6 +1543,13 @@ pub(crate) async fn handle_workflow_execute(
     } else {
         "succeeded"
     };
+    crate::acp::helpers::autonomy_metrics::record_autonomy_loop_stop_reason(if run_status
+        == "succeeded"
+    {
+        "complete"
+    } else {
+        "failed"
+    });
     let run_error = if execution_report.subtasks_failed > 0 {
         Some(format!(
             "{} subtasks failed",
@@ -1517,6 +1559,27 @@ pub(crate) async fn handle_workflow_execute(
         None
     };
     complete_workflow_run(&run_id, run_status, run_error, artifacts.clone());
+
+    let orchestration_node_decisions = {
+        let records_value =
+            serde_json::to_value(&execution_records).unwrap_or_else(|_| json!([]));
+        let records = records_value.as_array().cloned().unwrap_or_default();
+        crate::acp::helpers::orchestration_alignment::derive_runtime_subtask_node_decisions(
+            &records,
+        )
+    };
+    let mapped_nodes = orchestration_node_decisions
+        .get("mapped_nodes")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let unmapped_nodes = orchestration_node_decisions
+        .get("unmapped_nodes")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    crate::acp::helpers::autonomy_metrics::record_orchestration_node_mapping(
+        mapped_nodes,
+        unmapped_nodes,
+    );
 
     let response_payload = json!({
         "ok": true,
@@ -1546,6 +1609,7 @@ pub(crate) async fn handle_workflow_execute(
             "auto_clarification_in_progress": _auto_clarification_in_progress,
         },
         "planner_execution_graph": _planner_bridge.progress_snapshot(),
+        "orchestration_node_decisions": orchestration_node_decisions,
         "approval_checkpoint": approval_checkpoint,
         "repo_context": repo_context,
         "multi_agent": multi_agent,
@@ -1720,6 +1784,39 @@ pub(super) async fn handle_task_execute(
             .unwrap_or("requirement_contract")
             .to_string();
         let next_step = blocked_payload["next_step"].clone();
+        if matches!(
+            requirement_continuation.kind,
+            crate::acp::helpers::requirement_continuation::RequirementContinuationKind::
+                ClarificationRequired
+        ) {
+            crate::acp::helpers::autonomy_metrics::record_autonomy_loop_stop_reason(
+                "incomplete",
+            );
+            complete_workflow_run(
+                &run_id,
+                "waiting_clarification",
+                Some(reason.clone()),
+                Vec::new(),
+            );
+            return send_result(
+                server,
+                request_id,
+                json!({
+                    "ok": true,
+                    "run_id": run_id,
+                    "run_status": "waiting_clarification",
+                    "status": "clarification_required",
+                    "kind": kind,
+                    "reason": reason,
+                    "next_step": next_step,
+                    "requirement_gate": blocked_payload,
+                    "requirement_continuation": requirement_continuation.next_step,
+                }),
+            )
+            .await;
+        }
+
+        crate::acp::helpers::autonomy_metrics::record_autonomy_loop_stop_reason("failed");
         complete_workflow_run(&run_id, "failed", Some(reason.clone()), Vec::new());
         return send_error(
             server,
@@ -2101,6 +2198,36 @@ pub(super) async fn handle_task_execute(
         "replay_scoring": build_replay_scoring(summary.subtasks_completed, summary.subtasks_failed),
     });
 
+    let orchestration_node_decisions = {
+        let records_value = serde_json::to_value(&summary.records).unwrap_or_else(|_| json!([]));
+        let records = records_value.as_array().cloned().unwrap_or_default();
+        crate::acp::helpers::orchestration_alignment::derive_runtime_subtask_node_decisions(
+            &records,
+        )
+    };
+    let mapped_nodes = orchestration_node_decisions
+        .get("mapped_nodes")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let unmapped_nodes = orchestration_node_decisions
+        .get("unmapped_nodes")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    crate::acp::helpers::autonomy_metrics::record_orchestration_node_mapping(
+        mapped_nodes,
+        unmapped_nodes,
+    );
+
+    let response_payload = if let Some(mut obj) = response_payload.as_object().cloned() {
+        obj.insert(
+            "orchestration_node_decisions".to_string(),
+            orchestration_node_decisions,
+        );
+        Value::Object(obj)
+    } else {
+        response_payload
+    };
+
     complete_workflow_run(
         &run_id,
         if summary.subtasks_failed > 0 {
@@ -2120,6 +2247,14 @@ pub(super) async fn handle_task_execute(
             learning_path.display().to_string(),
             tg_checkpoint_path.display().to_string(),
         ],
+    );
+
+    crate::acp::helpers::autonomy_metrics::record_autonomy_loop_stop_reason(
+        if summary.subtasks_failed > 0 {
+            "failed"
+        } else {
+            "complete"
+        },
     );
 
     {

@@ -70,12 +70,17 @@ pub struct RequirementGateAutoRecovery {
 impl RequirementGateFacadeDecision {
     /// Build the canonical JSON payload for blocked gate responses.
     pub fn blocked_payload(&self) -> Value {
+        let requires_human_confirmation = self
+            .next_step
+            .get("requires_human_confirmation")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
         json!({
             "kind": self.kind,
             "blocked": self.blocked,
             "clarification_in_progress": self.blocked,
-            "requires_human_confirmation": self.blocked,
-            "auto_confirmable": false,
+            "requires_human_confirmation": requires_human_confirmation,
+            "auto_confirmable": !requires_human_confirmation,
             "reason": self.reason,
             "missing_fields": self.missing_fields,
             "next_step": self.next_step,

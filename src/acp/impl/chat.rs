@@ -29,9 +29,13 @@ use crate::acp::helpers::autonomy::{
     run_followup_after_tool_observation,
 };
 use crate::acp::helpers::autonomy_metrics::{
-    record_explicit_tool_route, record_orchestration_alignment, record_planner_guided_route,
+    record_autonomy_loop_stop_reason,
+    record_explicit_tool_route, record_orchestration_alignment,
+    record_orchestration_node_mapping, record_planner_guided_route,
 };
-use crate::acp::helpers::orchestration_alignment::derive_plan_trace_alignment;
+use crate::acp::helpers::orchestration_alignment::{
+    derive_orchestration_node_decisions, derive_plan_trace_alignment,
+};
 use crate::acp::helpers::metrics::{stream_chunk_notification, stream_done_notification};
 use crate::acp::r#impl::UserSession;
 use crate::acp::server::AcpServer;
@@ -2328,6 +2332,7 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                     // Record the loop outcome
                     let tool_result = match &tao_decision {
                         LoopDecision::Complete(output) => {
+                            record_autonomy_loop_stop_reason("complete");
                             serde_json::json!({
                                 "status": "complete",
                                 "success": output.success,
@@ -2337,6 +2342,7 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                             })
                         }
                         LoopDecision::Failed { reason, .. } => {
+                            record_autonomy_loop_stop_reason("failed");
                             serde_json::json!({
                                 "status": "failed",
                                 "reason": reason,
@@ -2345,6 +2351,7 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                             })
                         }
                         LoopDecision::Escalate { reason, .. } => {
+                            record_autonomy_loop_stop_reason("escalated");
                             serde_json::json!({
                                 "status": "escalated",
                                 "reason": reason,
@@ -2352,11 +2359,14 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                                 "duration_ms": tao_trace.total_duration_ms,
                             })
                         }
-                        _ => serde_json::json!({
-                            "status": "incomplete",
-                            "iterations": tao_trace.iterations.len(),
-                            "duration_ms": tao_trace.total_duration_ms,
-                        }),
+                        _ => {
+                            record_autonomy_loop_stop_reason("incomplete");
+                            serde_json::json!({
+                                "status": "incomplete",
+                                "iterations": tao_trace.iterations.len(),
+                                "duration_ms": tao_trace.total_duration_ms,
+                            })
+                        }
                     };
 
                     tool_execution_results.push(json!({
@@ -2903,6 +2913,18 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         .unwrap_or(0.0);
     record_orchestration_alignment(alignment_coverage);
 
+    let orchestration_node_decisions =
+        derive_orchestration_node_decisions(&execution_plan, &tool_execution_results);
+    let mapped_nodes = orchestration_node_decisions
+        .get("mapped_nodes")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let unmapped_nodes = orchestration_node_decisions
+        .get("unmapped_nodes")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    record_orchestration_node_mapping(mapped_nodes, unmapped_nodes);
+
     // ── ForkRegistry cleanup (ARCH-05) ─────────────────────────────────
     // Register a fork entry for this execution to track sub-agent
     // isolation boundaries.  Completed forks are cleaned up immediately
@@ -2974,6 +2996,10 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         obj.insert(
             "orchestration_alignment".to_string(),
             orchestration_alignment,
+        );
+        obj.insert(
+            "orchestration_node_decisions".to_string(),
+            orchestration_node_decisions,
         );
         obj.insert("fork_id".to_string(), serde_json::json!(fork_id));
         obj.insert(

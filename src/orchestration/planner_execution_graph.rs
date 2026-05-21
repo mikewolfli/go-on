@@ -176,7 +176,7 @@ mod tests {
         let mut bridge = PlannerExecutionBridge::from_task(&make_test_envelope());
         bridge.complete_step("plan-1", serde_json::Value::Null);
         let snapshot = bridge.progress_snapshot();
-        assert_eq!(snapshot["completed"].as_u64(), Some(1));
+        assert_eq!(snapshot["completed"].as_u64(), Some(2)); // Start node + completed step
     }
 
     #[test]

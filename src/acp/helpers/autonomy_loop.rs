@@ -259,72 +259,73 @@ pub async fn run_autonomy_loop(
         let _ = chat_task.await;
 
         // ── Tool execution ──
-        if !tool_calls.is_empty() && tool_registry.is_some() {
-            record_explicit_tool_route();
-            let registry = tool_registry.as_ref().unwrap();
+        if !tool_calls.is_empty() {
+            if let Some(registry) = tool_registry.as_ref() {
+                record_explicit_tool_route();
 
-            for (tool_name, tool_args_str) in &tool_calls {
-                let parsed_args: Value =
-                    serde_json::from_str(tool_args_str).unwrap_or(serde_json::json!({}));
+                for (tool_name, tool_args_str) in &tool_calls {
+                    let parsed_args: Value =
+                        serde_json::from_str(tool_args_str).unwrap_or(serde_json::json!({}));
 
-                let tool_input = ToolInput {
-                    task_id: "autonomy-loop".to_string(),
-                    phase: format!("round-{}", iteration),
-                    agent_role: "autonomy_agent".to_string(),
-                    objective: objective.to_string(),
-                    constraints: None,
-                    evidence: None,
-                    payload: parsed_args,
-                    allowed_base_dir: None,
-                };
+                    let tool_input = ToolInput {
+                        task_id: "autonomy-loop".to_string(),
+                        phase: format!("round-{}", iteration),
+                        agent_role: "autonomy_agent".to_string(),
+                        objective: objective.to_string(),
+                        constraints: None,
+                        evidence: None,
+                        payload: parsed_args,
+                        allowed_base_dir: None,
+                    };
 
-                let loop_cfg = LoopConfig {
-                    max_iterations: 1,
-                    max_retries_per_tool: 1,
-                    enable_fallback: false,
-                    verify_output: None,
-                };
+                    let loop_cfg = LoopConfig {
+                        max_iterations: 1,
+                        max_retries_per_tool: 1,
+                        enable_fallback: false,
+                        verify_output: None,
+                    };
 
-                let (result, _trace) =
-                    execute_loop(tool_name, registry, &tool_input, &[], &loop_cfg);
+                    let (result, _trace) =
+                        execute_loop(tool_name, registry, &tool_input, &[], &loop_cfg);
 
-                round_tools.push(tool_name.clone());
+                    round_tools.push(tool_name.clone());
 
-                match result {
-                    LoopDecision::Complete(output) => {
-                        let result_text =
-                            serde_json::to_string_pretty(&output.result).unwrap_or_default();
-                        let tool_block =
-                            crate::orchestration::autonomy_runtime::build_tool_result_block(
-                                tool_name,
-                                &result_text,
-                                false,
-                            );
-                        messages.push(Message {
-                            role: "user".to_string(),
-                            content: tool_block,
-                        });
-                    }
-                    LoopDecision::Failed { reason, .. } => {
-                        let tool_block =
-                            crate::orchestration::autonomy_runtime::build_tool_result_block(
-                                tool_name, &reason, true,
-                            );
-                        messages.push(Message {
-                            role: "user".to_string(),
-                            content: tool_block,
-                        });
-                    }
-                    other => {
-                        let msg = format!("tool loop ended: {:?}", other);
-                        let tool_block =
-                            crate::orchestration::autonomy_runtime::build_tool_result_block(
-                                tool_name, &msg, true,
-                            );
-                        messages.push(Message {
-                            role: "user".to_string(),
-                            content: tool_block,
-                        });
+                    match result {
+                        LoopDecision::Complete(output) => {
+                            let result_text =
+                                serde_json::to_string_pretty(&output.result).unwrap_or_default();
+                            let tool_block =
+                                crate::orchestration::autonomy_runtime::build_tool_result_block(
+                                    tool_name,
+                                    &result_text,
+                                    false,
+                                );
+                            messages.push(Message {
+                                role: "user".to_string(),
+                                content: tool_block,
+                            });
+                        }
+                        LoopDecision::Failed { reason, .. } => {
+                            let tool_block =
+                                crate::orchestration::autonomy_runtime::build_tool_result_block(
+                                    tool_name, &reason, true,
+                                );
+                            messages.push(Message {
+                                role: "user".to_string(),
+                                content: tool_block,
+                            });
+                        }
+                        other => {
+                            let msg = format!("tool loop ended: {:?}", other);
+                            let tool_block =
+                                crate::orchestration::autonomy_runtime::build_tool_result_block(
+                                    tool_name, &msg, true,
+                                );
+                            messages.push(Message {
+                                role: "user".to_string(),
+                                content: tool_block,
+                            });
+                        }
                     }
                 }
             }
@@ -333,22 +334,19 @@ pub async fn run_autonomy_loop(
         // ── Follow-up round ──
         let followup_needed = !tool_calls.is_empty();
         if followup_needed && iteration + 1 < config.max_iterations {
-            let followup_messages = {
-                let mut msgs = Vec::new();
-                msgs.push(Message {
+            let followup_messages = vec![
+                Message {
                     role: "assistant".to_string(),
                     content: response.clone(),
-                });
-                msgs.push(Message {
+                },
+                Message {
                     role: "user".to_string(),
-                    content: format!(
-                        "Tool observations above are completed. \
+                    content: "Tool observations above are completed. \
                          Continue the task. If the original task is fully complete, \
                          provide the final answer. Otherwise, use more tools as needed."
-                    ),
-                });
-                msgs
-            };
+                        .to_string(),
+                },
+            ];
 
             let followup = run_followup_after_tool_observation(
                 Arc::clone(&agent),

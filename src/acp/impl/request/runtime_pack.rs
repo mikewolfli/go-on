@@ -4108,6 +4108,10 @@ pub(super) async fn handle_governance_status(
                     "clarification_resume_enabled": true,
                     "execution_cache_bypass_enabled": true,
                     "tool_governance": crate::acp::helpers::tool_governance::tool_governance_counters(),
+                    "tool_governance_default_policy": {
+                        "active_when_harness_bus_absent": server.harness_bus.is_none(),
+                        "snapshot": crate::acp::helpers::tool_governance_defaults::default_governance_policy_snapshot(),
+                    },
                     "autonomy_runtime_metrics": crate::acp::helpers::autonomy_metrics::autonomy_metrics_snapshot(),
                     "signals": {
                         "token_l1_cache_hit_count": token_l1_cache_hit,

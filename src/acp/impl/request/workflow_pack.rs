@@ -209,6 +209,18 @@ fn build_task_memory_graph_and_recall(ledger: &ArtifactLedger, task: &str) -> (V
     (memory_graph, memory_recall)
 }
 
+fn requires_human_confirmation(task: &str, params: &Value) -> bool {
+    if let Some(explicit) = params
+        .get("requires_human_confirmation")
+        .and_then(Value::as_bool)
+    {
+        return explicit;
+    }
+
+    let characteristics = TaskRouter::analyze_task(task);
+    characteristics.has_safety_concerns || characteristics.complexity >= 4
+}
+
 pub(super) async fn handle_workflow_confirm(
     server: &AcpServer,
     params: Value,
@@ -225,14 +237,15 @@ pub(super) async fn handle_workflow_confirm(
         .and_then(Value::as_bool)
         .unwrap_or(user_confirmed);
     if !ready_to_confirm {
+        let needs_human_confirmation = requires_human_confirmation(&task, &params);
         return send_result(
             server,
             request_id,
             json!({
                 "ok": true,
                 "status": "clarification_required",
-                "auto_confirmable": false,
-                "requires_human_confirmation": true,
+                "auto_confirmable": !needs_human_confirmation,
+                "requires_human_confirmation": needs_human_confirmation,
                 "next_step": {"method": "workflow.clarify", "task": task},
             }),
         )
@@ -337,16 +350,21 @@ pub(super) async fn handle_workflow_clarify(
     let learning_profile = build_learning_profile("workflow.clarify", &task, &params);
     let knowledge_refinement =
         build_knowledge_refinement_profile("workflow.clarify", &task, &params, &learning_profile);
+    let needs_human_confirmation = requires_human_confirmation(&task, &params);
 
     send_result(
         server,
         request_id,
         json!({
             "ok": true,
+            "status": "clarification_in_progress",
+            "auto_confirmable": !needs_human_confirmation,
+            "requires_human_confirmation": needs_human_confirmation,
             "clarification_session": clarification_session,
             "clarification_session_artifact_path": clarification_session_artifact_path.display().to_string(),
             "learning_profile": learning_profile,
             "knowledge_refinement": knowledge_refinement,
+            "next_step": {"method": "workflow.confirm", "task": task, "ready_to_confirm": clarification_session.ready_to_confirm},
         }),
     )
     .await
@@ -662,28 +680,57 @@ pub(crate) async fn handle_workflow_generate(
     }
 
     let ledger = clone_artifact_ledger(server);
-    let requirement_gate =
-        evaluate_requirement_gate_facade(&ledger, task, &params, "workflow.generate")?;
-    if requirement_gate.blocked {
+    // Use continuation-aware requirement gate (AUTON-02)
+    let requirement_continuation =
+        crate::acp::helpers::requirement_continuation::evaluate_with_continuation(
+            &ledger,
+            task,
+            &params,
+            "workflow.generate",
+        );
+    if !crate::acp::helpers::requirement_continuation::can_proceed_with_continuation(
+        &requirement_continuation,
+    ) {
+        let blocked_payload = requirement_continuation.gate.blocked_payload();
         return send_error(
             server,
             request_id,
             -32006,
-            requirement_gate
+            requirement_continuation
+                .gate
                 .reason
                 .clone()
                 .unwrap_or_else(|| "requirement confirmation is required".to_string()),
-            Some(requirement_gate.blocked_payload()),
+            Some(json!({
+                "requirement_gate": blocked_payload,
+                "requirement_continuation": requirement_continuation.next_step,
+                "auto_clarification_in_progress": matches!(
+                    requirement_continuation.kind,
+                    crate::acp::helpers::requirement_continuation::RequirementContinuationKind::
+                        AutoConfirmed | crate::acp::helpers::requirement_continuation::RequirementContinuationKind::
+                        ClarificationInProgress
+                ),
+            })),
         )
         .await;
     }
+
+    let auto_clarification_in_progress = matches!(
+        requirement_continuation.kind,
+        crate::acp::helpers::requirement_continuation::RequirementContinuationKind::
+            AutoConfirmed | crate::acp::helpers::requirement_continuation::RequirementContinuationKind::
+            ClarificationInProgress
+    );
 
     let mut plan = build_task_plan(task);
     let plan_artifact_path = persist_task_plan(&ledger, &plan)?;
     let mut workflow = build_workflow_generated_artifact(&plan);
     let adaptive_planning = apply_learning_plan_feedback(&ledger, &mut plan, &mut workflow);
     let workflow_artifact_path = persist_workflow_generated(&ledger, &workflow)?;
-    let requirement_gate_payload = requirement_gate.success_payload();
+    let requirement_gate_payload =
+        crate::acp::helpers::requirement_continuation::requirement_gate_payload_for_response(
+            &requirement_continuation,
+        );
     let execution_cycle = build_execution_cycle(
         "workflow.generate",
         "review_generated_workflow",
@@ -771,6 +818,7 @@ pub(crate) async fn handle_workflow_generate(
             "requirement_gate": {
                 "confirmed": true,
                 "gate": requirement_gate_payload,
+                "auto_clarification_in_progress": auto_clarification_in_progress,
             },
             "approval_checkpoint": approval_checkpoint,
             "repo_context": repo_context,

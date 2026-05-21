@@ -45,4 +45,7 @@ pub mod requirement_continuation;
 // Default tool governance when RBAC/HarnessBus is absent
 pub mod tool_governance_defaults;
 
+// Repair diagnosis: classify failures as retry/reroute/replan/repair/escalate
+pub mod repair_diagnosis;
+
 // Re-export for convenience

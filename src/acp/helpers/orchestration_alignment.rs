@@ -123,3 +123,147 @@ pub(crate) fn derive_plan_trace_alignment(
         "missing_steps": missing_steps,
     })
 }
+
+pub(crate) fn derive_orchestration_node_decisions(
+    execution_plan: &Value,
+    tool_execution_results: &[Value],
+) -> Value {
+    let steps = execution_plan
+        .get("steps")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let executed_tools = collect_executed_tools(tool_execution_results);
+
+    let mut mapped_nodes = 0_u64;
+    let mut unmapped_nodes = 0_u64;
+    let mut nodes = Vec::new();
+
+    for step in steps {
+        let step_id = step
+            .get("step_id")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown-step");
+        let description = step
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let expected_tools = step_expected_tools(description);
+
+        if expected_tools.is_empty() {
+            nodes.push(json!({
+                "step_id": step_id,
+                "decision": "observe_only",
+                "mapped": true,
+                "description": description,
+                "expected_tools": [],
+                "matched_tool": Value::Null,
+            }));
+            mapped_nodes += 1;
+            continue;
+        }
+
+        let matched_tool = expected_tools
+            .iter()
+            .find(|tool| executed_tools.iter().any(|executed| executed == **tool))
+            .map(|tool| tool.to_string());
+
+        let mapped = matched_tool.is_some();
+        if mapped {
+            mapped_nodes += 1;
+        } else {
+            unmapped_nodes += 1;
+        }
+
+        nodes.push(json!({
+            "step_id": step_id,
+            "decision": if mapped { "tool_executed" } else { "replan_required" },
+            "mapped": mapped,
+            "description": description,
+            "expected_tools": expected_tools,
+            "matched_tool": matched_tool,
+        }));
+    }
+
+    let total_nodes = mapped_nodes + unmapped_nodes;
+    let mapping_ratio = if total_nodes == 0 {
+        1.0
+    } else {
+        mapped_nodes as f64 / total_nodes as f64
+    };
+
+    json!({
+        "nodes": nodes,
+        "mapped_nodes": mapped_nodes,
+        "unmapped_nodes": unmapped_nodes,
+        "mapping_ratio": mapping_ratio,
+    })
+}
+
+pub(crate) fn derive_runtime_subtask_node_decisions(records: &[Value]) -> Value {
+    let mut mapped_nodes = 0_u64;
+    let mut unmapped_nodes = 0_u64;
+    let mut nodes = Vec::new();
+
+    for record in records {
+        let step_id = record
+            .get("id")
+            .or_else(|| record.get("subtask_id"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown-subtask");
+        let description = record
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let outcome = record
+            .get("outcome")
+            .or_else(|| record.get("status"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let outcome_lower = outcome.to_ascii_lowercase();
+
+        let mapped = matches!(
+            outcome_lower.as_str(),
+            "completed" | "complete" | "success" | "succeeded" | "done"
+        );
+
+        let decision = if mapped {
+            "tool_executed"
+        } else if matches!(
+            outcome_lower.as_str(),
+            "failed" | "error" | "timeout" | "cancelled"
+        ) {
+            "replan_required"
+        } else {
+            "observe_only"
+        };
+
+        if mapped {
+            mapped_nodes += 1;
+        } else {
+            unmapped_nodes += 1;
+        }
+
+        nodes.push(json!({
+            "step_id": step_id,
+            "decision": decision,
+            "mapped": mapped,
+            "description": description,
+            "outcome": outcome,
+        }));
+    }
+
+    let total_nodes = mapped_nodes + unmapped_nodes;
+    let mapping_ratio = if total_nodes == 0 {
+        1.0
+    } else {
+        mapped_nodes as f64 / total_nodes as f64
+    };
+
+    json!({
+        "nodes": nodes,
+        "mapped_nodes": mapped_nodes,
+        "unmapped_nodes": unmapped_nodes,
+        "mapping_ratio": mapping_ratio,
+    })
+}

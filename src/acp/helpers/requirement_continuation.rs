@@ -29,6 +29,8 @@ pub enum RequirementContinuationKind {
     AutoConfirmed,
     /// Clarification is in progress — caller should run workflow.clarify sub-flow
     ClarificationInProgress,
+    /// Clarification is required before execution, but human confirmation is not mandatory.
+    ClarificationRequired,
     /// Human confirmation is required — caller should block
     HumanConfirmationRequired,
 }
@@ -160,8 +162,26 @@ pub fn evaluate_with_continuation(
         }
     }
 
-    // Case 4: Hard block — human confirmation required
+    // Case 4: Gate still blocked.
+    // Low-risk tasks should return clarification-required (soft block) rather than
+    // forcing immediate human confirmation. Only high-risk paths remain hard blocked.
     let missing_fields = gate.missing_fields.clone();
+    if is_low_risk {
+        return RequirementContinuation {
+            kind: RequirementContinuationKind::ClarificationRequired,
+            can_proceed: false,
+            gate,
+            auto_recovery: None,
+            next_step: json!({
+                "method": "workflow.clarify",
+                "task": task,
+                "missing_fields": missing_fields,
+                "requires_human_confirmation": false,
+                "reason": "requirement clarification required before execution",
+            }),
+        };
+    }
+
     RequirementContinuation {
         kind: RequirementContinuationKind::HumanConfirmationRequired,
         can_proceed: false,
@@ -191,6 +211,8 @@ pub fn requirement_gate_payload_for_response(continuation: &RequirementContinuat
         | RequirementContinuationKind::ClarificationInProgress => {
             continuation.gate.success_payload()
         }
+        RequirementContinuationKind::ClarificationRequired
+        |
         RequirementContinuationKind::HumanConfirmationRequired => {
             continuation.gate.blocked_payload()
         }
@@ -202,7 +224,7 @@ mod tests {
     use super::*;
 
     fn make_ledger() -> ArtifactLedger {
-        ArtifactLedger::new("test_registry", "test_run".to_string())
+        ArtifactLedger::new(None)
     }
 
     fn simple_params() -> Value {
