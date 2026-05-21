@@ -1,6 +1,8 @@
 use crate::backend::{BackendClient, SkillRecord};
 use crate::i18n::I18n;
 use crate::views::security_prefs;
+use crate::widgets::cache::section_hash;
+use crate::widgets::cache::CachedView;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -60,6 +62,8 @@ pub struct SkillsView {
     cached_security: security_prefs::SecurityPrefs,
     /// Timestamp of the last security prefs load.
     security_last_load: Instant,
+    /// View-level cache: skips widget tree rebuild when state is unchanged.
+    pub cached_view: CachedView,
 }
 
 impl SkillsView {
@@ -91,6 +95,7 @@ impl SkillsView {
             pending_tx,
             cached_security: security_prefs::load(),
             security_last_load: Instant::now(),
+            cached_view: CachedView::new(),
         }
     }
 
@@ -289,8 +294,37 @@ impl SkillsView {
         ctx: &egui::Context,
         lifecycle_enabled: bool,
     ) {
-        egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+        // Process pending events FIRST, before cache check
         self.process_pending(i18n);
+
+        // Compute content hash from all state that affects rendering
+        let hash = section_hash!(
+            serde_json::to_string(&self.skills).unwrap_or_default(),
+            self.loading,
+            &self.error,
+            &self.success,
+            self.show_create,
+            self.show_import,
+            &self.selected_skill_name,
+            &self.edit_desc,
+            &self.edit_prompt,
+            &self.edit_schema,
+            &self.test_input,
+            &self.rollback_version,
+            &self.versions_for_skill,
+            serde_json::to_string(&self.versions).unwrap_or_default(),
+            &self.create_name,
+            &self.create_desc,
+            &self.create_prompt,
+            &self.create_input_schema,
+            &self.import_url,
+            lifecycle_enabled,
+            self.sending,
+            self.initialized,
+        );
+
+        let _ = self.cached_view.check_or_render(ui, "skills_view", hash, |ui| {
+            egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
         if !self.initialized {
             self.initialized = true;
             self.trigger_refresh(i18n, backend, ctx);
@@ -1272,6 +1306,7 @@ impl SkillsView {
                 }
             });
         }
+        });
         });
     }
 }

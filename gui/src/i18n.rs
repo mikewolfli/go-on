@@ -471,6 +471,30 @@ impl I18n {
             tr!(en, "Multi-model", cn, "多模型", tw, "多模型"),
         );
         m.insert(
+            "chat.threadInfo",
+            tr!(en, "Thread Info", cn, "线程信息", tw, "執行緒資訊"),
+        );
+        m.insert(
+            "chat.sessionName",
+            tr!(en, "Session Name", cn, "会话名称", tw, "會話名稱"),
+        );
+        m.insert(
+            "chat.createdAt",
+            tr!(en, "Created At", cn, "创建时间", tw, "建立時間"),
+        );
+        m.insert(
+            "chat.inputTokens",
+            tr!(en, "Input Tokens", cn, "输入 Token", tw, "輸入 Token"),
+        );
+        m.insert(
+            "chat.outputTokens",
+            tr!(en, "Output Tokens", cn, "输出 Token", tw, "輸出 Token"),
+        );
+        m.insert(
+            "chat.totalTokens",
+            tr!(en, "Total Tokens", cn, "总计 Token", tw, "總計 Token"),
+        );
+        m.insert(
             "chat.modelAutoOnly",
             tr!(en, "Auto Only", cn, "仅自动", tw, "僅自動"),
         );

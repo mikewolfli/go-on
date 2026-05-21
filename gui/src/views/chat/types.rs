@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::time::Instant;
 use tokio::task::JoinHandle;
 
@@ -24,8 +23,6 @@ pub struct Message {
     pub total_tokens: usize,
     #[serde(default)]
     pub thinking: String,
-    #[serde(default)]
-    pub risk_decision: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,7 +111,6 @@ pub enum PendingResponse {
         model: Option<String>,
         conversation_id: Option<String>,
         branch_id: Option<String>,
-        risk_decision: Option<Value>,
     },
     StreamChunk {
         generation_id: u64,

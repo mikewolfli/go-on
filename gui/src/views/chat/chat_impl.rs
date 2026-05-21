@@ -37,6 +37,7 @@ pub struct ChatView {
     pub active_session: usize,
     pub input: String,
     pub sending: bool,
+    pub last_sending: bool,
     pub error: String,
     pub success_message: Option<String>,
     pub ai_status: AiStatus,
@@ -119,6 +120,8 @@ pub struct ChatView {
     /// Per-message content hash cache: skips re-parsing unchanged messages.
     /// Key = message index, value = hash of content last rendered.
     rendered_content_hashes: Vec<u64>,
+    /// Section-level partial-render cache for sidebar, toolbar, etc.
+    pub section_cache: crate::widgets::cache::SectionCache,
 }
 
 impl ChatView {
@@ -402,6 +405,7 @@ impl ChatView {
             active_session: 0,
             input: default_input,
             sending: false,
+            last_sending: false,
             error: String::new(),
             success_message: None,
             ai_status: AiStatus::Idle,
@@ -476,6 +480,7 @@ impl ChatView {
                         .unwrap_or_else(|_| reqwest::Client::new())
                 }),
             rendered_content_hashes: Vec::new(),
+            section_cache: crate::widgets::cache::SectionCache::new(),
         }
     }
 
@@ -856,6 +861,7 @@ impl ChatView {
         self.phases_loaded = false;
         self.phases_load_scheduled = false;
         self.models_loaded = false;
+        self.last_sending = false;
     }
 
     /// Save chat-specific fields into the global UI state for persistence.
@@ -934,6 +940,7 @@ mod tests {
             active_session: 0,
             input: String::new(),
             sending: false,
+            last_sending: false,
             error: String::new(),
             success_message: None,
             ai_status: AiStatus::Idle,
@@ -991,6 +998,7 @@ mod tests {
             model_stats: std::collections::HashMap::new(),
             stream_client: reqwest::Client::new(),
             rendered_content_hashes: Vec::new(),
+            section_cache: crate::widgets::cache::SectionCache::new(),
         }
     }
 

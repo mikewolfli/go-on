@@ -11,6 +11,7 @@ mod i18n;
 mod keyring_util;
 mod theme;
 mod views;
+mod widgets;
 
 use app::GoOnApp;
 
@@ -350,8 +351,11 @@ async fn main() -> eframe::Result<()> {
             .with_min_inner_size([640.0, 480.0])
             .with_icon(icon),
         vsync: true,
-        // Explicitly use glow (OpenGL) backend for Linux compatibility
-        renderer: eframe::Renderer::Glow,
+        // Wgpu (Vulkan/Metal/DX12) uses proper swap-chain double
+        // buffering — no screen-clearing flash on repaint.
+        // Glow (OpenGL) on Linux clears the frame buffer on every
+        // frame, causing visible flickering at high repaint rates.
+        renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
     let result = eframe::run_native(

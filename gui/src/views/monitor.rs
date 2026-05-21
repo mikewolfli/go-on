@@ -1,5 +1,6 @@
 use crate::backend::{BackendClient, ErrorGroup, HealthStatus, MetricsWindowPoint, ProviderStatus};
 use crate::i18n::I18n;
+use crate::widgets::cache::{hash_bool, hash_combine, hash_str, CachedView};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -32,6 +33,7 @@ pub struct MonitorView {
     last_metrics_load: Instant,
     pub auto_refresh_interval: u64,
     consecutive_metrics_failures: u32,
+    pub cached_view: CachedView,
 }
 
 impl MonitorView {
@@ -59,6 +61,7 @@ impl MonitorView {
             last_metrics_load: Instant::now(),
             auto_refresh_interval: 30,
             consecutive_metrics_failures: 0,
+            cached_view: CachedView::new(),
         }
     }
 
@@ -488,7 +491,377 @@ impl MonitorView {
                             });
                         ui.add_space(2.0);
                     }
+                                // ── Cached rendering ────────────────────────────────────────
+                                // Compute content hash AFTER process_pending and auto-refresh
+                                // so that any state changes are reflected in the hash.
+                                let mut hash = hash_combine(
+                                    hash_bool(self.backend_configured),
+                                    hash_str(&self.error),
+                                );
+                                hash = hash_combine(hash, hash_str(&self.metrics_window));
+                                hash = hash_combine(hash, hash_str(&self.auto_refresh_interval.to_string()));
+                                hash = hash_combine(hash, hash_str(&self.provider_filter));
+
+                                // Health status
+                                if let Some(h) = &self.health {
+                                    hash = hash_combine(hash, hash_bool(h.connected));
+                                    hash = hash_combine(hash, hash_bool(h.healthy));
+                                    hash = hash_combine(hash, hash_str(&h.avg_latency_ms.to_string()));
+                                    hash = hash_combine(hash, hash_str(&h.success_rate.to_string()));
+                                    hash = hash_combine(hash, hash_str(&h.uptime.to_string()));
+                                    hash = hash_combine(hash, hash_str(&h.requests_per_minute.to_string()));
+                                } else {
+                                    hash = hash_combine(hash, hash_bool(false));
+                                }
+
+                                // Providers list (name + ready + model)
+                                for p in &self.providers {
+                                    hash = hash_combine(hash, hash_str(&p.name));
+                                    hash = hash_combine(hash, hash_bool(p.ready));
+                                    hash = hash_combine(hash, hash_str(&p.model));
+                                }
+
+                                // Metrics lines
+                                for line in &self.metrics_lines {
+                                    hash = hash_combine(hash, hash_str(line));
+                                }
+
+                                // Trend series
+                                for pt in &self.trend_series {
+                                    hash = hash_combine(hash, hash_str(&pt.ts.to_string()));
+                                    hash = hash_combine(hash, hash_str(&pt.qps.to_string()));
+                                    hash = hash_combine(hash, hash_str(&pt.p95.to_string()));
+                                    hash = hash_combine(hash, hash_str(&pt.error_rate.to_string()));
+                                    hash = hash_combine(hash, hash_str(&pt.success_rate.to_string()));
+                                }
+
+                                // Error groups
+                                for eg in &self.error_groups {
+                                    hash = hash_combine(hash, hash_str(&eg.error_type));
+                                    hash = hash_combine(hash, hash_str(&eg.count.to_string()));
+                                }
+                                hash = hash_combine(hash, hash_str(&self.sample_failures_count.to_string()));
+
+                                // Available windows
+                                for w in &self.available_windows {
+                                    hash = hash_combine(hash, hash_str(w));
+                                }
+
+                                // Cache check: skip widget tree rebuild on cache hit
+                                if let Some(cached_size) = self.cached_view.check_size("monitor", hash) {
+                                    ui.allocate_space(cached_size);
+                                } else {
+                                    let resp = egui::Frame::NONE.show(ui, |ui| {
+                                        ui.heading(i18n.t("monitor.health"));
+                                        ui.separator();
+                                        ui.add_space(8.0);
+
+                                        // ── Health card ──────────────────────────────────────────
+                                        egui::Frame::group(ui.style()).show(ui, |ui| {
+                                            match &self.health {
+                                                None => {
+                                                    // No health info yet – backend may not be running
+                                                    ui.horizontal(|ui| {
+                                                        ui.colored_label(egui::Color32::GRAY, "◌");
+                                                        ui.label(i18n.t("app.connecting"));
+                                                    });
+                                                }
+                                                Some(health) => {
+                                                    ui.horizontal(|ui| {
+                                                        let (_icon, color, text) = if !health.connected {
+                                                            ("◌", egui::Color32::RED, i18n.t("monitor.offline"))
+                                                        } else if health.healthy {
+                                                            (
+                                                                "●",
+                                                                egui::Color32::from_rgb(20, 120, 70),
+                                                                i18n.t("monitor.healthy"),
+                                                            )
+                                                        } else {
+                                                            ("◉", egui::Color32::YELLOW, i18n.t("monitor.unhealthy"))
+                                                        };
+                                                        ui.colored_label(color, text.as_ref());
+                                                    });
+                                                    ui.label(format!(
+                                                        "{}: {} ms",
+                                                        i18n.t("monitor.latency"),
+                                                        health.avg_latency_ms
+                                                    ));
+                                                    ui.label(format!(
+                                                        "{}: {}% (uptime: {} {})",
+                                                        i18n.t("monitor.success"),
+                                                        health.success_rate,
+                                                        health.uptime,
+                                                        i18n.t("common.seconds")
+                                                    ));
+                                                    ui.label(format!(
+                                                        "{}: {:.1}",
+                                                        i18n.t("monitor.rpm"),
+                                                        health.requests_per_minute
+                                                    ));
+                                                }
+                                            }
+                                        });
+
+                                        if !self.error.is_empty() {
+                                            let retry_in = effective_refresh_interval
+                                                .saturating_sub(self.last_metrics_load.elapsed())
+                                                .as_secs()
+                                                .max(1);
+                                            ui.add_space(6.0);
+                                            ui.colored_label(egui::Color32::from_rgb(220, 120, 80), &self.error);
+                                            ui.label(
+                                                i18n.t("monitor.retryIn")
+                                                    .replace("{seconds}", &retry_in.to_string()),
+                                            );
+                                        }
+
+                                        ui.add_space(16.0);
+
+                                        if monitor_history_alerts_enabled {
+                                            egui::Frame::group(ui.style()).show(ui, |ui| {
+                                                ui.horizontal(|ui| {
+                                                    ui.label(i18n.t("monitor.timeWindow"));
+                                                    egui::ComboBox::from_id_salt("monitor_metrics_window")
+                                                        .selected_text(self.metrics_window.clone())
+                                                        .show_ui(ui, |ui| {
+                                                            for w in &self.available_windows {
+                                                                ui.selectable_value(&mut self.metrics_window, w.clone(), w);
+                                                            }
+                                                        });
+                                                    ui.separator();
+                                                    ui.label(i18n.t("monitor.refreshInterval"));
+                                                    let mut refresh_interval = self.auto_refresh_interval as i32;
+                                                    if ui
+                                                        .add(egui::Slider::new(&mut refresh_interval, 10..=120))
+                                                        .changed()
+                                                    {
+                                                        self.auto_refresh_interval = refresh_interval as u64;
+                                                    }
+                                                    ui.label(format!(
+                                                        "{} {}",
+                                                        self.auto_refresh_interval,
+                                                        i18n.t("common.seconds")
+                                                    ));
+                                                    if ui.button(i18n.t("monitor.loadTrends")).clicked() {
+                                                        let backend_clone = backend.clone();
+                                                        let window = self.metrics_window.clone();
+                                                        let tx = self.pending_tx.clone();
+                                                        let ctx_clone = ui.ctx().clone();
+                                                        tokio::spawn(async move {
+                                                            // Add timeout to prevent hanging
+                                                            let result = match tokio::time::timeout(
+                                                                std::time::Duration::from_secs(10),
+                                                                backend_clone.metrics_window_query(&window),
+                                                            )
+                                                            .await
+                                                            {
+                                                                Ok(r) => r,
+                                                                Err(_) => Err("timeout".to_string()),
+                                                            };
+                                                            let payload = match result {
+                                                                Ok(series) => {
+                                                                    let trends_json = serde_json::to_string(&series)
+                                                                        .unwrap_or_else(|_| "[]".to_string());
+                                                                    let metrics =
+                                                                        format!("window={window} points={}", series.len());
+                                                                    (
+                                                                        format!("__metrics__:{metrics}"),
+                                                                        format!("__trends__:{trends_json}"),
+                                                                    )
+                                                                }
+                                                                Err(e) => (format!("__metrics_error__:{e}"), String::new()),
+                                                            };
+                                                            send_with_retry(&tx, payload.0);
+                                                            if !payload.1.is_empty() {
+                                                                send_with_retry(&tx, payload.1);
+                                                            }
+                                                            ctx_clone.request_repaint();
+                                                        });
+                                                    }
+                                                    if ui
+                                                        .button("⟳")
+                                                        .on_hover_text(i18n.t("monitor.refreshNow"))
+                                                        .clicked()
+                                                    {
+                                                        self.last_metrics_load =
+                                                            Instant::now() - self.effective_refresh_interval();
+                                                    }
+                                                    if ui.button(i18n.t("monitor.loadErrors")).clicked() {
+                                                        let backend_clone = backend.clone();
+                                                        let window = self.metrics_window.clone();
+                                                        let tx = self.pending_tx.clone();
+                                                        let ctx_clone = ui.ctx().clone();
+                                                        tokio::spawn(async move {
+                                                            // Add timeout to prevent hanging
+                                                            let result = match tokio::time::timeout(
+                                                                std::time::Duration::from_secs(10),
+                                                                backend_clone.metrics_errors_summary(&window, 10),
+                                                            )
+                                                            .await
+                                                            {
+                                                                Ok(r) => r,
+                                                                Err(_) => Err("timeout".to_string()),
+                                                            };
+                                                            let payload = match result {
+                                                                Ok((groups, failures)) => {
+                                                                    let metrics = format!(
+                                                                        "window={window} error_groups={}",
+                                                                        groups.len()
+                                                                    );
+                                                                    let summary_json = serde_json::json!({
+                                                                        "groups": groups,
+                                                                        "sample_failures_count": failures.len()
+                                                                    });
+                                                                    (
+                                                                        format!("__metrics__:{metrics}"),
+                                                                        format!("__errors_summary__:{summary_json}"),
+                                                                    )
+                                                                }
+                                                                Err(e) => (format!("__metrics_error__:{e}"), String::new()),
+                                                            };
+                                                            send_with_retry(&tx, payload.0);
+                                                            if !payload.1.is_empty() {
+                                                                send_with_retry(&tx, payload.1);
+                                                            }
+                                                            ctx_clone.request_repaint();
+                                                        });
+                                                    }
+                                                });
+
+                                                if let Some(last) = self.trend_series.last() {
+                                                    ui.add_space(6.0);
+                                                    ui.label(i18n.t("monitor.trendSummary"));
+                                                    ui.horizontal_wrapped(|ui| {
+                                                        ui.label(format!("{:}: {:.2}", i18n.t("monitor.qps"), last.qps));
+                                                        ui.label(format!("{:}: {:.2}ms", i18n.t("monitor.p95"), last.p95));
+                                                        ui.label(format!(
+                                                            "{:}: {:.3}",
+                                                            i18n.t("monitor.errorRate"),
+                                                            last.error_rate
+                                                        ));
+                                                        ui.label(format!(
+                                                            "{:}: {:.3}",
+                                                            i18n.t("monitor.successRate"),
+                                                            last.success_rate
+                                                        ));
+                                                    });
+                                                }
+
+                                                if !self.error_groups.is_empty() {
+                                                    ui.add_space(6.0);
+                                                    ui.label(i18n.t("monitor.errorTopGroups"));
+                                                    for g in self.error_groups.iter().take(5) {
+                                                        ui.label(format!("{}: {}", g.error_type, g.count));
+                                                    }
+                                                    ui.label(
+                                                        i18n.t("monitor.sampleFailures")
+                                                            .replace("{count}", &self.sample_failures_count.to_string()),
+                                                    );
+                                                }
+
+                                                for line in &self.metrics_lines {
+                                                    // Color-code metric lines by content for quick visual scanning.
+                                                    let color =
+                                                        if line.contains("error_rate") || line.contains("error_groups") {
+                                                            egui::Color32::from_rgb(220, 80, 80)
+                                                        } else if line.contains("success_rate") || line.contains("qps") {
+                                                            egui::Color32::from_rgb(60, 180, 100)
+                                                        } else if line.contains("p95") || line.contains("timeout") {
+                                                            egui::Color32::from_rgb(220, 170, 60)
+                                                        } else {
+                                                            ui.visuals().text_color()
+                                                        };
+                                                    ui.colored_label(color, line);
+                                                }
+                                            });
+                                            ui.add_space(10.0);
+                                        }
+
+                                        // ── Configured-but-backend-offline hint ────────────────
+                                        if self.backend_configured && self.health.as_ref().is_none_or(|h| !h.connected) {
+                                            ui.colored_label(
+                                                egui::Color32::from_rgb(200, 160, 60),
+                                                i18n.t("monitor.offlineHint"),
+                                            );
+                                            ui.add_space(8.0);
+                                        }
+
+                                        // ── Provider status ─────────────────────────────────────
+                                        ui.heading(i18n.t("monitor.providers"));
+                                        ui.separator();
+                                        ui.add_space(4.0);
+
+                                        // Provider search/filter
+                                        ui.add_space(8.0);
+                                        ui.add(
+                                            egui::TextEdit::singleline(&mut self.provider_filter)
+                                                .hint_text(i18n.t("monitor.filterProviders"))
+                                                .desired_width(200.0),
+                                        );
+                                        ui.add_space(4.0);
+
+                                        if self.providers.is_empty() {
+                                            // Show a more descriptive message when health is known but no providers
+                                            match &self.health {
+                                                Some(h) if h.connected => {
+                                                    ui.label(i18n.t("monitor.notReady"));
+                                                }
+                                                _ => {
+                                                    // Either no health data or backend offline – no point showing
+                                                    // empty providers as "not ready"; just be silent.
+                                                }
+                                            }
+                                        } else {
+                                            let q = self.provider_filter.to_lowercase();
+                                            let filter_enabled = !q.is_empty();
+                                            for p in &self.providers {
+                                                if filter_enabled && !p.name.to_lowercase().contains(&q) {
+                                                    continue;
+                                                }
+                                                egui::Frame::group(ui.style())
+                                                    .inner_margin(egui::Margin::same(8))
+                                                    .show(ui, |ui| {
+                                                        ui.horizontal(|ui| {
+                                                            let (icon, color) = if p.ready {
+                                                                ("●", egui::Color32::from_rgb(20, 120, 70))
+                                                            } else {
+                                                                ("○", egui::Color32::RED)
+                                                            };
+                                                            ui.colored_label(color, icon);
+                                                            ui.label(&p.name);
+                                                            if !p.model.is_empty() {
+                                                                ui.label(format!("({})", p.model));
+                                                            }
+                                                            ui.with_layout(
+                                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                                |ui| {
+                                                                    let status_label = if p.ready {
+                                                                        i18n.t("monitor.ready")
+                                                                    } else {
+                                                                        i18n.t("monitor.notReady")
+                                                                    };
+                                                                    let status_color = if p.ready {
+                                                                        egui::Color32::from_rgb(20, 120, 70)
+                                                                    } else {
+                                                                        egui::Color32::from_rgb(198, 60, 60)
+                                                                    };
+                                                                    egui::Frame::new()
+                                                                        .fill(status_color.gamma_multiply(0.15))
+                                                                        .corner_radius(10.0)
+                                                                        .inner_margin(egui::Margin::symmetric(8i8, 2i8))
+                                                                        .show(ui, |ui| {
+                                                                            ui.colored_label(status_color, status_label);
+                                                                        });
+                                                                },
+                                                            );
+                                                        });
+                                                    });
+                                                ui.add_space(2.0);
+                                            }
+                                        }
+                                    });
+                                    self.cached_view.store_size("monitor", hash, resp.response.rect.size());
+                                }
+                            });
+                    }
                 }
-            });
-    }
-}

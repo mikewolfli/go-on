@@ -109,7 +109,7 @@ impl ChatView {
     pub fn send_message(
         &mut self,
         backend: &BackendClient,
-        _ctx: &egui::Context,
+        ctx: &egui::Context,
         autotune_chain_enabled: bool,
     ) {
         let msg = self.input.trim().to_string();
@@ -162,7 +162,6 @@ impl ChatView {
             output_tokens: 0,
             total_tokens: 0,
             thinking: String::new(),
-            risk_decision: None,
         });
         self.save_sessions_to_disk();
 
@@ -223,7 +222,6 @@ impl ChatView {
                 output_tokens: 0,
                 total_tokens: 0,
                 thinking: String::new(),
-                risk_decision: None,
             });
             let msg_idx = self.session().messages.len().saturating_sub(1);
 
@@ -377,7 +375,6 @@ impl ChatView {
                                             model: None,
                                             conversation_id: None,
                                             branch_id: None,
-                                            risk_decision: value.get("risk_decision").cloned(),
                                         },
                                     )
                                     .await;
@@ -428,20 +425,17 @@ impl ChatView {
                                     None, // history not available in this scope
                                 )
                                 .await
-                                .map(
-                                    |(content, thinking, agent, selected_model, risk_decision)| {
-                                        PendingResponse::ChatCompleted {
-                                            generation_id,
-                                            content,
-                                            thinking,
-                                            agent,
-                                            model: selected_model,
-                                            conversation_id: None,
-                                            branch_id: None,
-                                            risk_decision,
-                                        }
-                                    },
-                                )
+                                .map(|(content, thinking, agent, selected_model)| {
+                                    PendingResponse::ChatCompleted {
+                                        generation_id,
+                                        content,
+                                        thinking,
+                                        agent,
+                                        model: selected_model,
+                                        conversation_id: None,
+                                        branch_id: None,
+                                    }
+                                })
                                 .unwrap_or_else(|e| PendingResponse::Error {
                                     generation_id: Some(generation_id),
                                     message: format!("stream error: {err}; fallback: {e}"),
@@ -459,7 +453,6 @@ impl ChatView {
                         let mut final_used_model: Option<String> = None;
                         let mut final_conv_id: Option<String> = None;
                         let mut final_branch_id: Option<String> = None;
-                        let mut final_risk_decision: Option<Value> = None;
                         let mut buffered_token = String::with_capacity(4096);
                         let mut buffered_reasoning = String::with_capacity(2048);
                         let mut last_stream_flush = std::time::Instant::now();
@@ -641,7 +634,6 @@ impl ChatView {
                                             .get("branch_id")
                                             .and_then(|v| v.as_str())
                                             .map(String::from);
-                                        final_risk_decision = data.get("risk_decision").cloned();
                                     }
                                     "error" => {
                                         if !buffered_token.is_empty()
@@ -734,7 +726,6 @@ impl ChatView {
                                 model: final_used_model,
                                 conversation_id: final_conv_id,
                                 branch_id: final_branch_id,
-                                risk_decision: final_risk_decision,
                             },
                         )
                         .await;
@@ -754,20 +745,17 @@ impl ChatView {
                                 None, // history not available in this scope
                             )
                             .await
-                            .map(
-                                |(content, thinking, agent, selected_model, risk_decision)| {
-                                    PendingResponse::ChatCompleted {
-                                        generation_id,
-                                        content,
-                                        thinking,
-                                        agent,
-                                        model: selected_model,
-                                        conversation_id: None,
-                                        branch_id: None,
-                                        risk_decision,
-                                    }
-                                },
-                            )
+                            .map(|(content, thinking, agent, selected_model)| {
+                                PendingResponse::ChatCompleted {
+                                    generation_id,
+                                    content,
+                                    thinking,
+                                    agent,
+                                    model: selected_model,
+                                    conversation_id: None,
+                                    branch_id: None,
+                                }
+                            })
                             .unwrap_or_else(|e| PendingResponse::Error {
                                 generation_id: Some(generation_id),
                                 message: format!("request error: {err}; fallback: {e}"),
@@ -793,14 +781,18 @@ impl ChatView {
         }
 
         self.save_sessions_to_disk();
+        // Trigger immediate repaint to show the placeholder message.
+        ctx.request_repaint();
     }
 
     /// Drain any pending async responses and update the session / `ai_status`.
-    pub(super) fn process_pending(&mut self, i18n: &I18n) {
+    pub(super) fn process_pending(&mut self, i18n: &I18n, ctx: &egui::Context) {
+        let mut had_events = false;
         for _ in 0..self.max_pending_events_per_frame {
             let Ok(pending) = self.pending_rx.try_recv() else {
                 break;
             };
+            had_events = true;
             match pending {
                 PendingResponse::Phases(list) => {
                     self.phases = list;
@@ -883,7 +875,6 @@ impl ChatView {
                     model,
                     conversation_id,
                     branch_id,
-                    risk_decision,
                 } => {
                     // Store conversation tracking IDs on the session
                     if let Some(conv_id) = conversation_id {
@@ -933,7 +924,6 @@ impl ChatView {
                                 }
                                 m.output_tokens = self.output_token_estimate.max(m.output_tokens);
                                 m.total_tokens = self.last_token_estimate.max(m.total_tokens);
-                                m.risk_decision = risk_decision.clone();
                                 output_tokens_to_record = m.output_tokens;
                                 model_name = Some(m.model.clone());
                             }
@@ -1011,6 +1001,9 @@ impl ChatView {
                     self.input = content;
                 }
             }
+        }
+        if had_events {
+            ctx.request_repaint();
         }
     }
 }

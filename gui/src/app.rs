@@ -128,6 +128,8 @@ pub struct GoOnApp {
     backend_crash_count: u8,
     /// Consecutive backend health poll failures for progressive backoff
     consecutive_poll_failures: u8,
+    /// Tab content cache: skips widget tree rebuild on idle repaints
+    tab_cache: crate::widgets::cache::SectionCache,
 }
 
 /// Detect system locale from environment variables.
@@ -1022,6 +1024,7 @@ top_k = 2
             blocked_tab_toast_shown: None,
             last_prompts_command_version: 0,
             ui_state,
+            tab_cache: crate::widgets::cache::SectionCache::new(),
         };
 
         // Pre-load prompts so that command_templates are ready
@@ -1242,10 +1245,11 @@ impl eframe::App for GoOnApp {
         // handled by egui's event system automatically.
         //
         // Only schedule a very infrequent wake-up (2s) to keep the GL
-        // context alive on macOS, so the first frame after an event
-        // doesn't feel sluggish. This is invisible to the user.
+        // Minimal wake-up to keep the window system responsive.
+        // Increased to 10s to reduce idle repaint frequency (eliminates
+        // the micro-jitter caused by periodic widget tree rebuilds).
         if !self.pending_refresh && !self.chat_view.sending {
-            ctx.request_repaint_after(std::time::Duration::from_secs(2));
+            ctx.request_repaint_after(std::time::Duration::from_secs(10));
         }
 
         // Reap zombie child if backend exited
@@ -1517,8 +1521,36 @@ impl eframe::App for GoOnApp {
         // The WGPU back-buffer retains the previous frame when no changes
         // are needed, so there is no flicker from empty frames.
         egui::CentralPanel::default().show(ctx, |ui| {
-            egui::ScrollArea::vertical()
-                .id_salt("main_scroll") // Stable ID prevents scroll state reset on tab switches
+            // Tab content hash — skips widget tree when nothing changed
+            let tab_hash = {
+                use std::hash::Hash as _;
+                let mut state = std::collections::hash_map::DefaultHasher::new();
+                self.active_tab.hash(&mut state);
+                match self.active_tab.as_str() {
+                    "chat" => {
+                        self.chat_view.messages().len().hash(&mut state);
+                        self.chat_view.sending.hash(&mut state);
+                    }
+                    "monitor" => {
+                        self.monitor_view.providers.len().hash(&mut state);
+                    }
+                    _ => {}
+                }
+                state.finish()
+            };
+
+            if let Some(size) = self.tab_cache.check(
+                crate::widgets::cache::Section::Messages,
+                tab_hash,
+            ) {
+                ui.allocate_space(size);
+                return;
+            }
+
+            // Render tab and cache size
+            let resp = egui::Frame::NONE.show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("main_scroll")
                 .show(ui, |ui| {
                     let has_backend = self.has_providers;
                     match self.active_tab.as_str() {
@@ -1693,7 +1725,7 @@ impl eframe::App for GoOnApp {
                     frame_elapsed.as_millis()
                 ));
             }
-        }
+            请多轮全量扫描GUI,把所有GUI使用的EGUI控件全部接入双缓冲+局部重绘，目前对话框，标签页，还有个各个标签页都会出现下抖动。直到所有控件都接入。        }
     }
 }
 

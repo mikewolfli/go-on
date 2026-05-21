@@ -1,6 +1,7 @@
 use crate::config::{save_app_config, AppConfig};
 use crate::i18n::I18n;
 use crate::keyring_util::REDACTED_API_KEY;
+use crate::widgets::cache::CachedView;
 use serde_json::Value;
 
 const MAX_SNAPSHOTS: usize = 20;
@@ -15,6 +16,7 @@ pub struct ConfigEditorView {
     json_parse_error: String,
     pub applied: bool,
     draft_len_at_validation: usize,
+    cached_view: CachedView,
 }
 
 impl ConfigEditorView {
@@ -29,6 +31,7 @@ impl ConfigEditorView {
             json_parse_error: String::new(),
             applied: false,
             draft_len_at_validation: 0,
+            cached_view: CachedView::new(),
         }
     }
 
@@ -128,143 +131,163 @@ impl ConfigEditorView {
                 ui.label(i18n.t("config.hint"));
                 ui.separator();
 
-                // Search bar
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.search_query)
-                            .hint_text(i18n.t("config.search"))
-                            .desired_width(200.0),
-                    );
-                    if !self.search_query.is_empty() {
-                        if ui.button("✕").clicked() {
-                            self.search_query.clear();
-                        }
-                        // Live search count
-                        let count = self.draft.matches(&self.search_query).count();
-                        ui.label(format!("{} {}", count, i18n.t("configEditor.matches")));
-                    }
-                });
-
-                if !safe_mode_enabled {
-                    ui.label(i18n.t("config.safeModeHidden"));
-                    ui.add_space(6.0);
-                }
-
-                let edit_response = ui.add(
-                    egui::TextEdit::multiline(&mut self.draft)
-                        .desired_rows(12)
-                        .desired_width(f32::INFINITY),
+                // Compute hash from render-relevant state
+                let hash = crate::section_hash!(
+                    self.draft,
+                    self.search_query,
+                    self.initialized,
+                    self.is_valid_json,
+                    self.snapshots.len(),
+                    safe_mode_enabled,
                 );
 
-                // Live JSON validation — only re-parse when the draft changes
-                if edit_response.changed() || self.draft.len() != self.draft_len_at_validation {
-                    self.draft_len_at_validation = self.draft.len();
-                    match serde_json::from_str::<serde_json::Value>(&self.draft) {
-                        Ok(_) => {
-                            self.is_valid_json = true;
-                            self.json_parse_error.clear();
-                        }
-                        Err(e) => {
-                            self.is_valid_json = false;
-                            self.json_parse_error = format!("⚠ {}", e);
-                        }
-                    }
-                }
-
-                // Validation status display
-                ui.horizontal(|ui| {
-                    if !self.is_valid_json {
-                        ui.colored_label(
-                            egui::Color32::from_rgb(220, 80, 80),
-                            &self.json_parse_error,
-                        );
-                    } else if !self.draft.trim().is_empty() {
-                        ui.colored_label(
-                            egui::Color32::from_rgb(60, 180, 100),
-                            i18n.t("config.validJson"),
-                        );
-                    }
-                });
-
-                ui.horizontal(|ui| {
-                    if ui.button(i18n.t("config.reloadCurrent")).clicked() {
-                        let raw = serde_json::to_string_pretty(config).unwrap_or_default();
-                        self.draft = Self::redact_api_keys_in_json(&raw);
-                        self.status = i18n.t("config.reloaded").to_string();
-                    }
-                    if safe_mode_enabled && ui.button(i18n.t("config.createSnapshot")).clicked() {
-                        if self.snapshots.len() >= MAX_SNAPSHOTS {
-                            self.snapshots.remove(0);
-                        }
-                        self.snapshots.push(self.draft.clone());
-                        self.status = format!(
-                            "{} (#{}).",
-                            i18n.t("config.snapshotSaved"),
-                            self.snapshots.len()
-                        );
-                    }
-                    let apply_btn = if safe_mode_enabled {
-                        ui.add_enabled(
-                            self.is_valid_json && !self.draft.trim().is_empty(),
-                            egui::Button::new(i18n.t("config.applyJson")),
-                        )
-                    } else {
-                        ui.add(egui::Button::new(i18n.t("config.applyJson")))
-                    };
-                    if apply_btn.clicked() {
-                        // Restore real api_key values before parsing — the draft shows
-                        // redacted "sk-bc12...ef56" strings that must not overwrite real keys.
-                        let restored = Self::restore_api_keys_in_draft(&self.draft, config);
-                        match serde_json::from_str::<AppConfig>(&restored) {
-                            Ok(new_cfg) => {
-                                if safe_mode_enabled {
-                                    if self.snapshots.len() >= MAX_SNAPSHOTS {
-                                        self.snapshots.remove(0);
-                                    }
-                                    self.snapshots.push(
-                                        serde_json::to_string_pretty(config).unwrap_or_default(),
-                                    );
+                self.cached_view
+                    .check_or_render(ui, "config_editor", hash, |ui| {
+                        // Search bar
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.search_query)
+                                    .hint_text(i18n.t("config.search"))
+                                    .desired_width(200.0),
+                            );
+                            if !self.search_query.is_empty() {
+                                if ui.button("✕").clicked() {
+                                    self.search_query.clear();
                                 }
-                                *config = new_cfg;
-                                save_app_config(config);
-                                // Re-redact the draft so the editor continues to show redacted keys
-                                self.draft = Self::redact_api_keys_in_json(
-                                    &serde_json::to_string_pretty(config).unwrap_or_default(),
+                                // Live search count
+                                let count = self.draft.matches(&self.search_query).count();
+                                ui.label(format!("{} {}", count, i18n.t("configEditor.matches")));
+                            }
+                        });
+
+                        if !safe_mode_enabled {
+                            ui.label(i18n.t("config.safeModeHidden"));
+                            ui.add_space(6.0);
+                        }
+
+                        let edit_response = ui.add(
+                            egui::TextEdit::multiline(&mut self.draft)
+                                .desired_rows(12)
+                                .desired_width(f32::INFINITY),
+                        );
+
+                        // Live JSON validation — only re-parse when the draft changes
+                        if edit_response.changed()
+                            || self.draft.len() != self.draft_len_at_validation
+                        {
+                            self.draft_len_at_validation = self.draft.len();
+                            match serde_json::from_str::<serde_json::Value>(&self.draft) {
+                                Ok(_) => {
+                                    self.is_valid_json = true;
+                                    self.json_parse_error.clear();
+                                }
+                                Err(e) => {
+                                    self.is_valid_json = false;
+                                    self.json_parse_error = format!("⚠ {}", e);
+                                }
+                            }
+                        }
+
+                        // Validation status display
+                        ui.horizontal(|ui| {
+                            if !self.is_valid_json {
+                                ui.colored_label(
+                                    egui::Color32::from_rgb(220, 80, 80),
+                                    &self.json_parse_error,
                                 );
-                                self.status = i18n.t("config.applied").to_string();
-                                self.applied = true;
+                            } else if !self.draft.trim().is_empty() {
+                                ui.colored_label(
+                                    egui::Color32::from_rgb(60, 180, 100),
+                                    i18n.t("config.validJson"),
+                                );
                             }
-                            Err(e) => {
-                                self.status = format!("{}: {e}", i18n.t("config.invalidJson"));
+                        });
+
+                        ui.horizontal(|ui| {
+                            if ui.button(i18n.t("config.reloadCurrent")).clicked() {
+                                let raw = serde_json::to_string_pretty(config).unwrap_or_default();
+                                self.draft = Self::redact_api_keys_in_json(&raw);
+                                self.status = i18n.t("config.reloaded").to_string();
+                            }
+                            if safe_mode_enabled
+                                && ui.button(i18n.t("config.createSnapshot")).clicked()
+                            {
+                                if self.snapshots.len() >= MAX_SNAPSHOTS {
+                                    self.snapshots.remove(0);
+                                }
+                                self.snapshots.push(self.draft.clone());
+                                self.status = format!(
+                                    "{} (#{}).",
+                                    i18n.t("config.snapshotSaved"),
+                                    self.snapshots.len()
+                                );
+                            }
+                            let apply_btn = if safe_mode_enabled {
+                                ui.add_enabled(
+                                    self.is_valid_json && !self.draft.trim().is_empty(),
+                                    egui::Button::new(i18n.t("config.applyJson")),
+                                )
+                            } else {
+                                ui.add(egui::Button::new(i18n.t("config.applyJson")))
+                            };
+                            if apply_btn.clicked() {
+                                // Restore real api_key values before parsing — the draft shows
+                                // redacted "sk-bc12...ef56" strings that must not overwrite real keys.
+                                let restored = Self::restore_api_keys_in_draft(&self.draft, config);
+                                match serde_json::from_str::<AppConfig>(&restored) {
+                                    Ok(new_cfg) => {
+                                        if safe_mode_enabled {
+                                            if self.snapshots.len() >= MAX_SNAPSHOTS {
+                                                self.snapshots.remove(0);
+                                            }
+                                            self.snapshots.push(
+                                                serde_json::to_string_pretty(config)
+                                                    .unwrap_or_default(),
+                                            );
+                                        }
+                                        *config = new_cfg;
+                                        save_app_config(config);
+                                        // Re-redact the draft so the editor continues to show redacted keys
+                                        self.draft = Self::redact_api_keys_in_json(
+                                            &serde_json::to_string_pretty(config)
+                                                .unwrap_or_default(),
+                                        );
+                                        self.status = i18n.t("config.applied").to_string();
+                                        self.applied = true;
+                                    }
+                                    Err(e) => {
+                                        self.status =
+                                            format!("{}: {e}", i18n.t("config.invalidJson"));
+                                    }
+                                }
+                            }
+                        });
+
+                        if safe_mode_enabled {
+                            ui.add_space(6.0);
+                            ui.label(format!(
+                                "{}: {}",
+                                i18n.t("config.snapshots"),
+                                self.snapshots.len()
+                            ));
+                            if ui
+                                .add_enabled(
+                                    !self.snapshots.is_empty(),
+                                    egui::Button::new(i18n.t("config.rollbackSnapshot")),
+                                )
+                                .clicked()
+                            {
+                                if let Some(last) = self.snapshots.pop() {
+                                    self.draft = last;
+                                    self.status = i18n.t("config.rolledBack").to_string();
+                                }
                             }
                         }
-                    }
-                });
 
-                if safe_mode_enabled {
-                    ui.add_space(6.0);
-                    ui.label(format!(
-                        "{}: {}",
-                        i18n.t("config.snapshots"),
-                        self.snapshots.len()
-                    ));
-                    if ui
-                        .add_enabled(
-                            !self.snapshots.is_empty(),
-                            egui::Button::new(i18n.t("config.rollbackSnapshot")),
-                        )
-                        .clicked()
-                    {
-                        if let Some(last) = self.snapshots.pop() {
-                            self.draft = last;
-                            self.status = i18n.t("config.rolledBack").to_string();
+                        if !self.status.is_empty() {
+                            ui.label(&self.status);
                         }
-                    }
-                }
-
-                if !self.status.is_empty() {
-                    ui.label(&self.status);
-                }
+                    });
             });
     }
 }

@@ -1,6 +1,8 @@
 use crate::backend::{BackendClient, WorkflowRunRecord};
 use crate::i18n::I18n;
 use crate::views::autotune::AutoTuneView;
+use crate::widgets::cache::section_hash;
+use crate::widgets::cache::CachedView;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -68,6 +70,8 @@ pub struct WorkflowView {
     /// Cached security prefs — reloaded at most once per 10s to avoid per-frame disk reads.
     cached_security: crate::views::security_prefs::SecurityPrefs,
     security_last_load: Instant,
+    /// View-level cache: skips widget tree rebuild when state is unchanged.
+    cached_view: CachedView,
 }
 
 impl WorkflowView {
@@ -234,6 +238,7 @@ impl WorkflowView {
             last_run_center_poll: Instant::now(),
             cached_security: crate::views::security_prefs::load(),
             security_last_load: Instant::now(),
+            cached_view: CachedView::new(),
         }
     }
 
@@ -390,344 +395,441 @@ impl WorkflowView {
         backend: &BackendClient,
         run_center_enabled: bool,
     ) {
-        egui::ScrollArea::vertical()
-            .auto_shrink([false; 2])
-            .show(ui, |ui| {
-                self.process_pending(i18n);
+        // Process pending events FIRST, before cache check
+        self.process_pending(i18n);
 
-                ui.heading(i18n.t("tab.workflow"));
-                ui.label(i18n.t("workflow.hint"));
-                ui.separator();
+        // Compute content hash from all state that affects rendering
+        let hash = section_hash!(
+            serde_json::to_string(&self.state.steps).unwrap_or_default(),
+            &self.new_name,
+            &self.new_command,
+            self.running,
+            self.pending_confirm_run,
+            self.pending_confirm_delete
+                .map(|i| i.to_string())
+                .unwrap_or_default(),
+            serde_json::to_string(&self.runs).unwrap_or_default(),
+            &self.selected_run_id,
+            serde_json::to_string(&self.selected_run_detail).unwrap_or_default(),
+            &self.run_status_filter,
+            &self.run_center_msg,
+            &self.state.last_result,
+            run_center_enabled,
+            self.cached_security.confirm_dangerous_actions,
+        );
 
-                if !run_center_enabled {
-                    ui.label(i18n.t("workflow.runCenter.hidden"));
-                    ui.add_space(6.0);
-                }
+        let _ = self
+            .cached_view
+            .check_or_render(ui, "workflow_view", hash, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| {
+                        ui.heading(i18n.t("tab.workflow"));
+                        ui.label(i18n.t("workflow.hint"));
+                        ui.separator();
 
-                // Reload security prefs at most once per 10 seconds to avoid per-frame disk reads.
-                if self.security_last_load.elapsed() >= std::time::Duration::from_secs(10) {
-                    self.cached_security = crate::views::security_prefs::load();
-                    self.security_last_load = Instant::now();
-                }
-                // Copy the needed bool to avoid holding a borrow over closures.
-                let confirm_dangerous = self.cached_security.confirm_dangerous_actions;
-
-                ui.horizontal(|ui| {
-                    ui.label(i18n.t("workflow.step"));
-                    ui.text_edit_singleline(&mut self.new_name);
-                    ui.label(i18n.t("workflow.command"));
-                    ui.text_edit_singleline(&mut self.new_command);
-                    if ui.button(i18n.t("workflow.add")).clicked() {
-                        let name = self.new_name.trim();
-                        let cmd = self.new_command.trim();
-                        if !name.is_empty() && !cmd.is_empty() {
-                            self.state.steps.push(WorkflowStep {
-                                name: name.to_string(),
-                                command: cmd.to_string(),
-                                enabled: true,
-                            });
-                            self.new_name.clear();
-                            self.new_command.clear();
-                            self.save_state();
+                        if !run_center_enabled {
+                            ui.label(i18n.t("workflow.runCenter.hidden"));
+                            ui.add_space(6.0);
                         }
-                    }
-                });
 
-                ui.add_space(8.0);
-                if self.state.steps.is_empty() {
-                    ui.label(i18n.t("workflow.noSteps"));
-                }
+                        // Reload security prefs at most once per 10 seconds to avoid per-frame disk reads.
+                        if self.security_last_load.elapsed() >= std::time::Duration::from_secs(10) {
+                            self.cached_security = crate::views::security_prefs::load();
+                            self.security_last_load = Instant::now();
+                        }
+                        // Copy the needed bool to avoid holding a borrow over closures.
+                        let confirm_dangerous = self.cached_security.confirm_dangerous_actions;
 
-                let mut changed = false;
-                let mut remove_idx = None;
-                for (idx, step) in self.state.steps.iter_mut().enumerate() {
-                    egui::Frame::group(ui.style()).show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            if ui.checkbox(&mut step.enabled, "").changed() {
-                                changed = true;
-                            }
-                            ui.label(&step.name);
-                            ui.separator();
-                            ui.label(&step.command);
-                            let delete_label = if self.pending_confirm_delete == Some(idx) {
-                                i18n.t("workflow.confirmDelete")
-                            } else {
-                                i18n.t("workflow.delete")
-                            };
-                            if ui.button(delete_label).clicked() {
-                                if confirm_dangerous && self.pending_confirm_delete != Some(idx) {
-                                    self.pending_confirm_delete = Some(idx);
-                                    self.state.last_result = Some(
-                                        i18n.t("workflow.deleteConfirmAgain")
-                                            .replace("{name}", &step.name)
-                                            .to_string(),
-                                    );
-                                } else {
-                                    remove_idx = Some(idx);
-                                    self.pending_confirm_delete = None;
+                            ui.label(i18n.t("workflow.step"));
+                            ui.text_edit_singleline(&mut self.new_name);
+                            ui.label(i18n.t("workflow.command"));
+                            ui.text_edit_singleline(&mut self.new_command);
+                            if ui.button(i18n.t("workflow.add")).clicked() {
+                                let name = self.new_name.trim();
+                                let cmd = self.new_command.trim();
+                                if !name.is_empty() && !cmd.is_empty() {
+                                    self.state.steps.push(WorkflowStep {
+                                        name: name.to_string(),
+                                        command: cmd.to_string(),
+                                        enabled: true,
+                                    });
+                                    self.new_name.clear();
+                                    self.new_command.clear();
+                                    self.save_state();
                                 }
                             }
                         });
-                    });
-                    ui.add_space(4.0);
-                }
 
-                if let Some(idx) = remove_idx {
-                    self.state.steps.remove(idx);
-                    changed = true;
-                }
+                        ui.add_space(8.0);
+                        if self.state.steps.is_empty() {
+                            ui.label(i18n.t("workflow.noSteps"));
+                        }
 
-                ui.add_space(8.0);
-                let run_label = if self.pending_confirm_run {
-                    i18n.t("workflow.confirmRun")
-                } else {
-                    i18n.t("workflow.run")
-                };
-                if ui
-                    .add_enabled(!self.running, egui::Button::new(run_label))
-                    .clicked()
-                {
-                    if confirm_dangerous && !self.pending_confirm_run {
-                        self.pending_confirm_run = true;
-                        self.state.last_result =
-                            Some(i18n.t("workflow.runConfirmAgain").to_string());
-                        changed = true;
-                    } else {
-                        self.pending_confirm_run = false;
-                        self.trigger_run(i18n, ctx, backend);
-                    }
-                }
+                        let mut changed = false;
+                        let mut remove_idx = None;
+                        for (idx, step) in self.state.steps.iter_mut().enumerate() {
+                            egui::Frame::group(ui.style()).show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    if ui.checkbox(&mut step.enabled, "").changed() {
+                                        changed = true;
+                                    }
+                                    ui.label(&step.name);
+                                    ui.separator();
+                                    ui.label(&step.command);
+                                    let delete_label = if self.pending_confirm_delete == Some(idx) {
+                                        i18n.t("workflow.confirmDelete")
+                                    } else {
+                                        i18n.t("workflow.delete")
+                                    };
+                                    if ui.button(delete_label).clicked() {
+                                        if confirm_dangerous
+                                            && self.pending_confirm_delete != Some(idx)
+                                        {
+                                            self.pending_confirm_delete = Some(idx);
+                                            self.state.last_result = Some(
+                                                i18n.t("workflow.deleteConfirmAgain")
+                                                    .replace("{name}", &step.name)
+                                                    .to_string(),
+                                            );
+                                        } else {
+                                            remove_idx = Some(idx);
+                                            self.pending_confirm_delete = None;
+                                        }
+                                    }
+                                });
+                            });
+                            ui.add_space(4.0);
+                        }
 
-                if run_center_enabled {
-                    // Auto-refresh run center while there is active work, so operators don't have to spam refresh.
-                    let active_selected = self
-                        .selected_run_detail
-                        .as_ref()
-                        .map(|r| matches!(r.status.as_str(), "queued" | "running" | "paused"))
-                        .or_else(|| {
-                            self.runs
-                                .iter()
-                                .find(|r| r.run_id == self.selected_run_id)
+                        if let Some(idx) = remove_idx {
+                            self.state.steps.remove(idx);
+                            changed = true;
+                        }
+
+                        ui.add_space(8.0);
+                        let run_label = if self.pending_confirm_run {
+                            i18n.t("workflow.confirmRun")
+                        } else {
+                            i18n.t("workflow.run")
+                        };
+                        if ui
+                            .add_enabled(!self.running, egui::Button::new(run_label))
+                            .clicked()
+                        {
+                            if confirm_dangerous && !self.pending_confirm_run {
+                                self.pending_confirm_run = true;
+                                self.state.last_result =
+                                    Some(i18n.t("workflow.runConfirmAgain").to_string());
+                                changed = true;
+                            } else {
+                                self.pending_confirm_run = false;
+                                self.trigger_run(i18n, ctx, backend);
+                            }
+                        }
+
+                        if run_center_enabled {
+                            // Auto-refresh run center while there is active work, so operators don't have to spam refresh.
+                            let active_selected = self
+                                .selected_run_detail
+                                .as_ref()
                                 .map(|r| {
                                     matches!(r.status.as_str(), "queued" | "running" | "paused")
                                 })
-                        })
-                        .unwrap_or(false);
-                    if active_selected
-                        && !self.runs_loading
-                        && self.last_run_center_poll.elapsed() >= std::time::Duration::from_secs(3)
-                    {
-                        self.request_runs(backend, ctx);
-                        if !self.selected_run_id.is_empty() {
-                            let run_id = self.selected_run_id.clone();
-                            self.request_run_detail(&run_id, backend, ctx);
-                        }
-                        self.last_run_center_poll = Instant::now();
-                    }
+                                .or_else(|| {
+                                    self.runs
+                                        .iter()
+                                        .find(|r| r.run_id == self.selected_run_id)
+                                        .map(|r| {
+                                            matches!(
+                                                r.status.as_str(),
+                                                "queued" | "running" | "paused"
+                                            )
+                                        })
+                                })
+                                .unwrap_or(false);
+                            if active_selected
+                                && !self.runs_loading
+                                && self.last_run_center_poll.elapsed()
+                                    >= std::time::Duration::from_secs(3)
+                            {
+                                self.request_runs(backend, ctx);
+                                if !self.selected_run_id.is_empty() {
+                                    let run_id = self.selected_run_id.clone();
+                                    self.request_run_detail(&run_id, backend, ctx);
+                                }
+                                self.last_run_center_poll = Instant::now();
+                            }
 
-                    // Cross-platform: Ctrl+R (Win/Linux) or Command+R (macOS) to refresh run center.
-                    let mut quick_refresh = false;
-                    ui.input_mut(|i| {
-                        if i.consume_key(egui::Modifiers::CTRL, egui::Key::R)
-                            || i.consume_key(egui::Modifiers::COMMAND, egui::Key::R)
-                        {
-                            quick_refresh = true;
-                        }
-                    });
-                    if quick_refresh && !self.runs_loading {
-                        self.request_runs(backend, ctx);
-                        if !self.selected_run_id.is_empty() {
-                            let run_id = self.selected_run_id.clone();
-                            self.request_run_detail(&run_id, backend, ctx);
-                        }
-                        self.last_run_center_poll = Instant::now();
-                    }
-
-                    ui.add_space(14.0);
-                    ui.separator();
-                    ui.heading(i18n.t("workflow.runCenter.title"));
-                    ui.horizontal(|ui| {
-                        egui::ComboBox::from_id_salt("workflow_run_filter")
-                            .selected_text(Self::status_label(i18n, &self.run_status_filter))
-                            .show_ui(ui, |ui| {
-                                for status in [
-                                    "all",
-                                    "queued",
-                                    "running",
-                                    "paused",
-                                    "succeeded",
-                                    "failed",
-                                    "cancelled",
-                                ] {
-                                    ui.selectable_value(
-                                        &mut self.run_status_filter,
-                                        status.to_string(),
-                                        Self::status_label(i18n, status),
-                                    );
+                            // Cross-platform: Ctrl+R (Win/Linux) or Command+R (macOS) to refresh run center.
+                            let mut quick_refresh = false;
+                            ui.input_mut(|i| {
+                                if i.consume_key(egui::Modifiers::CTRL, egui::Key::R)
+                                    || i.consume_key(egui::Modifiers::COMMAND, egui::Key::R)
+                                {
+                                    quick_refresh = true;
                                 }
                             });
-                        if ui
-                            .add_enabled(
-                                !self.runs_loading,
-                                egui::Button::new(i18n.t("workflow.runCenter.refresh")),
-                            )
-                            .clicked()
-                        {
-                            self.request_runs(backend, ctx);
-                            self.last_run_center_poll = Instant::now();
-                        }
-                    });
-
-                    if !self.run_center_msg.is_empty() {
-                        ui.colored_label(egui::Color32::RED, &self.run_center_msg);
-                    }
-
-                    let mut pending_detail_run_id: Option<String> = None;
-                    for run in &self.runs {
-                        ui.horizontal(|ui| {
-                            if ui
-                                .selectable_label(self.selected_run_id == run.run_id, &run.run_id)
-                                .clicked()
-                            {
-                                self.selected_run_id = run.run_id.clone();
-                                self.selected_run_detail = None;
-                                pending_detail_run_id = Some(run.run_id.clone());
+                            if quick_refresh && !self.runs_loading {
+                                self.request_runs(backend, ctx);
+                                if !self.selected_run_id.is_empty() {
+                                    let run_id = self.selected_run_id.clone();
+                                    self.request_run_detail(&run_id, backend, ctx);
+                                }
+                                self.last_run_center_poll = Instant::now();
                             }
-                            ui.colored_label(Self::status_color(&run.status), "●");
-                            ui.label(format!(
-                                "{} [{}]",
-                                run.task,
-                                Self::status_label(i18n, &run.status)
-                            ));
-                            if let Some(duration_secs) = Self::run_duration_secs(run) {
-                                ui.label(format!("{} {}", duration_secs, i18n.t("common.seconds")));
-                            }
-                        });
-                    }
-                    if let Some(run_id) = pending_detail_run_id {
-                        self.request_run_detail(&run_id, backend, ctx);
-                    }
 
-                    if !self.selected_run_id.is_empty() {
-                        // Determine the current status of the selected run from the list or detail.
-                        let selected_status = self
-                            .selected_run_detail
-                            .as_ref()
-                            .map(|r| r.status.as_str())
-                            .or_else(|| {
-                                self.runs
-                                    .iter()
-                                    .find(|r| r.run_id == self.selected_run_id)
-                                    .map(|r| r.status.as_str())
-                            })
-                            .unwrap_or("");
-
-                        // Build a context-sensitive list of actions based on run status.
-                        let available_actions: Vec<(std::borrow::Cow<str>, &str)> =
-                            match selected_status {
-                                "running" => vec![
-                                    (i18n.t("workflow.pause"), "pause"),
-                                    (i18n.t("workflow.cancel"), "cancel"),
-                                ],
-                                "paused" => vec![
-                                    (i18n.t("workflow.resume"), "resume"),
-                                    (i18n.t("workflow.cancel"), "cancel"),
-                                ],
-                                "queued" => vec![(i18n.t("workflow.cancel"), "cancel")],
-                                _ => vec![],
-                            };
-
-                        if !available_actions.is_empty() {
+                            ui.add_space(14.0);
+                            ui.separator();
+                            ui.heading(i18n.t("workflow.runCenter.title"));
                             ui.horizontal(|ui| {
-                                for (label, action) in available_actions {
-                                    if ui.button(label).clicked() {
-                                        let run_id = self.selected_run_id.clone();
-                                        self.run_detail_request_seq =
-                                            self.run_detail_request_seq.wrapping_add(1);
-                                        let detail_request_id = self.run_detail_request_seq;
-                                        self.run_detail_in_flight = true;
-                                        self.last_requested_run_detail_id = run_id.clone();
-                                        let backend_clone = backend.clone();
-                                        let tx = self.pending_tx.clone();
-                                        let ctx_clone = ctx.clone();
-                                        let requested_tpl =
-                                            i18n.t("workflow.runActionRequested").to_string();
-                                        let failed_tpl =
-                                            i18n.t("workflow.runActionFailed").to_string();
-                                        tokio::spawn(async move {
-                                            // Add timeout to prevent hanging
-                                            let result = match tokio::time::timeout(
-                                                std::time::Duration::from_secs(10),
-                                                backend_clone
-                                                    .transition_workflow_run(&run_id, action),
-                                            )
-                                            .await
-                                            {
-                                                Ok(r) => r,
-                                                Err(_) => {
-                                                    #[cfg(debug_assertions)]
-                                                    eprintln!(
+                                egui::ComboBox::from_id_salt("workflow_run_filter")
+                                    .selected_text(Self::status_label(
+                                        i18n,
+                                        &self.run_status_filter,
+                                    ))
+                                    .show_ui(ui, |ui| {
+                                        for status in [
+                                            "all",
+                                            "queued",
+                                            "running",
+                                            "paused",
+                                            "succeeded",
+                                            "failed",
+                                            "cancelled",
+                                        ] {
+                                            ui.selectable_value(
+                                                &mut self.run_status_filter,
+                                                status.to_string(),
+                                                Self::status_label(i18n, status),
+                                            );
+                                        }
+                                    });
+                                if ui
+                                    .add_enabled(
+                                        !self.runs_loading,
+                                        egui::Button::new(i18n.t("workflow.runCenter.refresh")),
+                                    )
+                                    .clicked()
+                                {
+                                    self.request_runs(backend, ctx);
+                                    self.last_run_center_poll = Instant::now();
+                                }
+                            });
+
+                            if !self.run_center_msg.is_empty() {
+                                ui.colored_label(egui::Color32::RED, &self.run_center_msg);
+                            }
+
+                            let mut pending_detail_run_id: Option<String> = None;
+                            for run in &self.runs {
+                                ui.horizontal(|ui| {
+                                    if ui
+                                        .selectable_label(
+                                            self.selected_run_id == run.run_id,
+                                            &run.run_id,
+                                        )
+                                        .clicked()
+                                    {
+                                        self.selected_run_id = run.run_id.clone();
+                                        self.selected_run_detail = None;
+                                        pending_detail_run_id = Some(run.run_id.clone());
+                                    }
+                                    ui.colored_label(Self::status_color(&run.status), "●");
+                                    ui.label(format!(
+                                        "{} [{}]",
+                                        run.task,
+                                        Self::status_label(i18n, &run.status)
+                                    ));
+                                    if let Some(duration_secs) = Self::run_duration_secs(run) {
+                                        ui.label(format!(
+                                            "{} {}",
+                                            duration_secs,
+                                            i18n.t("common.seconds")
+                                        ));
+                                    }
+                                });
+                            }
+                            if let Some(run_id) = pending_detail_run_id {
+                                self.request_run_detail(&run_id, backend, ctx);
+                            }
+
+                            if !self.selected_run_id.is_empty() {
+                                // Determine the current status of the selected run from the list or detail.
+                                let selected_status = self
+                                    .selected_run_detail
+                                    .as_ref()
+                                    .map(|r| r.status.as_str())
+                                    .or_else(|| {
+                                        self.runs
+                                            .iter()
+                                            .find(|r| r.run_id == self.selected_run_id)
+                                            .map(|r| r.status.as_str())
+                                    })
+                                    .unwrap_or("");
+
+                                // Build a context-sensitive list of actions based on run status.
+                                let available_actions: Vec<(std::borrow::Cow<str>, &str)> =
+                                    match selected_status {
+                                        "running" => vec![
+                                            (i18n.t("workflow.pause"), "pause"),
+                                            (i18n.t("workflow.cancel"), "cancel"),
+                                        ],
+                                        "paused" => vec![
+                                            (i18n.t("workflow.resume"), "resume"),
+                                            (i18n.t("workflow.cancel"), "cancel"),
+                                        ],
+                                        "queued" => vec![(i18n.t("workflow.cancel"), "cancel")],
+                                        _ => vec![],
+                                    };
+
+                                if !available_actions.is_empty() {
+                                    ui.horizontal(|ui| {
+                                        for (label, action) in available_actions {
+                                            if ui.button(label).clicked() {
+                                                let run_id = self.selected_run_id.clone();
+                                                self.run_detail_request_seq =
+                                                    self.run_detail_request_seq.wrapping_add(1);
+                                                let detail_request_id = self.run_detail_request_seq;
+                                                self.run_detail_in_flight = true;
+                                                self.last_requested_run_detail_id = run_id.clone();
+                                                let backend_clone = backend.clone();
+                                                let tx = self.pending_tx.clone();
+                                                let ctx_clone = ctx.clone();
+                                                let requested_tpl = i18n
+                                                    .t("workflow.runActionRequested")
+                                                    .to_string();
+                                                let failed_tpl =
+                                                    i18n.t("workflow.runActionFailed").to_string();
+                                                tokio::spawn(async move {
+                                                    // Add timeout to prevent hanging
+                                                    let result = match tokio::time::timeout(
+                                                        std::time::Duration::from_secs(10),
+                                                        backend_clone.transition_workflow_run(
+                                                            &run_id, action,
+                                                        ),
+                                                    )
+                                                    .await
+                                                    {
+                                                        Ok(r) => r,
+                                                        Err(_) => {
+                                                            #[cfg(debug_assertions)]
+                                                            eprintln!(
                                                     "Warning: transition_workflow_run timed out"
                                                 );
-                                                    Err("timeout".to_string())
-                                                }
-                                            };
-                                            let msg = match result {
-                                                Ok(_) => requested_tpl
-                                                    .replace("{run_id}", &run_id)
-                                                    .replace("{action}", action),
-                                                Err(e) => failed_tpl
-                                                    .replace("{run_id}", &run_id)
-                                                    .replace("{action}", action)
-                                                    .replace("{error}", &e.to_string()),
-                                            };
-                                            if let Err(e) =
-                                                tx.try_send(WorkflowEvent::UiMessage(msg))
-                                            {
-                                                eprintln!(
-                                                    "WARN: workflow try_send failed: {:?}",
-                                                    e
-                                                );
-                                            }
+                                                            Err("timeout".to_string())
+                                                        }
+                                                    };
+                                                    let msg = match result {
+                                                        Ok(_) => requested_tpl
+                                                            .replace("{run_id}", &run_id)
+                                                            .replace("{action}", action),
+                                                        Err(e) => failed_tpl
+                                                            .replace("{run_id}", &run_id)
+                                                            .replace("{action}", action)
+                                                            .replace("{error}", &e.to_string()),
+                                                    };
+                                                    if let Err(e) =
+                                                        tx.try_send(WorkflowEvent::UiMessage(msg))
+                                                    {
+                                                        eprintln!(
+                                                            "WARN: workflow try_send failed: {:?}",
+                                                            e
+                                                        );
+                                                    }
 
-                                            // Pull latest run detail after action so UI reflects new state quickly.
-                                            if let Ok(Ok(detail)) = tokio::time::timeout(
-                                                std::time::Duration::from_secs(10),
-                                                backend_clone.get_workflow_run_typed(&run_id),
-                                            )
-                                            .await
-                                            {
-                                                if let Err(e2) =
-                                                    tx.try_send(WorkflowEvent::RunDetailResult {
-                                                        request_id: detail_request_id,
-                                                        run_id: run_id.clone(),
-                                                        result: Ok(detail),
-                                                    })
-                                                {
-                                                    eprintln!(
+                                                    // Pull latest run detail after action so UI reflects new state quickly.
+                                                    if let Ok(Ok(detail)) = tokio::time::timeout(
+                                                        std::time::Duration::from_secs(10),
+                                                        backend_clone
+                                                            .get_workflow_run_typed(&run_id),
+                                                    )
+                                                    .await
+                                                    {
+                                                        if let Err(e2) = tx.try_send(
+                                                            WorkflowEvent::RunDetailResult {
+                                                                request_id: detail_request_id,
+                                                                run_id: run_id.clone(),
+                                                                result: Ok(detail),
+                                                            },
+                                                        ) {
+                                                            eprintln!(
                                                         "WARN: workflow try_send failed: {:?}",
                                                         e2
                                                     );
-                                                }
+                                                        }
+                                                    }
+                                                    ctx_clone.request_repaint();
+                                                });
                                             }
-                                            ctx_clone.request_repaint();
-                                        });
-                                    }
-                                }
-                            });
-                        } // end if !available_actions.is_empty()
+                                        }
+                                    });
+                                } // end if !available_actions.is_empty()
 
-                        if let Some(run) = &self.selected_run_detail {
-                            ui.add_space(6.0);
-                            let estimated_progress = Self::estimated_progress(run);
-                            egui::Frame::group(ui.style()).show(ui, |ui| {
-                                ui.label(i18n.t("workflow.activeSummary"));
-                                ui.add(
-                                    egui::ProgressBar::new(estimated_progress)
-                                        .desired_width(ui.available_width())
-                                        .show_percentage(),
-                                );
-                                ui.horizontal_wrapped(|ui| {
+                                if let Some(run) = &self.selected_run_detail {
+                                    ui.add_space(6.0);
+                                    let estimated_progress = Self::estimated_progress(run);
+                                    egui::Frame::group(ui.style()).show(ui, |ui| {
+                                        ui.label(i18n.t("workflow.activeSummary"));
+                                        ui.add(
+                                            egui::ProgressBar::new(estimated_progress)
+                                                .desired_width(ui.available_width())
+                                                .show_percentage(),
+                                        );
+                                        ui.horizontal_wrapped(|ui| {
+                                            if let Some(duration_secs) =
+                                                Self::run_duration_secs(run)
+                                            {
+                                                ui.label(format!(
+                                                    "{}: {} {}",
+                                                    i18n.t("workflow.duration"),
+                                                    duration_secs,
+                                                    i18n.t("common.seconds")
+                                                ));
+                                            }
+                                            if let Some(remaining_secs) =
+                                                Self::estimated_remaining_secs(run)
+                                            {
+                                                ui.label(format!(
+                                                    "{}: {} {}",
+                                                    i18n.t("workflow.estimatedRemaining"),
+                                                    remaining_secs,
+                                                    i18n.t("common.seconds")
+                                                ));
+                                            }
+                                        });
+                                    });
+                                    ui.add_space(6.0);
+                                    ui.label(format!(
+                                        "{}: {}",
+                                        i18n.t("workflow.status"),
+                                        Self::status_label(i18n, &run.status)
+                                    ));
+                                    ui.label(format!(
+                                        "{}: {}",
+                                        i18n.t("workflow.phase"),
+                                        run.phase
+                                    ));
+                                    ui.label(format!(
+                                        "{}: {}",
+                                        i18n.t("workflow.createdAt"),
+                                        Self::format_local_ts(run.created_at)
+                                    ));
+                                    if let Some(started_at) = run.started_at {
+                                        ui.label(format!(
+                                            "{}: {}",
+                                            i18n.t("workflow.startedAt"),
+                                            Self::format_local_ts(started_at)
+                                        ));
+                                    }
+                                    if let Some(ended_at) = run.ended_at {
+                                        ui.label(format!(
+                                            "{}: {}",
+                                            i18n.t("workflow.endedAt"),
+                                            Self::format_local_ts(ended_at)
+                                        ));
+                                    }
                                     if let Some(duration_secs) = Self::run_duration_secs(run) {
                                         ui.label(format!(
                                             "{}: {} {}",
@@ -736,75 +838,30 @@ impl WorkflowView {
                                             i18n.t("common.seconds")
                                         ));
                                     }
-                                    if let Some(remaining_secs) =
-                                        Self::estimated_remaining_secs(run)
-                                    {
-                                        ui.label(format!(
-                                            "{}: {} {}",
-                                            i18n.t("workflow.estimatedRemaining"),
-                                            remaining_secs,
-                                            i18n.t("common.seconds")
-                                        ));
+                                    if let Some(error) = &run.error {
+                                        ui.colored_label(
+                                            egui::Color32::RED,
+                                            format!("{}: {}", i18n.t("workflow.error"), error),
+                                        );
                                     }
-                                });
-                            });
-                            ui.add_space(6.0);
-                            ui.label(format!(
-                                "{}: {}",
-                                i18n.t("workflow.status"),
-                                Self::status_label(i18n, &run.status)
-                            ));
-                            ui.label(format!("{}: {}", i18n.t("workflow.phase"), run.phase));
-                            ui.label(format!(
-                                "{}: {}",
-                                i18n.t("workflow.createdAt"),
-                                Self::format_local_ts(run.created_at)
-                            ));
-                            if let Some(started_at) = run.started_at {
-                                ui.label(format!(
-                                    "{}: {}",
-                                    i18n.t("workflow.startedAt"),
-                                    Self::format_local_ts(started_at)
-                                ));
-                            }
-                            if let Some(ended_at) = run.ended_at {
-                                ui.label(format!(
-                                    "{}: {}",
-                                    i18n.t("workflow.endedAt"),
-                                    Self::format_local_ts(ended_at)
-                                ));
-                            }
-                            if let Some(duration_secs) = Self::run_duration_secs(run) {
-                                ui.label(format!(
-                                    "{}: {} {}",
-                                    i18n.t("workflow.duration"),
-                                    duration_secs,
-                                    i18n.t("common.seconds")
-                                ));
-                            }
-                            if let Some(error) = &run.error {
-                                ui.colored_label(
-                                    egui::Color32::RED,
-                                    format!("{}: {}", i18n.t("workflow.error"), error),
-                                );
-                            }
-                            if !run.artifacts.is_empty() {
-                                ui.label(i18n.t("workflow.artifacts"));
-                                for artifact in &run.artifacts {
-                                    ui.label(format!("- {}", artifact));
+                                    if !run.artifacts.is_empty() {
+                                        ui.label(i18n.t("workflow.artifacts"));
+                                        for artifact in &run.artifacts {
+                                            ui.label(format!("- {}", artifact));
+                                        }
+                                    }
                                 }
                             }
                         }
-                    }
-                }
 
-                if let Some(result) = &self.state.last_result {
-                    ui.label(result);
-                }
+                        if let Some(result) = &self.state.last_result {
+                            ui.label(result);
+                        }
 
-                if changed {
-                    self.save_state();
-                }
+                        if changed {
+                            self.save_state();
+                        }
+                    });
             });
     }
 }

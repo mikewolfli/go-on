@@ -1,4 +1,5 @@
 use super::*;
+use crate::widgets::cache::Section;
 use std::hash::{Hash, Hasher};
 
 /// Map mode ID to its i18n key for display.
@@ -122,89 +123,6 @@ impl ChatView {
             });
     }
 
-    fn render_risk_decision_summary(
-        ui: &mut egui::Ui,
-        i18n: &I18n,
-        risk_decision: &serde_json::Value,
-    ) {
-        let is_high_risk = risk_decision
-            .get("is_high_risk")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let review_required = risk_decision
-            .get("review_required")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let strategy = risk_decision
-            .get("vote_report")
-            .and_then(|v| v.get("strategy"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("auto");
-
-        let label = if is_high_risk {
-            i18n.t("chat.riskDecisionHigh")
-        } else {
-            i18n.t("chat.riskDecisionNormal")
-        };
-
-        let review_label = if review_required {
-            i18n.t("chat.riskDecisionReviewRequired")
-        } else {
-            i18n.t("chat.riskDecisionNoReview")
-        };
-
-        let title = i18n.t("chat.riskDecisionTitle");
-        let strategy_label = i18n.t("chat.riskDecisionStrategy");
-        let reasons = risk_decision
-            .get("reasons")
-            .and_then(|v| v.as_array())
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| item.as_str())
-                    .take(4)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .unwrap_or_default();
-
-        let bg = if is_high_risk {
-            if ui.visuals().dark_mode {
-                egui::Color32::from_rgba_premultiplied(120, 60, 30, 45)
-            } else {
-                egui::Color32::from_rgba_premultiplied(255, 220, 190, 70)
-            }
-        } else if ui.visuals().dark_mode {
-            egui::Color32::from_rgba_premultiplied(50, 70, 50, 35)
-        } else {
-            egui::Color32::from_rgba_premultiplied(210, 240, 210, 60)
-        };
-
-        egui::Frame::new()
-            .fill(bg)
-            .corner_radius(6.0)
-            .inner_margin(egui::Margin::symmetric(8i8, 5i8))
-            .show(ui, |ui| {
-                ui.vertical(|ui| {
-                    ui.label(egui::RichText::new(title).strong().size(11.0));
-                    ui.label(format!("{}: {}", i18n.t("chat.riskDecisionState"), label));
-                    ui.label(format!("{}: {}", strategy_label, strategy));
-                    ui.label(format!(
-                        "{}: {}",
-                        i18n.t("chat.riskDecisionReview"),
-                        review_label
-                    ));
-                    if !reasons.is_empty() {
-                        ui.label(format!(
-                            "{}: {}",
-                            i18n.t("chat.riskDecisionReasons"),
-                            reasons
-                        ));
-                    }
-                });
-            });
-    }
-
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -220,15 +138,18 @@ impl ChatView {
             runtime_config.max_pending_events_per_frame,
         );
 
-        // Process any pending async responses (non-blocking)
-        self.process_pending(i18n);
+        // Process any pending async responses — triggers ctx.request_repaint()
+        // when new stream data arrives, providing data-driven frame timing.
+        self.process_pending(i18n, ctx);
 
-        // Smooth streaming repaint cadence (30 FPS). 60 FPS caused screen flickering
-        // due to egui's full-frame rebuild — 30 FPS is visually smooth while eliminating
-        // flicker and reducing CPU/GPU load. The main frame governor in app.rs also
-        // accelerates to 100ms during streaming for responsiveness.
-        if self.sending {
-            ctx.request_repaint_after(std::time::Duration::from_millis(33));
+        // Data-driven repaint: process_pending() calls ctx.request_repaint()
+        // when new stream data arrives.  No periodic timer — frame pacing
+        // is handled entirely by GPU vsync, eliminating micro-jitter.
+        // The sending-state transition below ensures the first frame after
+        // send/stop is rendered immediately.
+        if self.sending != self.last_sending {
+            self.last_sending = self.sending;
+            ctx.request_repaint();
         }
 
         // Lazy initialization of templates and name refresh
@@ -1001,315 +922,352 @@ impl ChatView {
         backend: &BackendClient,
         ctx: &egui::Context,
     ) {
-        ui.vertical(|ui| {
-            ui.horizontal(|ui| {
-                ui.label(i18n.t("chat.title"));
-                // Export button
-                if ui
-                    .button("📤")
-                    .on_hover_text(i18n.t("chat.exportSession"))
-                    .clicked()
-                {
-                    let msgs = self.messages();
-                    let mut md = String::new();
-                    md.push_str(&format!("# {}\n\n", i18n.t("chat.exportTitle")));
-                    let exported_at = format_absolute_time(crate::fs_util::epoch_secs());
-                    md.push_str(&format!(
-                        "_{}_\n\n",
-                        i18n.t("chat.exportedAt").replace("{time}", &exported_at)
-                    ));
-                    for msg in msgs {
-                        let role_label = if msg.role == "user" {
-                            format!("**{}**", i18n.t("chat.exportRoleYou"))
-                        } else {
-                            format!("**{}**", i18n.t("chat.exportRoleAssistant"))
-                        };
-                        md.push_str(&format!(
-                            "{} ({})\n\n",
-                            role_label,
-                            format_absolute_time(msg.timestamp)
-                        ));
-                        if !msg.model.is_empty() {
-                            md.push_str(&format!(
-                                "_{}_\n\n",
-                                i18n.t("chat.exportModel").replace("{model}", &msg.model)
-                            ));
-                        }
-                        md.push_str(&format!("{}\n\n", msg.content));
-                        if !msg.thinking.is_empty() {
-                            md.push_str(&format!(
-                                "> {}\n\n",
-                                i18n.t("chat.exportThinking")
-                                    .replace("{thinking}", &msg.thinking)
-                            ));
-                        }
-                    }
-                    let default_name = self
-                        .sessions
-                        .get(self.active_session)
-                        .map(|s| s.name.clone())
-                        .unwrap_or_else(|| "chat-export".to_string())
-                        .replace('/', "-");
-                    if let Some(path) = rfd::FileDialog::new()
-                        .set_file_name(format!("{default_name}.md"))
-                        .save_file()
-                    {
-                        match std::fs::write(&path, md) {
-                            Ok(()) => {
-                                self.error = i18n
-                                    .t("chat.exportSuccess")
-                                    .replace("{path}", &path.display().to_string());
-                            }
-                            Err(e) => {
-                                self.error = i18n
-                                    .t("chat.exportFailed")
-                                    .replace("{error}", &e.to_string());
-                            }
-                        }
-                    }
-                }
-                if ui
-                    .button("📂")
-                    .on_hover_text(i18n.t("chat.openConfigDir"))
-                    .clicked()
-                {
-                    if let Some(dirs) = directories::ProjectDirs::from("com", "goon", "go-on-gui") {
-                        let config_dir = dirs.config_dir();
-                        #[cfg(target_os = "windows")]
-                        if let Err(e) = std::process::Command::new("cmd")
-                            .args(["/c", "start", "", &config_dir.display().to_string()])
-                            .spawn()
-                        {
-                            eprintln!("Failed to open config directory: {e}");
-                        }
-                        #[cfg(target_os = "macos")]
-                        if let Err(e) = std::process::Command::new("open").arg(config_dir).spawn() {
-                            eprintln!("Failed to open config directory: {e}");
-                        }
-                        #[cfg(target_os = "linux")]
-                        if let Err(e) = std::process::Command::new("xdg-open")
-                            .arg(config_dir)
-                            .spawn()
-                        {
-                            eprintln!("Failed to open config directory: {e}");
-                        }
-                        #[cfg(not(any(
-                            target_os = "windows",
-                            target_os = "macos",
-                            target_os = "linux"
-                        )))]
-                        if let Err(e) = std::process::Command::new("xdg-open")
-                            .arg(config_dir)
-                            .spawn()
-                        {
-                            eprintln!("Failed to open config directory: {e}");
-                        }
-                    }
-                }
-                if ui
-                    .button("＋")
-                    .on_hover_text(i18n.t("chat.newSession"))
-                    .clicked()
-                {
-                    self.new_session();
-                    self.refresh_default_session_names(i18n);
-                }
-                if ui
-                    .button("🗑")
-                    .on_hover_text(i18n.t("chat.clearSession"))
-                    .clicked()
-                {
-                    if let Some(session) = self.sessions.get_mut(self.active_session) {
-                        session.messages.clear();
-                        self.save_sessions_to_disk();
-                    }
-                }
-            });
-            // Feature 9: search field
-            ui.add_space(2.0);
-            ui.add(
-                egui::TextEdit::singleline(&mut self.session_search_query)
-                    .hint_text(i18n.t("chat.searchSessions"))
-                    .desired_width(ui.available_width()),
-            );
-            ui.separator();
-            ui.add_space(4.0);
-            // Generate Workflow button
-            if ui
-                .button("🔄 ".to_string() + &i18n.t("chat.generateWorkflow"))
-                .on_hover_text(i18n.t("chat.generateWorkflowHint"))
-                .clicked()
-            {
-                // Collect all user messages from current session
-                let msgs = self.messages();
-                let user_msgs: Vec<String> = msgs
-                    .iter()
-                    .filter(|m| m.role == "user")
-                    .map(|m| m.content.clone())
-                    .collect();
-
-                if user_msgs.is_empty() {
-                    self.error = i18n.t("chat.noMessagesForWorkflow").to_string();
-                } else {
-                    // Build the task from conversation history
-                    let task = user_msgs.join("\n---\n");
-                    let backend_clone = backend.clone();
-                    let tx = self.pending_tx.clone();
-                    let ctx_clone = ctx.clone();
-                    let success_tpl = i18n.t("chat.workflowGenerated").to_string();
-                    let failed_tpl = i18n.t("chat.workflowGenError").to_string();
-                    tokio::spawn(async move {
-                        match tokio::time::timeout(
-                            std::time::Duration::from_secs(60),
-                            backend_clone.execute_workflow(&task, None, None),
-                        )
-                        .await
-                        {
-                            Ok(Ok(value)) => {
-                                let msg = if let Some(id) =
-                                    value.get("run_id").and_then(|v| v.as_str())
-                                {
-                                    success_tpl.replace("{workflow}", id)
-                                } else {
-                                    success_tpl.replace("{workflow}", "OK")
-                                };
-                                if let Err(e) = tx.try_send(PendingResponse::UiMessage(msg)) {
-                                    eprintln!("WARN: chat ui try_send failed: {:?}", e);
-                                }
-                            }
-                            Ok(Err(e)) => {
-                                let msg = failed_tpl.replace("{error}", &e);
-                                if let Err(e) = tx.try_send(PendingResponse::UiMessage(msg)) {
-                                    eprintln!("WARN: chat ui try_send failed: {:?}", e);
-                                }
-                            }
-                            Err(_) => {
-                                let msg = failed_tpl.replace("{error}", "timeout");
-                                if let Err(e) = tx.try_send(PendingResponse::UiMessage(msg)) {
-                                    eprintln!("WARN: chat ui try_send failed: {:?}", e);
-                                }
-                            }
-                        }
-                        ctx_clone.request_repaint();
-                    });
-                }
+        // Sidebar content hash for partial-render cache
+        let sidebar_hash = {
+            let mut state = std::collections::hash_map::DefaultHasher::new();
+            self.sessions.len().hash(&mut state);
+            for s in &self.sessions {
+                s.name.hash(&mut state);
+                s.mode.hash(&mut state);
+                s.phase.hash(&mut state);
             }
-            ui.separator();
-            ui.add_space(4.0);
+            self.active_session.hash(&mut state);
+            self.session_search_query.hash(&mut state);
+            self.rename_session_idx.hash(&mut state);
+            ui.visuals().dark_mode.hash(&mut state);
+            state.finish()
+        };
 
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    let mut to_remove: Option<usize> = None;
-                    // Feature 9: filter by search query
-                    let filtered_indices: Vec<usize> = if self.session_search_query.is_empty() {
-                        self.sessions
-                            .iter()
-                            .enumerate()
-                            .map(|(idx, _)| idx)
-                            .collect()
-                    } else {
-                        let q = self.session_search_query.to_lowercase();
-                        self.sessions
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, s)| s.name.to_lowercase().contains(&q))
-                            .map(|(idx, _)| idx)
-                            .collect()
-                    };
-                    for idx in filtered_indices {
-                        let selected = idx == self.active_session;
+        // Check cache: if sidebar content unchanged, just allocate space
+        if let Some(size) = self.section_cache.check(Section::Sidebar, sidebar_hash) {
+            ui.allocate_space(size);
+            return;
+        }
 
-                        // Session row with rename support
-                        let is_renaming = self.rename_session_idx == Some(idx);
-                        if is_renaming {
-                            ui.horizontal(|ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.rename_session_buf)
-                                        .hint_text(i18n.t("chat.sessionNamePlaceholder"))
-                                        .desired_width(140.0),
-                                );
-                                if ui.button(i18n.t("chat.save")).clicked() {
-                                    let new_name = self.rename_session_buf.trim().to_string();
-                                    if !new_name.is_empty() {
-                                        if let Some(s) = self.sessions.get_mut(idx) {
-                                            s.name = new_name;
-                                            self.save_sessions_to_disk();
-                                        }
-                                    }
-                                    self.rename_session_idx = None;
-                                    self.rename_session_buf.clear();
-                                }
-                                if ui.button(i18n.t("chat.cancel")).clicked() {
-                                    self.rename_session_idx = None;
-                                    self.rename_session_buf.clear();
-                                }
-                            });
-                        } else {
-                            ui.horizontal(|ui| {
-                                let resp = ui.selectable_label(
-                                    selected,
-                                    format!("\u{200B}{}\u{200B}{}", idx, &self.sessions[idx].name),
-                                );
-                                if resp.double_clicked() {
-                                    self.rename_session_idx = Some(idx);
-                                    self.rename_session_buf = self.sessions[idx].name.clone();
-                                } else if resp.clicked() {
-                                    self.active_session = idx;
-                                    self.selected_mode = self.sessions[idx].mode.clone();
-                                    self.selected_phase = self.sessions[idx].phase.clone();
-                                    self.selected_model = self.sessions[idx].model.clone();
-                                    self.sync_model_selection();
-                                    self.ai_status = AiStatus::Idle;
-                                    self.edit_msg_idx = None;
-                                    self.edit_msg_buf.clear();
-                                    self.rename_session_idx = None;
-                                    self.rename_session_buf.clear();
-                                }
-                                // Delete button
-                                if ui
-                                    .button("✕")
-                                    .on_hover_text(i18n.t("chat.deleteSession"))
-                                    .clicked()
-                                {
-                                    to_remove = Some(idx);
-                                }
-                            });
-                        }
-                        // Mode/phase indicator as a simple label
-                        ui.label(format!(
-                            "{} | {}",
-                            i18n.t(&format!("mode.{}", self.sessions[idx].mode)),
-                            i18n.t(&format!("phase.{}", self.sessions[idx].phase)),
+        // Cache miss — render sidebar and store size
+        let resp = egui::Frame::NONE.show(ui, |ui| {
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    ui.label(i18n.t("chat.title"));
+                    // Export button
+                    if ui
+                        .button("📤")
+                        .on_hover_text(i18n.t("chat.exportSession"))
+                        .clicked()
+                    {
+                        let msgs = self.messages();
+                        let mut md = String::new();
+                        md.push_str(&format!("# {}\n\n", i18n.t("chat.exportTitle")));
+                        let exported_at = format_absolute_time(crate::fs_util::epoch_secs());
+                        md.push_str(&format!(
+                            "_{}_\n\n",
+                            i18n.t("chat.exportedAt").replace("{time}", &exported_at)
                         ));
-                        ui.add_space(4.0);
+                        for msg in msgs {
+                            let role_label = if msg.role == "user" {
+                                format!("**{}**", i18n.t("chat.exportRoleYou"))
+                            } else {
+                                format!("**{}**", i18n.t("chat.exportRoleAssistant"))
+                            };
+                            md.push_str(&format!(
+                                "{} ({})\n\n",
+                                role_label,
+                                format_absolute_time(msg.timestamp)
+                            ));
+                            if !msg.model.is_empty() {
+                                md.push_str(&format!(
+                                    "_{}_\n\n",
+                                    i18n.t("chat.exportModel").replace("{model}", &msg.model)
+                                ));
+                            }
+                            md.push_str(&format!("{}\n\n", msg.content));
+                            if !msg.thinking.is_empty() {
+                                md.push_str(&format!(
+                                    "> {}\n\n",
+                                    i18n.t("chat.exportThinking")
+                                        .replace("{thinking}", &msg.thinking)
+                                ));
+                            }
+                        }
+                        let default_name = self
+                            .sessions
+                            .get(self.active_session)
+                            .map(|s| s.name.clone())
+                            .unwrap_or_else(|| "chat-export".to_string())
+                            .replace('/', "-");
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_file_name(format!("{default_name}.md"))
+                            .save_file()
+                        {
+                            match std::fs::write(&path, md) {
+                                Ok(()) => {
+                                    self.error = i18n
+                                        .t("chat.exportSuccess")
+                                        .replace("{path}", &path.display().to_string());
+                                }
+                                Err(e) => {
+                                    self.error = i18n
+                                        .t("chat.exportFailed")
+                                        .replace("{error}", &e.to_string());
+                                }
+                            }
+                        }
                     }
-
-                    if let Some(idx) = to_remove {
-                        if self.sessions.len() > 1 {
-                            self.sessions.remove(idx);
-                            if idx < self.active_session {
-                                self.active_session = self.active_session.saturating_sub(1);
-                            } else if self.active_session >= self.sessions.len() {
-                                self.active_session = self.sessions.len().saturating_sub(1);
+                    if ui
+                        .button("📂")
+                        .on_hover_text(i18n.t("chat.openConfigDir"))
+                        .clicked()
+                    {
+                        if let Some(dirs) =
+                            directories::ProjectDirs::from("com", "goon", "go-on-gui")
+                        {
+                            let config_dir = dirs.config_dir();
+                            #[cfg(target_os = "windows")]
+                            if let Err(e) = std::process::Command::new("cmd")
+                                .args(["/c", "start", "", &config_dir.display().to_string()])
+                                .spawn()
+                            {
+                                eprintln!("Failed to open config directory: {e}");
                             }
-                            if self.active_session < self.sessions.len() {
-                                self.selected_mode =
-                                    self.sessions[self.active_session].mode.clone();
-                                self.selected_phase =
-                                    self.sessions[self.active_session].phase.clone();
-                                self.selected_model =
-                                    self.sessions[self.active_session].model.clone();
-                                self.sync_model_selection();
+                            #[cfg(target_os = "macos")]
+                            if let Err(e) =
+                                std::process::Command::new("open").arg(config_dir).spawn()
+                            {
+                                eprintln!("Failed to open config directory: {e}");
                             }
+                            #[cfg(target_os = "linux")]
+                            if let Err(e) = std::process::Command::new("xdg-open")
+                                .arg(config_dir)
+                                .spawn()
+                            {
+                                eprintln!("Failed to open config directory: {e}");
+                            }
+                            #[cfg(not(any(
+                                target_os = "windows",
+                                target_os = "macos",
+                                target_os = "linux"
+                            )))]
+                            if let Err(e) = std::process::Command::new("xdg-open")
+                                .arg(config_dir)
+                                .spawn()
+                            {
+                                eprintln!("Failed to open config directory: {e}");
+                            }
+                        }
+                    }
+                    if ui
+                        .button("＋")
+                        .on_hover_text(i18n.t("chat.newSession"))
+                        .clicked()
+                    {
+                        self.new_session();
+                        self.refresh_default_session_names(i18n);
+                    }
+                    if ui
+                        .button("🗑")
+                        .on_hover_text(i18n.t("chat.clearSession"))
+                        .clicked()
+                    {
+                        if let Some(session) = self.sessions.get_mut(self.active_session) {
+                            session.messages.clear();
                             self.save_sessions_to_disk();
-                        } else {
-                            // Can't delete last session — show feedback
-                            self.error = i18n.t("chat.cannotDeleteLastSession").to_string();
                         }
                     }
                 });
+                // Feature 9: search field
+                ui.add_space(2.0);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.session_search_query)
+                        .hint_text(i18n.t("chat.searchSessions"))
+                        .desired_width(ui.available_width()),
+                );
+                ui.separator();
+                ui.add_space(4.0);
+                // Generate Workflow button
+                if ui
+                    .button("🔄 ".to_string() + &i18n.t("chat.generateWorkflow"))
+                    .on_hover_text(i18n.t("chat.generateWorkflowHint"))
+                    .clicked()
+                {
+                    // Collect all user messages from current session
+                    let msgs = self.messages();
+                    let user_msgs: Vec<String> = msgs
+                        .iter()
+                        .filter(|m| m.role == "user")
+                        .map(|m| m.content.clone())
+                        .collect();
+
+                    if user_msgs.is_empty() {
+                        self.error = i18n.t("chat.noMessagesForWorkflow").to_string();
+                    } else {
+                        // Build the task from conversation history
+                        let task = user_msgs.join("\n---\n");
+                        let backend_clone = backend.clone();
+                        let tx = self.pending_tx.clone();
+                        let ctx_clone = ctx.clone();
+                        let success_tpl = i18n.t("chat.workflowGenerated").to_string();
+                        let failed_tpl = i18n.t("chat.workflowGenError").to_string();
+                        tokio::spawn(async move {
+                            match tokio::time::timeout(
+                                std::time::Duration::from_secs(60),
+                                backend_clone.execute_workflow(&task, None, None),
+                            )
+                            .await
+                            {
+                                Ok(Ok(value)) => {
+                                    let msg = if let Some(id) =
+                                        value.get("run_id").and_then(|v| v.as_str())
+                                    {
+                                        success_tpl.replace("{workflow}", id)
+                                    } else {
+                                        success_tpl.replace("{workflow}", "OK")
+                                    };
+                                    if let Err(e) = tx.try_send(PendingResponse::UiMessage(msg)) {
+                                        eprintln!("WARN: chat ui try_send failed: {:?}", e);
+                                    }
+                                }
+                                Ok(Err(e)) => {
+                                    let msg = failed_tpl.replace("{error}", &e);
+                                    if let Err(e) = tx.try_send(PendingResponse::UiMessage(msg)) {
+                                        eprintln!("WARN: chat ui try_send failed: {:?}", e);
+                                    }
+                                }
+                                Err(_) => {
+                                    let msg = failed_tpl.replace("{error}", "timeout");
+                                    if let Err(e) = tx.try_send(PendingResponse::UiMessage(msg)) {
+                                        eprintln!("WARN: chat ui try_send failed: {:?}", e);
+                                    }
+                                }
+                            }
+                            ctx_clone.request_repaint();
+                        });
+                    }
+                }
+                ui.separator();
+                ui.add_space(4.0);
+
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        let mut to_remove: Option<usize> = None;
+                        // Feature 9: filter by search query
+                        let filtered_indices: Vec<usize> = if self.session_search_query.is_empty() {
+                            self.sessions
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, _)| idx)
+                                .collect()
+                        } else {
+                            let q = self.session_search_query.to_lowercase();
+                            self.sessions
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, s)| s.name.to_lowercase().contains(&q))
+                                .map(|(idx, _)| idx)
+                                .collect()
+                        };
+                        for idx in filtered_indices {
+                            let selected = idx == self.active_session;
+
+                            // Session row with rename support
+                            let is_renaming = self.rename_session_idx == Some(idx);
+                            if is_renaming {
+                                ui.horizontal(|ui| {
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut self.rename_session_buf)
+                                            .hint_text(i18n.t("chat.sessionNamePlaceholder"))
+                                            .desired_width(140.0),
+                                    );
+                                    if ui.button(i18n.t("chat.save")).clicked() {
+                                        let new_name = self.rename_session_buf.trim().to_string();
+                                        if !new_name.is_empty() {
+                                            if let Some(s) = self.sessions.get_mut(idx) {
+                                                s.name = new_name;
+                                                self.save_sessions_to_disk();
+                                            }
+                                        }
+                                        self.rename_session_idx = None;
+                                        self.rename_session_buf.clear();
+                                    }
+                                    if ui.button(i18n.t("chat.cancel")).clicked() {
+                                        self.rename_session_idx = None;
+                                        self.rename_session_buf.clear();
+                                    }
+                                });
+                            } else {
+                                ui.horizontal(|ui| {
+                                    let resp = ui.selectable_label(
+                                        selected,
+                                        format!(
+                                            "\u{200B}{}\u{200B}{}",
+                                            idx, &self.sessions[idx].name
+                                        ),
+                                    );
+                                    if resp.double_clicked() {
+                                        self.rename_session_idx = Some(idx);
+                                        self.rename_session_buf = self.sessions[idx].name.clone();
+                                    } else if resp.clicked() {
+                                        self.active_session = idx;
+                                        self.selected_mode = self.sessions[idx].mode.clone();
+                                        self.selected_phase = self.sessions[idx].phase.clone();
+                                        self.selected_model = self.sessions[idx].model.clone();
+                                        self.sync_model_selection();
+                                        self.ai_status = AiStatus::Idle;
+                                        self.edit_msg_idx = None;
+                                        self.edit_msg_buf.clear();
+                                        self.rename_session_idx = None;
+                                        self.rename_session_buf.clear();
+                                    }
+                                    // Delete button
+                                    if ui
+                                        .button("✕")
+                                        .on_hover_text(i18n.t("chat.deleteSession"))
+                                        .clicked()
+                                    {
+                                        to_remove = Some(idx);
+                                    }
+                                });
+                            }
+                            // Mode/phase indicator as a simple label
+                            ui.label(format!(
+                                "{} | {}",
+                                i18n.t(&format!("mode.{}", self.sessions[idx].mode)),
+                                i18n.t(&format!("phase.{}", self.sessions[idx].phase)),
+                            ));
+                            ui.add_space(4.0);
+                        }
+
+                        if let Some(idx) = to_remove {
+                            if self.sessions.len() > 1 {
+                                self.sessions.remove(idx);
+                                if idx < self.active_session {
+                                    self.active_session = self.active_session.saturating_sub(1);
+                                } else if self.active_session >= self.sessions.len() {
+                                    self.active_session = self.sessions.len().saturating_sub(1);
+                                }
+                                if self.active_session < self.sessions.len() {
+                                    self.selected_mode =
+                                        self.sessions[self.active_session].mode.clone();
+                                    self.selected_phase =
+                                        self.sessions[self.active_session].phase.clone();
+                                    self.selected_model =
+                                        self.sessions[self.active_session].model.clone();
+                                    self.sync_model_selection();
+                                }
+                                self.save_sessions_to_disk();
+                            } else {
+                                // Can't delete last session — show feedback
+                                self.error = i18n.t("chat.cannotDeleteLastSession").to_string();
+                            }
+                        }
+                    });
+            });
         });
+        self.section_cache.store(
+            crate::widgets::cache::Section::Sidebar,
+            sidebar_hash,
+            resp.response.rect.size(),
+        );
     }
 
     // ── Messages area ─────────────────────
@@ -1436,15 +1394,7 @@ impl ChatView {
             }
 
             // Full render for changed or last message
-            let (
-                is_user,
-                timestamp,
-                model_name,
-                content_text,
-                has_thinking,
-                thinking_text,
-                risk_decision,
-            ) = {
+            let (is_user, timestamp, model_name, content_text, has_thinking, thinking_text) = {
                 let msgs = self.messages();
                 if msg_idx >= msgs.len() {
                     continue;
@@ -1457,7 +1407,6 @@ impl ChatView {
                     m.content.clone(),
                     !m.thinking.is_empty() && m.role != "user",
                     m.thinking.clone(),
-                    m.risk_decision.clone(),
                 )
             };
             // ── Edit mode: show TextEdit instead of bubble ────────
@@ -1673,11 +1622,6 @@ impl ChatView {
                                     text_color,
                                     &trunc_hint_msg,
                                 );
-                            }
-
-                            if let Some(ref rd) = risk_decision {
-                                ui.add_space(6.0);
-                                Self::render_risk_decision_summary(ui, i18n, rd);
                             }
 
                             // ── Thinking section ──
