@@ -824,13 +824,25 @@ impl ChatView {
                 .max_height(100.0)
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
+                    // Use a stable ID for the TextEdit so focus/IME state persists across frames
+                    let input_id = egui::Id::new("chat_input_textedit");
                     let input_te = egui::TextEdit::multiline(&mut self.input)
+                        .id(input_id)
                         .desired_width(f32::INFINITY)
                         .desired_rows(3)
                         .hint_text(i18n.t("chat.input"));
-                    ui.add_enabled(!self.sending, input_te)
+                    let te_resp = ui.add_enabled(!self.sending, input_te);
+                    // If nothing else grabbed focus and user has existing text,
+                    // request focus so IME stays active
+                    if !self.sending
+                        && !te_resp.has_focus()
+                        && !self.input.is_empty()
+                        && !ui.ctx().is_using_pointer()
+                    {
+                        ui.memory_mut(|m| m.request_focus(input_id));
+                    }
+                    te_resp
                 });
-            // Check focus of the inner TextEdit via ScrollArea's inner response
             let input_focus = input_resp.inner.has_focus();
 
             // Character counter
@@ -987,11 +999,33 @@ impl ChatView {
                 });
             });
 
-            // Enter to send (Shift+Enter to insert newline)
-            if ui.input(|i| !input_focus || !i.key_pressed(egui::Key::Enter) || i.modifiers.shift) {
-                // Don't send
-            } else {
-                self.send_message(backend, ctx, autotune_chain_enabled);
+            // ── Send on Enter / Ctrl+Enter ────────────────
+            // On Linux (fcitx5 IME): Ctrl+Enter to send (IME-safe),
+            // plain Enter is consumed by IME for composition commit.
+            // On all platforms: Shift+Enter inserts a newline.
+            #[cfg(target_os = "linux")]
+            {
+                // Linux: Ctrl+Enter sends; Enter and Shift+Enter insert newline.
+                let mut do_send = false;
+                ui.input_mut(|i| {
+                    if input_focus && i.consume_key(egui::Modifiers::CTRL, egui::Key::Enter) {
+                        do_send = true;
+                    }
+                });
+                if do_send {
+                    self.send_message(backend, ctx, autotune_chain_enabled);
+                }
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                // Non-Linux: Enter sends; Shift+Enter inserts newline.
+                if ui.input(|i| {
+                    !input_focus || !i.key_pressed(egui::Key::Enter) || i.modifiers.shift
+                }) {
+                    // Don't send
+                } else {
+                    self.send_message(backend, ctx, autotune_chain_enabled);
+                }
             }
 
             // ── Global keyboard shortcuts ─────────

@@ -340,18 +340,6 @@ fn load_embedded_icon() -> Option<egui::IconData> {
 
 #[tokio::main]
 async fn main() -> eframe::Result<()> {
-    // Install panic hook to print panics to stderr before they're caught
-    std::panic::set_hook(Box::new(|info| {
-        eprintln!("=== PANIC CAUGHT === {}", info);
-        if let Some(location) = info.location() {
-            eprintln!(
-                "    at {}:{}:{}",
-                location.file(),
-                location.line(),
-                location.column()
-            );
-        }
-    }));
     auto_detect_proxy().await;
     let icon = load_embedded_icon().unwrap_or_else(make_icon);
     let config = crate::config::load_app_config();
