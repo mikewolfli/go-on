@@ -1,0 +1,290 @@
+//! Default tool governance policy when RBAC/HarnessBus is not configured.
+//!
+//! This module ensures that even without a HarnessBus, there is an explicit,
+//! observable minimum-trust policy instead of default-allow-all.
+//!
+//! Implements AUTON-05: tool governance default permissions.
+
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+use super::tool_governance::record_tool_policy_denied;
+
+/// Risk classification for a tool
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub enum ToolRiskClass {
+    /// Read-only operations (files, search, git diff)
+    ReadOnly,
+    /// Low-risk write operations (file write, patch apply)
+    LowRiskWrite,
+    /// High-risk execution operations (shell, test run)
+    HighRiskExecute,
+    /// Administrative operations (skill management, workflow control)
+    Admin,
+}
+
+/// Default policy for a given risk class
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DefaultToolPolicy {
+    /// Risk class
+    pub risk_class: ToolRiskClass,
+    /// Default allow state
+    pub default_allow: bool,
+    /// Whether this operation requires explicit policy configuration
+    pub requires_explicit_policy: bool,
+    /// Human-readable description
+    pub description: &'static str,
+}
+
+impl DefaultToolPolicy {
+    /// Get the default policy for a risk class
+    pub const fn for_class(risk_class: ToolRiskClass) -> Self {
+        match risk_class {
+            ToolRiskClass::ReadOnly => Self {
+                risk_class,
+                default_allow: true,
+                requires_explicit_policy: false,
+                description: "Read-only operations: allowed by default in all profiles",
+            },
+            ToolRiskClass::LowRiskWrite => Self {
+                risk_class,
+                default_allow: true,
+                requires_explicit_policy: false,
+                description:
+                    "Low-risk file writes: allowed by default, audited when policy present",
+            },
+            ToolRiskClass::HighRiskExecute => Self {
+                risk_class,
+                default_allow: false,
+                requires_explicit_policy: true,
+                description:
+                    "High-risk execution: blocked by default unless explicit policy permits it",
+            },
+            ToolRiskClass::Admin => Self {
+                risk_class,
+                default_allow: true,
+                requires_explicit_policy: false,
+                description:
+                    "Administrative operations: allowed by default for workflow management",
+            },
+        }
+    }
+}
+
+/// Classification result for a tool call
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolClassification {
+    /// The tool name
+    pub tool_name: String,
+    /// Risk class
+    pub risk_class: ToolRiskClass,
+    /// Whether the tool is allowed by default policy
+    pub allowed: bool,
+    /// Reason for the decision
+    pub reason: String,
+    /// Whether RBAC is configured (if not, we use defaults)
+    pub rbac_configured: bool,
+}
+
+/// Classify a tool by name into a risk class.
+pub fn classify_tool_risk(tool_name: &str) -> ToolRiskClass {
+    match tool_name {
+        // Read-only tools
+        "search_files"
+        | "read_file"
+        | "inspect_git_diff"
+        | "skill-finder"
+        | "prompts_list"
+        | "prompts_get"
+        | "acp_trace_get"
+        | "acp_debug_panel_get"
+        | "goon_workflow_run_list"
+        | "goon_workflow_run_get"
+        | "goon_metrics_window_query"
+        | "goon_metrics_errors_summary"
+        | "goon_provider_capabilities" => ToolRiskClass::ReadOnly,
+
+        // Low-risk write tools
+        "write_file" | "apply_patch" => ToolRiskClass::LowRiskWrite,
+
+        // High-risk execution tools
+        "run_tests"
+        | "bash"
+        | "execute_command"
+        | "goon_provider_test_connection"
+        | "goon_provider_test_completion" => ToolRiskClass::HighRiskExecute,
+
+        // Admin tools
+        name if name.starts_with("goon_skill_")
+            || name.starts_with("goon_workflow_run_cancel")
+            || name.starts_with("goon_workflow_run_pause")
+            || name.starts_with("goon_workflow_run_resume") =>
+        {
+            ToolRiskClass::Admin
+        }
+
+        // Unknown tools default to LowRiskWrite (conservative)
+        _ => ToolRiskClass::LowRiskWrite,
+    }
+}
+
+/// Evaluate a tool call against the default governance policy.
+///
+/// Returns a `ToolClassification` with the decision and reasoning.
+/// This should be called when `HarnessBus` is not present or not configured
+/// with RBAC, to ensure there is no "default allow all" blind spot.
+pub fn evaluate_default_tool_policy(
+    tool_name: &str,
+    harness_bus_present: bool,
+    rbac_configured: bool,
+) -> ToolClassification {
+    let risk_class = classify_tool_risk(tool_name);
+    let policy = DefaultToolPolicy::for_class(risk_class);
+
+    // If HarnessBus with RBAC is present, skip default policy evaluation
+    // (the caller should use HarnessBus directly)
+    if harness_bus_present && rbac_configured {
+        return ToolClassification {
+            tool_name: tool_name.to_string(),
+            risk_class,
+            allowed: true, // HarnessBus will handle the real decision
+            reason: "delegated to configured HarnessBus RBAC".to_string(),
+            rbac_configured: true,
+        };
+    }
+
+    let allowed = policy.default_allow;
+    if !allowed {
+        record_tool_policy_denied();
+    }
+
+    let reason = if !harness_bus_present {
+        if policy.requires_explicit_policy {
+            format!(
+                "tool '{tool_name}' is class '{:?}' which requires explicit policy configuration, \
+                 but no HarnessBus is present. Blocked by default governance policy.",
+                risk_class
+            )
+        } else {
+            format!(
+                "tool '{tool_name}' is class '{:?}' — allowed by default governance policy \
+                 (no RBAC configured, default_allow=true)",
+                risk_class
+            )
+        }
+    } else if !rbac_configured {
+        // HarnessBus present but RBAC not configured
+        if policy.requires_explicit_policy {
+            format!(
+                "tool '{tool_name}' is class '{:?}' which requires explicit RBAC policy. \
+                 HarnessBus is present but RBAC is not configured. Blocked by default.",
+                risk_class
+            )
+        } else {
+            format!(
+                "tool '{tool_name}' is class '{:?}' — allowed by default (HarnessBus present, \
+                 RBAC not configured, default_allow=true)",
+                risk_class
+            )
+        }
+    } else {
+        "allowed by policy".to_string()
+    };
+
+    ToolClassification {
+        tool_name: tool_name.to_string(),
+        risk_class,
+        allowed,
+        reason,
+        rbac_configured,
+    }
+}
+
+/// Snapshot of the default governance policy state.
+#[allow(dead_code)]
+pub fn default_governance_policy_snapshot() -> Value {
+    json!({
+        "policy_name": "default-governance-policy-v1",
+        "risk_classes": {
+            "ReadOnly": {
+                "default_allow": true,
+                "requires_explicit_policy": false,
+                "description": "read-only file/query operations"
+            },
+            "LowRiskWrite": {
+                "default_allow": true,
+                "requires_explicit_policy": false,
+                "description": "file write and patch operations"
+            },
+            "HighRiskExecute": {
+                "default_allow": false,
+                "requires_explicit_policy": true,
+                "description": "shell/test/network execution — blocked by default"
+            },
+            "Admin": {
+                "default_allow": true,
+                "requires_explicit_policy": false,
+                "description": "workflow/skill management operations"
+            }
+        },
+        "notes": "This policy applies when HarnessBus is absent or RBAC is not configured. \
+                  For production deployments, configure HarnessBus with explicit RBAC rules."
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_file_is_read_only() {
+        assert_eq!(classify_tool_risk("read_file"), ToolRiskClass::ReadOnly);
+    }
+
+    #[test]
+    fn write_file_is_low_risk_write() {
+        assert_eq!(
+            classify_tool_risk("write_file"),
+            ToolRiskClass::LowRiskWrite
+        );
+    }
+
+    #[test]
+    fn run_tests_is_high_risk() {
+        assert_eq!(
+            classify_tool_risk("run_tests"),
+            ToolRiskClass::HighRiskExecute
+        );
+    }
+
+    #[test]
+    fn bash_is_high_risk() {
+        assert_eq!(classify_tool_risk("bash"), ToolRiskClass::HighRiskExecute);
+    }
+
+    #[test]
+    fn default_policy_blocks_high_risk_without_rbac() {
+        let result = evaluate_default_tool_policy("run_tests", false, false);
+        assert!(!result.allowed);
+        assert_eq!(result.risk_class, ToolRiskClass::HighRiskExecute);
+    }
+
+    #[test]
+    fn default_policy_allows_read_only_without_rbac() {
+        let result = evaluate_default_tool_policy("read_file", false, false);
+        assert!(result.allowed);
+    }
+
+    #[test]
+    fn default_policy_blocks_high_risk_with_harness_no_rbac() {
+        let result = evaluate_default_tool_policy("bash", true, false);
+        assert!(!result.allowed);
+    }
+
+    #[test]
+    fn default_policy_delegates_when_rbac_configured() {
+        let result = evaluate_default_tool_policy("run_tests", true, true);
+        assert!(result.allowed); // Delegated
+        assert!(result.rbac_configured);
+    }
+}

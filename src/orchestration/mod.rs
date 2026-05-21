@@ -15,6 +15,7 @@ pub mod r#loop; // F-GAP-17 (structured sub-module)
 pub mod mode;
 pub mod omnipotent;
 pub mod orchestrator;
+pub mod planner_execution_graph; // Bridge: Planner → ExecutionGraph DAG
 pub mod planner_executor;
 pub mod promotion_plugin;
 pub mod prompt_layers;

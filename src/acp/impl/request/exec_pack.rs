@@ -561,10 +561,43 @@ fn build_repair_loop_state(
 }
 
 fn build_repair_history_response(context: &RepairContext) -> Value {
+    let total_cycles = context.cycle_reports.len() as u64;
+    let resolved_cycles = context
+        .cycle_reports
+        .iter()
+        .filter(|cycle| cycle.result == "resolved")
+        .count() as u64;
+    let improved_cycles = context
+        .cycle_reports
+        .iter()
+        .filter(|cycle| cycle.result == "improved")
+        .count() as u64;
+    let unresolved_cycles = context
+        .cycle_reports
+        .iter()
+        .filter(|cycle| cycle.result == "unresolved")
+        .count() as u64;
+    let repair_effective_ratio = if total_cycles == 0 {
+        0.0
+    } else {
+        (resolved_cycles + improved_cycles) as f64 / total_cycles as f64
+    };
+
     let diagnosis_summary = json!({
         "total_actions": context.repair_actions.len(),
         "successful_actions": context.repair_actions.iter().filter(|a| a.result == "success").count(),
         "failed_actions": context.repair_actions.iter().filter(|a| a.result == "failed").count(),
+        "total_cycles": total_cycles,
+        "resolved_cycles": resolved_cycles,
+        "improved_cycles": improved_cycles,
+        "unresolved_cycles": unresolved_cycles,
+        "repair_effective_ratio": repair_effective_ratio,
+        "replan_required": unresolved_cycles > 0,
+        "next_action_hint": if unresolved_cycles > 0 {
+            "promote remaining failures from retry to reroute/replan"
+        } else {
+            "continue execution flow"
+        },
         "top_failure_class": context.failure_classes.first().cloned().unwrap_or_else(|| "unknown".to_string()),
         "latest_result": context
             .cycle_reports
@@ -1038,6 +1071,10 @@ async fn execute_runtime_subtasks_with_repair_loop(
             },
         });
 
+        if let Some(report) = repair_context.cycle_reports.last() {
+            crate::acp::helpers::autonomy_metrics::record_repair_cycle_result(&report.result);
+        }
+
         report = rerun_report;
         if failed_after == 0 || repair_context.iteration >= repair_context.max_iterations {
             break;
@@ -1061,13 +1098,25 @@ pub(crate) async fn handle_workflow_execute(
     let effective_options = run.effective_options.clone();
 
     let ledger = clone_artifact_ledger(server);
-    let gate = evaluate_requirement_gate_facade(&ledger, &task, &params, "workflow.execute")?;
-    if gate.blocked {
-        let reason = gate
+    // Use continuation-aware requirement gate (AUTON-02):
+    // Converts hard blocking to resumable states (Confirmed / AutoConfirmed /
+    // ClarificationInProgress / HumanConfirmationRequired).
+    let requirement_continuation =
+        crate::acp::helpers::requirement_continuation::evaluate_with_continuation(
+            &ledger,
+            &task,
+            &params,
+            "workflow.execute",
+        );
+    if !crate::acp::helpers::requirement_continuation::can_proceed_with_continuation(
+        &requirement_continuation,
+    ) {
+        let blocked_payload = requirement_continuation.gate.blocked_payload();
+        let reason = requirement_continuation
+            .gate
             .reason
             .clone()
             .unwrap_or_else(|| "requirement confirmation required".to_string());
-        let blocked_payload = gate.blocked_payload();
         let kind = blocked_payload["kind"]
             .as_str()
             .unwrap_or("requirement_contract")
@@ -1085,10 +1134,38 @@ pub(crate) async fn handle_workflow_execute(
                 "kind": kind,
                 "next_step": next_step,
                 "requirement_gate": blocked_payload,
+                "requirement_continuation": requirement_continuation.next_step,
             })),
         )
         .await;
     }
+
+    // Record auto-recovery if it happened
+    let _auto_clarification_in_progress = matches!(
+        requirement_continuation.kind,
+        crate::acp::helpers::requirement_continuation::RequirementContinuationKind::
+            AutoConfirmed | crate::acp::helpers::requirement_continuation::RequirementContinuationKind::
+            ClarificationInProgress
+    );
+    let requirement_gate_payload =
+        crate::acp::helpers::requirement_continuation::requirement_gate_payload_for_response(
+            &requirement_continuation,
+        );
+
+    // Wire Planner → ExecutionGraph DAG (AUTON-07)
+    let _planner_bridge = {
+        use crate::agent::AgentTaskEnvelope;
+        let envelope = AgentTaskEnvelope {
+            task_id: run_id.clone(),
+            phase: phase_name.unwrap_or("execute").to_string(),
+            role: "planner".to_string(),
+            objective: task.clone(),
+            constraints: None,
+            evidence: None,
+            input: serde_json::json!({"params": params}),
+        };
+        crate::orchestration::planner_execution_graph::PlannerExecutionBridge::from_task(&envelope)
+    };
 
     if params
         .get("consultation_required")
@@ -1329,7 +1406,6 @@ pub(crate) async fn handle_workflow_execute(
         },
         200,
     )?;
-    let requirement_gate_payload = gate.success_payload();
     let execution_cycle = build_runtime_execution_cycle(
         "workflow.execute",
         if execution_report.subtasks_failed > 0 {
@@ -1467,7 +1543,9 @@ pub(crate) async fn handle_workflow_execute(
         "requirement_gate": {
             "confirmed": true,
             "gate": requirement_gate_payload,
+            "auto_clarification_in_progress": _auto_clarification_in_progress,
         },
+        "planner_execution_graph": _planner_bridge.progress_snapshot(),
         "approval_checkpoint": approval_checkpoint,
         "repo_context": repo_context,
         "multi_agent": multi_agent,
@@ -1576,20 +1654,35 @@ pub(super) async fn handle_task_execute(
 
     if !bypass_idempotency_for_execution {
         if let Some(cached) = {
-        let mut cache = task_execute_idempotency_cache()
-            .lock()
-            .map_err(|e| anyhow::anyhow!("failed to lock idempotency cache: {e}"))?;
-        cache.evict_expired();
-        cache
-            .get(&idempotency_key)
-            .map(|entry| entry.response.clone())
+            let mut cache = task_execute_idempotency_cache()
+                .lock()
+                .map_err(|e| anyhow::anyhow!("failed to lock idempotency cache: {e}"))?;
+            cache.evict_expired();
+            cache
+                .get(&idempotency_key)
+                .map(|entry| entry.response.clone())
         } {
             let mut cached_response = cached;
+            let continuation =
+                crate::acp::helpers::idempotency_resume::derive_idempotency_continuation(
+                    &cached_response,
+                );
+            let continuation_pending = continuation
+                .get("pending_execution")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            crate::acp::helpers::autonomy_metrics::record_idempotency_hit(continuation_pending);
             if let Some(obj) = cached_response.as_object_mut() {
                 obj.insert(
                     "idempotency".to_string(),
-                    json!({"hit": true, "key": idempotency_key, "bypassed_for_execution": false}),
+                    json!({
+                        "hit": true,
+                        "key": idempotency_key,
+                        "bypassed_for_execution": false,
+                        "continuation_pending": continuation_pending,
+                    }),
                 );
+                obj.insert("continuation".to_string(), continuation);
             }
             return send_result(server, request_id, cached_response).await;
         }
@@ -1605,13 +1698,23 @@ pub(super) async fn handle_task_execute(
     let effective_options = run.effective_options.clone();
 
     let ledger = clone_artifact_ledger(server);
-    let gate = evaluate_requirement_gate_facade(&ledger, task, &params, "task.execute")?;
-    if gate.blocked {
-        let reason = gate
+    // Use continuation-aware requirement gate (AUTON-02)
+    let requirement_continuation =
+        crate::acp::helpers::requirement_continuation::evaluate_with_continuation(
+            &ledger,
+            task,
+            &params,
+            "task.execute",
+        );
+    if !crate::acp::helpers::requirement_continuation::can_proceed_with_continuation(
+        &requirement_continuation,
+    ) {
+        let blocked_payload = requirement_continuation.gate.blocked_payload();
+        let reason = requirement_continuation
+            .gate
             .reason
             .clone()
             .unwrap_or_else(|| "requirement confirmation required".to_string());
-        let blocked_payload = gate.blocked_payload();
         let kind = blocked_payload["kind"]
             .as_str()
             .unwrap_or("requirement_contract")
@@ -1629,10 +1732,38 @@ pub(super) async fn handle_task_execute(
                 "kind": kind,
                 "next_step": next_step,
                 "requirement_gate": blocked_payload,
+                "requirement_continuation": requirement_continuation.next_step,
             })),
         )
         .await;
     }
+
+    // Record auto-recovery if it happened
+    let _auto_clarification_in_progress = matches!(
+        requirement_continuation.kind,
+        crate::acp::helpers::requirement_continuation::RequirementContinuationKind::
+            AutoConfirmed | crate::acp::helpers::requirement_continuation::RequirementContinuationKind::
+            ClarificationInProgress
+    );
+    let requirement_gate_payload =
+        crate::acp::helpers::requirement_continuation::requirement_gate_payload_for_response(
+            &requirement_continuation,
+        );
+
+    // Wire Planner → ExecutionGraph DAG (AUTON-07)
+    let _planner_bridge = {
+        use crate::agent::AgentTaskEnvelope;
+        let envelope = AgentTaskEnvelope {
+            task_id: idempotency_task_id.to_string(),
+            phase: idempotency_phase.to_string(),
+            role: "planner".to_string(),
+            objective: task.to_string(),
+            constraints: None,
+            evidence: None,
+            input: serde_json::json!({"params": params}),
+        };
+        crate::orchestration::planner_execution_graph::PlannerExecutionBridge::from_task(&envelope)
+    };
 
     let mut plan = build_task_plan(task);
     let plan_path = persist_task_plan(&ledger, &plan)?;
@@ -1773,7 +1904,6 @@ pub(super) async fn handle_task_execute(
         Vec::new()
     };
 
-    let requirement_gate_payload = gate.success_payload();
     let execution_cycle = build_runtime_execution_cycle(
         "task.execute",
         if summary.subtasks_failed > 0 {
@@ -1929,7 +2059,9 @@ pub(super) async fn handle_task_execute(
         "requirement_gate": {
             "confirmed": true,
             "gate": requirement_gate_payload,
+            "auto_clarification_in_progress": _auto_clarification_in_progress,
         },
+        "planner_execution_graph": _planner_bridge.progress_snapshot(),
         "approval_checkpoint": approval_checkpoint,
         "repo_context": repo_context,
         "multi_agent": multi_agent,

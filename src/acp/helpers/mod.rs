@@ -30,4 +30,19 @@ pub mod tool_governance;
 // Miscellaneous helper functions
 pub mod misc;
 
+// Orchestration alignment helpers
+pub mod orchestration_alignment;
+
+// Idempotency continuation helpers
+pub mod idempotency_resume;
+
+// Autonomy loop: unified plan → act → observe → replan runtime
+pub mod autonomy_loop;
+
+// Requirement gate continuation: hard block → resumable state machine
+pub mod requirement_continuation;
+
+// Default tool governance when RBAC/HarnessBus is absent
+pub mod tool_governance_defaults;
+
 // Re-export for convenience

@@ -1,7 +1,8 @@
 use super::prompts_pack::{build_prompts_get_tool, build_prompts_list_tool};
 use super::*;
 use crate::acp::helpers::tool_governance::{
-    record_tool_allowed, record_tool_budget_denied, record_tool_policy_denied,
+    record_tool_allowed, record_tool_budget_denied, record_tool_harness_sandbox_denied,
+    record_tool_policy_denied, record_tool_rbac_denied,
 };
 use crate::orchestration::skill_import::{SkillImportPolicy, SkillImportRequest, SkillImportStore};
 
@@ -218,6 +219,41 @@ pub(crate) async fn execute_mcp_tool_call(
     name: &str,
     arguments: &Value,
 ) -> Result<Value> {
+    if let Some(harness_bus) = server.harness_bus.as_ref() {
+        let verdict = harness_bus.evaluator.check_tool_call(name, arguments);
+        if !verdict.allowed {
+            record_tool_harness_sandbox_denied();
+            anyhow::bail!(
+                "tool '{}' denied by harness sandbox policy (sandbox_allowed={})",
+                name,
+                verdict.allowed
+            );
+        }
+        if !verdict.budget_ok {
+            record_tool_budget_denied();
+            anyhow::bail!("tool '{}' denied by harness budget gate", name);
+        }
+        if !verdict.permitted {
+            record_tool_rbac_denied();
+            anyhow::bail!("tool '{}' denied by harness RBAC permission gate", name);
+        }
+    } else {
+        // No HarnessBus — apply default tool governance policy
+        // to prevent "default allow all" blind spot (AUTON-05).
+        let classification =
+            crate::acp::helpers::tool_governance_defaults::evaluate_default_tool_policy(
+                name, false, false,
+            );
+        if !classification.allowed {
+            anyhow::bail!(
+                "tool '{}' blocked by default governance policy: {} (risk_class={:?})",
+                name,
+                classification.reason,
+                classification.risk_class,
+            );
+        }
+    }
+
     let policy = policy_bundle_for_target(server.runtime_config.deployment_target.as_deref());
     let budget_scope = budget_scope_key(name, arguments);
     let estimated_tokens = estimate_argument_tokens(arguments);

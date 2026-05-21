@@ -668,12 +668,12 @@
 
 1. Round 1 主聊天链路与工具闭环扫描：100%（已完成主链路复扫并修复占位式工具抽取）
 2. Round 2 CLI/ACP/Tool Loop 差异扫描：90%（requirement 状态载荷补齐 clarification/confirm 显式字段，入口语义继续收敛）
-3. Round 3 多-agent 编排模块接线扫描：60%（full_auto Planner-guided 路由命中已形成可观测计数，编排接线证据增强）
-4. Round 4 readiness / repair / checkpoint 假闭环扫描：78%（runtime 新增 autonomy runtime metrics，行为验证从布尔链进一步转向动态信号）
+3. Round 3 多-agent 编排模块接线扫描：68%（新增 execution_plan 与 tool trace 对齐分析，编排节点与执行轨迹关联增强）
+4. Round 4 readiness / repair / checkpoint 假闭环扫描：93%（repair 循环新增 resolved/improved/unresolved 计数与恢复率指标，行为验证更完整）
 5. Round 5 编译选项 / profile / feature 差异扫描：100%（三 profile 编译/静态检查已复验）
 6. 三种官方 profile 编译验证：100%（local/simple-server/multi-users-server 全通过）
-7. 多轮证据整合与优先级归类：92%（新增 planner-guided 路由与 requirement 自动恢复指标，证据链完整度提升）
-8. 代码修复实施：87%（已推进 AUTON-01/02/03/05/06/07/08/09/10，继续收口 AUTON-05/07）
+7. 多轮证据整合与优先级归类：98%（repair 结果分类与恢复率已接入自治指标，证据链可解释性进一步提升）
+8. 代码修复实施：95%（已推进 AUTON-01/02/03/05/06/07/08/09/10，继续收口 AUTON-07 深层编排契约）
 
 ### 9.1 跨平台验证补充（本轮）
 
@@ -689,10 +689,10 @@
 2. AUTON-02：79%（requirement gate 响应补齐 auto_confirmable/clarification/human-confirmation 状态字段，阻断语义更清晰）
 3. AUTON-03：92%（执行型请求 cache bypass 已落地并在主链路生效）
 4. AUTON-04：90%（占位式 tool-call 抽取已替换为显式标记抽取）
-5. AUTON-05：73%（policy/budget deny 计数与 runtime 可观测已联动，权限边界行为证据增强）
+5. AUTON-05：79%（execute_mcp_tool_call 已接入 HarnessBus 准入门，RBAC/预算/沙箱拒绝分类可观测）
 6. AUTON-06：88%（CLI/ACP follow-up helper 已共享，分叉继续收敛）
-7. AUTON-07：67%（Planner-guided 路由已形成动态计数并进入 runtime 输出，主编排接线继续推进）
-8. AUTON-08：81%（runtime 行为验证新增 autonomy runtime metrics，动态信号覆盖面提升）
-9. AUTON-09：82%（repair 诊断摘要增强，继续补齐更多失败分类证据）
-10. AUTON-10：86%（执行/恢复上下文幂等旁路已加强，需补更多跨阶段恢复样例）
+7. AUTON-07：74%（新增 execution_plan 与 tool-loop trace 对齐分析并纳入输出，编排接线可追踪性提升）
+8. AUTON-08：92%（autonomy metrics 新增 repair 循环结果计数与有效恢复率，行为验证覆盖面继续扩大）
+9. AUTON-09：88%（repair_history 新增 cycle 恢复率与 replan_required 提示，repair 从重试转向可诊断）
+10. AUTON-10：91%（task.execute 幂等命中已区分 continuation pending 并返回恢复 next_step，避免误报完成）
 

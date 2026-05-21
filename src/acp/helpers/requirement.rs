@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{
@@ -36,7 +37,7 @@ pub struct RequirementGateDecision {
 }
 
 /// Unified gate facade decision used by workflow/task main paths.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequirementGateFacadeDecision {
     /// Stable kind for cross-surface consumers.
     pub kind: String,
@@ -55,7 +56,7 @@ pub struct RequirementGateFacadeDecision {
 }
 
 /// Result for automatic requirement-gate recovery.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct RequirementGateAutoRecovery {
     /// Re-evaluated requirement gate after auto clarification.
@@ -396,7 +397,7 @@ pub fn evaluate_requirement_gate_facade(
 }
 
 #[allow(dead_code)]
-fn auto_clarification_enabled(params: &Value) -> bool {
+pub(crate) fn auto_clarification_enabled(params: &Value) -> bool {
     params
         .get("governance")
         .and_then(|value| value.get("auto_clarification_enabled"))
@@ -405,7 +406,7 @@ fn auto_clarification_enabled(params: &Value) -> bool {
 }
 
 #[allow(dead_code)]
-fn can_auto_recover_task(task: &str, gate: &RequirementGateFacadeDecision) -> bool {
+pub(crate) fn can_auto_recover_task(task: &str, gate: &RequirementGateFacadeDecision) -> bool {
     let characteristics = TaskRouter::analyze_task(task);
     if characteristics.has_safety_concerns || characteristics.complexity >= 4 {
         return false;
@@ -416,7 +417,7 @@ fn can_auto_recover_task(task: &str, gate: &RequirementGateFacadeDecision) -> bo
 }
 
 #[allow(dead_code)]
-fn synthesize_requirement_contract(
+pub(crate) fn synthesize_requirement_contract(
     task: &str,
     params: &Value,
     source: &str,

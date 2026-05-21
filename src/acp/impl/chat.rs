@@ -29,8 +29,9 @@ use crate::acp::helpers::autonomy::{
     run_followup_after_tool_observation,
 };
 use crate::acp::helpers::autonomy_metrics::{
-    record_explicit_tool_route, record_planner_guided_route,
+    record_explicit_tool_route, record_orchestration_alignment, record_planner_guided_route,
 };
+use crate::acp::helpers::orchestration_alignment::derive_plan_trace_alignment;
 use crate::acp::helpers::metrics::{stream_chunk_notification, stream_done_notification};
 use crate::acp::r#impl::UserSession;
 use crate::acp::server::AcpServer;
@@ -2894,6 +2895,14 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         })
     };
 
+    let orchestration_alignment =
+        derive_plan_trace_alignment(&execution_plan, &tool_execution_results);
+    let alignment_coverage = orchestration_alignment
+        .get("coverage_ratio")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0);
+    record_orchestration_alignment(alignment_coverage);
+
     // ── ForkRegistry cleanup (ARCH-05) ─────────────────────────────────
     // Register a fork entry for this execution to track sub-agent
     // isolation boundaries.  Completed forks are cleaned up immediately
@@ -2962,6 +2971,10 @@ You have access to {} registered skill(s). Skills are reusable templates that au
             serde_json::json!(optimizer_recommendations),
         );
         obj.insert("execution_plan".to_string(), execution_plan);
+        obj.insert(
+            "orchestration_alignment".to_string(),
+            orchestration_alignment,
+        );
         obj.insert("fork_id".to_string(), serde_json::json!(fork_id));
         obj.insert(
             "evaluation_results".to_string(),
