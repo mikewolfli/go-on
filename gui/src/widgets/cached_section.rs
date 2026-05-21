@@ -12,10 +12,6 @@ pub fn cached_section(
     hash: u64,
     render_fn: impl FnOnce(&mut egui::Ui),
 ) {
-    if let Some(size) = cache.check(&section, hash) {
-        ui.allocate_space(size);
-    } else {
-        let resp = egui::Frame::NONE.show(ui, render_fn);
-        cache.store(&section, hash, resp.response.rect.size());
-    }
+    let resp = egui::Frame::NONE.show(ui, render_fn);
+    cache.store(&section, hash, resp.response.rect.size());
 }

@@ -4,7 +4,6 @@ use std::time::{Duration, Instant};
 
 use crate::backend::{BackendClient, SkillRecord};
 use crate::i18n::I18n;
-use crate::section_hash;
 use crate::views::security_prefs;
 use crate::widgets::cache::{Section, SectionCache};
 
@@ -300,37 +299,9 @@ impl SkillsView {
         // Process pending events FIRST, before cache check
         self.process_pending(i18n);
 
-        // Compute content hash from all state that affects rendering
-        let hash = section_hash!(
-            serde_json::to_string(&self.skills).unwrap_or_default(),
-            self.loading,
-            &self.error,
-            &self.success,
-            self.show_create,
-            self.show_import,
-            &self.selected_skill_name,
-            &self.edit_desc,
-            &self.edit_prompt,
-            &self.edit_schema,
-            &self.test_input,
-            &self.rollback_version,
-            &self.versions_for_skill,
-            serde_json::to_string(&self.versions).unwrap_or_default(),
-            &self.create_name,
-            &self.create_desc,
-            &self.create_prompt,
-            &self.create_input_schema,
-            &self.import_url,
-            lifecycle_enabled,
-            self.sending,
-            self.initialized,
-        );
+        let hash = 0_u64;
 
-        // Check cache: if content unchanged, skip full render and just allocate space
-        if let Some(size) = SKILLS_CACHE.with(|c| c.borrow().check(&Section::SkillsList, hash)) {
-            ui.allocate_space(size);
-            return;
-        }
+        let _ = SKILLS_CACHE.with(|c| c.borrow().check(&Section::SkillsList, hash));
 
         let resp = egui::Frame::NONE.show(ui, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {

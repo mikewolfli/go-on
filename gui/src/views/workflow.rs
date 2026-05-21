@@ -5,7 +5,6 @@ use std::time::Instant;
 
 use crate::backend::{BackendClient, WorkflowRunRecord};
 use crate::i18n::I18n;
-use crate::section_hash;
 use crate::views::autotune::AutoTuneView;
 use crate::widgets::cache::CachedView;
 use serde::{Deserialize, Serialize};
@@ -401,25 +400,7 @@ impl WorkflowView {
         // Process pending events FIRST, before cache check
         self.process_pending(i18n);
 
-        // Compute content hash from all state that affects rendering
-        let hash = section_hash!(
-            serde_json::to_string(&self.state.steps).unwrap_or_default(),
-            &self.new_name,
-            &self.new_command,
-            self.running,
-            self.pending_confirm_run,
-            self.pending_confirm_delete
-                .map(|i| i.to_string())
-                .unwrap_or_default(),
-            serde_json::to_string(&self.runs).unwrap_or_default(),
-            &self.selected_run_id,
-            serde_json::to_string(&self.selected_run_detail).unwrap_or_default(),
-            &self.run_status_filter,
-            &self.run_center_msg,
-            &self.state.last_result,
-            run_center_enabled,
-            self.cached_security.confirm_dangerous_actions,
-        );
+        let hash = 0_u64;
 
         let _ = WORKFLOW_CACHE.with(|c| {
             c.borrow_mut()

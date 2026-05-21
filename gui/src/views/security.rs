@@ -63,15 +63,7 @@ impl SecurityView {
                 ui.label(i18n.t("security.hint"));
                 ui.separator();
 
-                // Compute hash from render-relevant state
-                let hash = crate::section_hash!(
-                    self.state.confirm_dangerous_actions,
-                    self.state.redact_api_keys_in_ui,
-                    self.state.block_external_urls,
-                    self.status,
-                    self.sending,
-                    self.pending_restart_confirmation,
-                );
+                let hash = 0_u64;
 
                 self.cached_view
                     .check_or_render(ui, "security", hash, |ui| {

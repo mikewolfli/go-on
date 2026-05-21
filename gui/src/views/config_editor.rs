@@ -131,15 +131,7 @@ impl ConfigEditorView {
                 ui.label(i18n.t("config.hint"));
                 ui.separator();
 
-                // Compute hash from render-relevant state
-                let hash = crate::section_hash!(
-                    self.draft,
-                    self.search_query,
-                    self.initialized,
-                    self.is_valid_json,
-                    self.snapshots.len(),
-                    safe_mode_enabled,
-                );
+                let hash = 0_u64;
 
                 self.cached_view
                     .check_or_render(ui, "config_editor", hash, |ui| {

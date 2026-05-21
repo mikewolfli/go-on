@@ -340,36 +340,68 @@ fn load_embedded_icon() -> Option<egui::IconData> {
 
 #[tokio::main]
 async fn main() -> eframe::Result<()> {
+    // Install panic hook to print panics to stderr before they're caught
+    std::panic::set_hook(Box::new(|info| {
+        eprintln!("=== PANIC CAUGHT === {}", info);
+        if let Some(location) = info.location() {
+            eprintln!(
+                "    at {}:{}:{}",
+                location.file(),
+                location.line(),
+                location.column()
+            );
+        }
+    }));
     auto_detect_proxy().await;
     let icon = load_embedded_icon().unwrap_or_else(make_icon);
     let config = crate::config::load_app_config();
     let title = app::GoOnApp::detect_initial_window_title(&config);
-    let options = eframe::NativeOptions {
+    let build_options = |renderer: eframe::Renderer| eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title(title)
+            .with_title(title.clone())
             .with_inner_size([1200.0, 800.0])
             .with_min_inner_size([640.0, 480.0])
-            .with_icon(icon),
+            .with_icon(icon.clone()),
         vsync: true,
-        // Wgpu (Vulkan/Metal/DX12) uses proper swap-chain double
-        // buffering — no screen-clearing flash on repaint.
-        // Glow (OpenGL) on Linux clears the frame buffer on every
-        // frame, causing visible flickering at high repaint rates.
-        renderer: eframe::Renderer::Wgpu,
+        renderer,
         ..Default::default()
     };
-    let result = eframe::run_native(
-        "Go-On GUI",
-        options,
-        Box::new(|cc| {
-            let mut fonts = egui::FontDefinitions::default();
-            if !load_cjk_font(&mut fonts) {
-                eprintln!("WARNING: No CJK font found! Text may show as boxes.");
-            }
-            cc.egui_ctx.set_fonts(fonts);
-            Ok(Box::new(GoOnApp::new(config)))
-        }),
-    );
+
+    let requested_renderer = std::env::var("GO_ON_RENDERER").ok();
+    let preferred_renderer = match requested_renderer.as_deref() {
+        Some("glow") => eframe::Renderer::Glow,
+        // Default to WGPU because swap-chain double buffering is more stable
+        // against visible clear/flicker than Glow on high repaint rates.
+        _ => eframe::Renderer::Wgpu,
+    };
+    let fallback_renderer = if preferred_renderer == eframe::Renderer::Wgpu {
+        eframe::Renderer::Glow
+    } else {
+        eframe::Renderer::Wgpu
+    };
+
+    let run_with_renderer = |renderer: eframe::Renderer, cfg: crate::config::AppConfig| {
+        eframe::run_native(
+            "Go-On GUI",
+            build_options(renderer),
+            Box::new(move |cc| {
+                let mut fonts = egui::FontDefinitions::default();
+                if !load_cjk_font(&mut fonts) {
+                    eprintln!("WARNING: No CJK font found! Text may show as boxes.");
+                }
+                cc.egui_ctx.set_fonts(fonts);
+                Ok(Box::new(GoOnApp::new(cfg)))
+            }),
+        )
+    };
+
+    let result = run_with_renderer(preferred_renderer, config.clone()).or_else(|first_err| {
+        eprintln!(
+            "WARN: Renderer {:?} failed: {}. Retrying with {:?}.",
+            preferred_renderer, first_err, fallback_renderer
+        );
+        run_with_renderer(fallback_renderer, config)
+    });
     match result {
         Ok(_) => Ok(()),
         Err(e) => {

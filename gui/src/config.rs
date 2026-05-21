@@ -24,6 +24,10 @@ fn default_protocol_mode() -> String {
     "acp_http".to_string()
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiStabilityConfig {
     pub backend_refresh_interval_secs: u64,
@@ -106,6 +110,9 @@ pub struct FeatureToggles {
     pub setup_enterprise: bool,
     /// Whether to show the prompt templates tab
     pub show_prompts_tab: bool,
+    /// Whether to show the Risk Decision tab
+    #[serde(default = "default_true")]
+    pub show_risk_decision_tab: bool,
 }
 
 impl Default for FeatureToggles {
@@ -127,6 +134,7 @@ impl Default for FeatureToggles {
             config_safe_mode: false,
             setup_enterprise: false,
             show_prompts_tab: true,
+            show_risk_decision_tab: true,
         }
     }
 }

@@ -20,15 +20,13 @@ pub fn log_msg(msg: &str) {
 
 use crate::i18n::{I18n, Lang};
 use crate::keyring_util::REDACTED_API_KEY;
-use crate::section_hash;
 use crate::views::chat::ChatUiRuntimeConfig;
 use crate::views::{
     about::AboutView, autotune::AutoTuneView, chat::ChatView, config_editor::ConfigEditorView,
-    monitor::MonitorView, prompts::PromptsView, providers::ProvidersView, security::SecurityView,
-    settings::SettingsView, setup::SetupView, skills::SkillsView, workflow::WorkflowView,
+    monitor::MonitorView, prompts::PromptsView, providers::ProvidersView,
+    risk_decision::RiskDecisionView, security::SecurityView, settings::SettingsView,
+    setup::SetupView, skills::SkillsView, workflow::WorkflowView,
 };
-use crate::widgets::cache::{Section, SectionCache};
-use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
@@ -42,6 +40,7 @@ enum BackendUpdate {
 
 use crate::backend::{HealthStatus, ProviderStatus};
 use std::collections::hash_map::DefaultHasher;
+use std::net::{TcpStream, ToSocketAddrs};
 
 /// Find the go-on backend binary path relative to the GUI executable.
 fn find_backend_binary() -> Option<std::path::PathBuf> {
@@ -77,6 +76,36 @@ fn find_backend_binary() -> Option<std::path::PathBuf> {
     })
 }
 
+fn backend_log_path() -> Option<std::path::PathBuf> {
+    find_backend_binary().and_then(|path| path.parent().map(|p| p.join("backend.log")))
+}
+
+fn backend_log_has_addr_in_use() -> bool {
+    backend_log_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .is_some_and(|s| s.contains("Address already in use"))
+}
+
+fn backend_bind_addr_from_url(url: &str) -> String {
+    let without_scheme = url
+        .trim_start_matches("http://")
+        .trim_start_matches("https://")
+        .trim_end_matches('/');
+    match without_scheme.find('/') {
+        Some(pos) => without_scheme[..pos].to_string(),
+        None => without_scheme.to_string(),
+    }
+}
+
+fn is_addr_listening(addr: &str) -> bool {
+    let Ok(candidates) = addr.to_socket_addrs() else {
+        return false;
+    };
+    candidates
+        .into_iter()
+        .any(|sock| TcpStream::connect_timeout(&sock, Duration::from_millis(150)).is_ok())
+}
+
 pub struct GoOnApp {
     pub config: AppConfig,
     config_shared: Arc<AppConfig>,
@@ -92,6 +121,7 @@ pub struct GoOnApp {
     pub security_view: SecurityView,
     pub config_editor_view: ConfigEditorView,
     pub prompts_view: PromptsView,
+    pub risk_decision_view: RiskDecisionView,
     pub providers_view: ProvidersView,
     pub about_view: AboutView,
     pub show_setup: bool,
@@ -103,6 +133,8 @@ pub struct GoOnApp {
     last_refresh: Instant,
     /// Managed backend child process
     backend_child: Option<std::process::Child>,
+    /// True when GUI reuses an already-running backend listener instead of spawning child.
+    backend_reused_external: bool,
     /// Cache the last applied theme name to avoid calling ctx.set_style() every frame.
     last_applied_theme: String,
     /// Track when the backend crashed to enable auto-restart with rate limiting
@@ -125,14 +157,14 @@ pub struct GoOnApp {
     health_disconnect_streak: u8,
     /// Tracks the last seen prompts command version to avoid cloning every frame.
     last_prompts_command_version: u64,
+    /// Last language used to load prompts data for chat command/category browser.
+    last_prompts_lang: Lang,
     /// Persistent UI state shared across all views
     pub ui_state: GlobalUiState,
     /// Count of consecutive backend crashes for rate limiting
     backend_crash_count: u8,
     /// Consecutive backend health poll failures for progressive backoff
     consecutive_poll_failures: u8,
-    /// Tab content cache: skips widget tree rebuild on idle repaints
-    tab_cache: crate::widgets::cache::SectionCache,
 }
 
 /// Detect system locale from environment variables.
@@ -209,6 +241,7 @@ impl GoOnApp {
         config.features.config_safe_mode.hash(&mut hasher);
         config.features.setup_enterprise.hash(&mut hasher);
         config.features.show_prompts_tab.hash(&mut hasher);
+        config.features.show_risk_decision_tab.hash(&mut hasher);
         for provider in &config.providers {
             provider.name.hash(&mut hasher);
             provider.model.hash(&mut hasher);
@@ -299,8 +332,18 @@ impl GoOnApp {
     }
 
     /// Start or restart the backend child process with fresh env vars from keyring.
-    fn spawn_backend(config: &AppConfig) -> (BackendClient, Option<std::process::Child>) {
+    fn spawn_backend(config: &AppConfig) -> (BackendClient, Option<std::process::Child>, bool) {
         Self::diagnostic_key_report(config);
+
+        let bind_addr = backend_bind_addr_from_url(&config.backend_url);
+        if is_addr_listening(&bind_addr) {
+            eprintln!(
+                "backend: detected existing listener at {}; reusing external backend",
+                bind_addr
+            );
+            return (BackendClient::new(&config.backend_url), None, true);
+        }
+
         match find_backend_binary() {
             Some(path) => {
                 let config_dir: std::borrow::Cow<'_, std::path::Path> = match path.parent() {
@@ -391,17 +434,17 @@ impl GoOnApp {
                 match cmd.spawn() {
                     Ok(child) => {
                         eprintln!("go-on backend started (PID: {})", child.id());
-                        (BackendClient::new(&config.backend_url), Some(child))
+                        (BackendClient::new(&config.backend_url), Some(child), false)
                     }
                     Err(e) => {
                         eprintln!("warning: failed to start backend: {}", e);
-                        (BackendClient::new(&config.backend_url), None)
+                        (BackendClient::new(&config.backend_url), None, false)
                     }
                 }
             }
             None => {
                 eprintln!("warning: go-on backend binary not found");
-                (BackendClient::new(&config.backend_url), None)
+                (BackendClient::new(&config.backend_url), None, false)
             }
         }
     }
@@ -789,19 +832,7 @@ global_max_inflight = 64
         };
 
         // Bind address must match GUI's backend_url
-        let bind_addr = {
-            let without_scheme = config
-                .backend_url
-                .trim_start_matches("http://")
-                .trim_start_matches("https://")
-                .trim_end_matches('/');
-            // Strip any path component — bind address is host:port only
-            match without_scheme.find('/') {
-                Some(pos) => &without_scheme[..pos],
-                None => without_scheme,
-            }
-            .to_string()
-        };
+        let bind_addr = backend_bind_addr_from_url(&config.backend_url);
 
         let toml = format!(
             r#"# Auto-generated by go-on-gui — do not edit manually.
@@ -925,9 +956,10 @@ top_k = 2
             });
         }
         // Start new
-        let (backend, child) = Self::spawn_backend(self.config_shared.as_ref());
+        let (backend, child, reused_external) = Self::spawn_backend(self.config_shared.as_ref());
         self.backend = backend;
         self.backend_child = child;
+        self.backend_reused_external = reused_external;
         // Force immediate refresh on next update() cycle
         self.pending_refresh = false;
         self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
@@ -976,7 +1008,7 @@ top_k = 2
         let (backend_tx, backend_updates) = mpsc::sync_channel(128);
 
         // Start backend with env vars from keyring
-        let (backend, backend_child) = Self::spawn_backend(&config);
+        let (backend, backend_child, backend_reused_external) = Self::spawn_backend(&config);
 
         // Compute hash before moving config
         let initial_url_hash = {
@@ -1001,6 +1033,7 @@ top_k = 2
             security_view: SecurityView::new(),
             config_editor_view: ConfigEditorView::new(),
             prompts_view: PromptsView::new(),
+            risk_decision_view: RiskDecisionView::new(),
             providers_view: ProvidersView::new(),
             about_view: AboutView::new(),
             config,
@@ -1013,6 +1046,7 @@ top_k = 2
             pending_refresh: false,
             last_refresh: Instant::now(),
             backend_child,
+            backend_reused_external,
             last_applied_theme: String::new(),
             backend_crash_time: None,
             last_backend_url_hash: initial_url_hash,
@@ -1026,15 +1060,13 @@ top_k = 2
             consecutive_poll_failures: 0,
             blocked_tab_toast_shown: None,
             last_prompts_command_version: 0,
+            last_prompts_lang: lang,
             ui_state,
-            tab_cache: crate::widgets::cache::SectionCache::new(),
         };
 
-        // Pre-load prompts so that command_templates are ready
-        // when the chat tab is first opened.
-        if app.config.features.show_prompts_tab {
-            app.prompts_view.ensure_loaded(lang);
-        }
+        // Pre-load prompts for chat `/` command expansion and category browser,
+        // regardless of whether the Prompts tab itself is visible.
+        app.prompts_view.ensure_loaded(lang);
 
         app
     }
@@ -1231,6 +1263,34 @@ impl eframe::App for GoOnApp {
         self.sync_shared_config_if_needed();
         self.i18n.switch(self.current_lang());
 
+        // Keep prompts data available for chat command/category search even when
+        // the Prompts tab is hidden. Also reload on language changes.
+        let cur_lang = self.current_lang();
+        if !self.prompts_view.loaded {
+            self.prompts_view.ensure_loaded(cur_lang);
+        } else if self.last_prompts_lang != cur_lang {
+            self.prompts_view.reload(cur_lang);
+        }
+        self.last_prompts_lang = cur_lang;
+
+        // Apply prompt insertion globally so inserts from the Prompts tab are
+        // immediately reflected in Chat input and user is routed to Chat.
+        if let Some(content) = self.prompts_view.pending_insert.take() {
+            if self.chat_view.input.trim().is_empty() {
+                self.chat_view.input = content;
+            } else {
+                self.chat_view.input = format!("{}\n\n{}", self.chat_view.input, content);
+            }
+            self.active_tab = "chat".to_string();
+        }
+
+        // Sync prompts-derived command templates/category collection into Chat.
+        if self.last_prompts_command_version != self.prompts_view.command_version {
+            self.last_prompts_command_version = self.prompts_view.command_version;
+            self.chat_view.prompts_command_templates = self.prompts_view.command_templates.clone();
+            self.chat_view.prompt_collection = self.prompts_view.collection.clone();
+        }
+
         // ── Frame rate governor ───────────────────────────────────────────
         // Only apply theme on actual change — ctx.set_style() invalidates
         // egui's text cache and forces full re-layout.
@@ -1262,7 +1322,18 @@ impl eframe::App for GoOnApp {
                 Ok(Some(status)) => {
                     eprintln!("go-on backend exited (code: {:?})", status.code());
                     self.backend_child = None;
-                    self.backend_crash_time = Some(Instant::now());
+                    if backend_log_has_addr_in_use() {
+                        // Another process is already bound to backend_url; restarting this child
+                        // will just thrash and cause visible UI jitter.
+                        eprintln!(
+                            "Backend exited due to address-in-use; suppressing auto-restart storm"
+                        );
+                        self.backend_reused_external = true;
+                        self.backend_crash_count = 10;
+                        self.backend_crash_time = None;
+                    } else {
+                        self.backend_crash_time = Some(Instant::now());
+                    }
                 }
                 Err(e) => {
                     eprintln!("go-on backend wait error: {}", e);
@@ -1345,93 +1416,71 @@ impl eframe::App for GoOnApp {
             .as_ref()
             .is_some_and(|h| h.connected);
 
-        thread_local! {
-            static TOOLBAR_CACHE: RefCell<SectionCache> = RefCell::new(SectionCache::new());
-            static TAB_BAR_CACHE: RefCell<SectionCache> = RefCell::new(SectionCache::new());
-        }
-
         // Toolbar
-        let toolbar_hash = section_hash!(
-            &self.i18n.lang,
-            is_connected,
-            self.pending_refresh,
-            self.backend_child.as_ref().map(|c| c.id()).unwrap_or(0),
-            &self.config_shared.theme,
-        );
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-            if let Some(size) =
-                TOOLBAR_CACHE.with(|c| c.borrow().check(&Section::Toolbar, toolbar_hash))
-            {
-                ui.allocate_space(size);
-            } else {
-                let resp = egui::Frame::NONE.show(ui, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        let title_color = ui.style().visuals.text_color();
-                        ui.label(
-                            egui::RichText::new(self.i18n.t("app.title"))
-                                .text_style(egui::TextStyle::Name("Title".into()))
-                                .strong()
-                                .color(title_color),
-                        );
-                        // Keyboard shortcut hints
-                        ui.add_space(16.0);
-                        ui.label(
-                            egui::RichText::new(self.i18n.t("app.shortcutHint"))
-                                .size(11.0)
-                                .weak(),
-                        );
+            egui::Frame::NONE.show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    let title_color = ui.style().visuals.text_color();
+                    ui.label(
+                        egui::RichText::new(self.i18n.t("app.title"))
+                            .text_style(egui::TextStyle::Heading)
+                            .strong()
+                            .color(title_color),
+                    );
+                    // Keyboard shortcut hints
+                    ui.add_space(16.0);
+                    ui.label(
+                        egui::RichText::new(self.i18n.t("app.shortcutHint"))
+                            .size(11.0)
+                            .weak(),
+                    );
 
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let status = if is_connected {
-                                self.i18n.t("status.connected")
-                            } else {
-                                self.i18n.t("status.disconnected")
-                            };
-                            let status_color = if is_connected {
-                                egui::Color32::from_rgb(60, 180, 80)
-                            } else {
-                                egui::Color32::from_rgb(220, 80, 80)
-                            };
-                            let pid_info = self
-                                .backend_child
-                                .as_ref()
-                                .map(|c| format!("  PID:{}", c.id()))
-                                .unwrap_or_default();
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let status = if is_connected {
+                            self.i18n.t("status.connected")
+                        } else {
+                            self.i18n.t("status.disconnected")
+                        };
+                        let status_color = if is_connected {
+                            egui::Color32::from_rgb(60, 180, 80)
+                        } else {
+                            egui::Color32::from_rgb(220, 80, 80)
+                        };
+                        let pid_info = self
+                            .backend_child
+                            .as_ref()
+                            .map(|c| format!("  PID:{}", c.id()))
+                            .unwrap_or_default();
 
-                            egui::Frame::new()
-                                .fill(status_color.gamma_multiply(0.15))
-                                .corner_radius(12.0)
-                                .inner_margin(egui::Margin::symmetric(10i8, 4i8))
-                                .show(ui, |ui| {
-                                    ui.label(
-                                        egui::RichText::new(format!("{}{}", status, pid_info))
-                                            .color(status_color)
-                                            .strong(),
-                                    );
-                                });
-                        });
-
-                        // Reserve a fixed spinner slot to avoid toolbar width shifts.
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(20.0, 20.0),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                if self.pending_refresh {
-                                    ui.add(egui::Label::new(
-                                        egui::RichText::new("⟳")
-                                            .color(egui::Color32::from_rgb(100, 180, 255))
-                                            .size(16.0),
-                                    ));
-                                }
-                            },
-                        );
+                        egui::Frame::new()
+                            .fill(status_color.gamma_multiply(0.15))
+                            .corner_radius(12.0)
+                            .inner_margin(egui::Margin::symmetric(10i8, 4i8))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(format!("{}{}", status, pid_info))
+                                        .color(status_color)
+                                        .strong(),
+                                );
+                            });
                     });
+
+                    // Reserve a fixed spinner slot to avoid toolbar width shifts.
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(20.0, 20.0),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            if self.pending_refresh {
+                                ui.add(egui::Label::new(
+                                    egui::RichText::new("⟳")
+                                        .color(egui::Color32::from_rgb(100, 180, 255))
+                                        .size(16.0),
+                                ));
+                            }
+                        },
+                    );
                 });
-                TOOLBAR_CACHE.with(|c| {
-                    c.borrow_mut()
-                        .store(&Section::Toolbar, toolbar_hash, resp.response.rect.size())
-                });
-            }
+            });
         });
 
         // Global keyboard shortcuts for tab switching
@@ -1467,55 +1516,41 @@ impl eframe::App for GoOnApp {
         });
 
         // Tab bar — when disconnected, only monitor/providers/settings are accessible
-        let allowed_when_offline = ["monitor", "providers", "prompts", "settings"];
+        let allowed_when_offline = [
+            "monitor",
+            "providers",
+            "prompts",
+            "risk_decision",
+            "settings",
+        ];
         let mut new_tab: Option<String> = None;
         let mut blocked_tab: Option<String> = None;
-        let tab_bar_hash = section_hash!(
-            &tabs.join(","),
-            &self.active_tab,
-            is_connected,
-            &self.i18n.lang,
-        );
         egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
-            if let Some(size) = TAB_BAR_CACHE.with(|c| {
-                c.borrow()
-                    .check(&Section::View("tab_bar".to_string()), tab_bar_hash)
-            }) {
-                ui.allocate_space(size);
-            } else {
-                let resp = egui::Frame::NONE.show(ui, |ui| {
-                    egui::ScrollArea::horizontal().show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.add_space(4.0);
-                            for tab in &tabs {
-                                let label = self.tab_label(tab);
-                                let is_active = self.active_tab == *tab;
-                                let blocked =
-                                    !is_connected && !allowed_when_offline.contains(&tab.as_str());
-                                let resp = ui
-                                    .add_enabled_ui(!blocked, |ui| {
-                                        ui.selectable_label(is_active, label)
-                                    })
-                                    .inner;
-                                if resp.clicked() {
-                                    if blocked {
-                                        blocked_tab = Some(tab.clone());
-                                    } else {
-                                        new_tab = Some(tab.clone());
-                                    }
+            egui::Frame::NONE.show(ui, |ui| {
+                egui::ScrollArea::horizontal().show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add_space(4.0);
+                        for tab in &tabs {
+                            let label = self.tab_label(tab);
+                            let is_active = self.active_tab == *tab;
+                            let blocked =
+                                !is_connected && !allowed_when_offline.contains(&tab.as_str());
+                            let resp = ui
+                                .add_enabled_ui(!blocked, |ui| {
+                                    ui.selectable_label(is_active, label)
+                                })
+                                .inner;
+                            if resp.clicked() {
+                                if blocked {
+                                    blocked_tab = Some(tab.clone());
+                                } else {
+                                    new_tab = Some(tab.clone());
                                 }
                             }
-                        });
+                        }
                     });
                 });
-                TAB_BAR_CACHE.with(|c| {
-                    c.borrow_mut().store(
-                        &Section::View("tab_bar".to_string()),
-                        tab_bar_hash,
-                        resp.response.rect.size(),
-                    )
-                });
-            }
+            });
         });
         // Save old tab's UI state before switching tabs
         let previous_tab = self.active_tab.clone();
@@ -1572,34 +1607,7 @@ impl eframe::App for GoOnApp {
         // The WGPU back-buffer retains the previous frame when no changes
         // are needed, so there is no flicker from empty frames.
         egui::CentralPanel::default().show(ctx, |ui| {
-            // Tab content hash — skips widget tree when nothing changed
-            let tab_hash = {
-                use std::hash::Hash as _;
-                let mut state = std::collections::hash_map::DefaultHasher::new();
-                self.active_tab.hash(&mut state);
-                match self.active_tab.as_str() {
-                    "chat" => {
-                        self.chat_view.messages().len().hash(&mut state);
-                        self.chat_view.sending.hash(&mut state);
-                    }
-                    "monitor" => {
-                        self.monitor_view.providers.len().hash(&mut state);
-                    }
-                    _ => {}
-                }
-                state.finish()
-            };
-
-            if let Some(size) = self
-                .tab_cache
-                .check(&crate::widgets::cache::Section::Messages, tab_hash)
-            {
-                ui.allocate_space(size);
-                return;
-            }
-
-            // Render tab and cache size
-            let resp = egui::Frame::NONE.show(ui, |ui| {
+            egui::Frame::NONE.show(ui, |ui| {
                 egui::ScrollArea::vertical()
                     .id_salt("main_scroll")
                     .show(ui, |ui| {
@@ -1613,27 +1621,12 @@ impl eframe::App for GoOnApp {
                                     has_backend,
                                     &self.backend,
                                     mon_alerts,
+                                    self.backend_reused_external,
                                 );
                             }
                             "chat" => {
                                 let stability = &self.config.ui_stability;
                                 let autotune_chain = self.config.features.autotune_chain_injection;
-                                // Check for pending insert from prompts view
-                                if let Some(content) = self.prompts_view.pending_insert.take() {
-                                    self.chat_view.input = content;
-                                }
-                                // Pass prompts command templates for `/` command expansion
-                                // Only clone when version changes to avoid per-frame allocation
-                                if self.last_prompts_command_version
-                                    != self.prompts_view.command_version
-                                {
-                                    self.last_prompts_command_version =
-                                        self.prompts_view.command_version;
-                                    self.chat_view.prompts_command_templates =
-                                        self.prompts_view.command_templates.clone();
-                                    self.chat_view.prompt_collection =
-                                        self.prompts_view.collection.clone();
-                                }
                                 self.chat_view.show(
                                     ui,
                                     &self.i18n,
@@ -1647,6 +1640,10 @@ impl eframe::App for GoOnApp {
                                             .chat_max_pending_events_per_frame,
                                     },
                                 );
+                                // Keep standalone Risk Decision tab in sync with the latest
+                                // fields edited in Chat's risk popup.
+                                let draft = self.chat_view.risk_decision_draft();
+                                self.risk_decision_view.apply_draft(&draft);
                             }
                             "skills" => {
                                 let skills_lifecycle = self.config.features.skills_lifecycle;
@@ -1709,6 +1706,22 @@ impl eframe::App for GoOnApp {
                             "prompts" => {
                                 self.prompts_view.show(ui, &self.i18n);
                             }
+                            "risk_decision" => {
+                                let draft = self.chat_view.risk_decision_draft();
+                                self.risk_decision_view.apply_draft(&draft);
+                                if let Some(block) = self.risk_decision_view.show(ui, &self.i18n) {
+                                    if self.chat_view.input.trim().is_empty() {
+                                        self.chat_view.input = block;
+                                    } else {
+                                        self.chat_view.input =
+                                            format!("{}\n\n{}", self.chat_view.input, block);
+                                    }
+                                    self.active_tab = "chat".to_string();
+                                }
+                                // Push tab edits back into Chat popup state.
+                                let draft = self.risk_decision_view.draft();
+                                self.chat_view.apply_risk_decision_draft(&draft);
+                            }
                             "autotune" => self.autotune_view.show(ui, &self.i18n),
                             "security" => {
                                 self.security_view.show(ui, &self.i18n, &self.backend, ctx)
@@ -1760,12 +1773,6 @@ impl eframe::App for GoOnApp {
                         }
                     });
             });
-            // Store tab content size in cache for partial-redraw on next frame
-            self.tab_cache.store(
-                &crate::widgets::cache::Section::Messages,
-                tab_hash,
-                resp.response.rect.size(),
-            );
         });
 
         // Frame timing diagnostics — rate limited to at most once per second
@@ -1974,6 +1981,9 @@ impl GoOnApp {
         if self.config_shared.features.show_prompts_tab {
             tabs.push("prompts".into());
         }
+        if self.config_shared.features.chat && self.config_shared.features.show_risk_decision_tab {
+            tabs.push("risk_decision".into());
+        }
         if self.config_shared.features.security {
             tabs.push("security".into());
         }
@@ -1996,6 +2006,7 @@ impl GoOnApp {
             "workflow" => self.i18n.t("tab.workflow"),
             "autotune" => self.i18n.t("tab.autotune"),
             "prompts" => self.i18n.t("tab.prompts"),
+            "risk_decision" => self.i18n.t("tab.riskDecision"),
             "security" => self.i18n.t("tab.security"),
             "config" => self.i18n.t("tab.config"),
             "providers" => self.i18n.t("tab.providers"),

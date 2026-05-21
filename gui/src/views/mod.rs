@@ -5,6 +5,7 @@ pub mod config_editor;
 pub mod monitor;
 pub mod prompts;
 pub mod providers;
+pub mod risk_decision;
 pub mod security;
 pub mod security_prefs;
 pub mod settings;

@@ -1,10 +1,10 @@
-/// Widget-level cache: stores content hashes and allocated sizes.
-/// When content is unchanged, the caller can skip widget tree rebuild
-/// and just `allocate_space()` with the cached size.
+/// Widget-level cache metadata.
 ///
-/// This eliminates per-frame text shaping, layout calculation, and
-/// paint-command generation for static content, making every frame
-/// take the same CPU time (no micro-jitter from variable widget cost).
+/// NOTE:
+/// egui/eframe is an immediate-mode UI: widgets must be rebuilt every
+/// frame that repaints. Skipping rebuild and only reserving layout space
+/// causes missing draw commands (blank/white areas). Therefore this cache
+/// stores metadata only and does not short-circuit rendering.
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -94,6 +94,7 @@ pub enum Section {
 
 // ── Cached size entry ──────────────────────────────────────────────
 
+#[allow(dead_code)]
 struct CacheEntry {
     hash: u64,
     size: egui::Vec2,
@@ -112,13 +113,13 @@ impl SectionCache {
         }
     }
 
-    /// Check whether a section's content hash matches.
-    /// Returns `Some(cached_size)` on hit, `None` on miss.
-    /// On miss, the caller MUST render and then call `store()`.
-    pub fn check(&self, section: &Section, hash: u64) -> Option<egui::Vec2> {
-        self.entries
-            .get(section)
-            .and_then(|e| if e.hash == hash { Some(e.size) } else { None })
+    /// Always returns `None`.
+    ///
+    /// Historical code paths used this to skip rendering on hash hit, which
+    /// is unsafe in immediate-mode rendering. Keeping the method preserves API
+    /// compatibility while forcing callers to render every frame.
+    pub fn check(&self, _section: &Section, _hash: u64) -> Option<egui::Vec2> {
+        None
     }
 
     /// Store the rendered size for a section + content hash.
@@ -186,9 +187,10 @@ impl CachedView {
         self.cache.insert((key.to_owned(), hash), size);
     }
 
-    /// Check the cached size for `(key, hash)`.  On hit, allocate
-    /// exactly that much space and return the size.  On miss, call
-    /// `render_fn`, capture the rendered size, store it, and return it.
+    /// Render unconditionally and store the resulting size.
+    ///
+    /// This intentionally does not skip rendering on cache hit because egui
+    /// requires rebuilding widgets every repaint.
     pub fn check_or_render(
         &mut self,
         ui: &mut egui::Ui,
@@ -197,14 +199,6 @@ impl CachedView {
         render_fn: impl FnOnce(&mut egui::Ui),
     ) -> egui::Vec2 {
         let cache_key = (key.to_owned(), hash);
-
-        if let Some(&size) = self.cache.get(&cache_key) {
-            // Cache hit → just reserve space, no widget rebuild.
-            ui.allocate_space(size);
-            return size;
-        }
-
-        // Cache miss → actually render, then record the size.
         let resp = egui::Frame::NONE.show(ui, render_fn);
         let size = resp.response.rect.size();
         self.cache.insert(cache_key, size);
@@ -231,6 +225,7 @@ macro_rules! section_hash {
 /// Compute a 64-bit hash from a string slice.
 ///
 /// Convenience wrapper — equivalent to `section_hash!(my_str)`.
+#[allow(dead_code)]
 pub fn hash_str(s: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     s.hash(&mut hasher);
@@ -238,6 +233,7 @@ pub fn hash_str(s: &str) -> u64 {
 }
 
 /// Compute a 64-bit hash from a boolean (yields `0u64` or `1u64`).
+#[allow(dead_code)]
 pub fn hash_bool(b: bool) -> u64 {
     if b {
         1
@@ -250,6 +246,7 @@ pub fn hash_bool(b: bool) -> u64 {
 ///
 /// Uses the same mixing strategy as `boost::hash_combine` to spread
 /// both hash values across the output range.
+#[allow(dead_code)]
 pub fn hash_combine(h1: u64, h2: u64) -> u64 {
     // 0x9e3779b97f4a7c15 is the golden-ratio reciprocal for 64-bit.
     h1.wrapping_mul(0x9e3779b97f4a7c15)

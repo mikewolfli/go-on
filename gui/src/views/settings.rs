@@ -2,7 +2,6 @@ use crate::config::save_app_config;
 use crate::config::AppConfig;
 use crate::config::UiStabilityConfig;
 use crate::i18n::I18n;
-use crate::section_hash;
 use crate::widgets::cache::CachedView;
 use std::cell::RefCell;
 
@@ -103,39 +102,7 @@ impl SettingsView {
         egui::ScrollArea::vertical()
             .auto_shrink([false; 2])
             .show(ui, |ui| {
-                // Compute hash from ALL render-relevant config fields
-                let hash = section_hash!(
-                    config.features.monitor,
-                    config.features.chat,
-                    config.features.skills,
-                    config.features.workflow,
-                    config.features.autotune,
-                    config.features.security,
-                    config.features.config,
-                    config.features.providers,
-                    config.features.show_prompts_tab,
-                    config.features.workflow_run_center,
-                    config.features.autotune_chain_injection,
-                    config.features.skills_lifecycle,
-                    config.features.providers_ops,
-                    config.features.monitor_history_alerts,
-                    config.features.config_safe_mode,
-                    config.features.setup_enterprise,
-                    config.enterprise.active_environment,
-                    config.enterprise.secret_source,
-                    config.enterprise.export_path,
-                    config.enterprise.import_path,
-                    config.enterprise.environments.len(),
-                    config.backend_url,
-                    config.language,
-                    config.theme,
-                    config.ui_stability.backend_refresh_interval_secs,
-                    config.ui_stability.backend_ui_commit_debounce_ms,
-                    config.ui_stability.health_disconnect_debounce_count,
-                    config.ui_stability.chat_stream_chunk_flush_ms,
-                    config.ui_stability.chat_repaint_interval_ms,
-                    config.ui_stability.chat_max_pending_events_per_frame,
-                );
+                let hash = 0_u64;
 
                 SETTINGS_CACHE.with(|cache| {
                     cache
@@ -198,6 +165,15 @@ impl SettingsView {
                                     ui.label(i18n.t("tab.prompts"));
                                     if ui
                                         .checkbox(&mut config.features.show_prompts_tab, "")
+                                        .changed()
+                                    {
+                                        changed = true;
+                                    }
+                                    ui.end_row();
+
+                                    ui.label(i18n.t("tab.riskDecision"));
+                                    if ui
+                                        .checkbox(&mut config.features.show_risk_decision_tab, "")
                                         .changed()
                                     {
                                         changed = true;

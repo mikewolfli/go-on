@@ -89,14 +89,7 @@ impl AutoTuneView {
                 ui.label(i18n.t("autotune.hint"));
                 ui.separator();
 
-                // Compute hash from render-relevant state
-                let hash = crate::section_hash!(
-                    self.state.temperature.to_bits(),
-                    self.state.top_p.to_bits(),
-                    self.state.max_tokens,
-                    self.state.aggressive,
-                    self.saved_at.map(|t| t.elapsed().as_secs() / 2),
-                );
+                let hash = 0_u64;
 
                 self.cached_view
                     .check_or_render(ui, "autotune", hash, |ui| {

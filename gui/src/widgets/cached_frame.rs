@@ -22,14 +22,7 @@ impl CachedFrame {
     ) {
         let hash = if ui.visuals().dark_mode { 1u64 } else { 0u64 };
 
-        if let Some(size) = cache.check(&self.section, hash) {
-            let (_id, rect) = ui.allocate_space(size);
-            let bg = ui.style().visuals.window_fill();
-            ui.painter()
-                .rect_filled(rect, egui::CornerRadius::same(0), bg);
-        } else {
-            let resp = egui::Frame::NONE.show(ui, content);
-            cache.store(&self.section, hash, resp.response.rect.size());
-        }
+        let resp = egui::Frame::NONE.show(ui, content);
+        cache.store(&self.section, hash, resp.response.rect.size());
     }
 }

@@ -27,11 +27,7 @@ impl CachedLabel {
         text.len().hash(&mut hasher);
         let hash = hasher.finish();
 
-        if let Some(size) = cache.check(&self.section, hash) {
-            ui.allocate_space(size);
-        } else {
-            let resp = ui.label(text);
-            cache.store(&self.section, hash, resp.rect.size());
-        }
+        let resp = ui.label(text);
+        cache.store(&self.section, hash, resp.rect.size());
     }
 }

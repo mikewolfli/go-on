@@ -25,13 +25,8 @@ impl CachedButton {
         label.hash(&mut hasher);
         let hash = hasher.finish();
 
-        if let Some(size) = cache.check(&self.section, hash) {
-            ui.allocate_space(size);
-            false
-        } else {
-            let resp = ui.button(label);
-            cache.store(&self.section, hash, resp.rect.size());
-            resp.clicked()
-        }
+        let resp = ui.button(label);
+        cache.store(&self.section, hash, resp.rect.size());
+        resp.clicked()
     }
 }

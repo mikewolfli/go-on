@@ -158,6 +158,10 @@ impl I18n {
             "tab.prompts",
             tr!(en, "Prompts", cn, "提示词", tw, "提示詞"),
         );
+        m.insert(
+            "tab.riskDecision",
+            tr!(en, "Risk Decision", cn, "风险决策", tw, "風險決策"),
+        );
 
         m.insert(
             "app.backendRequired",
@@ -390,6 +394,21 @@ impl I18n {
                 "⚠ 已配置 AI 供应商，请确认后端正在运行",
                 tw,
                 "⚠ 已配置 AI 供應商，請確認後端正在運行"
+            ),
+        );
+        m.insert(
+            "monitor.externalBackendBadge",
+            tr!(en, "External Backend", cn, "外部后端", tw, "外部後端"),
+        );
+        m.insert(
+            "monitor.externalBackendHint",
+            tr!(
+                en,
+                "Port is already occupied. GUI is reusing the existing backend process.",
+                cn,
+                "端口已被占用，GUI 正在复用已运行的后端进程。",
+                tw,
+                "埠已被佔用，GUI 正在重用已運行的後端進程。"
             ),
         );
         m.insert(
@@ -3775,6 +3794,21 @@ impl I18n {
                 "⚠ 已配置 AI 供应商，请确认后端正在运行",
                 tw,
                 "⚠ 已配置 AI 供應商，請確認後端正在運行"
+            ),
+        );
+        m.insert(
+            "monitor.externalBackendBadge",
+            tr!(en, "External Backend", cn, "外部后端", tw, "外部後端"),
+        );
+        m.insert(
+            "monitor.externalBackendHint",
+            tr!(
+                en,
+                "Port is already occupied. GUI is reusing the existing backend process.",
+                cn,
+                "端口已被占用，GUI 正在复用已运行的后端进程。",
+                tw,
+                "埠已被佔用，GUI 正在重用已運行的後端進程。"
             ),
         );
         m.insert(

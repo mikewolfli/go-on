@@ -2,7 +2,6 @@ use std::mem;
 use std::{collections::HashMap, collections::HashSet};
 
 use crate::i18n::{I18n, Lang};
-use crate::section_hash;
 use crate::widgets::cache::CachedView;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
@@ -359,19 +358,7 @@ impl PromptsView {
         // Ensure data is loaded
         self.ensure_loaded(i18n.lang);
 
-        // Compute content hash from all state that affects rendering
-        let hash = section_hash!(
-            serde_json::to_string(&self.collection).unwrap_or_default(),
-            &self.search_query,
-            &self.selected_category,
-            serde_json::to_string(&self.selected_template).unwrap_or_default(),
-            self.edit_mode,
-            serde_json::to_string(&self.edit_template).unwrap_or_default(),
-            self.show_create,
-            serde_json::to_string(&self.create_template).unwrap_or_default(),
-            &self.error,
-            i18n.lang as u8,
-        );
+        let hash = 0_u64;
 
         let _ = PROMPTS_CACHE.with(|c| {
             c.borrow_mut()

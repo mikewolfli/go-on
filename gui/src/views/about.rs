@@ -23,14 +23,7 @@ impl AboutView {
         egui::ScrollArea::vertical()
             .auto_shrink([false; 2])
             .show(ui, |ui| {
-                // Compute hash from ALL render-relevant state
-                let hash = crate::section_hash!(
-                    i18n.lang,
-                    health.is_some_and(|h| h.connected),
-                    backend_pid,
-                    health.and_then(|h| h.backend_version.as_deref()),
-                    health.and_then(|h| h.backend_build.as_deref()),
-                );
+                let hash = 0_u64;
 
                 self.cached_view.check_or_render(ui, "about", hash, |ui| {
                     ui.heading(i18n.t("about.title"));

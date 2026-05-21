@@ -1,6 +1,7 @@
 use crate::backend::BackendClient;
 use crate::i18n::I18n;
 use crate::views::autotune::AutoTuneView;
+use crate::views::risk_decision::RiskDecisionDraft;
 use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
@@ -95,6 +96,12 @@ pub struct ChatView {
     pub prompt_collection: Vec<crate::views::prompts::PromptCategory>,
     /// Currently selected category ID in the prompt browser.
     prompt_selected_category: Option<String>,
+    /// Risk decision helper panel visibility and fields.
+    show_risk_decision: bool,
+    risk_is_high: bool,
+    risk_review_required: bool,
+    risk_strategy: String,
+    risk_reasons: String,
     // Feature 9: search (sessions + messages)
     pub session_search_query: String,
     // Save serialization guards (AtomicBool ensures no concurrent file writes)
@@ -120,8 +127,6 @@ pub struct ChatView {
     /// Per-message content hash cache: skips re-parsing unchanged messages.
     /// Key = message index, value = hash of content last rendered.
     rendered_content_hashes: Vec<u64>,
-    /// Section-level partial-render cache for sidebar, toolbar, etc.
-    pub section_cache: crate::widgets::cache::SectionCache,
 }
 
 impl ChatView {
@@ -446,6 +451,11 @@ impl ChatView {
             prompts_command_templates: Vec::new(),
             prompt_collection: Vec::new(),
             prompt_selected_category: None,
+            show_risk_decision: false,
+            risk_is_high: false,
+            risk_review_required: false,
+            risk_strategy: String::new(),
+            risk_reasons: String::new(),
             // Feature 9
             session_search_query: String::new(),
             // Save guards
@@ -480,7 +490,6 @@ impl ChatView {
                         .unwrap_or_else(|_| reqwest::Client::new())
                 }),
             rendered_content_hashes: Vec::new(),
-            section_cache: crate::widgets::cache::SectionCache::new(),
         }
     }
 
@@ -880,6 +889,22 @@ impl ChatView {
         ui_state.template_search_query = self.template_search_query.clone();
     }
 
+    pub fn risk_decision_draft(&self) -> RiskDecisionDraft {
+        RiskDecisionDraft {
+            is_high: self.risk_is_high,
+            review_required: self.risk_review_required,
+            strategy: self.risk_strategy.clone(),
+            reasons: self.risk_reasons.clone(),
+        }
+    }
+
+    pub fn apply_risk_decision_draft(&mut self, draft: &RiskDecisionDraft) {
+        self.risk_is_high = draft.is_high;
+        self.risk_review_required = draft.review_required;
+        self.risk_strategy = draft.strategy.clone();
+        self.risk_reasons = draft.reasons.clone();
+    }
+
     fn set_phase_record_status(&mut self, status: &str) {
         if let Some(record) = self
             .session()
@@ -978,6 +1003,11 @@ mod tests {
             prompts_command_templates: Vec::new(),
             prompt_collection: Vec::new(),
             prompt_selected_category: None,
+            show_risk_decision: false,
+            risk_is_high: false,
+            risk_review_required: false,
+            risk_strategy: String::new(),
+            risk_reasons: String::new(),
             session_search_query: String::new(),
             session_save_in_flight: Arc::new(AtomicBool::new(false)),
             template_save_in_flight: Arc::new(AtomicBool::new(false)),
@@ -998,7 +1028,6 @@ mod tests {
             model_stats: std::collections::HashMap::new(),
             stream_client: reqwest::Client::new(),
             rendered_content_hashes: Vec::new(),
-            section_cache: crate::widgets::cache::SectionCache::new(),
         }
     }
 
