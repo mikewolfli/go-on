@@ -255,7 +255,7 @@ use crate::evaluation::TraceEvent;
 use crate::acp::helpers::policy::{rank_execution_agents, resolve_review_policy};
 use crate::acp::helpers::requirement::{
     evaluate_requirement_gate_facade, parse_requirement_contract_from_params,
-    resolve_learning_clarification_metrics, try_auto_recover_requirement_gate,
+    resolve_learning_clarification_metrics,
 };
 use crate::flow_with_models::FlowModelSelector;
 use crate::governance::hardening::{

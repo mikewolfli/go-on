@@ -2,7 +2,6 @@ use tracing::warn;
 
 use super::*;
 use crate::mcp::MCP_VERSION;
-use crate::orchestration::autonomy_runtime::TOKEN_THINKING_PREFIX;
 use crate::schema::{
     ImportedSkillRecordView, ModelsListResponse, PhaseResponse, SkillActionResponse,
 };
@@ -207,59 +206,23 @@ fn build_chat_params_from_acp(params: Value, session_state: &AcpSessionState) ->
         .get("sessionId")
         .and_then(|s| s.as_str())
         .map(|s| s.to_string());
-    let options = {
+    let options = session_state.cwd.as_ref().map(|cwd| {
         let mut extra = serde_json::Map::new();
-
-        if let Some(cwd) = session_state.cwd.as_ref() {
-            extra.insert("cwd".to_string(), Value::String(cwd.clone()));
-        }
-
-        if !session_state.additional_directories.is_empty() {
-            extra.insert(
-                "additional_directories".to_string(),
-                Value::Array(
-                    session_state
-                        .additional_directories
-                        .iter()
-                        .map(|d| Value::String(d.clone()))
-                        .collect(),
-                ),
-            );
-        }
-
-        // Promote session config options (e.g. model selection) into chat options.
-        for (key, value) in &session_state.config_options {
-            if key != "mode" {
-                extra.insert(key.clone(), value.clone());
-            }
-        }
-
-        // Map thought-level selection to provider-friendly reasoning controls.
-        if let Some(level) = session_state
-            .config_options
-            .get("thought_level")
-            .and_then(Value::as_str)
-            .map(|v| v.trim().to_ascii_lowercase())
-        {
-            let effort = match level.as_str() {
-                "low" => "low",
-                "high" => "high",
-                _ => "medium",
-            };
-            extra.insert(
-                "reasoning_effort".to_string(),
-                Value::String(effort.to_string()),
-            );
-        }
-
-        if extra.is_empty() {
-            None
-        } else {
-            let mut options = serde_json::Map::new();
-            options.insert("extra".to_string(), Value::Object(extra));
-            Some(Value::Object(options))
-        }
-    };
+        extra.insert("cwd".to_string(), Value::String(cwd.clone()));
+        extra.insert(
+            "additional_directories".to_string(),
+            Value::Array(
+                session_state
+                    .additional_directories
+                    .iter()
+                    .map(|d| Value::String(d.clone()))
+                    .collect(),
+            ),
+        );
+        let mut options = serde_json::Map::new();
+        options.insert("extra".to_string(), Value::Object(extra));
+        Value::Object(options)
+    });
 
     serde_json::to_value(InternalChatParams {
         mode: normalize_acp_mode(Some(session_state.mode.as_str())),
@@ -268,41 +231,6 @@ fn build_chat_params_from_acp(params: Value, session_state: &AcpSessionState) ->
         options,
     })
     .unwrap_or_default()
-}
-
-fn sanitize_visible_response_text(response_text: &str, thinking_text: &str) -> String {
-    let mut visible = response_text.replace(TOKEN_THINKING_PREFIX, "");
-
-    // If a dedicated thinking field is present, avoid duplicating it in visible text.
-    let thinking_trimmed = thinking_text.trim();
-    if !thinking_trimmed.is_empty() {
-        let pattern = format!(
-            r"^(?:\s*{}\s*[。．.!！?？,:：，;；、\-—\n\r]*)+",
-            regex::escape(thinking_trimmed)
-        );
-        if let Ok(re) = regex::Regex::new(&pattern) {
-            visible = re.replace(visible.trim_start(), "").to_string();
-        } else if let Some(stripped) = visible.trim_start().strip_prefix(thinking_trimmed) {
-            visible = stripped.to_string();
-        }
-    }
-
-    visible.trim().to_string()
-}
-
-fn extract_chat_result_texts(chat_result: &Value) -> (String, String) {
-    let response_text_raw = chat_result
-        .get("response")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let thinking_text = chat_result
-        .get("thinking")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    let response_text = sanitize_visible_response_text(response_text_raw, &thinking_text);
-    (response_text, thinking_text)
 }
 
 pub(super) async fn handle_initialize(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
@@ -442,25 +370,18 @@ pub(super) async fn handle_session_new(
     modes.current_mode_id = crate::schema::SessionModeId::new(current_mode.clone());
 
     if let Ok(mut state) = acp_session_state().lock() {
-        let mut config_options = HashMap::new();
-        config_options.insert("mode".to_string(), Value::String(current_mode.clone()));
-        config_options.insert("model".to_string(), Value::String("auto".to_string()));
-        config_options.insert(
-            "thought_level".to_string(),
-            Value::String("medium".to_string()),
-        );
         state.insert(
             session_id.clone(),
             AcpSessionState {
                 cwd,
                 mode: current_mode.clone(),
                 additional_directories,
-                config_options,
+                config_options: HashMap::new(),
             },
         );
     }
 
-    let config_options = build_session_config_options(server, &current_mode, "auto", "medium");
+    let config_options = build_model_config_options(server);
 
     crate::acp::r#impl::io::send_result(
         server,
@@ -494,29 +415,10 @@ pub(super) async fn handle_session_load(
         .and_then(|state| state.get(session_id).cloned())
         .unwrap_or_default();
     let current_mode = normalize_acp_mode(Some(stored.mode.as_str()));
-    let current_model = stored
-        .config_options
-        .get("model")
-        .and_then(Value::as_str)
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or("auto")
-        .to_string();
-    let current_thought_level = stored
-        .config_options
-        .get("thought_level")
-        .and_then(Value::as_str)
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or("medium")
-        .to_string();
     let mut modes = build_default_modes();
     modes.current_mode_id = crate::schema::SessionModeId::new(current_mode);
 
-    let config_options = build_session_config_options(
-        server,
-        &modes.current_mode_id.0,
-        &current_model,
-        &current_thought_level,
-    );
+    let config_options = build_model_config_options(server);
 
     crate::acp::r#impl::io::send_result(
         server,
@@ -606,8 +508,11 @@ pub(super) async fn handle_session_prompt(
 
     match result {
         Ok(Ok(chat_result)) => {
-            // Extract visible response and structured thinking text.
-            let (response_text, thinking_text) = extract_chat_result_texts(&chat_result);
+            // Extract the actual AI response text from the chat result
+            let response_text = chat_result
+                .get("response")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
 
             tracing::info!(
                 response_chars = response_text.chars().count(),
@@ -637,11 +542,6 @@ pub(super) async fn handle_session_prompt(
             // DO NOT change "session/update" to "sessionUpdate" or any other variant!
             // ────────────────────────────────────────────────────────────────────
             if let Some(ref sid) = session_id_for_notification {
-                // Prefer structured thinking field when available.
-                if !thinking_text.is_empty() {
-                    send_chunk(server, sid, "agent_thought_chunk", &thinking_text).await;
-                }
-
                 // Parse the response into segments: <thinking> blocks are
                 // sent as agent_thought_chunk, everything else as agent_message_chunk.
                 // This lets Zed render thinking in a collapsible box rather than
@@ -649,9 +549,8 @@ pub(super) async fn handle_session_prompt(
                 let re = regex::Regex::new(r"<thinking>(.*?)</thinking>").unwrap();
                 let mut last_end = 0;
                 let sid = sid.as_str();
-                let enable_inline_tag_thinking = thinking_text.is_empty();
 
-                for cap in re.captures_iter(&response_text) {
+                for cap in re.captures_iter(response_text) {
                     let m = cap.get(0).unwrap();
                     let thought_content = cap.get(1).unwrap().as_str();
 
@@ -663,7 +562,7 @@ pub(super) async fn handle_session_prompt(
                     }
 
                     // Send the thinking block as a thought chunk
-                    if enable_inline_tag_thinking && !thought_content.is_empty() {
+                    if !thought_content.is_empty() {
                         send_chunk(server, sid, "agent_thought_chunk", thought_content).await;
                     }
 
@@ -802,67 +701,27 @@ pub(super) async fn handle_session_set_mode(
     request_id: Option<Value>,
 ) -> Result<()> {
     use crate::schema::{
-        ConfigOptionUpdate, CurrentModeUpdate, SessionId, SessionNotification, SessionUpdate,
-        SetSessionModeResponse,
+        CurrentModeUpdate, SessionId, SessionNotification, SessionUpdate, SetSessionModeResponse,
     };
     let session_id = params
         .get("sessionId")
         .and_then(Value::as_str)
         .unwrap_or_default();
     let mode_id = normalize_acp_mode(params.get("modeId").and_then(Value::as_str));
-    let mut selected_model = "auto".to_string();
-    let mut selected_thought_level = "medium".to_string();
     if !session_id.is_empty() {
         if let Ok(mut state) = acp_session_state().lock() {
-            let session = state.entry(session_id.to_string()).or_default();
-            session.mode = mode_id.clone();
-            session
-                .config_options
-                .insert("mode".to_string(), Value::String(mode_id.clone()));
-            selected_model = session
-                .config_options
-                .get("model")
-                .and_then(Value::as_str)
-                .filter(|v| !v.trim().is_empty())
-                .unwrap_or("auto")
-                .to_string();
-            selected_thought_level = session
-                .config_options
-                .get("thought_level")
-                .and_then(Value::as_str)
-                .filter(|v| !v.trim().is_empty())
-                .unwrap_or("medium")
-                .to_string();
+            state.entry(session_id.to_string()).or_default().mode = mode_id.clone();
         }
         // Send session/update notification with CurrentModeUpdate so the
         // client (e.g. Zed) can reflect the mode change in its UI immediately.
         let notif = SessionNotification::new(
             SessionId::new(session_id.to_string()),
             SessionUpdate::CurrentModeUpdate(CurrentModeUpdate {
-                current_mode_id: crate::schema::SessionModeId::new(mode_id.clone()),
+                current_mode_id: crate::schema::SessionModeId::new(mode_id),
                 meta: None,
             }),
         );
         if let Ok(value) = serde_json::to_value(&notif) {
-            let _ =
-                crate::acp::r#impl::io::send_notification(server, "session/update", value).await;
-        }
-
-        // Keep config panel in sync with current mode/model values.
-        let config_options = build_session_config_options(
-            server,
-            &mode_id,
-            &selected_model,
-            &selected_thought_level,
-        );
-        let cfg_notif = SessionNotification::new(
-            SessionId::new(session_id.to_string()),
-            SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate {
-                config_options,
-                meta: None,
-            }),
-        );
-        if let Ok(value) = serde_json::to_value(&cfg_notif) {
             let _ =
                 crate::acp::r#impl::io::send_notification(server, "session/update", value).await;
         }
@@ -893,58 +752,23 @@ pub(super) async fn handle_session_resume(
         .filter(|v| !v.is_empty())
         .map(ToString::to_string);
 
-    let (current_mode, current_model, current_thought_level, _additional_dirs) =
-        if !session_id.is_empty() {
-            if let Ok(mut state) = acp_session_state().lock() {
-                let entry = state.entry(session_id.to_string()).or_default();
-                if let Some(ref new_cwd) = cwd {
-                    entry.cwd = Some(new_cwd.clone());
-                }
-                let model = entry
-                    .config_options
-                    .get("model")
-                    .and_then(Value::as_str)
-                    .filter(|v| !v.trim().is_empty())
-                    .unwrap_or("auto")
-                    .to_string();
-                let thought_level = entry
-                    .config_options
-                    .get("thought_level")
-                    .and_then(Value::as_str)
-                    .filter(|v| !v.trim().is_empty())
-                    .unwrap_or("medium")
-                    .to_string();
-                (
-                    entry.mode.clone(),
-                    model,
-                    thought_level,
-                    entry.additional_directories.clone(),
-                )
-            } else {
-                (
-                    "ask".to_string(),
-                    "auto".to_string(),
-                    "medium".to_string(),
-                    vec![],
-                )
+    let (current_mode, _additional_dirs) = if !session_id.is_empty() {
+        if let Ok(mut state) = acp_session_state().lock() {
+            let entry = state.entry(session_id.to_string()).or_default();
+            if let Some(ref new_cwd) = cwd {
+                entry.cwd = Some(new_cwd.clone());
             }
+            (entry.mode.clone(), entry.additional_directories.clone())
         } else {
-            (
-                "ask".to_string(),
-                "auto".to_string(),
-                "medium".to_string(),
-                vec![],
-            )
-        };
+            ("ask".to_string(), vec![])
+        }
+    } else {
+        ("ask".to_string(), vec![])
+    };
 
     let mut modes = build_default_modes();
     modes.current_mode_id = SessionModeId::new(current_mode);
-    let config_options = build_session_config_options(
-        server,
-        &modes.current_mode_id.0,
-        &current_model,
-        &current_thought_level,
-    );
+    let config_options = build_model_config_options(server);
 
     crate::acp::r#impl::io::send_result(
         server,
@@ -1035,10 +859,6 @@ pub(super) async fn handle_session_set_config_option(
         .unwrap_or_default();
     let value = params.get("value").cloned().unwrap_or(Value::Null);
 
-    let mut current_mode = "ask".to_string();
-    let mut current_model = "auto".to_string();
-    let mut current_thought_level = "medium".to_string();
-
     if !session_id.is_empty() && !config_id.is_empty() {
         if let Ok(mut state) = acp_session_state().lock() {
             let session = state.entry(session_id.to_string()).or_default();
@@ -1047,47 +867,7 @@ pub(super) async fn handle_session_set_config_option(
                 .insert(config_id.to_string(), value.clone());
             if config_id == "mode" {
                 session.mode = normalize_acp_mode(value.as_str());
-                session
-                    .config_options
-                    .insert("mode".to_string(), Value::String(session.mode.clone()));
             }
-
-            current_mode = session.mode.clone();
-            current_model = session
-                .config_options
-                .get("model")
-                .and_then(Value::as_str)
-                .filter(|v| !v.trim().is_empty())
-                .unwrap_or("auto")
-                .to_string();
-            current_thought_level = session
-                .config_options
-                .get("thought_level")
-                .and_then(Value::as_str)
-                .filter(|v| !v.trim().is_empty())
-                .unwrap_or("medium")
-                .to_string();
-        }
-    }
-
-    let config_options = build_session_config_options(
-        server,
-        &current_mode,
-        &current_model,
-        &current_thought_level,
-    );
-
-    if !session_id.is_empty() {
-        let notif = crate::schema::SessionNotification::new(
-            crate::schema::SessionId::new(session_id.to_string()),
-            crate::schema::SessionUpdate::ConfigOptionUpdate(crate::schema::ConfigOptionUpdate {
-                config_options: config_options.clone(),
-                meta: None,
-            }),
-        );
-        if let Ok(value) = serde_json::to_value(&notif) {
-            let _ =
-                crate::acp::r#impl::io::send_notification(server, "session/update", value).await;
         }
     }
 
@@ -1095,7 +875,7 @@ pub(super) async fn handle_session_set_config_option(
         server,
         request_id,
         serde_json::to_value(&crate::schema::SetSessionConfigOptionResponse {
-            config_options,
+            config_options: vec![],
             meta: None,
         })
         .unwrap(),
@@ -1103,78 +883,12 @@ pub(super) async fn handle_session_set_config_option(
     .await
 }
 
-fn build_session_config_options(
-    server: &AcpServer,
-    current_mode: &str,
-    current_model: &str,
-    current_thought_level: &str,
-) -> Vec<crate::schema::SessionConfigOption> {
-    vec![
-        build_mode_config_option(current_mode),
-        build_model_config_option(server, current_model),
-        build_thought_level_config_option(current_thought_level),
-    ]
-}
-
-fn build_mode_config_option(current_mode: &str) -> crate::schema::SessionConfigOption {
-    use crate::schema::{
-        SessionConfigId, SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory,
-        SessionConfigSelect, SessionConfigSelectOption, SessionConfigSelectOptions,
-        SessionConfigValueId,
-    };
-
-    let modes = [
-        ("ask", "Ask / 对话", "Q&A assistant — general questions"),
-        (
-            "plan",
-            "Plan / 计划",
-            "Planning mode — structured task breakdown",
-        ),
-        ("edit", "Edit / 编辑", "Edit/review mode — code changes"),
-        (
-            "safeguard",
-            "Safeguard / 安全",
-            "Safety-first — escalation on high-risk operations",
-        ),
-        (
-            "full_auto",
-            "Full Auto / 全自动",
-            "Fully autonomous — agent runs without user confirmation",
-        ),
-    ];
-
-    let select_options = modes
-        .iter()
-        .map(|(value, name, description)| SessionConfigSelectOption {
-            value: SessionConfigValueId::new(*value),
-            name: (*name).to_string(),
-            description: Some((*description).to_string()),
-            meta: None,
-        })
-        .collect::<Vec<_>>();
-
-    SessionConfigOption {
-        id: SessionConfigId::new("mode"),
-        name: "Mode / 模式".to_string(),
-        description: Some("Execution mode for this session.".to_string()),
-        category: Some(SessionConfigOptionCategory::Mode),
-        kind: SessionConfigKind::Select(SessionConfigSelect {
-            current_value: SessionConfigValueId::new(normalize_acp_mode(Some(current_mode))),
-            options: SessionConfigSelectOptions::Ungrouped(select_options),
-        }),
-        meta: None,
-    }
-}
-
 /// Build config options for model selection, populated from the agent registry.
 ///
-/// Returns one `SessionConfigOption` of kind `Select` containing all
-/// available models grouped by provider, and includes a dedicated "Auto" option.
-/// When set to "Auto", the capability bus selects the best model automatically.
-fn build_model_config_option(
-    server: &AcpServer,
-    current_model: &str,
-) -> crate::schema::SessionConfigOption {
+/// Returns a single `SessionConfigOption` of kind `Select` containing all
+/// available models grouped by provider, with "Auto" as the default value.
+/// When set to "Auto", the CapabilityBus selects the best model automatically.
+fn build_model_config_options(server: &AcpServer) -> Vec<crate::schema::SessionConfigOption> {
     use crate::schema::{
         SessionConfigGroupId, SessionConfigId, SessionConfigKind, SessionConfigOption,
         SessionConfigOptionCategory, SessionConfigSelect, SessionConfigSelectGroup,
@@ -1182,19 +896,6 @@ fn build_model_config_option(
     };
 
     let mut groups: Vec<SessionConfigSelectGroup> = Vec::new();
-
-    // Ensure current_value always exists in options for strict clients.
-    groups.push(SessionConfigSelectGroup {
-        group: SessionConfigGroupId::new("system"),
-        name: "System".to_string(),
-        options: vec![SessionConfigSelectOption {
-            value: SessionConfigValueId::new("auto"),
-            name: "Auto".to_string(),
-            description: Some("Automatically select best model".to_string()),
-            meta: None,
-        }],
-        meta: None,
-    });
 
     if let Some(registry) = server.agent_registry() {
         for (agent_name, _default, models) in registry.models() {
@@ -1219,7 +920,7 @@ fn build_model_config_option(
         }
     }
 
-    SessionConfigOption {
+    vec![SessionConfigOption {
         id: SessionConfigId::new("model"),
         name: "Model / 模型".to_string(),
         description: Some(
@@ -1227,62 +928,11 @@ fn build_model_config_option(
         ),
         category: Some(SessionConfigOptionCategory::Model),
         kind: SessionConfigKind::Select(SessionConfigSelect {
-            current_value: SessionConfigValueId::new(if current_model.trim().is_empty() {
-                "auto"
-            } else {
-                current_model
-            }),
+            current_value: SessionConfigValueId::new("auto"),
             options: SessionConfigSelectOptions::Grouped(groups),
         }),
         meta: None,
-    }
-}
-
-fn build_thought_level_config_option(
-    current_thought_level: &str,
-) -> crate::schema::SessionConfigOption {
-    use crate::schema::{
-        SessionConfigId, SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory,
-        SessionConfigSelect, SessionConfigSelectOption, SessionConfigSelectOptions,
-        SessionConfigValueId,
-    };
-
-    let normalized = match current_thought_level.trim().to_ascii_lowercase().as_str() {
-        "low" => "low",
-        "high" => "high",
-        _ => "medium",
-    };
-
-    SessionConfigOption {
-        id: SessionConfigId::new("thought_level"),
-        name: "Thinking / 思考深度".to_string(),
-        description: Some("Reasoning depth hint for capable models".to_string()),
-        category: Some(SessionConfigOptionCategory::ThoughtLevel),
-        kind: SessionConfigKind::Select(SessionConfigSelect {
-            current_value: SessionConfigValueId::new(normalized),
-            options: SessionConfigSelectOptions::Ungrouped(vec![
-                SessionConfigSelectOption {
-                    value: SessionConfigValueId::new("low"),
-                    name: "Low".to_string(),
-                    description: Some("Prioritize speed and lower reasoning depth".to_string()),
-                    meta: None,
-                },
-                SessionConfigSelectOption {
-                    value: SessionConfigValueId::new("medium"),
-                    name: "Medium".to_string(),
-                    description: Some("Balanced reasoning depth".to_string()),
-                    meta: None,
-                },
-                SessionConfigSelectOption {
-                    value: SessionConfigValueId::new("high"),
-                    name: "High".to_string(),
-                    description: Some("Prefer deeper reasoning when supported".to_string()),
-                    meta: None,
-                },
-            ]),
-        }),
-        meta: None,
-    }
+    }]
 }
 
 /// Build the default set of session modes.
@@ -2644,165 +2294,4 @@ pub(super) async fn handle_terminal_wait_for_exit(
         })?,
     )
     .await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::acp::server::ServerBuilder;
-    use crate::schema::{SessionConfigKind, SessionConfigSelectOptions};
-
-    #[test]
-    fn sanitize_visible_response_text_strips_thinking_markers() {
-        let raw = format!(
-            "{}先{}分析{}。你好，我来帮你处理这个问题。",
-            TOKEN_THINKING_PREFIX, TOKEN_THINKING_PREFIX, TOKEN_THINKING_PREFIX
-        );
-        let thinking = "先分析";
-        let visible = sanitize_visible_response_text(&raw, thinking);
-        assert!(
-            !visible.contains(TOKEN_THINKING_PREFIX),
-            "marker prefix should be removed from visible response"
-        );
-        assert!(
-            visible.contains("你好"),
-            "final visible answer should be preserved"
-        );
-    }
-
-    #[test]
-    fn extract_chat_result_texts_separates_structured_thinking() {
-        let response = format!(
-            "{}先{}分析{}。 先分析\n你好，我来帮你处理这个问题。",
-            TOKEN_THINKING_PREFIX, TOKEN_THINKING_PREFIX, TOKEN_THINKING_PREFIX
-        );
-        let chat_result = serde_json::json!({
-            "response": response,
-            "thinking": "先分析"
-        });
-
-        let (visible, thinking) = extract_chat_result_texts(&chat_result);
-        assert_eq!(thinking, "先分析");
-        assert!(
-            !visible.contains(TOKEN_THINKING_PREFIX),
-            "visible response must not contain leaked thinking markers"
-        );
-        assert!(
-            visible.starts_with("你好"),
-            "visible response should remove duplicated leading thinking text"
-        );
-    }
-
-    #[test]
-    fn build_chat_params_from_acp_includes_selected_model() {
-        let mut config_options = HashMap::new();
-        config_options.insert("mode".to_string(), Value::String("edit".to_string()));
-        config_options.insert(
-            "model".to_string(),
-            Value::String("gpt-4o-mini".to_string()),
-        );
-        config_options.insert(
-            "thought_level".to_string(),
-            Value::String("high".to_string()),
-        );
-        config_options.insert("temperature".to_string(), Value::from(0.2));
-
-        let session_state = AcpSessionState {
-            cwd: Some("/tmp".to_string()),
-            mode: "plan".to_string(),
-            additional_directories: vec!["/work".to_string()],
-            config_options,
-        };
-
-        let params = serde_json::json!({
-            "sessionId": "acp-session-1",
-            "prompt": [{"type": "text", "text": "hello"}]
-        });
-
-        let out = build_chat_params_from_acp(params, &session_state);
-        assert_eq!(
-            out.get("mode").and_then(Value::as_str),
-            Some("plan"),
-            "session mode should be propagated"
-        );
-
-        let extra = out
-            .get("options")
-            .and_then(|v| v.get("extra"))
-            .and_then(Value::as_object)
-            .expect("options.extra should exist");
-
-        assert_eq!(
-            extra.get("model").and_then(Value::as_str),
-            Some("gpt-4o-mini"),
-            "selected model must be propagated to chat options"
-        );
-        assert_eq!(
-            extra.get("reasoning_effort").and_then(Value::as_str),
-            Some("high"),
-            "thought level should map to reasoning effort"
-        );
-        assert!(
-            !extra.contains_key("mode"),
-            "mode should not be duplicated into options.extra"
-        );
-    }
-
-    #[test]
-    fn build_session_config_options_exposes_mode_and_model() {
-        let server = ServerBuilder::new().build().expect("build test server");
-
-        let options = build_session_config_options(&server, "edit", "auto", "medium");
-        assert_eq!(
-            options.len(),
-            3,
-            "should expose mode+model+thought_level config options"
-        );
-
-        let mode = options
-            .iter()
-            .find(|opt| opt.id.0 == "mode")
-            .expect("mode config option should exist");
-        let model = options
-            .iter()
-            .find(|opt| opt.id.0 == "model")
-            .expect("model config option should exist");
-        let thought_level = options
-            .iter()
-            .find(|opt| opt.id.0 == "thought_level")
-            .expect("thought_level config option should exist");
-
-        match &mode.kind {
-            SessionConfigKind::Select(select) => {
-                assert_eq!(select.current_value.0, "edit");
-            }
-        }
-
-        match &model.kind {
-            SessionConfigKind::Select(select) => {
-                assert_eq!(select.current_value.0, "auto");
-                match &select.options {
-                    SessionConfigSelectOptions::Grouped(groups) => {
-                        let system_group = groups
-                            .iter()
-                            .find(|g| g.group.0 == "system")
-                            .expect("system group with auto option should exist");
-                        assert!(
-                            system_group.options.iter().any(|opt| opt.value.0 == "auto"),
-                            "auto option should be present for strict clients"
-                        );
-                    }
-                    SessionConfigSelectOptions::Ungrouped(_) => {
-                        panic!("model options should be grouped by provider")
-                    }
-                }
-            }
-        }
-
-        match &thought_level.kind {
-            SessionConfigKind::Select(select) => {
-                assert_eq!(select.current_value.0, "medium");
-            }
-        }
-    }
 }
