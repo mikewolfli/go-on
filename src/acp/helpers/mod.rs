@@ -18,6 +18,15 @@ pub mod conversation;
 // Metrics helper functions
 pub mod metrics;
 
+// Autonomy helper functions
+pub mod autonomy;
+
+// Autonomy behavior metrics
+pub mod autonomy_metrics;
+
+// Tool governance counters
+pub mod tool_governance;
+
 // Miscellaneous helper functions
 pub mod misc;
 

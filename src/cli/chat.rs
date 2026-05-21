@@ -21,12 +21,12 @@ use tokio::time::Duration;
 use tracing::warn;
 
 use crate::agents::agent::{Agent, AgentRegistry, Message, StreamingSender};
+use crate::acp::helpers::autonomy::run_followup_after_tool_observation;
 use crate::config::AppConfig;
 use crate::flow::FlowManager;
 use crate::intelligence::capability_graph::CapabilityGraph;
 use crate::orchestration::autonomy_runtime::{
     build_tool_execution_followup_message, build_tool_result_block, parse_tool_call_token,
-    TOKEN_TOOL_CALL_PREFIX,
 };
 
 /// Maximum file size we'll read in a single tool call (10 MB).
@@ -315,7 +315,14 @@ async fn run_agent_with_tools(agent: &Arc<dyn Agent>, messages: &mut Vec<Message
             eprint!("{}── Agent follow-up ──{}\n🤖 ", ansi!("33"), ansi!("0"));
             std::io::Write::flush(&mut std::io::stdout()).ok();
 
-            let followup_response = agent_followup(agent, messages).await?;
+            let (followup_response, _, _) = run_followup_after_tool_observation(
+                Arc::clone(agent),
+                messages.clone(),
+                None,
+                None,
+                None,
+            )
+            .await?;
             response = followup_response;
         }
     }
@@ -335,38 +342,6 @@ async fn run_agent_with_tools(agent: &Arc<dyn Agent>, messages: &mut Vec<Message
     }
 
     Ok(())
-}
-
-/// Send tool results back to the agent and collect the follow-up response.
-async fn agent_followup(agent: &Arc<dyn Agent>, messages: &[Message]) -> Result<String> {
-    let (tx, mut rx) = mpsc::channel::<String>(2048);
-    let sender = StreamingSender::from(tx);
-    let msgs = messages.to_vec();
-
-    let agent_ref = Arc::clone(agent);
-    let task = tokio::spawn(async move { agent_ref.chat(msgs, None, None, sender).await });
-
-    let mut response = String::new();
-    while let Some(token) = rx.recv().await {
-        if token.starts_with(TOKEN_TOOL_CALL_PREFIX) {
-            continue; // No nested tool execution (safety limit)
-        }
-        response.push_str(&token);
-        print!("{}", token);
-        std::io::Write::flush(&mut std::io::stdout()).ok();
-    }
-
-    match task.await {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => {
-            warn!("agent follow-up task returned error: {}", e);
-        }
-        Err(e) => {
-            warn!("agent follow-up task join error: {}", e);
-        }
-    }
-    eprintln!();
-    Ok(response)
 }
 
 /// Execute a tool by name and arguments, returning the result as a string.

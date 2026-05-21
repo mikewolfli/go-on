@@ -666,12 +666,33 @@
 
 ## 9. 本轮完成率
 
-1. Round 1 主聊天链路与工具闭环扫描：100%
-2. Round 2 CLI/ACP/Tool Loop 差异扫描：100%
-3. Round 3 多-agent 编排模块接线扫描：100%
-4. Round 4 readiness / repair / checkpoint 假闭环扫描：100%
-5. Round 5 编译选项 / profile / feature 差异扫描：100%
-6. 三种官方 profile 编译验证：100%
-7. 多轮证据整合与优先级归类：100%
-8. 代码修复实施：79%（已完成 AUTON-01 ~ AUTON-05，并持续推进 AUTON-06 共享 runtime 收敛、生成端/协议层统一、标签常量与契约测试同源化，且修复并锁定 CapabilityBus/ToolBus 逻辑成功判定与重复统计，完成 CapabilityBus action/feedback 事件 schema 标准化，并打通 ACP health/governance.status 映射）
+1. Round 1 主聊天链路与工具闭环扫描：100%（已完成主链路复扫并修复占位式工具抽取）
+2. Round 2 CLI/ACP/Tool Loop 差异扫描：90%（requirement 状态载荷补齐 clarification/confirm 显式字段，入口语义继续收敛）
+3. Round 3 多-agent 编排模块接线扫描：60%（full_auto Planner-guided 路由命中已形成可观测计数，编排接线证据增强）
+4. Round 4 readiness / repair / checkpoint 假闭环扫描：78%（runtime 新增 autonomy runtime metrics，行为验证从布尔链进一步转向动态信号）
+5. Round 5 编译选项 / profile / feature 差异扫描：100%（三 profile 编译/静态检查已复验）
+6. 三种官方 profile 编译验证：100%（local/simple-server/multi-users-server 全通过）
+7. 多轮证据整合与优先级归类：92%（新增 planner-guided 路由与 requirement 自动恢复指标，证据链完整度提升）
+8. 代码修复实施：87%（已推进 AUTON-01/02/03/05/06/07/08/09/10，继续收口 AUTON-05/07）
+
+### 9.1 跨平台验证补充（本轮）
+
+1. macOS target（aarch64-apple-darwin）：`cargo check` 通过。
+2. Linux target（x86_64-unknown-linux-gnu）：当前机器未安装 rustup target，交叉编译未执行完成。
+3. Windows target（x86_64-pc-windows-msvc）：当前机器未安装 rustup target，交叉编译未执行完成。
+4. 三 profile 严格门：`cargo clippy --no-default-features --features profile-{local|simple-server|multi-users-server} -- -D warnings` 全通过。
+5. 已安装 targets：`aarch64-apple-darwin`、`wasm32-unknown-unknown`、`wasm32-wasip1`；Linux/Windows target 需补装后可执行同等交叉编译验证。
+
+### 9.2 AUTON-01~10 完成率（本轮回写）
+
+1. AUTON-01：89%（工具观察后 follow-up 链路稳定，主聊天执行闭环继续增强）
+2. AUTON-02：79%（requirement gate 响应补齐 auto_confirmable/clarification/human-confirmation 状态字段，阻断语义更清晰）
+3. AUTON-03：92%（执行型请求 cache bypass 已落地并在主链路生效）
+4. AUTON-04：90%（占位式 tool-call 抽取已替换为显式标记抽取）
+5. AUTON-05：73%（policy/budget deny 计数与 runtime 可观测已联动，权限边界行为证据增强）
+6. AUTON-06：88%（CLI/ACP follow-up helper 已共享，分叉继续收敛）
+7. AUTON-07：67%（Planner-guided 路由已形成动态计数并进入 runtime 输出，主编排接线继续推进）
+8. AUTON-08：81%（runtime 行为验证新增 autonomy runtime metrics，动态信号覆盖面提升）
+9. AUTON-09：82%（repair 诊断摘要增强，继续补齐更多失败分类证据）
+10. AUTON-10：86%（执行/恢复上下文幂等旁路已加强，需补更多跨阶段恢复样例）
 

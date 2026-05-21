@@ -1,5 +1,8 @@
 use super::prompts_pack::{build_prompts_get_tool, build_prompts_list_tool};
 use super::*;
+use crate::acp::helpers::tool_governance::{
+    record_tool_allowed, record_tool_budget_denied, record_tool_policy_denied,
+};
 use crate::orchestration::skill_import::{SkillImportPolicy, SkillImportRequest, SkillImportStore};
 
 pub(super) fn skill_import_policy(server: &AcpServer) -> SkillImportPolicy {
@@ -229,14 +232,17 @@ pub(crate) async fn execute_mcp_tool_call(
             ))
         });
         tracker.check_wall_clock().map_err(|err| {
+            record_tool_budget_denied();
             anyhow::anyhow!("budget denied tool '{name}' in scope '{budget_scope}': {err}")
         })?;
         tracker.record_tool_call().map_err(|err| {
+            record_tool_budget_denied();
             anyhow::anyhow!("budget denied tool '{name}' in scope '{budget_scope}': {err}")
         })?;
         tracker
             .consume_with_pua(estimated_tokens, &pua_engine)
             .map_err(|err| {
+                record_tool_budget_denied();
                 anyhow::anyhow!("budget denied tool '{name}' in scope '{budget_scope}': {err}")
             })?;
         tracker.remaining_tokens()
@@ -245,6 +251,7 @@ pub(crate) async fn execute_mcp_tool_call(
     let action = governance_action_for_tool(name);
     let decision = enforce_action(&policy, action);
     if !decision.allowed {
+        record_tool_policy_denied();
         anyhow::bail!(
             "hardening policy denied tool '{}' (policy={}, sandbox={}): {}",
             name,
@@ -253,6 +260,7 @@ pub(crate) async fn execute_mcp_tool_call(
             decision.reason
         );
     }
+    record_tool_allowed();
     info!(
         "hardening allow tool={} policy={} sandbox={} budget_scope={} estimated_tokens={} remaining_tokens={}",
         name,

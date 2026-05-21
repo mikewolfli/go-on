@@ -21,6 +21,8 @@ struct RepairCycleReport {
     failed_after: usize,
     actions_applied: usize,
     result: String,
+    diagnosis: String,
+    strategy_adjustment: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -506,6 +508,11 @@ fn apply_repair_strategy_to_failed_subtasks(
             "previous_failure": record.outcome.as_deref().unwrap_or("unknown"),
             "strategy_applied": "adapt_based_on_failure_class",
             "estimated_success_probability": 0.65,  // Default estimate, would be based on learning
+            "diagnosis": {
+                "failure_class_hypothesis": context.failure_classes.first().cloned().unwrap_or_else(|| "execution_subtask_failed".to_string()),
+                "root_cause": "execution path instability or missing context",
+                "planned_adjustment": "retry_with_context_preservation",
+            },
         });
 
         record_repair_action(
@@ -554,6 +561,18 @@ fn build_repair_loop_state(
 }
 
 fn build_repair_history_response(context: &RepairContext) -> Value {
+    let diagnosis_summary = json!({
+        "total_actions": context.repair_actions.len(),
+        "successful_actions": context.repair_actions.iter().filter(|a| a.result == "success").count(),
+        "failed_actions": context.repair_actions.iter().filter(|a| a.result == "failed").count(),
+        "top_failure_class": context.failure_classes.first().cloned().unwrap_or_else(|| "unknown".to_string()),
+        "latest_result": context
+            .cycle_reports
+            .last()
+            .map(|cycle| cycle.result.clone())
+            .unwrap_or_else(|| "not_started".to_string()),
+    });
+
     json!({
         "iteration": context.iteration,
         "max_iterations": context.max_iterations,
@@ -562,6 +581,7 @@ fn build_repair_history_response(context: &RepairContext) -> Value {
         "governance_mode": context.governance_mode,
         "actions_count": context.repair_actions.len(),
         "cycles": context.cycle_reports,
+        "diagnosis_summary": diagnosis_summary,
         "actions": context.repair_actions.iter().map(|action| json!({
             "iteration": action.iteration,
             "type": action.action_type,
@@ -1003,6 +1023,18 @@ async fn execute_runtime_subtasks_with_repair_loop(
                 "improved".to_string()
             } else {
                 "unresolved".to_string()
+            },
+            diagnosis: if failed_after == 0 {
+                "repair actions fully addressed failed subtasks".to_string()
+            } else if failed_after < failed_before {
+                "partial recovery; remaining failures need deeper replanning".to_string()
+            } else {
+                "retry-only repair insufficient; escalate to replan/reroute".to_string()
+            },
+            strategy_adjustment: if failed_after < failed_before {
+                "continue targeted retry with context-preserving adjustments".to_string()
+            } else {
+                "switch from retry to reroute/replan for remaining failures".to_string()
             },
         });
 
@@ -1516,8 +1548,34 @@ pub(super) async fn handle_task_execute(
         .and_then(Value::as_str)
         .unwrap_or("execute");
     let idempotency_key = Idempotency::key(idempotency_task_id, idempotency_phase, task);
+    let bypass_idempotency_for_execution = {
+        let allow_stale = params
+            .get("idempotency_allow_stale")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let has_resume_signal = params
+            .get("resume_eligible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            || params.get("checkpoint_id").is_some();
+        let task_lower = task.to_ascii_lowercase();
+        let execution_like = [
+            "fix",
+            "modify",
+            "update",
+            "refactor",
+            "implement",
+            "run",
+            "test",
+            "build",
+        ]
+        .iter()
+        .any(|kw| task_lower.contains(kw));
+        !allow_stale && (has_resume_signal || execution_like)
+    };
 
-    if let Some(cached) = {
+    if !bypass_idempotency_for_execution {
+        if let Some(cached) = {
         let mut cache = task_execute_idempotency_cache()
             .lock()
             .map_err(|e| anyhow::anyhow!("failed to lock idempotency cache: {e}"))?;
@@ -1525,15 +1583,16 @@ pub(super) async fn handle_task_execute(
         cache
             .get(&idempotency_key)
             .map(|entry| entry.response.clone())
-    } {
-        let mut cached_response = cached;
-        if let Some(obj) = cached_response.as_object_mut() {
-            obj.insert(
-                "idempotency".to_string(),
-                json!({"hit": true, "key": idempotency_key}),
-            );
+        } {
+            let mut cached_response = cached;
+            if let Some(obj) = cached_response.as_object_mut() {
+                obj.insert(
+                    "idempotency".to_string(),
+                    json!({"hit": true, "key": idempotency_key, "bypassed_for_execution": false}),
+                );
+            }
+            return send_result(server, request_id, cached_response).await;
         }
-        return send_result(server, request_id, cached_response).await;
     }
 
     let run = start_workflow_run(
@@ -1856,7 +1915,11 @@ pub(super) async fn handle_task_execute(
         "plan": plan,
         "workflow": workflow,
         "summary": summary,
-        "idempotency": {"hit": false, "key": idempotency_key},
+        "idempotency": {
+            "hit": false,
+            "key": idempotency_key,
+            "bypassed_for_execution": bypass_idempotency_for_execution,
+        },
         "adaptive": {
             "planning": adaptive_planning,
             "execution_defaults": execution_context.adaptive_defaults,

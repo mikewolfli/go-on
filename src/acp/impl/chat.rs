@@ -24,6 +24,13 @@ use crate::acp::helpers::context::{
     AgentRuntimeReadiness,
 };
 use crate::acp::helpers::conversation::stream_would_exceed_limits;
+use crate::acp::helpers::autonomy::{
+    is_execution_like_request, planner_guided_tool_preferences,
+    run_followup_after_tool_observation,
+};
+use crate::acp::helpers::autonomy_metrics::{
+    record_explicit_tool_route, record_planner_guided_route,
+};
 use crate::acp::helpers::metrics::{stream_chunk_notification, stream_done_notification};
 use crate::acp::r#impl::UserSession;
 use crate::acp::server::AcpServer;
@@ -1266,6 +1273,8 @@ You have access to {} registered skill(s). Skills are reusable templates that au
     let mut quota_failed_agents: Vec<String> = Vec::new();
     let mut agent_attempts: Vec<Value> = Vec::new();
     let mut cache_hit = false;
+    let cache_bypassed_for_execution =
+        is_execution_like_request(&params.mode, &agent_messages);
 
     // ── Scheduler task submission (ARCH-02) ────────────────────────────
     // Submit this request as a ScheduledTask so the dual-level priority
@@ -1306,7 +1315,7 @@ You have access to {} registered skill(s). Skills are reusable templates that au
     // already holds a response for this exact input.  On a high-confidence
     // hit (L1 exact match, or L2/L3 with semantic similarity > 0.95) we
     // skip the LLM call entirely and return the cached output.
-    {
+    if !cache_bypassed_for_execution {
         let input_text = crate::intelligence::token_cache::messages_to_text(&agent_messages);
         let estimated_tokens =
             crate::intelligence::token_cache::estimate_messages_token_count(&agent_messages);
@@ -1380,6 +1389,19 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                 }));
             }
         }
+    } else {
+        tracing::info!(
+            target = "token_cache",
+            mode = %params.mode,
+            "process_chat_request: bypassing token cache for execution-like request"
+        );
+        agent_attempts.push(json!({
+            "agent": "cache_guard",
+            "ok": true,
+            "cached": false,
+            "cache_bypassed_for_execution": true,
+            "duration_ms": 0u64
+        }));
     }
 
     let mut base_agent_options = phase
@@ -2276,9 +2298,18 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                     let preferred_tools: Vec<String> = {
                         let calls = extract_tool_calls_from_response(&response_text, 5);
                         if calls.is_empty() {
-                            // No explicit tool calls — let execute_loop discover
-                            vec!["read_file".to_string(), "search_files".to_string()]
+                            record_planner_guided_route();
+                            // No explicit tool calls — derive execution tools from planner-guided intent.
+                            planner_guided_tool_preferences(
+                                &conversation_id,
+                                phase_name,
+                                &selected_agent,
+                                &task_description,
+                                &response_text,
+                                5,
+                            )
                         } else {
+                            record_explicit_tool_route();
                             calls
                         }
                     };
@@ -2678,6 +2709,10 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         "conversation_id": conversation_id,
         "branch_id": branch_id,
         "mode": params.mode,
+        "cache": {
+            "hit": cache_hit,
+            "bypassed_for_execution": cache_bypassed_for_execution,
+        },
         "phase": phase_name,
         "phase_origin": phase_origin,
         "agent": selected_agent,
@@ -2965,6 +3000,11 @@ async fn run_agent_collecting(
     timeout_duration: Option<Duration>,
 ) -> Result<(String, String, Option<String>)> {
     use crate::acp::r#impl::request::tools_pack::execute_mcp_tool_call;
+    let base_messages = messages.clone();
+    let followup_agent = Arc::clone(&agent);
+    let followup_principles = principles.clone();
+    let followup_options = options.clone();
+
     let (sender, mut receiver) = mpsc::channel::<String>(2048);
     let sender = crate::agent::StreamingSender::from(sender);
     let task = tokio::spawn(async move { agent.chat(messages, principles, options, sender).await });
@@ -3132,8 +3172,48 @@ async fn run_agent_collecting(
                 }
                 if !tool_results.is_empty() {
                     let combined = tool_results.join("\n");
-                    response.push_str("\n\n");
-                    response.push_str(&combined);
+                    let mut followup_messages = base_messages.clone();
+                    if !response.trim().is_empty() {
+                        followup_messages.push(Message {
+                            role: "assistant".to_string(),
+                            content: response.clone(),
+                        });
+                    }
+                    followup_messages.push(Message {
+                        role: "user".to_string(),
+                        content: format!(
+                            "Tool observations:\n{}\n\nIncorporate these observations and provide the final answer.",
+                            combined
+                        ),
+                    });
+
+                    let followup = run_followup_after_tool_observation(
+                        Arc::clone(&followup_agent),
+                        followup_messages,
+                        followup_principles.clone(),
+                        followup_options.clone(),
+                        timeout_duration,
+                    )
+                    .await;
+
+                    match followup {
+                        Ok((followup_response, followup_reasoning, followup_model))
+                            if !followup_response.trim().is_empty() =>
+                        {
+                            response = followup_response;
+                            if !followup_reasoning.is_empty() {
+                                reasoning_buffer.push_str(&followup_reasoning);
+                            }
+                            if selected_model.is_none() {
+                                selected_model = followup_model;
+                            }
+                        }
+                        _ => {
+                            response.push_str("\n\n");
+                            response.push_str(&combined);
+                        }
+                    }
+
                     // Emit the tool result block via stream if an observer is attached.
                     if let Some(ref observer) = stream_ctx.stream_observer {
                         let meta = StreamEventMeta {
@@ -4767,12 +4847,56 @@ fn run_tool_execution_loop(task: &str, subtask: &str, record_index: usize) -> St
 
 /// Extract model tool calls from response
 fn extract_tool_calls_from_response(response: &str, max_calls: usize) -> Vec<String> {
-    // Simplified tool call extraction
-    let mut calls = Vec::new();
-    if response.contains("tool") || response.contains("function") || response.contains("call") {
-        calls.push("simulated_tool_call".to_string());
+    // Parse only explicit tool-call markers; never synthesize placeholder calls.
+    let mut calls: Vec<String> = Vec::new();
+
+    for line in response.lines() {
+        let trimmed = line.trim();
+
+        let marker_value = trimmed
+            .strip_prefix("__tool_call__")
+            .map(|value| value.trim_start_matches(':').trim())
+            .or_else(|| {
+                trimmed
+                    .strip_prefix("tool_call:")
+                    .map(str::trim)
+            })
+            .or_else(|| {
+                trimmed
+                    .strip_prefix("tool:")
+                    .map(str::trim)
+            });
+
+        let Some(raw_name) = marker_value else {
+            continue;
+        };
+
+        let candidate = raw_name
+            .split(|c: char| c == '(' || c == '{' || c == ':' || c.is_whitespace())
+            .next()
+            .unwrap_or("")
+            .trim();
+
+        if candidate.is_empty() {
+            continue;
+        }
+
+        let valid_name = candidate
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.');
+        if !valid_name {
+            continue;
+        }
+
+        if !calls.iter().any(|name| name == candidate) {
+            calls.push(candidate.to_string());
+        }
+
+        if calls.len() >= max_calls {
+            break;
+        }
     }
-    calls.truncate(max_calls);
+
     calls
 }
 

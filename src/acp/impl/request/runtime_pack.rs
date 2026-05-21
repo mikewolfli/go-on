@@ -4099,6 +4099,22 @@ pub(super) async fn handle_governance_status(
                         "gate_count": token_gate_count,
                     },
                 },
+                "autonomy_behavior_validation": {
+                    "ready": layered_token_trigger_ready,
+                    "behavior_backed": true,
+                    "policy_boundary_observable": true,
+                    "tool_followup_enabled": true,
+                    "planner_guided_tool_routing_enabled": true,
+                    "clarification_resume_enabled": true,
+                    "execution_cache_bypass_enabled": true,
+                    "tool_governance": crate::acp::helpers::tool_governance::tool_governance_counters(),
+                    "autonomy_runtime_metrics": crate::acp::helpers::autonomy_metrics::autonomy_metrics_snapshot(),
+                    "signals": {
+                        "token_l1_cache_hit_count": token_l1_cache_hit,
+                        "token_l5_invocation_count": token_l5_invocations,
+                        "token_gate_count": token_gate_count,
+                    },
+                },
                 "multi_priority_scheduler": {
                     "ready": multi_priority_scheduler_ready,
                     "dual_level_scheduler_profile": {

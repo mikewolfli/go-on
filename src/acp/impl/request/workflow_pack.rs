@@ -216,20 +216,25 @@ pub(super) async fn handle_workflow_confirm(
     _trace: &RequestTraceContext,
 ) -> Result<()> {
     let task = params_task(&params).unwrap_or_default();
+    let user_confirmed = params
+        .get("user_confirmed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let ready_to_confirm = params
         .get("ready_to_confirm")
         .and_then(Value::as_bool)
-        .unwrap_or(false);
+        .unwrap_or(user_confirmed);
     if !ready_to_confirm {
-        return send_error(
+        return send_result(
             server,
             request_id,
-            -32006,
-            "clarification session not ready to confirm".to_string(),
-            Some(json!({
-                "kind": "clarification_session",
-                "next_step": {"method": "workflow.clarify", "task": task}
-            })),
+            json!({
+                "ok": true,
+                "status": "clarification_required",
+                "auto_confirmable": false,
+                "requires_human_confirmation": true,
+                "next_step": {"method": "workflow.clarify", "task": task},
+            }),
         )
         .await;
     }
@@ -250,10 +255,7 @@ pub(super) async fn handle_workflow_confirm(
             user_confirmed: false,
         },
     );
-    contract.user_confirmed = params
-        .get("user_confirmed")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    contract.user_confirmed = user_confirmed || ready_to_confirm;
     let requirement_contract_artifact_path = persist_requirement_contract(&ledger, &contract)?;
     let clarification_session = ClarificationSessionArtifact {
         generated_at: crate::acp::prelude::now_ts(),
