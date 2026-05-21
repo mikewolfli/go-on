@@ -675,15 +675,3 @@
 7. 多轮证据整合与优先级归类：100%
 8. 代码修复实施：79%（已完成 AUTON-01 ~ AUTON-05，并持续推进 AUTON-06 共享 runtime 收敛、生成端/协议层统一、标签常量与契约测试同源化，且修复并锁定 CapabilityBus/ToolBus 逻辑成功判定与重复统计，完成 CapabilityBus action/feedback 事件 schema 标准化，并打通 ACP health/governance.status 映射）
 
-### 9.1 实施进度回写（截至 2026-05-21）
-
-1. AUTON-01：100%（ACP chat 主链路已支持工具执行后 follow-up 回注）
-2. AUTON-02：100%（workflow/task 主入口 requirement gate 已改为可恢复状态机）
-3. AUTON-03：100%（执行型请求已禁止 token cache 直接短路）
-4. AUTON-04：100%（移除 `simulated_tool_call` 占位抽取，改为显式标记解析）
-5. AUTON-05：75%（RBAC 缺失时已改为 deployment policy fallback，不再默认全放行）
-6. AUTON-06：76%（已抽取共享 autonomy runtime helper，并在 CLI/ACP/Agent/protocol_pack 统一 token 解析与生成协议、thinking/ToolExecutionResults 标签同源、follow-up 契约与测试夹具同源化，且修复并回归锁定 CapabilityBus/ToolBus 逻辑成功判定与 action 指标重复计数，完成 CapabilityBus action/feedback 事件 schema 与字段构建统一，并接入 ACP health/governance.status 事件 schema 摘要）
-7. AUTON-07：20%（编排组件仍以构件层为主，主执行接线待落地）
-8. AUTON-08：20%（ready/gate 观测增强进行中，行为指标替换未完成）
-9. AUTON-09：15%（repair 仍偏重试机制，AI 诊断式修复待接入）
-10. AUTON-10：10%（端到端自治回归矩阵尚未补齐）

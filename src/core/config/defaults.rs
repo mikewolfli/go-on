@@ -1465,8 +1465,6 @@ pub fn default_non_ai_config_toml() -> String {
 mod tests {
     use super::adaptive;
 
-    use crate::core::config::types::*;
-
     #[test]
     fn normalize_provider_name_maps_claude_to_anthropic() {
         assert_eq!(

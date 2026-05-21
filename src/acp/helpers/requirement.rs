@@ -53,6 +53,7 @@ pub struct RequirementGateFacadeDecision {
 
 /// Result for automatic requirement-gate recovery.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct RequirementGateAutoRecovery {
     /// Re-evaluated requirement gate after auto clarification.
     pub gate: RequirementGateFacadeDecision,
@@ -339,8 +340,7 @@ pub fn evaluate_requirement_gate_facade(
         governance_artifact_path: gate.governance_artifact_path,
     })
 }
-
-fn auto_clarification_enabled(params: &Value) -> bool {
+#[allow(dead_code)]fn auto_clarification_enabled(params: &Value) -> bool {
     params
         .get("governance")
         .and_then(|value| value.get("auto_clarification_enabled"))
@@ -348,6 +348,7 @@ fn auto_clarification_enabled(params: &Value) -> bool {
         .unwrap_or(true)
 }
 
+#[allow(dead_code)]
 fn can_auto_recover_task(task: &str, gate: &RequirementGateFacadeDecision) -> bool {
     let characteristics = TaskRouter::analyze_task(task);
     if characteristics.has_safety_concerns || characteristics.complexity >= 4 {
@@ -358,6 +359,7 @@ fn can_auto_recover_task(task: &str, gate: &RequirementGateFacadeDecision) -> bo
     gate.missing_fields.len() <= 2
 }
 
+#[allow(dead_code)]
 fn synthesize_requirement_contract(
     task: &str,
     params: &Value,
@@ -395,6 +397,7 @@ fn synthesize_requirement_contract(
 }
 
 /// Try to recover from requirement gate blocking by auto-clarifying low-risk gaps.
+#[allow(dead_code)]
 pub fn try_auto_recover_requirement_gate(
     ledger: &ArtifactLedger,
     task: &str,

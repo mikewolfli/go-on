@@ -32,6 +32,7 @@ pub fn parse_tool_call_token(token: &str) -> Option<(&str, &str)> {
     Some((tool_name, args))
 }
 
+#[allow(dead_code)]
 pub fn parse_model_used_token(token: &str) -> Option<&str> {
     token
         .strip_prefix(TOKEN_MODEL_USED_PREFIX)
@@ -39,6 +40,7 @@ pub fn parse_model_used_token(token: &str) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 
+#[allow(dead_code)]
 pub fn parse_thinking_token(token: &str) -> Option<&str> {
     token.strip_prefix(TOKEN_THINKING_PREFIX)
 }
