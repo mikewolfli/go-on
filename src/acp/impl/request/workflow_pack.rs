@@ -356,6 +356,7 @@ pub(super) async fn handle_workflow_research(
     request_id: Option<Value>,
     _trace: &RequestTraceContext,
 ) -> Result<()> {
+    let mut params = params;
     let task = params_task(&params).unwrap_or_default();
     if task.trim().is_empty() {
         return send_error(
@@ -369,8 +370,22 @@ pub(super) async fn handle_workflow_research(
     }
 
     let ledger = clone_artifact_ledger(server);
-    let requirement_gate =
+    let mut requirement_gate =
         evaluate_requirement_gate_facade(&ledger, &task, &params, "workflow.research")?;
+    let mut gate_auto_recovery = json!({"applied": false});
+    if requirement_gate.blocked {
+        if let Some(recovery) = try_auto_recover_requirement_gate(
+            &ledger,
+            &task,
+            &params,
+            "workflow.research",
+            &requirement_gate,
+        )? {
+            params = recovery.params;
+            requirement_gate = recovery.gate;
+            gate_auto_recovery = recovery.metadata;
+        }
+    }
     if requirement_gate.blocked {
         return send_error(
             server,
@@ -380,7 +395,10 @@ pub(super) async fn handle_workflow_research(
                 .reason
                 .clone()
                 .unwrap_or_else(|| "requirement confirmation is required".to_string()),
-            Some(requirement_gate.blocked_payload()),
+            Some(json!({
+                "auto_recovery": gate_auto_recovery,
+                "requirement_gate": requirement_gate.blocked_payload(),
+            })),
         )
         .await;
     }
@@ -488,6 +506,7 @@ pub(super) async fn handle_workflow_research(
             "requirement_gate": {
                 "confirmed": true,
                 "gate": requirement_gate_payload,
+                "auto_recovery": gate_auto_recovery,
             },
             "approval_checkpoint": approval_checkpoint,
             "repo_context": repo_context,
@@ -509,6 +528,7 @@ pub(super) async fn handle_workflow_consult(
     request_id: Option<Value>,
     _trace: &RequestTraceContext,
 ) -> Result<()> {
+    let mut params = params;
     let task = params_task(&params).unwrap_or_default();
     if task.trim().is_empty() {
         return send_error(
@@ -522,8 +542,22 @@ pub(super) async fn handle_workflow_consult(
     }
 
     let ledger = clone_artifact_ledger(server);
-    let requirement_gate =
+    let mut requirement_gate =
         evaluate_requirement_gate_facade(&ledger, &task, &params, "workflow.consult")?;
+    let mut gate_auto_recovery = json!({"applied": false});
+    if requirement_gate.blocked {
+        if let Some(recovery) = try_auto_recover_requirement_gate(
+            &ledger,
+            &task,
+            &params,
+            "workflow.consult",
+            &requirement_gate,
+        )? {
+            params = recovery.params;
+            requirement_gate = recovery.gate;
+            gate_auto_recovery = recovery.metadata;
+        }
+    }
     if requirement_gate.blocked {
         return send_error(
             server,
@@ -533,7 +567,10 @@ pub(super) async fn handle_workflow_consult(
                 .reason
                 .clone()
                 .unwrap_or_else(|| "requirement confirmation is required".to_string()),
-            Some(requirement_gate.blocked_payload()),
+            Some(json!({
+                "auto_recovery": gate_auto_recovery,
+                "requirement_gate": requirement_gate.blocked_payload(),
+            })),
         )
         .await;
     }
@@ -618,6 +655,7 @@ pub(super) async fn handle_workflow_consult(
             "requirement_gate": {
                 "confirmed": true,
                 "gate": requirement_gate_payload,
+                "auto_recovery": gate_auto_recovery,
             },
             "approval_checkpoint": approval_checkpoint,
             "repo_context": repo_context,
@@ -638,6 +676,7 @@ pub(crate) async fn handle_workflow_generate(
     request_id: Option<Value>,
     trace: &RequestTraceContext,
 ) -> Result<()> {
+    let mut params = params;
     let Some(task) = params.get("task").and_then(Value::as_str) else {
         return send_error(
             server,
@@ -648,6 +687,7 @@ pub(crate) async fn handle_workflow_generate(
         )
         .await;
     };
+    let task = task.to_string();
     if task.trim().is_empty() {
         return send_error(
             server,
@@ -660,8 +700,22 @@ pub(crate) async fn handle_workflow_generate(
     }
 
     let ledger = clone_artifact_ledger(server);
-    let requirement_gate =
-        evaluate_requirement_gate_facade(&ledger, task, &params, "workflow.generate")?;
+    let mut requirement_gate =
+        evaluate_requirement_gate_facade(&ledger, task.as_str(), &params, "workflow.generate")?;
+    let mut gate_auto_recovery = json!({"applied": false});
+    if requirement_gate.blocked {
+        if let Some(recovery) = try_auto_recover_requirement_gate(
+            &ledger,
+            task.as_str(),
+            &params,
+            "workflow.generate",
+            &requirement_gate,
+        )? {
+            params = recovery.params;
+            requirement_gate = recovery.gate;
+            gate_auto_recovery = recovery.metadata;
+        }
+    }
     if requirement_gate.blocked {
         return send_error(
             server,
@@ -671,12 +725,15 @@ pub(crate) async fn handle_workflow_generate(
                 .reason
                 .clone()
                 .unwrap_or_else(|| "requirement confirmation is required".to_string()),
-            Some(requirement_gate.blocked_payload()),
+            Some(json!({
+                "auto_recovery": gate_auto_recovery,
+                "requirement_gate": requirement_gate.blocked_payload(),
+            })),
         )
         .await;
     }
 
-    let mut plan = build_task_plan(task);
+    let mut plan = build_task_plan(task.as_str());
     let plan_artifact_path = persist_task_plan(&ledger, &plan)?;
     let mut workflow = build_workflow_generated_artifact(&plan);
     let adaptive_planning = apply_learning_plan_feedback(&ledger, &mut plan, &mut workflow);
@@ -714,22 +771,26 @@ pub(crate) async fn handle_workflow_generate(
         request_id.as_ref(),
         Some(workflow_artifact_path.display().to_string().as_str()),
     );
-    let capability_profile = build_capability_profile("workflow.generate", task, &params);
+    let capability_profile = build_capability_profile("workflow.generate", task.as_str(), &params);
     let governance_profile =
         build_universal_governance_profile("workflow.generate", &capability_profile, &params);
     let sandbox_profile = build_sandbox_profile("workflow.generate", &params, &capability_profile);
     let approval_checkpoint =
         build_approval_checkpoint("workflow.generate", &change_bundle, &params);
     let repo_context = build_repo_native_context("workflow.generate", &params, &change_bundle);
-    let learning_profile = build_learning_profile("workflow.generate", task, &params);
+    let learning_profile = build_learning_profile("workflow.generate", task.as_str(), &params);
     let token_economy = build_token_economy(
         "workflow.generate",
         &params,
         &governance_profile,
         &execution_cycle,
     );
-    let knowledge_refinement =
-        build_knowledge_refinement_profile("workflow.generate", task, &params, &learning_profile);
+    let knowledge_refinement = build_knowledge_refinement_profile(
+        "workflow.generate",
+        task.as_str(),
+        &params,
+        &learning_profile,
+    );
 
     record_trace_event(
         server,
@@ -769,6 +830,7 @@ pub(crate) async fn handle_workflow_generate(
             "requirement_gate": {
                 "confirmed": true,
                 "gate": requirement_gate_payload,
+                "auto_recovery": gate_auto_recovery,
             },
             "approval_checkpoint": approval_checkpoint,
             "repo_context": repo_context,
@@ -790,6 +852,7 @@ pub(super) async fn handle_task_plan(
     request_id: Option<Value>,
     trace: &RequestTraceContext,
 ) -> Result<()> {
+    let mut params = params;
     let Some(task) = params.get("task").and_then(Value::as_str) else {
         return send_error(
             server,
@@ -800,6 +863,7 @@ pub(super) async fn handle_task_plan(
         )
         .await;
     };
+    let task = task.to_string();
     if task.trim().is_empty() {
         return send_error(
             server,
@@ -812,7 +876,22 @@ pub(super) async fn handle_task_plan(
     }
 
     let ledger = clone_artifact_ledger(server);
-    let requirement_gate = evaluate_requirement_gate_facade(&ledger, task, &params, "task.plan")?;
+    let mut requirement_gate =
+        evaluate_requirement_gate_facade(&ledger, task.as_str(), &params, "task.plan")?;
+    let mut gate_auto_recovery = json!({"applied": false});
+    if requirement_gate.blocked {
+        if let Some(recovery) = try_auto_recover_requirement_gate(
+            &ledger,
+            task.as_str(),
+            &params,
+            "task.plan",
+            &requirement_gate,
+        )? {
+            params = recovery.params;
+            requirement_gate = recovery.gate;
+            gate_auto_recovery = recovery.metadata;
+        }
+    }
     if requirement_gate.blocked {
         return send_error(
             server,
@@ -822,13 +901,16 @@ pub(super) async fn handle_task_plan(
                 .reason
                 .clone()
                 .unwrap_or_else(|| "requirement confirmation is required".to_string()),
-            Some(requirement_gate.blocked_payload()),
+            Some(json!({
+                "auto_recovery": gate_auto_recovery,
+                "requirement_gate": requirement_gate.blocked_payload(),
+            })),
         )
         .await;
     }
 
-    let (memory_graph, memory_recall) = build_task_memory_graph_and_recall(&ledger, task);
-    let plan = build_task_plan(task);
+    let (memory_graph, memory_recall) = build_task_memory_graph_and_recall(&ledger, task.as_str());
+    let plan = build_task_plan(task.as_str());
     let artifact_path = persist_task_plan(&ledger, &plan)?;
     let requirement_gate_payload = requirement_gate.success_payload();
     let execution_cycle =
@@ -853,17 +935,17 @@ pub(super) async fn handle_task_plan(
         request_id.as_ref(),
         Some(artifact_path.display().to_string().as_str()),
     );
-    let capability_profile = build_capability_profile("task.plan", task, &params);
+    let capability_profile = build_capability_profile("task.plan", task.as_str(), &params);
     let governance_profile =
         build_universal_governance_profile("task.plan", &capability_profile, &params);
     let sandbox_profile = build_sandbox_profile("task.plan", &params, &capability_profile);
     let approval_checkpoint = build_approval_checkpoint("task.plan", &change_bundle, &params);
     let repo_context = build_repo_native_context("task.plan", &params, &change_bundle);
-    let learning_profile = build_learning_profile("task.plan", task, &params);
+    let learning_profile = build_learning_profile("task.plan", task.as_str(), &params);
     let token_economy =
         build_token_economy("task.plan", &params, &governance_profile, &execution_cycle);
     let knowledge_refinement =
-        build_knowledge_refinement_profile("task.plan", task, &params, &learning_profile);
+        build_knowledge_refinement_profile("task.plan", task.as_str(), &params, &learning_profile);
     record_trace_event(
         server,
         trace,
@@ -899,6 +981,7 @@ pub(super) async fn handle_task_plan(
             "requirement_gate": {
                 "confirmed": true,
                 "gate": requirement_gate_payload,
+                "auto_recovery": gate_auto_recovery,
             },
             "approval_checkpoint": approval_checkpoint,
             "repo_context": repo_context,

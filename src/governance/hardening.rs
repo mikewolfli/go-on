@@ -569,6 +569,22 @@ pub fn enforce_action(policy: &PolicyBundle, action: GovernanceAction) -> Harden
     }
 }
 
+/// Fallback authorization when RBAC enforcer is unavailable.
+///
+/// This is deployment-policy driven to avoid implicit allow-all behavior.
+pub fn rbac_fallback_allows_action(
+    deployment_target: Option<&str>,
+    action: GovernanceAction,
+) -> HardeningDecision {
+    let policy = policy_bundle_for_target(deployment_target);
+    let mut decision = enforce_action(&policy, action);
+    decision.reason = format!(
+        "RBAC unavailable; applying deployment fallback policy '{}': {}",
+        decision.policy_name, decision.reason
+    );
+    decision
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -590,6 +606,20 @@ mod tests {
         let policy = policy_bundle_for_target(Some("managed-service"));
         assert!(!enforce_action(&policy, GovernanceAction::Write).allowed);
         assert!(!enforce_action(&policy, GovernanceAction::Shell).allowed);
+    }
+
+    #[test]
+    fn rbac_fallback_respects_deployment_policy() {
+        let local_write = rbac_fallback_allows_action(Some("local-dev"), GovernanceAction::Write);
+        assert!(local_write.allowed);
+
+        let managed_write =
+            rbac_fallback_allows_action(Some("managed-service"), GovernanceAction::Write);
+        assert!(!managed_write.allowed);
+
+        let managed_read =
+            rbac_fallback_allows_action(Some("managed-service"), GovernanceAction::Read);
+        assert!(managed_read.allowed);
     }
 
     #[test]

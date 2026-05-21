@@ -1,4 +1,5 @@
 pub mod artifact;
+pub mod autonomy_runtime;
 pub mod brain_loop; // F-GAP-17 (flat, legacy)
 #[cfg(any(
     feature = "sub-bus-tool",

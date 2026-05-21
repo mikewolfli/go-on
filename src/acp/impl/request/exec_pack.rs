@@ -1022,6 +1022,7 @@ pub(crate) async fn handle_workflow_execute(
     request_id: Option<Value>,
     _trace: &RequestTraceContext,
 ) -> Result<()> {
+    let mut params = params;
     let task = params_task(&params).unwrap_or_default();
     let phase_name = params.get("phase").and_then(Value::as_str);
     let run = start_workflow_run("workflow.execute", &task, phase_name, &params);
@@ -1029,7 +1030,17 @@ pub(crate) async fn handle_workflow_execute(
     let effective_options = run.effective_options.clone();
 
     let ledger = clone_artifact_ledger(server);
-    let gate = evaluate_requirement_gate_facade(&ledger, &task, &params, "workflow.execute")?;
+    let mut gate = evaluate_requirement_gate_facade(&ledger, &task, &params, "workflow.execute")?;
+    let mut gate_auto_recovery = json!({"applied": false});
+    if gate.blocked {
+        if let Some(recovery) =
+            try_auto_recover_requirement_gate(&ledger, &task, &params, "workflow.execute", &gate)?
+        {
+            params = recovery.params;
+            gate = recovery.gate;
+            gate_auto_recovery = recovery.metadata;
+        }
+    }
     if gate.blocked {
         let reason = gate
             .reason
@@ -1052,6 +1063,7 @@ pub(crate) async fn handle_workflow_execute(
                 "run_status": "failed",
                 "kind": kind,
                 "next_step": next_step,
+                "auto_recovery": gate_auto_recovery,
                 "requirement_gate": blocked_payload,
             })),
         )
@@ -1435,6 +1447,7 @@ pub(crate) async fn handle_workflow_execute(
         "requirement_gate": {
             "confirmed": true,
             "gate": requirement_gate_payload,
+            "auto_recovery": gate_auto_recovery,
         },
         "approval_checkpoint": approval_checkpoint,
         "repo_context": repo_context,
@@ -1495,6 +1508,7 @@ pub(super) async fn handle_task_execute(
     params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
+    let mut params = params;
     let Some(task) = params.get("task").and_then(Value::as_str) else {
         return send_error(
             server,
@@ -1505,6 +1519,7 @@ pub(super) async fn handle_task_execute(
         )
         .await;
     };
+    let task = task.to_string();
 
     let idempotency_task_id = params
         .get("task_id")
@@ -1515,7 +1530,7 @@ pub(super) async fn handle_task_execute(
         .get("phase")
         .and_then(Value::as_str)
         .unwrap_or("execute");
-    let idempotency_key = Idempotency::key(idempotency_task_id, idempotency_phase, task);
+    let idempotency_key = Idempotency::key(idempotency_task_id, idempotency_phase, task.as_str());
 
     if let Some(cached) = {
         let mut cache = task_execute_idempotency_cache()
@@ -1538,7 +1553,7 @@ pub(super) async fn handle_task_execute(
 
     let run = start_workflow_run(
         "task.execute",
-        task,
+        task.as_str(),
         params.get("phase").and_then(Value::as_str),
         &params,
     );
@@ -1546,7 +1561,22 @@ pub(super) async fn handle_task_execute(
     let effective_options = run.effective_options.clone();
 
     let ledger = clone_artifact_ledger(server);
-    let gate = evaluate_requirement_gate_facade(&ledger, task, &params, "task.execute")?;
+    let mut gate =
+        evaluate_requirement_gate_facade(&ledger, task.as_str(), &params, "task.execute")?;
+    let mut gate_auto_recovery = json!({"applied": false});
+    if gate.blocked {
+        if let Some(recovery) = try_auto_recover_requirement_gate(
+            &ledger,
+            task.as_str(),
+            &params,
+            "task.execute",
+            &gate,
+        )? {
+            params = recovery.params;
+            gate = recovery.gate;
+            gate_auto_recovery = recovery.metadata;
+        }
+    }
     if gate.blocked {
         let reason = gate
             .reason
@@ -1569,13 +1599,14 @@ pub(super) async fn handle_task_execute(
                 "run_status": "failed",
                 "kind": kind,
                 "next_step": next_step,
+                "auto_recovery": gate_auto_recovery,
                 "requirement_gate": blocked_payload,
             })),
         )
         .await;
     }
 
-    let mut plan = build_task_plan(task);
+    let mut plan = build_task_plan(task.as_str());
     let plan_path = persist_task_plan(&ledger, &plan)?;
     let mut workflow = build_workflow_generated_artifact(&plan);
     let adaptive_planning = apply_learning_plan_feedback(&ledger, &mut plan, &mut workflow);
@@ -1585,7 +1616,7 @@ pub(super) async fn handle_task_execute(
     let mut records = plan.planned_subtasks.clone();
     let initial_records = records.clone();
     let initial_execution_report =
-        execute_runtime_subtasks(task, &workflow, &mut records, &execution_context).await;
+        execute_runtime_subtasks(task.as_str(), &workflow, &mut records, &execution_context).await;
 
     let initial_failure_taxonomy = if initial_execution_report.subtasks_failed > 0 {
         vec!["execution_subtask_failed".to_string()]
@@ -1619,7 +1650,7 @@ pub(super) async fn handle_task_execute(
     };
 
     let execution_report = execute_runtime_subtasks_with_repair_loop(
-        task,
+        task.as_str(),
         &workflow,
         &mut records,
         &execution_context,
@@ -1760,7 +1791,11 @@ pub(super) async fn handle_task_execute(
                 result_summary: None,
             })
             .collect();
-        let ckpt = tg.snapshot(task, execution_report.phases_executed, graph_records);
+        let ckpt = tg.snapshot(
+            task.as_str(),
+            execution_report.phases_executed,
+            graph_records,
+        );
         crate::reinforcement::TaskGraphCheckpointArtifact {
             checkpoint_id: ckpt.checkpoint_id,
             schema_version: ckpt.schema_version,
@@ -1824,22 +1859,26 @@ pub(super) async fn handle_task_execute(
         request_id.as_ref(),
         Some(execution_path.display().to_string().as_str()),
     );
-    let capability_profile = build_capability_profile("task.execute", task, &params);
+    let capability_profile = build_capability_profile("task.execute", task.as_str(), &params);
     let governance_profile =
         build_universal_governance_profile("task.execute", &capability_profile, &params);
     let sandbox_profile = build_sandbox_profile("task.execute", &params, &capability_profile);
     let approval_checkpoint = build_approval_checkpoint("task.execute", &change_bundle, &params);
     let repo_context = build_repo_native_context("task.execute", &params, &change_bundle);
-    let learning_profile = build_learning_profile("task.execute", task, &params);
+    let learning_profile = build_learning_profile("task.execute", task.as_str(), &params);
     let token_economy = build_token_economy(
         "task.execute",
         &params,
         &governance_profile,
         &execution_cycle,
     );
-    let knowledge_refinement =
-        build_knowledge_refinement_profile("task.execute", task, &params, &learning_profile);
-    let multi_agent = build_multi_agent_sessions(task, "task.execute", &execution_report);
+    let knowledge_refinement = build_knowledge_refinement_profile(
+        "task.execute",
+        task.as_str(),
+        &params,
+        &learning_profile,
+    );
+    let multi_agent = build_multi_agent_sessions(task.as_str(), "task.execute", &execution_report);
 
     let response_payload = json!({
         "ok": true,
@@ -1866,6 +1905,7 @@ pub(super) async fn handle_task_execute(
         "requirement_gate": {
             "confirmed": true,
             "gate": requirement_gate_payload,
+            "auto_recovery": gate_auto_recovery,
         },
         "approval_checkpoint": approval_checkpoint,
         "repo_context": repo_context,
@@ -1899,7 +1939,7 @@ pub(super) async fn handle_task_execute(
             json!({ "actions": [] })
         },
         // B26-S5: memory graph drift protection profile
-        "memory_graph": build_memory_graph_profile(task),
+        "memory_graph": build_memory_graph_profile(task.as_str()),
         // B26-S6: structured review adjudication
         "review_adjudication": build_review_adjudication(summary.subtasks_failed),
         // B26-S7: three-dimensional replay scoring

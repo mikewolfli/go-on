@@ -24,6 +24,10 @@ use crate::agents::agent::{Agent, AgentRegistry, Message, StreamingSender};
 use crate::config::AppConfig;
 use crate::flow::FlowManager;
 use crate::intelligence::capability_graph::CapabilityGraph;
+use crate::orchestration::autonomy_runtime::{
+    build_tool_execution_followup_message, build_tool_result_block, parse_tool_call_token,
+    TOKEN_TOOL_CALL_PREFIX,
+};
 
 /// Maximum file size we'll read in a single tool call (10 MB).
 const MAX_FILE_READ_BYTES: u64 = 10 * 1024 * 1024;
@@ -221,16 +225,11 @@ async fn run_agent_with_tools(agent: &Arc<dyn Agent>, messages: &mut Vec<Message
     while let Some(token) = rx.recv().await {
         // Tool call detection (agents emit __tool_call__:tool_name:args)
         // Use splitn(3, ':') to handle colons inside JSON tool args correctly.
-        if token.starts_with("__tool_call__:") {
-            let parts: Vec<&str> = token.splitn(3, ':').collect();
-            if parts.len() == 3 {
-                let tool_name = parts[1];
-                let tool_args = parts[2];
-                tool_calls.push((tool_name.to_string(), tool_args.to_string()));
-                eprintln!();
-                eprintln!("🔧 [Tool call: {tool_name}]");
-                continue;
-            }
+        if let Some((tool_name, tool_args)) = parse_tool_call_token(&token) {
+            tool_calls.push((tool_name.to_string(), tool_args.to_string()));
+            eprintln!();
+            eprintln!("🔧 [Tool call: {tool_name}]");
+            continue;
         }
 
         // Reasoning content markers
@@ -293,33 +292,24 @@ async fn run_agent_with_tools(agent: &Arc<dyn Agent>, messages: &mut Vec<Message
                     } else {
                         result_text.clone()
                     };
-                    tool_results.push(format!(
-                        "[Tool result: {}]\n{}[/Tool result]",
-                        tool_name, result_for_llm
-                    ));
+                    tool_results.push(build_tool_result_block(tool_name, &result_for_llm, false));
                 }
                 Err(e) => {
                     eprintln!("    {}✗ Error: {e}{}", ansi!("31"), ansi!("0"));
-                    tool_results.push(format!("[Tool error: {}]\n{}[/Tool error]", tool_name, e));
+                    tool_results.push(build_tool_result_block(tool_name, &e.to_string(), true));
                 }
             }
         }
 
         // ── Phase 3: Send tool results back to agent for follow-up ──
         if !tool_results.is_empty() {
-            let combined = tool_results.join("\n\n");
             messages.push(Message {
                 role: "assistant".to_string(),
                 content: response.clone(),
             });
             messages.push(Message {
                 role: "user".to_string(),
-                content: format!(
-                    "[Tool execution results]\n{}[/Tool execution results]\n\n\
-                     Please continue based on the tool results above. \
-                     If the task is complete, provide a summary.",
-                    combined
-                ),
+                content: build_tool_execution_followup_message(&tool_results, false),
             });
 
             eprint!("{}── Agent follow-up ──{}\n🤖 ", ansi!("33"), ansi!("0"));
@@ -358,7 +348,7 @@ async fn agent_followup(agent: &Arc<dyn Agent>, messages: &[Message]) -> Result<
 
     let mut response = String::new();
     while let Some(token) = rx.recv().await {
-        if token.starts_with("__tool_call__:") {
+        if token.starts_with(TOKEN_TOOL_CALL_PREFIX) {
             continue; // No nested tool execution (safety limit)
         }
         response.push_str(&token);

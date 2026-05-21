@@ -20,6 +20,7 @@ use crate::agent::{resolve_secret, Agent, Message, ModelInfo};
 use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
 use crate::agents::{apply_openai_common_options, option_string, principles_to_text};
 use crate::i18n::runtime::tf;
+use crate::orchestration::autonomy_runtime::build_model_used_token;
 
 const COPILOT_TOKEN_URL: &str = "https://api.github.com/copilot_internal/v2/token";
 const COPILOT_MODELS_URL: &str = "https://api.githubcopilot.com/models";
@@ -517,7 +518,7 @@ impl CopilotAgent {
         if let Ok(mutex) = actual_model.lock() {
             if let Some(ref model_name) = *mutex {
                 if !model_name.is_empty() {
-                    let _ = sender.send(format!("__model_used__:{}", model_name));
+                    let _ = sender.send(build_model_used_token(model_name));
                 }
             }
         }

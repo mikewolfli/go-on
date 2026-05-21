@@ -286,7 +286,7 @@ impl ToolBus {
 
         // ── Record statistics ────────────────────────────────────────
         let duration_ms = start.elapsed().as_millis() as u64;
-        let success = result.is_ok();
+        let success = result.as_ref().map(|output| output.success).unwrap_or(false);
         // Use an immutable snapshot of the name for the record call.
         // (record_tool_call needs &str, not the moved tool_name if we
         //  consumed it — but we keep a copy.)
@@ -461,6 +461,26 @@ pub fn import_remote_skill(
 mod tests {
     use super::*;
     use crate::orchestration::skill::EchoSkill;
+    use crate::orchestration::tool::Tool;
+
+    struct LogicalFailureTool;
+
+    impl Tool for LogicalFailureTool {
+        fn name(&self) -> &'static str {
+            "logical_failure"
+        }
+
+        fn run(&self, _input: &ToolInput) -> Result<ToolOutput> {
+            Ok(ToolOutput {
+                success: false,
+                result: None,
+                error: Some("simulated logical failure".to_string()),
+                verification: None,
+                audit_log: None,
+                pua_report: None,
+            })
+        }
+    }
 
     fn make_bus() -> ToolBus {
         let tool_registry = Arc::new(Mutex::new(ToolRegistry::new()));
@@ -572,6 +592,38 @@ mod tests {
             result.unwrap_err().to_string().contains("not found"),
             "error should mention 'not found'"
         );
+    }
+
+    #[test]
+    fn execute_tool_ok_but_logical_failure_tracks_failure_stats() {
+        let bus = make_bus();
+        if let Ok(mut reg) = bus.tool_registry.lock() {
+            reg.register(LogicalFailureTool);
+        }
+
+        let input = ToolInput {
+            task_id: "test-003".to_string(),
+            phase: "act".to_string(),
+            agent_role: "coder".to_string(),
+            objective: "trigger logical failure".to_string(),
+            constraints: None,
+            evidence: None,
+            payload: serde_json::json!({}),
+            allowed_base_dir: None,
+        };
+
+        let output = bus
+            .execute_tool("logical_failure", &input)
+            .expect("tool should return logical failure output");
+        assert!(!output.success, "logical failure output should be unsuccessful");
+
+        let stats = bus.tool_stats();
+        let lf_stats = stats
+            .get("logical_failure")
+            .expect("expected stats for logical_failure");
+        assert_eq!(lf_stats.total_calls, 1);
+        assert_eq!(lf_stats.success_calls, 0);
+        assert_eq!(lf_stats.failure_calls, 1);
     }
 
     #[test]

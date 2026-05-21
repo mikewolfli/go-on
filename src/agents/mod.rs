@@ -50,6 +50,8 @@ use futures_util::StreamExt;
 use serde_json::Value;
 use tracing::warn;
 
+use crate::orchestration::autonomy_runtime::{build_thinking_token, build_tool_call_token};
+
 pub use ai21::Ai21Agent;
 pub use aleph::AlephAgent;
 pub use anthropic::AnthropicAgent;
@@ -418,7 +420,7 @@ fn extract_token(value: &Value) -> Option<String> {
                     .and_then(|f| f.get("arguments"))
                     .and_then(|v| v.as_str()),
             ) {
-                let token = format!("__tool_call__:{}:{}", name, args);
+                let token = build_tool_call_token(name, args);
                 return Some(token);
             }
         }
@@ -441,7 +443,7 @@ fn extract_token(value: &Value) -> Option<String> {
                     .and_then(|f| f.get("arguments"))
                     .and_then(|v| v.as_str()),
             ) {
-                let token = format!("__tool_call__:{}:{}", name, args);
+                let token = build_tool_call_token(name, args);
                 return Some(token);
             }
         }
@@ -474,10 +476,10 @@ fn extract_token(value: &Value) -> Option<String> {
                 .and_then(|v| v.as_str());
             if let Some(text) = content {
                 if !text.is_empty() {
-                    return Some(format!("__thinking__{}{}", thinking, text));
+                    return Some(build_thinking_token(thinking, Some(text)));
                 }
             }
-            return Some(format!("__thinking__{}", thinking));
+            return Some(build_thinking_token(thinking, None));
         }
     }
     if let Some(thinking) = value
@@ -497,10 +499,10 @@ fn extract_token(value: &Value) -> Option<String> {
                 .and_then(|v| v.as_str());
             if let Some(text) = content {
                 if !text.is_empty() {
-                    return Some(format!("__thinking__{}{}", thinking, text));
+                    return Some(build_thinking_token(thinking, Some(text)));
                 }
             }
-            return Some(format!("__thinking__{}", thinking));
+            return Some(build_thinking_token(thinking, None));
         }
     }
 

@@ -105,6 +105,68 @@ fn copilot_models_cache() -> &'static CopilotModelsCache {
     COPILOT_MODELS_CACHE.get_or_init(|| std::sync::Mutex::new(None))
 }
 
+fn capability_bus_event_schema_summary(server: &AcpServer) -> Value {
+    let Some(cb) = server.capability_bus.as_ref() else {
+        return json!({
+            "enabled": false,
+            "action_events": 0u64,
+            "feedback_events": 0u64,
+            "action_schema": Value::Null,
+            "feedback_schema": Value::Null,
+            "schema_coverage": 0.0f64,
+        });
+    };
+
+    let events = cb.snapshot_events();
+    let mut action_events = 0u64;
+    let mut feedback_events = 0u64;
+    let mut action_schema_events = 0u64;
+    let mut feedback_schema_events = 0u64;
+    let mut latest_action_schema: Option<String> = None;
+    let mut latest_feedback_schema: Option<String> = None;
+
+    for event in events.iter().rev() {
+        match event.stage.as_str() {
+            "action" => {
+                action_events = action_events.saturating_add(1);
+                if let Some(schema) = event.detail.get("schema").and_then(Value::as_str) {
+                    action_schema_events = action_schema_events.saturating_add(1);
+                    if latest_action_schema.is_none() {
+                        latest_action_schema = Some(schema.to_string());
+                    }
+                }
+            }
+            "feedback" => {
+                feedback_events = feedback_events.saturating_add(1);
+                if let Some(schema) = event.detail.get("schema").and_then(Value::as_str) {
+                    feedback_schema_events = feedback_schema_events.saturating_add(1);
+                    if latest_feedback_schema.is_none() {
+                        latest_feedback_schema = Some(schema.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let total_target = action_events.saturating_add(feedback_events);
+    let total_tagged = action_schema_events.saturating_add(feedback_schema_events);
+    let schema_coverage = if total_target == 0 {
+        1.0
+    } else {
+        total_tagged as f64 / total_target as f64
+    };
+
+    json!({
+        "enabled": true,
+        "action_events": action_events,
+        "feedback_events": feedback_events,
+        "action_schema": latest_action_schema,
+        "feedback_schema": latest_feedback_schema,
+        "schema_coverage": schema_coverage,
+    })
+}
+
 fn read_copilot_models_cache() -> Option<Vec<String>> {
     let guard = copilot_models_cache().lock().ok()?;
     let (fetched_at, models) = guard.as_ref()?.clone();
@@ -736,6 +798,7 @@ pub(super) async fn handle_health(server: &AcpServer, request_id: Option<Value>)
             json!({
                 "enabled": true,
                 "profile": cb.capability_bus_profile(),
+                "event_schema": capability_bus_event_schema_summary(server),
             })
         })
         .unwrap_or(json!({"enabled": false}));
@@ -3500,6 +3563,7 @@ pub(super) async fn handle_governance_status(
                 "event_history_len": p.event_history_len,
                 "workflow_presets_count": p.workflow_presets_count,
                 "provenance_entries_count": p.provenance_entries_count,
+                "event_schema": capability_bus_event_schema_summary(server),
             })
         })
         .unwrap_or_else(|| {
@@ -3516,6 +3580,14 @@ pub(super) async fn handle_governance_status(
                 "event_history_len": 0u32,
                 "workflow_presets_count": 0u32,
                 "provenance_entries_count": 0u32,
+                "event_schema": {
+                    "enabled": false,
+                    "action_events": 0u64,
+                    "feedback_events": 0u64,
+                    "action_schema": Value::Null,
+                    "feedback_schema": Value::Null,
+                    "schema_coverage": 0.0f64,
+                },
             })
         });
 

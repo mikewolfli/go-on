@@ -40,6 +40,7 @@ use crate::config::{AutoTuneConfig, AutoTuneState, RuntimeConfig, VectorConfig};
 use crate::failure_prevention::FailurePrevention;
 use crate::flow::FlowManager;
 use crate::flow_with_models::FlowModelSelector;
+use crate::governance::hardening::{rbac_fallback_allows_action, GovernanceAction};
 use crate::governance::rbac::{AccessDecision, Permission, Principal};
 use crate::memory_module::{MemoryPolicy, MemoryStore};
 use crate::memory_response_cache::MemoryResponseCache;
@@ -3237,8 +3238,34 @@ async fn check_http_authorization(
         }
     }
 
-    // No RBAC enforcer configured — allow (backward compat)
-    Ok(false)
+    // No RBAC enforcer configured — apply explicit deployment fallback policy.
+    let fallback_action = match required_perm {
+        Permission::Execute => GovernanceAction::Shell,
+        Permission::Write => GovernanceAction::Write,
+        _ => GovernanceAction::Read,
+    };
+    let fallback = rbac_fallback_allows_action(
+        server.runtime_config.deployment_target.as_deref(),
+        fallback_action,
+    );
+    if fallback.allowed {
+        return Ok(false);
+    }
+
+    write_http_json_response(
+        socket,
+        403,
+        serde_json::json!({
+            "error": "Forbidden",
+            "code": "RBAC_UNAVAILABLE_POLICY_DENY",
+            "reason": fallback.reason,
+            "policy": fallback.policy_name,
+            "sandbox_level": fallback.sandbox_level,
+        }),
+        cors_headers,
+    )
+    .await?;
+    Ok(true)
 }
 
 /// Main HTTP connection handler — parses, guards, routes, and times the request.

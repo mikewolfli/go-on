@@ -634,6 +634,56 @@ impl CapabilityBus {
         }
     }
 
+    fn action_outcome_label(success: bool) -> &'static str {
+        if success {
+            "success"
+        } else {
+            "failure"
+        }
+    }
+
+    fn build_action_blocked_detail(tool_name: &str, reason: &str) -> Value {
+        serde_json::json!({
+            "schema": "capability-bus-action-v1",
+            "tool": tool_name,
+            "duration_ms": 0,
+            "logical_success": false,
+            "error": reason,
+            "policy_blocked": true,
+        })
+    }
+
+    fn build_action_event_detail(
+        tool_name: &str,
+        duration_ms: u64,
+        success: bool,
+        error_text: Option<String>,
+    ) -> Value {
+        serde_json::json!({
+            "schema": "capability-bus-action-v1",
+            "tool": tool_name,
+            "duration_ms": duration_ms,
+            "logical_success": success,
+            "error": error_text,
+            "policy_blocked": false,
+        })
+    }
+
+    fn build_feedback_event_detail(
+        duration_ms: u64,
+        token_cost: u64,
+        quality_score: f64,
+        success: bool,
+    ) -> Value {
+        serde_json::json!({
+            "schema": "capability-bus-feedback-v1",
+            "duration_ms": duration_ms,
+            "token_cost": token_cost,
+            "quality_score": quality_score,
+            "logical_success": success,
+        })
+    }
+
     // ------------------------------------------------------------------
     // Stage 1: Sensing — gather input from sub-buses
     // ------------------------------------------------------------------
@@ -985,7 +1035,7 @@ impl CapabilityBus {
                 None,
                 None,
                 "blocked",
-                serde_json::json!({"tool": tool_name, "reason": "HarnessBus denied"}),
+                Self::build_action_blocked_detail(tool_name, "HarnessBus denied"),
             );
             return Err(anyhow::anyhow!(
                 "Tool call '{}' denied by HarnessBus policy",
@@ -1001,7 +1051,15 @@ impl CapabilityBus {
         let result: anyhow::Result<crate::orchestration::tool::ToolOutput> =
             Err(anyhow::anyhow!("ToolBus not available in this profile"));
         let duration_ms = start.elapsed().as_millis() as u64;
-        let success = result.is_ok();
+        let success = result
+            .as_ref()
+            .map(|output| output.success)
+            .unwrap_or(false);
+        let error_text = result
+            .as_ref()
+            .err()
+            .map(|err| err.to_string())
+            .or_else(|| result.as_ref().ok().and_then(|output| output.error.clone()));
 
         // Step 3: Record execution in ObservabilityBus
         #[cfg(feature = "sub-bus-observability")]
@@ -1010,23 +1068,18 @@ impl CapabilityBus {
             "tool_call",
             duration_ms,
             success,
-            result.as_ref().err().map(|e| e.to_string()),
+            error_text.clone(),
             0,
         );
 
-        // Step 4: Record outcome in ToolBus
-        #[cfg(feature = "sub-bus-tool")]
-        self.tool_bus
-            .record_tool_call(tool_name, success, duration_ms);
-
-        // Step 5: Record event
-        let outcome = if success { "success" } else { "failure" };
+        // Step 4: Record event
+        let outcome = Self::action_outcome_label(success);
         self.record_event(
             "action",
             None,
             None,
             outcome,
-            serde_json::json!({"tool": tool_name, "duration_ms": duration_ms}),
+            Self::build_action_event_detail(tool_name, duration_ms, success, error_text),
         );
 
         result
@@ -1186,17 +1239,13 @@ impl CapabilityBus {
         }
 
         // 5. Record event
-        let outcome = if success { "success" } else { "failure" };
+        let outcome = Self::action_outcome_label(success);
         self.record_event(
             "feedback",
             Some(agent.to_string()),
             Some(task_id.to_string()),
             outcome,
-            serde_json::json!({
-                "duration_ms": duration_ms,
-                "token_cost": token_cost,
-                "quality_score": quality_score,
-            }),
+            Self::build_feedback_event_detail(duration_ms, token_cost, quality_score, success),
         );
 
         // 6. Record provenance
@@ -1658,5 +1707,67 @@ struct FlowGuard<'a> {
 impl Drop for FlowGuard<'_> {
     fn drop(&mut self) {
         self.bus.complete_flow(self.flow_id, self.task_id);
+    }
+}
+
+#[cfg(all(test, feature = "sub-bus-tool"))]
+mod tests {
+    use super::CapabilityBus;
+    use crate::governance::harness_bus::default_harness_bus;
+    use crate::orchestration::tool::ToolInput;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn execute_tool_counts_single_call_in_tool_bus() {
+        let harness = Arc::new(default_harness_bus(None));
+        let bus = CapabilityBus::new_default(harness, None);
+
+        let before = bus.tool_bus.profile().total_calls;
+        let input = ToolInput {
+            task_id: "cb-test-001".to_string(),
+            phase: "act".to_string(),
+            agent_role: "coder".to_string(),
+            objective: "read cargo manifest".to_string(),
+            constraints: None,
+            evidence: None,
+            payload: serde_json::json!({"path": "Cargo.toml"}),
+            allowed_base_dir: None,
+        };
+
+        let result = bus.execute_tool("read_file", &input);
+        assert!(
+            result.is_ok(),
+            "execute_tool should succeed: {:?}",
+            result.err()
+        );
+
+        let after = bus.tool_bus.profile().total_calls;
+        assert_eq!(
+            after,
+            before + 1,
+            "tool call should be counted exactly once"
+        );
+
+        let profile = bus.capability_bus_profile();
+        assert_eq!(profile.tool_bus_calls, after);
+
+        let action_event = bus
+            .snapshot_events()
+            .into_iter()
+            .rev()
+            .find(|event| event.stage == "action")
+            .expect("action event should be recorded");
+        assert_eq!(action_event.outcome, "success");
+        assert_eq!(
+            action_event.detail.get("schema").and_then(|v| v.as_str()),
+            Some("capability-bus-action-v1")
+        );
+        assert_eq!(
+            action_event
+                .detail
+                .get("logical_success")
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
     }
 }

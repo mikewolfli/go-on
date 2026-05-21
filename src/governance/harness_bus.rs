@@ -43,7 +43,8 @@ use crate::governance::drift::drift_protection::{
     DriftProfile, DriftProtectionConfig, DriftProtectionEngine,
 };
 use crate::governance::hardening::{
-    BudgetTracker, GovernanceAction, IdempotencyCache, PolicyBundle, SandboxPolicy, TaskBudget,
+    rbac_fallback_allows_action, BudgetTracker, GovernanceAction, IdempotencyCache, PolicyBundle,
+    SandboxPolicy, TaskBudget,
 };
 use crate::governance::pua::{PuaFeedbackCollector, PuaRuleEngine, TaskContext, TaskType};
 use crate::governance::rationalization::{RationalizationAnnotation, SelfRationalizationGuard};
@@ -808,17 +809,25 @@ impl PolicyEvaluator {
         }
     }
 
-    /// Permission check (delegates to RBAC enforcer when configured, falls back to allow-all).
+    /// Permission check (delegates to RBAC enforcer when configured, otherwise
+    /// applies an explicit fallback policy based on the active sandbox level).
     fn check_permission(&self, tool: &str, _args: &Value) -> bool {
+        let action = match tool {
+            "write_file" | "apply_patch" | "create_directory" | "delete_path" => {
+                GovernanceAction::Write
+            }
+            "run_tests" | "execute_command" | "terminal" => GovernanceAction::Shell,
+            "search" | "find" | "grep" | "semantic_search" => GovernanceAction::Search,
+            _ => GovernanceAction::Read,
+        };
+
         if let Some(ref rbac) = self.rbac_enforcer {
             // Map tool name to Permission.  Write-tools require Write, exec-tools require Execute,
             // everything else requires Read.
-            let required_perm = match tool {
-                "write_file" | "apply_patch" | "create_directory" | "delete_path" => {
-                    Permission::Write
-                }
-                "run_tests" | "execute_command" | "terminal" => Permission::Execute,
-                _ => Permission::Read,
+            let required_perm = match action {
+                GovernanceAction::Write => Permission::Write,
+                GovernanceAction::Shell => Permission::Execute,
+                GovernanceAction::Read | GovernanceAction::Search => Permission::Read,
             };
             // Build a principal from whatever context we have — for now use a default
             // "harness" principal with the "user" role (least-privilege for tool calls).
@@ -844,8 +853,28 @@ impl PolicyEvaluator {
                 }
             }
         } else {
-            tracing::debug!("RBAC enforcer not configured — allowing all tools (F-GAP-13)");
-            true
+            // Derive fallback policy from sandbox level to prevent implicit allow-all.
+            let deployment_hint = self
+                .sandbox_level
+                .lock()
+                .map(|level| match level.as_str() {
+                    "none" => "local-dev",
+                    "basic" => "ci",
+                    "strict" => "managed-service",
+                    "isolated" => "production",
+                    _ => "managed-service",
+                })
+                .unwrap_or("managed-service");
+            let decision = rbac_fallback_allows_action(Some(deployment_hint), action);
+            tracing::info!(
+                tool = %tool,
+                policy = %decision.policy_name,
+                sandbox = %decision.sandbox_level,
+                allowed = decision.allowed,
+                reason = %decision.reason,
+                "RBAC enforcer unavailable, applying fallback policy"
+            );
+            decision.allowed
         }
     }
 

@@ -1,0 +1,505 @@
+use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use super::autotune::AutoTuneConfig;
+use crate::orchestration::roles::RoleDefinition;
+
+/// Application configuration structure
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+#[derive(Default)]
+pub struct AppConfig {
+    /// Default phase to use when none is specified
+    pub default_phase: String,
+    /// Map of agent configurations
+    pub agents: HashMap<String, AgentConfig>,
+    /// Flow configuration defining phase sequence
+    pub flow: FlowConfig,
+    /// Map of phase configurations
+    pub phases: HashMap<String, PhaseConfig>,
+    /// Runtime configuration
+    pub runtime: Option<RuntimeConfig>,
+    /// Cache configuration
+    pub cache: Option<CacheConfig>,
+    /// Vector store configuration
+    pub vector: Option<VectorConfig>,
+    /// Autotune configuration
+    pub autotune: Option<AutoTuneConfig>,
+    /// Model selection mode for automatic selection (Phase 10+)
+    #[serde(default)]
+    pub model_selection_mode: String,
+    /// Compliance configuration (S3)
+    #[serde(default)]
+    pub compliance: Option<ComplianceConfig>,
+    /// Startup context loader configuration (S5)
+    #[serde(default)]
+    pub startup_context: Option<StartupContextConfig>,
+    /// Scheduler configuration (S8/S9)
+    #[serde(default)]
+    pub scheduler: Option<SchedulerConfig>,
+    /// Reputation tracking configuration (S13)
+    #[serde(default)]
+    pub reputation: Option<ReputationConfig>,
+    /// Custom role registry loaded from `[role_registry.*]`
+    #[serde(default)]
+    pub role_registry: HashMap<String, RoleDefinition>,
+}
+
+/// Simplified adaptive configuration for AI-driven setup
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdaptiveConfig {
+    /// Whether to use adaptive mode (AI determines best configuration)
+    #[serde(default = "super::defaults::default_true")]
+    pub adaptive_mode: bool,
+
+    /// Minimum configuration required for operation
+    pub minimal_config: MinimalConfig,
+
+    /// Learning preferences for AI adaptation
+    #[serde(default)]
+    pub learning_preferences: LearningPreferences,
+
+    /// Conversation history for context-aware adaptation
+    #[serde(default)]
+    pub conversation_context: Vec<ConversationContext>,
+}
+
+/// Minimal configuration required for operation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MinimalConfig {
+    /// Default phase name
+    #[serde(default = "super::defaults::default_coding_phase")]
+    pub default_phase: String,
+
+    /// Available AI providers (auto-detected from environment)
+    #[serde(default)]
+    pub available_providers: Vec<String>,
+
+    /// Whether to enable caching
+    #[serde(default = "super::defaults::default_true")]
+    pub enable_cache: bool,
+
+    /// Whether to enable vector memory
+    #[serde(default = "super::defaults::default_true")]
+    pub enable_vector_memory: bool,
+}
+
+/// Learning preferences for AI adaptation
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LearningPreferences {
+    /// Preferred communication style
+    #[serde(default = "super::defaults::default_communication_style")]
+    pub communication_style: String,
+
+    /// Preferred level of detail
+    #[serde(default = "super::defaults::default_detail_level")]
+    pub detail_level: String,
+
+    /// Learning speed preference
+    #[serde(default = "super::defaults::default_learning_speed")]
+    pub learning_speed: String,
+
+    /// Whether to ask for clarification when uncertain
+    #[serde(default = "super::defaults::default_true")]
+    pub ask_for_clarification: bool,
+
+    /// Whether to adapt based on conversation history
+    #[serde(default = "super::defaults::default_true")]
+    pub adapt_from_history: bool,
+}
+
+/// Conversation context for adaptive configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationContext {
+    /// Conversation ID
+    pub conversation_id: String,
+    /// User preferences expressed in conversation
+    pub expressed_preferences: Vec<String>,
+    /// Successful adaptations from this conversation
+    pub successful_adaptations: Vec<String>,
+    /// Timestamp of last interaction
+    pub last_interaction: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ProviderSpec {
+    pub(crate) name: String,
+    #[serde(rename = "type")]
+    pub(crate) agent_type: String,
+    #[serde(default)]
+    pub(crate) url: Option<String>,
+    #[serde(default)]
+    pub(crate) chat_path: Option<String>,
+    #[serde(default)]
+    pub(crate) model: Option<String>,
+    #[serde(default)]
+    pub(crate) api_key_env: Option<String>,
+    #[serde(default)]
+    pub(crate) secret_key_env: Option<String>,
+    #[serde(default)]
+    pub(crate) anthropic_version: Option<String>,
+    #[serde(default)]
+    pub(crate) max_tokens: Option<u32>,
+    #[serde(default)]
+    pub(crate) supports_system: Option<bool>,
+    #[serde(default)]
+    pub(crate) supports_vision: Option<bool>,
+}
+
+impl ProviderSpec {
+    /// Returns whether this provider supports vision/image inputs.
+    #[allow(dead_code)] // F-GAP-13 — reserved for multi-modal capability checks
+    pub fn supports_vision(&self) -> bool {
+        self.supports_vision.unwrap_or(false)
+    }
+}
+
+/// Runtime configuration
+#[derive(Debug, Clone, Deserialize)]
+pub struct RuntimeConfig {
+    /// Protocol mode: auto / acp / mcp
+    #[serde(default)]
+    pub protocol_mode: Option<String>,
+    /// Platform mode: universal / phase_compat
+    #[serde(default)]
+    pub platform_mode: Option<String>,
+    /// Emit PUA execution report into JSON-RPC response metadata when enabled
+    #[serde(default)]
+    pub pua_report: bool,
+    /// Deployment target for hardening profile selection: local-dev | ci | managed-service
+    #[serde(default)]
+    pub deployment_target: Option<String>,
+    /// Maintenance interval in seconds
+    #[serde(default = "super::defaults::default_runtime_maintenance_interval_seconds")]
+    pub maintenance_interval_seconds: u64,
+    /// Health check interval in seconds
+    #[serde(default = "super::defaults::default_runtime_health_interval_seconds")]
+    pub health_interval_seconds: u64,
+    /// Shutdown drain time in seconds
+    #[serde(default = "super::defaults::default_runtime_shutdown_drain_seconds")]
+    pub shutdown_drain_seconds: u64,
+    /// Optional ACP HTTP bind address for REST/SSE endpoints
+    #[serde(default)]
+    pub acp_http_bind_addr: Option<String>,
+    /// Whether inbound entry auth is enabled at gateway/edge for exposed HTTP endpoints
+    #[serde(default)]
+    pub entry_auth_enabled: bool,
+    /// Env var name holding entry API key used for HTTP ingress auth
+    #[serde(default = "super::defaults::default_runtime_entry_auth_api_key_env")]
+    pub entry_auth_api_key_env: String,
+    /// Entry layer source-based rate limit (requests per minute)
+    #[serde(default = "super::defaults::default_runtime_entry_rate_limit_rpm")]
+    pub entry_rate_limit_rpm: u64,
+    /// Entry layer token bucket burst capacity per source
+    #[serde(default = "super::defaults::default_runtime_entry_rate_limit_burst")]
+    pub entry_rate_limit_burst: u64,
+    /// Enforce production strict fail-fast checks on unsafe runtime configuration
+    #[serde(default)]
+    pub production_strict: bool,
+    /// How often background maintenance performs SQLite VACUUM cycles
+    #[serde(default = "super::defaults::default_runtime_sqlite_vacuum_interval_cycles")]
+    pub sqlite_vacuum_interval_cycles: u64,
+    /// Enable OpenTelemetry exporter for distributed traces
+    #[serde(default)]
+    pub otel_enabled: bool,
+    /// Exporter type: otlp or jaeger (jaeger uses OTLP endpoint)
+    #[serde(default = "super::defaults::default_runtime_otel_exporter")]
+    pub otel_exporter: String,
+    /// Optional OTLP endpoint (for Jaeger, point to collector OTLP endpoint)
+    #[serde(default)]
+    pub otel_endpoint: Option<String>,
+    /// OpenTelemetry service name
+    #[serde(default = "super::defaults::default_runtime_otel_service_name")]
+    pub otel_service_name: String,
+    /// Sampling ratio in [0.0, 1.0]
+    #[serde(default = "super::defaults::default_runtime_otel_sample_ratio")]
+    pub otel_sample_ratio: f64,
+    /// Number of slow requests to keep in top-N trace metrics
+    #[serde(default = "super::defaults::default_runtime_trace_slow_top_n")]
+    pub trace_slow_top_n: usize,
+    /// Enable builtin skills (e.g. `builtin.echo`) at server startup.
+    /// Default is `true` for development; set to `false` in production (`config.production.toml`).
+    #[serde(default = "super::defaults::default_runtime_skills_enabled")]
+    pub skills_enabled: bool,
+    /// Enable skills import APIs (`skill.import`, `skill.enable`, etc.).
+    #[serde(default)]
+    pub skills_import_enabled: bool,
+    /// Allowed source prefixes for importing skills. Supports trailing `*` wildcard prefix matching.
+    #[serde(default)]
+    pub skills_allowed_sources: Vec<String>,
+    /// Require import requests to provide expected SHA256 digest.
+    #[serde(default = "super::defaults::default_runtime_skills_require_sha256")]
+    pub skills_require_sha256: bool,
+    /// Allow floating refs (`main`, `latest`, non-SHA refs`) when importing from GitHub.
+    #[serde(default)]
+    pub skills_allow_floating_ref: bool,
+    /// Cache directory used to persist imported skill manifests and index.
+    #[serde(default = "super::defaults::default_runtime_skills_cache_dir")]
+    pub skills_cache_dir: String,
+    /// Allowed CORS origins for the ACP HTTP server.
+    /// Empty list means CORS is disabled entirely.
+    #[serde(default)]
+    pub cors_allowed_origins: Vec<String>,
+    /// Master switch for user-level authentication.
+    /// When `false`, all requests are treated as admin (single-user mode).
+    #[serde(default)]
+    pub user_auth_enabled: bool,
+    /// HMAC secret for signing user authentication tokens.
+    /// Should be overridden with a strong secret in production.
+    #[serde(default = "super::defaults::default_runtime_user_auth_token_secret")]
+    pub user_auth_token_secret: String,
+    /// Env var name holding the HMAC secret for user auth tokens.
+    /// When set, overrides `user_auth_token_secret`.
+    #[serde(default = "super::defaults::default_runtime_user_auth_token_secret_env")]
+    pub user_auth_token_secret_env: String,
+    /// Token TTL in seconds for user authentication tokens (default: 86400 = 24h).
+    #[serde(default = "super::defaults::default_runtime_user_auth_token_ttl_seconds")]
+    pub user_auth_token_ttl_seconds: u64,
+    /// Default daily token limit per tenant (when user auth is enabled).
+    #[serde(default = "super::defaults::default_runtime_tenant_default_daily_token_limit")]
+    pub tenant_default_daily_token_limit: u64,
+    /// Default concurrent tasks limit per tenant.
+    #[serde(default = "super::defaults::default_runtime_tenant_default_concurrent_tasks")]
+    pub tenant_default_concurrent_tasks: usize,
+    /// Default language for i18n (e.g. "en", "zh-CN").
+    #[serde(default = "super::defaults::default_runtime_i18n_default_language")]
+    pub i18n_default_language: String,
+    /// Default daily API call limit per tenant.
+    #[serde(default = "super::defaults::default_runtime_tenant_default_daily_api_calls")]
+    pub tenant_default_daily_api_calls: usize,
+}
+
+impl RuntimeConfig {
+    /// Build a [`CorsConfig`] from the configured origins, or return `None` if
+    /// CORS is disabled (empty list).
+    pub fn cors_config(&self) -> Option<crate::acp::r#impl::cors::CorsConfig> {
+        if self.cors_allowed_origins.is_empty() {
+            return None;
+        }
+        let cfg = crate::acp::r#impl::cors::CorsConfig {
+            allowed_origins: self.cors_allowed_origins.clone(),
+            ..crate::acp::r#impl::cors::CorsConfig::default()
+        };
+        Some(cfg)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CacheConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "super::defaults::default_cache_path")]
+    pub path: String,
+    #[serde(default = "super::defaults::default_cache_ttl_seconds")]
+    pub default_ttl_seconds: u64,
+    #[serde(default = "super::defaults::default_cache_max_entries")]
+    pub max_entries: usize,
+    /// PostgreSQL connection URL (used when compiled with profile-multi-users-server).
+    /// Example: "postgres://user:pass@localhost/go_on"
+    #[serde(default)]
+    pub connection_string: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct VectorConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "super::defaults::default_vector_auto_mode")]
+    pub auto_mode: bool,
+    #[serde(default = "super::defaults::default_vector_path")]
+    pub path: String,
+    /// PostgreSQL connection URL (used when compiled with profile-multi-users-server).
+    /// Example: "postgres://user:pass@localhost/go_on"
+    #[serde(default)]
+    pub connection_string: Option<String>,
+    #[serde(default = "super::defaults::default_vector_dimensions")]
+    pub dimensions: usize,
+    #[serde(default = "super::defaults::default_vector_min_query_chars")]
+    pub min_query_chars: usize,
+    #[serde(default = "super::defaults::default_vector_top_k")]
+    pub top_k: usize,
+    #[serde(default = "super::defaults::default_vector_min_similarity")]
+    pub min_similarity: f32,
+    #[serde(default = "super::defaults::default_vector_max_snippet_chars")]
+    pub max_snippet_chars: usize,
+    #[serde(default = "super::defaults::default_vector_max_entries")]
+    pub max_entries: usize,
+    #[serde(default = "super::defaults::default_summary_enabled")]
+    pub summary_enabled: bool,
+    #[serde(default = "super::defaults::default_summary_trigger_messages")]
+    pub summary_trigger_messages: usize,
+    #[serde(default = "super::defaults::default_summary_max_chars")]
+    pub summary_max_chars: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+#[derive(Default)]
+pub struct AgentConfig {
+    #[serde(rename = "type")]
+    pub agent_type: String,
+    pub url: Option<String>,
+    pub chat_path: Option<String>,
+    pub api_key_env: Option<String>,
+    pub secret_key_env: Option<String>,
+    pub anthropic_version: Option<String>,
+    pub model: Option<String>,
+    pub max_tokens: Option<u32>,
+    pub supports_system: Option<bool>,
+    pub supports_vision: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+#[derive(Default)]
+pub struct FlowConfig {
+    pub name: String,
+    pub phases: Vec<String>,
+    #[serde(default)]
+    pub workflow_type: WorkflowType,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowType {
+    #[default]
+    Auto,
+    Dev,
+    General,
+    Free,
+    Custom,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ComplianceConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub standards: Vec<String>,
+    #[serde(default)]
+    pub data_classification_default: String,
+    #[serde(default)]
+    pub retention_policy_default: String,
+    #[serde(default = "super::defaults::default_compliance_audit_retention_days")]
+    pub audit_retention_days: u32,
+    #[serde(default)]
+    pub pii_fields: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StartupContextConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "super::defaults::default_startup_readme_max_chars")]
+    pub readme_max_chars: usize,
+    #[serde(default = "super::defaults::default_startup_recent_commits")]
+    pub recent_commits: usize,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SchedulerConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "super::defaults::default_scheduler_workers")]
+    pub worker_slots: usize,
+    #[serde(default = "super::defaults::default_scheduler_max_depth")]
+    pub max_queue_depth: usize,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ReputationConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "super::defaults::default_reputation_alpha")]
+    pub ema_alpha: f64,
+    #[serde(default = "super::defaults::default_reputation_degraded")]
+    pub degraded_threshold: f64,
+    #[serde(default = "super::defaults::default_reputation_excluded")]
+    pub exclusion_threshold: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+#[derive(Default)]
+pub struct PhaseConfig {
+    pub description: String,
+    pub agents: Vec<String>,
+    pub fallback: Option<bool>,
+    pub principles: Option<Vec<String>>,
+    pub options: Option<PhaseOptions>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct PhaseOptions {
+    pub cache_enabled: Option<bool>,
+    pub cache_ttl_seconds: Option<u64>,
+    pub vector_enabled: Option<bool>,
+    pub vector_auto: Option<bool>,
+    pub vector_min_query_chars: Option<usize>,
+    pub vector_top_k: Option<usize>,
+    pub vector_min_similarity: Option<f32>,
+    pub vector_max_snippet_chars: Option<usize>,
+    pub summary_enabled: Option<bool>,
+    pub summary_trigger_messages: Option<usize>,
+    pub summary_max_chars: Option<usize>,
+    pub max_history_messages: Option<usize>,
+    pub max_history_chars: Option<usize>,
+    pub autopilot_complexity: Option<String>,
+    pub full_auto_review_agents: Option<Vec<String>>,
+    pub request_timeout_seconds: Option<u64>,
+    pub review_timeout_seconds: Option<u64>,
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
+}
+
+impl PhaseOptions {
+    pub fn agent_options(&self) -> Option<HashMap<String, Value>> {
+        if self.extra.is_empty() {
+            None
+        } else {
+            Some(self.extra.clone())
+        }
+    }
+}
+
+impl AppConfig {
+    /// Returns the effective default phase, accounting for free workflow bypass.
+    pub fn effective_default_phase(&self) -> Option<&str> {
+        match self.flow.workflow_type {
+            WorkflowType::Free => None,
+            WorkflowType::General => {
+                if self.default_phase.trim().is_empty() {
+                    Some("executing")
+                } else {
+                    Some(self.default_phase.as_str())
+                }
+            }
+            WorkflowType::Custom => {
+                if self.default_phase.trim().is_empty() {
+                    self.flow.phases.first().map(|phase| phase.as_str())
+                } else {
+                    Some(self.default_phase.as_str())
+                }
+            }
+            WorkflowType::Dev => {
+                // Development workflow always starts in a coding-oriented phase.
+                if self.default_phase.trim().is_empty() {
+                    Some("coding")
+                } else {
+                    Some(self.default_phase.as_str())
+                }
+            }
+            WorkflowType::Auto => {
+                // Auto-detected workflow: use configured default or fall back
+                // to "coding" (the most common entry point).
+                if self.default_phase.trim().is_empty() {
+                    Some("coding")
+                } else {
+                    Some(self.default_phase.as_str())
+                }
+            }
+        }
+    }
+}
