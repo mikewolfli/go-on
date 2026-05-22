@@ -11,11 +11,9 @@ use std::collections::{HashMap, HashSet};
 // ── Node types ──────────────────────────────────────────────────────────────
 
 /// Execution graph node ID
-#[allow(dead_code)] // F-GAP-04 — planned wiring
 pub type ExNodeId = String;
 
 /// Kind of execution graph node
-#[allow(dead_code)] // F-GAP-04 — planned wiring
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ExNodeKind {
     /// Standard execution step
@@ -33,7 +31,6 @@ pub enum ExNodeKind {
 }
 
 /// Node execution state
-#[allow(dead_code)] // F-GAP-04 — planned wiring
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ExNodeState {
     Pending,
@@ -44,7 +41,6 @@ pub enum ExNodeState {
 }
 
 /// A node in the execution graph
-#[allow(dead_code)] // F-GAP-04 — planned wiring
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExNode {
     pub id: ExNodeId,
@@ -62,7 +58,6 @@ pub struct ExNode {
 }
 
 impl ExNode {
-    #[allow(dead_code)] // F-GAP-04 — planned wiring
     pub fn new(id: &str, kind: ExNodeKind, name: &str) -> Self {
         Self {
             id: id.to_string(),
@@ -81,7 +76,6 @@ impl ExNode {
 // ── Conditions ──────────────────────────────────────────────────────────────
 
 /// Condition evaluated by a Condition node to determine branching
-#[allow(dead_code)] // F-GAP-04 — planned wiring
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ExCondition {
     /// True when a node's output matches an expected value
@@ -106,7 +100,6 @@ pub enum ExCondition {
 
 impl ExCondition {
     /// Evaluate this condition against the current node outputs.
-    #[allow(dead_code)] // F-GAP-04 — planned wiring
     pub fn evaluate(&self, node_outputs: &HashMap<ExNodeId, &ExNode>) -> bool {
         match self {
             ExCondition::OutputMatches { node_id, expected } => node_outputs
@@ -145,7 +138,6 @@ impl ExCondition {
 // ── Edges ───────────────────────────────────────────────────────────────────
 
 /// Directed edge between two nodes
-#[allow(dead_code)] // F-GAP-04 — planned wiring
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExEdge {
     pub from: ExNodeId,
@@ -157,7 +149,6 @@ pub struct ExEdge {
 // ── Fan-out groups ──────────────────────────────────────────────────────────
 
 /// Tracks a fan-out group: branch -> parallel tasks -> join
-#[allow(dead_code)] // F-GAP-04 — planned wiring
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FanOutGroup {
     pub group_id: String,
@@ -171,7 +162,6 @@ pub struct FanOutGroup {
 // ── Execution graph ─────────────────────────────────────────────────────────
 
 /// Execution graph — a DAG supporting fan-out/join and conditional branching.
-#[allow(dead_code)] // F-GAP-04 — planned wiring
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionGraph {
     pub nodes: HashMap<ExNodeId, ExNode>,
@@ -182,7 +172,6 @@ pub struct ExecutionGraph {
     pub name: String,
 }
 
-#[allow(dead_code)] // F-GAP-04 — planned wiring
 impl ExecutionGraph {
     /// Create a new execution graph with Start and End nodes.
     pub fn new(name: &str) -> Self {

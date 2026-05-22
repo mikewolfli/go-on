@@ -12,6 +12,7 @@ use std::time::Instant;
 use std::{fs, path::Path};
 
 use anyhow::Result;
+use futures_util::future::join_all;
 use opentelemetry::{Context as OtelContext, KeyValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -19,24 +20,24 @@ use tokio::sync::mpsc;
 use tokio::time::Duration;
 use tracing::{debug, info, warn};
 
+use crate::acp::helpers::autonomy::{
+    is_execution_like_request, planner_guided_tool_preferences, run_followup_after_tool_observation,
+};
+use crate::acp::helpers::autonomy_metrics::{
+    record_autonomy_loop_stop_reason, record_explicit_tool_route, record_fallback_reason,
+    record_orchestration_alignment, record_orchestration_node_mapping, record_planner_guided_route,
+    record_reputation_routing_applied, record_tool_followup_attempt, record_tool_followup_fallback,
+    record_tool_followup_success, record_vote_reputation_tiebreak, record_vote_winner,
+};
 use crate::acp::helpers::context::{
     probe_agent_runtime_readiness, request_timeout, run_with_optional_timeout,
     AgentRuntimeReadiness,
 };
 use crate::acp::helpers::conversation::stream_would_exceed_limits;
-use crate::acp::helpers::autonomy::{
-    is_execution_like_request, planner_guided_tool_preferences,
-    run_followup_after_tool_observation,
-};
-use crate::acp::helpers::autonomy_metrics::{
-    record_autonomy_loop_stop_reason,
-    record_explicit_tool_route, record_orchestration_alignment,
-    record_orchestration_node_mapping, record_planner_guided_route,
-};
+use crate::acp::helpers::metrics::{stream_chunk_notification, stream_done_notification};
 use crate::acp::helpers::orchestration_alignment::{
     derive_orchestration_node_decisions, derive_plan_trace_alignment,
 };
-use crate::acp::helpers::metrics::{stream_chunk_notification, stream_done_notification};
 use crate::acp::r#impl::UserSession;
 use crate::acp::server::AcpServer;
 use crate::agent::Message;
@@ -45,6 +46,10 @@ use crate::evaluation::TraceEvent;
 use crate::flow::FlowManager;
 use crate::i18n::runtime::tf;
 use crate::intelligence::token_cache::ContextLengthClass;
+use crate::orchestration::autonomy_runtime::{
+    build_tool_execution_followup_message, build_tool_result_block,
+};
+use crate::orchestration::council::{CouncilMember, CouncilProposal, CouncilVote, ProposalStatus};
 use crate::orchestration::planner_executor::Planner;
 use crate::orchestration::prompt_layers::PromptAssembler;
 use crate::orchestration::skill::SkillDescriptor;
@@ -367,6 +372,116 @@ fn normalize_vote_key(text: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_ascii_lowercase()
+}
+
+struct HighRiskVoteAttemptResult {
+    attempt_log: Value,
+    candidate: Option<AgentStrongVoteOutcome>,
+    source: Option<AgentVoteSource>,
+    failure: Option<Value>,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_high_risk_vote_attempt(
+    server: &AcpServer,
+    phase_name: &str,
+    trace_id: &str,
+    agent_name: String,
+    agent: Arc<dyn crate::agent::Agent>,
+    agent_messages: Vec<Message>,
+    principles: Option<Vec<String>>,
+    options: HashMap<String, Value>,
+    timeout: Option<Duration>,
+    strong_model: Option<String>,
+    vote_mode: &'static str,
+) -> HighRiskVoteAttemptResult {
+    let attempt_started = Instant::now();
+    let model = strong_model.clone();
+
+    let outcome = run_agent_collecting(
+        server,
+        StreamNotificationContext {
+            stream_observer: None,
+            agent_name: &agent_name,
+            phase_name,
+            trace_id,
+        },
+        Arc::clone(&agent),
+        agent_messages,
+        principles,
+        Some(options.clone()),
+        timeout,
+    )
+    .await;
+
+    let elapsed_ms = attempt_started.elapsed().as_millis() as u64;
+
+    match outcome {
+        Ok((output_text, reasoning_output, _sel_m)) => {
+            let success = !output_text.trim().is_empty();
+            if let Ok(mut ctrl) = server.online_controller.lock() {
+                ctrl.record_agent_outcome(phase_name, &agent_name, success, elapsed_ms);
+            }
+
+            if success {
+                HighRiskVoteAttemptResult {
+                    attempt_log: json!({
+                        "agent": agent_name,
+                        "ok": true,
+                        "duration_ms": elapsed_ms,
+                        "risk_vote_mode": vote_mode,
+                        "model": model,
+                    }),
+                    candidate: Some(AgentStrongVoteOutcome {
+                        agent: agent_name.clone(),
+                        model: strong_model,
+                        response: output_text,
+                        reasoning: reasoning_output,
+                    }),
+                    source: Some((agent_name, agent, options)),
+                    failure: None,
+                }
+            } else {
+                HighRiskVoteAttemptResult {
+                    attempt_log: json!({
+                        "agent": agent_name,
+                        "ok": false,
+                        "duration_ms": elapsed_ms,
+                        "risk_vote_mode": vote_mode,
+                        "error": "empty_response",
+                    }),
+                    candidate: None,
+                    source: None,
+                    failure: Some(json!({
+                        "agent": agent_name,
+                        "reason": "empty_response",
+                    })),
+                }
+            }
+        }
+        Err(err) => {
+            let err_text = err.to_string();
+            if let Ok(mut ctrl) = server.online_controller.lock() {
+                ctrl.record_agent_outcome(phase_name, &agent_name, false, elapsed_ms);
+            }
+
+            HighRiskVoteAttemptResult {
+                attempt_log: json!({
+                    "agent": agent_name,
+                    "ok": false,
+                    "duration_ms": elapsed_ms,
+                    "risk_vote_mode": vote_mode,
+                    "error": err_text,
+                }),
+                candidate: None,
+                source: None,
+                failure: Some(json!({
+                    "agent": agent_name,
+                    "reason": err_text,
+                })),
+            }
+        }
+    }
 }
 
 fn select_strong_model_id(agent: &dyn crate::agent::Agent) -> Option<String> {
@@ -729,6 +844,7 @@ fn controller_recommended_phase(
 }
 
 /// Process chat request
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) async fn process_chat_request(
     server: &AcpServer,
     params: &ChatParams,
@@ -907,6 +1023,28 @@ pub(crate) async fn process_chat_request(
     let phase = resolved.phase.clone();
     let phase_name = &phase.phase_name;
     reorder_chat_agents_by_runtime_score(server, phase_name, &mut resolved.agents);
+    let mut routing_provenance: Vec<String> = vec!["runtime_score_rerank_applied".to_string()];
+    let mut reputation_scores: HashMap<String, f64> = HashMap::new();
+
+    if let Some(ref cb) = server.capability_bus {
+        if let Ok(rep) = cb.reputation.lock() {
+            for (name, _) in &resolved.agents {
+                reputation_scores.insert(name.clone(), rep.score(name));
+            }
+        }
+    }
+    if resolved.agents.len() > 1 && !reputation_scores.is_empty() {
+        resolved.agents.sort_by(|a, b| {
+            let score_a = reputation_scores.get(&a.0).copied().unwrap_or(0.5);
+            let score_b = reputation_scores.get(&b.0).copied().unwrap_or(0.5);
+            score_b
+                .partial_cmp(&score_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        record_reputation_routing_applied();
+        routing_provenance.push("reputation_weighted_rerank_applied".to_string());
+    }
 
     // ── SchemaRegistry task envelope validation (F-GAP-07) ─────────────
     // Validate the resolved phase's role schemas against the incoming
@@ -968,6 +1106,10 @@ pub(crate) async fn process_chat_request(
 
     let mut capability_selected_agent: Option<String> = None;
     let mut capability_recommended_mode: Option<String> = None;
+    let mut capability_candidate_count: Option<u64> = None;
+    let mut capability_decision_confidence: Option<f64> = None;
+    let mut capability_selection_reason: Option<String> = None;
+    let mut selected_agent_reputation: Option<f64> = None;
     #[cfg(feature = "sub-bus-optimization")]
     let mut capability_optimization_hint: Option<Value> = None;
     #[cfg(not(feature = "sub-bus-optimization"))]
@@ -990,6 +1132,8 @@ pub(crate) async fn process_chat_request(
         let decision = cb.decide(&task_ctx, &sensing);
         capability_selected_agent = decision.selected_agent.clone();
         capability_recommended_mode = Some(decision.recommended_mode.clone());
+        capability_candidate_count = Some(sensing.capability_agent_count as u64);
+        capability_decision_confidence = Some(decision.confidence);
 
         // Compute optimization hint under the feature gate.
         #[cfg(feature = "sub-bus-optimization")]
@@ -1018,10 +1162,28 @@ pub(crate) async fn process_chat_request(
             // we fall through to the phase-level agents unchanged.
             if resolved.agents.iter().any(|(name, _)| name == agent) {
                 resolved.agents.retain(|(name, _)| name == agent);
+                capability_selection_reason = Some("capability_bus_selected".to_string());
+                routing_provenance.push("capability_bus_selected_agent_applied".to_string());
+                crate::acp::helpers::autonomy_metrics::record_capability_selection_reason(
+                    "capability_bus_selected",
+                );
+            } else {
+                capability_selection_reason = Some("capability_bus_no_match".to_string());
+                routing_provenance
+                    .push("capability_bus_selected_agent_not_in_candidates".to_string());
+                crate::acp::helpers::autonomy_metrics::record_capability_selection_reason(
+                    "capability_bus_no_match",
+                );
             }
             // reorder is now redundant since retain already reduced to one,
             // but kept for clarity in case retain logic changes in future.
             let _ = reorder_agents_with_priority(&mut resolved.agents, agent);
+        } else {
+            capability_selection_reason = Some("capability_bus_none".to_string());
+            routing_provenance.push("capability_bus_no_selected_agent".to_string());
+            crate::acp::helpers::autonomy_metrics::record_capability_selection_reason(
+                "capability_bus_none",
+            );
         }
         // Record the routing decision as an observable event
         cb.record_event(
@@ -1278,8 +1440,7 @@ You have access to {} registered skill(s). Skills are reusable templates that au
     let mut quota_failed_agents: Vec<String> = Vec::new();
     let mut agent_attempts: Vec<Value> = Vec::new();
     let mut cache_hit = false;
-    let cache_bypassed_for_execution =
-        is_execution_like_request(&params.mode, &agent_messages);
+    let cache_bypassed_for_execution = is_execution_like_request(&params.mode, &agent_messages);
 
     // ── Scheduler task submission (ARCH-02) ────────────────────────────
     // Submit this request as a ScheduledTask so the dual-level priority
@@ -1320,86 +1481,106 @@ You have access to {} registered skill(s). Skills are reusable templates that au
     // already holds a response for this exact input.  On a high-confidence
     // hit (L1 exact match, or L2/L3 with semantic similarity > 0.95) we
     // skip the LLM call entirely and return the cached output.
-    if !cache_bypassed_for_execution {
-        let input_text = crate::intelligence::token_cache::messages_to_text(&agent_messages);
-        let estimated_tokens =
-            crate::intelligence::token_cache::estimate_messages_token_count(&agent_messages);
-        let context_class = ContextLengthClass::from_token_count(estimated_tokens);
+    //
+    // When the request is execution-like, a cache hit is recorded as a
+    // "short-circuit refusal" (AUTON-03 criterion 3) so governance.status
+    // can distinguish: "cache was hit but refused" vs. "cache was skipped".
+    let input_text = crate::intelligence::token_cache::messages_to_text(&agent_messages);
+    let estimated_tokens =
+        crate::intelligence::token_cache::estimate_messages_token_count(&agent_messages);
+    let context_class = ContextLengthClass::from_token_count(estimated_tokens);
 
-        if let Some((level, entry)) = server
-            .cache
-            .token_cache
-            .lookup(&input_text, context_class)
-            .await
-        {
-            // L1 is always an exact match → 100 % confidence.
-            // L2 / L3 hits are considered high-confidence when the output is
-            // long enough to provide meaningful reuse.
-            let confidence = match level {
-                crate::intelligence::token_cache::CacheLevel::L1 => 1.0,
-                crate::intelligence::token_cache::CacheLevel::L2 => {
-                    // Compute cosine similarity between input and cached input
-                    let input_vec = crate::intelligence::token_cache::simple_embedding(&input_text);
-                    let cached_vec =
-                        crate::intelligence::token_cache::simple_embedding(&entry.input);
-                    crate::intelligence::token_cache::cosine_similarity(&input_vec, &cached_vec)
-                }
-                crate::intelligence::token_cache::CacheLevel::L3 => {
-                    // L3 template matches are structural – treat as high confidence
-                    // when the cached output is non-trivial (> 50 chars).
-                    if entry.output.len() > 50 {
-                        0.96
-                    } else {
-                        0.0
-                    }
-                }
-            };
-
-            if confidence > 0.95 {
-                tracing::info!(
-                    target = "token_cache",
-                    level = %level,
-                    confidence,
-                    agent_count = resolved.agents.len(),
-                    "process_chat_request: token cache HIT, skipping agent execution"
-                );
-                cache_hit = true;
-                selected_agent = resolved
-                    .agents
-                    .first()
-                    .map(|(name, _)| name.clone())
-                    .unwrap_or_else(|| "cached".to_string());
-                response_text = entry.output.clone();
-
-                // Emit the cached response through the stream observer, if present.
-                if let Some(ref observer) = stream_observer {
-                    let meta = StreamEventMeta {
-                        agent_name: &selected_agent,
-                        phase_name,
-                        trace_id: &trace.trace_id,
-                    };
-                    let total_chars = response_text.chars().count();
-                    emit_stream_chunk(server, Some(observer), meta, &response_text, 1, total_chars)
-                        .await?;
-                    emit_stream_done(server, Some(observer), meta, 1, total_chars, 0u64, None)
-                        .await?;
-                }
-
-                agent_attempts.push(json!({
-                    "agent": selected_agent,
-                    "ok": true,
-                    "cached": true,
-                    "cache_level": format!("{level}"),
-                    "duration_ms": 0u64
-                }));
+    if let Some((level, entry)) = server
+        .cache
+        .token_cache
+        .lookup(&input_text, context_class)
+        .await
+    {
+        // L1 is always an exact match → 100 % confidence.
+        // L2 / L3 hits are considered high-confidence when the output is
+        // long enough to provide meaningful reuse.
+        let confidence = match level {
+            crate::intelligence::token_cache::CacheLevel::L1 => 1.0,
+            crate::intelligence::token_cache::CacheLevel::L2 => {
+                // Compute cosine similarity between input and cached input
+                let input_vec = crate::intelligence::token_cache::simple_embedding(&input_text);
+                let cached_vec = crate::intelligence::token_cache::simple_embedding(&entry.input);
+                crate::intelligence::token_cache::cosine_similarity(&input_vec, &cached_vec)
             }
+            crate::intelligence::token_cache::CacheLevel::L3 => {
+                // L3 template matches are structural – treat as high confidence
+                // when the cached output is non-trivial (> 50 chars).
+                if entry.output.len() > 50 {
+                    0.96
+                } else {
+                    0.0
+                }
+            }
+        };
+
+        if confidence > 0.95 && !cache_bypassed_for_execution {
+            tracing::info!(
+                target = "token_cache",
+                level = %level,
+                confidence,
+                agent_count = resolved.agents.len(),
+                "process_chat_request: token cache HIT, skipping agent execution"
+            );
+            cache_hit = true;
+            selected_agent = resolved
+                .agents
+                .first()
+                .map(|(name, _)| name.clone())
+                .unwrap_or_else(|| "cached".to_string());
+            response_text = entry.output.clone();
+
+            // Emit the cached response through the stream observer, if present.
+            if let Some(ref observer) = stream_observer {
+                let meta = StreamEventMeta {
+                    agent_name: &selected_agent,
+                    phase_name,
+                    trace_id: &trace.trace_id,
+                };
+                let total_chars = response_text.chars().count();
+                emit_stream_chunk(server, Some(observer), meta, &response_text, 1, total_chars)
+                    .await?;
+                emit_stream_done(server, Some(observer), meta, 1, total_chars, 0u64, None).await?;
+            }
+
+            agent_attempts.push(json!({
+                "agent": selected_agent,
+                "ok": true,
+                "cached": true,
+                "cache_level": format!("{level}"),
+                "duration_ms": 0u64
+            }));
+        } else if confidence > 0.95 && cache_bypassed_for_execution {
+            // Cache hit was found but refused — record for governance.status observability
+            // (AUTON-03 criterion 3). The request is execution-like, so a stale cached
+            // response could mask necessary side effects.
+            tracing::info!(
+                target = "token_cache",
+                level = %level,
+                mode = %params.mode,
+                "process_chat_request: cache HIT but refused (execution-like request)"
+            );
+            crate::acp::helpers::autonomy_metrics::record_cache_shortcircuit_refused(
+                "execution_like_request",
+            );
+            crate::acp::helpers::autonomy_metrics::record_cache_bypass_for_execution();
+            agent_attempts.push(json!({
+                "agent": "cache_guard",
+                "ok": true,
+                "cached": false,
+                "shortcircuit_refused": true,
+                "cache_level": format!("{level}"),
+                "reason": "execution_like_request",
+                "duration_ms": 0u64
+            }));
         }
-    } else {
-        tracing::info!(
-            target = "token_cache",
-            mode = %params.mode,
-            "process_chat_request: bypassing token cache for execution-like request"
-        );
+    } else if cache_bypassed_for_execution {
+        // No cache entry found for this execution-like request — record the bypass.
+        crate::acp::helpers::autonomy_metrics::record_cache_bypass_for_execution();
         agent_attempts.push(json!({
             "agent": "cache_guard",
             "ok": true,
@@ -1564,6 +1745,16 @@ You have access to {} registered skill(s). Skills are reusable templates that au
     let mut agent_vote_failures: Vec<Value> = Vec::new();
     let mut agent_vote_sources: Vec<AgentVoteSource> = Vec::new();
     let mut emit_final_vote_response = false;
+    let mut vote_winner: Option<String> = None;
+    let mut fallback_reason: Option<String> = None;
+    let mut council_decision: Option<Value> = None;
+    let mut high_risk_vote_jobs: Vec<(
+        String,
+        Arc<dyn crate::agent::Agent>,
+        HashMap<String, Value>,
+        Option<String>,
+    )> = Vec::new();
+    let vote_timeout = request_timeout(phase.options.as_ref());
 
     // Degraded fallback: if all candidates are marked unhealthy, still attempt
     // the first candidate so the request can make progress instead of failing fast.
@@ -1581,6 +1772,9 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                     fallback_agent = %name,
                     "all candidate agents unhealthy; forcing degraded fallback attempt"
                 );
+                fallback_reason = Some("all_agents_unhealthy".to_string());
+                routing_provenance.push("degraded_fallback_all_agents_unhealthy".to_string());
+                record_fallback_reason("all_agents_unhealthy");
             }
             selected
         } else {
@@ -1590,7 +1784,91 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         None
     };
 
-    if !cache_hit {
+    let should_use_council_deliberation = risk_assessment.is_high_risk
+        && !model_is_specific
+        && resolved.agents.len() >= 2
+        && option_bool(&base_agent_options, "council_deliberation_enabled", true);
+    if should_use_council_deliberation {
+        if let Some(ref cb) = server.capability_bus {
+            let candidate_names = resolved
+                .agents
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect::<Vec<_>>();
+            if let Some((winner, decision)) =
+                run_council_route_deliberation(cb, phase_name, &candidate_names, &reputation_scores)
+            {
+                if reorder_agents_with_priority(&mut resolved.agents, &winner) {
+                    routing_provenance.push("council_deliberation_selected_route".to_string());
+                }
+                council_decision = Some(decision);
+            }
+        }
+    }
+
+    // AUTON-01: Use multi-round autonomy loop for full_auto / execution-like requests.
+    // The autonomy loop runs think → act → observe → replan cycles until the task
+    // is complete, tools are exhausted, or the iteration limit is reached.
+    // Once set, the regular agent loop AND the TAO section (line ~2317) are skipped
+    // to prevent dual tool execution.
+    let mut autonomy_loop_executed = false;
+    if !cache_hit
+        && crate::acp::helpers::autonomy_loop_adapter::should_use_acp_autonomy_loop(
+            &params.mode,
+            &agent_messages,
+        )
+    {
+        if let Some(first_agent) = resolved.agents.first().cloned() {
+            let (agent_name, agent) = first_agent;
+            let attempt_started = std::time::Instant::now();
+            let autonomy_tool_registry = Some(std::sync::Arc::new(
+                crate::orchestration::tool::ToolRegistry::new(),
+            ));
+            let result = crate::acp::helpers::autonomy_loop_adapter::run_acp_autonomy_loop(
+                agent,
+                autonomy_tool_registry,
+                agent_messages.clone(),
+                phase.principles.clone(),
+                None,
+                request_timeout(phase.options.as_ref()),
+                None,
+            )
+            .await;
+            match result {
+                Ok(loop_result) => {
+                    autonomy_loop_executed = true;
+                    response_text = loop_result.response;
+                    reasoning_text = loop_result.reasoning;
+                    selected_model_name = loop_result.selected_model;
+                    selected_agent = agent_name.clone();
+                    agent_attempts.push(json!({
+                        "agent": agent_name,
+                        "ok": true,
+                        "autonomy_loop": true,
+                        "total_rounds": loop_result.report.total_rounds,
+                        "total_tools": loop_result.report.total_tools,
+                        "stop_reason": loop_result.report.stop_reason,
+                        "duration_ms": attempt_started.elapsed().as_millis() as u64,
+                    }));
+                    crate::acp::helpers::autonomy_metrics::record_autonomy_loop_stop_reason(
+                        &loop_result.report.stop_reason,
+                    );
+                }
+                Err(e) => {
+                    warn!("autonomy loop failed for '{}': {}", agent_name, e);
+                    agent_attempts.push(json!({
+                        "agent": agent_name,
+                        "ok": false,
+                        "autonomy_loop": true,
+                        "error": e.to_string(),
+                        "duration_ms": attempt_started.elapsed().as_millis() as u64,
+                    }));
+                }
+            }
+        }
+    }
+
+    if !cache_hit && response_text.is_empty() {
         for (agent_name, agent) in resolved.agents {
             let attempt_started = std::time::Instant::now();
 
@@ -1638,89 +1916,13 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                 if let Some(model_id) = strong_model.clone() {
                     vote_options.insert("model".to_string(), Value::String(model_id));
                 }
-
-                match run_agent_collecting(
-                    server,
-                    StreamNotificationContext {
-                        stream_observer: None,
-                        agent_name: &agent_name,
-                        phase_name,
-                        trace_id: &trace.trace_id,
-                    },
+                high_risk_vote_jobs.push((
+                    agent_name.clone(),
                     Arc::clone(&agent),
-                    agent_messages.clone(),
-                    phase.principles.clone(),
-                    Some(vote_options),
-                    request_timeout(phase.options.as_ref()),
-                )
-                .await
-                {
-                    Ok((output_text, reasoning_output, _sel_m))
-                        if !output_text.trim().is_empty() =>
-                    {
-                        if let Ok(mut ctrl) = server.online_controller.lock() {
-                            ctrl.record_agent_outcome(
-                                phase_name,
-                                &agent_name,
-                                true,
-                                attempt_started.elapsed().as_millis() as u64,
-                            );
-                        }
-                        agent_attempts.push(json!({
-                            "agent": agent_name,
-                            "ok": true,
-                            "duration_ms": attempt_started.elapsed().as_millis() as u64,
-                            "risk_vote_mode": "strong_model",
-                            "model": strong_model,
-                        }));
-                        agent_vote_candidates.push(AgentStrongVoteOutcome {
-                            agent: agent_name.clone(),
-                            model: strong_model,
-                            response: output_text,
-                            reasoning: reasoning_output,
-                        });
-                        agent_vote_sources.push((
-                            agent_name.clone(),
-                            Arc::clone(&agent),
-                            per_attempt_options.clone(),
-                        ));
-                        continue;
-                    }
-                    Ok((_, _, _)) => {
-                        let failure = json!({
-                            "agent": agent_name,
-                            "reason": "empty_response",
-                        });
-                        agent_vote_failures.push(failure.clone());
-                        agent_attempts.push(json!({
-                            "agent": agent_name,
-                            "ok": false,
-                            "duration_ms": attempt_started.elapsed().as_millis() as u64,
-                            "risk_vote_mode": "strong_model",
-                            "error": "empty_response",
-                        }));
-                        continue;
-                    }
-                    Err(err) => {
-                        let err_text = err.to_string();
-                        let failure = json!({
-                            "agent": agent_name,
-                            "reason": err_text,
-                        });
-                        agent_vote_failures.push(failure.clone());
-                        agent_attempts.push(json!({
-                            "agent": agent_name,
-                            "ok": false,
-                            "duration_ms": attempt_started.elapsed().as_millis() as u64,
-                            "risk_vote_mode": "strong_model",
-                            "error": err.to_string(),
-                        }));
-                        if last_err.is_none() {
-                            last_err = Some(anyhow::anyhow!("{}: {}", agent_name, err));
-                        }
-                        continue;
-                    }
-                }
+                    vote_options,
+                    strong_model,
+                ));
+                continue;
             }
 
             match run_agent_collecting(
@@ -1837,6 +2039,54 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         }
     }
 
+    if !high_risk_vote_jobs.is_empty() {
+        let vote_results = join_all(high_risk_vote_jobs.into_iter().map(
+            |(agent_name, agent, vote_options, strong_model)| {
+                let server_ref = server;
+                let agent_messages = agent_messages.clone();
+                let phase_principles = phase.principles.clone();
+                let trace_id = &trace.trace_id;
+                async move {
+                    run_high_risk_vote_attempt(
+                        server_ref,
+                        phase_name,
+                        trace_id,
+                        agent_name,
+                        agent,
+                        agent_messages,
+                        phase_principles,
+                        vote_options,
+                        vote_timeout,
+                        strong_model,
+                        "strong_model",
+                    )
+                    .await
+                }
+            },
+        ))
+        .await;
+
+        for result in vote_results {
+            agent_attempts.push(result.attempt_log);
+            if let Some(candidate) = result.candidate {
+                agent_vote_candidates.push(candidate);
+            }
+            if let Some(source) = result.source {
+                agent_vote_sources.push(source);
+            }
+            if let Some(failure) = result.failure {
+                if last_err.is_none() {
+                    let reason = failure
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .unwrap_or("vote attempt failed");
+                    last_err = Some(anyhow::anyhow!("high-risk vote failed: {}", reason));
+                }
+                agent_vote_failures.push(failure);
+            }
+        }
+    }
+
     if !cache_hit
         && enable_high_risk_multi_agent_vote
         && agent_vote_candidates.len() >= min_vote_agents
@@ -1851,16 +2101,39 @@ You have access to {} registered skill(s). Skills are reusable templates that au
 
         let mut winner_index = 0usize;
         let mut winner_votes = 0usize;
+        let mut winner_rep = 0.0f64;
         let mut winner_len = 0usize;
         for (idx, candidate) in agent_vote_candidates.iter().enumerate() {
             let key = normalize_vote_key(&candidate.response);
             let votes = vote_counts.get(&key).copied().unwrap_or(0);
+            let rep = reputation_scores
+                .get(&candidate.agent)
+                .copied()
+                .unwrap_or(0.5);
             let length = candidate.response.chars().count();
-            if votes > winner_votes || (votes == winner_votes && length > winner_len) {
+            if votes > winner_votes
+                || (votes == winner_votes && rep > winner_rep)
+                || (votes == winner_votes
+                    && (rep - winner_rep).abs() < f64::EPSILON
+                    && length > winner_len)
+            {
                 winner_index = idx;
                 winner_votes = votes;
+                winner_rep = rep;
                 winner_len = length;
             }
+        }
+        let max_vote_count = winner_votes;
+        let tied_candidates = agent_vote_candidates
+            .iter()
+            .filter(|candidate| {
+                let key = normalize_vote_key(&candidate.response);
+                vote_counts.get(&key).copied().unwrap_or(0) == max_vote_count
+            })
+            .count();
+        if tied_candidates > 1 {
+            record_vote_reputation_tiebreak();
+            routing_provenance.push("vote_tiebreaked_by_reputation".to_string());
         }
 
         let winner = agent_vote_candidates[winner_index].clone();
@@ -1896,10 +2169,16 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         });
 
         vote_report = Some(strong_vote_report.clone());
+        vote_winner = Some("multi_agent_strong_model_vote".to_string());
+        record_vote_winner("multi_agent_strong_model_vote");
 
         if review_required && escalation_enabled {
-            let mut escalation_ballots: Vec<AgentStrongVoteOutcome> = Vec::new();
-            let mut escalation_failures: Vec<Value> = Vec::new();
+            let mut escalation_jobs: Vec<(
+                String,
+                Arc<dyn crate::agent::Agent>,
+                HashMap<String, Value>,
+                Option<String>,
+            )> = Vec::new();
 
             for (agent_name, agent, base_options) in
                 agent_vote_sources.iter().take(escalation_max_agents)
@@ -1908,53 +2187,54 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                     continue;
                 }
 
-                let candidate_models =
-                    select_top_models(agent.as_ref(), escalation_models_per_agent);
-                for model_id in candidate_models {
+                for model_id in select_top_models(agent.as_ref(), escalation_models_per_agent) {
                     let mut model_options = base_options.clone();
                     model_options.insert("model".to_string(), Value::String(model_id.clone()));
-
-                    match run_agent_collecting(
-                        server,
-                        StreamNotificationContext {
-                            stream_observer: None,
-                            agent_name,
-                            phase_name,
-                            trace_id: &trace.trace_id,
-                        },
+                    escalation_jobs.push((
+                        agent_name.clone(),
                         Arc::clone(agent),
-                        agent_messages.clone(),
-                        phase.principles.clone(),
-                        Some(model_options),
-                        request_timeout(phase.options.as_ref()),
-                    )
-                    .await
-                    {
-                        Ok((output_text, reasoning_output, _sel_m))
-                            if !output_text.trim().is_empty() =>
-                        {
-                            escalation_ballots.push(AgentStrongVoteOutcome {
-                                agent: agent_name.clone(),
-                                model: Some(model_id.clone()),
-                                response: output_text,
-                                reasoning: reasoning_output,
-                            });
-                        }
-                        Ok((_, _, _)) => {
-                            escalation_failures.push(json!({
-                                "agent": agent_name,
-                                "model": model_id,
-                                "reason": "empty_response",
-                            }));
-                        }
-                        Err(err) => {
-                            escalation_failures.push(json!({
-                                "agent": agent_name,
-                                "model": model_id,
-                                "reason": err.to_string(),
-                            }));
-                        }
+                        model_options,
+                        Some(model_id),
+                    ));
+                }
+            }
+
+            let escalation_results = join_all(escalation_jobs.into_iter().map(
+                |(agent_name, agent, model_options, model_id)| {
+                    let server_ref = server;
+                    let agent_messages = agent_messages.clone();
+                    let phase_principles = phase.principles.clone();
+                    let trace_id = &trace.trace_id;
+
+                    async move {
+                        run_high_risk_vote_attempt(
+                            server_ref,
+                            phase_name,
+                            trace_id,
+                            agent_name,
+                            agent,
+                            agent_messages,
+                            phase_principles,
+                            model_options,
+                            vote_timeout,
+                            model_id,
+                            "escalation",
+                        )
+                        .await
                     }
+                },
+            ))
+            .await;
+
+            let mut escalation_ballots: Vec<AgentStrongVoteOutcome> = Vec::new();
+            let mut escalation_failures: Vec<Value> = Vec::new();
+
+            for result in escalation_results {
+                if let Some(ballot) = result.candidate {
+                    escalation_ballots.push(ballot);
+                }
+                if let Some(failure) = result.failure {
+                    escalation_failures.push(failure);
                 }
             }
 
@@ -1968,18 +2248,37 @@ You have access to {} registered skill(s). Skills are reusable templates that au
 
                 let mut escalation_winner_index = 0usize;
                 let mut escalation_winner_votes = 0usize;
+                let mut escalation_winner_rep = 0.0f64;
                 let mut escalation_winner_len = 0usize;
                 for (idx, ballot) in escalation_ballots.iter().enumerate() {
                     let key = normalize_vote_key(&ballot.response);
                     let votes = escalation_counts.get(&key).copied().unwrap_or(0);
+                    let rep = reputation_scores.get(&ballot.agent).copied().unwrap_or(0.5);
                     let length = ballot.response.chars().count();
                     if votes > escalation_winner_votes
-                        || (votes == escalation_winner_votes && length > escalation_winner_len)
+                        || (votes == escalation_winner_votes && rep > escalation_winner_rep)
+                        || (votes == escalation_winner_votes
+                            && (rep - escalation_winner_rep).abs() < f64::EPSILON
+                            && length > escalation_winner_len)
                     {
                         escalation_winner_index = idx;
                         escalation_winner_votes = votes;
+                        escalation_winner_rep = rep;
                         escalation_winner_len = length;
                     }
+                }
+                let escalation_max_vote_count = escalation_winner_votes;
+                let escalation_tied_candidates = escalation_ballots
+                    .iter()
+                    .filter(|ballot| {
+                        let key = normalize_vote_key(&ballot.response);
+                        escalation_counts.get(&key).copied().unwrap_or(0)
+                            == escalation_max_vote_count
+                    })
+                    .count();
+                if escalation_tied_candidates > 1 {
+                    record_vote_reputation_tiebreak();
+                    routing_provenance.push("escalation_vote_tiebreaked_by_reputation".to_string());
                 }
 
                 let escalation_winner = escalation_ballots[escalation_winner_index].clone();
@@ -2010,6 +2309,8 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                     "failed_ballots": escalation_failures,
                     "review_required": review_required,
                 }));
+                vote_winner = Some("multi_agent_multi_model_escalation".to_string());
+                record_vote_winner("multi_agent_multi_model_escalation");
             }
         }
     }
@@ -2258,7 +2559,10 @@ You have access to {} registered skill(s). Skills are reusable templates that au
     let mut tool_execution_results = Vec::new();
 
     if params.mode.eq_ignore_ascii_case("full_auto") {
-        match crate::acp::r#impl::agent::run_dual_review_gate(
+        // ── Review gate always runs for full_auto mode ────────────────
+        // Ensures review results are available regardless of whether the
+        // autonomy loop or TAO loop handles tool execution.
+        let review_outcome = crate::acp::r#impl::agent::run_dual_review_gate(
             server,
             None,
             &params.messages,
@@ -2266,8 +2570,9 @@ You have access to {} registered skill(s). Skills are reusable templates that au
             span,
             trace,
         )
-        .await
-        {
+        .await;
+
+        match &review_outcome {
             Ok(outcome) => {
                 reviews.push(json!({
                     "reviewer": outcome.reviewer,
@@ -2275,8 +2580,15 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                     "response": outcome.comments.join("; "),
                     "duration_ms": outcome.duration_ms,
                 }));
+            }
+            Err(e) => {
+                tracing::warn!("review gate failed: {}", e);
+            }
+        }
 
-                // If review passed, run tool execution loop
+        // ── Only run TAO loop when the autonomy loop did NOT handle execution ──
+        if !autonomy_loop_executed {
+            if let Ok(outcome) = &review_outcome {
                 if outcome.passed {
                     // Extract task description
                     let task_description = extract_task_description(&params.messages);
@@ -2304,7 +2616,6 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                         let calls = extract_tool_calls_from_response(&response_text, 5);
                         if calls.is_empty() {
                             record_planner_guided_route();
-                            // No explicit tool calls — derive execution tools from planner-guided intent.
                             planner_guided_tool_preferences(
                                 &conversation_id,
                                 phase_name,
@@ -2376,13 +2687,6 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                         "task": task_description
                     }));
                 }
-            }
-            Err(err) => {
-                reviews.push(json!({
-                    "reviewer": "review_gate",
-                    "verdict": "REJECT",
-                    "response": format!("review gate failed: {err}"),
-                }));
             }
         }
     }
@@ -2715,6 +3019,17 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         None
     };
 
+    if selected_agent_reputation.is_none() {
+        selected_agent_reputation = reputation_scores.get(&selected_agent).copied();
+        if selected_agent_reputation.is_none() {
+            if let Some(ref cb) = server.capability_bus {
+                if let Ok(rep) = cb.reputation.lock() {
+                    selected_agent_reputation = Some(rep.score(&selected_agent));
+                }
+            }
+        }
+    }
+
     let result = json!({
         "done": true,
         "conversation_id": conversation_id,
@@ -2727,7 +3042,7 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         "phase": phase_name,
         "phase_origin": phase_origin,
         "agent": selected_agent,
-        "selected_model": selected_model_name,
+        "selected_model": selected_model_name.clone(),
         "duration_ms": started.elapsed().as_millis() as u64,
         "response": response_text,
         "checkpoint": checkpoint,
@@ -2749,9 +3064,61 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         "capability_routing": {
             "selected_agent": capability_selected_agent,
             "recommended_mode": capability_recommended_mode,
+            "candidate_count": capability_candidate_count,
+            "decision_confidence": capability_decision_confidence,
+            "selection_reason": capability_selection_reason,
             "optimization": capability_optimization_hint
+        },
+        "routing_diagnostics": {
+            "routing_provenance": routing_provenance,
+            "candidate_reputation_scores": reputation_scores,
+            "selected_agent_reputation": selected_agent_reputation,
+            "council_decision": council_decision,
+            "vote_winner": vote_winner,
+            "fallback_reason": fallback_reason,
         }
     });
+
+    // ── Request-level routing provenance (BLUE41 Step 7) ──────────────
+    // Persist route decisions and diagnostics so future learning and audits
+    // can explain why this request selected a specific execution path.
+    if let Some(ref ledger) = server.provenance_ledger {
+        let route_input = json!({
+            "request_id": trace.request_id.clone(),
+            "mode": params.mode,
+            "phase": phase_name,
+            "candidate_agents": candidate_agents,
+            "capability_routing": result.get("capability_routing").cloned().unwrap_or_default(),
+            "routing_diagnostics": result.get("routing_diagnostics").cloned().unwrap_or_default(),
+        });
+        let route_output = json!({
+            "selected_agent": selected_agent.clone(),
+            "selected_model": selected_model_name.clone(),
+            "duration_ms": started.elapsed().as_millis() as u64,
+            "success": !response_text.trim().is_empty(),
+        });
+        let timestamp_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        ledger.append(crate::observability::provenance::ProvenanceEntry {
+            id: format!("routing:{}", trace.request_id),
+            task_id: trace.request_id.clone(),
+            phase: phase_name.to_string(),
+            agent: selected_agent.clone(),
+            tool: "routing.deliberation".to_string(),
+            input_digest: crate::observability::provenance::ProvenanceLedger::digest(&route_input),
+            output_digest: crate::observability::provenance::ProvenanceLedger::digest(
+                &route_output,
+            ),
+            upstream_ids: Vec::new(),
+            timestamp_ms,
+            metadata: json!({
+                "route_input": route_input,
+                "route_output": route_output,
+            }),
+        });
+    }
 
     // ── Scheduler task completion (ARCH-02) ────────────────────────────
     // Mark the scheduled task as completed so the active-worker counter
@@ -2773,11 +3140,12 @@ You have access to {} registered skill(s). Skills are reusable templates that au
             .and_then(|v| v.get("total_tokens"))
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
+        let request_succeeded = !response_text.trim().is_empty();
         cb.feedback(
             &selected_agent,
             phase_name,
             &conversation_id,
-            true,
+            request_succeeded,
             elapsed,
             used_tokens,
             1.0,
@@ -2788,7 +3156,7 @@ You have access to {} registered skill(s). Skills are reusable templates that au
             "execute",
             &(phase_name.clone(), selected_agent.clone()),
             used_tokens,
-            true,
+            request_succeeded,
             1.0,
         );
     }
@@ -2816,7 +3184,11 @@ You have access to {} registered skill(s). Skills are reusable templates that au
             .and_then(|v| v.get("total_tokens"))
             .and_then(|v| v.as_u64())
             .unwrap_or(0) as f64;
-        let success_rate = 1.0; // Current request succeeded
+        let success_rate = if response_text.trim().is_empty() {
+            0.0
+        } else {
+            1.0
+        };
         let latency_ms = elapsed as f64;
         let cost_score = (used_tokens / 100_000.0).min(1.0);
         if let Ok(reg) = server.promotion_registry.lock() {
@@ -3196,15 +3568,13 @@ async fn run_agent_collecting(
                         Ok(result) => {
                             let result_text =
                                 serde_json::to_string_pretty(&result).unwrap_or_default();
-                            let tool_block = format!(
-                                "[Tool result: {}]\n{}\n[/Tool result]",
-                                tool_name, result_text
-                            );
+                            let tool_block =
+                                build_tool_result_block(tool_name, &result_text, false);
                             tool_results.push(tool_block);
                         }
                         Err(err) => {
                             let err_block =
-                                format!("[Tool error: {}]\n{}\n[/Tool error]", tool_name, err);
+                                build_tool_result_block(tool_name, &err.to_string(), true);
                             tool_results.push(err_block);
                         }
                     }
@@ -3220,10 +3590,7 @@ async fn run_agent_collecting(
                     }
                     followup_messages.push(Message {
                         role: "user".to_string(),
-                        content: format!(
-                            "Tool observations:\n{}\n\nIncorporate these observations and provide the final answer.",
-                            combined
-                        ),
+                        content: build_tool_execution_followup_message(&tool_results, true),
                     });
 
                     let followup = run_followup_after_tool_observation(
@@ -3234,11 +3601,13 @@ async fn run_agent_collecting(
                         timeout_duration,
                     )
                     .await;
+                    record_tool_followup_attempt();
 
                     match followup {
                         Ok((followup_response, followup_reasoning, followup_model))
                             if !followup_response.trim().is_empty() =>
                         {
+                            record_tool_followup_success();
                             response = followup_response;
                             if !followup_reasoning.is_empty() {
                                 reasoning_buffer.push_str(&followup_reasoning);
@@ -3248,6 +3617,7 @@ async fn run_agent_collecting(
                             }
                         }
                         _ => {
+                            record_tool_followup_fallback();
                             response.push_str("\n\n");
                             response.push_str(&combined);
                         }
@@ -4821,6 +5191,89 @@ fn routing_handles(
     crate::acp::r#impl::runtime::routing_handles(server)
 }
 
+fn run_council_route_deliberation(
+    cb: &crate::intelligence::capability_bus::core::CapabilityBus,
+    phase_name: &str,
+    candidate_agents: &[String],
+    reputation_scores: &HashMap<String, f64>,
+) -> Option<(String, Value)> {
+    if candidate_agents.len() < 2 {
+        return None;
+    }
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let proposal_id = format!("route-{}-{}", phase_name, now_ms);
+
+    let council = cb.council.lock().ok()?;
+    for agent in candidate_agents {
+        let _ = council.add_member(CouncilMember {
+            id: agent.clone(),
+            name: agent.clone(),
+            role: "routing_member".to_string(),
+            voting_power: 100,
+            specializations: vec![phase_name.to_string()],
+            is_active: true,
+            joined_ms: now_ms,
+        });
+    }
+
+    let proposal = CouncilProposal {
+        id: proposal_id.clone(),
+        title: format!("Route selection for phase {}", phase_name),
+        description: "Select the best routing agent for this high-complexity request".to_string(),
+        submitted_by: "capability_bus".to_string(),
+        options: candidate_agents.to_vec(),
+        status: ProposalStatus::Active,
+        created_ms: now_ms,
+    };
+    if council.submit_proposal(proposal).is_err() {
+        return None;
+    }
+
+    let winner_guess = candidate_agents.iter().cloned().max_by(|a, b| {
+        let sa = reputation_scores.get(a).copied().unwrap_or(0.5);
+        let sb = reputation_scores.get(b).copied().unwrap_or(0.5);
+        sa.partial_cmp(&sb)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.cmp(a))
+    })?;
+
+    for agent in candidate_agents {
+        let weight = (reputation_scores.get(agent).copied().unwrap_or(0.5) * 100.0)
+            .round()
+            .clamp(1.0, 100.0) as u32;
+        let _ = council.cast_vote(CouncilVote {
+            member_id: agent.clone(),
+            proposal_id: proposal_id.clone(),
+            selected_option: winner_guess.clone(),
+            weight,
+            vote_ms: now_ms,
+            rationale: Some("Reputation-weighted route deliberation".to_string()),
+        });
+    }
+
+    let tally = council.tally_votes(&proposal_id).ok()?;
+    let winner = tally
+        .winning_option
+        .clone()
+        .unwrap_or_else(|| winner_guess.clone());
+    Some((
+        winner,
+        json!({
+            "proposal_id": proposal_id,
+            "winner": tally.winning_option,
+            "tie": tally.tie,
+            "passed": tally.passed,
+            "total_votes": tally.total_votes,
+            "option_tallies": tally.option_tallies,
+            "candidate_count": candidate_agents.len(),
+        }),
+    ))
+}
+
 fn reorder_chat_agents_by_runtime_score(
     server: &AcpServer,
     phase_name: &str,
@@ -4888,23 +5341,156 @@ fn run_tool_execution_loop(task: &str, subtask: &str, record_index: usize) -> St
 fn extract_tool_calls_from_response(response: &str, max_calls: usize) -> Vec<String> {
     // Parse only explicit tool-call markers; never synthesize placeholder calls.
     let mut calls: Vec<String> = Vec::new();
+    let mut json_block: Vec<String> = Vec::new();
+    let mut in_json_block = false;
+
+    let flush_json_block = |json_block: &mut Vec<String>, calls: &mut Vec<String>| {
+        if json_block.is_empty() {
+            return;
+        }
+
+        let block = json_block.join("\n");
+        json_block.clear();
+
+        let Ok(value) = serde_json::from_str::<Value>(&block) else {
+            return;
+        };
+
+        let mut push_call = |call_name: &str| {
+            let candidate = call_name.trim();
+            if candidate.is_empty() {
+                return;
+            }
+
+            let valid_name = candidate
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.');
+            if !valid_name {
+                return;
+            }
+
+            if !calls.iter().any(|name| name == candidate) {
+                calls.push(candidate.to_string());
+            }
+        };
+
+        match value {
+            Value::Object(map) => {
+                if let Some(tool_call) = map.get("tool_call").and_then(Value::as_str) {
+                    push_call(tool_call);
+                }
+
+                if let Some(tool_calls) = map.get("tool_calls").and_then(Value::as_array) {
+                    for item in tool_calls {
+                        match item {
+                            Value::String(name) => push_call(name),
+                            Value::Object(object) => {
+                                if let Some(name) = object.get("name").and_then(Value::as_str) {
+                                    push_call(name);
+                                } else if let Some(name) =
+                                    object.get("tool").and_then(Value::as_str)
+                                {
+                                    push_call(name);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                if let Some(actions) = map.get("actions").and_then(Value::as_array) {
+                    for item in actions {
+                        match item {
+                            Value::String(name) => push_call(name),
+                            Value::Object(object) => {
+                                if let Some(name) = object.get("name").and_then(Value::as_str) {
+                                    push_call(name);
+                                } else if let Some(name) =
+                                    object.get("tool").and_then(Value::as_str)
+                                {
+                                    push_call(name);
+                                } else if let Some(name) =
+                                    object.get("action").and_then(Value::as_str)
+                                {
+                                    push_call(name);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                if let Some(action_plan) = map.get("action_plan") {
+                    if let Some(action_plan_actions) =
+                        action_plan.get("actions").and_then(Value::as_array)
+                    {
+                        for item in action_plan_actions {
+                            match item {
+                                Value::String(name) => push_call(name),
+                                Value::Object(object) => {
+                                    if let Some(name) = object.get("name").and_then(Value::as_str) {
+                                        push_call(name);
+                                    } else if let Some(name) =
+                                        object.get("tool").and_then(Value::as_str)
+                                    {
+                                        push_call(name);
+                                    } else if let Some(name) =
+                                        object.get("action").and_then(Value::as_str)
+                                    {
+                                        push_call(name);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    if let Value::Object(object) = item {
+                        if let Some(name) = object.get("name").and_then(Value::as_str) {
+                            push_call(name);
+                        } else if let Some(name) = object.get("tool").and_then(Value::as_str) {
+                            push_call(name);
+                        } else if let Some(name) = object.get("action").and_then(Value::as_str) {
+                            push_call(name);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    };
 
     for line in response.lines() {
         let trimmed = line.trim();
 
+        if trimmed.starts_with("```") {
+            if in_json_block {
+                flush_json_block(&mut json_block, &mut calls);
+                in_json_block = false;
+                if calls.len() >= max_calls {
+                    break;
+                }
+                continue;
+            }
+
+            let fence_lang = trimmed.trim_start_matches("```").trim();
+            in_json_block = fence_lang.is_empty() || fence_lang.eq_ignore_ascii_case("json");
+            continue;
+        }
+
+        if in_json_block {
+            json_block.push(trimmed.to_string());
+            continue;
+        }
+
         let marker_value = trimmed
             .strip_prefix("__tool_call__")
             .map(|value| value.trim_start_matches(':').trim())
-            .or_else(|| {
-                trimmed
-                    .strip_prefix("tool_call:")
-                    .map(str::trim)
-            })
-            .or_else(|| {
-                trimmed
-                    .strip_prefix("tool:")
-                    .map(str::trim)
-            });
+            .or_else(|| trimmed.strip_prefix("tool_call:").map(str::trim))
+            .or_else(|| trimmed.strip_prefix("tool:").map(str::trim));
 
         let Some(raw_name) = marker_value else {
             continue;
@@ -4934,6 +5520,10 @@ fn extract_tool_calls_from_response(response: &str, max_calls: usize) -> Vec<Str
         if calls.len() >= max_calls {
             break;
         }
+    }
+
+    if in_json_block {
+        flush_json_block(&mut json_block, &mut calls);
     }
 
     calls
@@ -5352,7 +5942,7 @@ mod tests {
     use serde_json::Value;
 
     #[cfg(not(feature = "backend-postgres"))]
-    use super::{process_chat_request, ChatParams};
+    use super::{extract_tool_calls_from_response, process_chat_request, ChatParams};
     #[cfg(not(feature = "backend-postgres"))]
     use crate::acp::server::ServerBuilder;
     #[cfg(not(feature = "backend-postgres"))]
@@ -5612,6 +6202,44 @@ mod tests {
 
         assert!(summary.chars().count() <= 12);
         assert!(!summary.is_empty());
+    }
+
+    #[test]
+    fn extract_tool_calls_from_explicit_marker() {
+        let response = "Here is the plan\n__tool_call__:read_file:{\"path\":\"src/main.rs\"}\n__tool_call__:apply_patch:{\"path\":\"src/lib.rs\"}";
+        let calls = extract_tool_calls_from_response(response, 5);
+        assert_eq!(
+            calls,
+            vec!["read_file".to_string(), "apply_patch".to_string()]
+        );
+    }
+
+    #[test]
+    fn extract_tool_calls_from_json_fence() {
+        let response = "```json\n{\"tool_calls\":[{\"name\":\"read_file\"},{\"tool\":\"apply_patch\"}],\"tool_call\":\"bash\"}\n```";
+        let calls = extract_tool_calls_from_response(response, 5);
+        assert_eq!(
+            calls,
+            vec![
+                "bash".to_string(),
+                "read_file".to_string(),
+                "apply_patch".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn extract_tool_calls_from_action_plan_alias() {
+        let response = "```json\n{\"action_plan\":{\"actions\":[{\"action\":\"read_file\"},{\"tool\":\"apply_patch\"},{\"name\":\"bash\"}]}}\n```";
+        let calls = extract_tool_calls_from_response(response, 5);
+        assert_eq!(
+            calls,
+            vec![
+                "read_file".to_string(),
+                "apply_patch".to_string(),
+                "bash".to_string()
+            ]
+        );
     }
 
     #[cfg(not(feature = "backend-postgres"))]

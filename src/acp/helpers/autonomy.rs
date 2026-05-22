@@ -10,6 +10,10 @@ use crate::acp::helpers::context::run_with_optional_timeout;
 use crate::agent::{Agent, Message};
 use crate::orchestration::planner_executor::Planner;
 
+fn contains_any(text: &str, terms: &[&str]) -> bool {
+    terms.iter().any(|term| text.contains(term))
+}
+
 pub(crate) fn planner_guided_tool_preferences(
     task_id: &str,
     phase: &str,
@@ -52,35 +56,69 @@ pub(crate) fn planner_guided_tool_preferences(
 
     let mut tools: Vec<String> = Vec::new();
 
-    // Planner-guided routing heuristics for actual execution tools.
-    if ["search", "find", "locate", "analyze", "inspect"]
-        .iter()
-        .any(|kw| joined_text.contains(kw))
-    {
+    let discovery_signal = contains_any(
+        &joined_text,
+        &["search", "find", "locate", "trace", "inspect", "analyze"],
+    ) && contains_any(
+        &joined_text,
+        &[
+            "file",
+            "code",
+            "workspace",
+            "repo",
+            "module",
+            "bug",
+            "error",
+        ],
+    );
+    let review_signal = contains_any(
+        &joined_text,
+        &["read", "check", "trace", "review", "diagnose", "inspect"],
+    ) && contains_any(
+        &joined_text,
+        &["file", "code", "workspace", "repo", "module", "error"],
+    );
+    let mutation_signal = contains_any(
+        &joined_text,
+        &[
+            "write",
+            "create",
+            "update",
+            "modify",
+            "refactor",
+            "fix",
+            "implement",
+        ],
+    ) && contains_any(
+        &joined_text,
+        &["file", "code", "module", "patch", "change", "refactor"],
+    );
+    let execution_signal = contains_any(
+        &joined_text,
+        &["run", "build", "test", "verify", "compile", "benchmark"],
+    ) && contains_any(
+        &joined_text,
+        &[
+            "cargo",
+            "test",
+            "build",
+            "compile",
+            "benchmark",
+            "workspace",
+        ],
+    );
+
+    if discovery_signal {
         push_unique_tool(&mut tools, "search_files");
     }
-    if ["read", "check", "trace", "review", "diagnose"]
-        .iter()
-        .any(|kw| joined_text.contains(kw))
-    {
+    if review_signal {
         push_unique_tool(&mut tools, "read_file");
     }
-    if ["write", "create", "update", "modify", "refactor", "fix"]
-        .iter()
-        .any(|kw| joined_text.contains(kw))
-    {
+    if mutation_signal {
         push_unique_tool(&mut tools, "write_file");
     }
-    if ["run", "build", "test", "verify", "compile", "benchmark"]
-        .iter()
-        .any(|kw| joined_text.contains(kw))
-    {
+    if execution_signal {
         push_unique_tool(&mut tools, "bash");
-    }
-
-    if tools.is_empty() {
-        push_unique_tool(&mut tools, "read_file");
-        push_unique_tool(&mut tools, "search_files");
     }
 
     tools.truncate(max_tools.max(1));
@@ -106,8 +144,13 @@ pub(crate) fn is_execution_like_request(mode: &str, messages: &[Message]) -> boo
         "create file",
         "run tests",
         "build",
+        "compile",
+        "verify",
+        "apply patch",
+        "execute",
         "workflow.execute",
         "task.execute",
+        "workflow.generate",
     ];
 
     messages.iter().any(|message| {

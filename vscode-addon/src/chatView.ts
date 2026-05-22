@@ -1,3 +1,4 @@
+import * as path from "path";
 import * as vscode from "vscode";
 import { spawn } from "child_process";
 import * as crypto from "crypto";
@@ -201,6 +202,10 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     text: string,
     attachments?: { name: string; type: string; dataUrl: string }[],
   ) {
+    // TODO: Streaming support (go-on.chat.streaming) is not implemented yet.
+    // Currently all responses are awaited synchronously. To add streaming,
+    // the backend response would need to be streamed via WebSocket or SSE,
+    // and the UI would need incremental token rendering.
     if (!this._view) return;
 
     try {
@@ -506,7 +511,10 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     if (allowedShellPaths.length === 0) {
       return true;
     }
-    return allowedShellPaths.some((allowed) => shellPath.startsWith(allowed));
+    const resolved = path.resolve(shellPath);
+    return allowedShellPaths.some(
+      (allowed) => path.resolve(allowed) === resolved,
+    );
   }
 
   private async _executePythonCode(code: string): Promise<string> {

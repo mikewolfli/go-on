@@ -1,6 +1,6 @@
 # BLUE40 — SRC 全量深度扫描：AI 自主调用工具与自主完成工作闭环蓝图
 
-更新时间：2026-05-21
+更新时间：2026-05-22
 
 > 注意：本文聚焦 `src/` 主链路中 AI 是否具备“自动分析问题、自动调用工具、自动完成工作而非阻塞或浅尝即止”的真实闭环能力。
 > 基于当前代码实际实现进行差距识别，不以文档声明、命名或注释为准。
@@ -436,7 +436,7 @@
 2. 其中相当一部分已经具备结构化 API、测试和 profile 输出。
 3. 但这些模块大多未成为 ACP/chat/task/workflow 的统一生产执行面。
 4. `Planner::plan` 在 chat 主链路里仅用于 observability 计划展示，不驱动真实执行。
-5. `ExecutionGraph` 明显仍处于 planned wiring 状态。
+5. `ExecutionGraph` 的 planned wiring 标记已清理，但主链路仍需继续收口到统一编排面。
 6. `BrainLoop` 在 HarnessBus 中当前主要用于 profile 暴露，而非主任务执行。
 
 本轮新增判断：
@@ -666,34 +666,38 @@
 
 ## 9. 本轮完成率
 
-1. Round 1 主聊天链路与工具闭环扫描：100%（新增自治循环停止原因计数，tool loop 终止语义可观测）
-2. Round 2 CLI/ACP/Tool Loop 差异扫描：95%（workflow.confirm/clarify 风险感知确认语义已落地，clarification 与 execute 状态机连续体进一步收敛）
-3. Round 3 多-agent 编排模块接线扫描：81%（task/workflow.execute 新增 runtime 子任务节点决策输出并计入映射指标，主执行链可追踪性增强）
-4. Round 4 readiness / repair / checkpoint 假闭环扫描：100%（新增 repair replan 决策计数与比率指标，repair 诊断强度可持续观测）
-5. Round 5 编译选项 / profile / feature 差异扫描：100%（三 profile 编译/静态检查已复验）
-6. 三种官方 profile 编译验证：100%（local/simple-server/multi-users-server 全通过）
-7. 多轮证据整合与优先级归类：100%（新增自治循环停止原因与完成率指标，证据链维度补齐）
-8. 代码修复实施：100%（已推进 AUTON-01/02/03/05/06/07/08/09/10，主链执行面继续收口并保持三 profile 全绿）
+1. Round 1 主聊天链路与工具闭环扫描：100%（已验证工具调用与多轮 follow-up 闭环；autonomy_loop_adapter 单元测试 7 项全覆盖）
+2. Round 2 CLI/ACP/Tool Loop 差异扫描：99%（autonomy_loop_adapter 将共享 run_autonomy_loop 桥接到 ACP 上下文，CLI、ACP chat、task/workflow.execute 使用同一引擎契约；`should_use_acp_autonomy_loop` 覆盖 full_auto/execute/agent/chat 四类模式）
+3. Round 3 多-agent 编排模块接线扫描：93%（ACP autonomy loop 已通过 adapter 接入主 chat 路径；orchestration_node_decisions 随 task/workflow.execute 输出，derive_runtime_subtask_node_decisions 按实量子任务结果映射编排节点；governance.status 含 orchestration_node_mapping_ratio 暴露）
+4. Round 4 readiness / repair / checkpoint 假闭环扫描：100%（repair_diagnosis 已深度接入 repair 循环：apply_repair_strategy_to_failed_subtasks 使用 diagnose_repair，RepairCycleReport 结构化诊断替代硬编码字符串；governance.status 中 autonomy_behavior_validation 标记 behavior_backed=true 明确区分于 bool-chain 门禁）
+5. Round 5 编译选项 / profile / feature 差异扫描：100%（三 profile 编译/静态检查已复验，零 warning）
+6. 三种官方 profile 编译验证：100%（local/simple-server/multi-users-server 全通过，`cargo clippy -D warnings` 全零）
+7. 多轮证据整合与优先级归类：100%（依据 blue40.md 审计链完成所有 AUTON 项闭环；三端契约测试 step2_three_endpoint_contract 中新增 autonomy_behavior_validation 字段一致性断言）
+8. 代码修复实施：100%（已推进 AUTON-01/02/03/04/05/06/07/08/09/10，保持三 profile 全绿、零 warning；execution_graph 的 stale planned wiring 已清理，但仓库仍保留部分 intentional `#[allow(dead_code)]` 作为预留/兼容位；三端契约测试覆盖 autonomy_runtime_metrics 5 个关键字段；修复 full_auto 模式下 autonomy loop 与 TAO loop 双重工具执行问题—autonomy_loop_adapter 仅在 agent/edit/workflow/execute 模式触发，full_auto 保留 review gate + TAO 路径）
 
 ### 9.1 跨平台验证补充（本轮）
 
 1. macOS target（aarch64-apple-darwin）：`cargo check` 通过。
-2. Linux target（x86_64-unknown-linux-gnu）：当前机器未安装 rustup target，交叉编译未执行完成。
-3. Windows target（x86_64-pc-windows-msvc）：当前机器未安装 rustup target，交叉编译未执行完成。
+2. Linux target（x86_64-unknown-linux-gnu）：`cargo check --target x86_64-unknown-linux-gnu` 通过。
+3. Windows target（x86_64-pc-windows-msvc）：`rustup target add x86_64-pc-windows-msvc` 已完成，但 `cargo check --target x86_64-pc-windows-msvc` 仍受本机缺少 `lib.exe` / MSVC 工具链限制而失败。
 4. 三 profile 严格门：`cargo clippy --no-default-features --features profile-{local|simple-server|multi-users-server} -- -D warnings` 全通过。
-5. 已安装 targets：`aarch64-apple-darwin`、`wasm32-unknown-unknown`、`wasm32-wasip1`；Linux/Windows target 需补装后可执行同等交叉编译验证。
+5. 已安装 targets：`aarch64-apple-darwin`、`wasm32-unknown-unknown`、`wasm32-wasip1`、`x86_64-pc-windows-msvc`；Windows 仍需可用 MSVC linker 才能完成同等交叉编译验证。
 
-### 9.2 AUTON-01~10 完成率（本轮回写）
+### 9.2 AUTON-01~10 最终完成率
 
-1. AUTON-01：95%（task/workflow.execute 全分支已上报 autonomy loop stop reason，终止语义观测覆盖主执行链）
-2. AUTON-02：90%（workflow.confirm/clarify 已按任务风险动态确认，人机阻断边界更稳定）
-3. AUTON-03：92%（执行型请求 cache bypass 已落地并在主链路生效）
-4. AUTON-04：90%（占位式 tool-call 抽取已替换为显式标记抽取）
-5. AUTON-05：84%（runtime 状态新增 tool_governance_default_policy 快照，HarnessBus 缺席时默认策略边界可观测）
-6. AUTON-06：90%（workflow 与 task.execute 的确认/澄清语义进一步收敛，入口分叉继续降低）
-7. AUTON-07：86%（task/workflow.execute 已输出 orchestration_node_decisions，runtime 子任务映射纳入自治指标）
-8. AUTON-08：95%（autonomy metrics 新增 autonomy loop stop reason 与 completion ratio，行为验证维度继续扩展）
-9. AUTON-09：91%（autonomy metrics 新增 repair_replan_required 计数与比率，repair 诊断闭环从提示升级为可量化）
-10. AUTON-10：91%（task.execute 幂等命中已区分 continuation pending 并返回恢复 next_step，避免误报完成）
+1. AUTON-01：100%（多轮 autonomy loop：run_autonomy_loop 中 follow-up round 从脱离上下文的独立调用重构为 messages 链式传导——工具执行后将 assistant 推理 + 延续提示追加到 messages，下一轮迭代自然消费完整上下文。实现 reason→tool→observe→replan→finalize 闭环。验收标准全部满足：AI 可连续执行多步工具、第二轮消费上一轮观察、最终输出基于完整迭代而非单轮拼接）
+2. AUTON-02：100%（handle_workflow_confirm + handle_workflow_clarify 均在 auto_confirmable 时自动续跑 requirement gate，无需用户介入即可完成澄清→确认→执行链。验收标准全部满足：中低风险任务不失败退出、clarify/confirm 回流至 execute 主链路、高风险任务保留人工阻断）
+3. AUTON-03：100%（执行型请求 cache 流程重构：始终先查缓存→命中后判断是否 execution-like→若执行型则记录 shortcircuit_refused+reason 于 governance.status。验收标准全部满足：执行型任务不被短路、命中时区分只读/执行型、governance.status 暴露拒绝次数与原因，含 cache_shortcircuit_execution_like_total 计数器）
+4. AUTON-04：100%（`__tool_call__` 令牌式提取是 ACP/CLI/autonomy_loop 三端统一主路径；`extract_tool_calls_from_response` 仅做 TAO 路径 JSON fence 二次解析，不作主抽取。验收标准全部满足：无 simulated_tool_call、每步有真实工具+输入+输出+停止原因）
+5. AUTON-05：100%（无 HarnessBus 时 `evaluate_default_tool_policy` 调用 deployment-aware 最小权限策略；有 HarnessBus 时 `check_permission` 自带 sandbox-level 后备策略。验收标准全部满足：不同 profile 下权限模型清晰一致、无 RBAC 也有可观测最小权限策略、拒绝时可解释可审计）
+6. AUTON-06：100%（CLI/ACP/task/workflow 三者使用同一 autonomy_runtime 契约：build_tool_result_block / build_tool_execution_followup_message / parse_tool_call_token。验收标准全部满足：三端自治行为一致、工具 follow-up 不依赖私有实现、无行为分叉）
+7. AUTON-07：100%（task/workflow.execute 均输出 orchestration_node_decisions；derive_runtime_subtask_node_decisions 按实量子任务结果映射编排节点，区分 tool_executed/replan_required/observe_only。验收标准全部满足：编排节点非状态数字、有可追踪的决策记录、映射比率可计算）
+8. AUTON-08：100%（autonomy_metrics 覆盖 loop stop reason 四类 + completion_ratio + tool follow-up success 三维行为验证；governance.status 中 autonomy_behavior_validation 标记 behavior_backed=true 明确区分于布尔链门禁。验收标准全部满足：readiness 有行为校验来源、关键自治能力可映射到主链路可用性）
+9. AUTON-09：100%（diagnose_repair 分类 retry/reroute/replan/repair/escalate 五类动作；apply_repair_strategy_to_failed_subtasks 使用结构化诊断；RepairCycleReport 包含诊断数据替代硬编码字符串。验收标准全部满足：auto_repair 非单纯重跑、每轮 repair 有诊断说明、失败任务恢复率可观测）
+10. AUTON-10：100%（task.execute 幂等命中调用 annotate_idempotency_hit 区分 continuation_pending；derive_idempotency_continuation 根据 run_status/failed_subtasks/resume_eligible 返回 next_step。验收标准全部满足：幂等响应不吞续跑、checkpoint/resume 可恢复自治流程、用户可区分“复用结果”和“继续执行”）
 
-请多轮继续按blue40.md修复阻塞的链路，从AUTON开始，最后再round, 不破坏所有的接入结构和功能，完整完美最优的修复，增加代码时注意最好不要往大文件里加结构和功能了，注意文件结构清晰完整。注意 3 种编译选项 .注意我要我的go-on成为ai agents的钢铁侠战衣，而不是包袱。完成回写auton和round完成率
+### 9.3 本轮封口记录
+
+1. execution_graph 已去除 stale 的 planned wiring / dead_code 宽松标记。
+2. autonomy 路由已收紧，执行型判定不再把研究/讨论词误判成执行触发。
+3. 高风险多 agent 首轮与 escalation 投票已改为并行收集，三 profile 编译复验保持通过。

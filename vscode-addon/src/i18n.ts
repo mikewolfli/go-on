@@ -329,8 +329,7 @@ export const MessageKeys = {
   processFlowInvalidStagesFormat: "processFlow.invalidStagesFormat",
   processFlowCreatedSuccess: "processFlow.createdSuccess",
   processFlowCompletedSuccess: "processFlow.completedSuccess",
-  processFlowCodeExecutionNotSupported:
-    "processFlow.codeExecutionNotSupported",
+  processFlowCodeExecutionNotSupported: "processFlow.codeExecutionNotSupported",
   processFlowManualStagePrompt: "processFlow.manualStagePrompt",
   processFlowContinueButton: "processFlow.continueButton",
 
@@ -399,6 +398,14 @@ export const MessageKeys = {
   keyringDeleteFailed: "messages.keyringDeleteFailed",
   keyringListFailed: "messages.keyringListFailed",
   processFlowFailed: "messages.processFlowFailed",
+  apiKeyMissing: "messages.apiKeyMissing",
+  openSettings: "messages.openSettings",
+  later: "messages.later",
+  quickSetup: "messages.quickSetup",
+  selectProvider: "messages.selectProvider",
+  quickSetupStep1Title: "messages.quickSetupStep1Title",
+  apiKeyConfigured: "messages.apiKeyConfigured",
+  setupFailed: "messages.setupFailed",
 } as const;
 
 class I18nManager {

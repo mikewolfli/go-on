@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Result;
+use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -19,9 +20,9 @@ use crate::agent::{Agent, Message, StreamingSender};
 use crate::orchestration::planner_executor::Planner;
 use crate::orchestration::tool::{execute_loop, LoopConfig, LoopDecision, ToolInput, ToolRegistry};
 
-use super::autonomy::run_followup_after_tool_observation;
 use super::autonomy_metrics::{
-    record_explicit_tool_route, record_orchestration_alignment, record_planner_guided_route,
+    record_explicit_tool_route, record_orchestration_alignment, record_parallel_tool_fanout,
+    record_planner_guided_route, record_tool_followup_attempt, record_tool_followup_success,
 };
 use super::orchestration_alignment::derive_plan_trace_alignment;
 
@@ -61,6 +62,10 @@ pub struct AutonomyLoopConfig {
     pub require_replan_for_complex: bool,
     /// Minimum plan steps that trigger replan requirement
     pub replan_complexity_threshold: usize,
+    /// BLUE41: Enable early-stop when completion confidence exceeds threshold
+    pub enable_early_stop: bool,
+    /// BLUE41: Confidence threshold (0.0–1.0) for early-stop decision
+    pub early_stop_confidence_threshold: f64,
 }
 
 impl Default for AutonomyLoopConfig {
@@ -72,11 +77,13 @@ impl Default for AutonomyLoopConfig {
             enable_trace_alignment: true,
             require_replan_for_complex: true,
             replan_complexity_threshold: 3,
+            enable_early_stop: true,
+            early_stop_confidence_threshold: 0.85,
         }
     }
 }
 
-/// A single round in the autonomy loop
+/// A single round of execution in the autonomy loop
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct AutonomyRound {
@@ -92,6 +99,12 @@ pub struct AutonomyRound {
     pub duration_ms: u64,
     /// Error message if round failed
     pub error: Option<String>,
+    /// BLUE41: Round start offset from loop start (ms)
+    pub round_start_offset_ms: u64,
+    /// BLUE41: Number of tool retries in this round
+    pub retry_count: u32,
+    /// BLUE41: Why this round ended (tool_complete / max_tools / error / early_stop)
+    pub round_stop_reason: String,
 }
 
 /// Final report from the autonomy loop
@@ -148,7 +161,7 @@ pub async fn run_autonomy_loop(
     objective: &str,
     additional_context: Vec<Message>,
     config: AutonomyLoopConfig,
-    timeout_duration: Option<std::time::Duration>,
+    _timeout_duration: Option<std::time::Duration>,
 ) -> Result<AutonomyLoopResult> {
     #[allow(unused_variables)]
     let start = Instant::now();
@@ -177,6 +190,9 @@ pub async fn run_autonomy_loop(
         planner_guided: false,
         duration_ms: start.elapsed().as_millis() as u64,
         error: None,
+        round_start_offset_ms: 0,
+        retry_count: 0,
+        round_stop_reason: "planned".to_string(),
     };
     all_rounds.push(planning_round);
 
@@ -262,31 +278,65 @@ pub async fn run_autonomy_loop(
         if !tool_calls.is_empty() {
             if let Some(registry) = tool_registry.as_ref() {
                 record_explicit_tool_route();
+                if tool_calls.len() > 1 {
+                    record_parallel_tool_fanout(tool_calls.len() as u64);
+                }
 
-                for (tool_name, tool_args_str) in &tool_calls {
-                    let parsed_args: Value =
-                        serde_json::from_str(tool_args_str).unwrap_or(serde_json::json!({}));
+                let tool_jobs = tool_calls
+                    .iter()
+                    .map(|(tool_name, tool_args_str)| {
+                        let registry = Arc::clone(registry);
+                        let tool_name = tool_name.clone();
+                        let tool_args_str = tool_args_str.clone();
+                        let objective_text = objective.to_string();
+                        let round_phase = format!("round-{}", iteration);
+                        tokio::spawn(async move {
+                            let parsed_args: Value = serde_json::from_str(&tool_args_str)
+                                .unwrap_or(serde_json::json!({}));
 
-                    let tool_input = ToolInput {
-                        task_id: "autonomy-loop".to_string(),
-                        phase: format!("round-{}", iteration),
-                        agent_role: "autonomy_agent".to_string(),
-                        objective: objective.to_string(),
-                        constraints: None,
-                        evidence: None,
-                        payload: parsed_args,
-                        allowed_base_dir: None,
+                            let tool_input = ToolInput {
+                                task_id: "autonomy-loop".to_string(),
+                                phase: round_phase,
+                                agent_role: "autonomy_agent".to_string(),
+                                objective: objective_text,
+                                constraints: None,
+                                evidence: None,
+                                payload: parsed_args,
+                                allowed_base_dir: None,
+                            };
+
+                            let loop_cfg = LoopConfig {
+                                max_iterations: 1,
+                                max_retries_per_tool: 1,
+                                enable_fallback: false,
+                                verify_output: None,
+                            };
+
+                            let (decision, _trace) =
+                                execute_loop(&tool_name, &registry, &tool_input, &[], &loop_cfg);
+                            (tool_name, decision)
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
+                let tool_results = join_all(tool_jobs).await;
+                for task_result in tool_results {
+                    let (tool_name, result) = match task_result {
+                        Ok(output) => output,
+                        Err(err) => {
+                            let tool_block =
+                                crate::orchestration::autonomy_runtime::build_tool_result_block(
+                                    "tool_exec_runtime",
+                                    &format!("tool execution join error: {}", err),
+                                    true,
+                                );
+                            messages.push(Message {
+                                role: "user".to_string(),
+                                content: tool_block,
+                            });
+                            continue;
+                        }
                     };
-
-                    let loop_cfg = LoopConfig {
-                        max_iterations: 1,
-                        max_retries_per_tool: 1,
-                        enable_fallback: false,
-                        verify_output: None,
-                    };
-
-                    let (result, _trace) =
-                        execute_loop(tool_name, registry, &tool_input, &[], &loop_cfg);
 
                     round_tools.push(tool_name.clone());
 
@@ -296,7 +346,7 @@ pub async fn run_autonomy_loop(
                                 serde_json::to_string_pretty(&output.result).unwrap_or_default();
                             let tool_block =
                                 crate::orchestration::autonomy_runtime::build_tool_result_block(
-                                    tool_name,
+                                    &tool_name,
                                     &result_text,
                                     false,
                                 );
@@ -308,7 +358,7 @@ pub async fn run_autonomy_loop(
                         LoopDecision::Failed { reason, .. } => {
                             let tool_block =
                                 crate::orchestration::autonomy_runtime::build_tool_result_block(
-                                    tool_name, &reason, true,
+                                    &tool_name, &reason, true,
                                 );
                             messages.push(Message {
                                 role: "user".to_string(),
@@ -319,7 +369,7 @@ pub async fn run_autonomy_loop(
                             let msg = format!("tool loop ended: {:?}", other);
                             let tool_block =
                                 crate::orchestration::autonomy_runtime::build_tool_result_block(
-                                    tool_name, &msg, true,
+                                    &tool_name, &msg, true,
                                 );
                             messages.push(Message {
                                 role: "user".to_string(),
@@ -331,81 +381,62 @@ pub async fn run_autonomy_loop(
             }
         }
 
-        // ── Follow-up round ──
-        let followup_needed = !tool_calls.is_empty();
-        if followup_needed && iteration + 1 < config.max_iterations {
-            let followup_messages = vec![
-                Message {
-                    role: "assistant".to_string(),
-                    content: response.clone(),
-                },
-                Message {
-                    role: "user".to_string(),
-                    content: "Tool observations above are completed. \
-                         Continue the task. If the original task is fully complete, \
-                         provide the final answer. Otherwise, use more tools as needed."
-                        .to_string(),
-                },
-            ];
-
-            let followup = run_followup_after_tool_observation(
-                Arc::clone(&agent),
-                followup_messages,
-                None,
-                None,
-                timeout_duration,
-            )
-            .await;
-
-            match followup {
-                Ok((fr, fr_reasoning, fr_model)) if !fr.trim().is_empty() => {
-                    response = fr;
-                    if !fr_reasoning.is_empty() {
-                        reasoning.push('\n');
-                        reasoning.push_str(&fr_reasoning);
-                    }
-                    if model_id.is_none() {
-                        model_id = fr_model;
-                    }
-                    // Replanning signal for complex tasks
-                    if config.require_replan_for_complex
-                        && plan.steps.len() >= config.replan_complexity_threshold
-                        && iteration + 1 < config.max_iterations
-                    {
-                        messages.push(Message {
-                            role: "assistant".to_string(),
-                            content: response.clone(),
-                        });
-                        messages.push(Message {
-                            role: "user".to_string(),
-                            content: format!(
-                                "The task is complex ({} plan steps). \
-                                 Based on current progress, decide if replanning is needed \
-                                 or if the task is complete. If complete, give the final answer.",
-                                plan.steps.len()
-                            ),
-                        });
-                    }
-                }
-                _ => {
-                    // Follow-up failed — append raw results to response
-                    if !response.is_empty() {
-                        response.push('\n');
-                    }
-                    response.push_str("[tool execution completed — integrating results]");
-                }
-            }
+        // ── Chain observations into messages for next iteration ──
+        // Instead of a separate follow-up agent call, we append the agent's
+        // reasoning + tool observations + continuation prompt to `messages`.
+        // The next while-loop iteration will naturally give the agent full
+        // context: original task → previous reasoning → tool results → prompt.
+        // This creates a true reason → tool → observe → replan → finalize chain.
+        let tools_were_called = !tool_calls.is_empty();
+        if tools_were_called && !response.trim().is_empty() {
+            messages.push(Message {
+                role: "assistant".to_string(),
+                content: response.clone(),
+            });
+            let continuation = if config.require_replan_for_complex
+                && plan.steps.len() >= config.replan_complexity_threshold
+            {
+                format!(
+                    "Tool results above. Task has {} plan steps. \
+                     Continue: use more tools if needed, or provide the final answer \
+                     when the original task is complete.",
+                    plan.steps.len()
+                )
+            } else {
+                "Tool results above. Continue the original task. \
+                 Use more tools as needed, then provide the final answer \
+                 once the task is complete."
+                    .to_string()
+            };
+            messages.push(Message {
+                role: "user".to_string(),
+                content: continuation,
+            });
+            record_tool_followup_attempt();
+            record_tool_followup_success();
         }
 
-        final_response = response;
-        final_reasoning = reasoning;
+        final_response = response.clone();
+        final_reasoning = reasoning.clone();
         if model_id.is_some() {
-            final_model = model_id;
+            final_model = model_id.clone();
         }
+
+        let round_stop_reason = if !tools_were_called {
+            "no_tools_needed"
+        } else if iteration >= config.max_iterations {
+            "max_iterations_reached"
+        } else if response.trim().is_empty() {
+            "empty_response"
+        } else {
+            "tools_completed"
+        };
+        // Save round_tools before moving into round_record
+        let rt_for_early_stop = round_tools.clone();
 
         let round_record = AutonomyRound {
             round_index: iteration + 1,
-            phase: if followup_needed {
+            phase: if tools_were_called {
                 AutonomyPhase::Observing
             } else {
                 AutonomyPhase::Finalizing
@@ -414,12 +445,40 @@ pub async fn run_autonomy_loop(
             planner_guided,
             duration_ms: round_start.elapsed().as_millis() as u64,
             error: None,
+            round_start_offset_ms: start.elapsed().as_millis() as u64,
+            retry_count: 0,
+            round_stop_reason: round_stop_reason.to_string(),
         };
         all_rounds.push(round_record);
 
         // Stop if no tools were called — the agent is done
-        if tool_calls.is_empty() {
+        if !tools_were_called {
             break;
+        }
+
+        // BLUE41: Early-stop when completion confidence is high
+        // and the response has enough content to be useful.
+        if config.enable_early_stop
+            && !response.trim().is_empty()
+            && response.len() > 100
+            && iteration >= 1
+        {
+            let completed_steps = plan
+                .steps
+                .iter()
+                .filter(|s| {
+                    let desc = s.description.to_ascii_lowercase();
+                    rt_for_early_stop.iter().any(|t| {
+                        desc.contains(t.as_str()) || desc.contains(t.trim_end_matches("_file"))
+                    })
+                })
+                .count();
+            let total_steps = plan.steps.len().max(1);
+            let completion_ratio = completed_steps as f64 / total_steps as f64;
+            if completion_ratio >= config.early_stop_confidence_threshold {
+                // High completion confidence — stop early
+                break;
+            }
         }
 
         iteration += 1;

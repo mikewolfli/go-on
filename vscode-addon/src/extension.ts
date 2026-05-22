@@ -769,18 +769,25 @@ export function activate(context: vscode.ExtensionContext) {
           const ready = await goOnManager.isAnyAiProviderReady();
           if (!ready) {
             const action = await vscode.window.showWarningMessage(
+<<<<<<< Updated upstream
               "AI provider is configured but no API key is set. " +
                 "Go-On needs an API key to function.",
               "Open Settings",
               "Later",
+=======
+              i18n.getMessage(MessageKeys.apiKeyMissing),
+              i18n.getMessage(MessageKeys.openSettings),
+              i18n.getMessage(MessageKeys.later),
+>>>>>>> Stashed changes
             );
             if (action === "Open Settings") {
               vscode.commands.executeCommand("go-on.openSettings");
             }
           }
         }
-      } catch {
-        // backend may not be running yet, ignore
+      } catch (err) {
+// eslint-disable-next-line no-console
+                console.warn("go-on: backend readiness check failed:", err);
       }
     }, 3000);
     context.subscriptions.push(
@@ -808,7 +815,10 @@ export function activate(context: vscode.ExtensionContext) {
         new vscode.Disposable(() => clearTimeout(autoOpenTimer)),
       );
     }
-  })();
+  })().catch((err) => {
+    // eslint-disable-next-line no-console
+        console.error("go-on activation error:", err);
+  });
 }
 
 export function deactivate() {

@@ -48,4 +48,13 @@ pub mod tool_governance_defaults;
 // Repair diagnosis: classify failures as retry/reroute/replan/repair/escalate
 pub mod repair_diagnosis;
 
+// AUTON gate blocker diagnosis for readiness output
+pub mod auton_gate_diagnosis;
+
+// Planner bridge runtime helpers for DAG order and observability payloads
+pub mod planner_bridge;
+
+// ACP-aware multi-round autonomy loop adapter (AUTON-01)
+pub mod autonomy_loop_adapter;
+
 // Re-export for convenience

@@ -20,8 +20,8 @@ use tokio::sync::mpsc;
 use tokio::time::Duration;
 use tracing::warn;
 
-use crate::agents::agent::{Agent, AgentRegistry, Message, StreamingSender};
 use crate::acp::helpers::autonomy::run_followup_after_tool_observation;
+use crate::agents::agent::{Agent, AgentRegistry, Message, StreamingSender};
 use crate::config::AppConfig;
 use crate::flow::FlowManager;
 use crate::intelligence::capability_graph::CapabilityGraph;
@@ -323,6 +323,12 @@ async fn run_agent_with_tools(agent: &Arc<dyn Agent>, messages: &mut Vec<Message
                 None,
             )
             .await?;
+            crate::acp::helpers::autonomy_metrics::record_tool_followup_attempt();
+            if followup_response.trim().is_empty() {
+                crate::acp::helpers::autonomy_metrics::record_tool_followup_fallback();
+            } else {
+                crate::acp::helpers::autonomy_metrics::record_tool_followup_success();
+            }
             response = followup_response;
         }
     }

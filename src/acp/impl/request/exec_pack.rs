@@ -500,29 +500,44 @@ fn apply_repair_strategy_to_failed_subtasks(
             break; // Respect iteration limit
         }
 
+        let diagnosis = crate::acp::helpers::repair_diagnosis::diagnose_repair(
+            &record.id,
+            record.outcome.as_deref().unwrap_or("failed"),
+            None,
+            record.retry_count as usize,
+        );
+        let diagnosis_summary =
+            crate::acp::helpers::repair_diagnosis::diagnosis_to_strategy_adjustment(&diagnosis);
+        let action_type = match &diagnosis.kind {
+            crate::acp::helpers::repair_diagnosis::DiagnosisKind::Retry => "retry_subtask",
+            crate::acp::helpers::repair_diagnosis::DiagnosisKind::Reroute => "reroute_subtask",
+            crate::acp::helpers::repair_diagnosis::DiagnosisKind::Replan => "replan_subtask",
+            crate::acp::helpers::repair_diagnosis::DiagnosisKind::Repair => "repair_subtask",
+            crate::acp::helpers::repair_diagnosis::DiagnosisKind::Escalate => "escalate_subtask",
+        };
+
         let repair_action = json!({
             "subtask_id": record.id.clone(),
             "subtask_description": record.description.clone(),
             "iteration": context.iteration,
-            "action": "retry_with_adaptive_strategy",
+            "action": action_type,
             "previous_failure": record.outcome.as_deref().unwrap_or("unknown"),
-            "strategy_applied": "adapt_based_on_failure_class",
-            "estimated_success_probability": 0.65,  // Default estimate, would be based on learning
-            "diagnosis": {
-                "failure_class_hypothesis": context.failure_classes.first().cloned().unwrap_or_else(|| "execution_subtask_failed".to_string()),
-                "root_cause": "execution path instability or missing context",
-                "planned_adjustment": "retry_with_context_preservation",
+            "strategy_applied": diagnosis.suggested_strategy,
+            "estimated_success_probability": match &diagnosis.kind {
+                crate::acp::helpers::repair_diagnosis::DiagnosisKind::Retry => 0.7,
+                crate::acp::helpers::repair_diagnosis::DiagnosisKind::Reroute => 0.75,
+                crate::acp::helpers::repair_diagnosis::DiagnosisKind::Replan => 0.72,
+                crate::acp::helpers::repair_diagnosis::DiagnosisKind::Repair => 0.78,
+                crate::acp::helpers::repair_diagnosis::DiagnosisKind::Escalate => 0.35,
             },
+            "diagnosis": diagnosis_summary,
         });
 
         record_repair_action(
             context,
-            "retry_subtask",
+            action_type,
             record.id.clone(),
-            format!(
-                "Retrying subtask with adaptive strategy in iteration {}",
-                context.iteration
-            ),
+            format!("{} in iteration {}", action_type, context.iteration),
             "in_progress",
             repair_action.clone(),
         );
@@ -1047,6 +1062,58 @@ async fn execute_runtime_subtasks_with_repair_loop(
             .iter()
             .filter(|action| action.iteration == cycle_iteration)
             .count();
+        // AUTON-09: Use structured repair diagnosis from the diagnosis module
+        // to produce AI-driven diagnostic reports instead of hardcoded strings.
+        let (diagnosis, strategy_adjustment) = {
+            let last_diag = failed_records.first().map(|r| {
+                crate::acp::helpers::repair_diagnosis::diagnose_and_summarize(
+                    &r.id,
+                    r.outcome.as_deref().unwrap_or("failed"),
+                    None,
+                    r.retry_count as usize,
+                )
+            });
+            let diagnosis_text = if failed_after == 0 {
+                "repair actions fully addressed failed subtasks"
+            } else if failed_after < failed_before {
+                "partial recovery; remaining failures need deeper replanning"
+            } else {
+                "retry-only repair insufficient; escalate to replan/reroute"
+            };
+            let strategy_text = if failed_after < failed_before {
+                "continue targeted retry with context-preserving adjustments"
+            } else {
+                "switch from retry to reroute/replan for remaining failures"
+            };
+
+            let enriched_diagnosis = if let Some(ref d) = last_diag {
+                format!(
+                    "{} | diagnosis_kind={}, confidence={:.2}",
+                    diagnosis_text,
+                    d.get("diagnosis")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown"),
+                    d.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                )
+            } else {
+                diagnosis_text.to_string()
+            };
+
+            let enriched_strategy = if let Some(ref d) = last_diag {
+                format!(
+                    "{} | diagnosis_strategy={}",
+                    strategy_text,
+                    d.get("strategy")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown"),
+                )
+            } else {
+                strategy_text.to_string()
+            };
+
+            (enriched_diagnosis, enriched_strategy)
+        };
+
         repair_context.cycle_reports.push(RepairCycleReport {
             iteration: cycle_iteration,
             failed_before,
@@ -1059,18 +1126,8 @@ async fn execute_runtime_subtasks_with_repair_loop(
             } else {
                 "unresolved".to_string()
             },
-            diagnosis: if failed_after == 0 {
-                "repair actions fully addressed failed subtasks".to_string()
-            } else if failed_after < failed_before {
-                "partial recovery; remaining failures need deeper replanning".to_string()
-            } else {
-                "retry-only repair insufficient; escalate to replan/reroute".to_string()
-            },
-            strategy_adjustment: if failed_after < failed_before {
-                "continue targeted retry with context-preserving adjustments".to_string()
-            } else {
-                "switch from retry to reroute/replan for remaining failures".to_string()
-            },
+            diagnosis,
+            strategy_adjustment,
         });
 
         if let Some(report) = repair_context.cycle_reports.last() {
@@ -1129,9 +1186,7 @@ pub(crate) async fn handle_workflow_execute(
             crate::acp::helpers::requirement_continuation::RequirementContinuationKind::
                 ClarificationRequired
         ) {
-            crate::acp::helpers::autonomy_metrics::record_autonomy_loop_stop_reason(
-                "incomplete",
-            );
+            crate::acp::helpers::autonomy_metrics::record_autonomy_loop_stop_reason("incomplete");
             complete_workflow_run(
                 &run_id,
                 "waiting_clarification",
@@ -1187,20 +1242,13 @@ pub(crate) async fn handle_workflow_execute(
             &requirement_continuation,
         );
 
-    // Wire Planner → ExecutionGraph DAG (AUTON-07)
-    let _planner_bridge = {
-        use crate::agent::AgentTaskEnvelope;
-        let envelope = AgentTaskEnvelope {
-            task_id: run_id.clone(),
-            phase: phase_name.unwrap_or("execute").to_string(),
-            role: "planner".to_string(),
-            objective: task.clone(),
-            constraints: None,
-            evidence: None,
-            input: serde_json::json!({"params": params}),
-        };
-        crate::orchestration::planner_execution_graph::PlannerExecutionBridge::from_task(&envelope)
-    };
+    // Wire Planner -> ExecutionGraph DAG (AUTON-07)
+    let planner_bridge = crate::acp::helpers::planner_bridge::build_planner_bridge(
+        run_id.clone(),
+        phase_name.unwrap_or("execute"),
+        task.clone(),
+        &params,
+    );
 
     if params
         .get("consultation_required")
@@ -1245,6 +1293,10 @@ pub(crate) async fn handle_workflow_execute(
     let mut plan = build_task_plan(&task);
     let plan_artifact_path = persist_task_plan(&ledger, &plan)?;
     let mut workflow = build_workflow_generated_artifact(&plan);
+    let _dag_order_updated = crate::acp::helpers::planner_bridge::apply_dag_order_to_workflow(
+        &mut workflow,
+        &planner_bridge,
+    );
     let adaptive_planning = apply_learning_plan_feedback(&ledger, &mut plan, &mut workflow);
     let workflow_artifact_path = persist_workflow_generated(&ledger, &workflow)?;
 
@@ -1543,13 +1595,13 @@ pub(crate) async fn handle_workflow_execute(
     } else {
         "succeeded"
     };
-    crate::acp::helpers::autonomy_metrics::record_autonomy_loop_stop_reason(if run_status
-        == "succeeded"
-    {
-        "complete"
-    } else {
-        "failed"
-    });
+    crate::acp::helpers::autonomy_metrics::record_autonomy_loop_stop_reason(
+        if run_status == "succeeded" {
+            "complete"
+        } else {
+            "failed"
+        },
+    );
     let run_error = if execution_report.subtasks_failed > 0 {
         Some(format!(
             "{} subtasks failed",
@@ -1561,8 +1613,7 @@ pub(crate) async fn handle_workflow_execute(
     complete_workflow_run(&run_id, run_status, run_error, artifacts.clone());
 
     let orchestration_node_decisions = {
-        let records_value =
-            serde_json::to_value(&execution_records).unwrap_or_else(|_| json!([]));
+        let records_value = serde_json::to_value(&execution_records).unwrap_or_else(|_| json!([]));
         let records = records_value.as_array().cloned().unwrap_or_default();
         crate::acp::helpers::orchestration_alignment::derive_runtime_subtask_node_decisions(
             &records,
@@ -1608,7 +1659,7 @@ pub(crate) async fn handle_workflow_execute(
             "gate": requirement_gate_payload,
             "auto_clarification_in_progress": _auto_clarification_in_progress,
         },
-        "planner_execution_graph": _planner_bridge.progress_snapshot(),
+        "planner_execution_graph": crate::acp::helpers::planner_bridge::planner_execution_graph_payload(&planner_bridge),
         "orchestration_node_decisions": orchestration_node_decisions,
         "approval_checkpoint": approval_checkpoint,
         "repo_context": repo_context,
@@ -1726,7 +1777,11 @@ pub(super) async fn handle_task_execute(
                 .get(&idempotency_key)
                 .map(|entry| entry.response.clone())
         } {
-            let mut cached_response = cached;
+            let cached_response = crate::acp::helpers::idempotency_resume::annotate_idempotency_hit(
+                cached,
+                &idempotency_key,
+                false,
+            );
             let continuation =
                 crate::acp::helpers::idempotency_resume::derive_idempotency_continuation(
                     &cached_response,
@@ -1736,18 +1791,6 @@ pub(super) async fn handle_task_execute(
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
             crate::acp::helpers::autonomy_metrics::record_idempotency_hit(continuation_pending);
-            if let Some(obj) = cached_response.as_object_mut() {
-                obj.insert(
-                    "idempotency".to_string(),
-                    json!({
-                        "hit": true,
-                        "key": idempotency_key,
-                        "bypassed_for_execution": false,
-                        "continuation_pending": continuation_pending,
-                    }),
-                );
-                obj.insert("continuation".to_string(), continuation);
-            }
             return send_result(server, request_id, cached_response).await;
         }
     }
@@ -1789,9 +1832,7 @@ pub(super) async fn handle_task_execute(
             crate::acp::helpers::requirement_continuation::RequirementContinuationKind::
                 ClarificationRequired
         ) {
-            crate::acp::helpers::autonomy_metrics::record_autonomy_loop_stop_reason(
-                "incomplete",
-            );
+            crate::acp::helpers::autonomy_metrics::record_autonomy_loop_stop_reason("incomplete");
             complete_workflow_run(
                 &run_id,
                 "waiting_clarification",
@@ -1847,24 +1888,21 @@ pub(super) async fn handle_task_execute(
             &requirement_continuation,
         );
 
-    // Wire Planner → ExecutionGraph DAG (AUTON-07)
-    let _planner_bridge = {
-        use crate::agent::AgentTaskEnvelope;
-        let envelope = AgentTaskEnvelope {
-            task_id: idempotency_task_id.to_string(),
-            phase: idempotency_phase.to_string(),
-            role: "planner".to_string(),
-            objective: task.to_string(),
-            constraints: None,
-            evidence: None,
-            input: serde_json::json!({"params": params}),
-        };
-        crate::orchestration::planner_execution_graph::PlannerExecutionBridge::from_task(&envelope)
-    };
+    // Wire Planner -> ExecutionGraph DAG (AUTON-07)
+    let planner_bridge = crate::acp::helpers::planner_bridge::build_planner_bridge(
+        idempotency_task_id,
+        idempotency_phase,
+        task,
+        &params,
+    );
 
     let mut plan = build_task_plan(task);
     let plan_path = persist_task_plan(&ledger, &plan)?;
     let mut workflow = build_workflow_generated_artifact(&plan);
+    let _dag_order_updated = crate::acp::helpers::planner_bridge::apply_dag_order_to_workflow(
+        &mut workflow,
+        &planner_bridge,
+    );
     let adaptive_planning = apply_learning_plan_feedback(&ledger, &mut plan, &mut workflow);
     let workflow_path = persist_workflow_generated(&ledger, &workflow)?;
 
@@ -2158,7 +2196,7 @@ pub(super) async fn handle_task_execute(
             "gate": requirement_gate_payload,
             "auto_clarification_in_progress": _auto_clarification_in_progress,
         },
-        "planner_execution_graph": _planner_bridge.progress_snapshot(),
+        "planner_execution_graph": crate::acp::helpers::planner_bridge::planner_execution_graph_payload(&planner_bridge),
         "approval_checkpoint": approval_checkpoint,
         "repo_context": repo_context,
         "multi_agent": multi_agent,
@@ -3160,9 +3198,9 @@ async fn execute_single_subtask(
                     });
                     followup_messages.push(Message {
                         role: "user".to_string(),
-                        content: format!(
-                            "Tool execution results:\n{}\n\nIncorporate these observations and provide the final executable outcome.",
-                            model_tool_observations.join("\n")
+                        content: crate::orchestration::autonomy_runtime::build_tool_execution_followup_message(
+                            &model_tool_observations,
+                            true,
                         ),
                     });
 
@@ -3175,9 +3213,16 @@ async fn execute_single_subtask(
                     )
                     .await
                     {
+                        crate::acp::helpers::autonomy_metrics::record_tool_followup_attempt();
                         if !followup.trim().is_empty() {
+                            crate::acp::helpers::autonomy_metrics::record_tool_followup_success();
                             final_response = followup;
+                        } else {
+                            crate::acp::helpers::autonomy_metrics::record_tool_followup_fallback();
                         }
+                    } else {
+                        crate::acp::helpers::autonomy_metrics::record_tool_followup_attempt();
+                        crate::acp::helpers::autonomy_metrics::record_tool_followup_fallback();
                     }
                 }
 

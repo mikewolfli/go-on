@@ -677,7 +677,15 @@
     "openGoOnSettings": "Open Go-On Settings",
     "usingLocalBinary": "Using local Go-On binary: {0}",
     "runtimeDownloading": "Go-On runtime not found. Downloading {0} from {1} ({2})...",
-    "runtimeDownloadComplete": "Go-On runtime download complete. Chat is ready to use."
+    "runtimeDownloadComplete": "Go-On runtime download complete. Chat is ready to use.",
+    "apiKeyMissing": "Go-On needs an AI provider API key to process your request.",
+    "openSettings": "Open Settings",
+    "later": "Later",
+    "quickSetup": "Quick Setup",
+    "selectProvider": "Select an AI provider to configure",
+    "quickSetupStep1Title": "Quick Setup — Step 1/2",
+    "apiKeyConfigured": "✅ {0} API key configured! You can now send messages.",
+    "setupFailed": "Setup failed: {0}. Try Open Settings instead."
   },
   "diagnosis": {
     "title": "Go-On Diagnosis Report",

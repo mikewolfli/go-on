@@ -8,26 +8,68 @@
 //! is called at the boundary between planning and execution.
 
 use serde_json::Value;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::orchestration::execution_graph::ExNodeState;
 use crate::orchestration::planner_execution_graph::PlannerExecutionBridge;
 
-/// Build a phased execution order from the current DAG state.
+/// Build a phased execution order from the planner DAG.
 ///
 /// Returns `Vec<Vec<String>>` where each inner vec is a phase of ready-to-run
 /// node IDs. This matches the `execution_order` format in
 /// `WorkflowGeneratedArtifact` used by `execute_runtime_subtasks`.
 ///
-/// Only nodes in `Pending` state whose dependencies are satisfied are included.
-/// Start/End and already-completed nodes are excluded.
+/// This returns the complete plan order (topological phases), not just the
+/// first set of currently-ready nodes. Structural nodes (Start/End/Join/
+/// Condition) are excluded because the planner bridge tracks only plan steps.
 #[allow(dead_code)]
 pub fn dag_execution_order(bridge: &PlannerExecutionBridge) -> Vec<Vec<String>> {
-    let ready = bridge.ready_nodes();
-    if ready.is_empty() {
-        return Vec::new();
+    let plan_step_ids: HashSet<String> = bridge
+        .plan
+        .steps
+        .iter()
+        .map(|step| step.step_id.clone())
+        .collect();
+
+    let mut deps: HashMap<String, Vec<String>> = HashMap::new();
+    for step in &bridge.plan.steps {
+        deps.insert(step.step_id.clone(), step.depends_on.clone());
     }
-    // All ready nodes go into a single phase (they have no unsatisfied deps).
-    vec![ready]
+
+    let mut remaining: BTreeSet<String> = plan_step_ids.iter().cloned().collect();
+    let mut completed: HashSet<String> = HashSet::new();
+    let mut phases: Vec<Vec<String>> = Vec::new();
+
+    while !remaining.is_empty() {
+        let ready_phase: Vec<String> = remaining
+            .iter()
+            .filter(|id| {
+                deps.get(*id)
+                    .map(|requirements| {
+                        requirements
+                            .iter()
+                            .all(|dep| !plan_step_ids.contains(dep) || completed.contains(dep))
+                    })
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect();
+
+        if ready_phase.is_empty() {
+            // Dependency cycle or malformed graph: keep deterministic fallback
+            // so runtime can still execute and surface diagnostics.
+            phases.push(remaining.iter().cloned().collect());
+            break;
+        }
+
+        for step_id in &ready_phase {
+            let _ = remaining.remove(step_id);
+            completed.insert(step_id.clone());
+        }
+        phases.push(ready_phase);
+    }
+
+    phases
 }
 
 /// Extract progress information from the DAG as a serializable value.
@@ -104,6 +146,21 @@ mod tests {
         // plan-1 should be ready (no dependencies)
         assert!(!order.is_empty());
         assert!(order[0].contains(&"plan-1".to_string()));
+    }
+
+    #[test]
+    fn dag_order_covers_all_plan_steps() {
+        let bridge = make_bridge();
+        let order = dag_execution_order(&bridge);
+        let flattened: Vec<String> = order.into_iter().flatten().collect();
+
+        for step in &bridge.plan.steps {
+            assert!(
+                flattened.iter().any(|id| id == &step.step_id),
+                "missing step in execution order: {}",
+                step.step_id
+            );
+        }
     }
 
     #[test]

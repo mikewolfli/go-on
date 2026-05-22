@@ -677,7 +677,15 @@
     "openGoOnSettings": "打开 Go-On 设置",
     "usingLocalBinary": "使用本地 Go-On 二进制文件: {0}",
     "runtimeDownloading": "未找到 Go-On 运行时。正在从 {1} 下载 {0} ({2})...",
-    "runtimeDownloadComplete": "Go-On 运行时下载完成。聊天已就绪。"
+    "runtimeDownloadComplete": "Go-On 运行时下载完成。聊天已就绪。",
+    "apiKeyMissing": "Go-On 需要一个 AI 提供商 API 密钥来处理您的请求。",
+    "openSettings": "打开设置",
+    "later": "稍后",
+    "quickSetup": "快速设置",
+    "selectProvider": "选择一个要配置的 AI 提供商",
+    "quickSetupStep1Title": "快速设置 — 第 1/2 步",
+    "apiKeyConfigured": "✅ {0} API 密钥已配置！您现在可以发送消息了。",
+    "setupFailed": "设置失败：{0}。请改用打开设置。"
   },
   "diagnosis": {
     "title": "Go-On 诊断报告",

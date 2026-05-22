@@ -760,6 +760,19 @@ pub(super) async fn handle_release_readiness(
     let blue33_remaining_closure_gate = failover_recovery_drill_gate
         && cross_zone_state_snapshot_gate
         && supernode_hot_standby_gate;
+    let open_breakers_usize = usize::try_from(open_breakers).unwrap_or(usize::MAX);
+    let auton_gate_signals = crate::acp::helpers::auton_gate_diagnosis::AutonGateSignals {
+        blue30_release_closure_ready: blue30_release_closure_gate,
+        blue33_release_closure_ready: blue33_release_closure_gate,
+        observability_gate,
+        runtime_healthy: status.lifecycle.is_healthy,
+        open_breakers: open_breakers_usize,
+        requests_ok: metrics.total_requests >= metrics.failed_requests,
+    };
+    let autonomy_boundary_blockers =
+        crate::acp::helpers::auton_gate_diagnosis::autonomy_boundary_blockers(auton_gate_signals);
+    let autonomy_scope_blockers =
+        crate::acp::helpers::auton_gate_diagnosis::autonomy_scope_blockers(auton_gate_signals);
     // BLUE34 S0-S17
     let dual_track_boundary_freeze_gate = blue33_remaining_closure_gate && observability_gate;
     let state_vector_store_trait_unified_gate =
@@ -3535,6 +3548,10 @@ pub(super) async fn handle_release_readiness(
                     "checks": {
                         "blue30_release_closure_ready": blue30_release_closure_gate,
                         "observability_gate": observability_gate,
+                        "runtime_healthy": status.lifecycle.is_healthy,
+                        "open_breakers": open_breakers,
+                        "requests_vs_failures_consistent": metrics.total_requests >= metrics.failed_requests,
+                        "blockers": autonomy_boundary_blockers,
                     },
                 },
                 "emergency_stop_protocol": {
@@ -3731,6 +3748,10 @@ pub(super) async fn handle_release_readiness(
                     "checks": {
                         "blue33_release_closure_ready": blue33_release_closure_gate,
                         "observability_gate": observability_gate,
+                        "runtime_healthy": status.lifecycle.is_healthy,
+                        "open_breakers": open_breakers,
+                        "requests_vs_failures_consistent": metrics.total_requests >= metrics.failed_requests,
+                        "blockers": autonomy_scope_blockers,
                     },
                 },
                 "redline_policy_runtime": {

@@ -6303,12 +6303,15 @@ fn rpc_confirm_body() {
     );
     assert!(clarify["result"]["clarification_session_artifact_path"].is_string());
 
+    // AUTON-02: confirm with requirement contract and user_confirmed=true
+    // proceeds directly instead of returning -32006.
     let blocked_confirm = harness.request(
         172,
         "workflow.confirm",
         Some(json!({
             "task": task,
             "user_confirmed": true,
+            "ready_to_confirm": true,
             "requirement_contract": {
                 "goal": "harden auth and billing",
                 "scope": "auth,billing modules",
@@ -6318,18 +6321,29 @@ fn rpc_confirm_body() {
             }
         })),
     );
-    assert_eq!(blocked_confirm["error"]["code"], -32006);
-    assert_eq!(
-        blocked_confirm["error"]["data"]["kind"],
-        "clarification_session"
+    assert_eq!(blocked_confirm["result"]["ok"], true);
+    assert!(
+        blocked_confirm["result"]["requirement_contract_artifact_path"].is_string(),
+        "confirm should persist requirement contract"
     );
+
+    // Verify that confirm without ready_to_confirm or user_confirmed returns
+    // a continuation response instead of a hard error (AUTON-02).
+    let clarification_needed = harness.request(
+        173,
+        "workflow.confirm",
+        Some(json!({
+            "task": task,
+        })),
+    );
+    assert_eq!(clarification_needed["result"]["ok"], true);
     assert_eq!(
-        blocked_confirm["error"]["data"]["next_step"]["method"],
-        "workflow.clarify"
+        clarification_needed["result"]["status"],
+        "clarification_required"
     );
 
     let confirmed = harness.request(
-        173,
+        174,
         "workflow.confirm",
         Some(json!({
             "task": task,
@@ -6350,7 +6364,7 @@ fn rpc_confirm_body() {
         true
     );
 
-    let shutdown = harness.request(174, "shutdown", None);
+    let shutdown = harness.request(175, "shutdown", None);
     assert_eq!(shutdown["result"]["ok"], true);
     harness.wait_for_exit(Duration::from_secs(8));
 }

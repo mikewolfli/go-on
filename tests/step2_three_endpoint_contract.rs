@@ -456,6 +456,47 @@ mod three_endpoint_contract_tests {
             }
         }
 
+        // Check autonomy_behavior_validation (AUTON-08: behavior-backed readiness)
+        if let Some(abv) = obj.get("autonomy_behavior_validation") {
+            if !abv.is_object() {
+                return Err(
+                    "governance.status.autonomy_behavior_validation must be object".to_string(),
+                );
+            }
+            let abv_obj = abv.as_object().unwrap();
+            if !abv_obj.contains_key("ready") {
+                return Err("autonomy_behavior_validation missing: ready".to_string());
+            }
+            if !abv_obj.contains_key("behavior_backed") {
+                return Err("autonomy_behavior_validation missing: behavior_backed".to_string());
+            }
+            if abv_obj.get("behavior_backed").and_then(|v| v.as_bool()) != Some(true) {
+                return Err("autonomy_behavior_validation.behavior_backed must be true".to_string());
+            }
+            if !abv_obj.contains_key("autonomy_runtime_metrics") {
+                return Err(
+                    "autonomy_behavior_validation missing: autonomy_runtime_metrics".to_string(),
+                );
+            }
+            let metrics = abv_obj
+                .get("autonomy_runtime_metrics")
+                .and_then(|v| v.as_object());
+            if let Some(m) = metrics {
+                let expected_metrics = [
+                    "autonomy_loop_completion_ratio",
+                    "autonomy_loop_stop_complete_total",
+                    "tool_followup_success_ratio",
+                    "repair_cycle_effective_ratio",
+                    "cache_bypass_for_execution_total",
+                ];
+                for metric in &expected_metrics {
+                    if !m.contains_key(*metric) {
+                        return Err(format!("autonomy_runtime_metrics missing: {}", metric));
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -663,10 +704,34 @@ mod three_endpoint_contract_tests {
                 "total_agents": 10,
                 "active_agents": 5,
                 "decisions_made": 200
+            },
+            "autonomy_behavior_validation": {
+                "ready": true,
+                "behavior_backed": true,
+                "tool_followup_enabled": true,
+                "clarification_resume_enabled": true,
+                "execution_cache_bypass_enabled": true,
+                "autonomy_runtime_metrics": {
+                    "autonomy_loop_completion_ratio": 0.85,
+                    "autonomy_loop_stop_complete_total": 42,
+                    "tool_followup_success_ratio": 0.92,
+                    "repair_cycle_effective_ratio": 0.78,
+                    "cache_bypass_for_execution_total": 15,
+                    "autonomy_loop_stop_failed_total": 3,
+                    "autonomy_loop_stop_escalated_total": 1,
+                    "autonomy_loop_stop_incomplete_total": 2
+                }
             }
         });
 
         assert!(validate_governance_status_contract(&response).is_ok());
+
+        // Verify behavior_backed is explicitly true
+        let abv = response.get("autonomy_behavior_validation").unwrap();
+        assert_eq!(
+            abv.get("behavior_backed").and_then(|v| v.as_bool()),
+            Some(true)
+        );
 
         // HarnessBus metrics must be numeric
         if let Some(hb) = response["harness_bus"].as_object() {

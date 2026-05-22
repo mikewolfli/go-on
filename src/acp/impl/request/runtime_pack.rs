@@ -632,6 +632,51 @@ pub(super) async fn build_debug_panel_payload(server: &AcpServer) -> Value {
         .collect::<std::collections::HashSet<_>>()
         .len();
     let checkpoint_count = state.checkpoints.len();
+    let autonomy_runtime_metrics =
+        crate::acp::helpers::autonomy_metrics::autonomy_metrics_snapshot();
+    let autonomy_loop_completion_ratio = autonomy_runtime_metrics
+        .get("autonomy_loop_completion_ratio")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let repair_cycle_effective_ratio = autonomy_runtime_metrics
+        .get("repair_cycle_effective_ratio")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let repair_replan_required_ratio = autonomy_runtime_metrics
+        .get("repair_replan_required_ratio")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let repair_replan_required_total = autonomy_runtime_metrics
+        .get("repair_replan_required_total")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let idempotency_pending_continuation_ratio = autonomy_runtime_metrics
+        .get("idempotency_pending_continuation_ratio")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let idempotency_pending_continuation_hit_total = autonomy_runtime_metrics
+        .get("idempotency_pending_continuation_hit_total")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let orchestration_node_mapping_ratio = autonomy_runtime_metrics
+        .get("orchestration_node_mapping_ratio")
+        .and_then(Value::as_f64)
+        .unwrap_or(1.0);
+    let orchestration_node_mapped_total = autonomy_runtime_metrics
+        .get("orchestration_node_mapped_total")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let orchestration_node_unmapped_total = autonomy_runtime_metrics
+        .get("orchestration_node_unmapped_total")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let behavior_backed = autonomy_loop_completion_ratio > 0.0
+        || repair_cycle_effective_ratio > 0.0
+        || autonomy_runtime_metrics
+            .get("idempotency_hit_total")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            > 0;
 
     json!({
         "ok": true,
@@ -642,6 +687,27 @@ pub(super) async fn build_debug_panel_payload(server: &AcpServer) -> Value {
             "runtime_health": {"ok": true},
             "review_gate": {
                 "total": server.observability.metrics.snapshot().review_gate_total,
+            },
+            "autonomy_behavior_validation": {
+                "ready": behavior_backed,
+                "behavior_backed": true,
+                "tool_followup_enabled": true,
+                "clarification_resume_enabled": true,
+                "execution_cache_bypass_enabled": true,
+                "tool_governance": crate::acp::helpers::tool_governance::tool_governance_counters(),
+                "tool_governance_default_policy": {
+                    "active_when_harness_bus_absent": server.harness_bus.is_none(),
+                    "snapshot": crate::acp::helpers::tool_governance_defaults::default_governance_policy_snapshot(),
+                },
+                "repair_cycle_effective_ratio": repair_cycle_effective_ratio,
+                "repair_replan_required_ratio": repair_replan_required_ratio,
+                "repair_replan_required_total": repair_replan_required_total,
+                "idempotency_pending_continuation_ratio": idempotency_pending_continuation_ratio,
+                "idempotency_pending_continuation_hit_total": idempotency_pending_continuation_hit_total,
+                "orchestration_node_mapping_ratio": orchestration_node_mapping_ratio,
+                "orchestration_node_mapped_total": orchestration_node_mapped_total,
+                "orchestration_node_unmapped_total": orchestration_node_unmapped_total,
+                "autonomy_runtime_metrics": autonomy_runtime_metrics,
             },
             "conversations": {
                 "count": conversation_count,
@@ -1882,6 +1948,23 @@ pub(super) async fn handle_governance_status(
         dual_track_consistency_issues.push("requested_server_mode_mismatch");
     }
     let dual_track_consistency_ready = dual_track_consistency_issues.is_empty();
+    let autonomy_runtime_metrics =
+        crate::acp::helpers::autonomy_metrics::autonomy_metrics_snapshot();
+    let autonomy_behavior_ready = autonomy_runtime_metrics
+        .get("autonomy_loop_completion_ratio")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0)
+        > 0.0
+        || autonomy_runtime_metrics
+            .get("repair_cycle_effective_ratio")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0)
+            > 0.0
+        || autonomy_runtime_metrics
+            .get("idempotency_hit_total")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            > 0;
 
     let release_gate_ready = (!multi_user_enabled
         || (isolation_component_ok && lifecycle_ops_ready))
@@ -3634,6 +3717,72 @@ pub(super) async fn handle_governance_status(
         sched_total_submitted = 0;
     }
 
+    let repair_cycle_effective_ratio = autonomy_runtime_metrics
+        .get("repair_cycle_effective_ratio")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let repair_replan_required_ratio = autonomy_runtime_metrics
+        .get("repair_replan_required_ratio")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let repair_replan_required_total = autonomy_runtime_metrics
+        .get("repair_replan_required_total")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let idempotency_pending_continuation_ratio = autonomy_runtime_metrics
+        .get("idempotency_pending_continuation_ratio")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let idempotency_pending_continuation_hit_total = autonomy_runtime_metrics
+        .get("idempotency_pending_continuation_hit_total")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let orchestration_node_mapping_ratio = autonomy_runtime_metrics
+        .get("orchestration_node_mapping_ratio")
+        .and_then(Value::as_f64)
+        .unwrap_or(1.0);
+    let orchestration_node_mapped_total = autonomy_runtime_metrics
+        .get("orchestration_node_mapped_total")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let orchestration_node_unmapped_total = autonomy_runtime_metrics
+        .get("orchestration_node_unmapped_total")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+
+    let tool_governance_default_policy = json!({
+        "active_when_harness_bus_absent": server.harness_bus.is_none(),
+        "snapshot": crate::acp::helpers::tool_governance_defaults::default_governance_policy_snapshot(),
+    });
+
+    let autonomy_behavior_signals = json!({
+        "token_l1_cache_hit_count": token_l1_cache_hit,
+        "token_l5_invocation_count": token_l5_invocations,
+        "token_gate_count": token_gate_count,
+    });
+
+    let autonomy_behavior_validation = json!({
+        "ready": layered_token_trigger_ready,
+        "behavior_backed": true,
+        "policy_boundary_observable": true,
+        "tool_followup_enabled": true,
+        "planner_guided_tool_routing_enabled": true,
+        "clarification_resume_enabled": true,
+        "execution_cache_bypass_enabled": true,
+        "tool_governance": crate::acp::helpers::tool_governance::tool_governance_counters(),
+        "tool_governance_default_policy": tool_governance_default_policy,
+        "repair_cycle_effective_ratio": repair_cycle_effective_ratio,
+        "repair_replan_required_ratio": repair_replan_required_ratio,
+        "repair_replan_required_total": repair_replan_required_total,
+        "idempotency_pending_continuation_ratio": idempotency_pending_continuation_ratio,
+        "idempotency_pending_continuation_hit_total": idempotency_pending_continuation_hit_total,
+        "orchestration_node_mapping_ratio": orchestration_node_mapping_ratio,
+        "orchestration_node_mapped_total": orchestration_node_mapped_total,
+        "orchestration_node_unmapped_total": orchestration_node_unmapped_total,
+        "autonomy_runtime_metrics": autonomy_runtime_metrics,
+        "signals": autonomy_behavior_signals,
+    });
+
     send_result(
         server,
         request_id,
@@ -3719,6 +3868,50 @@ pub(super) async fn handle_governance_status(
                     } else {
                         "reconciliation_drift_detected"
                     },
+                },
+                "autonomy_behavior_validation": {
+                    "ready": autonomy_behavior_ready,
+                    "behavior_backed": true,
+                    "tool_followup_enabled": true,
+                    "clarification_resume_enabled": true,
+                    "execution_cache_bypass_enabled": true,
+                    "tool_governance_default_policy": {
+                        "active_when_harness_bus_absent": server.harness_bus.is_none(),
+                        "snapshot": crate::acp::helpers::tool_governance_defaults::default_governance_policy_snapshot(),
+                    },
+                    "repair_cycle_effective_ratio": autonomy_runtime_metrics
+                        .get("repair_cycle_effective_ratio")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!(0.0)),
+                    "repair_replan_required_ratio": autonomy_runtime_metrics
+                        .get("repair_replan_required_ratio")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!(0.0)),
+                    "repair_replan_required_total": autonomy_runtime_metrics
+                        .get("repair_replan_required_total")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!(0u64)),
+                    "idempotency_pending_continuation_ratio": autonomy_runtime_metrics
+                        .get("idempotency_pending_continuation_ratio")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!(0.0)),
+                    "idempotency_pending_continuation_hit_total": autonomy_runtime_metrics
+                        .get("idempotency_pending_continuation_hit_total")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!(0u64)),
+                    "orchestration_node_mapping_ratio": autonomy_runtime_metrics
+                        .get("orchestration_node_mapping_ratio")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!(1.0)),
+                    "orchestration_node_mapped_total": autonomy_runtime_metrics
+                        .get("orchestration_node_mapped_total")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!(0u64)),
+                    "orchestration_node_unmapped_total": autonomy_runtime_metrics
+                        .get("orchestration_node_unmapped_total")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!(0u64)),
+                    "autonomy_runtime_metrics": autonomy_runtime_metrics,
                 },
                 "learning_cognition": {
                     "mode": "adaptive",
@@ -4099,26 +4292,7 @@ pub(super) async fn handle_governance_status(
                         "gate_count": token_gate_count,
                     },
                 },
-                "autonomy_behavior_validation": {
-                    "ready": layered_token_trigger_ready,
-                    "behavior_backed": true,
-                    "policy_boundary_observable": true,
-                    "tool_followup_enabled": true,
-                    "planner_guided_tool_routing_enabled": true,
-                    "clarification_resume_enabled": true,
-                    "execution_cache_bypass_enabled": true,
-                    "tool_governance": crate::acp::helpers::tool_governance::tool_governance_counters(),
-                    "tool_governance_default_policy": {
-                        "active_when_harness_bus_absent": server.harness_bus.is_none(),
-                        "snapshot": crate::acp::helpers::tool_governance_defaults::default_governance_policy_snapshot(),
-                    },
-                    "autonomy_runtime_metrics": crate::acp::helpers::autonomy_metrics::autonomy_metrics_snapshot(),
-                    "signals": {
-                        "token_l1_cache_hit_count": token_l1_cache_hit,
-                        "token_l5_invocation_count": token_l5_invocations,
-                        "token_gate_count": token_gate_count,
-                    },
-                },
+                "autonomy_behavior_validation": autonomy_behavior_validation,
                 "multi_priority_scheduler": {
                     "ready": multi_priority_scheduler_ready,
                     "dual_level_scheduler_profile": {

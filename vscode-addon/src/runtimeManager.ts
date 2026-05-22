@@ -683,10 +683,10 @@ export class GoOnManager {
     this.lastWizardPromptAt = now;
 
     const action = await vscode.window.showWarningMessage(
-      "Go-On needs an AI provider API key to process your request.",
-      "Quick Setup",
-      "Open Settings",
-      "Later",
+      i18n.getMessage(MessageKeys.apiKeyMissing),
+      i18n.getMessage(MessageKeys.quickSetup),
+      i18n.getMessage(MessageKeys.openSettings),
+      i18n.getMessage(MessageKeys.later),
     );
 
     if (action === "Later") return;
@@ -715,8 +715,8 @@ export class GoOnManager {
     }));
 
     const picked = await vscode.window.showQuickPick(providerItems, {
-      placeHolder: "Select an AI provider to configure",
-      title: "Quick Setup — Step 1/2",
+      placeHolder: i18n.getMessage(MessageKeys.selectProvider),
+      title: i18n.getMessage(MessageKeys.quickSetupStep1Title),
     });
 
     if (!picked) return;
@@ -798,12 +798,12 @@ export class GoOnManager {
       }
 
       vscode.window.showInformationMessage(
-        `✅ ${selectedProvider.label} API key configured! You can now send messages.`,
+        i18n.getMessage(MessageKeys.apiKeyConfigured, selectedProvider.label),
       );
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       vscode.window.showErrorMessage(
-        `Setup failed: ${msg}. Try Open Settings instead.`,
+        i18n.getMessage(MessageKeys.setupFailed, msg),
       );
     }
   }

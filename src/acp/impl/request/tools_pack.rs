@@ -242,7 +242,10 @@ pub(crate) async fn execute_mcp_tool_call(
         // to prevent "default allow all" blind spot (AUTON-05).
         let classification =
             crate::acp::helpers::tool_governance_defaults::evaluate_default_tool_policy(
-                name, false, false,
+                name,
+                false,
+                false,
+                server.runtime_config.deployment_target.as_deref(),
             );
         if !classification.allowed {
             anyhow::bail!(
