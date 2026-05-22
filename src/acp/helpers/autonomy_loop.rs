@@ -21,10 +21,13 @@ use crate::orchestration::planner_executor::Planner;
 use crate::orchestration::tool::{execute_loop, LoopConfig, LoopDecision, ToolInput, ToolRegistry};
 
 use super::autonomy_metrics::{
-    record_explicit_tool_route, record_orchestration_alignment, record_parallel_tool_fanout,
-    record_planner_guided_route, record_tool_followup_attempt, record_tool_followup_success,
+    record_agent_switch, record_capability_selection_reason, record_explicit_tool_route,
+    record_orchestration_alignment, record_parallel_tool_fanout, record_planner_guided_route,
+    record_tool_followup_attempt, record_tool_followup_success,
 };
+use super::execution_intelligence::{post_check, pre_check};
 use super::orchestration_alignment::derive_plan_trace_alignment;
+use crate::orchestration::capability_signals::CapabilitySignals;
 
 /// Autonomy loop state machine phases
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -66,6 +69,14 @@ pub struct AutonomyLoopConfig {
     pub enable_early_stop: bool,
     /// BLUE41: Confidence threshold (0.0–1.0) for early-stop decision
     pub early_stop_confidence_threshold: f64,
+    /// BLUE41: CapabilityBus signals for structured tool/agent/mode selection
+    pub capability_signals: Option<CapabilitySignals>,
+    /// BLUE42: Enable DAG-driven tool execution path
+    pub use_dag_execution: bool,
+    /// BLUE42: Enable adaptive reroute checks after weak rounds
+    pub enable_agent_reroute: bool,
+    /// BLUE42: Enable metacognitive and world-model feedback hooks
+    pub enable_execution_intelligence: bool,
 }
 
 impl Default for AutonomyLoopConfig {
@@ -79,6 +90,10 @@ impl Default for AutonomyLoopConfig {
             replan_complexity_threshold: 3,
             enable_early_stop: true,
             early_stop_confidence_threshold: 0.85,
+            capability_signals: None,
+            use_dag_execution: false,
+            enable_agent_reroute: false,
+            enable_execution_intelligence: true,
         }
     }
 }
@@ -105,6 +120,12 @@ pub struct AutonomyRound {
     pub retry_count: u32,
     /// BLUE41: Why this round ended (tool_complete / max_tools / error / early_stop)
     pub round_stop_reason: String,
+    /// BLUE42: Whether adaptive reroute was triggered this round
+    pub agent_switched: bool,
+    /// BLUE42: Optional reason for reroute trigger
+    pub agent_switch_reason: Option<String>,
+    /// BLUE42: Candidate agent count visible to this round
+    pub candidate_agent_count: u32,
 }
 
 /// Final report from the autonomy loop
@@ -193,6 +214,9 @@ pub async fn run_autonomy_loop(
         round_start_offset_ms: 0,
         retry_count: 0,
         round_stop_reason: "planned".to_string(),
+        agent_switched: false,
+        agent_switch_reason: None,
+        candidate_agent_count: 1,
     };
     all_rounds.push(planning_round);
 
@@ -220,9 +244,62 @@ pub async fn run_autonomy_loop(
         let round_start = Instant::now();
         let mut round_tools: Vec<String> = Vec::new();
         let mut planner_guided = false;
+        let mut agent_switched = false;
+        let mut agent_switch_reason: Option<String> = None;
+        let candidate_agent_count = if config
+            .capability_signals
+            .as_ref()
+            .and_then(|sig| sig.preferred_agent.as_ref())
+            .is_some()
+        {
+            2
+        } else {
+            1
+        };
 
-        // Use planner-guided tool preferences when enabled
-        if config.enable_planner_guidance && tool_registry.is_some() {
+        let pre = if config.enable_execution_intelligence {
+            pre_check("autonomy-loop", "autonomy_agent")
+        } else {
+            super::execution_intelligence::ExecutionPreCheck {
+                should_degrade: false,
+                reason: None,
+            }
+        };
+        if pre.should_degrade {
+            final_reasoning = pre
+                .reason
+                .unwrap_or_else(|| "execution intelligence requested degrade".to_string());
+            let round_record = AutonomyRound {
+                round_index: iteration + 1,
+                phase: AutonomyPhase::Failed,
+                tools_executed: Vec::new(),
+                planner_guided: false,
+                duration_ms: round_start.elapsed().as_millis() as u64,
+                error: Some("degraded_by_execution_intelligence".to_string()),
+                round_start_offset_ms: start.elapsed().as_millis() as u64,
+                retry_count: 0,
+                round_stop_reason: "degraded".to_string(),
+                agent_switched: false,
+                agent_switch_reason: None,
+                candidate_agent_count,
+            };
+            all_rounds.push(round_record);
+            break;
+        }
+
+        // Use capability signals or planner-guided tool preferences
+        #[allow(unused_variables)]
+        let preferred_tools: Vec<String> = if let Some(ref cap_sig) = config.capability_signals {
+            let tools = cap_sig.resolve_tool_preferences(config.max_tools_per_round);
+            if !tools.is_empty() {
+                planner_guided = true;
+                planner_guidance_used = true;
+                record_capability_selection_reason("capability_bus_selected");
+                tools
+            } else {
+                Vec::new()
+            }
+        } else if config.enable_planner_guidance && tool_registry.is_some() {
             let preferred = super::autonomy::planner_guided_tool_preferences(
                 "autonomy-loop",
                 "execute",
@@ -236,7 +313,10 @@ pub async fn run_autonomy_loop(
                 planner_guidance_used = true;
                 record_planner_guided_route();
             }
-        }
+            preferred
+        } else {
+            Vec::new()
+        };
 
         // Agent chat round to produce response and tool calls
         let (sender, mut receiver) = mpsc::channel::<String>(2048);
@@ -282,62 +362,83 @@ pub async fn run_autonomy_loop(
                     record_parallel_tool_fanout(tool_calls.len() as u64);
                 }
 
-                let tool_jobs = tool_calls
-                    .iter()
-                    .map(|(tool_name, tool_args_str)| {
-                        let registry = Arc::clone(registry);
-                        let tool_name = tool_name.clone();
-                        let tool_args_str = tool_args_str.clone();
-                        let objective_text = objective.to_string();
-                        let round_phase = format!("round-{}", iteration);
-                        tokio::spawn(async move {
-                            let parsed_args: Value = serde_json::from_str(&tool_args_str)
-                                .unwrap_or(serde_json::json!({}));
+                let tool_results: Vec<(String, LoopDecision)> = if config.use_dag_execution {
+                    crate::orchestration::dag_driver::execute_parallel_tool_calls(
+                        Arc::clone(registry),
+                        objective,
+                        iteration,
+                        &tool_calls,
+                    )
+                    .await
+                    .into_iter()
+                    .map(|r| (r.tool_name, r.decision))
+                    .collect()
+                } else {
+                    let tool_jobs = tool_calls
+                        .iter()
+                        .map(|(tool_name, tool_args_str)| {
+                            let registry = Arc::clone(registry);
+                            let tool_name = tool_name.clone();
+                            let tool_args_str = tool_args_str.clone();
+                            let objective_text = objective.to_string();
+                            let round_phase = format!("round-{}", iteration);
+                            tokio::spawn(async move {
+                                let parsed_args: Value = serde_json::from_str(&tool_args_str)
+                                    .unwrap_or(serde_json::json!({}));
 
-                            let tool_input = ToolInput {
-                                task_id: "autonomy-loop".to_string(),
-                                phase: round_phase,
-                                agent_role: "autonomy_agent".to_string(),
-                                objective: objective_text,
-                                constraints: None,
-                                evidence: None,
-                                payload: parsed_args,
-                                allowed_base_dir: None,
-                            };
+                                let tool_input = ToolInput {
+                                    task_id: "autonomy-loop".to_string(),
+                                    phase: round_phase,
+                                    agent_role: "autonomy_agent".to_string(),
+                                    objective: objective_text,
+                                    constraints: None,
+                                    evidence: None,
+                                    payload: parsed_args,
+                                    allowed_base_dir: None,
+                                };
 
-                            let loop_cfg = LoopConfig {
-                                max_iterations: 1,
-                                max_retries_per_tool: 1,
-                                enable_fallback: false,
-                                verify_output: None,
-                            };
+                                let loop_cfg = LoopConfig {
+                                    max_iterations: 1,
+                                    max_retries_per_tool: 1,
+                                    enable_fallback: false,
+                                    verify_output: None,
+                                };
 
-                            let (decision, _trace) =
-                                execute_loop(&tool_name, &registry, &tool_input, &[], &loop_cfg);
-                            (tool_name, decision)
-                        })
-                    })
-                    .collect::<Vec<_>>();
-
-                let tool_results = join_all(tool_jobs).await;
-                for task_result in tool_results {
-                    let (tool_name, result) = match task_result {
-                        Ok(output) => output,
-                        Err(err) => {
-                            let tool_block =
-                                crate::orchestration::autonomy_runtime::build_tool_result_block(
-                                    "tool_exec_runtime",
-                                    &format!("tool execution join error: {}", err),
-                                    true,
+                                let (decision, _trace) = execute_loop(
+                                    &tool_name,
+                                    &registry,
+                                    &tool_input,
+                                    &[],
+                                    &loop_cfg,
                                 );
-                            messages.push(Message {
-                                role: "user".to_string(),
-                                content: tool_block,
-                            });
-                            continue;
-                        }
-                    };
+                                (tool_name, decision)
+                            })
+                        })
+                        .collect::<Vec<_>>();
 
+                    join_all(tool_jobs)
+                        .await
+                        .into_iter()
+                        .filter_map(|task_result| match task_result {
+                            Ok(output) => Some(output),
+                            Err(err) => {
+                                let tool_block =
+                                    crate::orchestration::autonomy_runtime::build_tool_result_block(
+                                        "tool_exec_runtime",
+                                        &format!("tool execution join error: {}", err),
+                                        true,
+                                    );
+                                messages.push(Message {
+                                    role: "user".to_string(),
+                                    content: tool_block,
+                                });
+                                None
+                            }
+                        })
+                        .collect()
+                };
+
+                for (tool_name, result) in tool_results {
                     round_tools.push(tool_name.clone());
 
                     match result {
@@ -354,6 +455,9 @@ pub async fn run_autonomy_loop(
                                 role: "user".to_string(),
                                 content: tool_block,
                             });
+                            if config.enable_execution_intelligence {
+                                post_check("autonomy-loop", "autonomy_agent", true, &result_text);
+                            }
                         }
                         LoopDecision::Failed { reason, .. } => {
                             let tool_block =
@@ -364,6 +468,9 @@ pub async fn run_autonomy_loop(
                                 role: "user".to_string(),
                                 content: tool_block,
                             });
+                            if config.enable_execution_intelligence {
+                                post_check("autonomy-loop", "autonomy_agent", false, &reason);
+                            }
                         }
                         other => {
                             let msg = format!("tool loop ended: {:?}", other);
@@ -375,6 +482,9 @@ pub async fn run_autonomy_loop(
                                 role: "user".to_string(),
                                 content: tool_block,
                             });
+                            if config.enable_execution_intelligence {
+                                post_check("autonomy-loop", "autonomy_agent", false, &msg);
+                            }
                         }
                     }
                 }
@@ -431,6 +541,11 @@ pub async fn run_autonomy_loop(
         } else {
             "tools_completed"
         };
+        if config.enable_agent_reroute && tools_were_called && response.trim().is_empty() {
+            agent_switched = true;
+            agent_switch_reason = Some("failure".to_string());
+            record_agent_switch("failure");
+        }
         // Save round_tools before moving into round_record
         let rt_for_early_stop = round_tools.clone();
 
@@ -448,6 +563,9 @@ pub async fn run_autonomy_loop(
             round_start_offset_ms: start.elapsed().as_millis() as u64,
             retry_count: 0,
             round_stop_reason: round_stop_reason.to_string(),
+            agent_switched,
+            agent_switch_reason,
+            candidate_agent_count,
         };
         all_rounds.push(round_record);
 

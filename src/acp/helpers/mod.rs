@@ -57,4 +57,16 @@ pub mod planner_bridge;
 // ACP-aware multi-round autonomy loop adapter (AUTON-01)
 pub mod autonomy_loop_adapter;
 
+// BLUE42: agent selection extraction from chat runtime
+pub mod agent_selector;
+
+// BLUE42: cache hit/bypass strategy extraction
+pub mod cache_strategy;
+
+// BLUE42: task-aware historical router
+pub mod agent_router;
+
+// BLUE42: metacognitive/world-model execution intelligence bridge
+pub mod execution_intelligence;
+
 // Re-export for convenience

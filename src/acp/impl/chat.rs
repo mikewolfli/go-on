@@ -20,14 +20,22 @@ use tokio::sync::mpsc;
 use tokio::time::Duration;
 use tracing::{debug, info, warn};
 
+use crate::acp::helpers::agent_router::record_task_agent_outcome;
+use crate::acp::helpers::agent_selector::{
+    collect_reputation_scores, rank_by_task_success, rerank_by_reputation,
+};
 use crate::acp::helpers::autonomy::{
-    is_execution_like_request, planner_guided_tool_preferences, run_followup_after_tool_observation,
+    planner_guided_tool_preferences, run_followup_after_tool_observation,
 };
 use crate::acp::helpers::autonomy_metrics::{
-    record_autonomy_loop_stop_reason, record_explicit_tool_route, record_fallback_reason,
-    record_orchestration_alignment, record_orchestration_node_mapping, record_planner_guided_route,
-    record_reputation_routing_applied, record_tool_followup_attempt, record_tool_followup_fallback,
-    record_tool_followup_success, record_vote_reputation_tiebreak, record_vote_winner,
+    record_agent_switch, record_autonomy_loop_stop_reason, record_explicit_tool_route,
+    record_fallback_reason, record_orchestration_alignment, record_orchestration_node_mapping,
+    record_planner_guided_route, record_reputation_routing_applied, record_tool_followup_attempt,
+    record_tool_followup_fallback, record_tool_followup_success, record_vote_reputation_tiebreak,
+    record_vote_winner,
+};
+use crate::acp::helpers::cache_strategy::{
+    should_bypass_for_execution, should_refuse_cache_hit, should_serve_cache_hit, store_async,
 };
 use crate::acp::helpers::context::{
     probe_agent_runtime_readiness, request_timeout, run_with_optional_timeout,
@@ -1024,26 +1032,14 @@ pub(crate) async fn process_chat_request(
     let phase_name = &phase.phase_name;
     reorder_chat_agents_by_runtime_score(server, phase_name, &mut resolved.agents);
     let mut routing_provenance: Vec<String> = vec!["runtime_score_rerank_applied".to_string()];
-    let mut reputation_scores: HashMap<String, f64> = HashMap::new();
+    let reputation_scores = collect_reputation_scores(server, &resolved.agents);
 
-    if let Some(ref cb) = server.capability_bus {
-        if let Ok(rep) = cb.reputation.lock() {
-            for (name, _) in &resolved.agents {
-                reputation_scores.insert(name.clone(), rep.score(name));
-            }
-        }
-    }
-    if resolved.agents.len() > 1 && !reputation_scores.is_empty() {
-        resolved.agents.sort_by(|a, b| {
-            let score_a = reputation_scores.get(&a.0).copied().unwrap_or(0.5);
-            let score_b = reputation_scores.get(&b.0).copied().unwrap_or(0.5);
-            score_b
-                .partial_cmp(&score_a)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.0.cmp(&b.0))
-        });
+    if rerank_by_reputation(&mut resolved.agents, &reputation_scores) {
         record_reputation_routing_applied();
         routing_provenance.push("reputation_weighted_rerank_applied".to_string());
+    }
+    if rank_by_task_success(phase_name, &mut resolved.agents) {
+        routing_provenance.push("task_agent_success_rerank_applied".to_string());
     }
 
     // ── SchemaRegistry task envelope validation (F-GAP-07) ─────────────
@@ -1440,7 +1436,7 @@ You have access to {} registered skill(s). Skills are reusable templates that au
     let mut quota_failed_agents: Vec<String> = Vec::new();
     let mut agent_attempts: Vec<Value> = Vec::new();
     let mut cache_hit = false;
-    let cache_bypassed_for_execution = is_execution_like_request(&params.mode, &agent_messages);
+    let cache_bypassed_for_execution = should_bypass_for_execution(&params.mode, &agent_messages);
 
     // ── Scheduler task submission (ARCH-02) ────────────────────────────
     // Submit this request as a ScheduledTask so the dual-level priority
@@ -1518,7 +1514,7 @@ You have access to {} registered skill(s). Skills are reusable templates that au
             }
         };
 
-        if confidence > 0.95 && !cache_bypassed_for_execution {
+        if should_serve_cache_hit(confidence, cache_bypassed_for_execution) {
             tracing::info!(
                 target = "token_cache",
                 level = %level,
@@ -1554,7 +1550,7 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                 "cache_level": format!("{level}"),
                 "duration_ms": 0u64
             }));
-        } else if confidence > 0.95 && cache_bypassed_for_execution {
+        } else if should_refuse_cache_hit(confidence, cache_bypassed_for_execution) {
             // Cache hit was found but refused — record for governance.status observability
             // (AUTON-03 criterion 3). The request is execution-like, so a stale cached
             // response could mask necessary side effects.
@@ -1818,8 +1814,17 @@ You have access to {} registered skill(s). Skills are reusable templates that au
             &agent_messages,
         )
     {
-        if let Some(first_agent) = resolved.agents.first().cloned() {
-            let (agent_name, agent) = first_agent;
+        let reroute_enabled = option_bool(&base_agent_options, "enable_agent_reroute", true);
+        let autonomy_candidates = resolved.agents.clone();
+        for (idx, (agent_name, agent)) in autonomy_candidates.into_iter().enumerate() {
+            if idx > 0 && !reroute_enabled {
+                break;
+            }
+            if idx > 0 {
+                let switch_reason = if idx == 1 { "failure" } else { "reputation" };
+                record_agent_switch(switch_reason);
+            }
+
             let attempt_started = std::time::Instant::now();
             let autonomy_tool_registry = Some(std::sync::Arc::new(
                 crate::orchestration::tool::ToolRegistry::new(),
@@ -1829,30 +1834,39 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                 autonomy_tool_registry,
                 agent_messages.clone(),
                 phase.principles.clone(),
-                None,
+                Some(base_agent_options.clone()),
                 request_timeout(phase.options.as_ref()),
                 None,
             )
             .await;
+
             match result {
                 Ok(loop_result) => {
-                    autonomy_loop_executed = true;
-                    response_text = loop_result.response;
-                    reasoning_text = loop_result.reasoning;
-                    selected_model_name = loop_result.selected_model;
-                    selected_agent = agent_name.clone();
+                    let stop_reason = loop_result.report.stop_reason.clone();
+                    let produced_response = !loop_result.response.trim().is_empty();
                     agent_attempts.push(json!({
                         "agent": agent_name,
-                        "ok": true,
+                        "ok": produced_response,
                         "autonomy_loop": true,
                         "total_rounds": loop_result.report.total_rounds,
                         "total_tools": loop_result.report.total_tools,
-                        "stop_reason": loop_result.report.stop_reason,
+                        "stop_reason": stop_reason,
+                        "candidate_index": idx,
+                        "candidate_count": resolved.agents.len(),
                         "duration_ms": attempt_started.elapsed().as_millis() as u64,
                     }));
-                    crate::acp::helpers::autonomy_metrics::record_autonomy_loop_stop_reason(
-                        &loop_result.report.stop_reason,
-                    );
+                    record_autonomy_loop_stop_reason(&loop_result.report.stop_reason);
+                    if produced_response {
+                        autonomy_loop_executed = true;
+                        response_text = loop_result.response;
+                        reasoning_text = loop_result.reasoning;
+                        selected_model_name = loop_result.selected_model;
+                        selected_agent = agent_name;
+                        break;
+                    }
+                    if !reroute_enabled {
+                        break;
+                    }
                 }
                 Err(e) => {
                     warn!("autonomy loop failed for '{}': {}", agent_name, e);
@@ -1861,8 +1875,13 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                         "ok": false,
                         "autonomy_loop": true,
                         "error": e.to_string(),
+                        "candidate_index": idx,
+                        "candidate_count": resolved.agents.len(),
                         "duration_ms": attempt_started.elapsed().as_millis() as u64,
                     }));
+                    if !reroute_enabled {
+                        break;
+                    }
                 }
             }
         }
@@ -1991,19 +2010,14 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                         let token_count =
                             crate::intelligence::token_cache::estimate_token_count(&output_text);
                         let cache = server.cache.token_cache.clone();
-                        let agent_name_for_cache = Some(agent_name.clone());
-                        let cached_output = output_text.clone();
-                        tokio::spawn(async move {
-                            cache
-                                .store(
-                                    &input_text,
-                                    &cached_output,
-                                    token_count,
-                                    agent_name_for_cache,
-                                    model_name,
-                                )
-                                .await;
-                        });
+                        store_async(
+                            cache,
+                            input_text,
+                            output_text.clone(),
+                            token_count,
+                            Some(agent_name.clone()),
+                            model_name,
+                        );
                     }
 
                     last_err = None;
@@ -2692,6 +2706,15 @@ You have access to {} registered skill(s). Skills are reusable templates that au
     }
 
     let switched_from_quota_limit = !quota_failed_agents.is_empty() && !selected_agent.is_empty();
+    if let Some(primary_candidate) = candidate_agents.first() {
+        if !selected_agent.is_empty() && selected_agent != *primary_candidate {
+            if switched_from_quota_limit {
+                record_agent_switch("failure");
+            } else {
+                record_agent_switch("reputation");
+            }
+        }
+    }
     let agent_switch_notice = if switched_from_quota_limit {
         Some(json!({
             "type": "quota_fallback",
@@ -3160,6 +3183,12 @@ You have access to {} registered skill(s). Skills are reusable templates that au
             1.0,
         );
     }
+
+    record_task_agent_outcome(
+        phase_name,
+        &selected_agent,
+        !response_text.trim().is_empty(),
+    );
 
     // ── TenantBudgetEnforcer record usage (F-GAP-08) ───────────────────
     // Record resource consumption after task completion so subsequent
@@ -6553,5 +6582,98 @@ mod tests {
         assert!(attempts
             .iter()
             .any(|attempt| attempt["agent"] == "test-agent" && attempt["ok"] == true));
+    }
+
+    #[cfg(not(feature = "backend-postgres"))]
+    #[tokio::test]
+    async fn process_chat_request_high_risk_multi_candidate_emits_council_decision() {
+        let temp = tempfile::tempdir().expect("tempdir should exist");
+
+        let mut registry = AgentRegistry::new();
+        registry.register_arc(
+            "agent-a",
+            Arc::new(RecordingAgent {
+                seen_messages: Arc::new(Mutex::new(Vec::new())),
+                output: "agent-a answer".to_string(),
+            }),
+        );
+        registry.register_arc(
+            "agent-b",
+            Arc::new(RecordingAgent {
+                seen_messages: Arc::new(Mutex::new(Vec::new())),
+                output: "agent-b answer".to_string(),
+            }),
+        );
+
+        let mut config = test_config();
+        config
+            .phases
+            .get_mut("coding")
+            .expect("coding phase must exist")
+            .agents = vec!["agent-a".to_string(), "agent-b".to_string()];
+        let config = Arc::new(config);
+        let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
+
+        let harness_bus = Arc::new(crate::governance::harness_bus::default_harness_bus(None));
+        let workflow_registry = Arc::new(std::sync::Mutex::new(
+            crate::orchestration::workflow_registry::WorkflowRegistry::new(),
+        ));
+        let capability_bus = Arc::new(
+            crate::intelligence::capability_bus::core::CapabilityBus::new_default(
+                Arc::clone(&harness_bus),
+                Some(Arc::clone(&workflow_registry)),
+            ),
+        );
+
+        let mut server = ServerBuilder::new().build().expect("server should build");
+        server.flow_manager = Some(flow);
+        server.agent_registry = Some(Arc::new(registry));
+        server.vector_config = config.vector.clone();
+        server.harness_bus = Some(Arc::clone(&harness_bus));
+        server.capability_bus = Some(Arc::clone(&capability_bus));
+        let config_path = temp.path().join("config.toml");
+        std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
+        server.config_path = Some(config_path.display().to_string());
+
+        let params = ChatParams {
+            mode: "ask".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: "Need medical diagnosis and prescription decision with legal compliance considerations"
+                    .to_string(),
+            }],
+            conversation_id: Some("council-smoke-conv".to_string()),
+            branch_id: Some("main".to_string()),
+            phase: Some("coding".to_string()),
+            options: None,
+            requirement_contract: None,
+            plan: None,
+            vector_hits: None,
+            execution_decision_candidate: None,
+        };
+
+        let trace = chat_trace_context(&Some(json!(1)), "chat.council_smoke");
+        let result = process_chat_request(&server, &params, None, &trace, None, None)
+            .await
+            .expect("chat request should succeed");
+
+        let decision = result["routing_diagnostics"]["council_decision"]
+            .as_object()
+            .expect("council decision should be present for high-risk multi-candidate request");
+        assert!(decision.contains_key("proposal_id"));
+
+        let provenance = result["routing_diagnostics"]["routing_provenance"]
+            .as_array()
+            .expect("routing provenance must be an array")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            provenance.contains(&"council_deliberation_selected_route"),
+            "routing provenance should indicate council deliberation route selection"
+        );
+
+        let response_text = result["response"].as_str().unwrap_or_default();
+        assert!(response_text == "agent-a answer" || response_text == "agent-b answer");
     }
 }

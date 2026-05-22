@@ -29,11 +29,18 @@ pub(crate) async fn run_acp_autonomy_loop(
     tool_registry: Option<Arc<ToolRegistry>>,
     messages: Vec<Message>,
     _principles: Option<Vec<String>>,
-    _options: Option<std::collections::HashMap<String, Value>>,
+    options: Option<std::collections::HashMap<String, Value>>,
     timeout_duration: Option<std::time::Duration>,
     stream_tx: Option<mpsc::UnboundedSender<String>>,
 ) -> Result<AutonomyLoopResult> {
     let objective = extract_objective(&messages);
+    let option_bool = |key: &str, default: bool| -> bool {
+        options
+            .as_ref()
+            .and_then(|map| map.get(key))
+            .and_then(Value::as_bool)
+            .unwrap_or(default)
+    };
     let config = AutonomyLoopConfig {
         max_iterations: 5,
         max_tools_per_round: 8,
@@ -43,6 +50,10 @@ pub(crate) async fn run_acp_autonomy_loop(
         replan_complexity_threshold: 4,
         enable_early_stop: true,
         early_stop_confidence_threshold: 0.85,
+        capability_signals: None,
+        use_dag_execution: option_bool("enable_dag_execution", false),
+        enable_agent_reroute: option_bool("enable_agent_reroute", true),
+        enable_execution_intelligence: option_bool("enable_metacognitive_feedback", true),
     };
 
     let result = run_autonomy_loop(

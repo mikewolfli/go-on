@@ -37,6 +37,9 @@ static REPUTATION_ROUTING_APPLIED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VOTE_REPUTATION_TIEBREAK_TOTAL: AtomicU64 = AtomicU64::new(0);
 static PARALLEL_TOOL_FANOUT_CALLS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static PARALLEL_TOOL_FANOUT_BATCH_TOTAL: AtomicU64 = AtomicU64::new(0);
+static AGENT_SWITCH_TOTAL: AtomicU64 = AtomicU64::new(0);
+static AGENT_SWITCH_BY_FAILURE_TOTAL: AtomicU64 = AtomicU64::new(0);
+static AGENT_SWITCH_BY_REPUTATION_TOTAL: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn record_planner_guided_route() {
     PLANNER_GUIDED_ROUTE_TOTAL.fetch_add(1, Ordering::Relaxed);
@@ -173,6 +176,19 @@ pub(crate) fn record_parallel_tool_fanout(batch_size: u64) {
     PARALLEL_TOOL_FANOUT_BATCH_TOTAL.fetch_add(batch_size, Ordering::Relaxed);
 }
 
+pub(crate) fn record_agent_switch(reason: &str) {
+    AGENT_SWITCH_TOTAL.fetch_add(1, Ordering::Relaxed);
+    match reason {
+        "failure" => {
+            AGENT_SWITCH_BY_FAILURE_TOTAL.fetch_add(1, Ordering::Relaxed);
+        }
+        "reputation" => {
+            AGENT_SWITCH_BY_REPUTATION_TOTAL.fetch_add(1, Ordering::Relaxed);
+        }
+        _ => {}
+    }
+}
+
 /// Record that a cache hit was found but refused because the request is
 /// execution-like and may have side effects (AUTON-03 criterion 3).
 /// The `reason` categorizes the refusal for governance.status observability.
@@ -221,6 +237,9 @@ pub(crate) fn autonomy_metrics_snapshot() -> Value {
     let vote_total = vote_winner_strong + vote_winner_escalation;
     let parallel_tool_fanout_calls = PARALLEL_TOOL_FANOUT_CALLS_TOTAL.load(Ordering::Relaxed);
     let parallel_tool_fanout_batch = PARALLEL_TOOL_FANOUT_BATCH_TOTAL.load(Ordering::Relaxed);
+    let agent_switch_total = AGENT_SWITCH_TOTAL.load(Ordering::Relaxed);
+    let agent_switch_by_failure = AGENT_SWITCH_BY_FAILURE_TOTAL.load(Ordering::Relaxed);
+    let agent_switch_by_reputation = AGENT_SWITCH_BY_REPUTATION_TOTAL.load(Ordering::Relaxed);
     let recovery_total = auto_recovery + human_confirmation;
     let alignment_total = alignment_high + alignment_low;
     let repair_total = repair_resolved + repair_improved + repair_unresolved;
@@ -355,5 +374,8 @@ pub(crate) fn autonomy_metrics_snapshot() -> Value {
         "parallel_tool_fanout_calls_total": parallel_tool_fanout_calls,
         "parallel_tool_fanout_batch_total": parallel_tool_fanout_batch,
         "parallel_tool_fanout_avg_batch": parallel_tool_fanout_avg_batch,
+        "agent_switch_total": agent_switch_total,
+        "agent_switch_by_failure_total": agent_switch_by_failure,
+        "agent_switch_by_reputation_total": agent_switch_by_reputation,
     })
 }

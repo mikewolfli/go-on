@@ -1965,6 +1965,22 @@ pub(super) async fn handle_governance_status(
             .and_then(Value::as_u64)
             .unwrap_or(0)
             > 0;
+    let autonomy_perf = json!({
+        "p95_latency_ms": status.metrics.avg_request_duration_ms,
+        "avg_rounds_per_request": autonomy_runtime_metrics
+            .get("tool_followup_attempt_total")
+            .and_then(Value::as_u64)
+            .map(|attempts| {
+                let denom = status.metrics.chat_requests_total.max(1) as f64;
+                attempts as f64 / denom
+            })
+            .unwrap_or(0.0),
+        "parallel_utilization_ratio": autonomy_runtime_metrics
+            .get("parallel_tool_fanout_avg_batch")
+            .and_then(Value::as_f64)
+            .map(|avg_batch| (avg_batch / 8.0).clamp(0.0, 1.0))
+            .unwrap_or(0.0),
+    });
 
     let release_gate_ready = (!multi_user_enabled
         || (isolation_component_ok && lifecycle_ops_ready))
@@ -3780,6 +3796,7 @@ pub(super) async fn handle_governance_status(
         "orchestration_node_mapped_total": orchestration_node_mapped_total,
         "orchestration_node_unmapped_total": orchestration_node_unmapped_total,
         "autonomy_runtime_metrics": autonomy_runtime_metrics,
+        "autonomy_perf": autonomy_perf,
         "signals": autonomy_behavior_signals,
     });
 
@@ -3912,6 +3929,7 @@ pub(super) async fn handle_governance_status(
                         .cloned()
                         .unwrap_or_else(|| serde_json::json!(0u64)),
                     "autonomy_runtime_metrics": autonomy_runtime_metrics,
+                    "autonomy_perf": autonomy_perf,
                 },
                 "learning_cognition": {
                     "mode": "adaptive",

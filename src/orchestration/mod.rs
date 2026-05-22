@@ -1,12 +1,14 @@
 pub mod artifact;
 pub mod autonomy_runtime;
 pub mod brain_loop; // F-GAP-17 (flat, legacy)
+pub mod capability_signals; // BLUE41: Structured capability decision data
 #[cfg(any(
     feature = "sub-bus-tool",
     feature = "profile-simple-server",
     feature = "profile-multi-users-server"
 ))]
 pub mod council; // F-GAP-15
+pub mod dag_driver; // BLUE42: DAG execution driver for autonomy loop
 pub mod dag_execution; // AUTON-07: DAG-driven execution adapter
 pub mod execution_graph;
 pub mod flow;

@@ -459,13 +459,13 @@
 | Step | 内容 | 完成率 | 关键变更 |
 |------|------|:------:|----------|
 | 1 | 建立基线测量 | 100% | AutonomyRound 新增 round_start_offset_ms / retry_count / round_stop_reason；每轮记录的 stop_reason 区分 no_tools_needed/max_iterations_reached/empty_response/tools_completed |
-| 2 | CapabilityBus 接线 | 100% | `chat` 主链路新增 capability routing 诊断字段：candidate_count / decision_confidence / selection_reason；新增 routing_diagnostics: vote_winner / fallback_reason；并写入 autonomy_metrics 对应计数（capability selection、vote winner、fallback reason） |
+| 2 | CapabilityBus 接线 | 100% | `orchestration/capability_signals.rs` 新增 CapabilitySignals 结构化决策桥接；AutonomyLoopConfig 新增 capability_signals 字段+resolve_tool_preferences 方法，替换纯关键词启发式 |
 | 3 | 信誉与历史性能路由 | 100% | `chat` 主链路在 runtime_score 之后追加 reputation-weighted rerank；高风险投票平票时引入 reputation tie-break；输出 routing_provenance/candidate_reputation_scores/selected_agent_reputation 并落自治指标计数 |
 | 4 | 并行 fan-out 执行 | 100% | `autonomy_loop` 多 tool call 已 fan-out 并行聚合（join_all）；高风险多 agent vote / escalation 采用并行收集；新增并行批次指标 parallel_tool_fanout_calls_total / batch_total / avg_batch |
 | 5 | council 复杂任务 deliberation | 100% | `chat` 主链路新增高风险+多候选的 council_deliberation_enabled 门控，触发 council 提案/投票/tally 并将 winner 回灌路由；输出 council_decision 诊断 |
 | 6 | 引入早停规则 | 100% | AutonomyLoopConfig 新增 enable_early_stop / early_stop_confidence_threshold；实现 plan-step 完成度计算，超过阈值时提前退出循环 |
 | 7 | 学习回灌闭环 | 100% | request-level routing provenance 追加到 ProvenanceLedger；CapabilityBus feedback/evolve 改为真实 success 态；reputation 路由与回灌形成闭环（同类请求可复用历史成功偏好） |
-| 8 | 指标与回归门禁 | 100% | autonomy_metrics 增补 capability/vote/fallback/reputation/fan-out 总量与 ratio 指标；通过三 profile `cargo check` + 三 profile `cargo clippy -- -D warnings` 硬门 |
+| 8 | 指标与回归门禁 | 100% | autonomy_metrics 增补 capability/vote/fallback/reputation/fan-out 总量与 ratio 指标；通过三 profile `cargo check` + 三 profile `cargo clippy -- -D warnings` 硬门；新增 `process_chat_request_high_risk_multi_candidate_emits_council_decision` smoke 覆盖 council 路由诊断 |
 
 ### 9.2 结论回写
 
@@ -473,4 +473,4 @@
 2. CapabilityBus 决策输出已进入主结果体与自治指标快照，路由原因可观测性增强。
 3. 信誉路由已接入主链路：候选 agent 的 rerank 与投票平票都可由 reputation 信号驱动。
 4. 自治循环已具备多工具 fan-out 并行执行能力，复杂高风险请求已具备 council 门控 deliberation。
-5. Blue41 Step 1-8 已完成闭合，当前进入持续回归与性能压测阶段。
+5. 回归门禁已补充关键场景 smoke（高风险多候选 council 路由），Blue41 Step 1-8 保持完成闭合状态。
