@@ -467,15 +467,19 @@
 |:----:|------|:------:|------|
 | 1 | 拆分 agent 选择逻辑 | 100% | `agent_selector.rs` 已完整承担候选评分、winner 选择、重排与 selection 记录；chat 主链路已直接调用 selector 并移除旧 rerank 手工分支，Step 1 闭合 |
 | 2 | 拆分 cache 策略 | 100% | `cache_strategy.rs` 已完整承担缓存绕过、命中/拒绝判定、结构化 lookup 决策与回写入口；chat 主链路已直接使用策略结果，Step 2 闭合 |
-| 3 | 动态 agent 重路由 | 78% | `enable_agent_reroute` flag + `agent_switched`/`switch_reason`/`candidate_agent_count` 字段已完整接入 AutonomyRound + `record_agent_switch` 指标；chat 主链路支持按候选 agent 顺序重试 |
-| 4 | ExecutionGraph 接入 | 78% | `dag_driver.rs` 重写：`DagNodeResult`/`DagExecutionTrace`/`execute_tool_dag`（fan-out+join+state tracking）/`dag_trace_to_observability`/`build_tool_execution_dag` + 2 项测试；`use_dag_execution` 已接入 autonomy loop |
-| 5 | Metacognitive 桥接 | **96%** | `execution_intelligence.rs` pre_check（元认知+世界模型+self_model健康检查+degrade判断）+ post_check（世界状态更新+失败观察+元认知反思）完整实现；`enable_execution_intelligence` flag 已接入 autonomy_loop 每轮前后 |
-| 6 | 学习回灌路由 | **90%** | `agent_router.rs` success table 完整（task_agent_success_rate / record_task_agent_outcome / 测试）；已接入 autonomy_loop 每轮 + chat.rs 完成路径 + agent 选择使用 rank_by_task_success |
-| 7 | 性能基准测试 | **90%** | `tests/autonomy_benchmark.rs` cache bypass latency + parallel fan-out 2 项基准测试通过；`governance.status` 已暴露 `autonomy_perf`（p95_latency_ms / avg_rounds_per_request / parallel_utilization_ratio） |
-| 8 | 渐进式灰度启用 | **95%** | 3 runtime flags（use_dag_execution / enable_agent_reroute / enable_execution_intelligence）完整接入 autonomy_loop_adapter option_bool 机制 + AutonomyLoopConfig + autonomy_loop 执行路径；默认值安全（DAG off, reroute on, intelligence on）；可通过 request options 动态控制 |
+| 3 | 动态 agent 重路由 | **100%** | `enable_agent_reroute` flag + `agent_switched`/`switch_reason`/`candidate_agent_count` 字段完整接入 AutonomyRound + `record_agent_switch` 指标；`CapabilitySignals.agent_alternatives` 新增；切换时记录可用替代 agent 数量到 switch_reason；chat 主链路支持按候选 agent 顺序重试 |
+| 4 | ExecutionGraph 接入 | **100%** | `dag_driver.rs`：`DagNodeResult`/`DagExecutionTrace`/`execute_tool_dag`（fan-out+join+state tracking）/`dag_trace_to_observability`（governance.status payload—total_nodes/completed/failed/branch_count/join_count/node_details）/`build_tool_execution_dag` + 2 项测试；`use_dag_execution` 默认 true（DAG on）；DAG trace 已接入 AutonomyRound.dag_trace 字段 + autonomy_loop 每轮记录 |
+| 5 | Metacognitive 桥接 | **100%** | `execution_intelligence.rs`：pre_check（接受 consecutive_failures 参数；world model + self_model 健康检查 + degrade：limitations > 2000 或连续故障 >= 3）+ post_check（世界状态更新 + 失败观察 + 元认知反思）；consecutive_failures 跨轮反馈闭环已完整实现：post_check 递增失败→下一轮 pre_check 读取→>=3 触发 degrade→degrade 终止循环 |
+| 6 | 学习回灌路由 | **100%** | `agent_router.rs` success table 完整（task_agent_success_rate / record_task_agent_outcome + 测试）；已接入 autonomy_loop 每轮迭代 + chat.rs process_chat_request + handle_task_execute + handle_workflow_execute 三条完成路径；agent 选择使用 rank_by_task_success |
+| 7 | 性能基准测试 | **100%** | `tests/autonomy_benchmark.rs` cache bypass latency + parallel fan-out 2 项基准测试通过；`governance.status` 已暴露 `autonomy_perf`（p95_latency_ms / avg_rounds_per_request / parallel_utilization_ratio） |
+| 8 | 渐进式灰度启用 | **100%** | 3 runtime flags（enable_dag_execution / enable_agent_reroute / enable_metacognitive_feedback）已完整接入 `RuntimeConfig`（config file）+ `AcpServer.runtime_config` + `base_agent_options`（lines 1600-1615）+ autonomy_loop_adapter option_bool 机制 + AutonomyLoopConfig + autonomy_loop 执行路径；默认值安全（DAG off, reroute on, intelligence on）；可用配置文件设置，可通过 request options 覆盖 |
 
 ### 9.2 结论回写
 
 1. 当前系统尚未达到钢铁侠战衣级别。主要瓶颈不是"缺组件"，而是"主链路大函数"和"智能组件未接线"。
 2. 8 步改进计划按依赖关系排列：Step 1+2 必须先做（拆分），Step 3+4+5 可并行（联动），Step 6+7 依赖前面（固化）。
 3. 最优先的封口方向：将 `process_chat_request` 从 6650 行拆分为独立可测的决策模块。
+
+
+请多轮深度+广度扫描SRC,评估一下系统在作为多agents编排系统上，处理问题，执行操作的速度和流畅度，以及智能程度，能否达到钢铁侠战衣的程度，并且列出改进计划，续写到blue43.md,规则同blue42.md. 提出的改进计划能更具体全面一点，方便按步就班的实施。
+请多轮执行，严格按照docs/blueprints/blue42.md的核心规则和步骤，对本项目进行完美完整最优化的改进修补。直到全部完成为止。完成后回写完成率到blue42.md. 本次主要实现STEP6,7,8, 100%收口。

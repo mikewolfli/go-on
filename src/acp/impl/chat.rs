@@ -1597,6 +1597,20 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         }
     }
 
+    // BLUE42 Step 8: Seed config flags from RuntimeConfig so autonomy_loop_adapter picks them up
+    base_agent_options.insert(
+        "enable_dag_execution".to_string(),
+        json!(server.runtime_config.enable_dag_execution),
+    );
+    base_agent_options.insert(
+        "enable_agent_reroute".to_string(),
+        json!(server.runtime_config.enable_agent_reroute),
+    );
+    base_agent_options.insert(
+        "enable_metacognitive_feedback".to_string(),
+        json!(server.runtime_config.enable_metacognitive_feedback),
+    );
+
     // ── Inject registered skills as LLM-callable tools ──────────────────
     // When skills are registered in the skill_registry, expose them as
     // function-calling tools to the LLM provider so the AI can invoke them

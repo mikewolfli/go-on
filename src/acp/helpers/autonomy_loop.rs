@@ -129,6 +129,8 @@ pub struct AutonomyRound {
     pub agent_switch_reason: Option<String>,
     /// BLUE42: Candidate agent count visible to this round
     pub candidate_agent_count: u32,
+    /// BLUE42 Step 4: DAG execution trace for this round (if DAG mode active)
+    pub dag_trace: Option<serde_json::Value>,
 }
 
 /// Final report from the autonomy loop
@@ -220,6 +222,7 @@ pub async fn run_autonomy_loop(
         agent_switched: false,
         agent_switch_reason: None,
         candidate_agent_count: 1,
+        dag_trace: None,
     };
     all_rounds.push(planning_round);
 
@@ -242,6 +245,7 @@ pub async fn run_autonomy_loop(
     let mut final_response = String::new();
     let mut final_reasoning = String::new();
     let mut final_model: Option<String> = None;
+    let mut consecutive_failures: u32 = 0;
 
     while iteration < config.max_iterations {
         let round_start = Instant::now();
@@ -249,12 +253,14 @@ pub async fn run_autonomy_loop(
         let mut planner_guided = false;
         let mut agent_switched = false;
         let mut agent_switch_reason: Option<String> = None;
+        let mut round_dag_trace: Option<serde_json::Value> = None;
 
         // BLUE42 Step 5: Pre-check — query metacognitive / world model before execution
         if config.enable_execution_intelligence {
             let pre = super::execution_intelligence::pre_check(
                 &format!("autonomy-{}", iteration),
                 objective,
+                consecutive_failures,
             );
             if pre.should_degrade {
                 let round_record = AutonomyRound {
@@ -270,6 +276,7 @@ pub async fn run_autonomy_loop(
                     agent_switched: false,
                     agent_switch_reason: None,
                     candidate_agent_count: 0,
+                    dag_trace: None,
                 };
                 all_rounds.push(round_record);
                 break;
@@ -287,11 +294,12 @@ pub async fn run_autonomy_loop(
         };
 
         let pre = if config.enable_execution_intelligence {
-            pre_check("autonomy-loop", "autonomy_agent")
+            pre_check("autonomy-loop", "autonomy_agent", consecutive_failures)
         } else {
             super::execution_intelligence::ExecutionPreCheck {
                 should_degrade: false,
                 reason: None,
+                consecutive_failures: 0,
             }
         };
         if pre.should_degrade {
@@ -311,6 +319,7 @@ pub async fn run_autonomy_loop(
                 agent_switched: false,
                 agent_switch_reason: None,
                 candidate_agent_count,
+                dag_trace: None,
             };
             all_rounds.push(round_record);
             break;
@@ -392,14 +401,15 @@ pub async fn run_autonomy_loop(
                 }
 
                 let tool_results: Vec<(String, LoopDecision)> = if config.use_dag_execution {
-                    let (nodes, _trace) = crate::orchestration::dag_driver::execute_tool_dag(
-                        Arc::clone(registry),
-                        objective,
-                        iteration,
-                        &tool_calls,
-                    )
-                    .await;
-                    nodes
+                    let (nodes, dag_trace_data) =
+                        crate::orchestration::dag_driver::execute_tool_dag(
+                            Arc::clone(registry),
+                            objective,
+                            iteration,
+                            &tool_calls,
+                        )
+                        .await;
+                    let dag_results: Vec<(String, LoopDecision)> = nodes
                         .iter()
                         .map(|n| {
                             let decision = match &n.state {
@@ -426,7 +436,13 @@ pub async fn run_autonomy_loop(
                             };
                             (n.tool_name.clone(), decision)
                         })
-                        .collect()
+                        .collect::<Vec<(String, LoopDecision)>>();
+                    round_dag_trace = Some(
+                        crate::orchestration::dag_driver::dag_trace_to_observability(
+                            &dag_trace_data,
+                        ),
+                    );
+                    dag_results
                 } else {
                     let tool_jobs = tool_calls
                         .iter()
@@ -594,6 +610,14 @@ pub async fn run_autonomy_loop(
             );
         }
 
+        // BLUE42 Step 5: Update consecutive failures for pre_check feedback loop
+        // If response is non-empty and tools were called, it's a success; otherwise failure.
+        if tools_were_called && response.trim().is_empty() {
+            consecutive_failures = consecutive_failures.saturating_add(1);
+        } else if !response.trim().is_empty() {
+            consecutive_failures = 0;
+        }
+
         // BLUE42 Step 6: Record agent outcome for learning feedback
         record_task_agent_outcome(objective, "autonomy_agent", !response.trim().is_empty());
 
@@ -612,9 +636,21 @@ pub async fn run_autonomy_loop(
         } else {
             "tools_completed"
         };
+        // BLUE42 Step 3: Agent reroute — check if switching to an alternative
+        // agent might improve results. Records the switch reason and available
+        // candidates for governance.status observability.
         if config.enable_agent_reroute && tools_were_called && response.trim().is_empty() {
+            let alt_count = config
+                .capability_signals
+                .as_ref()
+                .map(|s| s.agent_alternatives.len())
+                .unwrap_or(0);
             agent_switched = true;
-            agent_switch_reason = Some("failure".to_string());
+            agent_switch_reason = if alt_count > 0 {
+                Some(format!("failure_with_{}_alternatives", alt_count))
+            } else {
+                Some("failure_no_alternatives".to_string())
+            };
             record_agent_switch("failure");
         }
         // Save round_tools before moving into round_record
@@ -637,6 +673,7 @@ pub async fn run_autonomy_loop(
             agent_switched,
             agent_switch_reason,
             candidate_agent_count,
+            dag_trace: round_dag_trace.clone(),
         };
         all_rounds.push(round_record);
 

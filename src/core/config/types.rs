@@ -269,6 +269,15 @@ pub struct RuntimeConfig {
     /// Default daily API call limit per tenant.
     #[serde(default = "super::defaults::default_runtime_tenant_default_daily_api_calls")]
     pub tenant_default_daily_api_calls: usize,
+    /// BLUE42 Step 8: Enable DAG-driven tool execution in autonomy loop (default: false)
+    #[serde(default)]
+    pub enable_dag_execution: bool,
+    /// BLUE42 Step 8: Enable adaptive agent reroute on weak rounds (default: true)
+    #[serde(default = "super::defaults::default_true")]
+    pub enable_agent_reroute: bool,
+    /// BLUE42 Step 8: Enable metacognitive + world-model feedback hooks (default: true)
+    #[serde(default = "super::defaults::default_true")]
+    pub enable_metacognitive_feedback: bool,
 }
 
 impl RuntimeConfig {

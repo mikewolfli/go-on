@@ -15,6 +15,8 @@ pub struct CapabilitySignals {
     pub recommended_mode: String,
     /// Tools preferred based on task type and history (ordered by score)
     pub preferred_tools: Vec<String>,
+    /// BLUE42 Step 3: Alternative agents available for reroute
+    pub agent_alternatives: Vec<String>,
     /// Whether the capability bus was available for this request
     pub capability_bus_available: bool,
     /// Task complexity calculated by the router

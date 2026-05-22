@@ -4,7 +4,6 @@
 //! as a DAG with fan-out, synchronization, and state tracking. Node states are
 //! exposed for governance.status observability.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures_util::future::join_all;

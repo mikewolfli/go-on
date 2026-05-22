@@ -1602,6 +1602,12 @@ pub(crate) async fn handle_workflow_execute(
             "failed"
         },
     );
+    // BLUE42 Step 6: Record agent outcome for learning feedback
+    crate::acp::helpers::agent_router::record_task_agent_outcome(
+        &task,
+        &policy_artifact.primary_agent,
+        run_status == "succeeded",
+    );
     let run_error = if execution_report.subtasks_failed > 0 {
         Some(format!(
             "{} subtasks failed",
@@ -2164,6 +2170,13 @@ pub(super) async fn handle_task_execute(
     let knowledge_refinement =
         build_knowledge_refinement_profile("task.execute", task, &params, &learning_profile);
     let multi_agent = build_multi_agent_sessions(task, "task.execute", &execution_report);
+
+    // BLUE42 Step 6: Record agent outcome for learning feedback
+    crate::acp::helpers::agent_router::record_task_agent_outcome(
+        task,
+        &execution_context.primary_agent,
+        summary.subtasks_failed == 0,
+    );
 
     let response_payload = json!({
         "ok": true,

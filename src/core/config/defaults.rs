@@ -212,6 +212,9 @@ impl Default for RuntimeConfig {
             tenant_default_concurrent_tasks: default_runtime_tenant_default_concurrent_tasks(),
             i18n_default_language: default_runtime_i18n_default_language(),
             tenant_default_daily_api_calls: default_runtime_tenant_default_daily_api_calls(),
+            enable_dag_execution: false,
+            enable_agent_reroute: true,
+            enable_metacognitive_feedback: true,
         }
     }
 }

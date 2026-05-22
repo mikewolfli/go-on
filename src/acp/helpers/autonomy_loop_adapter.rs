@@ -51,7 +51,7 @@ pub(crate) async fn run_acp_autonomy_loop(
         enable_early_stop: true,
         early_stop_confidence_threshold: 0.85,
         capability_signals: None,
-        use_dag_execution: option_bool("enable_dag_execution", false),
+        use_dag_execution: option_bool("enable_dag_execution", true), // DAG on by default for autonomy loop
         enable_agent_reroute: option_bool("enable_agent_reroute", true),
         enable_execution_intelligence: option_bool("enable_metacognitive_feedback", true),
     };
