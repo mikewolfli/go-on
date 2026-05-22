@@ -16,9 +16,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::mpsc;
 
+use crate::acp::helpers::agent_router::record_task_agent_outcome;
 use crate::agent::{Agent, Message, StreamingSender};
 use crate::orchestration::planner_executor::Planner;
-use crate::orchestration::tool::{execute_loop, LoopConfig, LoopDecision, ToolInput, ToolRegistry};
+use crate::orchestration::tool::{
+    execute_loop, LoopConfig, LoopDecision, ToolInput, ToolOutput, ToolRegistry,
+};
 
 use super::autonomy_metrics::{
     record_agent_switch, record_capability_selection_reason, record_explicit_tool_route,
@@ -246,6 +249,32 @@ pub async fn run_autonomy_loop(
         let mut planner_guided = false;
         let mut agent_switched = false;
         let mut agent_switch_reason: Option<String> = None;
+
+        // BLUE42 Step 5: Pre-check — query metacognitive / world model before execution
+        if config.enable_execution_intelligence {
+            let pre = super::execution_intelligence::pre_check(
+                &format!("autonomy-{}", iteration),
+                objective,
+            );
+            if pre.should_degrade {
+                let round_record = AutonomyRound {
+                    round_index: iteration + 1,
+                    phase: AutonomyPhase::Failed,
+                    tools_executed: Vec::new(),
+                    planner_guided: false,
+                    duration_ms: round_start.elapsed().as_millis() as u64,
+                    error: pre.reason.clone(),
+                    round_start_offset_ms: start.elapsed().as_millis() as u64,
+                    retry_count: 0,
+                    round_stop_reason: "degraded_by_execution_intelligence".to_string(),
+                    agent_switched: false,
+                    agent_switch_reason: None,
+                    candidate_agent_count: 0,
+                };
+                all_rounds.push(round_record);
+                break;
+            }
+        }
         let candidate_agent_count = if config
             .capability_signals
             .as_ref()
@@ -363,16 +392,41 @@ pub async fn run_autonomy_loop(
                 }
 
                 let tool_results: Vec<(String, LoopDecision)> = if config.use_dag_execution {
-                    crate::orchestration::dag_driver::execute_parallel_tool_calls(
+                    let (nodes, _trace) = crate::orchestration::dag_driver::execute_tool_dag(
                         Arc::clone(registry),
                         objective,
                         iteration,
                         &tool_calls,
                     )
-                    .await
-                    .into_iter()
-                    .map(|r| (r.tool_name, r.decision))
-                    .collect()
+                    .await;
+                    nodes
+                        .iter()
+                        .map(|n| {
+                            let decision = match &n.state {
+                                crate::orchestration::execution_graph::ExNodeState::Completed => {
+                                    LoopDecision::Complete(ToolOutput {
+                                        success: true,
+                                        result: Some(serde_json::json!({})),
+                                        error: None,
+                                        verification: None,
+                                        audit_log: None,
+                                        pua_report: None,
+                                    })
+                                }
+                                crate::orchestration::execution_graph::ExNodeState::Failed(
+                                    reason,
+                                ) => LoopDecision::Failed {
+                                    reason: reason.clone(),
+                                    last_output: None,
+                                },
+                                _ => LoopDecision::Failed {
+                                    reason: "dag_node_skipped".to_string(),
+                                    last_output: None,
+                                },
+                            };
+                            (n.tool_name.clone(), decision)
+                        })
+                        .collect()
                 } else {
                     let tool_jobs = tool_calls
                         .iter()
@@ -437,7 +491,6 @@ pub async fn run_autonomy_loop(
                         })
                         .collect()
                 };
-
                 for (tool_name, result) in tool_results {
                     round_tools.push(tool_name.clone());
 
@@ -525,6 +578,24 @@ pub async fn run_autonomy_loop(
             record_tool_followup_attempt();
             record_tool_followup_success();
         }
+
+        // BLUE42 Step 5: Post-check — record outcome into metacognitive / world model
+        if config.enable_execution_intelligence && !objective.trim().is_empty() {
+            let success = !response.trim().is_empty();
+            super::execution_intelligence::post_check(
+                &format!("autonomy-{}", iteration),
+                objective,
+                success,
+                &if response.len() > 100 {
+                    format!("{}...", &response[..100])
+                } else {
+                    response.clone()
+                },
+            );
+        }
+
+        // BLUE42 Step 6: Record agent outcome for learning feedback
+        record_task_agent_outcome(objective, "autonomy_agent", !response.trim().is_empty());
 
         final_response = response.clone();
         final_reasoning = reasoning.clone();

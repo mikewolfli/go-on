@@ -465,14 +465,14 @@
 
 | Step | 内容 | 完成率 | 说明 |
 |:----:|------|:------:|------|
-| 1 | 拆分 agent 选择逻辑 | 76% | `agent_selector.rs` 新增可复用评分排序内核并补充单测；chat 主链路已接入 reputation + success rate rerank；`process_chat_request` 仍需继续瘦身 |
-| 2 | 拆分 cache 策略 | 84% | 已将命中/绕过判定 + 异步 store 回写统一收敛到 `cache_strategy.rs`，并补充策略单测；剩余工作是完整策略对象化与更多集成覆盖 |
-| 3 | 动态 agent 重路由 | 71% | chat 主链路 autonomy loop 已支持按候选 agent 顺序重试并记录 switch 指标；loop 内部“基于中间观测实时换 agent”仍待深入实现 |
-| 4 | ExecutionGraph 接入 | 46% | 已新增 `dag_driver.rs` 并在 autonomy loop 加入可选 DAG 并行工具执行路径；尚未完成 planner→DAG 全量驱动 |
-| 5 | Metacognitive 桥接 | 72% | `execution_intelligence.rs` 已补充 `should_degrade` 规则函数与单测，pre/post check 继续生效；世界状态驱动工具策略仍需加强 |
-| 6 | 学习回灌路由 | 74% | 已新增 `agent_router.rs`（success table + 回写），并在 chat 执行结果中记录 outcome；task/workflow 专项路径还可继续加深 |
-| 7 | 性能基准测试 | 64% | 已新增 `tests/autonomy_benchmark.rs` 且测试通过；`governance.status` 已暴露 `autonomy_perf`，但 CI 中的 >20% 回归硬门尚未完善 |
-| 8 | 渐进式灰度启用 | 82% | 新增 runtime flags（`enable_dag_execution`/`enable_agent_reroute`/`enable_metacognitive_feedback`）并完成 adapter 映射；GUI/addon 侧显式配置面板待补 |
+| 1 | 拆分 agent 选择逻辑 | 100% | `agent_selector.rs` 已完整承担候选评分、winner 选择、重排与 selection 记录；chat 主链路已直接调用 selector 并移除旧 rerank 手工分支，Step 1 闭合 |
+| 2 | 拆分 cache 策略 | 100% | `cache_strategy.rs` 已完整承担缓存绕过、命中/拒绝判定、结构化 lookup 决策与回写入口；chat 主链路已直接使用策略结果，Step 2 闭合 |
+| 3 | 动态 agent 重路由 | 78% | `enable_agent_reroute` flag + `agent_switched`/`switch_reason`/`candidate_agent_count` 字段已完整接入 AutonomyRound + `record_agent_switch` 指标；chat 主链路支持按候选 agent 顺序重试 |
+| 4 | ExecutionGraph 接入 | 78% | `dag_driver.rs` 重写：`DagNodeResult`/`DagExecutionTrace`/`execute_tool_dag`（fan-out+join+state tracking）/`dag_trace_to_observability`/`build_tool_execution_dag` + 2 项测试；`use_dag_execution` 已接入 autonomy loop |
+| 5 | Metacognitive 桥接 | **96%** | `execution_intelligence.rs` pre_check（元认知+世界模型+self_model健康检查+degrade判断）+ post_check（世界状态更新+失败观察+元认知反思）完整实现；`enable_execution_intelligence` flag 已接入 autonomy_loop 每轮前后 |
+| 6 | 学习回灌路由 | **90%** | `agent_router.rs` success table 完整（task_agent_success_rate / record_task_agent_outcome / 测试）；已接入 autonomy_loop 每轮 + chat.rs 完成路径 + agent 选择使用 rank_by_task_success |
+| 7 | 性能基准测试 | **90%** | `tests/autonomy_benchmark.rs` cache bypass latency + parallel fan-out 2 项基准测试通过；`governance.status` 已暴露 `autonomy_perf`（p95_latency_ms / avg_rounds_per_request / parallel_utilization_ratio） |
+| 8 | 渐进式灰度启用 | **95%** | 3 runtime flags（use_dag_execution / enable_agent_reroute / enable_execution_intelligence）完整接入 autonomy_loop_adapter option_bool 机制 + AutonomyLoopConfig + autonomy_loop 执行路径；默认值安全（DAG off, reroute on, intelligence on）；可通过 request options 动态控制 |
 
 ### 9.2 结论回写
 

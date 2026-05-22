@@ -21,9 +21,7 @@ use tokio::time::Duration;
 use tracing::{debug, info, warn};
 
 use crate::acp::helpers::agent_router::record_task_agent_outcome;
-use crate::acp::helpers::agent_selector::{
-    collect_reputation_scores, rank_by_task_success, rerank_by_reputation,
-};
+use crate::acp::helpers::agent_selector::{collect_reputation_scores, AgentSelector};
 use crate::acp::helpers::autonomy::{
     planner_guided_tool_preferences, run_followup_after_tool_observation,
 };
@@ -35,7 +33,7 @@ use crate::acp::helpers::autonomy_metrics::{
     record_vote_winner,
 };
 use crate::acp::helpers::cache_strategy::{
-    should_bypass_for_execution, should_refuse_cache_hit, should_serve_cache_hit, store_async,
+    should_bypass_for_execution, store_async, CacheDecision, CacheStrategy,
 };
 use crate::acp::helpers::context::{
     probe_agent_runtime_readiness, request_timeout, run_with_optional_timeout,
@@ -1034,12 +1032,32 @@ pub(crate) async fn process_chat_request(
     let mut routing_provenance: Vec<String> = vec!["runtime_score_rerank_applied".to_string()];
     let reputation_scores = collect_reputation_scores(server, &resolved.agents);
 
-    if rerank_by_reputation(&mut resolved.agents, &reputation_scores) {
-        record_reputation_routing_applied();
-        routing_provenance.push("reputation_weighted_rerank_applied".to_string());
-    }
-    if rank_by_task_success(phase_name, &mut resolved.agents) {
-        routing_provenance.push("task_agent_success_rerank_applied".to_string());
+    let selector = AgentSelector::default();
+    let online_scores = resolved
+        .agents
+        .iter()
+        .map(|(name, _)| {
+            (
+                name.clone(),
+                crate::acp::helpers::agent_router::task_agent_success_rate(phase_name, name),
+            )
+        })
+        .collect::<Vec<_>>();
+    if let Some(selection) = selector.reorder_agents_by_selection(
+        &mut resolved.agents,
+        None,
+        &reputation_scores,
+        &online_scores,
+        phase_name,
+    ) {
+        if !reputation_scores.is_empty() {
+            record_reputation_routing_applied();
+        }
+        routing_provenance.push(format!("agent_selector_winner:{}", selection.winner));
+        routing_provenance.push(format!(
+            "agent_selector_reason:{}",
+            selection.selection_reason
+        ));
     }
 
     // ── SchemaRegistry task envelope validation (F-GAP-07) ─────────────
@@ -1492,98 +1510,71 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         .lookup(&input_text, context_class)
         .await
     {
-        // L1 is always an exact match → 100 % confidence.
-        // L2 / L3 hits are considered high-confidence when the output is
-        // long enough to provide meaningful reuse.
-        let confidence = match level {
-            crate::intelligence::token_cache::CacheLevel::L1 => 1.0,
-            crate::intelligence::token_cache::CacheLevel::L2 => {
-                // Compute cosine similarity between input and cached input
-                let input_vec = crate::intelligence::token_cache::simple_embedding(&input_text);
-                let cached_vec = crate::intelligence::token_cache::simple_embedding(&entry.input);
-                crate::intelligence::token_cache::cosine_similarity(&input_vec, &cached_vec)
-            }
-            crate::intelligence::token_cache::CacheLevel::L3 => {
-                // L3 template matches are structural – treat as high confidence
-                // when the cached output is non-trivial (> 50 chars).
-                if entry.output.len() > 50 {
-                    0.96
-                } else {
-                    0.0
+        let cache_decision = CacheStrategy::decide_from_entry(
+            &format!("{level}"),
+            &entry,
+            &input_text,
+            cache_bypassed_for_execution,
+        );
+
+        match cache_decision {
+            CacheDecision::Hit { response, level } => {
+                tracing::info!(
+                    target = "token_cache",
+                    level = %level,
+                    agent_count = resolved.agents.len(),
+                    "process_chat_request: token cache HIT, skipping agent execution"
+                );
+                cache_hit = true;
+                selected_agent = resolved
+                    .agents
+                    .first()
+                    .map(|(name, _)| name.clone())
+                    .unwrap_or_else(|| "cached".to_string());
+                response_text = response;
+
+                // Emit the cached response through the stream observer, if present.
+                if let Some(ref observer) = stream_observer {
+                    let meta = StreamEventMeta {
+                        agent_name: &selected_agent,
+                        phase_name,
+                        trace_id: &trace.trace_id,
+                    };
+                    let total_chars = response_text.chars().count();
+                    emit_stream_chunk(server, Some(observer), meta, &response_text, 1, total_chars)
+                        .await?;
+                    emit_stream_done(server, Some(observer), meta, 1, total_chars, 0u64, None)
+                        .await?;
                 }
+
+                agent_attempts.push(CacheStrategy::attempt_entry(&CacheDecision::Hit {
+                    response: response_text.clone(),
+                    level: level.clone(),
+                }));
             }
-        };
-
-        if should_serve_cache_hit(confidence, cache_bypassed_for_execution) {
-            tracing::info!(
-                target = "token_cache",
-                level = %level,
-                confidence,
-                agent_count = resolved.agents.len(),
-                "process_chat_request: token cache HIT, skipping agent execution"
-            );
-            cache_hit = true;
-            selected_agent = resolved
-                .agents
-                .first()
-                .map(|(name, _)| name.clone())
-                .unwrap_or_else(|| "cached".to_string());
-            response_text = entry.output.clone();
-
-            // Emit the cached response through the stream observer, if present.
-            if let Some(ref observer) = stream_observer {
-                let meta = StreamEventMeta {
-                    agent_name: &selected_agent,
-                    phase_name,
-                    trace_id: &trace.trace_id,
-                };
-                let total_chars = response_text.chars().count();
-                emit_stream_chunk(server, Some(observer), meta, &response_text, 1, total_chars)
-                    .await?;
-                emit_stream_done(server, Some(observer), meta, 1, total_chars, 0u64, None).await?;
+            CacheDecision::Refused { level, reason } => {
+                // Cache hit was found but refused — record for governance.status observability
+                // (AUTON-03 criterion 3). The request is execution-like, so a stale cached
+                // response could mask necessary side effects.
+                tracing::info!(
+                    target = "token_cache",
+                    level = %level,
+                    mode = %params.mode,
+                    "process_chat_request: cache HIT but refused (execution-like request)"
+                );
+                crate::acp::helpers::autonomy_metrics::record_cache_shortcircuit_refused(&reason);
+                crate::acp::helpers::autonomy_metrics::record_cache_bypass_for_execution();
+                agent_attempts.push(CacheStrategy::attempt_entry(&CacheDecision::Refused {
+                    level,
+                    reason,
+                }));
             }
-
-            agent_attempts.push(json!({
-                "agent": selected_agent,
-                "ok": true,
-                "cached": true,
-                "cache_level": format!("{level}"),
-                "duration_ms": 0u64
-            }));
-        } else if should_refuse_cache_hit(confidence, cache_bypassed_for_execution) {
-            // Cache hit was found but refused — record for governance.status observability
-            // (AUTON-03 criterion 3). The request is execution-like, so a stale cached
-            // response could mask necessary side effects.
-            tracing::info!(
-                target = "token_cache",
-                level = %level,
-                mode = %params.mode,
-                "process_chat_request: cache HIT but refused (execution-like request)"
-            );
-            crate::acp::helpers::autonomy_metrics::record_cache_shortcircuit_refused(
-                "execution_like_request",
-            );
-            crate::acp::helpers::autonomy_metrics::record_cache_bypass_for_execution();
-            agent_attempts.push(json!({
-                "agent": "cache_guard",
-                "ok": true,
-                "cached": false,
-                "shortcircuit_refused": true,
-                "cache_level": format!("{level}"),
-                "reason": "execution_like_request",
-                "duration_ms": 0u64
-            }));
+            CacheDecision::Miss => {}
         }
     } else if cache_bypassed_for_execution {
         // No cache entry found for this execution-like request — record the bypass.
         crate::acp::helpers::autonomy_metrics::record_cache_bypass_for_execution();
-        agent_attempts.push(json!({
-            "agent": "cache_guard",
-            "ok": true,
-            "cached": false,
-            "cache_bypassed_for_execution": true,
-            "duration_ms": 0u64
-        }));
+        agent_attempts.push(CacheStrategy::attempt_entry(&CacheDecision::Miss));
     }
 
     let mut base_agent_options = phase
