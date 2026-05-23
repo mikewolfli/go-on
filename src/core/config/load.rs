@@ -1790,6 +1790,9 @@ mod tests {
             tenant_default_concurrent_tasks: 10,
             tenant_default_daily_api_calls: 10_000,
             i18n_default_language: "en".to_string(),
+            enable_dag_execution: false,
+            enable_agent_reroute: true,
+            enable_metacognitive_feedback: true,
         });
 
         let err = cfg
@@ -2335,6 +2338,9 @@ mod tests {
             tenant_default_concurrent_tasks: 10,
             tenant_default_daily_api_calls: 10_000,
             i18n_default_language: "en".to_string(),
+            enable_dag_execution: false,
+            enable_agent_reroute: true,
+            enable_metacognitive_feedback: true,
         });
 
         let report = build_config_health_report(&config_path, &cfg);

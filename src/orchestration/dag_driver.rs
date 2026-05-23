@@ -20,6 +20,10 @@ pub struct DagNodeResult {
     pub tool_name: String,
     pub state: ExNodeState,
     pub duration_ms: u64,
+    /// Preserved tool output payload for observe/replan evidence
+    pub tool_output: Option<serde_json::Value>,
+    /// Preserved error payload for diagnostic use
+    pub error_payload: Option<String>,
 }
 
 /// Complete DAG execution trace
@@ -91,18 +95,27 @@ pub async fn execute_tool_dag(
                     verify_output: None,
                 };
                 let (decision, _trace) = execute_loop(&tool_name, &registry, &input, &[], &cfg);
-                let state = match decision {
-                    LoopDecision::Complete(_) => ExNodeState::Completed,
-                    LoopDecision::Failed { .. } => {
-                        ExNodeState::Failed("execution_error".to_string())
+                let (state, tool_output, error_payload) = match decision {
+                    LoopDecision::Complete(ref output) => {
+                        (ExNodeState::Completed, output.result.clone(), None)
                     }
-                    _ => ExNodeState::Skipped,
+                    LoopDecision::Failed {
+                        ref reason,
+                        ref last_output,
+                    } => (
+                        ExNodeState::Failed("execution_error".to_string()),
+                        last_output.as_ref().and_then(|o| o.result.clone()),
+                        Some(reason.clone()),
+                    ),
+                    _ => (ExNodeState::Skipped, None, None),
                 };
                 DagNodeResult {
                     node_id,
                     tool_name,
                     state,
                     duration_ms: node_start.elapsed().as_millis() as u64,
+                    tool_output,
+                    error_payload,
                 }
             })
         })
@@ -147,11 +160,14 @@ pub fn dag_trace_to_observability(trace: &DagExecutionTrace) -> Value {
             "branch_count": trace.branch_count,
             "join_count": trace.join_count,
             "total_duration_ms": trace.total_duration_ms,
+            "has_tool_evidence": trace.nodes.iter().any(|n| n.tool_output.is_some()),
             "node_details": trace.nodes.iter().map(|n| serde_json::json!({
                 "node_id": n.node_id,
                 "tool": n.tool_name,
                 "state": format!("{:?}", n.state),
                 "duration_ms": n.duration_ms,
+                "has_output": n.tool_output.is_some(),
+                "has_error": n.error_payload.is_some(),
             })).collect::<Vec<_>>(),
         }
     })
@@ -170,12 +186,16 @@ mod tests {
                     tool_name: "read_file".into(),
                     state: ExNodeState::Completed,
                     duration_ms: 15,
+                    tool_output: Some(serde_json::json!({"content": "file content"})),
+                    error_payload: None,
                 },
                 DagNodeResult {
                     node_id: "tool-search_files-1".into(),
                     tool_name: "search_files".into(),
                     state: ExNodeState::Completed,
                     duration_ms: 22,
+                    tool_output: None,
+                    error_payload: None,
                 },
             ],
             total_duration_ms: 40,

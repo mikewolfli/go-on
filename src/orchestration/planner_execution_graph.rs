@@ -147,7 +147,8 @@ mod tests {
             task_id: "test-bridge".to_string(),
             phase: "execution".to_string(),
             role: "tester".to_string(),
-            objective: "Test the planner-execution-graph bridge".to_string(),
+            objective: "Analyze the authentication module and implement the required fix"
+                .to_string(),
             constraints: None,
             evidence: None,
             input: serde_json::json!({}),

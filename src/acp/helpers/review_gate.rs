@@ -1,0 +1,142 @@
+//! BLUE43 Step 4: Extracted review gate helper for chat orchestration.
+//!
+//! Provides a focused interface for running review gates (dual review,
+//! enhanced verification) during chat request processing.
+
+use serde_json::{json, Value};
+
+use crate::acp::server::AcpServer;
+use crate::agent::Message;
+use crate::config::PhaseOptions;
+use crate::intelligence::verification::{
+    DeterministicVerifier, StructuredReview, VerificationVerdict,
+};
+use crate::rpc_protocol::RequestTraceContext;
+
+/// Outcome of a review gate execution
+#[derive(Debug, Clone)]
+pub struct ReviewGateOutcome {
+    pub reviews: Vec<Value>,
+    pub passed: bool,
+    pub error: Option<String>,
+}
+
+/// Run the dual review gate for full_auto mode.
+///
+/// Delegates to the existing dual-review implementation and returns
+/// structured review results.
+pub async fn run_review_gate(
+    server: &AcpServer,
+    messages: &[Message],
+    phase_options: Option<&PhaseOptions>,
+    span: Option<&opentelemetry::Context>,
+    trace: &RequestTraceContext,
+) -> ReviewGateOutcome {
+    let mut reviews = Vec::new();
+
+    let review_outcome = crate::acp::r#impl::agent::run_dual_review_gate(
+        server,
+        None,
+        messages,
+        phase_options,
+        span,
+        trace,
+    )
+    .await;
+
+    let error = match &review_outcome {
+        Ok(outcome) => {
+            reviews.push(json!({
+                "reviewer": outcome.reviewer,
+                "verdict": if outcome.passed { "APPROVE" } else { "REJECT" },
+                "response": outcome.comments.join("; "),
+                "duration_ms": outcome.duration_ms,
+            }));
+            None
+        }
+        Err(e) => {
+            Some(e.to_string())
+        }
+    };
+
+    ReviewGateOutcome {
+        reviews,
+        passed: review_outcome.map(|o| o.passed).unwrap_or(false),
+        error,
+    }
+}
+
+/// Run enhanced verification (syntax, test, lint, adversarial checks) on response text.
+pub fn run_enhanced_verification(response_text: &str) -> Value {
+    let mut verification_signals = Vec::new();
+
+    let syntax_signal = DeterministicVerifier::run_syntax_check(response_text);
+    verification_signals.push(syntax_signal);
+
+    if response_text.to_ascii_lowercase().contains("test") || response_text.contains("assert") {
+        let test_signal = DeterministicVerifier::run_test_check(response_text);
+        verification_signals.push(test_signal);
+    }
+
+    if response_text.contains("fn ")
+        || response_text.contains("let ")
+        || response_text.contains("pub ")
+    {
+        let lint_signal = DeterministicVerifier::run_lint_check(response_text);
+        verification_signals.push(lint_signal);
+    }
+
+    let adversarial_signal = DeterministicVerifier::run_test_check(response_text);
+    verification_signals.push(adversarial_signal);
+
+    let passed_count = verification_signals.iter().filter(|s| s.passed).count();
+    let total_count = verification_signals.len();
+    let confidence = if total_count > 0 {
+        passed_count as f32 / total_count as f32
+    } else {
+        1.0
+    };
+
+    let structured_review = StructuredReview {
+        verdict: if confidence >= 0.8 {
+            VerificationVerdict::Approve
+        } else {
+            VerificationVerdict::Reject
+        },
+        reviewer_agent: "enhanced_verification_system".to_string(),
+        confidence,
+        signals: verification_signals,
+        rationale: format!(
+            "Enhanced verification completed with {}/{} checks passed",
+            passed_count, total_count
+        ),
+        assumptions_validated: vec![
+            "Syntax validity".to_string(),
+            "No adversarial patterns".to_string(),
+        ],
+        weak_evidence_flags: if confidence < 0.9 {
+            vec!["Some verification checks had lower confidence".to_string()]
+        } else {
+            Vec::new()
+        },
+        quality_compass: vec![
+            "Deterministic verification".to_string(),
+            "Adversarial robustness".to_string(),
+        ],
+        pua_report: None,
+        audit_log: None,
+    };
+
+    json!({
+        "enhanced_verification": {
+            "verdict": format!("{:?}", structured_review.verdict),
+            "confidence": structured_review.confidence,
+            "signals_count": structured_review.signals.len(),
+            "passed_checks": passed_count,
+            "total_checks": total_count,
+            "rationale": structured_review.rationale,
+            "assumptions_validated": structured_review.assumptions_validated,
+            "quality_compass": structured_review.quality_compass,
+        }
+    })
+}

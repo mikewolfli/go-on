@@ -15,6 +15,7 @@ use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::mpsc;
+use std::collections::BTreeSet;
 
 use crate::acp::helpers::agent_router::record_task_agent_outcome;
 use crate::agent::{Agent, Message, StreamingSender};
@@ -23,14 +24,93 @@ use crate::orchestration::tool::{
     execute_loop, LoopConfig, LoopDecision, ToolInput, ToolOutput, ToolRegistry,
 };
 
+/// Predictive reroute scoring result.
+#[derive(Debug, Clone)]
+pub struct PredictiveRerouteScore {
+    pub should_reroute: bool,
+    pub reason_code: String,
+    pub expected_gain: f64,
+    pub current_health: f64,
+}
+
+/// Compute a predictive reroute score based on round health, consecutive failures,
+/// tool error rate, and available alternatives.
+/// Returns a score indicating whether switching agents would be beneficial.
+pub fn compute_predictive_reroute(
+    consecutive_failures: u32,
+    round_health: f64,
+    tool_error_rate: f64,
+    alternative_count: usize,
+    budget_remaining_pct: f64,
+) -> PredictiveRerouteScore {
+    // Composite health score: 0.0 (bad) to 1.0 (good)
+    let health = round_health
+        * (1.0 - tool_error_rate)
+        * (1.0_f64).min(1.0 - (consecutive_failures as f64 * 0.2));
+
+    let should_reroute;
+    let reason_code;
+    let expected_gain;
+
+    if budget_remaining_pct < 0.1 && alternative_count > 0 && health < 0.3 {
+        // Budget guard: low budget + poor health -> switch to conserve resources
+        should_reroute = true;
+        reason_code = "budget_guard".to_string();
+        expected_gain = 0.3;
+    } else if health < 0.2 || consecutive_failures >= 3 {
+        // Failure recovery: very poor health or repeated failures -> switch
+        should_reroute = true;
+        reason_code = "failure_recovery".to_string();
+        expected_gain = 0.5;
+    } else if health < 0.5 && alternative_count > 0 && consecutive_failures >= 1 {
+        // Predictive gain: moderate health with degradation trend -> proactive switch
+        let gain_estimate = (0.5 - health) * (alternative_count as f64 * 0.15);
+        should_reroute = gain_estimate > 0.1;
+        reason_code = "predictive_gain".to_string();
+        expected_gain = gain_estimate;
+    } else {
+        should_reroute = false;
+        reason_code = "no_reroute_needed".to_string();
+        expected_gain = 0.0;
+    }
+
+    PredictiveRerouteScore {
+        should_reroute,
+        reason_code,
+        expected_gain,
+        current_health: health,
+    }
+}
+
 use super::autonomy_metrics::{
     record_agent_switch, record_capability_selection_reason, record_explicit_tool_route,
     record_orchestration_alignment, record_parallel_tool_fanout, record_planner_guided_route,
     record_tool_followup_attempt, record_tool_followup_success,
 };
-use super::execution_intelligence::{post_check, pre_check};
+use super::execution_intelligence::{post_check, pre_check, PostCheckOutcome};
 use super::orchestration_alignment::derive_plan_trace_alignment;
 use crate::orchestration::capability_signals::CapabilitySignals;
+
+fn apply_corrective_actions(messages: &mut Vec<Message>, outcome: &PostCheckOutcome) {
+    if outcome.corrective_actions.is_empty() {
+        return;
+    }
+
+    let guidance = outcome
+        .corrective_actions
+        .iter()
+        .map(|action| format!("- {}", action))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    messages.push(Message {
+        role: "user".to_string(),
+        content: format!(
+            "Execution intelligence corrective actions detected. Apply these before next decision:\n{}",
+            guidance
+        ),
+    });
+}
 
 /// Autonomy loop state machine phases
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -129,6 +209,14 @@ pub struct AutonomyRound {
     pub agent_switch_reason: Option<String>,
     /// BLUE42: Candidate agent count visible to this round
     pub candidate_agent_count: u32,
+    /// BLUE43: Corrective actions applied from metacognitive post-check
+    pub corrective_actions: Vec<String>,
+    /// BLUE43: Number of corrective actions applied in this round
+    pub corrective_actions_applied: u32,
+    /// BLUE43: Predictive reroute gain estimate for this round
+    pub reroute_expected_gain: Option<f64>,
+    /// BLUE43: Composite health score used by predictive reroute
+    pub reroute_health_score: Option<f64>,
     /// BLUE42 Step 4: DAG execution trace for this round (if DAG mode active)
     pub dag_trace: Option<serde_json::Value>,
 }
@@ -151,8 +239,23 @@ pub struct AutonomyLoopReport {
     pub trace_alignment_coverage: f64,
     /// Total duration in ms
     pub total_duration_ms: u64,
+    /// BLUE43: Total corrective actions applied across rounds
+    pub corrective_actions_applied_total: u64,
+    /// BLUE43: Ratio of corrective actions followed by successful round outputs
+    pub corrective_action_effectiveness_ratio: f64,
     /// Stop reason
     pub stop_reason: String,
+}
+
+/// Build a stable contract snapshot for cross-entry autonomy diagnostics.
+pub fn contract_snapshot(report: &AutonomyLoopReport) -> Value {
+    serde_json::json!({
+        "total_rounds": report.total_rounds,
+        "total_tools": report.total_tools,
+        "stop_reason": report.stop_reason,
+        "corrective_actions_applied_total": report.corrective_actions_applied_total,
+        "corrective_action_effectiveness_ratio": report.corrective_action_effectiveness_ratio,
+    })
 }
 
 /// Result of the autonomy loop execution
@@ -222,6 +325,10 @@ pub async fn run_autonomy_loop(
         agent_switched: false,
         agent_switch_reason: None,
         candidate_agent_count: 1,
+        corrective_actions: Vec::new(),
+        corrective_actions_applied: 0,
+        reroute_expected_gain: None,
+        reroute_health_score: None,
         dag_trace: None,
     };
     all_rounds.push(planning_round);
@@ -246,6 +353,8 @@ pub async fn run_autonomy_loop(
     let mut final_reasoning = String::new();
     let mut final_model: Option<String> = None;
     let mut consecutive_failures: u32 = 0;
+    let mut corrective_actions_applied_total: u64 = 0;
+    let mut corrective_actions_effective_total: u64 = 0;
 
     while iteration < config.max_iterations {
         let round_start = Instant::now();
@@ -253,6 +362,9 @@ pub async fn run_autonomy_loop(
         let mut planner_guided = false;
         let mut agent_switched = false;
         let mut agent_switch_reason: Option<String> = None;
+        let mut round_corrective_actions: Vec<String> = Vec::new();
+        let mut reroute_expected_gain: Option<f64> = None;
+        let mut reroute_health_score: Option<f64> = None;
         let mut round_dag_trace: Option<serde_json::Value> = None;
 
         // BLUE42 Step 5: Pre-check — query metacognitive / world model before execution
@@ -276,6 +388,10 @@ pub async fn run_autonomy_loop(
                     agent_switched: false,
                     agent_switch_reason: None,
                     candidate_agent_count: 0,
+                    corrective_actions: Vec::new(),
+                    corrective_actions_applied: 0,
+                    reroute_expected_gain: None,
+                    reroute_health_score: None,
                     dag_trace: None,
                 };
                 all_rounds.push(round_record);
@@ -319,6 +435,10 @@ pub async fn run_autonomy_loop(
                 agent_switched: false,
                 agent_switch_reason: None,
                 candidate_agent_count,
+                corrective_actions: Vec::new(),
+                corrective_actions_applied: 0,
+                reroute_expected_gain: None,
+                reroute_health_score: None,
                 dag_trace: None,
             };
             all_rounds.push(round_record);
@@ -369,6 +489,7 @@ pub async fn run_autonomy_loop(
         let mut reasoning = String::new();
         let mut tool_calls: Vec<(String, String)> = Vec::new();
         let mut model_id: Option<String> = None;
+        let mut round_tool_error_rate: f64 = 0.0;
 
         while let Some(token) = receiver.recv().await {
             if let Some(mid) = token.strip_prefix("__model_used__:") {
@@ -416,7 +537,11 @@ pub async fn run_autonomy_loop(
                                 crate::orchestration::execution_graph::ExNodeState::Completed => {
                                     LoopDecision::Complete(ToolOutput {
                                         success: true,
-                                        result: Some(serde_json::json!({})),
+                                        // Preserve real tool output as evidence for observe/replan
+                                        result: n
+                                            .tool_output
+                                            .clone()
+                                            .or(Some(serde_json::json!({}))),
                                         error: None,
                                         verification: None,
                                         audit_log: None,
@@ -427,7 +552,15 @@ pub async fn run_autonomy_loop(
                                     reason,
                                 ) => LoopDecision::Failed {
                                     reason: reason.clone(),
-                                    last_output: None,
+                                    // Preserve detailed failure payload for diagnostic use
+                                    last_output: n.tool_output.clone().map(|result| ToolOutput {
+                                        success: false,
+                                        result: Some(result),
+                                        error: n.error_payload.clone(),
+                                        verification: None,
+                                        audit_log: None,
+                                        pua_report: None,
+                                    }),
                                 },
                                 _ => LoopDecision::Failed {
                                     reason: "dag_node_skipped".to_string(),
@@ -507,6 +640,16 @@ pub async fn run_autonomy_loop(
                         })
                         .collect()
                 };
+                // Track tool error rate for predictive reroute scoring
+                let failed_count = tool_results
+                    .iter()
+                    .filter(|(_, d)| matches!(d, LoopDecision::Failed { .. }))
+                    .count();
+                round_tool_error_rate = if tool_results.is_empty() {
+                    0.0
+                } else {
+                    failed_count as f64 / tool_results.len() as f64
+                };
                 for (tool_name, result) in tool_results {
                     round_tools.push(tool_name.clone());
 
@@ -525,7 +668,10 @@ pub async fn run_autonomy_loop(
                                 content: tool_block,
                             });
                             if config.enable_execution_intelligence {
-                                post_check("autonomy-loop", "autonomy_agent", true, &result_text);
+                                let outcome =
+                                    post_check("autonomy-loop", "autonomy_agent", true, &result_text);
+                                apply_corrective_actions(&mut messages, &outcome);
+                                round_corrective_actions.extend(outcome.corrective_actions);
                             }
                         }
                         LoopDecision::Failed { reason, .. } => {
@@ -538,7 +684,10 @@ pub async fn run_autonomy_loop(
                                 content: tool_block,
                             });
                             if config.enable_execution_intelligence {
-                                post_check("autonomy-loop", "autonomy_agent", false, &reason);
+                                let outcome =
+                                    post_check("autonomy-loop", "autonomy_agent", false, &reason);
+                                apply_corrective_actions(&mut messages, &outcome);
+                                round_corrective_actions.extend(outcome.corrective_actions);
                             }
                         }
                         other => {
@@ -552,7 +701,10 @@ pub async fn run_autonomy_loop(
                                 content: tool_block,
                             });
                             if config.enable_execution_intelligence {
-                                post_check("autonomy-loop", "autonomy_agent", false, &msg);
+                                let outcome =
+                                    post_check("autonomy-loop", "autonomy_agent", false, &msg);
+                                apply_corrective_actions(&mut messages, &outcome);
+                                round_corrective_actions.extend(outcome.corrective_actions);
                             }
                         }
                     }
@@ -598,7 +750,7 @@ pub async fn run_autonomy_loop(
         // BLUE42 Step 5: Post-check — record outcome into metacognitive / world model
         if config.enable_execution_intelligence && !objective.trim().is_empty() {
             let success = !response.trim().is_empty();
-            super::execution_intelligence::post_check(
+            let outcome = super::execution_intelligence::post_check(
                 &format!("autonomy-{}", iteration),
                 objective,
                 success,
@@ -608,6 +760,19 @@ pub async fn run_autonomy_loop(
                     response.clone()
                 },
             );
+            apply_corrective_actions(&mut messages, &outcome);
+            round_corrective_actions.extend(outcome.corrective_actions);
+        }
+
+        let round_corrective_actions: Vec<String> = round_corrective_actions
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let round_corrective_actions_applied = round_corrective_actions.len() as u32;
+        corrective_actions_applied_total += round_corrective_actions_applied as u64;
+        if round_corrective_actions_applied > 0 && !response.trim().is_empty() {
+            corrective_actions_effective_total += round_corrective_actions_applied as u64;
         }
 
         // BLUE42 Step 5: Update consecutive failures for pre_check feedback loop
@@ -636,22 +801,49 @@ pub async fn run_autonomy_loop(
         } else {
             "tools_completed"
         };
-        // BLUE42 Step 3: Agent reroute — check if switching to an alternative
-        // agent might improve results. Records the switch reason and available
-        // candidates for governance.status observability.
-        if config.enable_agent_reroute && tools_were_called && response.trim().is_empty() {
+        // BLUE43 Step 5: Predictive reroute scoring — uses composite health
+        // (reputation + task success + round health + tool error) to decide
+        // whether switching agents would provide positive expected gain.
+        // Records the reason code (predictive_gain / failure_recovery / budget_guard)
+        // for governance.status observability.
+        if config.enable_agent_reroute {
+            // Compute round health indicators
+            let round_health = if tools_were_called && !response.trim().is_empty() {
+                0.8 // Good: tools executed and response produced
+            } else if tools_were_called {
+                0.3 // Poor: tools executed but no response (empty)
+            } else if !response.trim().is_empty() {
+                0.9 // Excellent: response produced without needing tools
+            } else {
+                0.1 // Failed: no tools, no response
+            };
+
+            // Estimate tool error rate from this round's results
+            let tool_error_rate = round_tool_error_rate;
+
             let alt_count = config
                 .capability_signals
                 .as_ref()
                 .map(|s| s.agent_alternatives.len())
                 .unwrap_or(0);
-            agent_switched = true;
-            agent_switch_reason = if alt_count > 0 {
-                Some(format!("failure_with_{}_alternatives", alt_count))
-            } else {
-                Some("failure_no_alternatives".to_string())
-            };
-            record_agent_switch("failure");
+
+            let budget_remaining = 1.0 - (iteration as f64 / config.max_iterations.max(1) as f64);
+
+            let score = compute_predictive_reroute(
+                consecutive_failures,
+                round_health,
+                tool_error_rate,
+                alt_count,
+                budget_remaining,
+            );
+            reroute_expected_gain = Some(score.expected_gain);
+            reroute_health_score = Some(score.current_health);
+
+            if score.should_reroute {
+                agent_switched = true;
+                agent_switch_reason = Some(score.reason_code.clone());
+                record_agent_switch(&score.reason_code);
+            }
         }
         // Save round_tools before moving into round_record
         let rt_for_early_stop = round_tools.clone();
@@ -673,6 +865,10 @@ pub async fn run_autonomy_loop(
             agent_switched,
             agent_switch_reason,
             candidate_agent_count,
+            corrective_actions: round_corrective_actions,
+            corrective_actions_applied: round_corrective_actions_applied,
+            reroute_expected_gain,
+            reroute_health_score,
             dag_trace: round_dag_trace.clone(),
         };
         all_rounds.push(round_record);
@@ -726,6 +922,11 @@ pub async fn run_autonomy_loop(
         };
 
     let total_duration_ms = start.elapsed().as_millis() as u64;
+    let corrective_action_effectiveness_ratio = if corrective_actions_applied_total == 0 {
+        0.0
+    } else {
+        corrective_actions_effective_total as f64 / corrective_actions_applied_total as f64
+    };
     let stop_reason = if iteration == 0 {
         "completed_without_tool_calls"
     } else if iteration >= config.max_iterations {
@@ -742,6 +943,8 @@ pub async fn run_autonomy_loop(
         planner_guidance_used,
         trace_alignment_coverage,
         total_duration_ms,
+        corrective_actions_applied_total,
+        corrective_action_effectiveness_ratio,
         stop_reason: stop_reason.to_string(),
     };
 

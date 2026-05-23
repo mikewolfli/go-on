@@ -18,9 +18,10 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio::time::Duration;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::acp::helpers::autonomy::run_followup_after_tool_observation;
+use crate::acp::helpers::autonomy::terminal_chat_contract_snapshot;
 use crate::agents::agent::{Agent, AgentRegistry, Message, StreamingSender};
 use crate::config::AppConfig;
 use crate::flow::FlowManager;
@@ -261,6 +262,7 @@ async fn run_agent_with_tools(agent: &Arc<dyn Agent>, messages: &mut Vec<Message
     eprintln!();
 
     // ── Phase 2: Execute any tool calls ──
+    let mut followup_round_executed = false;
     if !tool_calls.is_empty() {
         eprintln!("{}── Tool execution ──{}", ansi!("33"), ansi!("0"));
         let mut tool_results: Vec<String> = Vec::new();
@@ -303,6 +305,7 @@ async fn run_agent_with_tools(agent: &Arc<dyn Agent>, messages: &mut Vec<Message
 
         // ── Phase 3: Send tool results back to agent for follow-up ──
         if !tool_results.is_empty() {
+            followup_round_executed = true;
             messages.push(Message {
                 role: "assistant".to_string(),
                 content: response.clone(),
@@ -346,6 +349,17 @@ async fn run_agent_with_tools(agent: &Arc<dyn Agent>, messages: &mut Vec<Message
             });
         }
     }
+
+    let autonomy_contract = terminal_chat_contract_snapshot(
+        tool_calls.len(),
+        followup_round_executed,
+        &response,
+    );
+    debug!(
+        target: "go_on::cli::chat",
+        autonomy_contract = %autonomy_contract,
+        "terminal chat turn completed"
+    );
 
     Ok(())
 }

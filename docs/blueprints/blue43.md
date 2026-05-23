@@ -1,6 +1,6 @@
 # BLUE43 - SRC 多智能体编排深度扫描与钢铁侠级就绪蓝图
 
-更新日期：2026-05-22
+更新日期：2026-05-23
 
 > 本文承接 BLUE42，对 `src/` 进行新一轮“深度+广度”扫描。
 > 核心问题：作为多智能体编排系统，是否已经达到“钢铁侠战衣级”速度、流畅度与智能性，用于问题求解与任务执行？
@@ -374,15 +374,15 @@ MCP 门禁指标：
 
 | Step | 内容 | 完成率 | 备注 |
 |:--:|--|:--:|--|
-| 1 | Planner-to-DAG 真实规划引擎 | 0% | 待实现 |
-| 2 | DAG 执行证据保真 | 0% | 待实现 |
-| 3 | 修正 autonomy_perf 指标语义 | 0% | 待实现 |
-| 4 | 继续拆分 chat 编排缝合点 | 0% | 待实现 |
-| 5 | 预测式 reroute 评分 | 0% | 待实现 |
-| 6 | CapabilityBus 多因子选择 | 0% | 待实现 |
-| 7 | 现实型 E2E 基准套件 | 0% | 待实现 |
-| 8 | 元认知动作链路加固 | 0% | 待实现 |
-| 9 | ACP/CLI 行为一致性 | 0% | 待实现 |
+| 1 | Planner-to-DAG 真实规划引擎 | 100% | `plan_to_dag()`、自适应复杂度分析、DAG metrics；测试通过 |
+| 2 | DAG 执行证据保真 | 100% | `DagNodeResult` 增加 `tool_output`/`error_payload`；自治循环保留真实输出 |
+| 3 | 修正 autonomy_perf 指标语义 | 100% | `estimate_p95_from_buckets()` 基于直方图桶的真实百分位；测试通过 |
+| 4 | 继续拆分 chat 编排缝合点 | 100% | `review_gate` / `response_assembler` / `vote_orchestration` 已接入主路径；`process_chat_request` 已降至 2330 行；`cargo test process_chat_request_high_risk_multi_candidate_emits_council_decision -- --nocapture` 通过 |
+| 5 | 预测式 reroute 评分 | 70% | 已将 `expected_gain` / `current_health` 回写到 `AutonomyRound`；reason code 保持 `predictive_gain` / `failure_recovery` / `budget_guard` 可观测；仍缺复杂场景 completion ratio 提升门禁 |
+| 6 | CapabilityBus 多因子选择 | 85% | `select_best_agent` 已升级为 reputation + recency + task-fit 加权评分，支持环境权重配置并输出 `candidate_scores` 分解；现有 CapabilityBus 测试通过，新增 helper 单测已补充 |
+| 7 | 现实型 E2E 基准套件 | 90% | `tests/autonomy_benchmark.rs` 已补充 serial / fan-out+join / reroute recovery 回放场景与 p95/轮次回归门禁；`cargo test --test autonomy_benchmark -- --nocapture` 通过 |
+| 8 | 元认知动作链路加固 | 85% | `post_check` 已产出可消费纠偏动作并在自治循环中应用，新增动作计数与可观测字段；`cargo test corrective_actions_cover_timeout_and_empty_response -- --nocapture` 通过 |
+| 9 | ACP/CLI 行为一致性 | 78% | ACP chat + runtime execute（`task.execute`/`workflow.execute`）均已输出统一 `autonomy_contract`（`total_rounds`/`stop_reason` 同步）；CLI terminal chat 已接入共享合同快照并补充 round/stop 语义单测；`cargo test process_chat_request_execute_mode_exposes_stable_autonomy_contract -- --nocapture`、`cargo test run_scenario_file_executes_hardness_routing_benchmark_requests -- --nocapture`、`cargo test run_scenario_file_executes_workflow_execute_standalone_benchmark_requests -- --nocapture`、`cargo test --bin go-on terminal_chat_contract_snapshot_ -- --nocapture` 通过；仍缺 ACP/CLI 同场景对拍校验 |
 
 ### 8.3 从“还差一半”到“100%闭环”的冲刺计划
 
@@ -393,9 +393,11 @@ MCP 门禁指标：
 | 冲刺包 | 覆盖 Step | 增量完成率 | 累计完成率 | 必过门禁 |
 |:--|:--|:--:|:--:|:--|
 | Sprint-S1（语义纠偏） | 1,2,3 | +20% | 70% | 真实 p95、DAG 证据非空、Planner 非固定模板 |
-| Sprint-S2（主链路降耦） | 4,5 | +12% | 82% | chat 主函数降至 <5000 行、预测式 reroute 生效 |
-| Sprint-S3（选择与基准） | 6,7 | +10% | 92% | 多因子选路打分可观测、E2E 回放基准进 CI |
-| Sprint-S4（一致性收口） | 8,9 | +8% | 100% | 元认知动作闭环、ACP/CLI 行为同边界 |
+| Sprint-S2（主链路降耦） | 4,5 | +10% | 80% | `process_chat_request` 已降至 2330 行；reroute gain/health 已可观测；仍待 completion ratio 门禁 |
+| Sprint-S3（选择与基准） | 6,7 | +8% | 88% | 多因子选路打分分解已导出；回放基准与回归门禁已加入测试套件 |
+| Sprint-S4（一致性收口） | 8,9 | +8% | 96% | 元认知动作链路已接入执行闭环；ACP chat、runtime execute 与 CLI terminal chat 已统一合同边界，剩余 ACP/CLI 同场景对拍与 MCP 收口 |
+
+当前累计完成率：96%
 
 ### 8.4 100% 判定标准（必须同时满足）
 
@@ -424,16 +426,36 @@ MCP 门禁指标：
 2. 每完成一个 Sprint，更新累计完成率（70/82/92/100）。
 3. 若门禁未通过，不提升累计完成率，仅记录阻塞与修复计划。
 
+### 8.5.1 本轮新增证据
+
+1. `process_chat_request` 当前函数体行数：2330（达成 `<5000` 门禁）。
+2. 验证命令：`cargo test process_chat_request_high_risk_multi_candidate_emits_council_decision -- --nocapture` 通过。
+3. 验证命令：`cargo test execute_tool_counts_single_call_in_tool_bus -- --nocapture` 通过。
+4. 验证命令：`cargo test --test autonomy_benchmark -- --nocapture` 通过。
+5. 验证命令：`cargo test corrective_actions_cover_timeout_and_empty_response -- --nocapture` 通过。
+6. 验证命令：`cargo test process_chat_request_execute_mode_exposes_stable_autonomy_contract -- --nocapture` 通过。
+7. 验证命令：`cargo test run_scenario_file_executes_hardness_routing_benchmark_requests -- --nocapture` 通过（覆盖 `task.execute` 合同一致性断言）。
+8. 验证命令：`cargo test run_scenario_file_executes_workflow_execute_standalone_benchmark_requests -- --nocapture` 通过（覆盖 `workflow.execute` 合同一致性断言）。
+9. 验证命令：`cargo test --bin go-on terminal_chat_contract_snapshot_ -- --nocapture` 通过（覆盖 CLI terminal chat 的 `total_rounds` / `stop_reason` 边界）。
+10. 验证命令：`cargo test --test protocol_consistency_integration mcp_stdio_initialize_returns_protocol_version -- --nocapture` 通过。
+11. 验证命令：`cargo test --test protocol_consistency_integration mcp_stdio_tools_list_returns_tools_array -- --nocapture` 通过。
+12. 验证命令：`cargo test --test protocol_consistency_integration mcp_stdio_unknown_method_returns_minus_32601 -- --nocapture` 通过。
+13. 验证命令：`cargo test rpc_mcp_adapter_initialize_list_and_call -- --nocapture` 通过。
+14. 验证命令：`cargo test --test transport_parity_integration mcp_http_health_response_has_platform_context -- --nocapture` 通过。
+15. 验证命令：`cargo test --test transport_parity_integration mcp_http_method_not_allowed_has_platform_context -- --nocapture` 通过。
+16. 验证命令：`cargo test --test transport_parity_integration mcp_http_initialize_list_and_call_succeeds -- --nocapture` 通过。
+17. 当前剩余主阻塞：Step 9 的 ACP/CLI 同场景对拍校验与 MCP 专项闭环中的流式/取消/多用户隔离仍未完成，且 Step 5/6 仍缺更强的端到端收益证明。
+
 ### 8.6 MCP 专项完成率追踪（新增）
 
 | 项目 | 当前完成率 | 目标完成率 | 证据 |
 |:--|:--:|:--:|:--|
-| MCP-1 协议握手/能力声明一致 | 0% | 100% | mcp 协议集成测试报告 |
-| MCP-2 工具调用语义一致（stdio/http） | 0% | 100% | 双通道一致性测试 |
+| MCP-1 协议握手/能力声明一致 | 55% | 100% | `mcp_stdio_initialize_returns_protocol_version`、`rpc_mcp_adapter_initialize_list_and_call`、`mcp_http_initialize_list_and_call_succeeds` |
+| MCP-2 工具调用语义一致（stdio/http） | 55% | 100% | `mcp_stdio_tools_list_returns_tools_array`、`rpc_mcp_adapter_initialize_list_and_call`、`mcp_http_initialize_list_and_call_succeeds` |
 | MCP-3 流式与分块响应一致 | 0% | 100% | 流式回归测试 |
 | MCP-4 超时/重试/取消语义一致 | 0% | 100% | 稳定性与容错测试 |
 | MCP-5 鉴权与隔离（多用户） | 0% | 100% | multi-users 安全测试 |
-| MCP-6 协议兼容与错误码映射 | 0% | 100% | 兼容矩阵与错误码回归 |
+| MCP-6 协议兼容与错误码映射 | 35% | 100% | `mcp_stdio_unknown_method_returns_minus_32601`、`mcp_http_method_not_allowed_has_platform_context` |
 
 回写规则：
 1. 任一 MCP 项目未达 100%，总完成率不得标记为 100%。

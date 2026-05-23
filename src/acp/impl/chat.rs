@@ -5,7 +5,7 @@
 //! These functions take `AcpServer` as their first parameter to maintain
 //! compatibility with the original implementation.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::{Mutex as StdMutex, OnceLock};
 use std::time::Instant;
@@ -41,9 +41,13 @@ use crate::acp::helpers::context::{
 };
 use crate::acp::helpers::conversation::stream_would_exceed_limits;
 use crate::acp::helpers::metrics::{stream_chunk_notification, stream_done_notification};
-use crate::acp::helpers::orchestration_alignment::{
-    derive_orchestration_node_decisions, derive_plan_trace_alignment,
+use crate::acp::helpers::orchestration_alignment::derive_plan_trace_alignment;
+use crate::acp::helpers::response_assembler::{
+    build_chat_response, build_role_routing, build_task_graph_checkpoint,
+    CapabilityRoutingInfo,
 };
+use crate::acp::helpers::review_gate::{run_enhanced_verification, run_review_gate};
+use crate::acp::helpers::vote_orchestration::derive_response_orchestration;
 use crate::acp::r#impl::UserSession;
 use crate::acp::server::AcpServer;
 use crate::agent::Message;
@@ -64,12 +68,7 @@ use crate::orchestration::tool::{execute_loop, LoopConfig, LoopDecision, ToolInp
 use crate::orchestration::workflow_optimizer::OptimizationContext;
 use crate::pua::PuaEnforcementPlan;
 
-use crate::intelligence::verification::{
-    DeterministicVerifier, StructuredReview, VerificationVerdict,
-};
 use crate::memory_module::{MemoryClass, MemoryEntry, MemoryPolicy, MemoryStore};
-use crate::orchestration::roles::{AgentRole, RoleRegistry};
-use crate::orchestration::task_graph::{TaskGraph, TaskNode};
 use crate::reinforcement::{
     build_task_plan, build_workflow_generated_artifact, persist_knowledge_insight_event,
     persist_workflow_generated, persist_workflow_learning_event, ArtifactLedger,
@@ -1849,12 +1848,17 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                 Ok(loop_result) => {
                     let stop_reason = loop_result.report.stop_reason.clone();
                     let produced_response = !loop_result.response.trim().is_empty();
+                    let autonomy_contract =
+                        crate::acp::helpers::autonomy_loop::contract_snapshot(&loop_result.report);
                     agent_attempts.push(json!({
                         "agent": agent_name,
                         "ok": produced_response,
                         "autonomy_loop": true,
+                        "autonomy_contract": autonomy_contract,
                         "total_rounds": loop_result.report.total_rounds,
                         "total_tools": loop_result.report.total_tools,
+                        "corrective_actions_applied_total": loop_result.report.corrective_actions_applied_total,
+                        "corrective_action_effectiveness_ratio": loop_result.report.corrective_action_effectiveness_ratio,
                         "stop_reason": stop_reason,
                         "candidate_index": idx,
                         "candidate_count": resolved.agents.len(),
@@ -2581,131 +2585,118 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         // ── Review gate always runs for full_auto mode ────────────────
         // Ensures review results are available regardless of whether the
         // autonomy loop or TAO loop handles tool execution.
-        let review_outcome = crate::acp::r#impl::agent::run_dual_review_gate(
+        let review_outcome = run_review_gate(
             server,
-            None,
             &params.messages,
             phase.options.as_ref(),
             span,
             trace,
         )
         .await;
-
-        match &review_outcome {
-            Ok(outcome) => {
-                reviews.push(json!({
-                    "reviewer": outcome.reviewer,
-                    "verdict": if outcome.passed { "APPROVE" } else { "REJECT" },
-                    "response": outcome.comments.join("; "),
-                    "duration_ms": outcome.duration_ms,
-                }));
-            }
-            Err(e) => {
-                tracing::warn!("review gate failed: {}", e);
-            }
+        if let Some(error) = &review_outcome.error {
+            tracing::warn!("review gate failed: {}", error);
         }
+        reviews = review_outcome.reviews.clone();
 
         // ── Only run TAO loop when the autonomy loop did NOT handle execution ──
         if !autonomy_loop_executed {
-            if let Ok(outcome) = &review_outcome {
-                if outcome.passed {
-                    // Extract task description
-                    let task_description = extract_task_description(&params.messages);
+            if review_outcome.passed {
+                // Extract task description
+                let task_description = extract_task_description(&params.messages);
 
-                    // Build a ToolInput from the task context
-                    let tool_input = ToolInput {
-                        task_id: "chat".to_string(),
-                        phase: phase_name.clone(),
-                        agent_role: selected_agent.clone(),
-                        objective: task_description.clone(),
-                        constraints: None,
-                        evidence: None,
-                        payload: serde_json::json!({
-                            "task": task_description,
-                            "phase": phase_name,
-                        }),
-                        allowed_base_dir: None,
-                    };
+                // Build a ToolInput from the task context
+                let tool_input = ToolInput {
+                    task_id: "chat".to_string(),
+                    phase: phase_name.clone(),
+                    agent_role: selected_agent.clone(),
+                    objective: task_description.clone(),
+                    constraints: None,
+                    evidence: None,
+                    payload: serde_json::json!({
+                        "task": task_description,
+                        "phase": phase_name,
+                    }),
+                    allowed_base_dir: None,
+                };
 
-                    // Create a ToolRegistry (reuses built-in tools)
-                    let tool_registry = ToolRegistry::new();
+                // Create a ToolRegistry (reuses built-in tools)
+                let tool_registry = ToolRegistry::new();
 
-                    // Determine preferred tools from agent response hints
-                    let preferred_tools: Vec<String> = {
-                        let calls = extract_tool_calls_from_response(&response_text, 5);
-                        if calls.is_empty() {
-                            record_planner_guided_route();
-                            planner_guided_tool_preferences(
-                                &conversation_id,
-                                phase_name,
-                                &selected_agent,
-                                &task_description,
-                                &response_text,
-                                5,
-                            )
-                        } else {
-                            record_explicit_tool_route();
-                            calls
-                        }
-                    };
+                // Determine preferred tools from agent response hints
+                let preferred_tools: Vec<String> = {
+                    let calls = extract_tool_calls_from_response(&response_text, 5);
+                    if calls.is_empty() {
+                        record_planner_guided_route();
+                        planner_guided_tool_preferences(
+                            &conversation_id,
+                            phase_name,
+                            &selected_agent,
+                            &task_description,
+                            &response_text,
+                            5,
+                        )
+                    } else {
+                        record_explicit_tool_route();
+                        calls
+                    }
+                };
 
-                    // Run the Think-Act-Observe loop
-                    let tao_config = LoopConfig::default();
-                    let (tao_decision, tao_trace) = execute_loop(
-                        &task_description,
-                        &tool_registry,
-                        &tool_input,
-                        &preferred_tools,
-                        &tao_config,
-                    );
+                // Run the Think-Act-Observe loop
+                let tao_config = LoopConfig::default();
+                let (tao_decision, tao_trace) = execute_loop(
+                    &task_description,
+                    &tool_registry,
+                    &tool_input,
+                    &preferred_tools,
+                    &tao_config,
+                );
 
-                    // Record the loop outcome
-                    let tool_result = match &tao_decision {
-                        LoopDecision::Complete(output) => {
-                            record_autonomy_loop_stop_reason("complete");
-                            serde_json::json!({
-                                "status": "complete",
-                                "success": output.success,
-                                "result": output.result,
-                                "iterations": tao_trace.iterations.len(),
-                                "duration_ms": tao_trace.total_duration_ms,
-                            })
-                        }
-                        LoopDecision::Failed { reason, .. } => {
-                            record_autonomy_loop_stop_reason("failed");
-                            serde_json::json!({
-                                "status": "failed",
-                                "reason": reason,
-                                "iterations": tao_trace.iterations.len(),
-                                "duration_ms": tao_trace.total_duration_ms,
-                            })
-                        }
-                        LoopDecision::Escalate { reason, .. } => {
-                            record_autonomy_loop_stop_reason("escalated");
-                            serde_json::json!({
-                                "status": "escalated",
-                                "reason": reason,
-                                "iterations": tao_trace.iterations.len(),
-                                "duration_ms": tao_trace.total_duration_ms,
-                            })
-                        }
-                        _ => {
-                            record_autonomy_loop_stop_reason("incomplete");
-                            serde_json::json!({
-                                "status": "incomplete",
-                                "iterations": tao_trace.iterations.len(),
-                                "duration_ms": tao_trace.total_duration_ms,
-                            })
-                        }
-                    };
+                // Record the loop outcome
+                let tool_result = match &tao_decision {
+                    LoopDecision::Complete(output) => {
+                        record_autonomy_loop_stop_reason("complete");
+                        serde_json::json!({
+                            "status": "complete",
+                            "success": output.success,
+                            "result": output.result,
+                            "iterations": tao_trace.iterations.len(),
+                            "duration_ms": tao_trace.total_duration_ms,
+                        })
+                    }
+                    LoopDecision::Failed { reason, .. } => {
+                        record_autonomy_loop_stop_reason("failed");
+                        serde_json::json!({
+                            "status": "failed",
+                            "reason": reason,
+                            "iterations": tao_trace.iterations.len(),
+                            "duration_ms": tao_trace.total_duration_ms,
+                        })
+                    }
+                    LoopDecision::Escalate { reason, .. } => {
+                        record_autonomy_loop_stop_reason("escalated");
+                        serde_json::json!({
+                            "status": "escalated",
+                            "reason": reason,
+                            "iterations": tao_trace.iterations.len(),
+                            "duration_ms": tao_trace.total_duration_ms,
+                        })
+                    }
+                    _ => {
+                        record_autonomy_loop_stop_reason("incomplete");
+                        serde_json::json!({
+                            "status": "incomplete",
+                            "iterations": tao_trace.iterations.len(),
+                            "duration_ms": tao_trace.total_duration_ms,
+                        })
+                    }
+                };
 
-                    tool_execution_results.push(json!({
-                        "tool_loop": "tao_executed",
-                        "decision": tool_result,
-                        "trace": serde_json::to_value(&tao_trace).unwrap_or_default(),
-                        "task": task_description
-                    }));
-                }
+                tool_execution_results.push(json!({
+                    "tool_loop": "tao_executed",
+                    "decision": tool_result,
+                    "trace": serde_json::to_value(&tao_trace).unwrap_or_default(),
+                    "task": task_description
+                }));
             }
         }
     }
@@ -2782,120 +2773,17 @@ You have access to {} registered skill(s). Skills are reusable templates that au
     // Task graph execution engine integration
     let (task_graph_result, _saved_graph_id, _saved_checkpoint_id) =
         if params.mode.eq_ignore_ascii_case("full_auto") {
-            // Create task graph for this execution
             let task_description = extract_task_description(&params.messages);
-            let root_node = TaskNode {
-                id: format!("chat-{}-root", conversation_id),
-                kind: "chat_request".to_string(),
-                state: "done".to_string(),
-                input: json!({
-                    "task": task_description,
-                    "mode": params.mode,
-                    "phase": phase_name
-                }),
-                output: Some(json!({
-                    "response": response_text,
-                    "duration_ms": started.elapsed().as_millis() as u64
-                })),
-                dependencies: HashSet::new(),
-                retries: 0,
-            };
-
-            let mut task_graph = TaskGraph::new(root_node);
-
-            // Add tool execution as a child node if tool execution was performed
-            if !tool_execution_results.is_empty() {
-                let tool_node = TaskNode {
-                    id: format!("chat-{}-tools", conversation_id),
-                    kind: "tool_execution".to_string(),
-                    state: "done".to_string(),
-                    input: json!({
-                        "task": task_description,
-                        "mode": "full_auto"
-                    }),
-                    output: Some(json!({
-                        "results": tool_execution_results,
-                        "count": tool_execution_results.len()
-                    })),
-                    dependencies: HashSet::from([format!("chat-{}-root", conversation_id)]),
-                    retries: 0,
-                };
-                task_graph.add_node(tool_node);
-                let _ = task_graph.add_edge(
-                    format!("chat-{}-root", conversation_id),
-                    format!("chat-{}-tools", conversation_id),
-                );
-            }
-
-            // Add memory promotion as a child node if memory promotion was performed
-            if let Some(memory_result) = &memory_promotion_result {
-                let memory_node = TaskNode {
-                    id: format!("chat-{}-memory", conversation_id),
-                    kind: "memory_promotion".to_string(),
-                    state: "done".to_string(),
-                    input: json!({
-                        "task": task_description
-                    }),
-                    output: Some(memory_result.clone()),
-                    dependencies: HashSet::from([format!("chat-{}-root", conversation_id)]),
-                    retries: 0,
-                };
-                task_graph.add_node(memory_node);
-                let _ = task_graph.add_edge(
-                    format!("chat-{}-root", conversation_id),
-                    format!("chat-{}-memory", conversation_id),
-                );
-            }
-
-            // Persist the task graph and checkpoint to the store
-            let graph_id = format!("graph-{}", conversation_id);
-            let checkpoint_id = format!("ckpt-{}", crate::acp::prelude::now_ts());
-            if let Some(ref store) = server.task_graph_store {
-                if let Err(e) = store.save_graph(&graph_id, &task_graph) {
-                    tracing::warn!(target: "task_graph", "failed to save graph: {e}");
-                }
-                // Build subtask records from graph nodes (excluding root)
-                let subtask_records: Vec<crate::orchestration::task_graph::PlannedSubtaskRecord> =
-                    task_graph
-                        .nodes
-                        .values()
-                        .filter(|n| n.id != task_graph.root)
-                        .map(|n| crate::orchestration::task_graph::PlannedSubtaskRecord {
-                            subtask_id: n.id.clone(),
-                            description: n
-                                .input
-                                .get("task")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            phase: n.kind.clone(),
-                            outcome: Some(if n.state == "done" {
-                                "completed".to_string()
-                            } else {
-                                n.state.clone()
-                            }),
-                            result_summary: n.output.as_ref().map(|o| o.to_string()),
-                        })
-                        .collect();
-                let checkpoint = task_graph.snapshot(&task_description, 1, subtask_records);
-                if let Err(e) = store.save_checkpoint(&checkpoint, &graph_id) {
-                    tracing::warn!(target: "task_graph", "failed to save checkpoint: {e}");
-                }
-            }
-
-            (
-                Some(json!({
-                    "task_graph": {
-                        "node_count": task_graph.nodes.len(),
-                        "edge_count": task_graph.edges.len(),
-                        "root": task_graph.root,
-                        "execution_complete": true,
-                        "graph_id": graph_id,
-                        "checkpoint_id": checkpoint_id,
-                    }
-                })),
-                Some(graph_id),
-                Some(checkpoint_id),
+            build_task_graph_checkpoint(
+                server,
+                &conversation_id,
+                &task_description,
+                &params.mode,
+                phase_name,
+                &response_text,
+                &tool_execution_results,
+                memory_promotion_result.as_ref(),
+                started.elapsed().as_millis() as u64,
             )
         } else {
             (None, None, None)
@@ -2903,146 +2791,15 @@ You have access to {} registered skill(s). Skills are reusable templates that au
 
     // Role-based agent routing integration
     let role_routing_result = if params.mode.eq_ignore_ascii_case("full_auto") {
-        // Determine appropriate roles based on task type
         let task_description = extract_task_description(&params.messages);
-        let task_lower = task_description.to_lowercase();
-
-        let mut suggested_roles = Vec::new();
-
-        // Analyze task and suggest appropriate roles
-        if task_lower.contains("plan")
-            || task_lower.contains("design")
-            || task_lower.contains("architecture")
-        {
-            suggested_roles.push(AgentRole::Planner);
-        }
-        if task_lower.contains("research")
-            || task_lower.contains("search")
-            || task_lower.contains("find")
-        {
-            suggested_roles.push(AgentRole::Researcher);
-        }
-        if task_lower.contains("code")
-            || task_lower.contains("implement")
-            || task_lower.contains("write")
-            || task_lower.contains("edit")
-        {
-            suggested_roles.push(AgentRole::Coder);
-        }
-        if task_lower.contains("test")
-            || task_lower.contains("verify")
-            || task_lower.contains("validate")
-        {
-            suggested_roles.push(AgentRole::Tester);
-        }
-        if task_lower.contains("review")
-            || task_lower.contains("check")
-            || task_lower.contains("audit")
-        {
-            suggested_roles.push(AgentRole::Reviewer);
-        }
-
-        // If no specific roles detected, use default roles
-        if suggested_roles.is_empty() {
-            suggested_roles = vec![AgentRole::Planner, AgentRole::Coder, AgentRole::Reviewer];
-        }
-
-        // Get role registry
-        let role_registry = RoleRegistry::new();
-        let role_definitions = role_registry.all();
-
-        Some(json!({
-            "role_routing": {
-                "suggested_roles": suggested_roles.iter().map(|r| r.as_str()).collect::<Vec<_>>(),
-                "role_count": suggested_roles.len(),
-                "task_analysis": task_description,
-                "available_custom_roles": role_definitions.len(),
-                "handoff_ready": true
-            }
-        }))
+        Some(build_role_routing(&task_description))
     } else {
         None
     };
 
     // Enhanced verification system integration
     let verification_result = if params.mode.eq_ignore_ascii_case("full_auto") {
-        // Run enhanced verification checks
-        let mut verification_signals = Vec::new();
-
-        // Run syntax check on response
-        let syntax_signal = DeterministicVerifier::run_syntax_check(&response_text);
-        verification_signals.push(syntax_signal);
-
-        // Run test check if response contains test-related content
-        if response_text.to_lowercase().contains("test") || response_text.contains("assert") {
-            let test_signal = DeterministicVerifier::run_test_check(&response_text);
-            verification_signals.push(test_signal);
-        }
-
-        // Run lint check if response contains code
-        if response_text.contains("fn ")
-            || response_text.contains("let ")
-            || response_text.contains("pub ")
-        {
-            let lint_signal = DeterministicVerifier::run_lint_check(&response_text);
-            verification_signals.push(lint_signal);
-        }
-
-        // Run adversarial check (using test check as fallback)
-        let adversarial_signal = DeterministicVerifier::run_test_check(&response_text);
-        verification_signals.push(adversarial_signal);
-
-        // Create structured review
-        let passed_count = verification_signals.iter().filter(|s| s.passed).count();
-        let total_count = verification_signals.len();
-        let confidence = if total_count > 0 {
-            passed_count as f32 / total_count as f32
-        } else {
-            1.0
-        };
-
-        let structured_review = StructuredReview {
-            verdict: if confidence >= 0.8 {
-                VerificationVerdict::Approve
-            } else {
-                VerificationVerdict::Reject
-            },
-            reviewer_agent: "enhanced_verification_system".to_string(),
-            confidence,
-            signals: verification_signals,
-            rationale: format!(
-                "Enhanced verification completed with {}/{} checks passed",
-                passed_count, total_count
-            ),
-            assumptions_validated: vec![
-                "Syntax validity".to_string(),
-                "No adversarial patterns".to_string(),
-            ],
-            weak_evidence_flags: if confidence < 0.9 {
-                vec!["Some verification checks had lower confidence".to_string()]
-            } else {
-                Vec::new()
-            },
-            quality_compass: vec![
-                "Deterministic verification".to_string(),
-                "Adversarial robustness".to_string(),
-            ],
-            pua_report: None,
-            audit_log: None,
-        };
-
-        Some(json!({
-            "enhanced_verification": {
-                "verdict": format!("{:?}", structured_review.verdict),
-                "confidence": structured_review.confidence,
-                "signals_count": structured_review.signals.len(),
-                "passed_checks": passed_count,
-                "total_checks": total_count,
-                "rationale": structured_review.rationale,
-                "assumptions_validated": structured_review.assumptions_validated,
-                "quality_compass": structured_review.quality_compass
-            }
-        }))
+        Some(run_enhanced_verification(&response_text))
     } else {
         None
     };
@@ -3058,54 +2815,52 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         }
     }
 
-    let result = json!({
-        "done": true,
-        "conversation_id": conversation_id,
-        "branch_id": branch_id,
-        "mode": params.mode,
-        "cache": {
-            "hit": cache_hit,
-            "bypassed_for_execution": cache_bypassed_for_execution,
+    let result = build_chat_response(
+        &params.mode,
+        &conversation_id,
+        &branch_id,
+        phase_name,
+        phase_origin,
+        &selected_agent,
+        selected_model_name.clone(),
+        &response_text,
+        json!(checkpoint),
+        metacognitive_loop,
+        token_economy,
+        vector_context.hits.clone(),
+        vector_context.summary.is_some(),
+        knowledge,
+        distillation,
+        reviews,
+        agent_attempts,
+        risk_decision,
+        agent_switch_notice,
+        tool_execution_results.clone(),
+        memory_promotion_result,
+        task_graph_result,
+        role_routing_result,
+        verification_result,
+        CapabilityRoutingInfo {
+            selected_agent: capability_selected_agent,
+            recommended_mode: capability_recommended_mode,
+            candidate_count: capability_candidate_count,
+            decision_confidence: capability_decision_confidence,
+            selection_reason: capability_selection_reason,
+            optimization_hint: capability_optimization_hint,
         },
-        "phase": phase_name,
-        "phase_origin": phase_origin,
-        "agent": selected_agent,
-        "selected_model": selected_model_name.clone(),
-        "duration_ms": started.elapsed().as_millis() as u64,
-        "response": response_text,
-        "checkpoint": checkpoint,
-        "metacognitive_loop": metacognitive_loop,
-        "token_economy": token_economy,
-        "vector_hits": vector_context.hits,
-        "summary_used": vector_context.summary.is_some(),
-        "knowledge": knowledge,
-        "distillation": distillation,
-        "reviews": reviews,
-        "agent_attempts": agent_attempts,
-        "risk_decision": risk_decision,
-        "agent_switch_notice": agent_switch_notice,
-        "tool_execution": tool_execution_results,
-        "memory_policy": memory_promotion_result,
-        "task_graph": task_graph_result,
-        "role_routing": role_routing_result,
-        "enhanced_verification": verification_result,
-        "capability_routing": {
-            "selected_agent": capability_selected_agent,
-            "recommended_mode": capability_recommended_mode,
-            "candidate_count": capability_candidate_count,
-            "decision_confidence": capability_decision_confidence,
-            "selection_reason": capability_selection_reason,
-            "optimization": capability_optimization_hint
-        },
-        "routing_diagnostics": {
+        json!({
             "routing_provenance": routing_provenance,
             "candidate_reputation_scores": reputation_scores,
             "selected_agent_reputation": selected_agent_reputation,
             "council_decision": council_decision,
             "vote_winner": vote_winner,
             "fallback_reason": fallback_reason,
-        }
-    });
+        }),
+        cache_hit,
+        cache_bypassed_for_execution,
+        started.elapsed().as_millis() as u64,
+        started,
+    );
 
     // ── Request-level routing provenance (BLUE41 Step 7) ──────────────
     // Persist route decisions and diagnostics so future learning and audits
@@ -3320,7 +3075,7 @@ You have access to {} registered skill(s). Skills are reusable templates that au
     record_orchestration_alignment(alignment_coverage);
 
     let orchestration_node_decisions =
-        derive_orchestration_node_decisions(&execution_plan, &tool_execution_results);
+        derive_response_orchestration(&execution_plan, &tool_execution_results);
     let mapped_nodes = orchestration_node_decisions
         .get("mapped_nodes")
         .and_then(serde_json::Value::as_u64)
@@ -6680,5 +6435,90 @@ mod tests {
 
         let response_text = result["response"].as_str().unwrap_or_default();
         assert!(response_text == "agent-a answer" || response_text == "agent-b answer");
+    }
+
+    #[cfg(not(feature = "backend-postgres"))]
+    #[tokio::test]
+    async fn process_chat_request_execute_mode_exposes_stable_autonomy_contract() {
+        let temp = tempfile::tempdir().expect("tempdir should exist");
+
+        let mut registry = AgentRegistry::new();
+        registry.register_arc(
+            "test-agent",
+            Arc::new(RecordingAgent {
+                seen_messages: Arc::new(Mutex::new(Vec::new())),
+                output: "execute mode answer".to_string(),
+            }),
+        );
+
+        let config = Arc::new(test_config());
+        let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
+
+        let mut server = ServerBuilder::new().build().expect("server should build");
+        server.flow_manager = Some(flow);
+        server.agent_registry = Some(Arc::new(registry));
+        server.vector_config = config.vector.clone();
+        let config_path = temp.path().join("config.toml");
+        std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
+        server.config_path = Some(config_path.display().to_string());
+
+        let params = ChatParams {
+            mode: "execute".to_string(),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: "Fix the build and return the result".to_string(),
+            }],
+            conversation_id: Some("autonomy-contract-conv".to_string()),
+            branch_id: Some("main".to_string()),
+            phase: Some("coding".to_string()),
+            options: None,
+            requirement_contract: None,
+            plan: None,
+            vector_hits: None,
+            execution_decision_candidate: None,
+        };
+
+        let trace = chat_trace_context(&Some(json!(1)), "chat.autonomy_contract");
+        let result = process_chat_request(&server, &params, None, &trace, None, None)
+            .await
+            .expect("chat request should succeed");
+
+        let attempts = result["agent_attempts"]
+            .as_array()
+            .expect("agent_attempts should be an array");
+        let autonomy_attempt = attempts
+            .iter()
+            .find(|attempt| attempt["autonomy_loop"].as_bool().unwrap_or(false))
+            .expect("autonomy loop attempt should exist");
+
+        let rounds = autonomy_attempt["total_rounds"]
+            .as_u64()
+            .expect("total_rounds should be set");
+        assert!((1..=6).contains(&rounds));
+
+        let stop_reason = autonomy_attempt["stop_reason"]
+            .as_str()
+            .expect("stop_reason should be set");
+        assert!(
+            stop_reason == "completed_without_tool_calls"
+                || stop_reason == "max_iterations_reached"
+                || stop_reason == "tools_exhausted_task_complete"
+        );
+
+        let contract = autonomy_attempt["autonomy_contract"]
+            .as_object()
+            .expect("autonomy_contract should be present");
+        assert_eq!(
+            contract
+                .get("total_rounds")
+                .and_then(serde_json::Value::as_u64),
+            Some(rounds)
+        );
+        assert_eq!(
+            contract
+                .get("stop_reason")
+                .and_then(serde_json::Value::as_str),
+            Some(stop_reason)
+        );
     }
 }

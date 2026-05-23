@@ -397,10 +397,12 @@ fn metric_window_history() -> &'static StdMutex<Vec<MetricWindowPoint>> {
 fn append_metric_window_sample(server: &AcpServer) -> MetricWindowPoint {
     let snapshot = server.observability.metrics.snapshot();
     let total = snapshot.total_requests.max(1) as f64;
+    // Estimate real p95 from latency histogram bucket counts
+    let real_p95 = estimate_p95_from_buckets(&snapshot.request_latency_bucket_counts);
     let point = MetricWindowPoint {
         ts: crate::acp::prelude::now_ts(),
         qps: (snapshot.total_requests as f64 / 60.0),
-        p95: snapshot.avg_request_duration_ms,
+        p95: real_p95,
         error_rate: (snapshot.failed_requests as f64 / total).clamp(0.0, 1.0),
         success_rate: ((snapshot
             .total_requests
@@ -426,6 +428,56 @@ fn percentile_value(mut values: Vec<f64>, percentile: f64) -> f64 {
     let clamped = percentile.clamp(0.0, 1.0);
     let index = ((values.len() - 1) as f64 * clamped).round() as usize;
     values[index.min(values.len() - 1)]
+}
+
+/// Estimate p95 latency from histogram bucket counts.
+/// Uses linear interpolation within the bucket that contains the 95th percentile.
+const P95_BUCKET_BOUNDARIES_MS: [f64; 10] = [
+    1.0,
+    5.0,
+    10.0,
+    50.0,
+    100.0,
+    500.0,
+    1000.0,
+    5000.0,
+    10000.0,
+    f64::MAX,
+];
+
+fn estimate_p95_from_buckets(bucket_counts: &[u64; 10]) -> f64 {
+    let total: u64 = bucket_counts.iter().sum();
+    if total == 0 {
+        return 0.0;
+    }
+    let target = (total as f64 * 0.95).ceil();
+    let mut cumulative: u64 = 0;
+    for (i, &count) in bucket_counts.iter().enumerate() {
+        cumulative += count;
+        if cumulative as f64 >= target {
+            // Found the bucket containing p95
+            let bucket_lower = if i == 0 {
+                0.0
+            } else {
+                P95_BUCKET_BOUNDARIES_MS[i - 1]
+            };
+            let bucket_upper = P95_BUCKET_BOUNDARIES_MS[i.min(9)];
+            if bucket_upper == f64::MAX || bucket_upper - bucket_lower <= 0.0 || count == 0 {
+                // For the last bucket (overflow) or degenerate case, use midpoint of bucket
+                return if i == 9 {
+                    bucket_lower * 2.0
+                } else {
+                    bucket_lower
+                };
+            }
+            let prev_cumulative = cumulative.saturating_sub(count);
+            let fraction = (target - prev_cumulative as f64) / count as f64;
+            let estimated = bucket_lower + fraction * (bucket_upper - bucket_lower);
+            return (estimated * 100.0).round() / 100.0;
+        }
+    }
+    // All samples fall within buckets, use upper bound of last bucket as estimate
+    P95_BUCKET_BOUNDARIES_MS[8]
 }
 
 fn classify_error_group(event: &TraceEvent) -> String {
@@ -571,7 +623,7 @@ pub(super) fn metrics_errors_summary_payload(server: &AcpServer, params: &Value)
         },
         "series": {
             "qps": snapshot.total_requests as f64 / 60.0,
-            "p95": snapshot.avg_request_duration_ms,
+            "p95": estimate_p95_from_buckets(&snapshot.request_latency_bucket_counts),
             "error_rate": if snapshot.total_requests > 0 {
                 snapshot.failed_requests as f64 / snapshot.total_requests as f64
             } else {
@@ -1966,7 +2018,8 @@ pub(super) async fn handle_governance_status(
             .unwrap_or(0)
             > 0;
     let autonomy_perf = json!({
-        "p95_latency_ms": status.metrics.avg_request_duration_ms,
+        "p95_latency_ms": estimate_p95_from_buckets(&runtime_snapshot.request_latency_bucket_counts),
+        "avg_latency_ms": status.metrics.avg_request_duration_ms,
         "avg_rounds_per_request": autonomy_runtime_metrics
             .get("tool_followup_attempt_total")
             .and_then(Value::as_u64)
@@ -2045,7 +2098,7 @@ pub(super) async fn handle_governance_status(
     } else {
         1.0
     };
-    let sla_p95_ms = runtime_snapshot.avg_request_duration_ms;
+    let sla_p95_ms = estimate_p95_from_buckets(&runtime_snapshot.request_latency_bucket_counts);
     let sla_cost_per_task = if runtime_snapshot.total_requests > 0 {
         (runtime_snapshot.request_latency_sum_ms / runtime_snapshot.total_requests as f64).round()
     } else {

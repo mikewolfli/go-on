@@ -164,6 +164,8 @@ pub struct MetacognitiveProfile {
     pub total_reports: usize,
     /// Average confidence score across all reports (0.0 if no reports).
     pub avg_confidence: f64,
+    /// Action effectiveness ratio (completed / total actions with outcome).
+    pub action_effectiveness_ratio: f64,
 }
 
 // ── Internal state ──────────────────────────────────────────────────────────
@@ -586,6 +588,105 @@ impl MetacognitiveController {
         report_ids
     }
 
+    // ── BLUE43 Step 8: Actionable insights ──────────────────────────────
+
+    /// Convert high-severity unresolved observations into actionable insight
+    /// prompts that can be consumed by the autonomy loop to drive behavior.
+    ///
+    /// Returns a vector of (action_type, prompt, severity) tuples where
+    /// severity is "high" or "critical".
+    pub fn get_actionable_insights(&self, task_id: &str) -> Vec<(String, String, String)> {
+        let inner = lock_guard(&self.inner);
+
+        let mut insights = Vec::new();
+        for obs in &inner.observations {
+            if obs.task_id == task_id && !obs.is_resolved {
+                let severity_lower = obs.severity.to_ascii_lowercase();
+                if severity_lower == "high" || severity_lower == "critical" {
+                    let (action_type, prompt) = match obs.observation_type.to_lowercase().as_str() {
+                        "latency_spike" | "timeout" => (
+                            "adjust_timeout",
+                            format!(
+                                "Observation: {} - {}. Suggestion: Increase timeout or reduce complexity.",
+                                obs.severity, obs.description
+                            ),
+                        ),
+                        "low_confidence" | "uncertain" => (
+                            "request_clarification",
+                            format!(
+                                "Observation: {} - {}. Suggestion: Break down the task or request more context.",
+                                obs.severity, obs.description
+                            ),
+                        ),
+                        "error" | "execution_error" | "tool_failure" => (
+                            "fallback_strategy",
+                            format!(
+                                "Observation: {} - {}. Suggestion: Switch to fallback tool or alternative approach.",
+                                obs.severity, obs.description
+                            ),
+                        ),
+                        "reroute_needed" | "agent_switch" => (
+                            "reroute",
+                            format!(
+                                "Observation: {} - {}. Suggestion: Reroute to alternative agent.",
+                                obs.severity, obs.description
+                            ),
+                        ),
+                        _ => (
+                            "review",
+                            format!(
+                                "Observation: {} - {}. Suggestion: Review and adjust execution strategy.",
+                                obs.severity, obs.description
+                            ),
+                        ),
+                    };
+                    insights.push((action_type.to_string(), prompt, severity_lower));
+                }
+            }
+        }
+        insights
+    }
+
+    /// Record the outcome of an applied actionable insight for effectiveness tracking.
+    /// Returns the action id.
+    pub fn record_action_outcome(
+        &self,
+        action_type: &str,
+        observation_id: &str,
+        description: &str,
+        success: bool,
+    ) -> Result<String> {
+        let action_id = self.propose_action(observation_id, action_type, description)?;
+        self.execute_action(&action_id)?;
+        if success {
+            self.complete_action(&action_id)?;
+        } else {
+            self.fail_action(&action_id, "insight did not improve outcome")?;
+        }
+        Ok(action_id)
+    }
+
+    /// Get action effectiveness ratio: completed / (completed + failed).
+    pub fn action_effectiveness_ratio(&self) -> f64 {
+        let inner = lock_guard(&self.inner);
+        let completed = inner
+            .actions
+            .iter()
+            .filter(|a| a.status == CorrectiveStatus::Completed)
+            .count() as f64;
+        let failed = inner
+            .actions
+            .iter()
+            .filter(|a| a.status == CorrectiveStatus::Failed)
+            .count() as f64;
+        let total = completed + failed;
+        if total == 0.0 {
+            0.0
+        } else {
+            completed / total
+        }
+    }
+
     // ── Profile ─────────────────────────────────────────────────────────
 
     /// Return a snapshot of the controller's runtime metrics.
@@ -626,6 +727,7 @@ impl MetacognitiveController {
             successful_actions,
             total_reports,
             avg_confidence,
+            action_effectiveness_ratio: self.action_effectiveness_ratio(),
         }
     }
 

@@ -75,6 +75,7 @@ use crate::protocol::transport::MultiChannelTransport;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::env;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -108,6 +109,105 @@ pub struct WorkflowLearningEvent {
     pub token_cost: u64,
     pub quality_score: f64,
     pub timestamp_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CandidateScoreWeights {
+    reputation: f64,
+    recency: f64,
+    task_fit: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CandidateScoreBreakdown {
+    agent: String,
+    reputation_score: f64,
+    recency_score: f64,
+    task_fit_score: f64,
+    total_score: f64,
+}
+
+fn configured_candidate_score_weights() -> CandidateScoreWeights {
+    fn read_weight(key: &str, fallback: f64) -> f64 {
+        env::var(key)
+            .ok()
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .unwrap_or(fallback)
+    }
+
+    let weights = CandidateScoreWeights {
+        reputation: read_weight("GO_ON_CAPABILITY_WEIGHT_REPUTATION", 0.55),
+        recency: read_weight("GO_ON_CAPABILITY_WEIGHT_RECENCY", 0.20),
+        task_fit: read_weight("GO_ON_CAPABILITY_WEIGHT_TASK_FIT", 0.25),
+    };
+    let total = weights.reputation + weights.recency + weights.task_fit;
+    if total <= f64::EPSILON {
+        CandidateScoreWeights {
+            reputation: 0.55,
+            recency: 0.20,
+            task_fit: 0.25,
+        }
+    } else {
+        CandidateScoreWeights {
+            reputation: weights.reputation / total,
+            recency: weights.recency / total,
+            task_fit: weights.task_fit / total,
+        }
+    }
+}
+
+fn task_fit_score(task: &TaskContext, agent_name: &str) -> f64 {
+    let normalized = agent_name.to_ascii_lowercase();
+    let prefers = |needles: &[&str]| -> bool { needles.iter().any(|needle| normalized.contains(needle)) };
+
+    match task.task_type {
+        crate::governance::pua::TaskType::BugFix => {
+            if prefers(&["fix", "debug", "coder", "review"]) {
+                0.95
+            } else {
+                0.60
+            }
+        }
+        crate::governance::pua::TaskType::FeatureAdd => {
+            if prefers(&["feature", "builder", "planner", "coder"]) {
+                0.95
+            } else {
+                0.65
+            }
+        }
+        crate::governance::pua::TaskType::Refactor => {
+            if prefers(&["refactor", "planner", "review", "coder"]) {
+                0.95
+            } else {
+                0.70
+            }
+        }
+        crate::governance::pua::TaskType::SecurityPatch => {
+            if prefers(&["security", "audit", "review", "guard"]) {
+                1.0
+            } else {
+                0.50
+            }
+        }
+        crate::governance::pua::TaskType::Other => 0.60,
+    }
+}
+
+fn recency_score(recent_agents: &[String], agent_name: &str) -> f64 {
+    if recent_agents.is_empty() {
+        return 0.50;
+    }
+
+    recent_agents
+        .iter()
+        .rev()
+        .position(|recent| recent == agent_name)
+        .map(|index| {
+            let rank = index as f64 / recent_agents.len().max(1) as f64;
+            (1.0 - rank).clamp(0.0, 1.0)
+        })
+        .unwrap_or(0.40)
 }
 
 /// In-memory WorkflowLearningBus — replaces the file-only artifact.
@@ -881,7 +981,8 @@ impl CapabilityBus {
             agents
         };
 
-        let selected_agent = self.select_best_agent(&candidate_agents, sensing);
+        let (selected_agent, score_breakdown) =
+            self.select_best_agent(task, &candidate_agents, sensing);
         tracing::info!(
             candidates = ?candidate_agents,
             selected = ?selected_agent,
@@ -920,11 +1021,10 @@ impl CapabilityBus {
             &format!("{:?}", task.task_type),
         ));
 
-        let confidence = sensing
-            .reputation_snapshot
+        let confidence = score_breakdown
             .iter()
-            .find(|r| Some(r.agent.as_str()) == selected_agent.as_deref())
-            .map(|r| r.score)
+            .find(|entry| Some(entry.agent.as_str()) == selected_agent.as_deref())
+            .map(|entry| entry.total_score)
             .unwrap_or(0.5);
 
         // Phase 4: Get recommended execution mode from OrchestrationBus
@@ -956,6 +1056,12 @@ impl CapabilityBus {
                 "recommended_mode": recommended_mode,
                 "available_tools": available_tools.len(),
                 "candidate_agents": candidate_agents.len(),
+                "score_weights": {
+                    "reputation": configured_candidate_score_weights().reputation,
+                    "recency": configured_candidate_score_weights().recency,
+                    "task_fit": configured_candidate_score_weights().task_fit,
+                },
+                "candidate_scores": score_breakdown,
             }),
         );
 
@@ -987,31 +1093,46 @@ impl CapabilityBus {
         }
     }
 
-    fn select_best_agent(&self, candidates: &[String], sensing: &SensingOutput) -> Option<String> {
+    fn select_best_agent(
+        &self,
+        task: &TaskContext,
+        candidates: &[String],
+        sensing: &SensingOutput,
+    ) -> (Option<String>, Vec<CandidateScoreBreakdown>) {
         if candidates.is_empty() {
-            return None;
+            return (None, Vec::new());
         }
-        // Score each candidate by reputation (higher is better).
-        // Default score for unknown agents is 0.5 (neutral trust) rather than
-        // 1.0 (max trust) to avoid favoring untested agents over proven ones.
-        let mut scored: Vec<(&String, f64)> = candidates
+        let weights = configured_candidate_score_weights();
+        let mut scored: Vec<CandidateScoreBreakdown> = candidates
             .iter()
             .map(|name| {
-                let score = sensing
+                let reputation_score = sensing
                     .reputation_snapshot
                     .iter()
                     .find(|r| r.agent == *name)
                     .map(|r| r.score)
                     .unwrap_or(0.5);
-                (name, score)
+                let recency_score = recency_score(&sensing.recent_agents, name);
+                let task_fit_score = task_fit_score(task, name);
+                let total_score = (reputation_score * weights.reputation)
+                    + (recency_score * weights.recency)
+                    + (task_fit_score * weights.task_fit);
+                CandidateScoreBreakdown {
+                    agent: name.clone(),
+                    reputation_score,
+                    recency_score,
+                    task_fit_score,
+                    total_score,
+                }
             })
             .collect();
         scored.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
+            b.total_score
+                .partial_cmp(&a.total_score)
                 .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.0.cmp(b.0))
+                .then_with(|| a.agent.cmp(&b.agent))
         });
-        scored.first().map(|(name, _)| (*name).clone())
+        (scored.first().map(|entry| entry.agent.clone()), scored)
     }
 
     // ------------------------------------------------------------------
@@ -1714,6 +1835,7 @@ impl Drop for FlowGuard<'_> {
 mod tests {
     use super::CapabilityBus;
     use crate::governance::harness_bus::default_harness_bus;
+    use crate::governance::pua::{TaskContext, TaskType};
     use crate::orchestration::tool::ToolInput;
     use std::sync::Arc;
 
@@ -1769,5 +1891,40 @@ mod tests {
                 .and_then(|v| v.as_bool()),
             Some(true)
         );
+    }
+
+    #[test]
+    fn configured_candidate_score_weights_are_normalized() {
+        let weights = super::configured_candidate_score_weights();
+        let total = weights.reputation + weights.recency + weights.task_fit;
+        assert!((total - 1.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn task_fit_score_prefers_security_agents_for_security_patch() {
+        let security_task = TaskContext {
+            task_type: TaskType::SecurityPatch,
+            file_count: 4,
+            risk_score: 0.9,
+        };
+
+        let reviewer = super::task_fit_score(&security_task, "security-reviewer");
+        let general = super::task_fit_score(&security_task, "general-coder");
+
+        assert!(reviewer > general);
+    }
+
+    #[test]
+    fn recency_score_prefers_more_recent_agents() {
+        let recent_agents = vec![
+            "planner".to_string(),
+            "reviewer".to_string(),
+            "coder".to_string(),
+        ];
+
+        let recent = super::recency_score(&recent_agents, "coder");
+        let stale = super::recency_score(&recent_agents, "planner");
+
+        assert!(recent > stale);
     }
 }

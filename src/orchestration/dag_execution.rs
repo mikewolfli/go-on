@@ -131,7 +131,8 @@ mod tests {
             task_id: "dag-test".to_string(),
             phase: "exec".to_string(),
             role: "tester".to_string(),
-            objective: "Test dag execution adapter".to_string(),
+            objective: "Analyze the bug in the authentication system and implement the fix"
+                .to_string(),
             constraints: None,
             evidence: None,
             input: serde_json::json!({}),

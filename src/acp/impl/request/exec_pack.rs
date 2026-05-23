@@ -801,6 +801,20 @@ fn build_runtime_repair_target_set(
         .collect()
 }
 
+fn build_runtime_execute_autonomy_contract(
+    total_rounds: usize,
+    total_tools: usize,
+    stop_reason: &str,
+) -> Value {
+    json!({
+        "total_rounds": total_rounds,
+        "total_tools": total_tools,
+        "stop_reason": stop_reason,
+        "corrective_actions_applied_total": 0,
+        "corrective_action_effectiveness_ratio": 0.0,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_runtime_execution_cycle(
     stage: &str,
@@ -1595,12 +1609,20 @@ pub(crate) async fn handle_workflow_execute(
     } else {
         "succeeded"
     };
+    let stop_reason = if run_status == "succeeded" {
+        "complete"
+    } else {
+        "failed"
+    };
+    let autonomy_contract = build_runtime_execute_autonomy_contract(
+        1 + repair_context.cycle_reports.len(),
+        execution_report.subtasks_completed
+            + execution_report.subtasks_failed
+            + execution_report.subtasks_skipped,
+        stop_reason,
+    );
     crate::acp::helpers::autonomy_metrics::record_autonomy_loop_stop_reason(
-        if run_status == "succeeded" {
-            "complete"
-        } else {
-            "failed"
-        },
+        stop_reason,
     );
     // BLUE42 Step 6: Record agent outcome for learning feedback
     crate::acp::helpers::agent_router::record_task_agent_outcome(
@@ -1654,6 +1676,9 @@ pub(crate) async fn handle_workflow_execute(
         "learning_artifact_path": learning_artifact_path.display().to_string(),
         "execution_mode": "runtime_execute",
         "run_mode": normalize_control_mode(&execution_context.adaptive_defaults.applied_mode),
+        "autonomy_contract": autonomy_contract,
+        "total_rounds": 1 + repair_context.cycle_reports.len(),
+        "stop_reason": stop_reason,
         "adaptive": {
             "planning": adaptive_planning,
             "execution_defaults": execution_context.adaptive_defaults,
@@ -2170,6 +2195,17 @@ pub(super) async fn handle_task_execute(
     let knowledge_refinement =
         build_knowledge_refinement_profile("task.execute", task, &params, &learning_profile);
     let multi_agent = build_multi_agent_sessions(task, "task.execute", &execution_report);
+    let stop_reason = if summary.subtasks_failed > 0 {
+        "failed"
+    } else {
+        "complete"
+    };
+    let total_rounds = 1 + repair_context.cycle_reports.len();
+    let autonomy_contract = build_runtime_execute_autonomy_contract(
+        total_rounds,
+        summary.subtasks_completed + summary.subtasks_failed + summary.subtasks_skipped,
+        stop_reason,
+    );
 
     // BLUE42 Step 6: Record agent outcome for learning feedback
     crate::acp::helpers::agent_router::record_task_agent_outcome(
@@ -2190,6 +2226,9 @@ pub(super) async fn handle_task_execute(
         "knowledge_refinement": knowledge_refinement,
         "execution_mode": "runtime_execute",
         "run_mode": normalize_control_mode(&execution_context.adaptive_defaults.applied_mode),
+        "autonomy_contract": autonomy_contract,
+        "total_rounds": total_rounds,
+        "stop_reason": stop_reason,
         "plan": plan,
         "workflow": workflow,
         "summary": summary,
@@ -2301,11 +2340,7 @@ pub(super) async fn handle_task_execute(
     );
 
     crate::acp::helpers::autonomy_metrics::record_autonomy_loop_stop_reason(
-        if summary.subtasks_failed > 0 {
-            "failed"
-        } else {
-            "complete"
-        },
+        stop_reason,
     );
 
     {

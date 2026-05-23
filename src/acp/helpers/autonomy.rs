@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 use tokio::time::Duration;
 
 use crate::acp::helpers::context::run_with_optional_timeout;
+use crate::acp::helpers::autonomy_loop::{contract_snapshot, AutonomyLoopReport, AutonomyPhase};
 use crate::agent::{Agent, Message};
 use crate::orchestration::planner_executor::Planner;
 
@@ -162,6 +163,41 @@ pub(crate) fn is_execution_like_request(mode: &str, messages: &[Message]) -> boo
     })
 }
 
+pub(crate) fn terminal_chat_contract_snapshot(
+    tool_call_count: usize,
+    followup_round_executed: bool,
+    final_response: &str,
+) -> Value {
+    let response_empty = final_response.trim().is_empty();
+    let stop_reason = if tool_call_count == 0 {
+        "completed_without_tool_calls"
+    } else if response_empty {
+        "incomplete"
+    } else {
+        "tools_exhausted_task_complete"
+    };
+
+    let total_rounds = 1 + usize::from(tool_call_count > 0 && followup_round_executed);
+    let final_phase = if response_empty {
+        AutonomyPhase::Failed
+    } else {
+        AutonomyPhase::Completed
+    };
+
+    contract_snapshot(&AutonomyLoopReport {
+        total_rounds,
+        total_tools: tool_call_count,
+        final_phase,
+        rounds: Vec::new(),
+        planner_guidance_used: false,
+        trace_alignment_coverage: 0.0,
+        total_duration_ms: 0,
+        corrective_actions_applied_total: 0,
+        corrective_action_effectiveness_ratio: 0.0,
+        stop_reason: stop_reason.to_string(),
+    })
+}
+
 pub(crate) async fn run_followup_after_tool_observation(
     agent: Arc<dyn Agent>,
     messages: Vec<Message>,
@@ -214,4 +250,64 @@ pub(crate) async fn run_followup_after_tool_observation(
         )
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::terminal_chat_contract_snapshot;
+    use crate::acp::helpers::autonomy_loop::{contract_snapshot, AutonomyLoopReport, AutonomyPhase};
+
+    #[test]
+    fn terminal_chat_contract_snapshot_tracks_single_round_completion() {
+        let contract = terminal_chat_contract_snapshot(0, false, "final answer");
+
+        assert_eq!(contract["total_rounds"].as_u64(), Some(1));
+        assert_eq!(contract["total_tools"].as_u64(), Some(0));
+        assert_eq!(
+            contract["stop_reason"].as_str(),
+            Some("completed_without_tool_calls")
+        );
+    }
+
+    #[test]
+    fn terminal_chat_contract_snapshot_tracks_followup_round_boundaries() {
+        let contract = terminal_chat_contract_snapshot(2, true, "patched result");
+
+        assert_eq!(contract["total_rounds"].as_u64(), Some(2));
+        assert_eq!(contract["total_tools"].as_u64(), Some(2));
+        assert_eq!(
+            contract["stop_reason"].as_str(),
+            Some("tools_exhausted_task_complete")
+        );
+    }
+
+    #[test]
+    fn terminal_chat_contract_snapshot_marks_empty_followup_incomplete() {
+        let contract = terminal_chat_contract_snapshot(1, true, "   ");
+
+        assert_eq!(contract["total_rounds"].as_u64(), Some(2));
+        assert_eq!(
+            contract["stop_reason"].as_str(),
+            Some("incomplete")
+        );
+    }
+
+    #[test]
+    fn terminal_chat_contract_snapshot_matches_autonomy_loop_contract() {
+        let cli_contract = terminal_chat_contract_snapshot(2, true, "patched result");
+        let acp_contract = contract_snapshot(&AutonomyLoopReport {
+            total_rounds: 2,
+            total_tools: 2,
+            final_phase: AutonomyPhase::Completed,
+            rounds: Vec::new(),
+            planner_guidance_used: false,
+            trace_alignment_coverage: 0.0,
+            total_duration_ms: 0,
+            corrective_actions_applied_total: 0,
+            corrective_action_effectiveness_ratio: 0.0,
+            stop_reason: "tools_exhausted_task_complete".to_string(),
+        });
+
+        assert_eq!(cli_contract, acp_contract);
+    }
 }

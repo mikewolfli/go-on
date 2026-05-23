@@ -1985,6 +1985,27 @@ mod advanced {
                 .is_some(),
             "task.execute adaptive defaults should include hardness"
         );
+        let contract = execution["result"]["autonomy_contract"]
+            .as_object()
+            .expect("task.execute should include autonomy_contract");
+        let total_rounds = execution["result"]["total_rounds"]
+            .as_u64()
+            .expect("task.execute should include total_rounds");
+        let stop_reason = execution["result"]["stop_reason"]
+            .as_str()
+            .expect("task.execute should include stop_reason");
+        assert_eq!(
+            contract
+                .get("total_rounds")
+                .and_then(serde_json::Value::as_u64),
+            Some(total_rounds)
+        );
+        assert_eq!(
+            contract
+                .get("stop_reason")
+                .and_then(serde_json::Value::as_str),
+            Some(stop_reason)
+        );
     }
 
     #[test]
@@ -4390,6 +4411,27 @@ mod advanced {
         assert!(exe["result"]["artifacts"].is_object());
         assert_blue22_change_bundle_shape(&exe["result"]);
         assert!(exe["result"]["trace_ref"].is_object());
+        let contract = exe["result"]["autonomy_contract"]
+            .as_object()
+            .expect("workflow.execute should include autonomy_contract");
+        let total_rounds = exe["result"]["total_rounds"]
+            .as_u64()
+            .expect("workflow.execute should include total_rounds");
+        let stop_reason = exe["result"]["stop_reason"]
+            .as_str()
+            .expect("workflow.execute should include stop_reason");
+        assert_eq!(
+            contract
+                .get("total_rounds")
+                .and_then(serde_json::Value::as_u64),
+            Some(total_rounds)
+        );
+        assert_eq!(
+            contract
+                .get("stop_reason")
+                .and_then(serde_json::Value::as_str),
+            Some(stop_reason)
+        );
     }
 
     // ── B16-R7: workflow sub-commands (clarify + research) ────────────────────

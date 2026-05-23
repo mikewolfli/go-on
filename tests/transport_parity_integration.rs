@@ -659,6 +659,89 @@ async fn mcp_http_health_response_has_platform_context() {
     );
 }
 
+/// MCP HTTP must support initialize -> tools/list -> tools/call on the JSON-RPC root path.
+#[tokio::test(flavor = "current_thread")]
+async fn mcp_http_initialize_list_and_call_succeeds() {
+    let _guard = lock_suite_guard();
+    let tmp = tempdir().expect("tempdir");
+    let cfg = tmp.path().join("config.toml");
+    write_local_echo_config(&cfg);
+    let sample = tmp.path().join("mcp-http-sample.txt");
+    fs::write(&sample, "hello from mcp http").expect("sample file should exist");
+
+    let harness = HttpHarness::spawn_with_mode(&cfg, ephemeral_bind_addr(), "mcp_http");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .expect("build client");
+    wait_healthy(&client, &harness.base_url, Duration::from_secs(15)).await;
+
+    let init: Value = client
+        .post(format!("{}/", harness.base_url))
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "clientInfo": { "name": "test" }
+            }
+        }))
+        .send()
+        .await
+        .expect("mcp initialize request failed")
+        .json()
+        .await
+        .expect("invalid mcp initialize json");
+    assert_eq!(init["result"]["protocolVersion"], "2024-11-05");
+    assert_eq!(init["result"]["serverInfo"]["name"], "go-on");
+
+    let tools: Value = client
+        .post(format!("{}/", harness.base_url))
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+            "params": {}
+        }))
+        .send()
+        .await
+        .expect("mcp tools/list request failed")
+        .json()
+        .await
+        .expect("invalid mcp tools/list json");
+    let tools_arr = tools["result"]["tools"]
+        .as_array()
+        .expect("mcp tools/list should return tools array");
+    assert!(
+        tools_arr.iter().any(|tool| tool["name"] == "read_file"),
+        "mcp_http tools/list should expose read_file; got: {tools}"
+    );
+
+    let called: Value = client
+        .post(format!("{}/", harness.base_url))
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "read_file",
+                "arguments": { "path": sample.to_string_lossy().to_string() }
+            }
+        }))
+        .send()
+        .await
+        .expect("mcp tools/call request failed")
+        .json()
+        .await
+        .expect("invalid mcp tools/call json");
+    assert_eq!(called["result"]["structuredContent"]["success"], true);
+    assert_eq!(
+        called["result"]["structuredContent"]["result"]["content"],
+        "hello from mcp http"
+    );
+}
+
 /// MCP HTTP 405 responses must keep platform_context on method-not-allowed baseline path.
 #[tokio::test(flavor = "current_thread")]
 async fn mcp_http_method_not_allowed_has_platform_context() {

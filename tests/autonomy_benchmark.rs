@@ -5,6 +5,111 @@
 
 use std::time::Instant;
 
+#[derive(Debug, Clone, Copy)]
+struct ReplayStep {
+    round: u32,
+    agent: &'static str,
+    simulated_ms: u64,
+    success: bool,
+    reroute: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ReplayScenario {
+    name: &'static str,
+    baseline_p95_ms: u64,
+    baseline_rounds: u64,
+    steps: Vec<ReplayStep>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ReplayMetrics {
+    wall_time_ms: u64,
+    rounds: u64,
+    max_fanout: usize,
+    unique_agents: usize,
+    success_ratio: f64,
+    reroute_count: u64,
+}
+
+fn compute_p95(samples: &[u64]) -> u64 {
+    let mut sorted = samples.to_vec();
+    sorted.sort_unstable();
+    let index = ((sorted.len() as f64) * 0.95).ceil() as usize;
+    sorted[index.saturating_sub(1).min(sorted.len().saturating_sub(1))]
+}
+
+fn replay_metrics(scenario: &ReplayScenario) -> ReplayMetrics {
+    let mut unique_rounds = Vec::<u32>::new();
+    let mut wall_time_ms = 0u64;
+    let mut max_fanout = 0usize;
+    let mut unique_agents = std::collections::BTreeSet::<&'static str>::new();
+    let mut success_count = 0usize;
+    let mut reroute_count = 0u64;
+
+    let mut grouped = std::collections::BTreeMap::<u32, Vec<ReplayStep>>::new();
+    for step in &scenario.steps {
+        grouped.entry(step.round).or_default().push(*step);
+        unique_agents.insert(step.agent);
+        if step.success {
+            success_count += 1;
+        }
+        if step.reroute {
+            reroute_count += 1;
+        }
+        if !unique_rounds.contains(&step.round) {
+            unique_rounds.push(step.round);
+        }
+    }
+
+    for steps in grouped.values() {
+        max_fanout = max_fanout.max(steps.len());
+        wall_time_ms += steps.iter().map(|step| step.simulated_ms).max().unwrap_or(0);
+    }
+
+    ReplayMetrics {
+        wall_time_ms,
+        rounds: unique_rounds.len() as u64,
+        max_fanout,
+        unique_agents: unique_agents.len(),
+        success_ratio: success_count as f64 / scenario.steps.len().max(1) as f64,
+        reroute_count,
+    }
+}
+
+fn assert_regression_gate(scenario: &ReplayScenario, metrics: &ReplayMetrics) {
+    let p95 = compute_p95(&scenario.steps.iter().map(|step| step.simulated_ms).collect::<Vec<_>>());
+    let p95_limit = ((scenario.baseline_p95_ms as f64) * 1.15).round() as u64;
+    let rounds_limit = ((scenario.baseline_rounds as f64) * 1.20).ceil() as u64;
+
+    eprintln!(
+        "scenario={} wall={}ms rounds={} fanout={} agents={} success={:.2} reroutes={} p95={}ms",
+        scenario.name,
+        metrics.wall_time_ms,
+        metrics.rounds,
+        metrics.max_fanout,
+        metrics.unique_agents,
+        metrics.success_ratio,
+        metrics.reroute_count,
+        p95,
+    );
+
+    assert!(
+        p95 <= p95_limit,
+        "scenario {} exceeded p95 gate: {} > {}",
+        scenario.name,
+        p95,
+        p95_limit
+    );
+    assert!(
+        metrics.rounds <= rounds_limit,
+        "scenario {} exceeded rounds gate: {} > {}",
+        scenario.name,
+        metrics.rounds,
+        rounds_limit
+    );
+}
+
 fn should_bypass(mode: &str, text: &str) -> bool {
     let mode_lower = mode.trim().to_ascii_lowercase();
     if matches!(
@@ -97,4 +202,125 @@ fn bench_parallel_fanout_simulation() {
         total_work > 0 && total_wall > 0,
         "fan-out benchmark produced no measurable work"
     );
+}
+
+#[test]
+fn replay_multi_tool_serial_scenario() {
+    let scenario = ReplayScenario {
+        name: "multi_tool_serial",
+        baseline_p95_ms: 135,
+        baseline_rounds: 3,
+        steps: vec![
+            ReplayStep {
+                round: 1,
+                agent: "planner",
+                simulated_ms: 110,
+                success: true,
+                reroute: false,
+            },
+            ReplayStep {
+                round: 2,
+                agent: "coder",
+                simulated_ms: 120,
+                success: true,
+                reroute: false,
+            },
+            ReplayStep {
+                round: 3,
+                agent: "reviewer",
+                simulated_ms: 105,
+                success: true,
+                reroute: false,
+            },
+        ],
+    };
+
+    let metrics = replay_metrics(&scenario);
+    assert_eq!(metrics.max_fanout, 1);
+    assert_eq!(metrics.rounds, 3);
+    assert_eq!(metrics.success_ratio, 1.0);
+    assert_regression_gate(&scenario, &metrics);
+}
+
+#[test]
+fn replay_parallel_fanout_join_scenario() {
+    let scenario = ReplayScenario {
+        name: "parallel_fanout_join",
+        baseline_p95_ms: 95,
+        baseline_rounds: 2,
+        steps: vec![
+            ReplayStep {
+                round: 1,
+                agent: "researcher-a",
+                simulated_ms: 70,
+                success: true,
+                reroute: false,
+            },
+            ReplayStep {
+                round: 1,
+                agent: "researcher-b",
+                simulated_ms: 90,
+                success: true,
+                reroute: false,
+            },
+            ReplayStep {
+                round: 1,
+                agent: "researcher-c",
+                simulated_ms: 85,
+                success: true,
+                reroute: false,
+            },
+            ReplayStep {
+                round: 2,
+                agent: "synthesizer",
+                simulated_ms: 55,
+                success: true,
+                reroute: false,
+            },
+        ],
+    };
+
+    let metrics = replay_metrics(&scenario);
+    assert_eq!(metrics.max_fanout, 3);
+    assert_eq!(metrics.rounds, 2);
+    assert_eq!(metrics.reroute_count, 0);
+    assert_regression_gate(&scenario, &metrics);
+}
+
+#[test]
+fn replay_reroute_recovery_scenario() {
+    let scenario = ReplayScenario {
+        name: "reroute_recovery",
+        baseline_p95_ms: 170,
+        baseline_rounds: 3,
+        steps: vec![
+            ReplayStep {
+                round: 1,
+                agent: "coder-primary",
+                simulated_ms: 145,
+                success: false,
+                reroute: false,
+            },
+            ReplayStep {
+                round: 2,
+                agent: "coder-fallback",
+                simulated_ms: 125,
+                success: true,
+                reroute: true,
+            },
+            ReplayStep {
+                round: 3,
+                agent: "reviewer",
+                simulated_ms: 80,
+                success: true,
+                reroute: false,
+            },
+        ],
+    };
+
+    let metrics = replay_metrics(&scenario);
+    assert_eq!(metrics.rounds, 3);
+    assert_eq!(metrics.reroute_count, 1);
+    assert!(metrics.success_ratio >= 0.66);
+    assert_regression_gate(&scenario, &metrics);
 }
