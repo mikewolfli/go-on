@@ -296,6 +296,194 @@ BLUE42 的全部约束继续作为 BLUE43 的硬门槛：
 验收：
 1. 同一场景在 ACP/CLI 下的 stop_reason 与 round 数保持同量级边界一致。
 
+### Step 10（P0）：Agents full-auto 全流程闭环
+
+目标：
+1. 让 go-on 的 agents 在接收到任务要求后，可自动完成技能查找、技能启用、执行环境准备、工具调用、任务执行与结果输出，成为加载 agents 后仍可独立工作的全能助手。
+
+实施：
+1. 建立 skill-aware 任务分解与能力匹配流程，自动从用户要求中识别所需 skills、tools 与执行前置条件。
+2. 为 agents 补齐自动执行环境引导能力，包括项目/依赖/运行时/部署前检查与安全降级路径。
+3. 将工具查找、skills 查找、部署、执行、回传结果统一进 full-auto 流程，并保留可审计的中间证据。
+4. 为失败场景补充自动恢复与最小人工介入边界，确保默认路径仍可一键完成。
+
+验收：
+1. 给定一条完整任务要求，agents 可自动完成“查找 skills -> 准备环境 -> 调用工具 -> 执行任务 -> 输出结果”的全链路。
+2. full-auto 模式下，任务完成结果可复现、可追踪、可回放。
+3. 加载 agents 后，系统仍保持“全能助手”行为，不因是否显式进入某个子模式而失去自动完成能力。
+
+### Step 11（P0）：热路径速度治理与快路径缓存
+
+目标：
+1. 在不牺牲正确性与安全性的前提下，把 full-auto 主路径做成默认快路径，避免因条件过多拖慢整体执行。
+
+实施：
+1. 将鉴权、意图解析、skills 匹配、环境探测拆成入口层 / 规划层 / 执行层，避免热路径重复判断。
+2. 为高频任务、常用 skills、稳定环境探测结果建立缓存与预热机制。
+3. 将慢检查改成懒加载或异常路径触发，主路径只保留必要校验。
+
+验收：
+1. 常见任务在 full-auto 模式下不会因额外条件显著拖慢 p95。
+2. 同类请求重复执行时，快路径命中率可观测且稳定。
+
+### Step 12（P0）：任务意图解析与能力快路由
+
+目标：
+1. 让 agents 能从自然语言中快速识别任务目标、约束、风险和所需能力，并一次性完成能力装配。
+
+实施：
+1. 将任务拆成目标、约束、前置条件、交付物四类结构化意图。
+2. 自动映射到 skills、tools、runtime、approval 四类能力需求。
+3. 为常见任务类型建立快路由模板，减少重复规划成本。
+
+验收：
+1. 同一需求在不同表述下仍进入一致的能力路由。
+2. 常见任务可通过快路由直接进入执行准备阶段。
+
+### Step 13（P1）：执行环境自动引导与预热
+
+目标：
+1. 让 agents 自动完成执行前环境准备，并把环境探测从阻塞式检查变成可复用的预热能力。
+
+实施：
+1. 建立环境探测与补齐流程，识别缺失依赖、缺失 secret、缺失 runtime。
+2. 为本地、远端、容器化场景提供统一引导语义和环境状态缓存。
+3. 保留不破坏现有架构的降级路径，避免强行改写运行态。
+
+验收：
+1. 环境缺失时可自动引导修复或明确降级。
+2. 已探测环境在后续任务中可直接复用，不重复付出完整检查成本。
+
+### Step 14（P1）：skills 发现、缓存与匹配闭环
+
+目标：
+1. 让 agents 自动查找、筛选、启用最合适的 skills，同时把 skill 检索开销控制在可接受范围。
+
+实施：
+1. 为 skills 建立语义索引、来源可信度、适用范围标签与命中缓存。
+2. 实现任务到 skills 的自动匹配、排序与复用。
+3. 为 skill 启用增加安全门禁与降级路径。
+
+验收：
+1. 给定任务要求，系统能自动列出候选 skills 并选择最合适项。
+2. skill 复用命中后不会重复做高成本发现流程。
+
+### Step 15（P1）：工具调用事务化与幂等化
+
+目标：
+1. 提升工具调用一次通过率，降低重复调用、部分成功和副作用污染带来的速度与稳定性损耗。
+
+实施：
+1. 为工具调用增加幂等标识、事务边界和回滚/补偿语义。
+2. 统一工具调用结果结构，显式记录成功、失败、部分成功。
+3. 对高风险工具引入确认阈值和有限重试策略。
+
+验收：
+1. 重复触发同一工具调用不会产生不可控副作用。
+2. 工具失败后仍能输出可读、可追踪且可恢复的失败原因。
+
+### Step 16（P1）：自动恢复与最小人工介入闭环
+
+目标：
+1. 让 agents 在失败、超时、工具异常时自动恢复到最小可用状态，提升执行顺畅度与一次通过率。
+
+实施：
+1. 为任务失败建立恢复策略树、降级路径和二次规划入口。
+2. 把人工介入限定在真正不可自动恢复的边界。
+3. 保留恢复尝试的证据链，避免黑箱重试。
+
+验收：
+1. 常见失败模式下可自动恢复或明确降级。
+2. 人工介入是例外，不是默认流程。
+
+### Step 17（P0）：多用户 tenant 注册与隔离闭环
+
+目标：
+1. 在不破坏现有单租户主路径的前提下，把 tenant 注册来源真正接进 RBAC、budget、session 与协议入口，补齐安全短板。
+
+实施：
+1. 为 runtime 建立 tenant 注册源与生命周期管理。
+2. 将 tenant 信息同步到 session、RBAC、budget 与协议入口。
+3. 为缺失 tenant、未知 tenant、跨 tenant 访问建立明确拒绝路径。
+
+验收：
+1. 不同 tenant 的请求无法跨越隔离边界。
+2. tenant 配置缺失时有明确、可审计的错误信息。
+
+### Step 18（P1）：MCP 流式、取消与超时闭环
+
+目标：
+1. 补齐 MCP-3 / MCP-4 的核心短板，使 stdio 与 http 在流式、取消、超时语义上保持一致。
+
+实施：
+1. 为 MCP 补齐流式/分块回传的统一语义。
+2. 引入可观测的取消与超时状态。
+3. 将不同传输模式的行为差异压到同一规范层。
+
+验收：
+1. 流式任务在 stdio / http 下行为一致。
+2. 取消与超时都能被测试、度量并纳入回归门禁。
+
+### Step 19（P1）：ACP / CLI / MCP 同场景对拍闭环
+
+目标：
+1. 让不同入口在相同任务上的 stop_reason、round 数、工具证据边界与异常语义保持一致。
+
+实施：
+1. 建立同场景对拍测试集，覆盖 ACP、CLI、MCP 三入口。
+2. 对比合同、结果与异常边界，而不是只比成功路径。
+3. 将差异回写到治理面，作为入口一致性回归门禁。
+
+验收：
+1. 同任务在三入口下的输出边界一致。
+2. 差异出现时可直接定位到入口级行为。
+
+### Step 20（P1）：审计、回放与证据闭环
+
+目标：
+1. 让 full-auto 结果不仅能跑完，还能被完整复盘，从而支撑安全、治理与竞品级对标。
+
+实施：
+1. 为 skills、tools、部署、执行、恢复全链路记录审计证据。
+2. 将结果、输入、环境、切换原因统一入可回放日志。
+3. 保持证据层与执行层解耦，避免侵入现有架构。
+
+验收：
+1. 任一任务都能回放出关键决策和执行证据。
+2. 审计数据足以支撑回归定位与安全追责。
+
+### Step 21（P0）：外部对标与持续回归门禁
+
+目标：
+1. 以“除生态外全面领先”为目标，对速度、执行顺畅、安全、自动化闭环、可验证性做持续外部对标；是否达成以 benchmark 结果为准，而非主观宣称。
+
+实施：
+1. 固化与 Claude Code、Codex、OpenClaw / harness 类工具同任务、同预算、同工具集的 benchmark。
+2. 固化对标维度：一次通过率、回合数、尾延迟、工具调用正确率、恢复成功率、审计完整度。
+3. 将外部对标结果纳入持续回归门禁和能力雷达，不影响现有主架构。
+
+验收：
+1. 每次核心变更都能自动跑横向对标。
+2. “除生态外全面领先”必须由持续 benchmark 结果支持，退化可直接阻断进入主分支。
+
+### 5.1 Step 11-21 量化门槛（新增）
+
+说明：以下门槛用于把 Step 11-21 从“方向正确”收敛为“可判定达成”。
+
+| Step | 核心量化门槛 | 达成判定 |
+|:--:|:--|:--|
+| 11 | full-auto 热路径 p95 相比当前基线不劣化（<= +5%），快路径命中率 >= 70% | 连续 3 轮回归满足 |
+| 12 | 意图解析结构化成功率 >= 95%，快路由命中任务的一次装配成功率 >= 90% | 连续 3 轮回归满足 |
+| 13 | 环境预热复用命中率 >= 60%，环境准备失败率 <= 5% | 连续 3 轮回归满足 |
+| 14 | skills 自动匹配 Top-1 命中率 >= 85%，skill 检索阶段耗时 p95 <= 300ms | 连续 3 轮回归满足 |
+| 15 | 工具调用幂等冲突率 <= 1%，工具调用成功率 >= 95% | 连续 3 轮回归满足 |
+| 16 | 自动恢复成功率 >= 80%，人工介入占比 <= 10% | 连续 3 轮回归满足 |
+| 17 | cross-tenant 访问误放行率 = 0，tenant 缺失/未知错误码映射一致率 = 100% | 连续 3 轮回归满足 |
+| 18 | MCP stdio/http 在流式、取消、超时语义一致率 = 100% | 连续 3 轮回归满足 |
+| 19 | ACP/CLI/MCP 同场景 stop_reason 与 round 边界一致率 >= 98% | 连续 3 轮回归满足 |
+| 20 | 任务审计链完整率 = 100%，回放成功率 >= 95% | 连续 3 轮回归满足 |
+| 21 | 外部横向 benchmark 中，除生态外核心指标领先率 >= 70%，且关键指标不低于任一对标项 | 连续 3 轮回归满足 |
+
 ---
 
 ## 6. 实施顺序与里程碑
@@ -323,9 +511,51 @@ BLUE42 的全部约束继续作为 BLUE43 的硬门槛：
 1. Step 6
 2. Step 8
 3. Step 9
+4. Step 10
 
 预期收益：
-1. 自适应行为增强，跨路径一致性提升。
+1. 自适应行为增强，跨路径一致性提升，agents 的自动化执行闭环进一步增强。
+
+### Milestone D（短板补齐与外部对标）
+
+1. Step 11
+2. Step 12
+3. Step 13
+4. Step 14
+5. Step 15
+6. Step 16
+7. Step 17
+8. Step 18
+9. Step 19
+10. Step 20
+11. Step 21
+
+预期收益：
+1. 在不破坏现有架构的前提下，先补速度与执行顺畅，再补安全与协议一致性，最后用持续对标证明除生态外的全面领先。
+
+### 6.1 Step 11-21 依赖矩阵（新增）
+
+1. Step 11 -> Step 12, Step 13, Step 14
+2. Step 12 -> Step 14, Step 15, Step 16
+3. Step 13 -> Step 15, Step 16
+4. Step 14 -> Step 15, Step 16
+5. Step 15 -> Step 16, Step 19, Step 20
+6. Step 17 -> Step 18, Step 19, Step 20
+7. Step 18 -> Step 19, Step 21
+8. Step 19 -> Step 20, Step 21
+9. Step 20 -> Step 21
+
+执行约束：
+1. 允许并行推进的组合：{12,13}、{14,17}、{18,20}。
+2. 禁止并行推进的组合：{11 与 21}、{15 与 21}（避免基线尚未稳定即做最终对标结论）。
+
+### 6.2 失败退出与回退准则（新增）
+
+1. 任一 Step 连续 2 轮回归未满足其量化门槛：冻结该 Step 的新增功能，进入修复模式。
+2. 任一 Step 导致核心性能门禁退化（p95 > +15% 或轮次膨胀 > 20%）：立即回退至上一个稳定版本。
+3. 任一 Step 出现安全红线事件（cross-tenant 误放行、权限越权、审计链断裂）：立即停止该 Step 推进并触发安全审查。
+4. Step 21 若连续 2 轮 benchmark 未满足“除生态外核心指标领先率 >= 70%”：不得宣称全面领先，仅可标注为“持续追平阶段”。
+5. 回退后必须在同一轮回写：触发原因、影响范围、回退版本、修复负责人、预计恢复窗口。
 
 ---
 
@@ -382,7 +612,19 @@ MCP 门禁指标：
 | 6 | CapabilityBus 多因子选择 | 85% | `select_best_agent` 已升级为 reputation + recency + task-fit 加权评分，支持环境权重配置并输出 `candidate_scores` 分解；现有 CapabilityBus 测试通过，新增 helper 单测已补充 |
 | 7 | 现实型 E2E 基准套件 | 90% | `tests/autonomy_benchmark.rs` 已补充 serial / fan-out+join / reroute recovery 回放场景与 p95/轮次回归门禁；`cargo test --test autonomy_benchmark -- --nocapture` 通过 |
 | 8 | 元认知动作链路加固 | 85% | `post_check` 已产出可消费纠偏动作并在自治循环中应用，新增动作计数与可观测字段；`cargo test corrective_actions_cover_timeout_and_empty_response -- --nocapture` 通过 |
-| 9 | ACP/CLI 行为一致性 | 78% | ACP chat + runtime execute（`task.execute`/`workflow.execute`）均已输出统一 `autonomy_contract`（`total_rounds`/`stop_reason` 同步）；CLI terminal chat 已接入共享合同快照并补充 round/stop 语义单测；`cargo test process_chat_request_execute_mode_exposes_stable_autonomy_contract -- --nocapture`、`cargo test run_scenario_file_executes_hardness_routing_benchmark_requests -- --nocapture`、`cargo test run_scenario_file_executes_workflow_execute_standalone_benchmark_requests -- --nocapture`、`cargo test --bin go-on terminal_chat_contract_snapshot_ -- --nocapture` 通过；仍缺 ACP/CLI 同场景对拍校验 |
+| 9 | ACP/CLI 行为一致性 | 82% | ACP chat + runtime execute（`task.execute`/`workflow.execute`）均已输出统一 `autonomy_contract`（`total_rounds`/`stop_reason` 同步）；CLI terminal chat 已接入共享合同快照并补充 round/stop 语义单测；`cargo test process_chat_request_execute_mode_exposes_stable_autonomy_contract -- --nocapture`、`cargo test run_scenario_file_executes_hardness_routing_benchmark_requests -- --nocapture`、`cargo test run_scenario_file_executes_workflow_execute_standalone_benchmark_requests -- --nocapture`、`cargo test --bin go-on terminal_chat_contract_snapshot_ -- --nocapture`、`cargo test --bin go-on terminal_chat_contract_snapshot_matches_autonomy_loop_contract -- --nocapture` 通过；仍缺 ACP/CLI 同场景对拍校验 |
+| 10 | Agents full-auto 全流程闭环 | 0% | 目标是让 agents 自动完成 skills 查找、部署、执行与结果输出；目前仍待设计与实现 |
+| 11 | 热路径速度治理与快路径缓存 | 0% | 把 full-auto 主路径做成默认快路径，避免条件过多拖慢执行 |
+| 12 | 任务意图解析与能力快路由 | 0% | 自动识别任务目标、约束、风险与能力需求，并一次性完成能力装配 |
+| 13 | 执行环境自动引导与预热 | 0% | 自动完成依赖、运行时、配置检查，并复用环境状态 |
+| 14 | skills 发现、缓存与匹配闭环 | 0% | 自动查找、筛选、启用最合适 skills，并控制检索开销 |
+| 15 | 工具调用事务化与幂等化 | 0% | 提升一次通过率并减少重复/部分成功污染 |
+| 16 | 自动恢复与最小人工介入闭环 | 0% | 失败、超时、异常时自动恢复，保持执行顺畅 |
+| 17 | 多用户 tenant 注册与隔离闭环 | 35% | RBAC tenant 注册源扩展为 `GO_ON_TENANTS` + `GO_ON_TENANTS_FILE` 双来源并接入 runtime；新增去重/文件源测试通过；预算/session 协同仍待补齐 |
+| 18 | MCP 流式、取消与超时闭环 | 45% | 新增 `notifications/cancelled` 可观测语义与 `REQUEST_CANCELLED` / `REQUEST_TIMEOUT` 错误码；stdio/http 取消一致性测试通过；流式/分块一致性仍待补齐 |
+| 19 | ACP / CLI / MCP 同场景对拍闭环 | 20% | 新增 MCP stdio/http 同场景取消对拍基线（同 request id 拒绝执行）；ACP/CLI/MCP 三入口统一对拍仍待完成 |
+| 20 | 审计、回放与证据闭环 | 0% | full-auto 全链路证据可审计、可回放 |
+| 21 | 外部对标与持续回归门禁 | 0% | 用持续 benchmark 证明除生态外的全面领先 |
 
 ### 8.3 从“还差一半”到“100%闭环”的冲刺计划
 
@@ -397,11 +639,13 @@ MCP 门禁指标：
 | Sprint-S3（选择与基准） | 6,7 | +8% | 88% | 多因子选路打分分解已导出；回放基准与回归门禁已加入测试套件 |
 | Sprint-S4（一致性收口） | 8,9 | +8% | 96% | 元认知动作链路已接入执行闭环；ACP chat、runtime execute 与 CLI terminal chat 已统一合同边界，剩余 ACP/CLI 同场景对拍与 MCP 收口 |
 
-当前累计完成率：96%
+当前累计完成率（Step 1-10 核心范围）：96%
+
+扩展短板补齐阶段（Step 11-21，目标为除生态外全面领先）当前完成率：9%
 
 ### 8.4 100% 判定标准（必须同时满足）
 
-1. 代码闭环：Step1-9 全部实现并通过对应单测/集测。
+1. 代码闭环：Step1-21 全部实现并通过对应单测/集测。
 2. 指标闭环：
    - `autonomy_perf.p95_latency_ms` 为真实百分位。
    - `avg_rounds_per_request` 基于真实自治报告统计。
@@ -413,6 +657,7 @@ MCP 门禁指标：
 4. 协议与入口闭环：
    - 5 协议行为一致通过验收。
    - ACP/CLI 同场景 stop_reason 与 round 边界一致。
+   - agents full-auto 可自动完成 skills 查找、部署、执行与结果输出。
 5. 文档与治理闭环：
    - governance.status 中新增字段文档齐备。
    - BLUE43 完成率表回写到 100%，并附每步证据链接/测试记录。
@@ -444,7 +689,14 @@ MCP 门禁指标：
 14. 验证命令：`cargo test --test transport_parity_integration mcp_http_health_response_has_platform_context -- --nocapture` 通过。
 15. 验证命令：`cargo test --test transport_parity_integration mcp_http_method_not_allowed_has_platform_context -- --nocapture` 通过。
 16. 验证命令：`cargo test --test transport_parity_integration mcp_http_initialize_list_and_call_succeeds -- --nocapture` 通过。
-17. 当前剩余主阻塞：Step 9 的 ACP/CLI 同场景对拍校验与 MCP 专项闭环中的流式/取消/多用户隔离仍未完成，且 Step 5/6 仍缺更强的端到端收益证明。
+17. 验证命令：`cargo test --bin go-on test_tenant_isolation -- --nocapture` 通过（RBAC 已补上 tenant 成员校验，覆盖允许/缺失 tenant/未知 tenant 三种分支）。
+18. 验证命令：`cargo test --bin go-on terminal_chat_contract_snapshot_matches_autonomy_loop_contract -- --nocapture` 通过（CLI terminal chat 合同快照与 ACP autonomy loop 共享合同形状一致）。
+19. 当前剩余主阻塞：Step 9 的 ACP/CLI 同场景对拍校验与 MCP 专项闭环中的流式/取消/多用户租户注册-隔离链路仍未完成，且 Step 5/6 仍缺更强的端到端收益证明。
+20. 验证命令：`cargo test --bin go-on test_register_tenants_from_file_env -- --nocapture` 通过（新增 tenant 文件源注册测试）。
+21. 验证命令：`cargo test --bin go-on test_register_tenants_from_sources_deduplicates -- --nocapture` 通过（双来源注册去重正确）。
+22. 验证命令：`cargo test --bin go-on test_mcp_cancelled_request_returns_cancel_error -- --nocapture` 通过（MCP 取消错误码稳定返回）。
+23. 验证命令：`cargo test --bin go-on test_mcp_tool_call_timeout_returns_timeout_error -- --nocapture` 通过（MCP 超时错误码稳定返回）。
+24. 验证命令：`cargo test --test protocol_consistency_integration mcp_stdio_cancel_notification_blocks_matching_request_id -- --nocapture` 与 `cargo test --test transport_parity_integration mcp_http_cancel_notification_blocks_matching_request_id -- --nocapture` 均通过（stdio/http 取消语义一致，并保留 platform_context）。
 
 ### 8.6 MCP 专项完成率追踪（新增）
 
@@ -453,9 +705,9 @@ MCP 门禁指标：
 | MCP-1 协议握手/能力声明一致 | 55% | 100% | `mcp_stdio_initialize_returns_protocol_version`、`rpc_mcp_adapter_initialize_list_and_call`、`mcp_http_initialize_list_and_call_succeeds` |
 | MCP-2 工具调用语义一致（stdio/http） | 55% | 100% | `mcp_stdio_tools_list_returns_tools_array`、`rpc_mcp_adapter_initialize_list_and_call`、`mcp_http_initialize_list_and_call_succeeds` |
 | MCP-3 流式与分块响应一致 | 0% | 100% | 流式回归测试 |
-| MCP-4 超时/重试/取消语义一致 | 0% | 100% | 稳定性与容错测试 |
-| MCP-5 鉴权与隔离（多用户） | 0% | 100% | multi-users 安全测试 |
-| MCP-6 协议兼容与错误码映射 | 35% | 100% | `mcp_stdio_unknown_method_returns_minus_32601`、`mcp_http_method_not_allowed_has_platform_context` |
+| MCP-4 超时/重试/取消语义一致 | 45% | 100% | `REQUEST_CANCELLED` / `REQUEST_TIMEOUT` 已落地；`mcp_stdio_cancel_notification_blocks_matching_request_id`、`mcp_http_cancel_notification_blocks_matching_request_id` 通过 |
+| MCP-5 鉴权与隔离（多用户） | 30% | 100% | `cargo test --bin go-on test_tenant_isolation -- --nocapture`；tenant 注册源已扩展为环境变量+文件源，仍待预算/session 级联闭环 |
+| MCP-6 协议兼容与错误码映射 | 45% | 100% | 新增取消/超时错误码映射并通过单测，既有 unknown-method / method-not-allowed 用例仍有效 |
 
 回写规则：
 1. 任一 MCP 项目未达 100%，总完成率不得标记为 100%。
@@ -468,3 +720,22 @@ MCP 门禁指标：
 1. 系统基础强、架构接近目标，但端到端执行智能尚未达到钢铁侠战衣级。
 2. 当前最高杠杆并非新增模块，而是提高现有模块的语义正确性与闭环执行强度。
 3. BLUE43 方案按“可增量、可验证、可门禁”设计，可在低歧义前提下持续推进闭环。
+
+## 10. 横向对比（BLUE43 达到 100% 后的预期位置）
+
+说明：以下判断基于“BLUE43 全部实现后”的能力形态，而不是当前 96% 的阶段状态。
+
+| 维度 | go-on（BLUE43=100%） | Claude Code | Codex | OpenClaw / harness 类 |
+|:--|:--|:--|:--|:--|
+| 本地全流程自治 | 很强，目标是 full-auto 完整闭环 | 强，但通常依赖既有工作流 | 强，偏代码生成与任务执行 | 强弱不一，更多取决于各自集成 |
+| skills / tools / 环境自动串联 | 设计目标就是统一闭环 | 有能力，但不一定以该形态为中心 | 通常较强，但偏模型工具调用 | 取决于实现，通常不如专门编排系统统一 |
+| 协议一致性（ACP / MCP / CLI） | 目标是强一致、可验收 | 不一定覆盖同等协议面 | 主要看产品形态，不一定有同级闭环 | 通常没有同等级协议统一目标 |
+| 可审计 / 可回放 / 可门禁 | 很强，是核心设计目标 | 有，但通常不是首要设计中心 | 有部分能力，但未必同级完整 | 差异大，常常不完整 |
+| 复杂任务一次通过率 | 目标高，但仍依赖基础模型与工具生态 | 通常很强，体验成熟 | 通常很强，尤其在代码任务上 | 差异最大，无法一概而论 |
+| 生态广度 / 默认能力 | 中-高，取决于 go-on 自身集成 | 高 | 高 | 中-高，取决于具体产品 |
+| 结论 | 在“自动化闭环 + 协议统一 + 可验证执行”上可能领先 | 在通用产品成熟度上仍可能更强 | 在基础模型/代码生成体验上仍可能更强 | 横向差异最大，不能默认超越 |
+
+结论：
+1. 如果 BLUE43 达到 100%，go-on 更可能在“全流程自治编排”这个定义域里成为强者。
+2. 但它不自动等于对所有竞品在模型能力、生态广度、产品成熟度上全面碾压。
+3. 真正能证明“完全超越”的，仍然需要同任务、同约束、同预算的横向 benchmark，而不是只看完成率。

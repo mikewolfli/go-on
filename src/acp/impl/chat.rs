@@ -43,8 +43,7 @@ use crate::acp::helpers::conversation::stream_would_exceed_limits;
 use crate::acp::helpers::metrics::{stream_chunk_notification, stream_done_notification};
 use crate::acp::helpers::orchestration_alignment::derive_plan_trace_alignment;
 use crate::acp::helpers::response_assembler::{
-    build_chat_response, build_role_routing, build_task_graph_checkpoint,
-    CapabilityRoutingInfo,
+    build_chat_response, build_role_routing, build_task_graph_checkpoint, CapabilityRoutingInfo,
 };
 use crate::acp::helpers::review_gate::{run_enhanced_verification, run_review_gate};
 use crate::acp::helpers::vote_orchestration::derive_response_orchestration;
@@ -2599,105 +2598,103 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         reviews = review_outcome.reviews.clone();
 
         // ── Only run TAO loop when the autonomy loop did NOT handle execution ──
-        if !autonomy_loop_executed {
-            if review_outcome.passed {
-                // Extract task description
-                let task_description = extract_task_description(&params.messages);
+        if !autonomy_loop_executed && review_outcome.passed {
+            // Extract task description
+            let task_description = extract_task_description(&params.messages);
 
-                // Build a ToolInput from the task context
-                let tool_input = ToolInput {
-                    task_id: "chat".to_string(),
-                    phase: phase_name.clone(),
-                    agent_role: selected_agent.clone(),
-                    objective: task_description.clone(),
-                    constraints: None,
-                    evidence: None,
-                    payload: serde_json::json!({
-                        "task": task_description,
-                        "phase": phase_name,
-                    }),
-                    allowed_base_dir: None,
-                };
+            // Build a ToolInput from the task context
+            let tool_input = ToolInput {
+                task_id: "chat".to_string(),
+                phase: phase_name.clone(),
+                agent_role: selected_agent.clone(),
+                objective: task_description.clone(),
+                constraints: None,
+                evidence: None,
+                payload: serde_json::json!({
+                    "task": task_description,
+                    "phase": phase_name,
+                }),
+                allowed_base_dir: None,
+            };
 
-                // Create a ToolRegistry (reuses built-in tools)
-                let tool_registry = ToolRegistry::new();
+            // Create a ToolRegistry (reuses built-in tools)
+            let tool_registry = ToolRegistry::new();
 
-                // Determine preferred tools from agent response hints
-                let preferred_tools: Vec<String> = {
-                    let calls = extract_tool_calls_from_response(&response_text, 5);
-                    if calls.is_empty() {
-                        record_planner_guided_route();
-                        planner_guided_tool_preferences(
-                            &conversation_id,
-                            phase_name,
-                            &selected_agent,
-                            &task_description,
-                            &response_text,
-                            5,
-                        )
-                    } else {
-                        record_explicit_tool_route();
-                        calls
-                    }
-                };
+            // Determine preferred tools from agent response hints
+            let preferred_tools: Vec<String> = {
+                let calls = extract_tool_calls_from_response(&response_text, 5);
+                if calls.is_empty() {
+                    record_planner_guided_route();
+                    planner_guided_tool_preferences(
+                        &conversation_id,
+                        phase_name,
+                        &selected_agent,
+                        &task_description,
+                        &response_text,
+                        5,
+                    )
+                } else {
+                    record_explicit_tool_route();
+                    calls
+                }
+            };
 
-                // Run the Think-Act-Observe loop
-                let tao_config = LoopConfig::default();
-                let (tao_decision, tao_trace) = execute_loop(
-                    &task_description,
-                    &tool_registry,
-                    &tool_input,
-                    &preferred_tools,
-                    &tao_config,
-                );
+            // Run the Think-Act-Observe loop
+            let tao_config = LoopConfig::default();
+            let (tao_decision, tao_trace) = execute_loop(
+                &task_description,
+                &tool_registry,
+                &tool_input,
+                &preferred_tools,
+                &tao_config,
+            );
 
-                // Record the loop outcome
-                let tool_result = match &tao_decision {
-                    LoopDecision::Complete(output) => {
-                        record_autonomy_loop_stop_reason("complete");
-                        serde_json::json!({
-                            "status": "complete",
-                            "success": output.success,
-                            "result": output.result,
-                            "iterations": tao_trace.iterations.len(),
-                            "duration_ms": tao_trace.total_duration_ms,
-                        })
-                    }
-                    LoopDecision::Failed { reason, .. } => {
-                        record_autonomy_loop_stop_reason("failed");
-                        serde_json::json!({
-                            "status": "failed",
-                            "reason": reason,
-                            "iterations": tao_trace.iterations.len(),
-                            "duration_ms": tao_trace.total_duration_ms,
-                        })
-                    }
-                    LoopDecision::Escalate { reason, .. } => {
-                        record_autonomy_loop_stop_reason("escalated");
-                        serde_json::json!({
-                            "status": "escalated",
-                            "reason": reason,
-                            "iterations": tao_trace.iterations.len(),
-                            "duration_ms": tao_trace.total_duration_ms,
-                        })
-                    }
-                    _ => {
-                        record_autonomy_loop_stop_reason("incomplete");
-                        serde_json::json!({
-                            "status": "incomplete",
-                            "iterations": tao_trace.iterations.len(),
-                            "duration_ms": tao_trace.total_duration_ms,
-                        })
-                    }
-                };
+            // Record the loop outcome
+            let tool_result = match &tao_decision {
+                LoopDecision::Complete(output) => {
+                    record_autonomy_loop_stop_reason("complete");
+                    serde_json::json!({
+                        "status": "complete",
+                        "success": output.success,
+                        "result": output.result,
+                        "iterations": tao_trace.iterations.len(),
+                        "duration_ms": tao_trace.total_duration_ms,
+                    })
+                }
+                LoopDecision::Failed { reason, .. } => {
+                    record_autonomy_loop_stop_reason("failed");
+                    serde_json::json!({
+                        "status": "failed",
+                        "reason": reason,
+                        "iterations": tao_trace.iterations.len(),
+                        "duration_ms": tao_trace.total_duration_ms,
+                    })
+                }
+                LoopDecision::Escalate { reason, .. } => {
+                    record_autonomy_loop_stop_reason("escalated");
+                    serde_json::json!({
+                        "status": "escalated",
+                        "reason": reason,
+                        "iterations": tao_trace.iterations.len(),
+                        "duration_ms": tao_trace.total_duration_ms,
+                    })
+                }
+                _ => {
+                    record_autonomy_loop_stop_reason("incomplete");
+                    serde_json::json!({
+                        "status": "incomplete",
+                        "iterations": tao_trace.iterations.len(),
+                        "duration_ms": tao_trace.total_duration_ms,
+                    })
+                }
+            };
 
-                tool_execution_results.push(json!({
-                    "tool_loop": "tao_executed",
-                    "decision": tool_result,
-                    "trace": serde_json::to_value(&tao_trace).unwrap_or_default(),
-                    "task": task_description
-                }));
-            }
+            tool_execution_results.push(json!({
+                "tool_loop": "tao_executed",
+                "decision": tool_result,
+                "trace": serde_json::to_value(&tao_trace).unwrap_or_default(),
+                "task": task_description
+            }));
         }
     }
 

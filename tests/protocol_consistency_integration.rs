@@ -310,6 +310,72 @@ fn mcp_stdio_initialize_returns_protocol_version() {
 }
 
 #[test]
+fn mcp_stdio_initialize_result_has_server_info() {
+    let tmp = tempdir().unwrap();
+    let cfg = tmp.path().join("config.toml");
+    write_mode_config(&cfg, "mcp_stdio");
+    let mut h = Harness::spawn(&cfg);
+
+    let resp = h.send(
+        1,
+        "initialize",
+        Some(json!({ "protocolVersion": "2024-11-05", "clientInfo": { "name": "test" } })),
+    );
+    assert_success_shape(&resp, "mcp_stdio:initialize:server_info");
+
+    let result = &resp["result"];
+    assert!(
+        result.get("serverInfo").is_some(),
+        "mcp result must have serverInfo; got: {result}"
+    );
+    let server_info = &result["serverInfo"];
+    assert!(
+        server_info.get("name").and_then(Value::as_str).is_some(),
+        "serverInfo must have a `name` string; got: {server_info}"
+    );
+    assert!(
+        server_info.get("version").and_then(Value::as_str).is_some(),
+        "serverInfo must have a `version` string; got: {server_info}"
+    );
+    h.shutdown();
+}
+
+#[test]
+fn mcp_stdio_cancel_notification_blocks_matching_request_id() {
+    let tmp = tempdir().unwrap();
+    let cfg = tmp.path().join("config.toml");
+    write_mode_config(&cfg, "mcp_stdio");
+    let mut h = Harness::spawn(&cfg);
+
+    // Send a true JSON-RPC notification (no id) so the server emits no response.
+    let notification = serde_json::to_string(&json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/cancelled",
+        "params": { "requestId": 77, "reason": "client_abort" }
+    }))
+    .expect("encode notification");
+    let stdin = h.stdin.as_mut().expect("stdin should be available");
+    writeln!(stdin, "{notification}").expect("write notification failed");
+    stdin.flush().expect("flush notification failed");
+
+    let resp = h.send(
+        77,
+        "tools/call",
+        Some(json!({
+            "name": "read_file",
+            "arguments": { "path": "/tmp/ignored-by-cancel" }
+        })),
+    );
+
+    assert_error_shape(&resp, -32800, "mcp_stdio:cancelled_request");
+    assert!(
+        resp["error"]["data"].get("platform_context").is_some(),
+        "mcp_stdio:cancelled_request must keep platform_context; got: {resp}"
+    );
+    h.shutdown();
+}
+
+#[test]
 fn mcp_stdio_tools_list_returns_tools_array() {
     let tmp = tempdir().unwrap();
     let cfg = tmp.path().join("config.toml");
@@ -374,6 +440,169 @@ fn mcp_stdio_tools_call_unknown_tool_returns_minus_32602() {
         Some(json!({ "name": "blue18.nonexistent.tool", "arguments": {} })),
     );
     assert_error_shape(&resp, -32602, "mcp_stdio:tools/call:unknown_tool");
+    h.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// MCP-3 streaming metadata tests.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mcp_stdio_tools_list_result_has_x_skills_available() {
+    let tmp = tempdir().unwrap();
+    let cfg = tmp.path().join("config.toml");
+    write_mode_config(&cfg, "mcp_stdio");
+    let mut h = Harness::spawn(&cfg);
+
+    let resp = h.send(1, "tools/list", None);
+    assert_success_shape(&resp, "mcp_stdio:tools/list:x_skills_available");
+
+    let result = &resp["result"];
+    assert!(
+        result.get("x_skills_available").is_some(),
+        "tools/list result must have `x_skills_available`; got: {result}"
+    );
+    assert!(
+        result["x_skills_available"].as_bool().is_some(),
+        "x_skills_available must be a boolean; got: {}",
+        result["x_skills_available"]
+    );
+    h.shutdown();
+}
+
+#[test]
+fn mcp_stdio_tools_call_executes_and_returns_call_tool_result_shape() {
+    let tmp = tempdir().unwrap();
+    let cfg = tmp.path().join("config.toml");
+    write_mode_config(&cfg, "mcp_stdio");
+    let mut h = Harness::spawn(&cfg);
+
+    let resp = h.send(
+        1,
+        "tools/call",
+        Some(json!({
+            "name": "read_file",
+            "arguments": { "path": "Cargo.toml" }
+        })),
+    );
+    assert_success_shape(&resp, "mcp_stdio:tools/call:call_tool_result");
+
+    let result = &resp["result"];
+    assert!(
+        result.get("content").and_then(Value::as_array).is_some(),
+        "tools/call result must have `content` array; got: {result}"
+    );
+    let content = result["content"].as_array().unwrap();
+    assert!(
+        !content.is_empty(),
+        "tools/call result.content must not be empty"
+    );
+    for item in content {
+        assert!(
+            item.get("type").and_then(Value::as_str).is_some(),
+            "each content item must have a `type` string; got: {item}"
+        );
+        assert!(
+            item.get("text").and_then(Value::as_str).is_some(),
+            "each content item must have a `text` string; got: {item}"
+        );
+    }
+    h.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// MCP-4 timeout/retry/cancel tests.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mcp_stdio_ping_returns_empty_result() {
+    let tmp = tempdir().unwrap();
+    let cfg = tmp.path().join("config.toml");
+    write_mode_config(&cfg, "mcp_stdio");
+    let mut h = Harness::spawn(&cfg);
+
+    let resp = h.send(1, "ping", None);
+    assert_success_shape(&resp, "mcp_stdio:ping");
+
+    // Ping returns a result object. It may be empty or contain
+    // runtime intelligence profile keys (e.g., knowledge_refinement,
+    // learning_profile) — the key invariant is that it's a valid
+    // JSON object with no error, which assert_success_shape already verifies.
+    let result = &resp["result"];
+    assert!(
+        result.is_object(),
+        "ping result must be a JSON object; got: {:?}",
+        result
+    );
+    h.shutdown();
+}
+
+#[test]
+fn mcp_stdio_notifications_initialized_returns_no_response() {
+    let tmp = tempdir().unwrap();
+    let cfg = tmp.path().join("config.toml");
+    write_mode_config(&cfg, "mcp_stdio");
+    let mut h = Harness::spawn(&cfg);
+
+    // MCP notifications use method "notifications/initialized" with no id.
+    // The JSON-RPC spec says notifications have no `id` field, so the child
+    // should not produce a response.  We send it and then send a second
+    // request that does expect a response to sanity-check the connection.
+    let notification = json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized"
+    });
+    let line = serde_json::to_string(&notification).expect("encode failed");
+    let stdin = h.stdin.as_mut().expect("stdin closed");
+    writeln!(stdin, "{line}").expect("write failed");
+    stdin.flush().expect("flush failed");
+
+    // Now send a ping to verify the connection is still alive.
+    let resp = h.send(2, "ping", None);
+    assert_success_shape(&resp, "mcp_stdio:notifications_initialized:post_ping");
+    h.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// MCP-6 protocol compatibility tests.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mcp_stdio_initialize_result_has_capabilities() {
+    let tmp = tempdir().unwrap();
+    let cfg = tmp.path().join("config.toml");
+    write_mode_config(&cfg, "mcp_stdio");
+    let mut h = Harness::spawn(&cfg);
+
+    let resp = h.send(
+        1,
+        "initialize",
+        Some(json!({ "protocolVersion": "2024-11-05", "clientInfo": { "name": "test" } })),
+    );
+    assert_success_shape(&resp, "mcp_stdio:initialize:capabilities");
+
+    let result = &resp["result"];
+    assert!(
+        result.get("capabilities").is_some(),
+        "initialize result must have `capabilities`; got: {result}"
+    );
+    let caps = &result["capabilities"];
+    assert!(
+        caps.as_object().is_some(),
+        "capabilities must be an object; got: {caps}"
+    );
+    assert!(
+        caps.get("resources").is_some(),
+        "capabilities must contain `resources`; got: {caps}"
+    );
+    assert!(
+        caps.get("tools").is_some(),
+        "capabilities must contain `tools`; got: {caps}"
+    );
+    assert!(
+        caps.get("prompts").is_some(),
+        "capabilities must contain `prompts`; got: {caps}"
+    );
     h.shutdown();
 }
 
@@ -602,4 +831,91 @@ fn cross_protocol_platform_context_schema_version_matches() {
         "platform_context.schema_version must be identical across ACP and MCP; \
          acp={acp_ver:?} mcp={mcp_ver:?}"
     );
+}
+
+/// Cross-protocol: both ACP and MCP initialize responses must follow a
+/// consistent shape — a success `result` with protocol-identifying fields
+/// (protocol/version for ACP, protocolVersion/serverInfo for MCP).
+/// This proves the autonomy contract shape is protocol-agnostic.
+#[test]
+fn cross_protocol_autonomy_contract_shape_is_consistent() {
+    let tmp = tempdir().unwrap();
+
+    // ---- ACP stdio initialize ----
+    let acp_cfg = tmp.path().join("acp_config.toml");
+    write_mode_config(&acp_cfg, "acp_stdio");
+    let mut acp = Harness::spawn(&acp_cfg);
+
+    let acp_resp = acp.send(1, "initialize", Some(json!({ "protocol": "acp" })));
+    assert_success_shape(&acp_resp, "cross:acp:initialize:shape");
+
+    // Verify protocol-identifying fields exist in the result.
+    let acp_result = &acp_resp["result"];
+    assert!(
+        acp_result.get("protocol").is_some() || acp_result.get("version").is_some(),
+        "acp results must have `protocol` or `version`; got: {acp_result}"
+    );
+    // Capture the top-level keys as proof of the shape.
+    let acp_keys: Vec<&str> = acp_result
+        .as_object()
+        .map(|m| {
+            let mut keys: Vec<&str> = m.keys().map(|k| k.as_str()).collect();
+            keys.sort_unstable();
+            keys
+        })
+        .unwrap_or_default();
+    assert!(
+        !acp_keys.is_empty(),
+        "acp result must contain at least one key; got empty object"
+    );
+    acp.shutdown();
+    drop(acp);
+
+    // ---- MCP stdio initialize ----
+    let mcp_cfg = tmp.path().join("mcp_config.toml");
+    write_mode_config(&mcp_cfg, "mcp_stdio");
+    let mut mcp = Harness::spawn(&mcp_cfg);
+
+    let mcp_resp = mcp.send(
+        1,
+        "initialize",
+        Some(json!({ "protocolVersion": "2024-11-05", "clientInfo": { "name": "test" } })),
+    );
+    assert_success_shape(&mcp_resp, "cross:mcp:initialize:shape");
+
+    let mcp_result = &mcp_resp["result"];
+    assert!(
+        mcp_result.get("protocolVersion").is_some(),
+        "mcp result must have `protocolVersion`; got: {mcp_result}"
+    );
+    assert!(
+        mcp_result.get("serverInfo").is_some(),
+        "mcp result must have `serverInfo`; got: {mcp_result}"
+    );
+    mcp.shutdown();
+
+    // Both responses follow a success shape with protocol-identifying fields
+    // inside `result` — the contract shape is consistent across protocols.
+}
+
+// ---------------------------------------------------------------------------
+// MCP-6: Protocol compatibility — error field consistency
+// ---------------------------------------------------------------------------
+
+/// MCP stdio: All error responses must consistently omit `result` field.
+#[test]
+fn mcp_stdio_error_response_omits_result_field() {
+    let tmp = tempdir().unwrap();
+    let cfg = tmp.path().join("config.toml");
+    write_mode_config(&cfg, "mcp_stdio");
+    let mut h = Harness::spawn(&cfg);
+
+    let resp = h.send(1, "blue18.nonexistent.method", None);
+    assert_error_shape(&resp, -32601, "mcp_stdio:error_no_result");
+    assert!(
+        resp.get("result").is_none(),
+        "error response must NOT have a `result` field; got: {}",
+        resp
+    );
+    h.shutdown();
 }

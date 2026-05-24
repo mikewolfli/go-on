@@ -1,11 +1,12 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::json;
 use tempfile::tempdir;
 
 use super::{JsonRpcRequest, McpServer};
 use crate::agent::AgentRegistry;
-use crate::tool::ToolRegistry;
+use crate::tool::{Tool, ToolInput, ToolOutput, ToolRegistry};
 
 fn build_server() -> McpServer {
     let agent_registry = Arc::new(AgentRegistry::new());
@@ -13,6 +14,39 @@ fn build_server() -> McpServer {
     McpServer::new(
         agent_registry,
         tool_registry,
+        "go-on".to_string(),
+        "1.0.0".to_string(),
+    )
+}
+
+#[derive(Clone)]
+struct SlowTool;
+
+impl Tool for SlowTool {
+    fn name(&self) -> &'static str {
+        "slow_test_tool"
+    }
+
+    fn run(&self, _input: &ToolInput) -> anyhow::Result<ToolOutput> {
+        std::thread::sleep(Duration::from_millis(50));
+        Ok(ToolOutput {
+            success: true,
+            result: Some(json!({"ok": true})),
+            error: None,
+            verification: None,
+            audit_log: None,
+            pua_report: None,
+        })
+    }
+}
+
+fn build_server_with_tool<T: Tool + 'static>(tool: T) -> McpServer {
+    let agent_registry = Arc::new(AgentRegistry::new());
+    let mut tool_registry = ToolRegistry::new_empty();
+    tool_registry.register(tool);
+    McpServer::new(
+        agent_registry,
+        Arc::new(tool_registry),
         "go-on".to_string(),
         "1.0.0".to_string(),
     )
@@ -152,4 +186,62 @@ async fn test_mcp_tool_call_executes_registered_tool() {
         .as_str()
         .expect("read_file content should be string");
     assert_eq!(content, "hello from mcp");
+}
+
+#[tokio::test]
+async fn test_mcp_cancelled_request_returns_cancel_error() {
+    let server = build_server();
+
+    let cancel = JsonRpcRequest {
+        jsonrpc: "2.0".to_string(),
+        method: "notifications/cancelled".to_string(),
+        params: Some(json!({"requestId": 42})),
+        id: None,
+    };
+    let cancel_response = server
+        .handle_request(cancel)
+        .await
+        .expect("cancel notification should not fail");
+    assert!(cancel_response.id.is_none());
+    assert!(cancel_response.result.is_none());
+
+    let request = JsonRpcRequest {
+        jsonrpc: "2.0".to_string(),
+        method: "tools/call".to_string(),
+        params: Some(json!({
+            "name": "read_file",
+            "arguments": {"path": "/tmp/unused"}
+        })),
+        id: Some(json!(42)),
+    };
+
+    let response = server
+        .handle_request(request)
+        .await
+        .expect("request should return response envelope");
+    let error = response.error.expect("cancelled request should return error");
+    assert_eq!(error.code, super::error_codes::REQUEST_CANCELLED);
+}
+
+#[tokio::test]
+async fn test_mcp_tool_call_timeout_returns_timeout_error() {
+    let server = build_server_with_tool(SlowTool);
+
+    let request = JsonRpcRequest {
+        jsonrpc: "2.0".to_string(),
+        method: "tools/call".to_string(),
+        params: Some(json!({
+            "name": "slow_test_tool",
+            "arguments": {},
+            "timeoutMs": 1
+        })),
+        id: Some(json!(99)),
+    };
+
+    let response = server
+        .handle_request(request)
+        .await
+        .expect("request should return response envelope");
+    let error = response.error.expect("timeout should return error");
+    assert_eq!(error.code, super::error_codes::REQUEST_TIMEOUT);
 }

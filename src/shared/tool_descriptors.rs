@@ -239,9 +239,7 @@ pub fn validate_required_arguments(tool_name: &str, tool_input: &Value) -> Resul
                 return Err(anyhow::anyhow!("{} tool requires 'task' field", tool_name));
             }
         }
-        _ => {
-            return Err(anyhow::anyhow!("unknown tool '{}'", tool_name));
-        }
+        _ => {}
     }
     Ok(())
 }

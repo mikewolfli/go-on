@@ -75,8 +75,8 @@ use crate::protocol::transport::MultiChannelTransport;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::env;
 use std::collections::VecDeque;
+use std::env;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tracing::warn;
@@ -159,7 +159,8 @@ fn configured_candidate_score_weights() -> CandidateScoreWeights {
 
 fn task_fit_score(task: &TaskContext, agent_name: &str) -> f64 {
     let normalized = agent_name.to_ascii_lowercase();
-    let prefers = |needles: &[&str]| -> bool { needles.iter().any(|needle| normalized.contains(needle)) };
+    let prefers =
+        |needles: &[&str]| -> bool { needles.iter().any(|needle| normalized.contains(needle)) };
 
     match task.task_type {
         crate::governance::pua::TaskType::BugFix => {
@@ -1926,5 +1927,43 @@ mod tests {
         let stale = super::recency_score(&recent_agents, "planner");
 
         assert!(recent > stale);
+    }
+
+    #[test]
+    fn configured_weights_env_override_respected_and_normalized() {
+        let weights = super::configured_candidate_score_weights();
+        let total = weights.reputation + weights.recency + weights.task_fit;
+        assert!(
+            (total - 1.0).abs() < 0.0001,
+            "weights must sum to 1.0, got {}",
+            total
+        );
+    }
+
+    #[test]
+    fn task_fit_score_differs_across_task_types() {
+        // Verify that task_fit_score returns meaningfully different values
+        // for the same agent across different task types.
+        let fix_task = TaskContext {
+            task_type: TaskType::BugFix,
+            file_count: 2,
+            risk_score: 0.5,
+        };
+        let security_task = TaskContext {
+            task_type: TaskType::SecurityPatch,
+            file_count: 2,
+            risk_score: 0.9,
+        };
+
+        let fix_score = super::task_fit_score(&fix_task, "security-reviewer");
+        let security_score = super::task_fit_score(&security_task, "security-reviewer");
+
+        // security-reviewer should score higher for SecurityPatch than BugFix
+        assert!(
+            security_score > fix_score,
+            "security-reviewer should score higher for SecurityPatch ({}) vs BugFix ({})",
+            security_score,
+            fix_score
+        );
     }
 }

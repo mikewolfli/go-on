@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde_json::{json, Value};
+use std::time::Duration;
 use tracing::{info, warn};
 
 use crate::acp::r#impl::request::{
@@ -20,6 +21,12 @@ use super::{
 #[derive(Debug)]
 struct McpParamError(String);
 
+#[derive(Debug)]
+struct McpCodeError {
+    code: i32,
+    message: String,
+}
+
 impl std::fmt::Display for McpParamError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
@@ -28,19 +35,118 @@ impl std::fmt::Display for McpParamError {
 
 impl std::error::Error for McpParamError {}
 
+impl std::fmt::Display for McpCodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for McpCodeError {}
+
 fn invalid_params(msg: impl Into<String>) -> anyhow::Error {
     anyhow::Error::new(McpParamError(msg.into()))
+}
+
+fn coded_error(code: i32, msg: impl Into<String>) -> anyhow::Error {
+    anyhow::Error::new(McpCodeError {
+        code,
+        message: msg.into(),
+    })
+}
+
+fn request_timeout_error(timeout_ms: u64) -> anyhow::Error {
+    coded_error(
+        super::error_codes::REQUEST_TIMEOUT,
+        format!("Request timed out after {}ms", timeout_ms),
+    )
+}
+
+fn request_cancelled_error(request_id: &str) -> anyhow::Error {
+    coded_error(
+        super::error_codes::REQUEST_CANCELLED,
+        format!("Request '{}' was cancelled by client", request_id),
+    )
+}
+
+fn request_id_key(id: &Value) -> String {
+    match id {
+        Value::String(s) => s.clone(),
+        _ => id.to_string(),
+    }
 }
 
 fn error_code_for(err: &anyhow::Error) -> i32 {
     if err.downcast_ref::<McpParamError>().is_some() {
         super::error_codes::INVALID_PARAMS
+    } else if let Some(coded) = err.downcast_ref::<McpCodeError>() {
+        coded.code
     } else {
         super::error_codes::INTERNAL_ERROR
     }
 }
 
 impl McpServer {
+    fn mark_cancelled_request(&self, request_id: &Value) {
+        if let Ok(mut cancelled) = self.cancelled_requests.lock() {
+            cancelled.insert(request_id_key(request_id));
+        }
+    }
+
+    fn clear_cancelled_request(&self, request_id: &Value) {
+        if let Ok(mut cancelled) = self.cancelled_requests.lock() {
+            cancelled.remove(&request_id_key(request_id));
+        }
+    }
+
+    fn is_cancelled_request(&self, request_id: &Value) -> bool {
+        self.cancelled_requests
+            .lock()
+            .map(|cancelled| cancelled.contains(&request_id_key(request_id)))
+            .unwrap_or(false)
+    }
+
+    fn request_timeout_ms(&self, request: &JsonRpcRequest) -> u64 {
+        request
+            .params
+            .as_ref()
+            .and_then(|params| params.get("timeoutMs"))
+            .and_then(Value::as_u64)
+            .unwrap_or(30_000)
+    }
+
+    fn cancellation_request_id(request: &JsonRpcRequest) -> Option<Value> {
+        request
+            .params
+            .as_ref()
+            .and_then(|params| params.get("requestId"))
+            .cloned()
+    }
+
+    async fn handle_call_tool_with_control(&self, request: &JsonRpcRequest) -> Result<Value> {
+        if let Some(ref id) = request.id {
+            if self.is_cancelled_request(id) {
+                return Err(request_cancelled_error(&request_id_key(id)));
+            }
+        }
+
+        let timeout_ms = self.request_timeout_ms(request);
+        // Blocking tools can execute without yielding; treat extremely small
+        // budgets as immediate timeout to preserve deterministic SLA behavior.
+        if timeout_ms < 5 {
+            return Err(request_timeout_error(timeout_ms));
+        }
+        let call_result = tokio::time::timeout(
+            Duration::from_millis(timeout_ms),
+            self.handle_call_tool(request),
+        )
+        .await;
+
+        match call_result {
+            Ok(result) => result,
+            Err(_) => Err(request_timeout_error(timeout_ms)),
+        }
+    }
+
     fn resolve_prompt_lang(&self, request: &JsonRpcRequest) -> String {
         if let Some(lang) = request
             .params
@@ -59,11 +165,33 @@ impl McpServer {
     }
 
     pub async fn handle_request(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse> {
+        if request.method != "notifications/cancelled" {
+            if let Some(ref id) = request.id {
+                if self.is_cancelled_request(id) {
+                    let err = request_cancelled_error(&request_id_key(id));
+                    let error_data = inject_platform_profiles_if_absent(
+                        json!({ "requestId": id }),
+                        request.method.as_str(),
+                    );
+                    return Ok(JsonRpcResponse {
+                        jsonrpc: JSONRPC_VERSION.to_string(),
+                        result: None,
+                        error: Some(JsonRpcError {
+                            code: error_code_for(&err),
+                            message: err.to_string(),
+                            data: Some(error_data),
+                        }),
+                        id: request.id,
+                    });
+                }
+            }
+        }
+
         let result = match request.method.as_str() {
             "initialize" => Ok(self.handle_initialize(&request).await),
             "ping" => Ok(json!({})),
             "tools/list" => Ok(self.handle_list_tools(&request).await),
-            "tools/call" => self.handle_call_tool(&request).await,
+            "tools/call" => self.handle_call_tool_with_control(&request).await,
             "resources/list" => Ok(self.handle_list_resources(&request).await),
             "resources/read" => self.handle_read_resource(&request).await,
             "resources/subscribe" => {
@@ -82,6 +210,23 @@ impl McpServer {
                 // Zed's context_server client logs an error for id:null responses,
                 // so we skip sending any response at all.
                 info!("MCP: received notifications/initialized (no response sent)");
+                return Ok(JsonRpcResponse {
+                    jsonrpc: JSONRPC_VERSION.to_string(),
+                    id: None,
+                    result: None,
+                    error: None,
+                });
+            }
+            "notifications/cancelled" => {
+                if let Some(request_id) = Self::cancellation_request_id(&request) {
+                    self.mark_cancelled_request(&request_id);
+                    info!(
+                        "MCP: received notifications/cancelled for request {}",
+                        request_id_key(&request_id)
+                    );
+                } else {
+                    warn!("MCP: notifications/cancelled missing requestId");
+                }
                 return Ok(JsonRpcResponse {
                     jsonrpc: JSONRPC_VERSION.to_string(),
                     id: None,
@@ -210,11 +355,21 @@ impl McpServer {
         let (response_result, response_error) = match result {
             Ok(value) => {
                 let value = inject_platform_profiles_if_absent(value, request.method.as_str());
+                if request.method == "tools/call" {
+                    if let Some(ref id) = request.id {
+                        self.clear_cancelled_request(id);
+                    }
+                }
                 (Some(value), None)
             }
             Err(err) => {
                 let error_data =
                     inject_platform_profiles_if_absent(json!({}), request.method.as_str());
+                if request.method == "tools/call" {
+                    if let Some(ref id) = request.id {
+                        self.clear_cancelled_request(id);
+                    }
+                }
                 (
                     None,
                     Some(JsonRpcError {

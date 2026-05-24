@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 /// Built-in roles
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -144,14 +145,20 @@ pub enum AccessDecision {
     Escalate { required_role: String },
 }
 
+/// Environment variable for registering tenants at startup.
+/// Comma-separated list of tenant IDs, e.g. "tenant-a,tenant-b,acme-corp"
+pub const GO_ON_TENANTS_ENV: &str = "GO_ON_TENANTS";
+/// Environment variable for registering tenants from a file path.
+/// The file can contain comma-separated and/or newline-separated tenant IDs.
+pub const GO_ON_TENANTS_FILE_ENV: &str = "GO_ON_TENANTS_FILE";
+
 /// The RBAC enforcer
 #[derive(Debug, Clone)]
 pub struct RbacEnforcer {
     /// Role -> permissions mapping
     role_permissions: HashMap<String, HashSet<Permission>>,
     /// Tenants (optional multi-tenant support)
-    #[allow(dead_code)] // F-GAP-15 — tenant isolation for multi-tenant deployment
-    tenants: HashSet<String>,
+    pub(crate) tenants: HashSet<String>,
 }
 
 impl Default for RbacEnforcer {
@@ -195,12 +202,75 @@ impl RbacEnforcer {
         self.tenants.insert(tenant_id.to_string());
     }
 
+    /// Register tenants from the GO_ON_TENANTS environment variable.
+    /// The env var should contain a comma-separated list of tenant IDs.
+    /// Returns the number of tenants registered.
+    pub fn register_tenants_from_env(&mut self) -> usize {
+        match std::env::var(GO_ON_TENANTS_ENV) {
+            Ok(val) if !val.trim().is_empty() => self.register_tenants_from_str(&val),
+            _ => 0,
+        }
+    }
+
+    /// Register tenants from `GO_ON_TENANTS_FILE` when set.
+    ///
+    /// Accepts comma-separated and/or newline-separated tenant IDs.
+    /// Returns the number of newly registered tenant IDs.
+    pub fn register_tenants_from_file_env(&mut self) -> usize {
+        let path = match std::env::var(GO_ON_TENANTS_FILE_ENV) {
+            Ok(value) if !value.trim().is_empty() => value,
+            _ => return 0,
+        };
+
+        let content = match std::fs::read_to_string(Path::new(path.trim())) {
+            Ok(value) => value,
+            Err(_) => return 0,
+        };
+
+        self.register_tenants_from_str(&content)
+    }
+
+    /// Register tenants from both `GO_ON_TENANTS` and `GO_ON_TENANTS_FILE`.
+    /// Returns total number of newly registered tenant IDs.
+    pub fn register_tenants_from_sources(&mut self) -> usize {
+        self.register_tenants_from_env() + self.register_tenants_from_file_env()
+    }
+
+    fn register_tenants_from_str(&mut self, raw: &str) -> usize {
+        let before = self.tenants.len();
+        for id in raw
+            .split(|ch| ch == ',' || ch == '\n' || ch == '\r')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            self.add_tenant(id);
+        }
+        self.tenants.len().saturating_sub(before)
+    }
+
     /// Check if a principal has access to a resource with a specific permission
     pub fn check_access(
         &self,
         principal: &Principal,
         required_perm: &Permission,
     ) -> AccessDecision {
+        if !self.tenants.is_empty() {
+            let Some(tenant_id) = principal.tenant_id.as_deref() else {
+                return AccessDecision::Deny {
+                    reason: format!("Principal '{}' is missing tenant context", principal.id),
+                };
+            };
+
+            if !self.tenants.contains(tenant_id) {
+                return AccessDecision::Deny {
+                    reason: format!(
+                        "Principal '{}' has unknown tenant '{}'",
+                        principal.id, tenant_id
+                    ),
+                };
+            }
+        }
+
         // Check role-based permissions
         for role_name in &principal.roles {
             if let Some(perms) = self.role_permissions.get(role_name) {
@@ -374,6 +444,117 @@ mod tests {
         enforcer.add_tenant("tenant-b");
 
         assert_eq!(enforcer.tenant_count(), 2);
+
+        let allowed = Principal::new("user-a", vec!["user"], Some("tenant-a"));
+        assert_eq!(
+            enforcer.check_access(&allowed, &Permission::Read),
+            AccessDecision::Allow
+        );
+
+        let missing_tenant = Principal::new("user-missing", vec!["user"], None);
+        match enforcer.check_access(&missing_tenant, &Permission::Read) {
+            AccessDecision::Deny { reason } => {
+                assert!(reason.contains("missing tenant context"));
+            }
+            other => panic!("Expected missing tenant to deny, got {:?}", other),
+        }
+
+        let unknown_tenant = Principal::new("user-unknown", vec!["user"], Some("tenant-z"));
+        match enforcer.check_access(&unknown_tenant, &Permission::Read) {
+            AccessDecision::Deny { reason } => {
+                assert!(reason.contains("unknown tenant"));
+            }
+            other => panic!("Expected unknown tenant to deny, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_register_tenants_from_env() {
+        // Ensure env is clean before starting
+        unsafe {
+            std::env::remove_var(GO_ON_TENANTS_ENV);
+        }
+
+        // Test empty env first
+        {
+            let mut enforcer = RbacEnforcer::new();
+            let count = enforcer.register_tenants_from_env();
+            assert_eq!(count, 0, "no env set should register 0 tenants");
+        }
+
+        // Set env and test registration
+        unsafe {
+            std::env::set_var(GO_ON_TENANTS_ENV, "tenant-a,tenant-b,tenant-c");
+        }
+        let mut enforcer = RbacEnforcer::new();
+        let count = enforcer.register_tenants_from_env();
+        assert_eq!(count, 3, "should register 3 tenants from env");
+        assert_eq!(enforcer.tenant_count(), 3);
+
+        // Verify isolation works with env-registered tenants
+        let allowed = Principal::new("user-a", vec!["user"], Some("tenant-a"));
+        assert_eq!(
+            enforcer.check_access(&allowed, &Permission::Read),
+            AccessDecision::Allow
+        );
+        let unknown = Principal::new("user-z", vec!["user"], Some("tenant-z"));
+        match enforcer.check_access(&unknown, &Permission::Read) {
+            AccessDecision::Deny { reason } => {
+                assert!(reason.contains("unknown tenant"));
+            }
+            other => panic!("Expected unknown tenant to deny, got {:?}", other),
+        }
+
+        // Clean up env
+        unsafe {
+            std::env::remove_var(GO_ON_TENANTS_ENV);
+        }
+    }
+
+    #[test]
+    fn test_register_tenants_from_file_env() {
+        unsafe {
+            std::env::remove_var(GO_ON_TENANTS_FILE_ENV);
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let path = dir.path().join("tenants.txt");
+        std::fs::write(&path, "tenant-a\ntenant-b,tenant-c\n").expect("tenant file should exist");
+
+        unsafe {
+            std::env::set_var(GO_ON_TENANTS_FILE_ENV, path.to_string_lossy().to_string());
+        }
+
+        let mut enforcer = RbacEnforcer::new();
+        let count = enforcer.register_tenants_from_file_env();
+        assert_eq!(count, 3, "should register 3 tenants from file env");
+        assert_eq!(enforcer.tenant_count(), 3);
+
+        unsafe {
+            std::env::remove_var(GO_ON_TENANTS_FILE_ENV);
+        }
+    }
+
+    #[test]
+    fn test_register_tenants_from_sources_deduplicates() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let path = dir.path().join("tenants.txt");
+        std::fs::write(&path, "tenant-b,tenant-c").expect("tenant file should exist");
+
+        unsafe {
+            std::env::set_var(GO_ON_TENANTS_ENV, "tenant-a,tenant-b");
+            std::env::set_var(GO_ON_TENANTS_FILE_ENV, path.to_string_lossy().to_string());
+        }
+
+        let mut enforcer = RbacEnforcer::new();
+        let count = enforcer.register_tenants_from_sources();
+        assert_eq!(count, 3, "duplicate tenant IDs should be counted once");
+        assert_eq!(enforcer.tenant_count(), 3);
+
+        unsafe {
+            std::env::remove_var(GO_ON_TENANTS_ENV);
+            std::env::remove_var(GO_ON_TENANTS_FILE_ENV);
+        }
     }
 
     #[test]

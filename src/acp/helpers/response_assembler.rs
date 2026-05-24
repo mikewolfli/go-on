@@ -89,7 +89,7 @@ pub fn build_chat_response(
 }
 
 /// Capability routing info bundle used in response assembly.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CapabilityRoutingInfo {
     pub selected_agent: Option<String>,
     pub recommended_mode: Option<String>,
@@ -97,19 +97,6 @@ pub struct CapabilityRoutingInfo {
     pub decision_confidence: Option<f64>,
     pub selection_reason: Option<String>,
     pub optimization_hint: Option<Value>,
-}
-
-impl Default for CapabilityRoutingInfo {
-    fn default() -> Self {
-        Self {
-            selected_agent: None,
-            recommended_mode: None,
-            candidate_count: None,
-            decision_confidence: None,
-            selection_reason: None,
-            optimization_hint: None,
-        }
-    }
 }
 
 /// Build role routing analysis from task description.
@@ -166,6 +153,7 @@ pub fn build_role_routing(task_description: &str) -> Value {
 }
 
 /// Build task graph checkpoint from conversation execution state.
+#[allow(clippy::too_many_arguments)]
 pub fn build_task_graph_checkpoint(
     server: &AcpServer,
     conversation_id: &str,
@@ -275,7 +263,7 @@ pub fn build_task_graph_checkpoint(
                 })
                 .collect();
 
-        let checkpoint = task_graph.snapshot(&task_description, 1, subtask_records);
+        let checkpoint = task_graph.snapshot(task_description, 1, subtask_records);
         if let Err(e) = store.save_checkpoint(&checkpoint, &graph_id) {
             tracing::warn!(target: "task_graph", "failed to save checkpoint: {e}");
         }

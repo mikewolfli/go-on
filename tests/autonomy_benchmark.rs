@@ -64,7 +64,11 @@ fn replay_metrics(scenario: &ReplayScenario) -> ReplayMetrics {
 
     for steps in grouped.values() {
         max_fanout = max_fanout.max(steps.len());
-        wall_time_ms += steps.iter().map(|step| step.simulated_ms).max().unwrap_or(0);
+        wall_time_ms += steps
+            .iter()
+            .map(|step| step.simulated_ms)
+            .max()
+            .unwrap_or(0);
     }
 
     ReplayMetrics {
@@ -78,7 +82,13 @@ fn replay_metrics(scenario: &ReplayScenario) -> ReplayMetrics {
 }
 
 fn assert_regression_gate(scenario: &ReplayScenario, metrics: &ReplayMetrics) {
-    let p95 = compute_p95(&scenario.steps.iter().map(|step| step.simulated_ms).collect::<Vec<_>>());
+    let p95 = compute_p95(
+        &scenario
+            .steps
+            .iter()
+            .map(|step| step.simulated_ms)
+            .collect::<Vec<_>>(),
+    );
     let p95_limit = ((scenario.baseline_p95_ms as f64) * 1.15).round() as u64;
     let rounds_limit = ((scenario.baseline_rounds as f64) * 1.20).ceil() as u64;
 
@@ -323,4 +333,215 @@ fn replay_reroute_recovery_scenario() {
     assert_eq!(metrics.reroute_count, 1);
     assert!(metrics.success_ratio >= 0.66);
     assert_regression_gate(&scenario, &metrics);
+}
+
+#[test]
+fn bench_predictive_reroute_completion_ratio() {
+    let scenario = ReplayScenario {
+        name: "predictive_reroute_completion",
+        baseline_p95_ms: 200,
+        baseline_rounds: 4,
+        steps: vec![
+            // Round 1: three agents running in parallel, all succeed
+            ReplayStep {
+                round: 1,
+                agent: "researcher-a",
+                simulated_ms: 60,
+                success: true,
+                reroute: false,
+            },
+            ReplayStep {
+                round: 1,
+                agent: "researcher-b",
+                simulated_ms: 80,
+                success: true,
+                reroute: false,
+            },
+            ReplayStep {
+                round: 1,
+                agent: "researcher-c",
+                simulated_ms: 70,
+                success: true,
+                reroute: false,
+            },
+            // Round 2: two agents, one fails triggering a predictive reroute
+            ReplayStep {
+                round: 2,
+                agent: "coder-primary",
+                simulated_ms: 150,
+                success: false,
+                reroute: false,
+            },
+            ReplayStep {
+                round: 2,
+                agent: "coder-secondary",
+                simulated_ms: 130,
+                success: true,
+                reroute: false,
+            },
+            // Round 3: fallback agent dispatched via reroute
+            ReplayStep {
+                round: 3,
+                agent: "coder-fallback",
+                simulated_ms: 120,
+                success: true,
+                reroute: true,
+            },
+            // Round 4: reviewer
+            ReplayStep {
+                round: 4,
+                agent: "reviewer",
+                simulated_ms: 90,
+                success: true,
+                reroute: false,
+            },
+        ],
+    };
+
+    let metrics = replay_metrics(&scenario);
+    assert!(
+        metrics.success_ratio >= 0.75,
+        "predictive reroute completion ratio {:.3} < 0.75",
+        metrics.success_ratio
+    );
+    assert!(
+        metrics.reroute_count >= 1,
+        "expected at least 1 reroute, got {}",
+        metrics.reroute_count
+    );
+    assert_regression_gate(&scenario, &metrics);
+}
+
+#[test]
+fn bench_without_reroute_completion_ratio() {
+    let reroute_scenario = ReplayScenario {
+        name: "predictive_reroute_completion",
+        baseline_p95_ms: 200,
+        baseline_rounds: 4,
+        steps: vec![
+            ReplayStep {
+                round: 1,
+                agent: "researcher-a",
+                simulated_ms: 60,
+                success: true,
+                reroute: false,
+            },
+            ReplayStep {
+                round: 1,
+                agent: "researcher-b",
+                simulated_ms: 80,
+                success: true,
+                reroute: false,
+            },
+            ReplayStep {
+                round: 1,
+                agent: "researcher-c",
+                simulated_ms: 70,
+                success: true,
+                reroute: false,
+            },
+            ReplayStep {
+                round: 2,
+                agent: "coder-primary",
+                simulated_ms: 150,
+                success: false,
+                reroute: false,
+            },
+            ReplayStep {
+                round: 2,
+                agent: "coder-secondary",
+                simulated_ms: 130,
+                success: true,
+                reroute: false,
+            },
+            ReplayStep {
+                round: 3,
+                agent: "coder-fallback",
+                simulated_ms: 120,
+                success: true,
+                reroute: true,
+            },
+            ReplayStep {
+                round: 4,
+                agent: "reviewer",
+                simulated_ms: 90,
+                success: true,
+                reroute: false,
+            },
+        ],
+    };
+    let reroute_metrics = replay_metrics(&reroute_scenario);
+
+    // Same scenario structure but without reroute: the failing agent in round 2
+    // is never recovered, and more failures arise from the two parallel agents.
+    let no_reroute_scenario = ReplayScenario {
+        name: "without_reroute_completion",
+        baseline_p95_ms: 200,
+        baseline_rounds: 4,
+        steps: vec![
+            ReplayStep {
+                round: 1,
+                agent: "researcher-a",
+                simulated_ms: 60,
+                success: true,
+                reroute: false,
+            },
+            ReplayStep {
+                round: 1,
+                agent: "researcher-b",
+                simulated_ms: 80,
+                success: true,
+                reroute: false,
+            },
+            ReplayStep {
+                round: 1,
+                agent: "researcher-c",
+                simulated_ms: 70,
+                success: true,
+                reroute: false,
+            },
+            // Both agents in round 2 fail because there is no reroute recovery
+            ReplayStep {
+                round: 2,
+                agent: "coder-primary",
+                simulated_ms: 150,
+                success: false,
+                reroute: false,
+            },
+            ReplayStep {
+                round: 2,
+                agent: "coder-secondary",
+                simulated_ms: 130,
+                success: false,
+                reroute: false,
+            },
+            // Round 3: no fallback (reroute=false), continues directly
+            ReplayStep {
+                round: 3,
+                agent: "coder-fallback",
+                simulated_ms: 120,
+                success: false,
+                reroute: false,
+            },
+            ReplayStep {
+                round: 4,
+                agent: "reviewer",
+                simulated_ms: 90,
+                success: true,
+                reroute: false,
+            },
+        ],
+    };
+    let no_reroute_metrics = replay_metrics(&no_reroute_scenario);
+
+    assert!(
+        reroute_metrics.success_ratio > no_reroute_metrics.success_ratio,
+        "reroute scenario success ratio ({:.3}) should exceed no-reroute scenario ({:.3})",
+        reroute_metrics.success_ratio,
+        no_reroute_metrics.success_ratio
+    );
+    assert_eq!(
+        no_reroute_metrics.reroute_count, 0,
+        "no-reroute scenario should have zero reroutes"
+    );
 }

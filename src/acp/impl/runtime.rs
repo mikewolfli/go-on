@@ -140,6 +140,18 @@ pub fn new_acp_server(
             vec![Permission::Read, Permission::Write, Permission::Execute],
         );
         enforcer.register_role("viewer", vec![Permission::Read]);
+        // Register tenants from environment-backed sources (F-GAP-15 / MCP-5):
+        // - GO_ON_TENANTS (inline IDs)
+        // - GO_ON_TENANTS_FILE (file-backed tenant registry)
+        let tenant_count = enforcer.register_tenants_from_sources();
+        if tenant_count > 0 {
+            tracing::info!(
+                "registered {} tenant(s) from {} and/or {}",
+                tenant_count,
+                crate::governance::rbac::GO_ON_TENANTS_ENV,
+                crate::governance::rbac::GO_ON_TENANTS_FILE_ENV,
+            );
+        }
         // Clone the enforcer for harness bus injection
         let bus_enforcer = enforcer.clone();
         // The Arc has strong count 1 at this point, so get_mut succeeds

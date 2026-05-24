@@ -1,5 +1,6 @@
 //! MCP (Model Context Protocol) compatibility layer.
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use crate::acp::server::AcpServer;
@@ -36,6 +37,8 @@ pub struct McpServer {
     /// Current logging level, set via logging/setLevel.
     /// F-GAP-10 — planned wiring: expose level to subsystem log filters.
     pub logging_level: Arc<Mutex<Option<String>>>,
+    /// Request IDs flagged by `notifications/cancelled`.
+    pub(crate) cancelled_requests: Arc<Mutex<HashSet<String>>>,
 }
 
 impl McpServer {
@@ -54,6 +57,7 @@ impl McpServer {
                 version: server_version,
             },
             logging_level: Arc::new(Mutex::new(None)),
+            cancelled_requests: Arc::new(Mutex::new(HashSet::new())),
             acp_server: None,
         }
     }
@@ -74,6 +78,7 @@ impl McpServer {
                 version: server_version,
             },
             logging_level: Arc::new(Mutex::new(None)),
+            cancelled_requests: Arc::new(Mutex::new(HashSet::new())),
             acp_server,
         }
     }

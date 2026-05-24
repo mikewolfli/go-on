@@ -45,17 +45,12 @@ pub struct ExecutionPlan {
 pub struct Planner;
 
 /// Task complexity level for adaptive planning
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TaskComplexity {
+    #[default]
     Simple,
     Medium,
     Complex,
-}
-
-impl Default for TaskComplexity {
-    fn default() -> Self {
-        TaskComplexity::Simple
-    }
 }
 
 /// Planning context carrying task features for adaptive decomposition

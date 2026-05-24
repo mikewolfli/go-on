@@ -780,6 +780,69 @@ async fn mcp_http_method_not_allowed_has_platform_context() {
     );
 }
 
+/// MCP HTTP cancellation semantics: notifications/cancelled must suppress subsequent
+/// request execution for the same request id.
+#[tokio::test(flavor = "current_thread")]
+async fn mcp_http_cancel_notification_blocks_matching_request_id() {
+    let _guard = lock_suite_guard();
+    let tmp = tempdir().expect("tempdir");
+    let cfg = tmp.path().join("config.toml");
+    write_local_echo_config(&cfg);
+    let harness = HttpHarness::spawn_with_mode(&cfg, ephemeral_bind_addr(), "mcp_http");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .expect("build client");
+    wait_healthy(&client, &harness.base_url, Duration::from_secs(15)).await;
+
+    let cancel_resp: Value = client
+        .post(format!("{}/", harness.base_url))
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": {
+                "requestId": 7001,
+                "reason": "client_abort"
+            }
+        }))
+        .send()
+        .await
+        .expect("mcp cancel notification request failed")
+        .json()
+        .await
+        .expect("invalid mcp cancel response json");
+
+    assert_eq!(cancel_resp, Value::Null, "notification should return null body");
+
+    let called: Value = client
+        .post(format!("{}/", harness.base_url))
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": 7001,
+            "method": "tools/call",
+            "params": {
+                "name": "read_file",
+                "arguments": { "path": "/tmp/ignored-by-cancel" }
+            }
+        }))
+        .send()
+        .await
+        .expect("mcp tools/call request failed")
+        .json()
+        .await
+        .expect("invalid mcp tools/call cancel json");
+
+    assert_eq!(
+        called["error"]["code"],
+        json!(-32800),
+        "cancelled request should return REQUEST_CANCELLED code"
+    );
+    assert!(
+        called["error"]["data"].get("platform_context").is_some(),
+        "cancelled request error must preserve platform_context"
+    );
+}
+
 #[test]
 fn acp_http_route_inventory_changes_require_transport_gate_update() {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

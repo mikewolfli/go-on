@@ -1192,5 +1192,16 @@ mod tests {
         assert_eq!(p.successful_actions, 1); // one Completed
         assert_eq!(p.total_reports, 2);
         assert!(p.avg_confidence > 0.0);
+        // 1 completed / (1 completed + 1 failed) = 0.5
+        assert!(
+            (p.action_effectiveness_ratio - 0.5).abs() < 0.001,
+            "expected action_effectiveness_ratio 0.5, got {}",
+            p.action_effectiveness_ratio
+        );
+        // Also verify direct method matches profile
+        assert!(
+            (ctrl.action_effectiveness_ratio() - p.action_effectiveness_ratio).abs() < 0.001,
+            "direct action_effectiveness_ratio() should match profile"
+        );
     }
 }

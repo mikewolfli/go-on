@@ -23,6 +23,10 @@ pub mod error_codes {
     pub const INVALID_PARAMS: i32 = -32602;
     /// JSON-RPC Internal error
     pub const INTERNAL_ERROR: i32 = -32603;
+    /// Request cancelled by client notification.
+    pub const REQUEST_CANCELLED: i32 = -32800;
+    /// Request timed out before producing a result.
+    pub const REQUEST_TIMEOUT: i32 = -32801;
     /// Server error start range
     #[allow(dead_code)] // F-GAP-10 — reserved for future MCP error handling
     pub const SERVER_ERROR_START: i32 = -32099;
