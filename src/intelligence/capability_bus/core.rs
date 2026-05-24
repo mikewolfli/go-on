@@ -116,14 +116,16 @@ struct CandidateScoreWeights {
     reputation: f64,
     recency: f64,
     task_fit: f64,
+    recent_outcome: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct CandidateScoreBreakdown {
+pub(crate) struct CandidateScoreBreakdown {
     agent: String,
     reputation_score: f64,
     recency_score: f64,
     task_fit_score: f64,
+    recent_outcome_score: f64,
     total_score: f64,
 }
 
@@ -137,22 +139,26 @@ fn configured_candidate_score_weights() -> CandidateScoreWeights {
     }
 
     let weights = CandidateScoreWeights {
-        reputation: read_weight("GO_ON_CAPABILITY_WEIGHT_REPUTATION", 0.55),
-        recency: read_weight("GO_ON_CAPABILITY_WEIGHT_RECENCY", 0.20),
+        reputation: read_weight("GO_ON_CAPABILITY_WEIGHT_REPUTATION", 0.45),
+        recency: read_weight("GO_ON_CAPABILITY_WEIGHT_RECENCY", 0.15),
         task_fit: read_weight("GO_ON_CAPABILITY_WEIGHT_TASK_FIT", 0.25),
+        recent_outcome: read_weight("GO_ON_CAPABILITY_WEIGHT_RECENT_OUTCOME", 0.15),
     };
-    let total = weights.reputation + weights.recency + weights.task_fit;
+    let total =
+        weights.reputation + weights.recency + weights.task_fit + weights.recent_outcome;
     if total <= f64::EPSILON {
         CandidateScoreWeights {
-            reputation: 0.55,
-            recency: 0.20,
+            reputation: 0.45,
+            recency: 0.15,
             task_fit: 0.25,
+            recent_outcome: 0.15,
         }
     } else {
         CandidateScoreWeights {
             reputation: weights.reputation / total,
             recency: weights.recency / total,
             task_fit: weights.task_fit / total,
+            recent_outcome: weights.recent_outcome / total,
         }
     }
 }
@@ -209,6 +215,42 @@ fn recency_score(recent_agents: &[String], agent_name: &str) -> f64 {
             (1.0 - rank).clamp(0.0, 1.0)
         })
         .unwrap_or(0.40)
+}
+
+fn recent_outcome_score(
+    events: &[WorkflowLearningEvent],
+    task: &TaskContext,
+    agent_name: &str,
+) -> f64 {
+    let mut weighted_total = 0.0;
+    let mut weighted_success = 0.0;
+    let target_task = format!("{:?}", task.task_type);
+
+    for (idx, event) in events
+        .iter()
+        .rev()
+        .filter(|event| event.agent == agent_name)
+        .take(20)
+        .enumerate()
+    {
+        let freshness_weight = 1.0 / ((idx + 1) as f64);
+        let task_weight = if event.task_type == target_task {
+            1.0
+        } else {
+            0.6
+        };
+        let weight = freshness_weight * task_weight;
+        weighted_total += weight;
+        if event.success {
+            weighted_success += weight;
+        }
+    }
+
+    if weighted_total <= f64::EPSILON {
+        0.50
+    } else {
+        (weighted_success / weighted_total).clamp(0.0, 1.0)
+    }
 }
 
 /// In-memory WorkflowLearningBus — replaces the file-only artifact.
@@ -810,6 +852,11 @@ impl CapabilityBus {
                 agents
             })
             .unwrap_or_default();
+        let learning_snapshot = self
+            .learning_bus
+            .lock()
+            .map(|lb| lb.snapshot())
+            .unwrap_or_default();
 
         // Phase 4: Query ObservabilityBus for healthy agents
         #[cfg(feature = "sub-bus-observability")]
@@ -865,6 +912,7 @@ impl CapabilityBus {
             capability_agent_count: cap_agents,
             reputation_snapshot: rep_snapshot,
             recent_agents: _learning_rates,
+            learning_snapshot,
             #[cfg(feature = "sub-bus-observability")]
             healthy_agents: healthy,
             #[cfg(feature = "sub-bus-orchestration")]
@@ -1061,6 +1109,7 @@ impl CapabilityBus {
                     "reputation": configured_candidate_score_weights().reputation,
                     "recency": configured_candidate_score_weights().recency,
                     "task_fit": configured_candidate_score_weights().task_fit,
+                    "recent_outcome": configured_candidate_score_weights().recent_outcome,
                 },
                 "candidate_scores": score_breakdown,
             }),
@@ -1094,7 +1143,7 @@ impl CapabilityBus {
         }
     }
 
-    fn select_best_agent(
+    pub(crate) fn select_best_agent(
         &self,
         task: &TaskContext,
         candidates: &[String],
@@ -1115,14 +1164,18 @@ impl CapabilityBus {
                     .unwrap_or(0.5);
                 let recency_score = recency_score(&sensing.recent_agents, name);
                 let task_fit_score = task_fit_score(task, name);
+                let recent_outcome_score =
+                    recent_outcome_score(&sensing.learning_snapshot, task, name);
                 let total_score = (reputation_score * weights.reputation)
                     + (recency_score * weights.recency)
-                    + (task_fit_score * weights.task_fit);
+                    + (task_fit_score * weights.task_fit)
+                    + (recent_outcome_score * weights.recent_outcome);
                 CandidateScoreBreakdown {
                     agent: name.clone(),
                     reputation_score,
                     recency_score,
                     task_fit_score,
+                    recent_outcome_score,
                     total_score,
                 }
             })
@@ -1790,6 +1843,7 @@ pub struct SensingOutput {
     pub capability_agent_count: usize,
     pub reputation_snapshot: Vec<crate::intelligence::reputation::ReputationRecord>,
     pub recent_agents: Vec<String>,
+    pub learning_snapshot: Vec<WorkflowLearningEvent>,
     /// Phase 4: healthy agents from ObservabilityBus
     #[cfg(feature = "sub-bus-observability")]
     pub healthy_agents: Vec<String>,
@@ -1837,6 +1891,7 @@ mod tests {
     use super::CapabilityBus;
     use crate::governance::harness_bus::default_harness_bus;
     use crate::governance::pua::{TaskContext, TaskType};
+    use crate::intelligence::capability_graph::CapabilityDecl;
     use crate::orchestration::tool::ToolInput;
     use std::sync::Arc;
 
@@ -1965,5 +2020,289 @@ mod tests {
             security_score,
             fix_score
         );
+    }
+
+    // ── Multi-factor E2E selection tests ────────────────────────────────
+
+    fn make_sensing(bus: &CapabilityBus, recent_agents: Vec<String>) -> super::SensingOutput {
+        let snapshot = bus
+            .reputation
+            .lock()
+            .map(|r| r.snapshot())
+            .unwrap_or_default();
+        super::SensingOutput {
+            capability_agent_count: 0,
+            reputation_snapshot: snapshot,
+            recent_agents,
+            learning_snapshot: Vec::new(),
+            #[cfg(feature = "sub-bus-observability")]
+            healthy_agents: Vec::new(),
+            #[cfg(feature = "sub-bus-orchestration")]
+            available_modes: Vec::new(),
+            #[cfg(feature = "sub-bus-optimization")]
+            optimization: None,
+        }
+    }
+
+    fn register_test_agent(
+        graph: &mut crate::intelligence::capability_graph::CapabilityGraph,
+        name: &str,
+        tags: Vec<&str>,
+    ) {
+        let decls: Vec<CapabilityDecl> = tags
+            .into_iter()
+            .map(|t| CapabilityDecl {
+                name: t.to_string(),
+                description: String::new(),
+                tags: vec![t.to_string()],
+            })
+            .collect();
+        graph.register_agent(name, decls);
+    }
+
+    #[tokio::test]
+    async fn multi_factor_selection_beats_reputation_only_for_security_task() {
+        let harness = Arc::new(default_harness_bus(None));
+        let bus = CapabilityBus::new_default(harness, None);
+
+        {
+            let mut graph = bus.capability_graph.lock().unwrap();
+            register_test_agent(&mut graph, "security-auditor", vec!["security"]);
+            register_test_agent(&mut graph, "general-coder", vec!["general"]);
+            register_test_agent(&mut graph, "fix-specialist", vec!["bugfix", "general"]);
+        }
+
+        {
+            let mut rep = bus.reputation.lock().unwrap();
+            rep.record_outcome("security-auditor", true);
+            rep.record_outcome("general-coder", true);
+            rep.record_outcome("general-coder", true);
+            rep.record_outcome("general-coder", true);
+            rep.record_outcome("fix-specialist", true);
+            rep.record_outcome("fix-specialist", true);
+        }
+
+        let recent = vec!["general-coder".to_string(), "fix-specialist".to_string()];
+        let candidates = vec![
+            "security-auditor".to_string(),
+            "general-coder".to_string(),
+            "fix-specialist".to_string(),
+        ];
+
+        let security_task = TaskContext {
+            task_type: TaskType::SecurityPatch,
+            file_count: 5,
+            risk_score: 0.9,
+        };
+
+        let sensing = make_sensing(&bus, recent);
+        let (selected, breakdown) = bus.select_best_agent(&security_task, &candidates, &sensing);
+
+        assert_eq!(
+            selected.as_deref(),
+            Some("security-auditor"),
+            "multi-factor should prefer security-auditor for SecurityPatch; got {:?}",
+            selected
+        );
+        assert!(
+            breakdown.len() >= 3,
+            "all candidates should have score breakdowns"
+        );
+
+        let auditor_entry = breakdown
+            .iter()
+            .find(|e| e.agent == "security-auditor")
+            .expect("security-auditor should be in breakdown");
+        assert!(
+            auditor_entry.task_fit_score > 0.9,
+            "security-auditor should have high task-fit for SecurityPatch"
+        );
+
+        let coder_entry = breakdown
+            .iter()
+            .find(|e| e.agent == "general-coder")
+            .expect("general-coder should be in breakdown");
+        assert!(
+            (0.0..=1.0).contains(&coder_entry.recent_outcome_score),
+            "recent_outcome_score should be normalized into [0,1]"
+        );
+    }
+
+    #[tokio::test]
+    async fn multi_factor_vs_reputation_only_different_results_across_task_types() {
+        let harness = Arc::new(default_harness_bus(None));
+        let bus = CapabilityBus::new_default(harness, None);
+
+        {
+            let mut graph = bus.capability_graph.lock().unwrap();
+            register_test_agent(&mut graph, "refactor-expert", vec!["refactor", "general"]);
+            register_test_agent(&mut graph, "general-coder", vec!["general"]);
+            register_test_agent(&mut graph, "debugger", vec!["bugfix", "general"]);
+        }
+
+        {
+            let mut rep = bus.reputation.lock().unwrap();
+            rep.record_outcome("refactor-expert", true);
+            rep.record_outcome("general-coder", true);
+            rep.record_outcome("debugger", true);
+        }
+
+        let candidates = vec![
+            "refactor-expert".to_string(),
+            "general-coder".to_string(),
+            "debugger".to_string(),
+        ];
+        let recent = candidates.clone();
+        let sensing = make_sensing(&bus, recent);
+
+        let refactor_task = TaskContext {
+            task_type: TaskType::Refactor,
+            file_count: 10,
+            risk_score: 0.3,
+        };
+        let (refactor_agent, _) = bus.select_best_agent(&refactor_task, &candidates, &sensing);
+        assert_eq!(
+            refactor_agent.as_deref(),
+            Some("refactor-expert"),
+            "refactor task should select refactor-expert"
+        );
+
+        let bugfix_task = TaskContext {
+            task_type: TaskType::BugFix,
+            file_count: 3,
+            risk_score: 0.6,
+        };
+        let (bugfix_agent, _) = bus.select_best_agent(&bugfix_task, &candidates, &sensing);
+        assert_eq!(
+            bugfix_agent.as_deref(),
+            Some("debugger"),
+            "bugfix task should select debugger"
+        );
+
+        assert_ne!(
+            refactor_agent, bugfix_agent,
+            "routing should differ across task types"
+        );
+    }
+
+    #[tokio::test]
+    async fn select_best_agent_returns_empty_when_no_candidates() {
+        let harness = Arc::new(default_harness_bus(None));
+        let bus = CapabilityBus::new_default(harness, None);
+
+        let task = TaskContext {
+            task_type: TaskType::Other,
+            file_count: 0,
+            risk_score: 0.0,
+        };
+        let sensing = make_sensing(&bus, vec![]);
+        let (selected, breakdown) = bus.select_best_agent(&task, &[], &sensing);
+        assert!(selected.is_none());
+        assert!(breakdown.is_empty());
+    }
+
+    #[tokio::test]
+    async fn candidate_score_breakdown_contains_all_expected_fields() {
+        let harness = Arc::new(default_harness_bus(None));
+        let bus = CapabilityBus::new_default(harness, None);
+
+        {
+            let mut graph = bus.capability_graph.lock().unwrap();
+            register_test_agent(&mut graph, "test-agent", vec!["general"]);
+        }
+
+        {
+            let mut rep = bus.reputation.lock().unwrap();
+            rep.record_outcome("test-agent", true);
+        }
+
+        let candidates = vec!["test-agent".to_string()];
+        let recent = candidates.clone();
+        let sensing = make_sensing(&bus, recent);
+
+        let task = TaskContext {
+            task_type: TaskType::BugFix,
+            file_count: 2,
+            risk_score: 0.5,
+        };
+        let (selected, breakdown) = bus.select_best_agent(&task, &candidates, &sensing);
+        assert_eq!(selected.as_deref(), Some("test-agent"));
+
+        let entry = &breakdown[0];
+        assert_eq!(entry.agent, "test-agent");
+        assert!(entry.reputation_score >= 0.0);
+        assert!(entry.recency_score >= 0.0);
+        assert!(entry.task_fit_score >= 0.0);
+        assert!(entry.recent_outcome_score >= 0.0);
+        assert!(entry.total_score >= 0.0);
+    }
+
+    #[tokio::test]
+    async fn recent_outcome_score_prefers_recent_successes_for_same_task_type() {
+        let harness = Arc::new(default_harness_bus(None));
+        let bus = CapabilityBus::new_default(harness, None);
+
+        let task = TaskContext {
+            task_type: TaskType::BugFix,
+            file_count: 3,
+            risk_score: 0.4,
+        };
+        let target = format!("{:?}", task.task_type);
+
+        let strong = vec![
+            super::WorkflowLearningEvent {
+                task_type: target.clone(),
+                agent: "agent-a".to_string(),
+                success: true,
+                duration_ms: 100,
+                token_cost: 50,
+                quality_score: 0.9,
+                timestamp_ms: 10,
+            },
+            super::WorkflowLearningEvent {
+                task_type: target.clone(),
+                agent: "agent-a".to_string(),
+                success: true,
+                duration_ms: 120,
+                token_cost: 60,
+                quality_score: 0.8,
+                timestamp_ms: 11,
+            },
+        ];
+        let weak = vec![
+            super::WorkflowLearningEvent {
+                task_type: target,
+                agent: "agent-b".to_string(),
+                success: false,
+                duration_ms: 100,
+                token_cost: 50,
+                quality_score: 0.2,
+                timestamp_ms: 12,
+            },
+            super::WorkflowLearningEvent {
+                task_type: "Other".to_string(),
+                agent: "agent-b".to_string(),
+                success: true,
+                duration_ms: 120,
+                token_cost: 60,
+                quality_score: 0.4,
+                timestamp_ms: 13,
+            },
+        ];
+
+        let mut learning = strong;
+        learning.extend(weak);
+
+        let strong_score = super::recent_outcome_score(&learning, &task, "agent-a");
+        let weak_score = super::recent_outcome_score(&learning, &task, "agent-b");
+        assert!(strong_score > weak_score);
+
+        let mut sensing = make_sensing(&bus, vec![]);
+        sensing.learning_snapshot = learning;
+
+        let candidates = vec!["agent-a".to_string(), "agent-b".to_string()];
+        let (selected, breakdown) = bus.select_best_agent(&task, &candidates, &sensing);
+        assert_eq!(selected.as_deref(), Some("agent-a"));
+        assert_eq!(breakdown.len(), 2);
     }
 }

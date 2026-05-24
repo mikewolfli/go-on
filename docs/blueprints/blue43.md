@@ -12,17 +12,22 @@
 
 BLUE42 的全部约束继续作为 BLUE43 的硬门槛：
 
-1. 5 协议全闭环：auto、acp stdio、acp http、mcp stdio、mcp http。
-2. 3 profile 全闭环：profile-local、profile-simple-server、profile-multi-users-server。
-3. 新增代码注释仅使用英文。
-4. 用户可见字符串完整 i18n。
-5. 每个事项必须闭环：编译通过、零告警、governance.status 可见、health 可观测、集成测试。
-6. Backend/GUI/vscode-addon 协议一致性。
-7. clippy 严格零告警。
-8. 每轮回写完成率。
-9. 未验证不得任意漂移计划。
-10. 主路径优先闭环，不允许占位行为。
-11. 架构整洁，避免继续单体膨胀。
+1. 5 种协议全链路闭合 — auto、acp stdio、acp http、mcp stdio、mcp http。每个推荐能力必须接入全部 5 种协议模式，不允许静默缺失。
+2. 3 种服务器 Profile 全链路闭合 — profile-local、profile-simple-server、profile-multi-users-server。每个推荐能力必须在全部 3 种 profile 特性集下正确编译和行为一致。不允许 cfg 不匹配。
+3. 注释英文 — 所有新增模块的代码注释必须使用英文。不允许中英文混合。
+4. 国际化（i18n）全覆盖 — 所有面向用户的字符串（GUI、addon、后端日志）必须经过 locale 键转译。不允许任何语言的硬编码展示字符串。
+5. 完整闭合 — 本文列出的每个模块最终必须达到：编译通过、零警告、接入 governance.status、可通过 health 端点观测、有集成测试覆盖。
+6. 三端一致性 — backend（Rust）、GUI、vscode-addon。无字段漂移，无静默回退，契约 smoke 必须断言全部三端。
+7. 零警告、零冲突、零遗漏 — 最终验证必须显示 cargo check --all-features 零警告，生产代码中无 allow dead_code，无未实现的 match 分支。
+8. 回写完成率 — 每轮完成后，回写完成率（简述）。
+9. 不要随意变更计划 — 严格按计划完整实施改进，未经充分验证和讨论，不要随意调整计划或回退已完成改进。
+10. 三端一统（backend / GUI / vscode-addon）。
+11. 主链路完整闭环。
+12. 最完美、最优化修改，不需要简化修改或最小修改。
+13. 不留 warning（以后端 cargo clippy --all-features -- -D warnings 为硬门）。
+14. 不允许占位、空函数、逻辑错误、不完整函数或结构。
+15. 功能增强 — 所有新增功能根据 local、simple-server、multi-users-server 接入主链路，纳入对应总线框架内。
+16. 注意单个文件的代码行数，不要太臃肿，新的结构和函数，请尽量创建新的模块文件，注意代码整体架构整洁简练清晰。
 
 ---
 
@@ -609,7 +614,7 @@ MCP 门禁指标：
 | 3 | 修正 autonomy_perf 指标语义 | 100% | `estimate_p95_from_buckets()` 基于直方图桶的真实百分位；测试通过 |
 | 4 | 继续拆分 chat 编排缝合点 | 100% | `review_gate` / `response_assembler` / `vote_orchestration` 已接入主路径；`process_chat_request` 已降至 2330 行；`cargo test process_chat_request_high_risk_multi_candidate_emits_council_decision -- --nocapture` 通过 |
 | 5 | 预测式 reroute 评分 | 70% | 已将 `expected_gain` / `current_health` 回写到 `AutonomyRound`；reason code 保持 `predictive_gain` / `failure_recovery` / `budget_guard` 可观测；仍缺复杂场景 completion ratio 提升门禁 |
-| 6 | CapabilityBus 多因子选择 | 85% | `select_best_agent` 已升级为 reputation + recency + task-fit 加权评分，支持环境权重配置并输出 `candidate_scores` 分解；现有 CapabilityBus 测试通过，新增 helper 单测已补充 |
+| 6 | CapabilityBus 多因子选择 | 90% | `select_best_agent` 已升级为 reputation + recency + task-fit + recent-outcome 加权评分，支持环境权重配置并输出 `candidate_scores` 分解；新增 recent outcome 打分与分解字段测试通过 |
 | 7 | 现实型 E2E 基准套件 | 90% | `tests/autonomy_benchmark.rs` 已补充 serial / fan-out+join / reroute recovery 回放场景与 p95/轮次回归门禁；`cargo test --test autonomy_benchmark -- --nocapture` 通过 |
 | 8 | 元认知动作链路加固 | 85% | `post_check` 已产出可消费纠偏动作并在自治循环中应用，新增动作计数与可观测字段；`cargo test corrective_actions_cover_timeout_and_empty_response -- --nocapture` 通过 |
 | 9 | ACP/CLI 行为一致性 | 82% | ACP chat + runtime execute（`task.execute`/`workflow.execute`）均已输出统一 `autonomy_contract`（`total_rounds`/`stop_reason` 同步）；CLI terminal chat 已接入共享合同快照并补充 round/stop 语义单测；`cargo test process_chat_request_execute_mode_exposes_stable_autonomy_contract -- --nocapture`、`cargo test run_scenario_file_executes_hardness_routing_benchmark_requests -- --nocapture`、`cargo test run_scenario_file_executes_workflow_execute_standalone_benchmark_requests -- --nocapture`、`cargo test --bin go-on terminal_chat_contract_snapshot_ -- --nocapture`、`cargo test --bin go-on terminal_chat_contract_snapshot_matches_autonomy_loop_contract -- --nocapture` 通过；仍缺 ACP/CLI 同场景对拍校验 |
@@ -697,6 +702,9 @@ MCP 门禁指标：
 22. 验证命令：`cargo test --bin go-on test_mcp_cancelled_request_returns_cancel_error -- --nocapture` 通过（MCP 取消错误码稳定返回）。
 23. 验证命令：`cargo test --bin go-on test_mcp_tool_call_timeout_returns_timeout_error -- --nocapture` 通过（MCP 超时错误码稳定返回）。
 24. 验证命令：`cargo test --test protocol_consistency_integration mcp_stdio_cancel_notification_blocks_matching_request_id -- --nocapture` 与 `cargo test --test transport_parity_integration mcp_http_cancel_notification_blocks_matching_request_id -- --nocapture` 均通过（stdio/http 取消语义一致，并保留 platform_context）。
+25. 验证命令：`cargo test --bin go-on recent_outcome_score_prefers_recent_successes_for_same_task_type -- --nocapture` 通过（CapabilityBus recent outcome 因子可区分近期成功/失败轨迹）。
+26. 验证命令：`cargo test --bin go-on multi_factor_selection_beats_reputation_only_for_security_task -- --nocapture` 与 `cargo test --bin go-on candidate_score_breakdown_contains_all_expected_fields -- --nocapture` 通过（Step6 多因子路由兼容且 score breakdown 合同保持稳定）。
+27. 验证命令：`cargo check --bin go-on 2>&1 | rg "autonomy_loop.rs|unused_assignments|with_consecutive_failures|without_consecutive_failures"` 未输出匹配项（当前未复现 `autonomy_loop.rs` 的 unused assignment 警告）。
 
 ### 8.6 MCP 专项完成率追踪（新增）
 
