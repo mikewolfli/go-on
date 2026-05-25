@@ -1455,6 +1455,23 @@ async fn run() -> Result<()> {
         None => return Ok(()),
     };
 
+    // Wrap config for hot-reload watchdog
+    let active_config: Arc<tokio::sync::RwLock<AppConfig>> =
+        Arc::new(tokio::sync::RwLock::new((*config).clone()));
+
+    // Start config hot-reload watchdog
+    let hot_reload_cfg = crate::core::config::hot_reload::HotReloadConfig {
+        config_path: config_path.clone(),
+        enabled: true,
+        ..Default::default()
+    };
+    let watchdog = crate::core::config::hot_reload::WatchDog::new(hot_reload_cfg, active_config);
+    tokio::spawn(async move {
+        if let Err(e) = watchdog.start().await {
+            tracing::warn!("Config hot-reload watchdog failed: {e}");
+        }
+    });
+
     // Check agent readiness — if no agents configured, prompt for setup or skip
     if !cli.setup
         && std::io::stdin().is_terminal()

@@ -116,6 +116,15 @@ impl AppConfig {
         if !cfg.role_registry.is_empty() {
             install_role_registry(cfg.role_registry.clone());
         }
+
+        // After normalization and before returning, validate schema version
+        #[cfg(not(test))]
+        if let Err(msg) = crate::core::config::schema_version::SchemaManager::new()
+            .validate_version(&crate::core::config::schema_version::SchemaVersion::CURRENT)
+        {
+            tracing::warn!("{}", msg);
+        }
+
         Ok(cfg)
     }
 

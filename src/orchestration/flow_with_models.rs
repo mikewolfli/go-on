@@ -7,7 +7,9 @@ use crate::agent::{Agent, ModelInfo};
 use crate::config::AppConfig;
 use crate::flow::ResolvedRouting;
 use crate::model_selector::{AutomaticModePolicy, ModelSelectionStrategy, SelectionCriteria};
-use crate::orchestration::orchestrator::{select_model_for_task, select_model_semantic};
+use crate::orchestration::orchestrator::{
+    select_model_for_task, select_model_semantic, OrchestrationContext,
+};
 use anyhow::Result;
 
 /// Extended routing information with selected model
@@ -42,6 +44,7 @@ impl FlowModelSelector {
     /// # Returns
     /// * `Result<ResolvedRoutingWithModel>` - Routing with selected model
     pub fn resolve_with_model_selection(
+        ctx: &OrchestrationContext,
         routing: ResolvedRouting,
         config: &AppConfig,
         task_description: Option<&str>,
@@ -50,7 +53,7 @@ impl FlowModelSelector {
             .agents
             .first()
             .map(|(_, agent_arc)| {
-                Self::select_model_for_agent(agent_arc.as_ref(), config, task_description)
+                Self::select_model_for_agent(ctx, agent_arc.as_ref(), config, task_description)
             })
             .unwrap_or_else(|| AgentModelSelection {
                 selected_model: None,
@@ -67,6 +70,7 @@ impl FlowModelSelector {
     }
 
     pub fn select_model_for_agent(
+        ctx: &OrchestrationContext,
         agent: &dyn Agent,
         config: &AppConfig,
         task_description: Option<&str>,
@@ -82,6 +86,7 @@ impl FlowModelSelector {
                     if config.model_selection_mode == "semantic" {
                         return AgentModelSelection {
                             selected_model: select_model_semantic(
+                                ctx,
                                 available,
                                 desc,
                                 strategy.clone(),
@@ -92,7 +97,7 @@ impl FlowModelSelector {
                     }
                 }
                 let criteria = Self::build_selection_criteria(task_complexity, task_description);
-                select_model_for_task(available, &criteria, strategy.clone())
+                select_model_for_task(ctx, available, &criteria, strategy.clone())
             } else if !available.is_empty() {
                 agent.default_model()
             } else {
@@ -300,6 +305,7 @@ mod tests {
 
     #[test]
     fn select_model_for_agent_uses_override_capability() {
+        let ctx = OrchestrationContext::new();
         let agent = MockSelectableAgent {
             supports_override: true,
             models: vec![
@@ -323,6 +329,7 @@ mod tests {
         };
 
         let selection = FlowModelSelector::select_model_for_agent(
+            &ctx,
             &agent,
             &test_config("capable"),
             Some("implement code generation changes"),
@@ -336,6 +343,7 @@ mod tests {
 
     #[test]
     fn select_model_for_agent_skips_providers_without_override() {
+        let ctx = OrchestrationContext::new();
         let agent = MockSelectableAgent {
             supports_override: false,
             models: vec![ModelInfo {
@@ -349,6 +357,7 @@ mod tests {
         };
 
         let selection = FlowModelSelector::select_model_for_agent(
+            &ctx,
             &agent,
             &test_config("capable"),
             Some("simple chat"),

@@ -2370,6 +2370,7 @@ struct RuntimeExecutionContext {
     adaptive_defaults: AdaptiveExecutionDefaults,
     artifact_ledger: ArtifactLedger,
     vector_store: Option<Arc<VectorStore>>,
+    orchestration_ctx: Arc<OrchestrationContext>,
 }
 
 #[derive(Clone, Serialize)]
@@ -2585,6 +2586,7 @@ async fn build_execution_context(
         },
         artifact_ledger: ledger,
         vector_store: server.cache.vector_store.clone(),
+        orchestration_ctx: Arc::new(OrchestrationContext::new()),
     })
 }
 
@@ -3131,6 +3133,7 @@ async fn execute_single_subtask(
         .iter()
         .map(|(agent_name, agent)| {
             let selection = FlowModelSelector::select_model_for_agent(
+                context.orchestration_ctx.as_ref(),
                 agent.as_ref(),
                 context.app_config.as_ref(),
                 Some(&subtask_description),

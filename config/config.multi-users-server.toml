@@ -9,6 +9,7 @@
 #            Set GO_ON_CORS_ALLOWED_ORIGINS for allowed origins (comma-separated).
 # ============================================================
 
+schema_version = "1.0.0"
 default_phase = "think"
 model_selection_mode = "adaptive"
 

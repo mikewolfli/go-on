@@ -20,6 +20,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tracing::{debug, info, warn};
 
+use crate::orchestration::brain_loop::{
+    BrainLoop, BrainLoopConfig, BrainLoopPhase, BrainLoopStep, StepStatus,
+};
 use crate::orchestration::fast_path_cache::{
     EnvCacheValue, FastPathCache, IntentCacheValue, SkillCacheValue,
 };
@@ -850,6 +853,48 @@ impl FullAutoFlow {
             errors.len(),
             total_duration_ms
         );
+
+        // ── BrainLoop integration (GAP-46-07) ───────────────────────────
+        // Create a plan from the task result and execute a synthetic step so
+        // the brain loop is no longer a dead module.
+        if !execution_log.is_empty() {
+            let bl = BrainLoop::new(BrainLoopConfig::default());
+            let bl_steps: Vec<BrainLoopStep> = execution_log
+                .iter()
+                .enumerate()
+                .map(|(i, s)| BrainLoopStep {
+                    id: format!("bl-step-{i}"),
+                    phase: BrainLoopPhase::Executing,
+                    description: s.skill_name.clone(),
+                    input: s.input.to_string(),
+                    output: if s.success {
+                        s.output.to_string()
+                    } else {
+                        String::new()
+                    },
+                    started_ms: s.timestamp_ms,
+                    completed_ms: s.timestamp_ms + s.duration_ms,
+                    duration_ms: s.duration_ms,
+                    status: if s.success {
+                        StepStatus::Done
+                    } else {
+                        StepStatus::Skipped
+                    },
+                })
+                .collect();
+
+            match bl.start_plan(task, bl_steps) {
+                Ok(plan_id) => {
+                    debug!("BrainLoop plan `{plan_id}` started for task");
+                    if let Some(ref output) = final_output {
+                        if let Err(e) = bl.execute_step(&plan_id, "bl-step-0", output) {
+                            warn!("BrainLoop step execution failed: {e}");
+                        }
+                    }
+                }
+                Err(e) => warn!("BrainLoop plan creation failed: {e}"),
+            }
+        }
 
         AutoExecutionReport {
             task_intent: intent,

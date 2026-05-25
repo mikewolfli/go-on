@@ -6,26 +6,135 @@
 //! all automatic recovery attempts are exhausted.
 
 use serde::{Deserialize, Serialize};
-#[cfg(test)]
 use serde_json::json;
 use serde_json::Value;
+use std::fmt;
 use std::time::Instant;
 use uuid::Uuid;
+
+// ---------------------------------------------------------------------------
+// Failure classification
+// ---------------------------------------------------------------------------
+
+/// Explicit classification of failure types for strategy matching.
+///
+/// Replaces fragile Levenshtein/string-similarity heuristics with a
+/// deterministic keyword-based classifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureKind {
+    Timeout,
+    RateLimit,
+    NetworkError,
+    PermissionDenied,
+    ToolNotFound,
+    ToolExecutionError,
+    InvalidInput,
+    ResourceExhausted,
+    Unknown,
+}
+
+/// Classify a failure description string into a `FailureKind` using keyword
+/// matching. Matching is case-insensitive.
+pub fn classify_failure(error: &str) -> FailureKind {
+    let e = error.to_ascii_lowercase();
+
+    if e.contains("timeout") || e.contains("timed out") || e.contains("deadline exceeded") {
+        FailureKind::Timeout
+    } else if e.contains("rate limit") || e.contains("rate_limit") || e.contains("throttl") {
+        FailureKind::RateLimit
+    } else if e.contains("network") || e.contains("connection refused") || e.contains("dns") {
+        FailureKind::NetworkError
+    } else if e.contains("permission")
+        || e.contains("denied")
+        || e.contains("forbidden")
+        || e.contains("unauthorized")
+        || e.contains("auth")
+    {
+        FailureKind::PermissionDenied
+    } else if e.contains("not found") || e.contains("no such") || e.contains("unknown tool") {
+        FailureKind::ToolNotFound
+    } else if e.contains("execution error") || e.contains("runtime error") || e.contains("crash") {
+        FailureKind::ToolExecutionError
+    } else if e.contains("invalid") || e.contains("bad request") || e.contains("malformed") {
+        FailureKind::InvalidInput
+    } else if e.contains("resource")
+        || e.contains("memory")
+        || e.contains("disk")
+        || e.contains("exhausted")
+    {
+        FailureKind::ResourceExhausted
+    } else {
+        FailureKind::Unknown
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tool / agent reference
+// ---------------------------------------------------------------------------
+
+/// A reference to a tool or agent used inside recovery actions.
+///
+/// Replaces magic string literals (`"auto"`, `"current"`, `"fallback"`)
+/// with explicit enum variants.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolReference {
+    /// The current tool or agent (auto-detect).
+    Auto,
+    /// The currently active agent.
+    Current,
+    /// A fallback agent.
+    Fallback,
+    /// An explicitly named tool or agent.
+    Named(String),
+}
+
+impl fmt::Display for ToolReference {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ToolReference::Auto => write!(f, "auto"),
+            ToolReference::Current => write!(f, "current"),
+            ToolReference::Fallback => write!(f, "fallback"),
+            ToolReference::Named(name) => write!(f, "{name}"),
+        }
+    }
+}
+
+impl Serialize for ToolReference {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for ToolReference {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        Ok(match s.as_str() {
+            "auto" => ToolReference::Auto,
+            "current" => ToolReference::Current,
+            "fallback" => ToolReference::Fallback,
+            _ => ToolReference::Named(s),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Recovery action
+// ---------------------------------------------------------------------------
 
 /// Recovery action in the strategy tree for task failures.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RecoveryAction {
     /// Retry the same tool with backoff (transient errors).
     Retry {
-        tool_name: String,
+        tool_name: ToolReference,
         attempt: u32,
         max_attempts: u32,
         backoff_ms: u64,
     },
     /// Reroute to a different agent (permission/mismatch errors).
     Reroute {
-        from_agent: String,
-        to_agent: String,
+        from_agent: ToolReference,
+        to_agent: ToolReference,
         reason: String,
     },
     /// Replan the task with different strategy (plan/validation errors).
@@ -35,7 +144,7 @@ pub enum RecoveryAction {
     },
     /// Apply a known repair strategy to the result.
     Repair {
-        tool_name: String,
+        tool_name: ToolReference,
         repair_strategy: String,
     },
     /// Escalate to human intervention (unresolvable).
@@ -61,7 +170,7 @@ impl RecoveryAction {
     }
 
     /// Returns the action as a JSON value for evidence logging.
-    #[cfg(test)]
+    #[allow(dead_code)]
     pub fn to_json(&self) -> Value {
         match self {
             RecoveryAction::Retry {
@@ -71,7 +180,7 @@ impl RecoveryAction {
                 backoff_ms,
             } => json!({
                 "action": "retry",
-                "tool_name": tool_name,
+                "tool_name": tool_name.to_string(),
                 "attempt": attempt,
                 "max_attempts": max_attempts,
                 "backoff_ms": backoff_ms,
@@ -82,8 +191,8 @@ impl RecoveryAction {
                 reason,
             } => json!({
                 "action": "reroute",
-                "from_agent": from_agent,
-                "to_agent": to_agent,
+                "from_agent": from_agent.to_string(),
+                "to_agent": to_agent.to_string(),
                 "reason": reason,
             }),
             RecoveryAction::Replan {
@@ -99,7 +208,7 @@ impl RecoveryAction {
                 repair_strategy,
             } => json!({
                 "action": "repair",
-                "tool_name": tool_name,
+                "tool_name": tool_name.to_string(),
                 "repair_strategy": repair_strategy,
             }),
             RecoveryAction::Escalate { reason, context } => json!({
@@ -118,6 +227,10 @@ impl RecoveryAction {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Recovery strategy
+// ---------------------------------------------------------------------------
 
 /// A recovery strategy with its name, action chain, and tracked success rate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,7 +268,7 @@ impl RecoveryStrategy {
     }
 
     /// Returns the success rate of this strategy (0.0–1.0).
-    #[cfg(test)]
+    #[allow(dead_code)]
     pub fn success_rate(&self) -> f64 {
         if self.attempt_count == 0 {
             0.0
@@ -164,6 +277,10 @@ impl RecoveryStrategy {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Recovery attempt
+// ---------------------------------------------------------------------------
 
 /// A single recovery attempt with its outcome and evidence.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,6 +317,10 @@ impl RecoveryAttempt {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Recovery orchestrator
+// ---------------------------------------------------------------------------
 
 /// Orchestrator that manages automatic recovery attempts with configurable
 /// thresholds for human intervention escalation.
@@ -253,7 +374,7 @@ impl RecoveryOrchestrator {
             RecoveryStrategy::new(
                 "timeout_retry",
                 vec![RecoveryAction::Retry {
-                    tool_name: "auto".to_string(),
+                    tool_name: ToolReference::Auto,
                     attempt: 1,
                     max_attempts: 3,
                     backoff_ms: 1000,
@@ -263,13 +384,13 @@ impl RecoveryOrchestrator {
                 "empty_response_retry",
                 vec![
                     RecoveryAction::Retry {
-                        tool_name: "auto".to_string(),
+                        tool_name: ToolReference::Auto,
                         attempt: 1,
                         max_attempts: 2,
                         backoff_ms: 500,
                     },
                     RecoveryAction::Repair {
-                        tool_name: "auto".to_string(),
+                        tool_name: ToolReference::Auto,
                         repair_strategy: "request_structured_intermediate_output".to_string(),
                     },
                 ],
@@ -277,8 +398,8 @@ impl RecoveryOrchestrator {
             RecoveryStrategy::new(
                 "permission_reroute",
                 vec![RecoveryAction::Reroute {
-                    from_agent: "current".to_string(),
-                    to_agent: "fallback".to_string(),
+                    from_agent: ToolReference::Current,
+                    to_agent: ToolReference::Fallback,
                     reason: "permission_denied".to_string(),
                 }],
             ),
@@ -286,7 +407,7 @@ impl RecoveryOrchestrator {
                 "rate_limit_backoff",
                 vec![
                     RecoveryAction::Retry {
-                        tool_name: "auto".to_string(),
+                        tool_name: ToolReference::Auto,
                         attempt: 1,
                         max_attempts: 3,
                         backoff_ms: 5000,
@@ -426,20 +547,35 @@ impl RecoveryOrchestrator {
     }
 
     /// Select the best matching strategy for a given failure type.
+    ///
+    /// Uses the explicit `FailureKind` classification instead of fragile
+    /// string similarity scoring.
     fn select_strategy(&self, failure_lower: &str) -> Result<&RecoveryStrategy, String> {
-        // Return the strategy with the best name match for the failure type.
-        let best = self
-            .strategies
+        let kind = classify_failure(failure_lower);
+        let name = match kind {
+            FailureKind::Timeout => "timeout_retry",
+            FailureKind::RateLimit => "rate_limit_backoff",
+            FailureKind::PermissionDenied => "permission_reroute",
+            // Tool execution errors (empty responses, crashes) → empty_response_retry
+            FailureKind::ToolExecutionError => "empty_response_retry",
+            // Everything else falls through to the generic replan strategy.
+            FailureKind::NetworkError
+            | FailureKind::ToolNotFound
+            | FailureKind::InvalidInput
+            | FailureKind::ResourceExhausted
+            | FailureKind::Unknown => "generic_failure_replan",
+        };
+        self.strategies
             .iter()
-            .max_by_key(|s| similarity_score(&s.name, failure_lower));
-        best.ok_or_else(|| format!("no strategy matches failure: {failure_lower}"))
+            .find(|s| s.name == name)
+            .ok_or_else(|| format!("no strategy matches failure: {failure_lower}"))
     }
 
     /// Returns the auto-recovery success rate (0.0–1.0).
     ///
     /// This measures how often automatic recovery attempts succeed.
     /// A low rate suggests the system should escalate to human sooner.
-    #[cfg(test)]
+    #[allow(dead_code)]
     pub fn auto_recovery_rate(&self) -> f64 {
         let auto_attempts: Vec<&RecoveryAttempt> = self
             .recovery_attempts
@@ -460,7 +596,7 @@ impl RecoveryOrchestrator {
     /// The ratio of escalation actions to all recovery attempts.
     /// A value near 1.0 means almost all failures escalate to human.
     /// A value near 0.0 means auto-recovery handles most failures.
-    #[cfg(test)]
+    #[allow(dead_code)]
     pub fn human_intervention_ratio(&self) -> f64 {
         let total = self.recovery_attempts.len();
         if total == 0 {
@@ -478,7 +614,7 @@ impl RecoveryOrchestrator {
     ///
     /// Each entry corresponds to one recovery attempt containing the failure,
     /// action taken, success status, duration, and evidence context.
-    #[cfg(test)]
+    #[allow(dead_code)]
     pub fn recovery_evidence_chain(&self) -> Vec<Value> {
         self.recovery_attempts
             .iter()
@@ -502,19 +638,9 @@ impl Default for RecoveryOrchestrator {
     }
 }
 
-/// Compute a simple heuristic similarity score between a strategy name and a failure type.
-///
-/// Returns a score where higher values indicate better match. Uses substring
-/// matching as a lightweight alternative to full NLP classification.
-fn similarity_score(strategy_name: &str, failure_type: &str) -> usize {
-    let parts: Vec<&str> = strategy_name.split('_').collect();
-
-    // Count how many parts of the strategy name appear in the failure type.
-    parts
-        .iter()
-        .filter(|part| !part.is_empty() && failure_type.contains(*part))
-        .count()
-}
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -665,7 +791,7 @@ mod tests {
         assert_eq!(chain[0]["action_taken"]["action"], "retry");
         assert_eq!(chain[0]["success"], true);
 
-        // Second attempt: permission denied → escalate or reroute.
+        // Second attempt: permission denied → reroute.
         assert_eq!(chain[1]["failure"], "permission denied");
         assert_eq!(chain[1]["success"], false);
     }
@@ -727,7 +853,7 @@ mod tests {
         let mut strategy = RecoveryStrategy::new(
             "test_strategy",
             vec![RecoveryAction::Retry {
-                tool_name: "test".to_string(),
+                tool_name: ToolReference::Named("test".to_string()),
                 attempt: 1,
                 max_attempts: 3,
                 backoff_ms: 100,
@@ -753,7 +879,7 @@ mod tests {
     #[test]
     fn recovery_action_label_and_json() {
         let action = RecoveryAction::Retry {
-            tool_name: "search".to_string(),
+            tool_name: ToolReference::Named("search".to_string()),
             attempt: 2,
             max_attempts: 5,
             backoff_ms: 2000,

@@ -62,7 +62,7 @@ mod platform {
         // Without this step, macOS Keychain Services will reject reads from
         // the backend because it's not the process that originally created the item.
         let _ = Command::new("security")
-            .args(&[
+            .args([
                 "set-key-partition-list",
                 "-S",
                 "apple:default,apple:toolbar,apple:unknown,apple:keychain:basic",

@@ -13,6 +13,7 @@
 # - Reduced vector dimensions (128)
 # - Shorter timeouts to free resources faster
 
+schema_version = "1.0.0"
 default_phase = "think"
 model_selection_mode = "adaptive"
 

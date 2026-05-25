@@ -546,21 +546,6 @@ impl Agent for AnthropicAgent {
                 context_window: Some(1_000_000),
             },
             crate::agent::ModelInfo {
-                id: "claude-sonnet-4-6".to_string(),
-                name: "Claude Sonnet 4.6".to_string(),
-                description: "Anthropic's best combination of speed and intelligence".to_string(),
-                is_default: self.model == "claude-sonnet-4-6",
-                capabilities: vec![
-                    "chat".to_string(),
-                    "vision".to_string(),
-                    "reasoning".to_string(),
-                    "function_calling".to_string(),
-                    "streaming".to_string(),
-                    "extended_thinking".to_string(),
-                ],
-                context_window: Some(1_000_000),
-            },
-            crate::agent::ModelInfo {
                 id: "claude-haiku-4-5-20251001".to_string(),
                 name: "Claude Haiku 4.5 (20251001)".to_string(),
                 description: "Anthropic's fastest model with near-frontier intelligence"

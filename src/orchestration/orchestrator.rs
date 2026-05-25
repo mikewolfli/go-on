@@ -8,7 +8,6 @@
 //! BLUE44: HotFailover + LivePerformanceFeed + SemanticCapabilityMatcher integration.
 
 use crate::agent::{AgentTaskEnvelope, AgentTaskResult, ModelInfo};
-use crate::intelligence::hot_failover::{HotFailover, HotFailoverConfig};
 use crate::intelligence::semantic_matcher::{
     ModelCapability as SemanticModelCapability, ScoredSkill, SemanticCapabilityMatcher,
     SkillCapability as SemanticSkillCapability,
@@ -22,45 +21,37 @@ use crate::mode::{
 use crate::model_selector::{
     ModelCharacteristics, ModelSelectionStrategy, ModelSelector, SelectionCriteria,
 };
-use crate::observability::live_performance::LivePerformanceFeed;
 use anyhow::Result;
-use std::sync::OnceLock;
+
+pub use crate::orchestration::context::OrchestrationContext;
 
 // ---------------------------------------------------------------------------
-// Global performance feed (lazily initialised)
+// Backward-compatible default context (deprecated)
 // ---------------------------------------------------------------------------
 
-/// Global `LivePerformanceFeed` for dynamic cost/latency estimates.
-static PERFORMANCE_FEED: OnceLock<LivePerformanceFeed> = OnceLock::new();
-
-/// Return a reference to the global performance feed, initialising it
-/// with default settings on first access.
-pub fn performance_feed() -> &'static LivePerformanceFeed {
-    PERFORMANCE_FEED.get_or_init(LivePerformanceFeed::default)
+/// Create a default `OrchestrationContext` with standard feed and failover
+/// settings.
+///
+/// ⚠ **Deprecated:** prefer to create an `OrchestrationContext` explicitly
+/// early in your request lifecycle and pass it through the call chain.
+/// This function exists to ease migration from the removed global singletons.
+#[deprecated(
+    note = "create an OrchestrationContext explicitly and pass it to orchestrator functions"
+)]
+pub fn default_context() -> OrchestrationContext {
+    OrchestrationContext::new()
 }
 
-// ---------------------------------------------------------------------------
-// Global hot-failover instance (lazily initialised)
-// ---------------------------------------------------------------------------
-
-/// Global `HotFailover` for transparent model failover.
-static FAILOVER: OnceLock<HotFailover> = OnceLock::new();
-
-/// Return a reference to the global hot-failover instance.
-pub fn failover() -> &'static HotFailover {
-    FAILOVER.get_or_init(|| HotFailover::new(HotFailoverConfig::default()))
-}
-
-/// Record a model execution outcome in the global performance feed.
+/// Record a model execution outcome.
 ///
 /// Call after each model request completes to keep dynamic estimates fresh.
-pub fn record_model_execution(model_id: &str, success: bool, latency_ms: u64) {
-    let feed = performance_feed();
-    if success {
-        feed.record_success(model_id, latency_ms);
-    } else {
-        feed.record_failure(model_id, latency_ms);
-    }
+pub fn record_model_execution(
+    ctx: &OrchestrationContext,
+    model_id: &str,
+    success: bool,
+    latency_ms: u64,
+) {
+    ctx.record_model_execution(model_id, success, latency_ms);
 }
 
 // ---------------------------------------------------------------------------
@@ -99,6 +90,7 @@ pub fn execute_with_mode(mode: &str, task: AgentTaskEnvelope) -> Result<AgentTas
 /// # Returns
 /// * `Option<ModelInfo>` - Selected model, or None if no suitable model found
 pub fn select_model_for_task(
+    ctx: &OrchestrationContext,
     available_models: Vec<ModelInfo>,
     criteria: &SelectionCriteria,
     strategy: ModelSelectionStrategy,
@@ -112,8 +104,8 @@ pub fn select_model_for_task(
         .iter()
         .map(|m| ModelCharacteristics {
             id: m.id.clone(),
-            cost_per_request_cents: estimate_model_cost(&m.id),
-            latency_ms: estimate_model_latency(&m.id),
+            cost_per_request_cents: estimate_model_cost(ctx, &m.id),
+            latency_ms: estimate_model_latency(ctx, &m.id),
             capability_tier: estimate_capability_tier(&m.capabilities),
             supports_vision: m.capabilities.contains(&"vision".to_string()),
             supports_function_calling: m.capabilities.contains(&"function_calling".to_string()),
@@ -137,6 +129,7 @@ pub fn select_model_for_task(
 /// delegates to `SemanticCapabilityMatcher::match_task_to_models`.
 /// Falls back to `select_model_for_task` if no semantic matches are found.
 pub fn select_model_semantic(
+    ctx: &OrchestrationContext,
     available_models: Vec<ModelInfo>,
     task_description: &str,
     fallback_strategy: ModelSelectionStrategy,
@@ -177,7 +170,7 @@ pub fn select_model_semantic(
 
     // Fallback: use traditional criteria-based selection
     let criteria = SelectionCriteria::minimal();
-    select_model_for_task(available_models, &criteria, fallback_strategy)
+    select_model_for_task(ctx, available_models, &criteria, fallback_strategy)
 }
 
 /// Select the best-matching skill using semantic capability matching.
@@ -208,9 +201,9 @@ pub fn select_skill_semantic(
 ///
 /// Checks the `LivePerformanceFeed` for a dynamic cost estimate first,
 /// falling back to the static lookup table.
-pub fn estimate_model_cost(model_id: &str) -> u32 {
+pub fn estimate_model_cost(ctx: &OrchestrationContext, model_id: &str) -> u32 {
     // Try dynamic estimate from LivePerformanceFeed.
-    if let Some(dynamic) = performance_feed().get_cost_estimate(model_id) {
+    if let Some(dynamic) = ctx.performance_feed().get_cost_estimate(model_id) {
         let cents = dynamic as u32;
         if cents > 0 {
             return cents;
@@ -230,12 +223,10 @@ pub fn estimate_model_cost(model_id: &str) -> u32 {
         // Anthropic models
         "claude-sonnet-4-20250514" => 15,
         // Legacy IDs — kept as fallbacks for backward compatibility
-        "deepseek-v3" => 5,
         "deepseek-chat" => 2,
         "deepseek-coder" => 3,
         "ernie-4.0-turbo-8k" | "ernie-3.5-turbo" => 4,
         "gpt-4" => 30,
-        "gpt-3.5-turbo" => 1,
         // Default estimate
         _ => 5,
     }
@@ -245,9 +236,9 @@ pub fn estimate_model_cost(model_id: &str) -> u32 {
 ///
 /// Checks the `LivePerformanceFeed` for a dynamic latency estimate first,
 /// falling back to the static lookup table.
-pub fn estimate_model_latency(model_id: &str) -> u32 {
+pub fn estimate_model_latency(ctx: &OrchestrationContext, model_id: &str) -> u32 {
     // Try dynamic estimate from LivePerformanceFeed.
-    if let Some(dynamic) = performance_feed().get_latency_estimate(model_id) {
+    if let Some(dynamic) = ctx.performance_feed().get_latency_estimate(model_id) {
         let ms = dynamic as u32;
         if ms > 0 {
             return ms;
@@ -267,10 +258,8 @@ pub fn estimate_model_latency(model_id: &str) -> u32 {
         // Legacy IDs — kept as fallbacks for backward compatibility
         "deepseek-chat" => 800,
         "deepseek-coder" => 1500,
-        "deepseek-v3" => 2000,
         "ernie-4.0-turbo-8k" | "ernie-3.5-turbo" => 1000,
         "gpt-4" => 2500,
-        "gpt-3.5-turbo" => 1200,
         // Default estimate
         _ => 1500,
     }
@@ -332,30 +321,32 @@ mod tests {
 
     #[test]
     fn test_model_cost_estimates() {
-        assert!(estimate_model_cost("gpt-4") > estimate_model_cost("gpt-3.5-turbo"));
-        assert!(estimate_model_cost("deepseek-v3") > estimate_model_cost("deepseek-chat"));
+        let ctx = OrchestrationContext::new();
+        assert!(estimate_model_cost(&ctx, "gpt-4") > estimate_model_cost(&ctx, "gpt-4o-mini"));
     }
 
     #[test]
     fn test_performance_feed_dynamic_cost_affects_estimate() {
-        let feed = performance_feed();
-        feed.record_success("gpt-4o-mini", 50);
-        let cost = estimate_model_cost("gpt-4o-mini");
+        let ctx = OrchestrationContext::new();
+        ctx.performance_feed().record_success("gpt-4o-mini", 50);
+        let cost = estimate_model_cost(&ctx, "gpt-4o-mini");
         // Dynamic cost should override static fallback (which is 2).
         assert!(cost > 0);
     }
 
     #[test]
     fn test_performance_feed_dynamic_latency_affects_estimate() {
-        let feed = performance_feed();
-        feed.record_success("deepseek-v4-flash", 200);
-        let latency = estimate_model_latency("deepseek-v4-flash");
+        let ctx = OrchestrationContext::new();
+        ctx.performance_feed()
+            .record_success("deepseek-v4-flash", 200);
+        let latency = estimate_model_latency(&ctx, "deepseek-v4-flash");
         // Dynamic latency should reflect observed value.
         assert!(latency > 0);
     }
 
     #[test]
     fn test_select_model_semantic_fallbacks_when_no_match() {
+        let ctx = OrchestrationContext::new();
         let models = vec![ModelInfo {
             id: "test-model".to_string(),
             name: "Test".to_string(),
@@ -365,6 +356,7 @@ mod tests {
             context_window: Some(4096),
         }];
         let result = select_model_semantic(
+            &ctx,
             models.clone(),
             "analyze images and screenshots",
             ModelSelectionStrategy::Balanced,
@@ -419,7 +411,8 @@ mod tests {
 
     #[test]
     fn test_failover_instance_is_available() {
-        let fo = failover();
+        let ctx = OrchestrationContext::new();
+        let fo = ctx.failover();
         let metrics = fo.metrics();
         assert_eq!(metrics.failover_count, 0);
         assert!(!fo.is_blacklisted("nonexistent-model"));

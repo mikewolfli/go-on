@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, error, info, warn};
 
 // ──────────────────────────────────────────────
@@ -139,17 +139,18 @@ pub struct SchedulerProfile {
 
 pub struct TaskScheduler {
     config: SchedulerConfig,
-    /// Priority queue of pending tasks
-    queue: Mutex<BinaryHeap<ScheduledTask>>,
-    /// Active task IDs (currently being executed)
-    active_tasks: Mutex<HashSet<String>>,
-    /// Task lookup by ID
+    /// Per-role priority queues of pending tasks (role → heap)
+    queues: Mutex<HashMap<String, BinaryHeap<ScheduledTask>>>,
+    /// Task lookup by ID (includes both pending and active tasks)
     task_map: Mutex<HashMap<String, ScheduledTask>>,
-    /// Per-role active count
-    role_active_count: Mutex<HashMap<String, usize>>,
+    /// Active task permits: task_id → (global_permit, role_permit).
+    /// Holding these permits consumes semaphore capacity.
+    /// Dropping the permits returns them to the semaphores.
+    active: Mutex<HashMap<String, (OwnedSemaphorePermit, OwnedSemaphorePermit)>>,
     /// Statistics
     stats: Mutex<SchedulerProfile>,
     /// Last aging update timestamp
+    #[allow(dead_code)]
     last_aging: Mutex<Instant>,
     /// Global concurrency limiter using a semaphore.
     concurrency_limiter: Arc<Semaphore>,
@@ -164,10 +165,9 @@ impl TaskScheduler {
     pub fn new(config: SchedulerConfig) -> Self {
         let global_permits = config.global_max_concurrent_tasks;
         Self {
-            queue: Mutex::new(BinaryHeap::new()),
-            active_tasks: Mutex::new(HashSet::new()),
+            queues: Mutex::new(HashMap::new()),
             task_map: Mutex::new(HashMap::new()),
-            role_active_count: Mutex::new(HashMap::new()),
+            active: Mutex::new(HashMap::new()),
             stats: Mutex::new(SchedulerProfile {
                 l1_queue_depth: 0,
                 l2_active_workers: 0,
@@ -204,10 +204,9 @@ impl TaskScheduler {
         };
 
         let scheduler = Self {
-            queue: Mutex::new(BinaryHeap::new()),
-            active_tasks: Mutex::new(HashSet::new()),
+            queues: Mutex::new(HashMap::new()),
             task_map: Mutex::new(HashMap::new()),
-            role_active_count: Mutex::new(HashMap::new()),
+            active: Mutex::new(HashMap::new()),
             stats: Mutex::new(SchedulerProfile {
                 l1_queue_depth: 0,
                 l2_active_workers: 0,
@@ -248,12 +247,15 @@ impl TaskScheduler {
         scheduler
     }
 
-    /// Submit a task to the queue. Pushes into BinaryHeap, stores in task_map.
+    /// Submit a task to the queue. Pushes into the role-specific BinaryHeap,
+    /// stores in task_map.
     ///
     /// Returns `Err` if the queue depth exceeds the backpressure threshold
     /// (configured via `SchedulerConfig::backpressure_queue_depth`).
     pub fn submit(&self, task: ScheduledTask) -> Result<()> {
         let task_id = task.task_id.clone();
+        let role = task.role.clone();
+
         if self
             .task_map
             .lock()
@@ -263,28 +265,34 @@ impl TaskScheduler {
             return Err(anyhow!("Task {} already submitted", task_id));
         }
 
-        // Check backpressure: reject if queue depth exceeds threshold.
-        let queue_depth = self
-            .queue
+        // Check backpressure: reject if total pending queue depth exceeds threshold.
+        let total_pending: usize = self
+            .queues
             .lock()
             .map_err(|e| anyhow!("Lock error: {}", e))?
-            .len();
-        if queue_depth >= self.config.backpressure_queue_depth {
+            .values()
+            .map(|q| q.len())
+            .sum();
+        if total_pending >= self.config.backpressure_queue_depth {
             if let Ok(mut stats) = self.stats.lock() {
                 stats.backpressure_rejections += 1;
             }
             return Err(anyhow!(
-                "Backpressure: queue depth ({}) exceeds threshold ({}) — rejected task {}",
-                queue_depth,
+                "Backpressure: total pending ({}) exceeds threshold ({}) — rejected task {}",
+                total_pending,
                 self.config.backpressure_queue_depth,
                 task_id
             ));
         }
 
-        self.queue
+        // Push into the role-specific heap
+        self.queues
             .lock()
             .map_err(|e| anyhow!("Lock error: {}", e))?
+            .entry(role)
+            .or_default()
             .push(task.clone());
+
         self.task_map
             .lock()
             .map_err(|e| anyhow!("Lock error: {}", e))?
@@ -357,118 +365,93 @@ impl TaskScheduler {
             .map_err(|e| anyhow!("Failed to acquire role permit for '{}': {}", role, e))
     }
 
-    /// Dequeue the highest-priority task matching the role.
-    /// Checks global concurrency cap, per-role cap, and semaphore availability.
-    /// On success, adds task_id to active_tasks and increments role counter.
+    /// Dequeue the highest-priority task for the given role.
+    ///
+    /// O(log n) — pops directly from the role-specific BinaryHeap.
+    /// Acquires global and per-role semaphore permits atomically; the caller
+    /// must not separately call `acquire_permit` / `acquire_role_permit`.
+    ///
+    /// Returns `None` if the queue is empty or capacity is exhausted.
     pub fn dequeue(&self, role: &str) -> Option<ScheduledTask> {
-        // Refresh dynamic priorities before picking the next task.
-        self.apply_aging();
+        // Note: apply_aging should be called periodically by a background
+        // timer task, not synchronously on every dequeue call.
 
-        if self.is_global_at_capacity() {
-            debug!("Global concurrency cap reached, cannot dequeue");
-            return None;
-        }
-        if self.is_role_at_capacity(role) {
-            debug!("Role {} at capacity, cannot dequeue", role);
-            return None;
-        }
-
-        // Check semaphore availability as an additional guard.
+        // Check global concurrency capacity via the semaphore.
         if self.available_concurrency() == 0 {
             debug!("Semaphore exhausted, cannot dequeue");
             return None;
         }
 
-        // Check per-role semaphore availability.
-        if let Ok(limiters) = self.role_limiters.lock() {
-            if let Some(limiter) = limiters.get(role) {
-                if limiter.available_permits() == 0 {
-                    debug!("Role '{}' semaphore exhausted, cannot dequeue", role);
+        // Check per-role capacity via its semaphore.
+        if self.is_role_at_capacity(role) {
+            debug!("Role {} at capacity, cannot dequeue", role);
+            return None;
+        }
+
+        // Pop the highest-priority task from the role-specific heap — O(log n).
+        let task = {
+            let mut queues = self.queues.lock().ok()?;
+            queues.get_mut(role)?.pop()?
+        };
+
+        let task_id = task.task_id.clone();
+        let role_str = task.role.clone();
+
+        // Acquire the global semaphore permit.
+        let global_permit = match self.concurrency_limiter.clone().try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                // Should not happen (we checked above), but roll back.
+                let mut queues = self.queues.lock().ok()?;
+                queues.entry(role_str).or_default().push(task);
+                return None;
+            }
+        };
+
+        // Acquire (or create) the per-role semaphore permit.
+        let role_permit = {
+            let mut limiters = self.role_limiters.lock().ok()?;
+            let limiter = limiters
+                .entry(role_str.clone())
+                .or_insert_with(|| Arc::new(Semaphore::new(self.config.max_workers_per_role)))
+                .clone();
+            match limiter.try_acquire_owned() {
+                Ok(p) => p,
+                Err(_) => {
+                    // Roll back the global permit.
+                    drop(global_permit);
+                    let mut queues = self.queues.lock().ok()?;
+                    queues.entry(role_str).or_default().push(task);
                     return None;
                 }
             }
-        }
-
-        // We need to find the highest-priority task matching the role.
-        // BinaryHeap only gives us the top, so we pop and re-push non-matching ones.
-        let mut queue = match self.queue.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                tracing::error!("scheduler queue mutex poisoned, recovering");
-                poisoned.into_inner()
-            }
         };
-        let mut buffer: Vec<ScheduledTask> = Vec::new();
-        let mut result: Option<ScheduledTask> = None;
 
-        while let Some(task) = queue.pop() {
-            match self.active_tasks.lock() {
-                Ok(active) => {
-                    if active.contains(&task.task_id) {
-                        buffer.push(task);
-                        continue;
-                    }
-                }
-                Err(poisoned) => {
-                    tracing::error!("scheduler active_tasks mutex poisoned, recovering");
-                    let active = poisoned.into_inner();
-                    if active.contains(&task.task_id) {
-                        buffer.push(task);
-                        continue;
-                    }
-                }
-            }
-            if task.role == role {
-                result = Some(task);
-                break;
-            }
-            buffer.push(task);
+        // Store the permits so they are held for the task's lifetime.
+        if let Ok(mut active) = self.active.lock() {
+            active.insert(task_id.clone(), (global_permit, role_permit));
         }
 
-        // Re-push all non-matching tasks back
-        for task in buffer {
-            queue.push(task);
-        }
-
-        if let Some(ref task) = result {
-            let task_id = task.task_id.clone();
-            let role_key = task.role.clone();
-            if let Ok(mut active) = self.active_tasks.lock() {
-                active.insert(task_id);
-            }
-            if let Ok(mut counts) = self.role_active_count.lock() {
-                *counts.entry(role_key).or_insert(0) += 1;
-            }
-            debug!("Dequeued task {} for role {}", task.task_id, role);
-        }
-
-        result
+        debug!("Dequeued task {} for role {}", task.task_id, role);
+        Some(task)
     }
 
-    /// Mark task as completed. Removes from active_tasks and task_map, decrements role counter,
-    /// updates stats.
+    /// Mark task as completed.
+    ///
+    /// Removes from `active` (dropping the permits, returning them to the
+    /// semaphores) and from `task_map`. Updates stats.
     pub fn complete(&self, task_id: &str) -> Result<()> {
+        // Drop the permits — this returns capacity to the semaphores.
         {
             let mut active = self
-                .active_tasks
+                .active
                 .lock()
                 .map_err(|e| anyhow!("Lock error: {}", e))?;
-            if !active.remove(task_id) {
-                return Err(anyhow!("Task {} not found in active tasks", task_id));
-            }
+            let _ = active
+                .remove(task_id)
+                .ok_or_else(|| anyhow!("Task {} not found in active tasks", task_id))?;
         }
-        // Decrement role counter by looking up the task's role from task_map
-        if let Ok(task_map) = self.task_map.lock() {
-            if let Some(task) = task_map.get(task_id) {
-                if let Ok(mut counts) = self.role_active_count.lock() {
-                    if let Some(count) = counts.get_mut(&task.role) {
-                        if *count > 0 {
-                            *count -= 1;
-                        }
-                    }
-                }
-            }
-        }
+
         // Remove completed task from task_map
         self.task_map
             .lock()
@@ -492,28 +475,19 @@ impl TaskScheduler {
     }
 
     /// Mark task as failed. If requeue and retries < max_retries, increments retries
-    /// and pushes back to queue. Otherwise removes permanently.
+    /// and pushes back to the role-specific queue. Otherwise removes permanently.
+    ///
+    /// The semaphore permits are released (via the `active` map) for the
+    /// permanent case; on requeue the permits are released and the task is
+    /// re-enqueued.
     pub fn fail(&self, task_id: &str, requeue: bool) -> Result<()> {
-        // Remove from active first
+        // Drop the permits — this returns capacity to the semaphores.
         {
             let mut active = self
-                .active_tasks
+                .active
                 .lock()
                 .map_err(|e| anyhow!("Lock error: {}", e))?;
             active.remove(task_id);
-        }
-
-        // Decrement role counter
-        if let Ok(task_map) = self.task_map.lock() {
-            if let Some(task) = task_map.get(task_id) {
-                if let Ok(mut counts) = self.role_active_count.lock() {
-                    if let Some(count) = counts.get_mut(&task.role) {
-                        if *count > 0 {
-                            *count -= 1;
-                        }
-                    }
-                }
-            }
         }
 
         if requeue {
@@ -522,10 +496,13 @@ impl TaskScheduler {
                     if task.retries < task.max_retries {
                         task.retries += 1;
                         let updated_task = task.clone();
-                        // Re-push into queue
-                        self.queue
+                        let role = task.role.clone();
+                        // Re-push into role-specific queue
+                        self.queues
                             .lock()
                             .map_err(|e| anyhow!("Lock error: {}", e))?
+                            .entry(role)
+                            .or_default()
                             .push(updated_task);
                         self.stats
                             .lock()
@@ -567,8 +544,13 @@ impl TaskScheduler {
     }
 
     /// Apply aging to all waiting tasks. Iterates task_map, increments aging_bonus
-    /// by aging_rate * elapsed_seconds, capped at max_aging_bonus. Rebuilds BinaryHeap.
-    /// Tracks starvation_events_prevented when aging bonus crosses a threshold.
+    /// by aging_rate * elapsed_seconds, capped at max_aging_bonus. Rebuilds per-role
+    /// BinaryHeaps. Tracks starvation_events_prevented when aging bonus crosses a
+    /// threshold.
+    ///
+    /// This should be called periodically by a background timer, not synchronously
+    /// on every `dequeue()` call.
+    #[allow(dead_code)]
     pub fn apply_aging(&self) {
         let now = Instant::now();
         let elapsed = {
@@ -595,9 +577,6 @@ impl TaskScheduler {
         if let Ok(mut task_map) = self.task_map.lock() {
             let mut starvation_events = 0u64;
             for task in task_map.values_mut() {
-                // Only age tasks that are not currently active
-                // (We age all tasks; active ones will eventually get their bonus too,
-                //  but dequeue filters on active check.)
                 let old_bonus = task.aging_bonus;
                 let bonus = (task.aging_bonus + aging_rate * elapsed_secs).min(max_bonus);
                 task.aging_bonus = bonus;
@@ -619,21 +598,32 @@ impl TaskScheduler {
             }
         }
 
-        // Rebuild the BinaryHeap from updated task_map
-        if let (Ok(mut queue), Ok(task_map)) = (self.queue.lock(), self.task_map.lock()) {
-            queue.clear();
-            for task in task_map.values() {
-                // Only queue tasks not currently active
-                if let Ok(active) = self.active_tasks.lock() {
-                    if !active.contains(&task.task_id) {
-                        queue.push(task.clone());
-                    }
-                }
+        // Collect non-active tasks from task_map (briefly holds task_map lock).
+        let pending_tasks: Vec<ScheduledTask> = {
+            if let (Ok(task_map), Ok(active)) = (self.task_map.lock(), self.active.lock()) {
+                task_map
+                    .values()
+                    .filter(|t| !active.contains_key(&t.task_id))
+                    .cloned()
+                    .collect()
+            } else {
+                return;
+            }
+        };
+
+        // Rebuild per-role BinaryHeaps — only needs queues lock now.
+        if let Ok(mut queues) = self.queues.lock() {
+            queues.clear();
+            for task in &pending_tasks {
+                queues
+                    .entry(task.role.clone())
+                    .or_default()
+                    .push(task.clone());
             }
             debug!(
-                "Aging applied (elapsed={:.2}s), queue rebuilt with {} tasks",
+                "Aging applied (elapsed={:.2}s), queues rebuilt with {} tasks",
                 elapsed_secs,
-                queue.len()
+                pending_tasks.len()
             );
         }
     }
@@ -654,34 +644,32 @@ impl TaskScheduler {
                 starvation_events_prevented: 0,
                 backpressure_rejections: 0,
             });
-        if let Ok(queue) = self.queue.lock() {
-            profile.l1_queue_depth = queue.len() as u32;
+        if let Ok(queues) = self.queues.lock() {
+            profile.l1_queue_depth = queues.values().map(|q| q.len() as u32).sum();
         }
-        if let Ok(active) = self.active_tasks.lock() {
+        if let Ok(active) = self.active.lock() {
             profile.l2_active_workers = active.len() as u32;
         }
         profile
     }
 
-    /// Check if a role has reached max_workers
+    /// Check if a role has reached its max_workers limit via the per-role semaphore.
     pub fn is_role_at_capacity(&self, role: &str) -> bool {
-        if let Ok(counts) = self.role_active_count.lock() {
-            let count = counts.get(role).copied().unwrap_or(0);
-            count >= self.config.max_workers_per_role
-        } else {
-            true // Err on the side of caution
+        if let Ok(limiters) = self.role_limiters.lock() {
+            if let Some(limiter) = limiters.get(role) {
+                return limiter.available_permits() == 0;
+            }
         }
+        false
     }
 
     /// Check if global concurrency cap is reached.
     ///
-    /// Considers both the active task count and the semaphore availability.
+    /// Delegates to the global semaphore: if no permits are available, the
+    /// system is at capacity.
+    #[allow(dead_code)]
     pub fn is_global_at_capacity(&self) -> bool {
-        if let Ok(active) = self.active_tasks.lock() {
-            active.len() >= self.config.global_max_concurrent_tasks
-        } else {
-            true
-        }
+        self.available_concurrency() == 0
     }
 
     /// Returns the number of permits currently available in the global semaphore.
@@ -933,9 +921,8 @@ pub fn create_persistent_scheduler(db_path: Option<std::path::PathBuf>) -> TaskS
     scheduler
 }
 
-/// Factory: create a scheduler with SQLite-backed persistence when
-/// the `backend-sqlite` feature is enabled.  Falls back to an in-memory
-/// scheduler otherwise.
+/// Fallback when the `backend-sqlite` feature is disabled — creates an
+/// in-memory scheduler.
 #[cfg(not(feature = "backend-sqlite"))]
 pub fn create_persistent_scheduler(_db_path: Option<std::path::PathBuf>) -> TaskScheduler {
     TaskScheduler::new(SchedulerConfig::default())
@@ -1362,7 +1349,7 @@ mod tests {
 
         // Complete it
         scheduler.complete("t1").unwrap();
-        assert!(scheduler.active_tasks.lock().unwrap().is_empty());
+        assert!(scheduler.active.lock().unwrap().is_empty());
         let profile = scheduler.profile();
         assert_eq!(profile.total_completed, 1);
 
@@ -1372,7 +1359,7 @@ mod tests {
 
         // Fail with requeue
         scheduler.fail("t2", true).unwrap();
-        assert!(scheduler.active_tasks.lock().unwrap().is_empty());
+        assert!(scheduler.active.lock().unwrap().is_empty());
         assert!(scheduler.task_map.lock().unwrap().contains_key("t2"));
 
         // Verify retry count incremented

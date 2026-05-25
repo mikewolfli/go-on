@@ -15,6 +15,7 @@ use tracing::{info, warn};
 // ---------------------------------------------------------------------------
 
 /// Configuration for the hot-failover subsystem.
+#[derive(Clone)]
 pub struct HotFailoverConfig {
     /// Whether failover is enabled.
     pub enabled: bool,
@@ -128,7 +129,6 @@ impl HotFailover {
         let mut last_error: Option<E> = None;
 
         for (i, (model_id, f)) in attempts.iter().enumerate().take(max_attempts) {
-
             // Skip blacklisted models.
             if self.is_blacklisted(model_id) {
                 let mut m = crate::intelligence::lock_guard(&self.metrics);

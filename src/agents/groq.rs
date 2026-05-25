@@ -68,6 +68,11 @@ impl GroqAgent {
 
         apply_openai_common_options(&mut payload, options);
 
+        // If tools were set via options but tool_choice wasn't, default to "auto"
+        if payload.get("tools").is_some() && payload.get("tool_choice").is_none() {
+            payload["tool_choice"] = serde_json::json!("auto");
+        }
+
         payload
     }
 
@@ -140,6 +145,38 @@ impl Agent for GroqAgent {
                 capabilities: vec!["chat".to_string(), "streaming".to_string()],
                 context_window: Some(128_000),
             },
+            ModelInfo {
+                id: "llama-4-maverick".to_string(),
+                name: "Llama 4 Maverick".to_string(),
+                description: "Llama 4 Maverick (experimental, fast, function calling)".to_string(),
+                is_default: self.model == "llama-4-maverick",
+                capabilities: vec!["chat".to_string(), "function_calling".to_string(), "streaming".to_string()],
+                context_window: Some(128_000),
+            },
+            ModelInfo {
+                id: "mixtral-8x7b-32768".to_string(),
+                name: "Mixtral 8x7B".to_string(),
+                description: "Mixtral 8x7B (32K context, function calling)".to_string(),
+                is_default: self.model == "mixtral-8x7b-32768",
+                capabilities: vec!["chat".to_string(), "function_calling".to_string(), "streaming".to_string()],
+                context_window: Some(32_768),
+            },
+            ModelInfo {
+                id: "gemma2-9b-it".to_string(),
+                name: "Gemma 2 9B IT".to_string(),
+                description: "Gemma 2 9B IT (instruction-tuned, lightweight)".to_string(),
+                is_default: self.model == "gemma2-9b-it",
+                capabilities: vec!["chat".to_string(), "streaming".to_string()],
+                context_window: Some(8_192),
+            },
+            ModelInfo {
+                id: "qwen-2.5-32b".to_string(),
+                name: "Qwen 2.5 32B".to_string(),
+                description: "Qwen 2.5 32B (function calling)".to_string(),
+                is_default: self.model == "qwen-2.5-32b",
+                capabilities: vec!["chat".to_string(), "function_calling".to_string(), "streaming".to_string()],
+                context_window: Some(128_000),
+            },
         ]
     }
 
@@ -179,5 +216,117 @@ impl Agent for GroqAgent {
         Err(last_error
             .unwrap_or_else(|| anyhow::anyhow!("{}", request_failed_msg("groq")))
             .into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message(role: &str, content: &str) -> Message {
+        Message {
+            role: role.to_string(),
+            content: content.to_string(),
+        }
+    }
+
+    fn agent() -> GroqAgent {
+        GroqAgent::new(
+            "GROQ_API_KEY".to_string(),
+            "https://api.groq.com".to_string(),
+            "llama-3.3-70b-versatile".to_string(),
+            reqwest::Client::new(),
+        )
+    }
+
+    #[test]
+    fn test_build_payload_basic() {
+        let payload = agent().build_payload(vec![message("user", "hello")], None, &None);
+
+        assert_eq!(payload["model"], "llama-3.3-70b-versatile");
+        assert_eq!(payload["messages"][0]["content"], "hello");
+        assert_eq!(payload["stream"], true);
+        assert!(payload.get("temperature").is_none());
+    }
+
+    #[test]
+    fn test_build_payload_with_principles() {
+        let payload = agent().build_payload(
+            vec![message("user", "do it")],
+            Some(vec![
+                "Be thorough".to_string(),
+                "Test everything".to_string(),
+            ]),
+            &None,
+        );
+
+        assert_eq!(payload["messages"][0]["role"], "system");
+        let content = payload["messages"][0]["content"].as_str().unwrap();
+        assert!(content.contains("Be thorough"));
+        assert!(content.contains("Test everything"));
+        assert_eq!(payload["messages"][1]["content"], "do it");
+    }
+
+    #[test]
+    fn test_build_payload_tool_choice_auto() {
+        let payload = agent().build_payload(
+            vec![message("user", "use tools")],
+            None,
+            &Some(HashMap::from([(
+                "tools".to_string(),
+                json!([{
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get the weather",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "location": { "type": "string" }
+                            }
+                        }
+                    }
+                }]),
+            )])),
+        );
+
+        assert!(payload.get("tools").is_some(), "tools should be present");
+        assert_eq!(
+            payload["tool_choice"], "auto",
+            "tool_choice should default to auto when tools are present"
+        );
+    }
+
+    #[test]
+    fn test_build_payload_tool_choice_preserved() {
+        let payload = agent().build_payload(
+            vec![message("user", "pick a tool")],
+            None,
+            &Some(HashMap::from([
+                (
+                    "tools".to_string(),
+                    json!([{
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "description": "Get the weather",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "location": { "type": "string" }
+                                }
+                            }
+                        }
+                    }]),
+                ),
+                ("tool_choice".to_string(), json!("required")),
+            ])),
+        );
+
+        assert!(payload.get("tools").is_some(), "tools should be present");
+        assert_eq!(
+            payload["tool_choice"], "required",
+            "tool_choice should remain 'required' when explicitly set"
+        );
     }
 }

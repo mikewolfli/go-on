@@ -6,6 +6,7 @@ pub mod cache_warming;
 pub mod capabilities_registry;
 pub mod capability_signals; // BLUE41: Structured capability decision data
 pub mod complexity_estimator;
+pub mod context;
 #[cfg(any(
     feature = "sub-bus-tool",
     feature = "profile-simple-server",
@@ -22,6 +23,7 @@ pub mod flow;
 pub mod flow_with_models;
 pub mod fork_registry;
 pub mod full_auto; // BLUE43 Step 10: Full-auto flow orchestrator
+pub mod integration;
 pub mod r#loop; // F-GAP-17 (structured sub-module)
 pub mod mode;
 pub mod omnipotent;

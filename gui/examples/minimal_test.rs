@@ -20,14 +20,9 @@ fn main() -> eframe::Result<()> {
     )
 }
 
+#[derive(Default)]
 struct MinimalApp {
     counter: u32,
-}
-
-impl Default for MinimalApp {
-    fn default() -> Self {
-        Self { counter: 0 }
-    }
 }
 
 impl eframe::App for MinimalApp {

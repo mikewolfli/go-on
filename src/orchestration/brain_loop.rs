@@ -15,6 +15,7 @@
 //! obtain a consistent view without holding the lock.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -41,7 +42,7 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// The phase a plan is currently in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BrainLoopPhase {
     Planning,
     Executing,
@@ -60,7 +61,7 @@ impl BrainLoopPhase {
 }
 
 /// Status of an individual step within a plan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StepStatus {
     Pending,
     InProgress,
@@ -73,7 +74,7 @@ pub enum StepStatus {
 // ---------------------------------------------------------------------------
 
 /// A single atomic unit of work inside a plan.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrainLoopStep {
     pub id: String,
     pub phase: BrainLoopPhase,
@@ -87,7 +88,7 @@ pub struct BrainLoopStep {
 }
 
 /// A plan being tracked by the brain loop.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrainLoopPlan {
     pub id: String,
     pub goal: String,
@@ -117,6 +118,8 @@ pub struct BrainLoopConfig {
     pub max_steps_per_iteration: u32,
     pub reflection_required: bool,
     pub auto_replan: bool,
+    /// Optional directory for persisting plans as JSON files.
+    pub plans_directory: Option<PathBuf>,
 }
 
 impl Default for BrainLoopConfig {
@@ -126,6 +129,7 @@ impl Default for BrainLoopConfig {
             max_steps_per_iteration: 10,
             reflection_required: true,
             auto_replan: true,
+            plans_directory: None,
         }
     }
 }
@@ -250,66 +254,90 @@ impl BrainLoop {
         let now = now_epoch_ms();
         let mut inner = lock_guard(&self.inner);
 
-        // Remove the plan so we can mutate it independently from `inner`.
-        let mut plan = inner
-            .plans
-            .remove(plan_id)
-            .ok_or_else(|| anyhow::anyhow!("{}", tf("error.plan_not_found", &[("id", plan_id)])))?;
-
-        if plan.phase.is_terminal() {
-            inner.plans.insert(plan_id.to_string(), plan);
-            anyhow::bail!("{}", tf("error.plan_already_terminal", &[("id", plan_id)]));
-        }
-
-        let step_idx = plan
-            .steps
-            .iter()
-            .position(|s| s.id == step_id)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "{}",
-                    tf(
-                        "error.step_not_found",
-                        &[("id", step_id), ("plan_id", plan_id)]
-                    )
-                )
+        // Phase 1: validate and check iteration limit (plan borrow dropped after scope).
+        let plan_failed = {
+            let plan = inner.plans.get_mut(plan_id).ok_or_else(|| {
+                anyhow::anyhow!("{}", tf("error.plan_not_found", &[("id", plan_id)]))
             })?;
 
-        if plan.steps[step_idx].status == StepStatus::Done {
-            inner.plans.insert(plan_id.to_string(), plan);
-            anyhow::bail!("{}", tf("error.step_already_done", &[("id", step_id)]));
-        }
-
-        // Iteration transition – only bump on the first execution of a
-        // new iteration (when plan is in Planning/Replanning and step is
-        // still Pending).
-        let was_planning =
-            plan.phase == BrainLoopPhase::Planning || plan.phase == BrainLoopPhase::Replanning;
-        if was_planning && plan.steps[step_idx].status == StepStatus::Pending {
-            plan.current_iteration += 1;
-            inner.total_cycles += 1;
-
-            if plan.current_iteration > plan.max_iterations {
-                plan.phase = BrainLoopPhase::Failed;
-                plan.fail_reason = format!("exceeded maximum iterations ({})", plan.max_iterations);
-                inner.plans.insert(plan_id.to_string(), plan);
-                inner.failed_plans_total += 1;
-                Self::evict_oldest_terminal_plan(&mut inner.plans);
-                return Ok(());
+            if plan.phase.is_terminal() {
+                anyhow::bail!("{}", tf("error.plan_already_terminal", &[("id", plan_id)]));
             }
+
+            let step_idx = plan
+                .steps
+                .iter()
+                .position(|s| s.id == step_id)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "{}",
+                        tf(
+                            "error.step_not_found",
+                            &[("id", step_id), ("plan_id", plan_id)]
+                        )
+                    )
+                })?;
+
+            if plan.steps[step_idx].status == StepStatus::Done {
+                anyhow::bail!("{}", tf("error.step_already_done", &[("id", step_id)]));
+            }
+
+            // Iteration transition – check limit BEFORE incrementing.
+            let was_planning =
+                plan.phase == BrainLoopPhase::Planning || plan.phase == BrainLoopPhase::Replanning;
+            if was_planning && plan.steps[step_idx].status == StepStatus::Pending {
+                if plan.current_iteration >= plan.max_iterations {
+                    plan.phase = BrainLoopPhase::Failed;
+                    plan.fail_reason =
+                        format!("exceeded maximum iterations ({})", plan.max_iterations);
+                    true
+                } else {
+                    plan.current_iteration += 1;
+                    inner.total_cycles += 1;
+                    false
+                }
+            } else {
+                false
+            }
+        };
+
+        if plan_failed {
+            inner.failed_plans_total += 1;
+            Self::evict_oldest_terminal_plan(&mut inner.plans);
+            return Ok(());
         }
 
-        plan.steps[step_idx].status = StepStatus::InProgress;
-        plan.steps[step_idx].started_ms = now;
-        plan.steps[step_idx].output = output.to_string();
-        plan.phase = BrainLoopPhase::Executing;
+        // Phase 2: mark step in-progress (separate scope to release plan borrow).
+        {
+            let plan = inner.plans.get_mut(plan_id).ok_or_else(|| {
+                anyhow::anyhow!("{}", tf("error.plan_not_found", &[("id", plan_id)]))
+            })?;
+
+            let step_idx = plan
+                .steps
+                .iter()
+                .position(|s| s.id == step_id)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "{}",
+                        tf(
+                            "error.step_not_found",
+                            &[("id", step_id), ("plan_id", plan_id)]
+                        )
+                    )
+                })?;
+
+            plan.steps[step_idx].status = StepStatus::InProgress;
+            plan.steps[step_idx].started_ms = now;
+            plan.steps[step_idx].output = output.to_string();
+            plan.phase = BrainLoopPhase::Executing;
+        }
 
         // Emit phase hint for streaming consumers.
         if let Some(ref mut reporter) = inner.progress_reporter {
             reporter.report_phase(crate::agents::progress_reporter::TOKEN_PHASE_EXECUTING);
         }
 
-        inner.plans.insert(plan_id.to_string(), plan);
         Ok(())
     }
 
@@ -329,66 +357,67 @@ impl BrainLoop {
         let now = now_epoch_ms();
         let mut inner = lock_guard(&self.inner);
 
-        // Remove the plan so we can mutate it without borrowing inner.
-        let mut plan = inner
-            .plans
-            .remove(plan_id)
-            .ok_or_else(|| anyhow::anyhow!("{}", tf("error.plan_not_found", &[("id", plan_id)])))?;
+        // Compute reflection inside a scope so the mutable plan borrow is
+        // dropped before we push to `inner.reflections`.
+        let reflection = {
+            let plan = inner
+                .plans
+                .get_mut(plan_id)
+                .ok_or_else(|| anyhow::anyhow!("{}", tf("error.plan_not_found", &[("id", plan_id)])))?;
 
-        if plan.phase.is_terminal() {
-            inner.plans.insert(plan_id.to_string(), plan);
-            anyhow::bail!("{}", tf("error.plan_already_terminal", &[("id", plan_id)]));
-        }
+            if plan.phase.is_terminal() {
+                anyhow::bail!("{}", tf("error.plan_already_terminal", &[("id", plan_id)]));
+            }
 
-        let step_idx = plan
-            .steps
-            .iter()
-            .position(|s| s.id == step_id)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "{}",
-                    tf(
-                        "error.step_not_found",
-                        &[("id", step_id), ("plan_id", plan_id)]
+            let step_idx = plan
+                .steps
+                .iter()
+                .position(|s| s.id == step_id)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "{}",
+                        tf(
+                            "error.step_not_found",
+                            &[("id", step_id), ("plan_id", plan_id)]
+                        )
                     )
-                )
-            })?;
+                })?;
 
-        let started = plan.steps[step_idx].started_ms;
+            let started = plan.steps[step_idx].started_ms;
 
-        plan.steps[step_idx].status = StepStatus::Done;
-        plan.steps[step_idx].completed_ms = now;
-        plan.steps[step_idx].duration_ms = now.saturating_sub(started);
-        plan.phase = BrainLoopPhase::Reflecting;
+            plan.steps[step_idx].status = StepStatus::Done;
+            plan.steps[step_idx].completed_ms = now;
+            plan.steps[step_idx].duration_ms = now.saturating_sub(started);
+            plan.phase = BrainLoopPhase::Reflecting;
+
+            let confidence = if issues.is_empty() {
+                1.0
+            } else {
+                // Each issue reduces confidence by 0.2, with a max penalty cap of 5 issues
+                let penalty = (issues.len() as f64 * 0.2).min(1.0);
+                (1.0 - penalty).max(0.1)
+            };
+
+            BrainLoopReflection {
+                step_id: step_id.to_string(),
+                observations,
+                issues,
+                improvements,
+                confidence,
+                reflection_ms: now,
+            }
+        };
 
         // Emit phase hint for streaming consumers.
         if let Some(ref mut reporter) = inner.progress_reporter {
             reporter.report_phase(crate::agents::progress_reporter::TOKEN_PHASE_REFLECTING);
         }
 
-        let confidence = if issues.is_empty() {
-            1.0
-        } else {
-            // Each issue reduces confidence by 0.2, with a max penalty cap of 5 issues
-            let penalty = (issues.len() as f64 * 0.2).min(1.0);
-            (1.0 - penalty).max(0.1)
-        };
-
-        let reflection = BrainLoopReflection {
-            step_id: step_id.to_string(),
-            observations,
-            issues,
-            improvements,
-            confidence,
-            reflection_ms: now,
-        };
-
         const MAX_REFLECTIONS: usize = 1000;
         if inner.reflections.len() >= MAX_REFLECTIONS {
             inner.reflections.remove(0);
         }
         inner.reflections.push(reflection.clone());
-        inner.plans.insert(plan_id.to_string(), plan);
 
         Ok(reflection)
     }
@@ -533,6 +562,66 @@ impl BrainLoop {
         }
     }
 
+    // ── Persistence ────────────────────────────────────────────────────────
+
+    /// Serialize and write a plan to a JSON file in the configured `plans_directory`.
+    ///
+    /// Returns `Ok(())` if the plan exists and serialization succeeds, or if no
+    /// directory is configured (silent no-op).
+    pub fn persist_plan(&self, plan_id: &str) -> anyhow::Result<()> {
+        let plan = self.get_plan(plan_id)?;
+
+        let dir = {
+            let inner = lock_guard(&self.inner);
+            inner.config.plans_directory.clone()
+        };
+
+        let dir = match dir {
+            Some(d) => d,
+            None => return Ok(()), // no directory configured, skip
+        };
+
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| anyhow::anyhow!("failed to create plans directory {:?}: {e}", dir))?;
+
+        let path = dir.join(format!("{plan_id}.json"));
+        let json = serde_json::to_string_pretty(&plan)
+            .map_err(|e| anyhow::anyhow!("failed to serialize plan `{plan_id}`: {e}"))?;
+        std::fs::write(&path, &json)
+            .map_err(|e| anyhow::anyhow!("failed to write plan `{plan_id}` to {:?}: {e}", path))?;
+        tracing::debug!("persisted plan `{plan_id}` to {:?}", path);
+        Ok(())
+    }
+
+    /// Load a plan from a JSON file in the configured `plans_directory`.
+    ///
+    /// Returns `None` if no directory is configured or the file does not exist.
+    pub fn load_plan(&self, plan_id: &str) -> Option<BrainLoopPlan> {
+        let dir = {
+            let inner = lock_guard(&self.inner);
+            inner.config.plans_directory.clone()
+        };
+
+        let dir = dir?;
+        let path = dir.join(format!("{plan_id}.json"));
+        if !path.exists() {
+            return None;
+        }
+        match std::fs::read_to_string(&path) {
+            Ok(content) => match serde_json::from_str::<BrainLoopPlan>(&content) {
+                Ok(plan) => Some(plan),
+                Err(e) => {
+                    tracing::warn!("failed to deserialize plan `{plan_id}` from {:?}: {e}", path);
+                    None
+                }
+            },
+            Err(e) => {
+                tracing::warn!("failed to read plan `{plan_id}` from {:?}: {e}", path);
+                None
+            }
+        }
+    }
+
     // Evict the oldest terminal plan when the cap is exceeded.
     fn evict_oldest_terminal_plan(plans: &mut HashMap<String, BrainLoopPlan>) {
         const MAX_TERMINAL_PLANS: usize = 200;
@@ -594,6 +683,7 @@ mod tests {
             max_steps_per_iteration: 10,
             reflection_required: true,
             auto_replan: true,
+            plans_directory: None,
         }
     }
 
@@ -836,6 +926,7 @@ mod tests {
             max_steps_per_iteration: 10,
             reflection_required: true,
             auto_replan: true,
+            plans_directory: None,
         };
         let bl = BrainLoop::new(config);
 

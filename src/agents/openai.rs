@@ -291,31 +291,6 @@ impl Agent for OpenAiAgent {
                 ],
                 context_window: Some(128_000),
             },
-            crate::agent::ModelInfo {
-                id: "gpt-4-turbo".to_string(),
-                name: "GPT-4 Turbo".to_string(),
-                description: "OpenAI GPT-4 Turbo (legacy)".to_string(),
-                is_default: self.model == "gpt-4-turbo",
-                capabilities: vec![
-                    "chat".to_string(),
-                    "vision".to_string(),
-                    "function_calling".to_string(),
-                    "streaming".to_string(),
-                ],
-                context_window: Some(128_000),
-            },
-            crate::agent::ModelInfo {
-                id: "gpt-3.5-turbo".to_string(),
-                name: "GPT-3.5 Turbo".to_string(),
-                description: "OpenAI GPT-3.5 Turbo [deprecated — will be shut down]".to_string(),
-                is_default: self.model == "gpt-3.5-turbo",
-                capabilities: vec![
-                    "chat".to_string(),
-                    "function_calling".to_string(),
-                    "streaming".to_string(),
-                ],
-                context_window: Some(16_385),
-            },
         ];
 
         // Keep runtime resilient to newly released model IDs configured by users.

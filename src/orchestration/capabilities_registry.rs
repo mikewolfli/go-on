@@ -18,6 +18,7 @@ use crate::orchestration::complexity_estimator::{
 };
 use crate::orchestration::diagnostic_feedback::{DiagnosticFeedbackEngine, DiagnosticSeverity};
 use crate::orchestration::distributed_tx::{DistributedTxStatus, TwoPhaseCoordinator};
+use crate::orchestration::integration::SystemIntegration;
 use crate::orchestration::plugin_system::{PluginManifest, PluginRegistry, PluginState};
 use crate::orchestration::session_context::{
     ContextWindowBudget, ContinuityMarker, MessageImportanceScore, SessionContextManager,
@@ -161,6 +162,7 @@ fn _gate_types() {
         expected_recoveries: vec![],
         timeout_secs: 30,
     };
+    let _ = SystemIntegration::default();
     let _ = HotReloadConfig::default();
     let _ = SchemaVersion::CURRENT;
     let _ = VotingOutcome {

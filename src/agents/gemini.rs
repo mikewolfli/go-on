@@ -170,26 +170,59 @@ impl GeminiAgent {
             );
         }
 
-        // Parse Gemini streaming response which uses `candidates[0].content.parts[0].text`
-        // format instead of OpenAI's `choices[0].delta.content`.
+        // Parse Gemini streaming response which uses `candidates[0].content.parts[*]`
+        // format. Each part may contain `text` for plain output or `functionCall`
+        // for native function calling.
         stream_sse_events(response, move |data| {
             if data.trim() == "[DONE]" {
                 return Ok(SseEventAction::Stop);
             }
 
             if let Ok(json) = serde_json::from_str::<Value>(data) {
-                // Gemini streaming format: candidates[0].content.parts[0].text
-                if let Some(token) = json
-                    .get("candidates")
-                    .and_then(|c| c.get(0))
-                    .and_then(|c| c.get("content"))
-                    .and_then(|c| c.get("parts"))
-                    .and_then(|c| c.get(0))
-                    .and_then(|c| c.get("text"))
-                    .and_then(|c| c.as_str())
-                {
-                    if sender.send(token.to_string()).is_err() {
-                        return Ok(SseEventAction::Stop);
+                if let Some(candidate) = json.get("candidates").and_then(|c| c.get(0)) {
+                    // Check finishReason for SAFETY/RECITATION blocks
+                    if let Some(finish_reason) =
+                        candidate.get("finishReason").and_then(|v| v.as_str())
+                    {
+                        if finish_reason == "SAFETY" || finish_reason == "RECITATION" {
+                            let token = format!("[Blocked by Gemini: {}]", finish_reason);
+                            if sender.send(token).is_err() {
+                                return Ok(SseEventAction::Stop);
+                            }
+                        }
+                    }
+
+                    // Iterate through all parts to extract text AND functionCall
+                    if let Some(parts) = candidate
+                        .get("content")
+                        .and_then(|c| c.get("parts"))
+                        .and_then(|p| p.as_array())
+                    {
+                        for part in parts {
+                            // Text content
+                            if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+                                if sender.send(text.to_string()).is_err() {
+                                    return Ok(SseEventAction::Stop);
+                                }
+                            }
+
+                            // Native function call (Gemini functionCall part)
+                            if let Some(func_call) = part.get("functionCall") {
+                                if let Some(name) = func_call.get("name").and_then(|v| v.as_str()) {
+                                    let args = func_call
+                                        .get("args")
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "{}".to_string());
+                                    let token = crate::orchestration::
+                                        autonomy_runtime::build_tool_call_token(
+                                        name, &args,
+                                    );
+                                    if sender.send(token).is_err() {
+                                        return Ok(SseEventAction::Stop);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
