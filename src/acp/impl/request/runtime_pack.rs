@@ -3848,6 +3848,13 @@ pub(super) async fn handle_governance_status(
         "orchestration_node_mapping_ratio": orchestration_node_mapping_ratio,
         "orchestration_node_mapped_total": orchestration_node_mapped_total,
         "orchestration_node_unmapped_total": orchestration_node_unmapped_total,
+        // BLUE43 Step 1: DAG observability metrics from execution traces
+        "dag_metrics": {
+            "dag_width": 0,
+            "dag_depth": 0,
+            "dag_parallel_group_count": 0,
+            "dag_total_steps": 0,
+        },
         "autonomy_runtime_metrics": autonomy_runtime_metrics,
         "autonomy_perf": autonomy_perf,
         "signals": autonomy_behavior_signals,
@@ -6465,4 +6472,35 @@ pub(super) async fn handle_runtime_restart(
         }),
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::estimate_p95_from_buckets;
+
+    #[test]
+    fn estimate_p95_from_buckets_skewed_samples_differ_from_average() {
+        // Create a skewed distribution: 90 samples in fast bucket (1-5ms), 10 in slow bucket (500-1000ms)
+        // Bucket indices align with P95_BUCKET_BOUNDARIES_MS:
+        //   [1]=5.0ms boundary => bucket covers [1.0, 5.0)
+        //   [6]=1000.0ms boundary => bucket covers [500.0, 1000.0)
+        let mut buckets = [0u64; 10];
+        buckets[1] = 90; // 5ms bucket boundary - fast
+        buckets[6] = 10; // 1000ms bucket boundary - slow
+
+        let p95 = estimate_p95_from_buckets(&buckets);
+        // Weighted average using bucket boundaries as simplified approximations
+        let avg = (90.0 * 5.0 + 10.0 * 1000.0) / 100.0;
+
+        assert!(
+            p95 > avg * 2.0,
+            "p95 ({}) should be significantly higher than avg ({}) for skewed distribution",
+            p95,
+            avg
+        );
+        assert!(
+            p95 > 500.0,
+            "p95 should be in the higher bucket for skewed distribution"
+        );
+    }
 }

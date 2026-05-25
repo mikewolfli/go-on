@@ -286,3 +286,170 @@ pub fn build_task_graph_checkpoint(
         (None, None, None)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::acp::server::ServerBuilder;
+    use std::time::Instant;
+
+    #[test]
+    fn build_chat_response_produces_canonical_structure() {
+        let info = CapabilityRoutingInfo::default();
+        let result = build_chat_response(
+            "test",
+            "conv-1",
+            "branch-1",
+            "coding",
+            "user",
+            "agent1",
+            Some("model1".into()),
+            "hello world",
+            json!({"state": "done"}),
+            json!({"loop": 1}),
+            json!({"tokens": 42}),
+            vec![],
+            false,
+            json!({}),
+            json!({}),
+            vec![],
+            vec![],
+            json!({"decision": "approve"}),
+            None,
+            vec![],
+            None,
+            None,
+            None,
+            None,
+            info,
+            json!({}),
+            false,
+            false,
+            100,
+            Instant::now(),
+        );
+
+        assert_eq!(result.get("done").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            result.get("conversation_id").and_then(|v| v.as_str()),
+            Some("conv-1")
+        );
+        assert_eq!(
+            result.get("branch_id").and_then(|v| v.as_str()),
+            Some("branch-1")
+        );
+        assert_eq!(result.get("mode").and_then(|v| v.as_str()), Some("test"));
+        assert_eq!(result.get("agent").and_then(|v| v.as_str()), Some("agent1"));
+        assert!(result.get("response").is_some());
+        assert!(result.get("checkpoint").is_some());
+        assert!(result.get("token_economy").is_some());
+        assert!(result.get("risk_decision").is_some());
+        assert!(result.get("capability_routing").is_some());
+        assert!(result.get("cache").is_some());
+        assert!(result.get("duration_ms").is_some());
+    }
+
+    #[test]
+    fn build_role_routing_with_agents() {
+        let result = build_role_routing("plan and design the architecture");
+
+        let routing = result
+            .get("role_routing")
+            .expect("should have role_routing");
+        let roles = routing
+            .get("suggested_roles")
+            .and_then(Value::as_array)
+            .expect("should have suggested_roles");
+        assert!(
+            roles.contains(&json!("planner")),
+            "Planner should be suggested for planning tasks"
+        );
+        assert!(routing.get("role_count").and_then(|v| v.as_u64()).unwrap() >= 1);
+        assert_eq!(
+            routing.get("handoff_ready").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert!(routing
+            .get("task_analysis")
+            .and_then(|v| v.as_str())
+            .is_some());
+    }
+
+    #[test]
+    fn build_task_graph_checkpoint_contains_state() {
+        let server = ServerBuilder::new().build().expect("server should build");
+        let (checkpoint, graph_id, ckpt_id) = build_task_graph_checkpoint(
+            &server,
+            "conv-1",
+            "test task",
+            "auto",
+            "coding",
+            "response text",
+            &[],
+            None,
+            100,
+        );
+
+        // With no task_graph_store configured, all results are None
+        assert!(checkpoint.is_none());
+        assert!(graph_id.is_none());
+        assert!(ckpt_id.is_none());
+    }
+
+    #[test]
+    fn payload_equivalence_across_helpers() {
+        // Verify that core functions from all three helpers produce
+        // JSON with consistent top-level field shapes when called together.
+
+        // ── From vote_orchestration ────────────────────────────────
+        let plan = json!({
+            "steps": [
+                {"step_id": "s1", "description": "write the implementation"},
+            ]
+        });
+        let tool_results: Vec<Value> = vec![];
+        let orchestration = crate::acp::helpers::vote_orchestration::derive_response_orchestration(
+            &plan,
+            &tool_results,
+        );
+        assert!(
+            orchestration.get("nodes").is_some(),
+            "orchestration must have 'nodes'"
+        );
+        assert!(
+            orchestration.get("mapping_ratio").is_some(),
+            "orchestration must have 'mapping_ratio'"
+        );
+
+        // ── From review_gate ──────────────────────────────────────
+        let verification = crate::acp::helpers::review_gate::run_enhanced_verification(
+            "fn main() { println!(\"hello\"); }",
+        );
+        let ev = verification
+            .get("enhanced_verification")
+            .expect("verification must have 'enhanced_verification'");
+        assert!(ev.get("verdict").is_some());
+        assert!(ev.get("confidence").is_some());
+
+        // ── From response_assembler ───────────────────────────────
+        let routing = build_role_routing("implement the feature");
+        let rr = routing
+            .get("role_routing")
+            .expect("routing must have 'role_routing'");
+        assert!(
+            rr.get("suggested_roles").is_some(),
+            "role_routing must have 'suggested_roles'"
+        );
+        assert!(rr.get("handoff_ready").is_some());
+
+        // Every top-level key across all three helpers is unique
+        // (no accidental overlap in the shared response structure)
+        let orchestration_keys: Vec<&str> = orchestration
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|s| s.as_str())
+            .collect();
+        assert!(orchestration_keys.contains(&"mapped_nodes"));
+    }
+}

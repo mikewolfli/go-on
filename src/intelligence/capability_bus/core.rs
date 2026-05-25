@@ -144,8 +144,7 @@ fn configured_candidate_score_weights() -> CandidateScoreWeights {
         task_fit: read_weight("GO_ON_CAPABILITY_WEIGHT_TASK_FIT", 0.25),
         recent_outcome: read_weight("GO_ON_CAPABILITY_WEIGHT_RECENT_OUTCOME", 0.15),
     };
-    let total =
-        weights.reputation + weights.recency + weights.task_fit + weights.recent_outcome;
+    let total = weights.reputation + weights.recency + weights.task_fit + weights.recent_outcome;
     if total <= f64::EPSILON {
         CandidateScoreWeights {
             reputation: 0.45,
@@ -2304,5 +2303,103 @@ mod tests {
         let (selected, breakdown) = bus.select_best_agent(&task, &candidates, &sensing);
         assert_eq!(selected.as_deref(), Some("agent-a"));
         assert_eq!(breakdown.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn select_best_agent_single_candidate_returns_that_candidate() {
+        // Edge case: only one candidate available — should still be selected
+        // and produce a valid breakdown.
+        let harness = Arc::new(default_harness_bus(None));
+        let bus = CapabilityBus::new_default(harness, None);
+
+        {
+            let mut graph = bus.capability_graph.lock().unwrap();
+            register_test_agent(&mut graph, "solo-agent", vec!["general"]);
+        }
+        {
+            let mut rep = bus.reputation.lock().unwrap();
+            rep.record_outcome("solo-agent", true);
+        }
+
+        let candidates = vec!["solo-agent".to_string()];
+        let recent = candidates.clone();
+        let sensing = make_sensing(&bus, recent);
+
+        let task = TaskContext {
+            task_type: TaskType::BugFix,
+            file_count: 1,
+            risk_score: 0.3,
+        };
+
+        let (selected, breakdown) = bus.select_best_agent(&task, &candidates, &sensing);
+        assert_eq!(selected.as_deref(), Some("solo-agent"));
+        assert_eq!(breakdown.len(), 1);
+
+        let entry = &breakdown[0];
+        assert_eq!(entry.agent, "solo-agent");
+        assert!(entry.total_score > 0.0);
+    }
+
+    #[tokio::test]
+    async fn select_best_agent_tiebreaker_is_alphabetical() {
+        // Edge case: when all scores are equal, alphabetical order should
+        // be the tiebreaker. Use fresh agents with no reputation/events.
+        let harness = Arc::new(default_harness_bus(None));
+        let bus = CapabilityBus::new_default(harness, None);
+
+        // Register agents but do NOT add any reputation events so all scores
+        // start at the same baseline (reputation=0.5, recency=0.0, etc.)
+        {
+            let mut graph = bus.capability_graph.lock().unwrap();
+            register_test_agent(&mut graph, "zulu-agent", vec!["general"]);
+            register_test_agent(&mut graph, "alpha-agent", vec!["general"]);
+            register_test_agent(&mut graph, "beta-agent", vec!["general"]);
+        }
+
+        let candidates = vec![
+            "zulu-agent".to_string(),
+            "alpha-agent".to_string(),
+            "beta-agent".to_string(),
+        ];
+        let sensing = make_sensing(&bus, vec![]);
+
+        let task = TaskContext {
+            task_type: TaskType::Other,
+            file_count: 0,
+            risk_score: 0.0,
+        };
+
+        let (selected, breakdown) = bus.select_best_agent(&task, &candidates, &sensing);
+        // All agents have equal scores, so alphabetical: alpha-agent wins
+        assert_eq!(
+            selected.as_deref(),
+            Some("alpha-agent"),
+            "tiebreaker should pick first alphabetically: alpha-agent, got {:?}",
+            selected
+        );
+        assert_eq!(breakdown.len(), 3);
+        // Verify the breakdown is also sorted alphabetically after score tie
+        assert_eq!(breakdown[0].agent, "alpha-agent");
+        assert_eq!(breakdown[1].agent, "beta-agent");
+        assert_eq!(breakdown[2].agent, "zulu-agent");
+    }
+
+    #[tokio::test]
+    async fn recent_outcome_score_defaults_to_mid_when_no_events() {
+        // Edge case: recent_outcome_score should return 0.5 (neutral) when
+        // there are no learning events for the agent-task combination.
+        let events = vec![];
+        let task = TaskContext {
+            task_type: TaskType::BugFix,
+            file_count: 2,
+            risk_score: 0.5,
+        };
+
+        let score = super::recent_outcome_score(&events, &task, "unknown-agent");
+        assert!(
+            (score - 0.5).abs() < 1e-6,
+            "expected 0.5 for no events, got {}",
+            score
+        );
     }
 }

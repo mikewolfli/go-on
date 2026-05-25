@@ -2639,6 +2639,36 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                 }
             };
 
+            // ── FullAutoFlow execution (BLUE43) ─────────────────────────
+            // Run the FullAutoFlow orchestrator before the TAO loop so that
+            // its execution report is available as context evidence.
+            let full_auto_result = crate::acp::helpers::autonomy_loop_adapter::run_full_auto_flow(
+                server.skill_registry.clone(),
+                &task_description,
+            )
+            .await;
+            match &full_auto_result {
+                Ok(result) => {
+                    tool_execution_results.push(json!({
+                        "tool_loop": "full_auto_flow",
+                        "status": "completed",
+                        "response": result.response,
+                        "reasoning": result.reasoning,
+                        "total_steps": result.report.total_tools,
+                        "duration_ms": result.report.total_duration_ms,
+                        "stop_reason": result.report.stop_reason,
+                    }));
+                }
+                Err(e) => {
+                    tracing::warn!("FullAutoFlow execution failed: {}", e);
+                    tool_execution_results.push(json!({
+                        "tool_loop": "full_auto_flow",
+                        "status": "failed",
+                        "error": e.to_string(),
+                    }));
+                }
+            }
+
             // Run the Think-Act-Observe loop
             let tao_config = LoopConfig::default();
             let (tao_decision, tao_trace) = execute_loop(

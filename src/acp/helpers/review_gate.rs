@@ -54,9 +54,7 @@ pub async fn run_review_gate(
             }));
             None
         }
-        Err(e) => {
-            Some(e.to_string())
-        }
+        Err(e) => Some(e.to_string()),
     };
 
     ReviewGateOutcome {
@@ -139,4 +137,57 @@ pub fn run_enhanced_verification(response_text: &str) -> Value {
             "quality_compass": structured_review.quality_compass,
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::acp::server::ServerBuilder;
+
+    #[tokio::test]
+    async fn run_review_gate_returns_review_outcome() {
+        let server = ServerBuilder::new().build().expect("server should build");
+        let trace = RequestTraceContext {
+            trace_id: "test".to_string(),
+            span_id: "test".to_string(),
+            method: "test".to_string(),
+            request_id: "test".to_string(),
+        };
+        let outcome = run_review_gate(&server, &[], None, None, &trace).await;
+
+        // With no flow_manager configured, the underlying dual review gate
+        // should fail, producing a ReviewGateOutcome with passed=false and an error.
+        assert!(!outcome.passed, "should not pass without a flow manager");
+        assert!(
+            outcome.error.is_some(),
+            "expected error due to missing flow manager"
+        );
+        assert!(
+            outcome.reviews.is_empty(),
+            "no reviews should be collected on error"
+        );
+    }
+
+    #[test]
+    fn run_enhanced_verification_checks_syntax() {
+        let result = run_enhanced_verification("fn hello() { let x = 1; }");
+
+        let ev = result
+            .get("enhanced_verification")
+            .expect("should have enhanced_verification key");
+        assert!(ev.get("verdict").and_then(Value::as_str).is_some());
+        assert!(ev.get("confidence").and_then(Value::as_f64).is_some());
+        assert!(ev.get("signals_count").and_then(Value::as_u64).is_some());
+        assert!(ev.get("passed_checks").and_then(Value::as_u64).is_some());
+        assert!(ev.get("total_checks").and_then(Value::as_u64).is_some());
+        assert!(ev.get("rationale").and_then(Value::as_str).is_some());
+        assert!(ev
+            .get("assumptions_validated")
+            .and_then(Value::as_array)
+            .is_some());
+        assert!(ev
+            .get("quality_compass")
+            .and_then(Value::as_array)
+            .is_some());
+    }
 }

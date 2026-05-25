@@ -37,7 +37,6 @@ pub struct DagExecutionTrace {
 
 /// Build tool execution as a Branch-Join DAG.
 /// Independent tools become Branch fans; dependent tools are sequenced.
-#[allow(dead_code)]
 pub fn build_tool_execution_dag(tool_calls: &[(String, String)]) -> (ExNodeId, Vec<ExNodeId>) {
     let branch_id: ExNodeId = "branch-tools".to_string();
     let tool_node_ids: Vec<ExNodeId> = tool_calls
@@ -59,6 +58,8 @@ pub async fn execute_tool_dag(
     use std::time::Instant;
     let dag_start = Instant::now();
 
+    // BLUE43 Step 2: Use build_tool_execution_dag to derive DAG structure
+    let (_branch_id, tool_node_ids) = build_tool_execution_dag(tool_calls);
     let num_tools = tool_calls.len();
     let branch_count = if num_tools > 1 { 1 } else { 0 }; // one Branch node
     let join_count = if num_tools > 1 { 1 } else { 0 }; // one Join node
@@ -72,7 +73,11 @@ pub async fn execute_tool_dag(
             let tool_args_str = tool_args_str.clone();
             let objective = objective.to_string();
             let phase = format!("dag-round-{}", iteration);
-            let node_id: ExNodeId = format!("tool-{}-{}", tool_name, i);
+            // Use the DAG node ID from build_tool_execution_dag for consistency
+            let node_id: ExNodeId = tool_node_ids
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| format!("tool-{}-{}", tool_name, i));
 
             tokio::spawn(async move {
                 let node_start = Instant::now();
@@ -138,7 +143,6 @@ pub async fn execute_tool_dag(
 }
 
 /// Convert DAG execution results into a governance.status-observable payload.
-#[allow(dead_code)]
 pub fn dag_trace_to_observability(trace: &DagExecutionTrace) -> Value {
     let completed = trace
         .nodes
@@ -213,6 +217,69 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    #[test]
+    fn dag_trace_to_observability_wired_to_governance_record() {
+        // Verify that dag_trace_to_observability produces governance-shaped output
+        // with all required metrics for the governance payload.
+        let trace = DagExecutionTrace {
+            nodes: vec![
+                DagNodeResult {
+                    node_id: "tool-read_file-0".into(),
+                    tool_name: "read_file".into(),
+                    state: ExNodeState::Completed,
+                    duration_ms: 10,
+                    tool_output: Some(serde_json::json!({"content": "data"})),
+                    error_payload: None,
+                },
+                DagNodeResult {
+                    node_id: "tool-grep-1".into(),
+                    tool_name: "grep".into(),
+                    state: ExNodeState::Completed,
+                    duration_ms: 20,
+                    tool_output: None,
+                    error_payload: None,
+                },
+                DagNodeResult {
+                    node_id: "tool-write_file-2".into(),
+                    tool_name: "write_file".into(),
+                    state: ExNodeState::Failed("permission_denied".to_string()),
+                    duration_ms: 5,
+                    tool_output: None,
+                    error_payload: Some("Permission denied".to_string()),
+                },
+            ],
+            total_duration_ms: 35,
+            branch_count: 1,
+            join_count: 1,
+        };
+        let obs = dag_trace_to_observability(&trace);
+
+        // Must include the top-level "dag_execution" key for governance parsing
+        let exec = &obs["dag_execution"];
+        assert_eq!(exec["total_nodes"].as_u64(), Some(3));
+        assert_eq!(exec["completed"].as_u64(), Some(2));
+        assert_eq!(exec["failed"].as_u64(), Some(1));
+        assert_eq!(exec["branch_count"].as_u64(), Some(1));
+        assert_eq!(exec["join_count"].as_u64(), Some(1));
+        assert_eq!(exec["total_duration_ms"].as_u64(), Some(35));
+        assert!(exec["has_tool_evidence"].as_bool().unwrap());
+
+        // DAG width = unique tools per level; depth = max chain length
+        // Both are derivable from node_details
+        let details = exec["node_details"].as_array().unwrap();
+        assert_eq!(details.len(), 3);
+        assert_eq!(details[0]["tool"].as_str(), Some("read_file"));
+        assert_eq!(details[1]["tool"].as_str(), Some("grep"));
+        assert_eq!(details[2]["tool"].as_str(), Some("write_file"));
+        assert_eq!(details[0]["state"].as_str(), Some("Completed"));
+        assert_eq!(
+            details[2]["state"].as_str(),
+            Some("Failed(\"permission_denied\")")
+        );
+        assert!(details[0]["has_output"].as_bool().unwrap());
+        assert!(details[2]["has_error"].as_bool().unwrap());
     }
 
     #[test]

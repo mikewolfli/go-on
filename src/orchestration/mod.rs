@@ -1,4 +1,5 @@
 pub mod artifact;
+pub mod audit;
 pub mod autonomy_runtime;
 pub mod brain_loop; // F-GAP-17 (flat, legacy)
 pub mod capability_signals; // BLUE41: Structured capability decision data
@@ -14,6 +15,8 @@ pub mod execution_graph;
 pub mod flow;
 pub mod flow_with_models;
 pub mod fork_registry;
+pub mod full_auto; // BLUE43 Step 10: Full-auto flow orchestrator
+pub mod recovery; // BLUE43 Step 16: Auto recovery orchestration with escalation
 pub mod r#loop; // F-GAP-17 (structured sub-module)
 pub mod mode;
 pub mod omnipotent;
@@ -34,5 +37,6 @@ pub mod task_router;
 pub mod task_schema;
 pub mod token_layers;
 pub mod tool;
+pub mod tool_transaction; // BLUE43 Step 15: Tool call transactional semantics
 pub mod workflow_optimizer;
 pub mod workflow_registry;

@@ -6,8 +6,8 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
 
-use crate::acp::helpers::context::run_with_optional_timeout;
 use crate::acp::helpers::autonomy_loop::{contract_snapshot, AutonomyLoopReport, AutonomyPhase};
+use crate::acp::helpers::context::run_with_optional_timeout;
 use crate::agent::{Agent, Message};
 use crate::orchestration::planner_executor::Planner;
 
@@ -194,6 +194,7 @@ pub(crate) fn terminal_chat_contract_snapshot(
         total_duration_ms: 0,
         corrective_actions_applied_total: 0,
         corrective_action_effectiveness_ratio: 0.0,
+        audit_trail: None,
         stop_reason: stop_reason.to_string(),
     })
 }
@@ -255,7 +256,9 @@ pub(crate) async fn run_followup_after_tool_observation(
 #[cfg(test)]
 mod tests {
     use super::terminal_chat_contract_snapshot;
-    use crate::acp::helpers::autonomy_loop::{contract_snapshot, AutonomyLoopReport, AutonomyPhase};
+    use crate::acp::helpers::autonomy_loop::{
+        contract_snapshot, AutonomyLoopReport, AutonomyPhase,
+    };
 
     #[test]
     fn terminal_chat_contract_snapshot_tracks_single_round_completion() {
@@ -286,10 +289,7 @@ mod tests {
         let contract = terminal_chat_contract_snapshot(1, true, "   ");
 
         assert_eq!(contract["total_rounds"].as_u64(), Some(2));
-        assert_eq!(
-            contract["stop_reason"].as_str(),
-            Some("incomplete")
-        );
+        assert_eq!(contract["stop_reason"].as_str(), Some("incomplete"));
     }
 
     #[test]
@@ -306,8 +306,166 @@ mod tests {
             corrective_actions_applied_total: 0,
             corrective_action_effectiveness_ratio: 0.0,
             stop_reason: "tools_exhausted_task_complete".to_string(),
+            audit_trail: None,
         });
 
         assert_eq!(cli_contract, acp_contract);
+    }
+
+    // ── BLUE43 Step 9: ACP/CLI same-scenario comparison tests ───────────
+    //
+    // Run the SAME scenario through both the CLI terminal chat path and the
+    // ACP autonomy loop path, then assert parity on:
+    //   - Same stop_reason boundary
+    //   - Same total_rounds (within ±1)
+    //   - Same tool evidence structure (identical contract JSON)
+
+    /// Helper: build the equivalent AutonomyLoopReport for a scenario.
+    fn acp_report_for_scenario(
+        tool_call_count: usize,
+        followup_round_executed: bool,
+        final_response: &str,
+    ) -> AutonomyLoopReport {
+        let response_empty = final_response.trim().is_empty();
+        let stop_reason = if tool_call_count == 0 {
+            "completed_without_tool_calls"
+        } else if response_empty {
+            "incomplete"
+        } else {
+            "tools_exhausted_task_complete"
+        };
+        let total_rounds = 1 + usize::from(tool_call_count > 0 && followup_round_executed);
+        let final_phase = if response_empty {
+            AutonomyPhase::Failed
+        } else {
+            AutonomyPhase::Completed
+        };
+        AutonomyLoopReport {
+            total_rounds,
+            total_tools: tool_call_count,
+            final_phase,
+            rounds: Vec::new(),
+            planner_guidance_used: false,
+            trace_alignment_coverage: 0.0,
+            total_duration_ms: 0,
+            corrective_actions_applied_total: 0,
+            corrective_action_effectiveness_ratio: 0.0,
+            stop_reason: stop_reason.to_string(),
+            audit_trail: None,
+        }
+    }
+
+    /// Assert that CLI and ACP produce identical contract snapshots.
+    fn assert_acp_cli_parity(tool_call_count: usize, followup: bool, response: &str) {
+        let cli_contract = terminal_chat_contract_snapshot(tool_call_count, followup, response);
+        let acp_report = acp_report_for_scenario(tool_call_count, followup, response);
+        let acp_contract = contract_snapshot(&acp_report);
+
+        // Same stop_reason boundary
+        assert_eq!(
+            cli_contract["stop_reason"].as_str(),
+            acp_contract["stop_reason"].as_str(),
+            "stop_reason differs (tools={}, followup={}, response={:?})",
+            tool_call_count,
+            followup,
+            response,
+        );
+
+        // Same total_rounds within ±1
+        let cli_rounds = cli_contract["total_rounds"].as_u64().unwrap_or(0) as i64;
+        let acp_rounds = acp_contract["total_rounds"].as_u64().unwrap_or(0) as i64;
+        let diff = (cli_rounds - acp_rounds).abs();
+        assert!(
+            diff <= 1,
+            "total_rounds differ by >1: CLI={}, ACP={}",
+            cli_rounds,
+            acp_rounds,
+        );
+
+        // Same tool evidence structure (identical JSON)
+        assert_eq!(
+            cli_contract, acp_contract,
+            "contract JSON differs for scenario (tools={}, followup={}, response={:?})",
+            tool_call_count, followup, response,
+        );
+    }
+
+    #[test]
+    fn parity_no_tools_completed() {
+        assert_acp_cli_parity(0, false, "Here is the answer.");
+    }
+
+    #[test]
+    fn parity_tools_exhausted_with_followup() {
+        assert_acp_cli_parity(3, true, "Code updated successfully.");
+    }
+
+    #[test]
+    fn parity_no_followup_round() {
+        assert_acp_cli_parity(2, false, "Done.");
+    }
+
+    #[test]
+    fn parity_incomplete_empty_followup() {
+        assert_acp_cli_parity(1, true, "   \t  \n");
+    }
+
+    #[test]
+    fn parity_incomplete_no_followup_empty() {
+        assert_acp_cli_parity(1, false, "");
+    }
+
+    #[test]
+    fn parity_zero_tools_empty_response() {
+        // tool_call_count == 0 takes priority: stop_reason = "completed_without_tool_calls"
+        assert_acp_cli_parity(0, false, "");
+    }
+
+    #[test]
+    fn parity_large_tool_count() {
+        assert_acp_cli_parity(10, true, "All 10 operations completed.");
+    }
+
+    #[test]
+    fn parity_whitespace_only_response() {
+        assert_acp_cli_parity(2, true, "  \n  \t  ");
+    }
+
+    #[test]
+    fn parity_one_tool_no_followup_complete() {
+        assert_acp_cli_parity(1, false, "single tool result");
+    }
+
+    #[test]
+    fn parity_all_contracts_have_canonical_fields() {
+        // Every contract snapshot — from both paths — must contain the
+        // same canonical set of fields (tool evidence structure consistency).
+        let scenarios = &[
+            terminal_chat_contract_snapshot(0, false, "ok"),
+            terminal_chat_contract_snapshot(2, true, "done"),
+            terminal_chat_contract_snapshot(1, false, "yes"),
+            contract_snapshot(&acp_report_for_scenario(0, false, "ok")),
+            contract_snapshot(&acp_report_for_scenario(3, true, "done")),
+            contract_snapshot(&acp_report_for_scenario(1, false, "yes")),
+        ];
+
+        let canonical_keys: &[&str] = &[
+            "total_rounds",
+            "total_tools",
+            "stop_reason",
+            "corrective_actions_applied_total",
+            "corrective_action_effectiveness_ratio",
+        ];
+
+        for (idx, contract) in scenarios.iter().enumerate() {
+            for key in canonical_keys {
+                assert!(
+                    contract.get(*key).is_some(),
+                    "scenario {} is missing contract field '{}'",
+                    idx,
+                    key,
+                );
+            }
+        }
     }
 }

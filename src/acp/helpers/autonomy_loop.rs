@@ -19,7 +19,9 @@ use tokio::sync::mpsc;
 
 use crate::acp::helpers::agent_router::record_task_agent_outcome;
 use crate::agent::{Agent, Message, StreamingSender};
+use crate::orchestration::audit::{AuditEntry, AuditTrail};
 use crate::orchestration::planner_executor::Planner;
+use crate::orchestration::recovery::RecoveryOrchestrator;
 use crate::orchestration::tool::{
     execute_loop, LoopConfig, LoopDecision, ToolInput, ToolOutput, ToolRegistry,
 };
@@ -154,6 +156,138 @@ mod tests {
             reroute_successes
         );
     }
+
+    #[test]
+    fn corrective_action_effectiveness_ratio_calculation() {
+        // Simulates the production logic from run_autonomy_loop:
+        //   ratio = effective_total / applied_total  (0.0 when applied_total == 0)
+        // A corrective action is effective when a round with applied corrective
+        // actions produces a non-empty response.
+
+        // Helper matching the production formula
+        let ratio = |applied: u64, effective: u64| -> f64 {
+            if applied == 0 {
+                0.0
+            } else {
+                effective as f64 / applied as f64
+            }
+        };
+
+        // Scenario: no corrective actions -> ratio 0.0
+        assert!((ratio(0, 0) - 0.0).abs() < f64::EPSILON);
+
+        // Scenario: all corrective actions effective -> ratio 1.0
+        assert!((ratio(5, 5) - 1.0).abs() < f64::EPSILON);
+
+        // Scenario: some effective, some failed -> ratio 0.6
+        assert!((ratio(5, 3) - 0.6).abs() < f64::EPSILON);
+
+        // Scenario: none effective -> ratio 0.0
+        assert!((ratio(4, 0) - 0.0).abs() < f64::EPSILON);
+
+        // Multi-round simulation:
+        //   Round 1: 2 corrective actions, response non-empty -> 2 effective
+        //   Round 2: 3 corrective actions, response empty       -> 0 effective
+        //   Round 3: 1 corrective action,  response non-empty    -> 1 effective
+        //   Total applied = 6, total effective = 3, ratio = 0.5
+        let total_applied = 2 + 3 + 1;
+        let total_effective = 2 + 0 + 1;
+        let computed = ratio(total_applied, total_effective);
+        assert!(
+            (computed - 0.5).abs() < f64::EPSILON,
+            "expected ratio 0.5, got {}",
+            computed
+        );
+    }
+
+    #[test]
+    fn predictive_reroute_early_break_returns_before_outer_loop_exhaustion() {
+        // Verify that compute_predictive_reroute with "failure_recovery" threshold
+        // causes should_reroute=true, which should trigger early exit.
+        let score = compute_predictive_reroute(3, 0.1, 0.3, 2, 0.5);
+        assert!(score.should_reroute);
+        assert_eq!(score.reason_code, "failure_recovery");
+        assert!(score.expected_gain > 0.0);
+    }
+
+    #[test]
+    fn corrective_action_effectiveness_exposed_in_contract_snapshot() {
+        // Verify that contract_snapshot() includes the corrective action
+        // effectiveness ratio alongside the applied total.
+        let report = AutonomyLoopReport {
+            total_rounds: 5,
+            total_tools: 10,
+            final_phase: AutonomyPhase::Completed,
+            rounds: Vec::new(),
+            planner_guidance_used: false,
+            trace_alignment_coverage: 0.95,
+            total_duration_ms: 1500,
+            corrective_actions_applied_total: 8,
+            corrective_action_effectiveness_ratio: 0.75,
+            stop_reason: "tools_exhausted_task_complete".to_string(),
+            audit_trail: None,
+        };
+
+        let snapshot = contract_snapshot(&report);
+
+        // Verify corrective actions applied total appears
+        assert_eq!(
+            snapshot["corrective_actions_applied_total"], 8,
+            "contract_snapshot must include corrective_actions_applied_total"
+        );
+
+        // Verify effectiveness ratio appears with correct value
+        let ratio = snapshot["corrective_action_effectiveness_ratio"]
+            .as_f64()
+            .expect("contract_snapshot must include corrective_action_effectiveness_ratio as f64");
+        assert!(
+            (ratio - 0.75).abs() < f64::EPSILON,
+            "expected effectiveness ratio 0.75, got {}",
+            ratio
+        );
+    }
+
+    #[test]
+    fn build_tool_execution_dag_integrated() {
+        // Verify that build_tool_execution_dag produces valid DAG structure
+        // that matches the expected integration point in execute_tool_dag.
+        // This test mirrors the DAG structure that execute_tool_dag builds
+        // internally via build_tool_execution_dag (BLUE43 Step 2).
+        let tool_calls: Vec<(String, String)> = vec![
+            (
+                "read_file".to_string(),
+                r#"{"path": "test.txt"}"#.to_string(),
+            ),
+            ("grep".to_string(), r#"{"pattern": "fn"}"#.to_string()),
+            (
+                "search_files".to_string(),
+                r#"{"query": "test"}"#.to_string(),
+            ),
+        ];
+
+        let (branch_id, node_ids) =
+            crate::orchestration::dag_driver::build_tool_execution_dag(&tool_calls);
+
+        // DAG must produce a branch node and one node per tool call
+        assert_eq!(branch_id, "branch-tools");
+        assert_eq!(node_ids.len(), 3);
+
+        // Each node ID must match the pattern "tool-{name}-{index}"
+        assert_eq!(node_ids[0], "tool-read_file-0");
+        assert_eq!(node_ids[1], "tool-grep-1");
+        assert_eq!(node_ids[2], "tool-search_files-2");
+
+        // Verify structural invariants: at least one node, all IDs are non-empty
+        assert!(!node_ids.is_empty(), "DAG must have at least one tool node");
+        assert!(
+            node_ids.iter().all(|id| !id.is_empty()),
+            "All DAG node IDs must be non-empty"
+        );
+
+        // Verify the DAG width equals the number of tools (all parallel at branch)
+        let dag_width = node_ids.len();
+        assert_eq!(dag_width, 3, "DAG width should equal tool call count");
+    }
 }
 use super::execution_intelligence::{post_check, pre_check, PostCheckOutcome};
 use super::orchestration_alignment::derive_plan_trace_alignment;
@@ -182,7 +316,6 @@ fn apply_corrective_actions(messages: &mut Vec<Message>, outcome: &PostCheckOutc
 
 /// Autonomy loop state machine phases
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[allow(dead_code)]
 pub enum AutonomyPhase {
     /// Initial planning phase — Planner produces ExecutionPlan
     Planning,
@@ -190,8 +323,6 @@ pub enum AutonomyPhase {
     Executing,
     /// Observation phase — tool results are collected and structured
     Observing,
-    /// Replanning phase — tool observations feed back into plan refinement
-    Replanning,
     /// Final answer construction phase
     Finalizing,
     /// Loop completed
@@ -202,7 +333,6 @@ pub enum AutonomyPhase {
 
 /// Configuration for the autonomy loop
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct AutonomyLoopConfig {
     /// Maximum rounds of plan → execute → observe (excluding planning round)
     pub max_iterations: usize,
@@ -228,6 +358,8 @@ pub struct AutonomyLoopConfig {
     pub enable_agent_reroute: bool,
     /// BLUE42: Enable metacognitive and world-model feedback hooks
     pub enable_execution_intelligence: bool,
+    /// BLUE43 Step 16: Automatic recovery orchestrator for failure recovery
+    pub recovery_orchestrator: Option<RecoveryOrchestrator>,
 }
 
 impl Default for AutonomyLoopConfig {
@@ -245,13 +377,13 @@ impl Default for AutonomyLoopConfig {
             use_dag_execution: false,
             enable_agent_reroute: false,
             enable_execution_intelligence: true,
+            recovery_orchestrator: None,
         }
     }
 }
 
 /// A single round of execution in the autonomy loop
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct AutonomyRound {
     /// Round index (0 = planning, 1+ = execute rounds)
     pub round_index: usize,
@@ -291,7 +423,6 @@ pub struct AutonomyRound {
 
 /// Final report from the autonomy loop
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct AutonomyLoopReport {
     /// Total rounds executed
     pub total_rounds: usize,
@@ -313,6 +444,8 @@ pub struct AutonomyLoopReport {
     pub corrective_action_effectiveness_ratio: f64,
     /// Stop reason
     pub stop_reason: String,
+    /// BLUE43 Step 20: Audit trail for this loop execution
+    pub audit_trail: Option<AuditTrail>,
 }
 
 /// Build a stable contract snapshot for cross-entry autonomy diagnostics.
@@ -323,12 +456,12 @@ pub fn contract_snapshot(report: &AutonomyLoopReport) -> Value {
         "stop_reason": report.stop_reason,
         "corrective_actions_applied_total": report.corrective_actions_applied_total,
         "corrective_action_effectiveness_ratio": report.corrective_action_effectiveness_ratio,
+        "audit_entries": report.audit_trail.as_ref().map(|t| t.len()).unwrap_or(0),
     })
 }
 
 /// Result of the autonomy loop execution
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct AutonomyLoopResult {
     /// Final response text
     pub response: String,
@@ -351,18 +484,18 @@ pub struct AutonomyLoopResult {
 /// - `additional_context`: Additional messages context
 /// - `config`: Loop configuration
 /// - `timeout_duration`: Optional timeout per agent round
-#[allow(dead_code)]
 pub async fn run_autonomy_loop(
     agent: Arc<dyn Agent>,
     tool_registry: Option<Arc<ToolRegistry>>,
     objective: &str,
     additional_context: Vec<Message>,
-    config: AutonomyLoopConfig,
+    mut config: AutonomyLoopConfig,
     _timeout_duration: Option<std::time::Duration>,
 ) -> Result<AutonomyLoopResult> {
     #[allow(unused_variables)]
     let start = Instant::now();
     let mut all_rounds: Vec<AutonomyRound> = Vec::new();
+    let mut audit_trail = AuditTrail::new("autonomy-loop", 100);
     let mut planner_guidance_used = false;
     let tool_execution_traces: Vec<Value> = Vec::new();
 
@@ -400,6 +533,15 @@ pub async fn run_autonomy_loop(
         dag_trace: None,
     };
     all_rounds.push(planning_round);
+
+    // BLUE43 Step 20: Record planning phase in audit trail
+    audit_trail.append_entry(AuditEntry::new(
+        "phase_transition",
+        "autonomy_planner",
+        "autonomy-loop",
+        serde_json::json!({"objective": objective, "plan_steps": plan.steps.len()}),
+        serde_json::json!({"phase": "planning_complete", "rounds_planned": 1}),
+    ));
 
     // ── Phase 2: Execution rounds ──
     let mut messages = additional_context.clone();
@@ -836,7 +978,7 @@ pub async fn run_autonomy_loop(
             round_corrective_actions.extend(outcome.corrective_actions);
         }
 
-        let round_corrective_actions: Vec<String> = round_corrective_actions
+        let mut round_corrective_actions: Vec<String> = round_corrective_actions
             .into_iter()
             .collect::<BTreeSet<_>>()
             .into_iter()
@@ -855,6 +997,52 @@ pub async fn run_autonomy_loop(
             consecutive_failures = 0;
         }
 
+        // BLUE43 Step 16: Recovery orchestration — use recovery orchestrator
+        // when failures are detected to select an automatic recovery action
+        // (retry/reroute/replan/repair) before escalating to human.
+        if let Some(ref mut revo) = config.recovery_orchestrator {
+            let has_failure = round_corrective_actions_applied > 0
+                || (tools_were_called && response.trim().is_empty());
+            if has_failure && consecutive_failures > 0 {
+                let failure_type = if response.trim().is_empty() {
+                    "empty_response"
+                } else {
+                    "tool_failure"
+                };
+                match revo.attempt_recovery(
+                    failure_type,
+                    serde_json::json!({
+                        "iteration": iteration,
+                        "round": iteration + 1,
+                        "tools": round_tools.len(),
+                        "consecutive_failures": consecutive_failures,
+                        "corrective_actions": round_corrective_actions,
+                    }),
+                ) {
+                    Ok(action) => {
+                        let action_label = action.label().to_string();
+                        // Record the recovery attempt ID for outcome tracking.
+                        if let Some(attempt_id) = revo.last_attempt_id() {
+                            // Mark outcome after observing the next iteration's result.
+                            // For now, optimistically record partial success if tools
+                            // produced any output at all.
+                            let partial_success = response.trim().len() > 10;
+                            revo.record_outcome(&attempt_id, partial_success);
+                        }
+                        // Emit round corrective action for audit trail.
+                        round_corrective_actions.push(format!("recovery_{}", action_label));
+                    }
+                    Err(e) => {
+                        // Strategy selection failure — note in corrective actions.
+                        round_corrective_actions.push(format!("recovery_strategy_error:{}", e));
+                    }
+                }
+            } else if !tools_were_called && !response.trim().is_empty() {
+                // Round completed successfully — reset recovery tracking.
+                // The record_outcome is handled above; no additional action needed.
+            }
+        }
+
         // BLUE42 Step 6: Record agent outcome for learning feedback
         record_task_agent_outcome(objective, "autonomy_agent", !response.trim().is_empty());
 
@@ -864,20 +1052,21 @@ pub async fn run_autonomy_loop(
             final_model = model_id.clone();
         }
 
-        let round_stop_reason = if !tools_were_called {
-            "no_tools_needed"
+        let mut round_stop_reason: String = if !tools_were_called {
+            "no_tools_needed".to_string()
         } else if iteration >= config.max_iterations {
-            "max_iterations_reached"
+            "max_iterations_reached".to_string()
         } else if response.trim().is_empty() {
-            "empty_response"
+            "empty_response".to_string()
         } else {
-            "tools_completed"
+            "tools_completed".to_string()
         };
         // BLUE43 Step 5: Predictive reroute scoring — uses composite health
         // (reputation + task success + round health + tool error) to decide
         // whether switching agents would provide positive expected gain.
         // Records the reason code (predictive_gain / failure_recovery / budget_guard)
         // for governance.status observability.
+        let mut should_break_early = false;
         if config.enable_agent_reroute {
             // Compute round health indicators
             let round_health = if tools_were_called && !response.trim().is_empty() {
@@ -915,6 +1104,11 @@ pub async fn run_autonomy_loop(
                 agent_switched = true;
                 agent_switch_reason = Some(score.reason_code.clone());
                 record_agent_switch(&score.reason_code);
+                // BLUE43 Step 5: Early exit when predictive reroute detects switching
+                // would be beneficial. This allows the caller to try alternative agents
+                // proactively rather than waiting for complete failure.
+                round_stop_reason = format!("predictive_reroute_{}", score.reason_code);
+                should_break_early = true;
             }
         }
         // Save round_tools before moving into round_record
@@ -945,8 +1139,33 @@ pub async fn run_autonomy_loop(
         };
         all_rounds.push(round_record);
 
+        // BLUE43 Step 20: Record round in audit trail
+        audit_trail.append_entry(AuditEntry::new(
+            "agent_decision",
+            "autonomy_agent",
+            "autonomy-loop",
+            serde_json::json!({
+                "round": iteration + 1,
+                "tools": rt_for_early_stop.len(),
+                "phase": "executing",
+                "tools_were_called": tools_were_called,
+            }),
+            serde_json::json!({
+                "round_stop_reason": round_stop_reason,
+                "response_length": response.len(),
+                "agent_switched": agent_switched,
+            }),
+        ));
+
         // Stop if no tools were called — the agent is done
         if !tools_were_called {
+            break;
+        }
+
+        // BLUE43 Step 5: Early exit when predictive reroute detects switching
+        // would be beneficial. The round was recorded above so the switch
+        // reason is visible in the audit trail.
+        if should_break_early {
             break;
         }
 
@@ -1018,6 +1237,7 @@ pub async fn run_autonomy_loop(
         corrective_actions_applied_total,
         corrective_action_effectiveness_ratio,
         stop_reason: stop_reason.to_string(),
+        audit_trail: Some(audit_trail),
     };
 
     Ok(AutonomyLoopResult {

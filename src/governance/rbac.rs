@@ -7,6 +7,7 @@
 //! for full OpenCLAW compliance.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -177,6 +178,18 @@ impl RbacEnforcer {
         enforcer
     }
 
+    /// Return all registered tenant IDs.
+    pub fn tenant_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self.tenants.iter().cloned().collect();
+        ids.sort();
+        ids
+    }
+
+    /// Check whether the given tenant ID is registered.
+    pub fn has_tenant(&self, tenant_id: &str) -> bool {
+        self.tenants.contains(tenant_id)
+    }
+
     fn init_builtin_roles(&mut self) {
         let builtins = vec![
             BuiltinRole::Admin,
@@ -239,7 +252,7 @@ impl RbacEnforcer {
     fn register_tenants_from_str(&mut self, raw: &str) -> usize {
         let before = self.tenants.len();
         for id in raw
-            .split(|ch| ch == ',' || ch == '\n' || ch == '\r')
+            .split(&[',', '\n', '\r'])
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
         {
@@ -350,6 +363,89 @@ impl RbacEnforcer {
         self.role_permissions.len()
     }
 
+    /// Check access and tenant budget in a single call.
+    /// Returns `Ok(())` when both RBAC access and tenant budget allow the operation.
+    /// Returns `Err` with a human-readable reason when either check fails.
+    pub fn check_access_with_budget(
+        &self,
+        principal: &Principal,
+        required_perm: &Permission,
+        budget_enforcer: Option<&crate::governance::hardening::TenantBudgetEnforcer>,
+    ) -> Result<(), String> {
+        // 1. RBAC access check
+        match self.check_access(principal, required_perm) {
+            AccessDecision::Allow => {}
+            AccessDecision::Deny { reason } => return Err(reason),
+            AccessDecision::Escalate { required_role } => {
+                return Err(format!(
+                    "Principal '{}' needs escalation to role '{}'",
+                    principal.id, required_role
+                ));
+            }
+        }
+
+        // 2. Tenant budget check (when a budget enforcer is available and principal has a tenant)
+        if let (Some(enforcer), Some(tenant_id)) = (budget_enforcer, principal.tenant_id.as_deref())
+        {
+            // If the tenant is not registered in the budget enforcer yet, auto-provision is expected
+            // to have happened at startup; if it's still missing, let it through.
+            if enforcer.quotas().contains_key(tenant_id) {
+                enforcer
+                    .check_can_start(tenant_id)
+                    .map_err(|e| format!("Budget exceeded for tenant '{}': {}", tenant_id, e))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Mark a task as started for a tenant (used after a successful budget check).
+    pub fn start_tenant_task(
+        &self,
+        principal: &Principal,
+        budget_enforcer: Option<
+            &std::sync::Mutex<crate::governance::hardening::TenantBudgetEnforcer>,
+        >,
+    ) {
+        if let (Some(enforcer), Some(tenant_id)) = (budget_enforcer, principal.tenant_id.as_deref())
+        {
+            if let Ok(mut guard) = enforcer.lock() {
+                guard.start_task(tenant_id);
+            }
+        }
+    }
+
+    /// Record resource usage for a tenant after a task completes.
+    pub fn record_tenant_usage(
+        &self,
+        principal: &Principal,
+        tokens: usize,
+        api_calls: usize,
+        budget_enforcer: Option<
+            &std::sync::Mutex<crate::governance::hardening::TenantBudgetEnforcer>,
+        >,
+    ) {
+        if let (Some(enforcer), Some(tenant_id)) = (budget_enforcer, principal.tenant_id.as_deref())
+        {
+            if let Ok(mut guard) = enforcer.lock() {
+                guard.record_usage(tenant_id, tokens, api_calls);
+            }
+        }
+    }
+
+    /// Register tenants from the supplied JSON array of tenant IDs.
+    pub fn register_tenants_from_json(&mut self, tenants: &Value) -> usize {
+        let before = self.tenants.len();
+        if let Some(arr) = tenants.as_array() {
+            for v in arr {
+                if let Some(id) = v.as_str() {
+                    self.add_tenant(id);
+                }
+            }
+        }
+        self.tenants.len().saturating_sub(before)
+    }
+
     #[cfg(test)]
     #[allow(dead_code)]
     fn tenant_count(&self) -> usize {
@@ -360,6 +456,7 @@ impl RbacEnforcer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::governance::hardening::{TenantBudgetEnforcer, TenantResourceQuota};
 
     #[test]
     fn test_builtin_admin_has_full_access() {
@@ -576,5 +673,130 @@ mod tests {
         assert!(principal.has_role("user"));
         assert!(!principal.has_role("viewer"));
         assert_eq!(principal.tenant_id, Some("tenant-1".to_string()));
+    }
+
+    #[test]
+    fn test_check_access_with_budget_within_limits() {
+        let mut enforcer = RbacEnforcer::new();
+        enforcer.add_tenant("tenant-a");
+
+        let mut budget = TenantBudgetEnforcer::new();
+        budget.set_quota(TenantResourceQuota {
+            tenant_id: "tenant-a".to_string(),
+            daily_token_limit: 1_000_000,
+            concurrent_tasks_limit: 5,
+            daily_api_call_limit: 10_000,
+        });
+
+        let principal = Principal::new("user-a", vec!["user"], Some("tenant-a"));
+        let result =
+            enforcer.check_access_with_budget(&principal, &Permission::Read, Some(&budget));
+        assert!(
+            result.is_ok(),
+            "within-limit budget check should succeed; got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_check_access_with_budget_exceeds_concurrent_tasks() {
+        let mut enforcer = RbacEnforcer::new();
+        enforcer.add_tenant("tenant-b");
+
+        let mut budget = TenantBudgetEnforcer::new();
+        budget.set_quota(TenantResourceQuota {
+            tenant_id: "tenant-b".to_string(),
+            daily_token_limit: 1_000_000,
+            concurrent_tasks_limit: 1,
+            daily_api_call_limit: 10_000,
+        });
+        // Fill the concurrent slot
+        budget.start_task("tenant-b");
+
+        let principal = Principal::new("user-b", vec!["user"], Some("tenant-b"));
+        let result =
+            enforcer.check_access_with_budget(&principal, &Permission::Read, Some(&budget));
+        assert!(result.is_err(), "concurrent task limit breach should fail");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("Budget exceeded"),
+            "error should mention budget; got: {}",
+            err
+        );
+        assert!(
+            err.contains("tenant-b"),
+            "error should mention tenant; got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_cross_tenant_access_denied_in_budget_context() {
+        let mut enforcer = RbacEnforcer::new();
+        enforcer.add_tenant("acme");
+        enforcer.add_tenant("globex");
+
+        let mut budget = TenantBudgetEnforcer::new();
+        budget.set_quota(TenantResourceQuota {
+            tenant_id: "acme".to_string(),
+            daily_token_limit: 500_000,
+            concurrent_tasks_limit: 2,
+            daily_api_call_limit: 5_000,
+        });
+
+        // Cross-tenant: globex principal tries to access acme budget
+        let principal = Principal::new("globex-user", vec!["user"], Some("globex"));
+        // RBAC check passes (globex is a valid tenant), but budget check will
+        // find no quota for globex and let it through (graceful degradation).
+        let result =
+            enforcer.check_access_with_budget(&principal, &Permission::Read, Some(&budget));
+        assert!(
+            result.is_ok(),
+            "unquoted tenant should not be rejected by budget check; got: {:?}",
+            result
+        );
+
+        // Now deny by having no tenant context at all
+        let no_tenant = Principal::new("anonymous", vec!["user"], None);
+        let result =
+            enforcer.check_access_with_budget(&no_tenant, &Permission::Read, Some(&budget));
+        assert!(result.is_err(), "missing tenant context should be denied");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("missing tenant context"),
+            "error should mention missing tenant; got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_tenant_ids_and_has_tenant() {
+        let mut enforcer = RbacEnforcer::new();
+        enforcer.add_tenant("tenant-a");
+        enforcer.add_tenant("tenant-b");
+
+        let ids = enforcer.tenant_ids();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&"tenant-a".to_string()));
+        assert!(ids.contains(&"tenant-b".to_string()));
+
+        assert!(enforcer.has_tenant("tenant-a"));
+        assert!(!enforcer.has_tenant("tenant-z"));
+    }
+
+    #[test]
+    fn test_register_tenants_from_json() {
+        let mut enforcer = RbacEnforcer::new();
+        let tenants = serde_json::json!(["tenant-a", "tenant-b", "tenant-c"]);
+        let count = enforcer.register_tenants_from_json(&tenants);
+        assert_eq!(count, 3);
+        assert_eq!(enforcer.tenant_count(), 3);
+        assert!(enforcer.has_tenant("tenant-a"));
+        assert!(enforcer.has_tenant("tenant-b"));
+        assert!(enforcer.has_tenant("tenant-c"));
+
+        // Second call should be idempotent
+        let count2 = enforcer.register_tenants_from_json(&tenants);
+        assert_eq!(count2, 0, "duplicate tenants should not be counted");
     }
 }

@@ -75,6 +75,13 @@ fn corrective_actions_for_summary(summary: &str) -> Vec<String> {
     let lower = summary.to_ascii_lowercase();
     let mut actions = Vec::new();
 
+    // Detect high-severity patterns first; if found, prepend an escalation action
+    let high_severity_keywords = ["critical", "security", "data loss", "crash", "panic"];
+    let is_high_severity = high_severity_keywords.iter().any(|kw| lower.contains(kw));
+    if is_high_severity {
+        actions.push("escalate_and_halt_immediately".to_string());
+    }
+
     if lower.contains("timeout") || lower.contains("timed out") {
         actions.push("reduce_tool_fanout_and_adjust_timeout_budget".to_string());
     }
@@ -84,7 +91,8 @@ fn corrective_actions_for_summary(summary: &str) -> Vec<String> {
     if lower.contains("empty") || lower.contains("no response") {
         actions.push("request_structured_intermediate_output_before_finalize".to_string());
     }
-    if lower.contains("tool execution") || lower.contains("join error") || lower.contains("failed") {
+    if lower.contains("tool execution") || lower.contains("join error") || lower.contains("failed")
+    {
         actions.push("retry_with_single_tool_path_then_replan".to_string());
     }
 
@@ -95,7 +103,12 @@ fn corrective_actions_for_summary(summary: &str) -> Vec<String> {
     actions
 }
 
-pub(crate) fn post_check(task_id: &str, agent: &str, success: bool, summary: &str) -> PostCheckOutcome {
+pub(crate) fn post_check(
+    task_id: &str,
+    agent: &str,
+    success: bool,
+    summary: &str,
+) -> PostCheckOutcome {
     let world = world_model();
     let _ = world.register_entity(&format!("autonomy-task-{}", task_id), EntityType::System);
 
@@ -161,5 +174,14 @@ mod tests {
 
         let ok = post_check("task-a", "agent-a", true, "all good");
         assert!(ok.corrective_actions.is_empty());
+    }
+
+    #[test]
+    fn high_severity_patterns_produce_escalation_action() {
+        let actions =
+            corrective_actions_for_summary("critical security failure with data loss risk");
+        assert!(actions
+            .iter()
+            .any(|a| a.contains("escalate") || a.contains("halt")));
     }
 }

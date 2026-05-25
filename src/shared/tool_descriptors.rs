@@ -234,11 +234,12 @@ pub fn validate_required_arguments(tool_name: &str, tool_input: &Value) -> Resul
                 .and_then(|value| value.as_str())
                 .ok_or_else(|| anyhow::anyhow!("github_search_skills requires arguments.query"))?;
         }
-        "workflow_execute" | "workflow_ask" | "workflow_generate" | "skill_creator" => {
-            if tool_name.starts_with("workflow") && tool_input.get("task").is_none() {
-                return Err(anyhow::anyhow!("{} tool requires 'task' field", tool_name));
-            }
+        "workflow_execute" | "workflow_ask" | "workflow_generate"
+            if tool_input.get("task").is_none() =>
+        {
+            return Err(anyhow::anyhow!("{} tool requires 'task' field", tool_name));
         }
+        "workflow_execute" | "workflow_ask" | "workflow_generate" => {}
         _ => {}
     }
     Ok(())

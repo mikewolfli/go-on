@@ -812,7 +812,11 @@ async fn mcp_http_cancel_notification_blocks_matching_request_id() {
         .await
         .expect("invalid mcp cancel response json");
 
-    assert_eq!(cancel_resp, Value::Null, "notification should return null body");
+    assert_eq!(
+        cancel_resp,
+        Value::Null,
+        "notification should return null body"
+    );
 
     let called: Value = client
         .post(format!("{}/", harness.base_url))
@@ -922,4 +926,292 @@ fn acp_http_route_inventory_changes_require_transport_gate_update() {
             e
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// BLUE43 Step 18 — MCP streaming/cancel/timeout consistency across transports
+// ---------------------------------------------------------------------------
+
+/// MCP stdio and HTTP must produce identical response shapes for the same
+/// `tools/call` invocation, proving that the shared `McpServer::handle_request`
+/// code path is equivalent regardless of transport layer.
+#[tokio::test(flavor = "current_thread")]
+async fn mcp_stdio_and_http_tool_call_shapes_match() {
+    let _guard = lock_suite_guard();
+    let tmp = tempdir().expect("tempdir");
+
+    // --- MCP stdio tool call ---
+    let stdio_cfg = tmp.path().join("stdio_config.toml");
+    write_local_echo_config(&stdio_cfg);
+    let stdio_resp = tokio::task::spawn_blocking(move || {
+        use std::io::BufRead;
+        let mut child = Command::new(binary_path())
+            .arg("--config")
+            .arg(&stdio_cfg)
+            .env("GO_ON_ENABLE_LOCAL_TEST_AGENTS", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("failed to spawn mcp_stdio harness");
+
+        let stdout = child.stdout.take().unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+
+        // Initialize
+        writeln!(
+            stdin,
+            "{}",
+            json!({
+                "jsonrpc": "2.0",
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "clientInfo": { "name": "test" }
+                },
+                "id": 100
+            })
+        )
+        .unwrap();
+
+        let mut reader = std::io::BufReader::new(stdout);
+        let mut line = String::new();
+
+        // Read init response
+        line.clear();
+        reader.read_line(&mut line).expect("read init response");
+        let init_resp: Value = serde_json::from_str(&line).expect("mcp stdio init response parse");
+        assert!(
+            init_resp.get("result").is_some(),
+            "mcp stdio init should succeed; got: {}",
+            init_resp
+        );
+
+        // Send tools/list and read response
+        writeln!(
+            stdin,
+            "{}",
+            json!({
+                "jsonrpc": "2.0",
+                "method": "tools/list",
+                "id": 101
+            })
+        )
+        .unwrap();
+        stdin.flush().unwrap();
+
+        line.clear();
+        reader
+            .read_line(&mut line)
+            .expect("read tools/list response");
+        let list_resp: Value =
+            serde_json::from_str(&line).expect("mcp stdio tools/list response parse");
+
+        let _ = child.kill();
+        let _ = child.wait();
+        list_resp
+    })
+    .await
+    .expect("stdio blocking task");
+
+    // --- MCP HTTP tool list ---
+    let http_cfg = tmp.path().join("http_config_mcp.toml");
+    write_local_echo_config(&http_cfg);
+    let harness = HttpHarness::spawn_with_mode(&http_cfg, ephemeral_bind_addr(), "mcp_http");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .expect("build client");
+    wait_healthy(&client, &harness.base_url, Duration::from_secs(15)).await;
+
+    let http_resp: Value = client
+        .post(format!("{}/", harness.base_url))
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "method": "tools/list",
+            "id": 1
+        }))
+        .send()
+        .await
+        .expect("mcp http tools/list request")
+        .json()
+        .await
+        .expect("mcp http tools/list json");
+
+    // Both responses must be success shapes with identical key structure
+    assert!(
+        stdio_resp.get("result").is_some(),
+        "stdio tools/list must have result"
+    );
+    assert!(
+        http_resp.get("result").is_some(),
+        "http tools/list must have result"
+    );
+    assert!(
+        stdio_resp.get("error").is_none(),
+        "stdio tools/list must not have error"
+    );
+    assert!(
+        http_resp.get("error").is_none(),
+        "http tools/list must not have error"
+    );
+
+    // Both results must have a `tools` array
+    let stdio_tools = stdio_resp["result"]["tools"]
+        .as_array()
+        .expect("stdio tools list must be array");
+    let http_tools = http_resp["result"]["tools"]
+        .as_array()
+        .expect("http tools list must be array");
+
+    // Tool names must match across transports
+    let stdio_names: Vec<&str> = stdio_tools
+        .iter()
+        .filter_map(|t| t.get("name").and_then(Value::as_str))
+        .collect();
+    let http_names: Vec<&str> = http_tools
+        .iter()
+        .filter_map(|t| t.get("name").and_then(Value::as_str))
+        .collect();
+
+    assert_eq!(
+        stdio_names.len(),
+        http_names.len(),
+        "stdio and http must report same number of tools"
+    );
+    for name in &stdio_names {
+        assert!(
+            http_names.contains(name),
+            "http tools/list missing tool '{}' present in stdio",
+            name
+        );
+    }
+}
+
+/// MCP stdio and HTTP timeout handling must produce equivalent error codes.
+#[tokio::test(flavor = "current_thread")]
+async fn mcp_stdio_and_http_timeout_codes_match() {
+    let _guard = lock_suite_guard();
+    let tmp = tempdir().expect("tempdir");
+
+    // --- MCP stdio timeout ---
+    let stdio_cfg = tmp.path().join("stdio_timeout_config.toml");
+    write_local_echo_config(&stdio_cfg);
+    let stdio_code = tokio::task::spawn_blocking(move || {
+        use std::io::BufRead;
+        let mut child = Command::new(binary_path())
+            .arg("--config")
+            .arg(&stdio_cfg)
+            .env("GO_ON_ENABLE_LOCAL_TEST_AGENTS", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("failed to spawn mcp_stdio for timeout");
+
+        let stdout = child.stdout.take().unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+
+        // Initialize first
+        writeln!(
+            stdin,
+            "{}",
+            json!({
+                "jsonrpc": "2.0",
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "clientInfo": { "name": "test" }
+                },
+                "id": 1
+            })
+        )
+        .unwrap();
+
+        let mut reader = std::io::BufReader::new(stdout);
+        let mut line = String::new();
+        // Read init response
+        line.clear();
+        reader.read_line(&mut line).expect("read init response");
+        let init_resp: Value = serde_json::from_str(&line).expect("parse init response");
+        assert!(init_resp.get("result").is_some(), "init should succeed");
+
+        // Now send a tool call with an extremely small timeout
+        writeln!(
+            stdin,
+            "{}",
+            json!({
+                "jsonrpc": "2.0",
+                "method": "tools/call",
+                "params": {
+                    "name": "read_file",
+                    "arguments": { "path": "/tmp/test-timeout.txt" },
+                    "timeoutMs": 1
+                },
+                "id": 99
+            })
+        )
+        .unwrap();
+        stdin.flush().unwrap();
+
+        // Read timeout response
+        line.clear();
+        reader.read_line(&mut line).expect("read timeout response");
+        let resp: Value = serde_json::from_str(&line).expect("parse timeout response");
+        let code = resp["error"]["code"].as_i64().unwrap_or(0);
+
+        let _ = child.kill();
+        let _ = child.wait();
+        code
+    })
+    .await
+    .expect("stdio timeout blocking task");
+
+    // --- MCP HTTP timeout ---
+    let http_cfg = tmp.path().join("http_timeout_config.toml");
+    write_local_echo_config(&http_cfg);
+    let harness = HttpHarness::spawn_with_mode(&http_cfg, ephemeral_bind_addr(), "mcp_http");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .expect("build client");
+    wait_healthy(&client, &harness.base_url, Duration::from_secs(15)).await;
+
+    let http_resp: Value = client
+        .post(format!("{}/", harness.base_url))
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": "read_file",
+                "arguments": { "path": "/tmp/test-timeout.txt" },
+                "timeoutMs": 1
+            },
+            "id": 99
+        }))
+        .send()
+        .await
+        .expect("mcp http timeout request")
+        .json()
+        .await
+        .expect("mcp http timeout json");
+
+    let http_code = http_resp["error"]["code"].as_i64().unwrap_or(0);
+
+    // Both must return REQUEST_TIMEOUT (-32801)
+    assert_eq!(
+        stdio_code, -32801,
+        "mcp stdio timeout must return REQUEST_TIMEOUT (-32801); got {}",
+        stdio_code
+    );
+    assert_eq!(
+        http_code, -32801,
+        "mcp http timeout must return REQUEST_TIMEOUT (-32801); got {}",
+        http_code
+    );
+    assert_eq!(
+        stdio_code, http_code,
+        "mcp stdio and http timeout error codes must match; stdio={} http={}",
+        stdio_code, http_code
+    );
 }
