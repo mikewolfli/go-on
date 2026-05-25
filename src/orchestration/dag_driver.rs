@@ -10,6 +10,7 @@ use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::orchestration::dag_executor::build_dag_from_tool_calls;
 use crate::orchestration::execution_graph::{ExNodeId, ExNodeState};
 use crate::orchestration::tool::{execute_loop, LoopConfig, LoopDecision, ToolInput, ToolRegistry};
 
@@ -38,12 +39,26 @@ pub struct DagExecutionTrace {
 /// Build tool execution as a Branch-Join DAG.
 /// Independent tools become Branch fans; dependent tools are sequenced.
 pub fn build_tool_execution_dag(tool_calls: &[(String, String)]) -> (ExNodeId, Vec<ExNodeId>) {
-    let branch_id: ExNodeId = "branch-tools".to_string();
-    let tool_node_ids: Vec<ExNodeId> = tool_calls
+    // Delegate to the real DAG builder: convert String args to Value
+    let converted: Vec<(String, Value)> = tool_calls
         .iter()
-        .enumerate()
-        .map(|(i, (name, _))| format!("tool-{}-{}", name, i))
+        .map(|(name, args_str)| {
+            let parsed: Value = serde_json::from_str(args_str).unwrap_or(serde_json::json!({}));
+            (name.clone(), parsed)
+        })
         .collect();
+    let graph = build_dag_from_tool_calls(&converted);
+    let tool_node_ids: Vec<ExNodeId> = graph.nodes.keys().cloned().collect();
+    let branch_id: ExNodeId = if graph.nodes.is_empty() {
+        "branch-tools".to_string()
+    } else {
+        // Use the first entry point as the branch node ID
+        graph
+            .entry_points
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "branch-tools".to_string())
+    };
     (branch_id, tool_node_ids)
 }
 

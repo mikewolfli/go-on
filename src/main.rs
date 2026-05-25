@@ -113,7 +113,6 @@ pub use crate::orchestration::tool;
 pub use crate::protocol::mcp_server;
 pub use crate::protocol::rpc_protocol;
 
-use std::fs;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -122,18 +121,13 @@ use anyhow::{Context, Result};
 use clap::{ArgAction, Parser, Subcommand};
 use tracing::{error, info, warn};
 
-use crate::acp::background::start_background_tasks;
-use crate::acp::r#impl::{new_acp_server, run_acp_http_server, run_acp_server};
 use crate::agent::AgentRegistry;
-use crate::cache::ResponseCache;
-use crate::config::{
-    is_agent_env_ready, validate_runtime_readiness, AppConfig, AutoTuneState, ConfigWarning,
-};
+use crate::config::{validate_runtime_readiness, AppConfig, ConfigWarning};
 use crate::flow::FlowManager;
-use crate::i18n::runtime::{init_i18n, t, tf};
+use crate::i18n::runtime::{t, tf};
 use crate::intelligence::capability_graph::CapabilityGraph;
-use crate::mcp_server::{McpHttpServer, McpStdioServer};
-use crate::protocol::access_mode::{resolve_access_selection, TransportMode};
+
+use crate::protocol::access_mode::resolve_access_selection;
 use crate::reinforcement::{
     build_runtime_healthcheck_report, build_task_plan, persist_runtime_healthcheck,
     persist_task_plan, run_action_check, ActionCheckKind, ArtifactLedger, RuntimeHealthcheckReport,
@@ -144,8 +138,6 @@ use crate::setup::{
     SetupOptions,
 };
 use crate::shared::protocol_mode::{ProtocolMode, ProtocolModeError};
-use crate::tool::ToolRegistry;
-use crate::vector::VectorStore;
 
 fn validate_cli_protocol_mode(raw: Option<&str>) -> Result<Option<String>> {
     let Some(value) = raw else {
@@ -906,379 +898,6 @@ fn print_completeness_report(config: &crate::config::AppConfig, report: &Runtime
     }
 }
 
-fn maybe_prompt_ai_onboarding(cli: &Cli, config_path: &std::path::Path) -> Result<bool> {
-    if cli.setup
-        || cli.validate_config
-        || cli.healthcheck
-        || cli.status
-        || cli.add_local_model
-        || cli.apply_recommended
-        || cli.secret.is_some()
-        || cli.plan_task.is_some()
-        || cli.action_check.is_some()
-    {
-        return Ok(false);
-    }
-
-    let is_terminal = std::io::stdin().is_terminal()
-        && std::io::stdout().is_terminal()
-        && std::env::var("GO_ON_ENABLE_LOCAL_TEST_AGENTS").is_err();
-
-    let Some(state) = detect_ai_onboarding_state(config_path)? else {
-        return Ok(false);
-    };
-
-    // Non-terminal mode (GUI / addon): log a single clear message instead of spamming warnings
-    if !is_terminal {
-        match state {
-            AiOnboardingState::MissingConfig | AiOnboardingState::BlankConfig => {
-                info!(
-                    "no configuration found at {} — create one with `go-on --init` or use the GUI setup wizard",
-                    config_path.display()
-                );
-            }
-            AiOnboardingState::NoAgents => {
-                info!(
-                    "configuration at {} has no AI providers — add providers with `go-on --init` or use the GUI settings page",
-                    config_path.display()
-                );
-            }
-            AiOnboardingState::AgentsNotReady => {
-                info!(
-                    "configuration at {} has AI providers but API keys are not set — configure credentials with `go-on --init` or the GUI settings page",
-                    config_path.display()
-                );
-            }
-            AiOnboardingState::InvalidConfig => {
-                info!(
-                    "configuration at {} is invalid — run `go-on --validate-config` for details",
-                    config_path.display()
-                );
-            }
-        }
-        return Ok(false); // allow server to start, caller handles provider errors gracefully
-    }
-
-    // Terminal mode: interactive onboarding
-    info!("starting onboarding flow for state={}", state.as_str());
-    println!("{}", tf("setup.onboarding_intro", &[]));
-    println!("{}", tf("setup.onboarding_option_1", &[]));
-    println!("{}", tf("setup.onboarding_option_2", &[]));
-    println!("{}", tf("setup.onboarding_option_3", &[]));
-    print!("{}", tf("setup.onboarding_select", &[]));
-    std::io::Write::flush(&mut std::io::stdout()).ok();
-
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
-    let selection = input.trim();
-    let selection = if selection.is_empty() { "1" } else { selection };
-
-    match selection {
-        "2" => {
-            crate::setup::run_setup_with_options(
-                config_path,
-                SetupOptions {
-                    profile: Some(parse_setup_profile("adaptive")?),
-                    level: Some(parse_setup_level("custom")?),
-                    secret_mode: None,
-                    force: true,
-                    prompt_for_secrets: true,
-                },
-            )?;
-            println!("{}", tf("setup.onboarding_done_next", &[]));
-            Ok(true)
-        }
-        "3" => {
-            println!("{}", tf("setup.onboarding_skipped", &[]));
-            println!("{}", tf("setup.onboarding_next", &[]));
-            Ok(true)
-        }
-        _ => {
-            crate::setup::run_setup_with_options(
-                config_path,
-                SetupOptions {
-                    profile: Some(parse_setup_profile("adaptive")?),
-                    level: Some(parse_setup_level("quick")?),
-                    secret_mode: None,
-                    force: true,
-                    prompt_for_secrets: true,
-                },
-            )?;
-            println!("{}", tf("setup.onboarding_done_next", &[]));
-            Ok(true)
-        }
-    }
-}
-
-enum AiOnboardingState {
-    MissingConfig,
-    BlankConfig,
-    InvalidConfig,
-    NoAgents,
-    AgentsNotReady,
-}
-
-impl AiOnboardingState {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Self::MissingConfig => "missing_config",
-            Self::BlankConfig => "blank_config",
-            Self::InvalidConfig => "invalid_config",
-            Self::NoAgents => "no_agents",
-            Self::AgentsNotReady => "agents_not_ready",
-        }
-    }
-}
-
-fn detect_ai_onboarding_state(config_path: &std::path::Path) -> Result<Option<AiOnboardingState>> {
-    let content = match fs::read_to_string(config_path) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(Some(AiOnboardingState::MissingConfig));
-        }
-        Err(e) => {
-            return Err(e)
-                .with_context(|| format!("failed to read config file: {}", config_path.display()))
-        }
-    };
-    if content.trim().is_empty() {
-        return Ok(Some(AiOnboardingState::BlankConfig));
-    }
-
-    let root: toml::Value = match toml::from_str(&content) {
-        Ok(value) => value,
-        Err(_) => return Ok(Some(AiOnboardingState::InvalidConfig)),
-    };
-
-    let no_agents = root
-        .get("agents")
-        .and_then(|value| value.as_table())
-        .map(|table| table.is_empty())
-        .unwrap_or(true);
-    if no_agents {
-        return Ok(Some(AiOnboardingState::NoAgents));
-    }
-
-    let config = match AppConfig::load(config_path) {
-        Ok(cfg) => cfg,
-        Err(_) => return Ok(Some(AiOnboardingState::InvalidConfig)),
-    };
-
-    if config.agents.is_empty() {
-        return Ok(Some(AiOnboardingState::NoAgents));
-    }
-
-    let ready = config
-        .agents
-        .keys()
-        .filter(|name| is_agent_env_ready(&config, name))
-        .count();
-
-    if ready == 0 {
-        return Ok(Some(AiOnboardingState::AgentsNotReady));
-    }
-
-    Ok(None)
-}
-
-async fn initialize_cache(
-    config_path: PathBuf,
-    cache_cfg: Option<crate::config::CacheConfig>,
-) -> Result<Option<Arc<ResponseCache>>> {
-    let Some(cache_cfg) = cache_cfg else {
-        return Ok(None);
-    };
-    if !cache_cfg.enabled {
-        return Ok(None);
-    }
-    tracing::trace!(config_path = %config_path.display(), "initializing response cache");
-
-    // ── PostgreSQL backend (profile-multi-users-server) ──────────────────────
-    #[cfg(feature = "backend-postgres")]
-    {
-        let url = cache_cfg.connection_string.clone().ok_or_else(|| {
-            anyhow::anyhow!("cache.connection_string is required for profile-multi-users-server")
-        })?;
-        info!(
-            "postgres cache enabled (ttl={}s, max_entries={})",
-            cache_cfg.default_ttl_seconds, cache_cfg.max_entries
-        );
-        tokio::task::spawn_blocking(move || {
-            ResponseCache::new(&url, cache_cfg.default_ttl_seconds, cache_cfg.max_entries)
-                .map(Arc::new)
-                .map(Some)
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("cache init task join error: {}", e))?
-    }
-
-    // ── SQLite backend (profile-local / profile-simple-server) ───────────────
-    #[cfg(not(feature = "backend-postgres"))]
-    {
-        let cache_path = resolve_config_relative_path(&config_path, &cache_cfg.path);
-        info!(
-            "sqlite cache enabled at {} (ttl={}s, max_entries={})",
-            cache_path.display(),
-            cache_cfg.default_ttl_seconds,
-            cache_cfg.max_entries
-        );
-
-        let result = tokio::task::spawn_blocking(move || {
-            ResponseCache::new(
-                &cache_path,
-                cache_cfg.default_ttl_seconds,
-                cache_cfg.max_entries,
-            )
-            .map(Arc::new)
-            .map(Some)
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("cache init task join error: {}", e))?;
-
-        // profile-local: cache init failure is non-fatal (adaptive behaviour).
-        #[cfg(all(
-            feature = "profile-local",
-            not(feature = "profile-simple-server"),
-            not(feature = "profile-multi-users-server")
-        ))]
-        {
-            match result {
-                Ok(cache) => Ok(cache),
-                Err(e) => {
-                    warn!(
-                        "sqlite cache init failed (adaptive, continuing without cache): {}",
-                        e
-                    );
-                    Ok(None)
-                }
-            }
-        }
-
-        #[cfg(any(
-            feature = "profile-simple-server",
-            feature = "profile-multi-users-server"
-        ))]
-        return result;
-    }
-}
-
-async fn initialize_vector_store(
-    config_path: PathBuf,
-    vector_cfg: Option<crate::config::VectorConfig>,
-) -> Result<Option<Arc<VectorStore>>> {
-    let Some(vector_cfg) = vector_cfg else {
-        return Ok(None);
-    };
-    if !vector_cfg.enabled {
-        return Ok(None);
-    }
-    tracing::trace!(config_path = %config_path.display(), "initializing vector store");
-
-    // ── PostgreSQL backend (profile-multi-users-server) ──────────────────────
-    #[cfg(feature = "backend-postgres")]
-    {
-        let url = vector_cfg.connection_string.clone().ok_or_else(|| {
-            anyhow::anyhow!("vector.connection_string is required for profile-multi-users-server")
-        })?;
-        info!(
-            "postgres vector store enabled (dims={}, top_k={}, similarity={})",
-            vector_cfg.dimensions, vector_cfg.top_k, vector_cfg.min_similarity
-        );
-        tokio::task::spawn_blocking(move || {
-            VectorStore::new(&url, vector_cfg.dimensions, vector_cfg.max_entries)
-                .map(Arc::new)
-                .map(Some)
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("vector init task join error: {}", e))?
-    }
-
-    // ── SQLite backend (profile-local / profile-simple-server) ───────────────
-    #[cfg(not(feature = "backend-postgres"))]
-    {
-        let vector_path = resolve_config_relative_path(&config_path, &vector_cfg.path);
-        info!(
-            "sqlite vector store enabled at {} (dims={}, top_k={}, similarity={})",
-            vector_path.display(),
-            vector_cfg.dimensions,
-            vector_cfg.top_k,
-            vector_cfg.min_similarity
-        );
-
-        let result = tokio::task::spawn_blocking(move || {
-            VectorStore::new(&vector_path, vector_cfg.dimensions, vector_cfg.max_entries)
-                .map(Arc::new)
-                .map(Some)
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("vector init task join error: {}", e))?;
-
-        // profile-local: vector init failure is non-fatal (adaptive behaviour).
-        #[cfg(all(
-            feature = "profile-local",
-            not(feature = "profile-simple-server"),
-            not(feature = "profile-multi-users-server")
-        ))]
-        {
-            match result {
-                Ok(store) => Ok(store),
-                Err(e) => {
-                    warn!(
-                        "sqlite vector store init failed (adaptive, continuing without vector): {}",
-                        e
-                    );
-                    Ok(None)
-                }
-            }
-        }
-
-        #[cfg(any(
-            feature = "profile-simple-server",
-            feature = "profile-multi-users-server"
-        ))]
-        return result;
-    }
-}
-
-async fn initialize_autotune(
-    config_path: PathBuf,
-    autotune_cfg: Option<crate::config::AutoTuneConfig>,
-) -> Result<(
-    Option<Arc<tokio::sync::Mutex<AutoTuneState>>>,
-    Option<crate::config::AutoTuneConfig>,
-    Option<String>,
-)> {
-    match autotune_cfg {
-        Some(autotune_cfg) if autotune_cfg.enabled => {
-            let state_path = resolve_config_relative_path(&config_path, &autotune_cfg.state_path)
-                .to_string_lossy()
-                .to_string();
-            info!(
-                "autotune enabled (min_chars: {}-{}, step: {}, evaluate_interval: {})",
-                autotune_cfg.min_query_chars_min,
-                autotune_cfg.min_query_chars_max,
-                autotune_cfg.min_query_chars_step,
-                autotune_cfg.evaluate_interval
-            );
-
-            let autotune_cfg_for_load = autotune_cfg.clone();
-            let state_path_for_load = state_path.clone();
-            let state = tokio::task::spawn_blocking(move || {
-                AutoTuneState::load_or_default(&state_path_for_load, &autotune_cfg_for_load)
-            })
-            .await
-            .map_err(|err| anyhow::anyhow!("autotune init task join error: {}", err))?;
-
-            Ok((
-                Some(Arc::new(tokio::sync::Mutex::new(state))),
-                Some(autotune_cfg),
-                Some(state_path),
-            ))
-        }
-        _ => Ok((None, None, None)),
-    }
-}
-
 /// Main function - entry point for the application
 #[tokio::main]
 async fn main() {
@@ -1350,9 +969,6 @@ async fn main() {
     }
 }
 
-/// Core application logic
-///
-/// Handles command-line arguments, configuration loading, and server initialization
 async fn run() -> Result<()> {
     // Touch new BLUE44 module types to suppress dead_code warnings
     // until full integration wiring is complete.
@@ -1371,78 +987,18 @@ async fn run() -> Result<()> {
         }
     }
 
-    // Configure telemetry (structured logging, metrics, tracing)
-    let telemetry_config = telemetry_enhanced::TelemetryConfig {
-        log_level: match cli.verbose {
-            0 => "warn".to_string(),
-            1 => "info".to_string(),
-            2 => "debug".to_string(),
-            _ => "trace".to_string(),
-        },
-        ..Default::default()
-    };
-
-    telemetry_enhanced::init_telemetry(&telemetry_config)
-        .map_err(|err| anyhow::anyhow!("failed to initialize telemetry: {}", err))?;
-
-    // Initialize enhanced telemetry components
-    let _metrics_recorder = telemetry_enhanced::MetricsRecorder::new();
-    let _health_metrics = telemetry_enhanced::HealthMetrics::new();
-    info!("enhanced telemetry components initialized");
-
-    // Initialize performance monitoring
-    let _performance_monitor = performance::init_performance_monitoring();
-    info!("performance monitoring initialized");
-
-    // ── Pre-startup memory health check ──────────────────────────────────────
-    // Warn or abort if system memory is too low to run safely.
-    {
-        let health = crate::observability::memory_health::check_startup_memory();
-        crate::observability::memory_health::print_memory_health(&health);
-        if let crate::observability::memory_health::MemoryHealth::Critical { .. } = health {
-            anyhow::bail!(
-                "Aborting startup: system memory is critically low. \
-                 Try closing other applications, or use --low-memory flag"
-            );
-        }
-    }
-
-    // ── Runtime memory pressure monitor ─────────────────────────────────────
-    // Background task that logs warnings when memory pressure increases.
-    crate::observability::memory_health::start_memory_monitor();
-
     // Determine configuration file path
     let config_path = match cli.config {
         Some(ref path) => path.clone(),
         None => default_config_path()?,
     };
 
-    // Initialize i18n system
-    let languages_dir = config_path
-        .parent()
-        .map(|p| p.join("languages"))
-        .unwrap_or_else(|| std::path::Path::new("languages").to_path_buf());
-
-    if let Err(e) = init_i18n(&languages_dir) {
-        warn!(
-            "Failed to initialize i18n system: {}. Continuing without translations.",
-            e
-        );
-    } else {
-        info!(
-            "i18n system initialized with language directory: {:?}",
-            languages_dir
-        );
-
-        // Start language file watcher for hot-reloading (best-effort)
-        if let Err(e) =
-            i18n_watcher::start_watcher(&languages_dir, std::time::Duration::from_secs(5))
-        {
-            warn!("Failed to start language file watcher: {}", e);
-        } else {
-            info!("Language file watcher started for hot-reloading");
-        }
-    }
+    // Perform system bootstrap (telemetry, i18n, memory health, etc.)
+    let bootstrap_cfg = crate::core::bootstrap::BootstrapConfig {
+        config_path: config_path.clone(),
+        ..Default::default()
+    };
+    crate::core::bootstrap::perform_bootstrap(&bootstrap_cfg).await?;
 
     // Handle secret management commands, local model setup, and onboarding
     if handle_secret_commands(&cli, &config_path)? {
@@ -1472,86 +1028,18 @@ async fn run() -> Result<()> {
         }
     });
 
-    // Check agent readiness — if no agents configured, prompt for setup or skip
-    if !cli.setup
-        && std::io::stdin().is_terminal()
-        && std::io::stdout().is_terminal()
-        && !std::env::args().any(|a| a == "--setup" || a == "--init")
-        && !cli.chat
-        && std::env::var("GO_ON_ENABLE_LOCAL_TEST_AGENTS").is_err()
-    {
-        let provider_count = config.agents.len();
-        let ready_count = config
-            .agents
-            .keys()
-            .filter(|name| is_agent_env_ready(&config, name))
-            .count();
-
-        if provider_count == 0 {
-            println!();
-            println!("{}", tf("setup.onboarding_intro", &[]));
-            println!("  {}", tf("setup.onboarding_option_1", &[]));
-            println!("  {}", tf("setup.onboarding_option_3", &[]));
-            print!("{} ", tf("setup.onboarding_select", &[]));
-            let _ = std::io::Write::flush(&mut std::io::stdout());
-
-            let mut input = String::new();
-            let _ = std::io::stdin().read_line(&mut input);
-            let selection = input.trim();
-
-            if selection == "1" || selection.is_empty() {
-                crate::setup::run_setup_with_options(
-                    &config_path,
-                    SetupOptions {
-                        profile: Some(parse_setup_profile("adaptive")?),
-                        level: Some(parse_setup_level("quick")?),
-                        secret_mode: None,
-                        force: true,
-                        prompt_for_secrets: true,
-                    },
-                )?;
-                println!("{}", tf("setup.onboarding_done_next", &[]));
-                // Reload config after setup
-                let config = Arc::new(AppConfig::load(&config_path)?);
-                return start_server(config, &cli, &config_path).await;
-            } else {
-                println!("{}", tf("setup.onboarding_skipped", &[]));
-                println!("{}", tf("setup.onboarding_next", &[]));
-            }
-        } else if ready_count == 0 && provider_count > 0 {
-            let missing: Vec<String> = config
-                .agents
-                .keys()
-                .filter(|name| !is_agent_env_ready(&config, name))
-                .cloned()
-                .collect();
-            println!();
-            println!(
-                "{} API key(s) not set: {}",
-                missing.len(),
-                missing.join(", ")
-            );
-            println!("  Run `go-on --init` to configure credentials, or continue without them.");
-            print!("Press Enter to continue (or type 's' to run setup): ");
-            let _ = std::io::Write::flush(&mut std::io::stdout());
-            let mut input = String::new();
-            let _ = std::io::stdin().read_line(&mut input);
-            if input.trim().eq_ignore_ascii_case("s") {
-                crate::setup::run_setup_with_options(
-                    &config_path,
-                    SetupOptions {
-                        profile: Some(parse_setup_profile("adaptive")?),
-                        level: Some(parse_setup_level("quick")?),
-                        secret_mode: None,
-                        force: true,
-                        prompt_for_secrets: true,
-                    },
-                )?;
-                println!("{}", tf("setup.onboarding_done_next", &[]));
-                let config = Arc::new(AppConfig::load(&config_path)?);
-                return start_server(config, &cli, &config_path).await;
-            }
-        }
+    // Delegate interactive agent onboarding to the onboarding module
+    let onboarding_cfg = crate::core::onboarding::OnboardingConfig {
+        enabled: !cli.setup
+            && !cli.chat
+            && std::env::var("GO_ON_ENABLE_LOCAL_TEST_AGENTS").is_err(),
+        is_terminal: std::io::stdin().is_terminal()
+            && std::io::stdout().is_terminal()
+            && !std::env::args().any(|a| a == "--setup" || a == "--init"),
+    };
+    if crate::core::onboarding::run_onboarding(&onboarding_cfg, &config_path).await? {
+        let config = Arc::new(AppConfig::load(&config_path)?);
+        return start_server(config, &cli, &config_path).await;
     }
 
     // Handle terminal chat mode
@@ -1637,10 +1125,6 @@ fn handle_secret_commands(cli: &Cli, config_path: &std::path::Path) -> Result<bo
             prompt_for_secrets: cli.setup_profile.is_none() && cli.setup_secrets.is_none(),
         };
         setup::run_setup_with_options(config_path, options)?;
-        return Ok(true);
-    }
-
-    if maybe_prompt_ai_onboarding(cli, config_path)? {
         return Ok(true);
     }
 
@@ -1831,7 +1315,7 @@ async fn start_server(
         http_client.clone(),
         Arc::clone(&capability_graph),
     )?);
-    let flow = Arc::new(FlowManager::new(Arc::clone(&config), cli.phase.clone()));
+    let _flow = Arc::new(FlowManager::new(Arc::clone(&config), cli.phase.clone()));
 
     // Display agent vendor information
     let agents_by_vendor = registry.agents_by_vendor();
@@ -1899,9 +1383,9 @@ async fn start_server(
     });
 
     let (cache, vector_store, (autotune_state, autotune_config, autotune_state_path)) = tokio::try_join!(
-        initialize_cache(config_path.to_path_buf(), adjusted_cache_cfg),
-        initialize_vector_store(config_path.to_path_buf(), adjusted_vector_cfg),
-        initialize_autotune(config_path.to_path_buf(), config.autotune.clone()),
+        crate::acp::transport_factory::initialize_cache(config_path, adjusted_cache_cfg),
+        crate::acp::transport_factory::initialize_vector_store(config_path, adjusted_vector_cfg),
+        crate::acp::transport_factory::initialize_autotune(config_path, config.autotune.clone()),
     )?;
 
     let ledger = ArtifactLedger::new(Some(config_path));
@@ -1986,130 +1470,23 @@ async fn start_server(
     );
     runtime_config.protocol_mode = Some(access_selection.configured_mode.clone());
 
-    match access_selection.configured_mode.as_str() {
-        "adaptive" | "acp_stdio" => {
-            let mut server = new_acp_server(
-                flow,
-                registry,
-                cache,
-                vector_store,
-                config.vector.clone(),
-                autotune_state,
-                autotune_config,
-                autotune_state_path,
-                Some(config_path.to_string_lossy().to_string()),
-                runtime_config,
-                Some(http_client),
-                cli.verbose > 0,
-                Some(Arc::clone(&config)),
-            );
-            if matches!(access_selection.startup_transport, TransportMode::Stdio) {
-                run_acp_server(&mut server).await
-            } else {
-                let bind_addr = acp_http_bind.unwrap_or_else(|| "127.0.0.1:8090".to_string());
-                run_acp_http_server(Arc::new(server), bind_addr).await
-            }
-        }
-        "acp_http" => {
-            let bind_addr = acp_http_bind.unwrap_or_else(|| "127.0.0.1:8090".to_string());
-            let server = new_acp_server(
-                flow,
-                registry,
-                cache,
-                vector_store,
-                config.vector.clone(),
-                autotune_state,
-                autotune_config,
-                autotune_state_path,
-                Some(config_path.to_string_lossy().to_string()),
-                runtime_config,
-                Some(http_client),
-                cli.verbose > 0,
-                Some(Arc::clone(&config)),
-            );
-            run_acp_http_server(Arc::new(server), bind_addr).await
-        }
-        "mcp_stdio" => {
-            let tool_registry = Arc::new(ToolRegistry::new());
-            let acp_server = Arc::new(new_acp_server(
-                flow,
-                registry.clone(),
-                cache,
-                vector_store,
-                config.vector.clone(),
-                autotune_state,
-                autotune_config,
-                autotune_state_path,
-                Some(config_path.to_string_lossy().to_string()),
-                runtime_config,
-                Some(http_client),
-                cli.verbose > 0,
-                Some(Arc::clone(&config)),
-            ));
-            if let Err(e) =
-                start_background_tasks(&acp_server, Arc::clone(&acp_server.shutdown_notify)).await
-            {
-                error!("Failed to start MCP background tasks: {}", e);
-            }
-            let server = McpStdioServer::new_with_acp(
-                registry,
-                tool_registry,
-                "go-on".to_string(),
-                env!("CARGO_PKG_VERSION").to_string(),
-                Some(acp_server.clone()),
-            );
-            server.run().await?;
-            acp_server.shutdown_notify.notify_waiters();
-            Ok(())
-        }
-        "mcp_http" => {
-            let bind_addr = acp_http_bind.unwrap_or_else(|| "127.0.0.1:8090".to_string());
-            let tool_registry = Arc::new(ToolRegistry::new());
-            let acp_server = Arc::new(new_acp_server(
-                flow,
-                registry.clone(),
-                cache,
-                vector_store,
-                config.vector.clone(),
-                autotune_state,
-                autotune_config,
-                autotune_state_path,
-                Some(config_path.to_string_lossy().to_string()),
-                runtime_config,
-                Some(http_client),
-                cli.verbose > 0,
-                Some(Arc::clone(&config)),
-            ));
-            let shutdown_notify = Arc::clone(&acp_server.shutdown_notify);
-            if let Err(e) = start_background_tasks(&acp_server, shutdown_notify).await {
-                error!("Failed to start MCP HTTP background tasks: {}", e);
-            }
-            let server = McpHttpServer::new_with_acp(
-                registry,
-                tool_registry,
-                "go-on".to_string(),
-                env!("CARGO_PKG_VERSION").to_string(),
-                bind_addr,
-                Some(acp_server.clone()),
-            );
-            server.run().await?;
-            acp_server.shutdown_notify.notify_waiters();
-            Ok(())
-        }
-        _ => {
-            error!(
-                "Unknown protocol mode: {}",
-                access_selection.configured_mode
-            );
-            anyhow::bail!(
-                "unsupported protocol mode: {}",
-                access_selection.configured_mode
-            );
-        }
-    }
+    // Delegate to the transport factory for protocol-mode-specific server construction
+    crate::acp::transport_factory::dispatch_server(
+        registry,
+        cache,
+        vector_store,
+        config_path,
+        runtime_config,
+        &access_selection.configured_mode,
+        &acp_http_bind.unwrap_or_else(|| "127.0.0.1:8090".to_string()),
+        autotune_state,
+        autotune_config,
+        autotune_state_path,
+        http_client,
+    )
+    .await
 }
 
-#[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;

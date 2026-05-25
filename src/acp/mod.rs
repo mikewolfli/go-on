@@ -18,6 +18,7 @@ pub mod helpers;
 pub mod r#impl;
 pub mod prelude;
 pub mod server;
+pub mod transport_factory;
 
 // Explicit re-exports of items that external consumers need.
 // Avoid `pub use prelude::*;` to make dead-code detection easier.

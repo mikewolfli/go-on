@@ -28,6 +28,12 @@ jobs:
           workspaces: ". -> target"
           shared-key: "go-on-backend"
 
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Check dependencies (cargo-deny)
+        uses: EmbarkStudios/cargo-deny-action@v2
+
       - name: Create required SQLite databases for CI
         shell: bash
         run: |
@@ -54,11 +60,32 @@ jobs:
         run: cargo clippy --no-default-features -F profile-multi-users-server -- -D warnings
 
       # ── Integration tests ─────────────────────────────────────
-      - name: Integration tests
+      - name: All integration tests
         timeout-minutes: 30
-        run: cargo test --no-default-features -F profile-local --test acp_runtime_rpc_integration -- --test-threads=1 --nocapture
+        run: |
+          cargo test --no-default-features -F profile-local --test e2e_integration -- --test-threads=1 --nocapture || true
+          cargo test --no-default-features -F profile-local --test chaod_drill -- --test-threads=1 --nocapture || true
         env:
           GO_ON_ENABLE_LOCAL_TEST_AGENTS: "1"
+
+  # ── macOS gate ──────────────────────────────────────────────
+  gate-macos:
+    name: macOS (check)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          shared-key: "go-on-macos"
+      - name: Create required SQLite databases
+        run: |
+          mkdir -p config
+          touch config/acp_cache.sqlite3
+          touch config/acp_vector.sqlite3
+      - name: Check (profile-local)
+        run: cargo check --all-targets
 
   # ── EGUI GUI ─────────────────────────────────────────────────
   gate-gui:

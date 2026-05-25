@@ -13,32 +13,32 @@ go-on 為智能體編排、治理和生產操作提供了全面的 API 接口。
 
 ### 2. 安全和治理 API
 - **目的**：安全策略、審計日誌、合規性監控
-- **協議**：HTTP、RPC
-- **認證**：API 密鑰、JWT 令牌（多用戶模式）
+- **協議**：HTTP、JSON-RPC
+- **認證**：API 密鑰
 
 ### 3. 可觀測性 API
 - **目的**：指標、追蹤、日誌、健康監控
-- **協議**：HTTP、OpenTelemetry
-- **認證**：API 密鑰（指標端點可能公開）
+- **協議**：HTTP、JSON-RPC
+- **認證**：API 密鑰（健康端點可能公開）
 
 ### 4. 可靠性 API
 - **目的**：斷路器、重試、維護操作
-- **協議**：HTTP、RPC
+- **協議**：HTTP、JSON-RPC
 - **認證**：API 密鑰
 
 ### 5. 工作流和任務 API
 - **目的**：工作流執行、任務規劃和管理
-- **協議**：HTTP、RPC
-- **認證**：API 密鑰、JWT 令牌
+- **協議**：HTTP、JSON-RPC
+- **認證**：API 密鑰
 
 ### 6. 學習和智能 API
 - **目的**：機器學習、強化學習、自適應選擇
-- **協議**：HTTP、RPC
+- **協議**：HTTP、JSON-RPC
 - **認證**：API 密鑰
 
 ### 7. 優化和操作 API
 - **目的**：成本優化、性能調優、操作指標
-- **協議**：HTTP、RPC
+- **協議**：HTTP、JSON-RPC
 - **認證**：API 密鑰
 
 ## 協議支持
@@ -56,12 +56,12 @@ go-on 為智能體編排、治理和生產操作提供了全面的 API 接口。
 ### HTTP REST API
 - **基礎 URL**：`http://localhost:8090`（默認）
 - **Content-Type**：`application/json`
-- **認證**：Bearer 令牌或 API 密鑰頭
+- **認證**：Bearer 令牌或 API 密鑰頭（`X-Api-Key` 或 `X-Go-On-Key`）
 
-### RPC（遠程過程調用）
-- **傳輸**：HTTP/2 帶 gRPC 或 JSON-RPC
-- **序列化**：Protocol Buffers 或 JSON
-- **特性**：雙向流、取消、截止時間
+### JSON-RPC over HTTP
+- **端點**：`POST /v1/responses`
+- **序列化**：JSON
+- **特性**：通過方法路由的請求/響應（`runtime.health`、`governance.status` 等）
 
 ## 認證
 
@@ -75,22 +75,7 @@ export GO_ON_SERVER_API_KEY="server-key"
 export GO_ON_ENTRY_API_KEY="entry-key"
 ```
 
-### JWT 令牌（多用戶模式）
-```bash
-# 獲取令牌
-curl -X POST http://localhost:8090/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"user","password":"pass"}'
-
-# 使用令牌
-curl http://localhost:8090/api/v1/users/me \
-  -H "Authorization: Bearer <jwt-token>"
-```
-
-### OAuth 2.0（企業版）
-- **供應商**：Google、GitHub、Okta、Azure AD
-- **範圍**：`read`、`write`、`admin`
-- **流程**：授權碼、客戶端憑證
+API 密鑰通過 `X-Api-Key` 或 `X-Go-On-Key` HTTP 頭髮送。認證根據運行時配置 `entry_auth_enabled` 強制執行。
 
 ## 速率限制
 
@@ -99,12 +84,7 @@ curl http://localhost:8090/api/v1/users/me \
 - **簡單服務器**：每分鐘 1000 個請求，200 個突發
 - **多用戶服務器**：每分鐘 5000 個請求，1000 個突發
 
-### 頭部
-```
-X-RateLimit-Limit: 1000
-X-RateLimit-Remaining: 950
-X-RateLimit-Reset: 1614556800
-```
+速率限制通過每階段的令牌桶算法內部強制執行。
 
 ## 錯誤處理
 
@@ -134,117 +114,43 @@ X-RateLimit-Reset: 1614556800
 }
 ```
 
-## 版本控制
+## HTTP 端點
 
-### API 版本頭部
-```http
-Accept: application/vnd.go-on.v1+json
-```
+### GET 端點
 
-### URL 版本控制
-```
-http://localhost:8090/api/v1/health
-http://localhost:8090/api/v2/health
-```
+| 路徑 | 描述 |
+|---|---|
+| `/` | 根能力響應（協議、端點、版本） |
+| `/health` | 健康檢查（狀態、版本、運行時間） |
+| `/v1/models` | 列出可用模型（OpenAI 兼容） |
+| `/v1/model` | `/v1/models` 的別名 |
+| `/models` | `/v1/models` 的別名 |
+| `/v1/responses/{id}` | 按 ID 獲取響應 |
 
-### 棄用策略
-- **警告**：棄用的端點返回 `X-API-Deprecated: true` 頭部
-- **淘汰**：棄用 6 個月後移除
-- **遷移**：文檔提供遷移指南
+### POST 端點
 
-## 分頁
-
-### 基於游標的分頁
-```json
-{
-  "data": [...],
-  "pagination": {
-    "next_cursor": "eyJpZCI6IjEwMCJ9",
-    "has_more": true,
-    "total": 1000
-  }
-}
-```
-
-### 限制和偏移
-```
-GET /api/v1/users?limit=20&offset=40
-```
-
-## 過濾和排序
-
-### 過濾
-```
-GET /api/v1/logs?level=error&since=2024-01-01T00:00:00Z
-```
-
-### 排序
-```
-GET /api/v1/users?sort=created_at&order=desc
-```
-
-## 字段選擇
-
-### 部分響應
-```
-GET /api/v1/users/123?fields=id,name,email
-```
-
-### 嵌套字段選擇
-```
-GET /api/v1/projects/456?fields=id,name,tasks(id,title,status)
-```
-
-## WebSocket 支持
-
-### 實時更新
-```javascript
-const ws = new WebSocket('ws://localhost:8090/ws');
-ws.onmessage = (event) => {
-  const data = JSON.parse(event.data);
-  console.log('更新:', data);
-};
-```
-
-### 事件
-- `workflow.completed`
-- `task.updated`
-- `error.occurred`
-- `health.status_changed`
-
-## OpenAPI 規範
-
-### 訪問 OpenAPI 文檔
-```
-http://localhost:8090/docs
-http://localhost:8090/openapi.json
-http://localhost:8090/openapi.yaml
-```
-
-### 生成客戶端 SDK
-```bash
-# TypeScript
-npx openapi-typescript http://localhost:8090/openapi.json --output client.ts
-
-# Python
-openapi-python-client generate --url http://localhost:8090/openapi.json
-
-# Go
-oapi-codegen -package api -generate types,client http://localhost:8090/openapi.json > api.gen.go
-```
+| 路徑 | 描述 |
+|---|---|
+| `/chat` | 聊天補全（ACP JSON-RPC 格式） |
+| `/chat/stream` | 流式聊天補全（SSE） |
+| `/v1/chat/completions` | OpenAI 兼容的聊天補全 |
+| `/chat/completions` | OpenAI 兼容的聊天補全 |
+| `/v1/responses` | JSON-RPC 2.0 方法分發 |
 
 ## 客戶端庫
 
 ### 官方庫
-- **TypeScript/JavaScript**：`@go-on/client`
-- **Python**：`go-on-client`
-- **Go**：`github.com/your-org/go-on/client`
+- **Python**：`go-on-sdk`（通過 `pip install go-on-sdk` 安裝）
 - **Rust**：`go-on-client` crate
 
-### 社區庫
-- **Java**：`go-on-java-client`
-- **C#**：`GoOn.Client`
-- **Ruby**：`go_on_ruby`
+### 生成自定義客戶端
+`POST /v1/responses` 的 JSON-RPC 接口可以直接從任何語言調用：
+
+```bash
+curl http://localhost:8090/v1/responses \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"runtime.health","params":{}}'
+```
 
 ## 測試
 
@@ -272,7 +178,6 @@ cargo test --test api_health
 - **健康檢查**：< 100ms
 - **簡單請求**：< 500ms
 - **複雜工作流**：< 5s
-- **向量搜索**：< 2s
 
 ### 吞吐量
 - **本地模式**：~100 請求/秒
@@ -281,23 +186,12 @@ cargo test --test api_health
 
 ## 安全
 
-### TLS/SSL
-```bash
-# 生成自簽名證書
-openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365
-
-# 在運行時中配置
-[runtime]
-tls_cert_path = "cert.pem"
-tls_key_path = "key.pem"
-```
-
 ### CORS 配置
 ```toml
 [security.cors]
 allowed_origins = ["https://example.com", "http://localhost:3000"]
 allowed_methods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
-allowed_headers = ["Authorization", "Content-Type"]
+allowed_headers = ["Authorization", "Content-Type", "X-Api-Key", "X-Go-On-Key"]
 allow_credentials = true
 ```
 
@@ -306,20 +200,19 @@ allow_credentials = true
 ### 健康檢查
 ```
 GET /health
-GET /health/ready
-GET /health/live
 ```
 
-### 指標
-```
-GET /metrics
-GET /metrics/prometheus
-```
+### OpenTelemetry 追蹤
+go-on 使用 OpenTelemetry 進行聊天補全、代理調用和審查門的內部追蹤。追蹤數據發送到任何已配置的 OTLP 收集器。
 
-### 追蹤
-- **Jaeger**：`http://localhost:16686`
-- **Zipkin**：`http://localhost:9411`
-- **OpenTelemetry**：`http://localhost:4317`
+### Prometheus 指標
+內部運行時指標（延遲直方圖、斷路器狀態、速率限制器令牌）可通過 JSON-RPC 獲取：
+
+```bash
+curl http://localhost:8090/v1/responses \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"metrics.prometheus","params":{}}'
+```
 
 ## 下一步
 
