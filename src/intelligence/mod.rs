@@ -33,8 +33,10 @@ pub fn lock_guard<T>(mtx: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> 
 pub mod adaptive_selector;
 pub mod consensus;
 pub mod discovery;
+pub mod hot_failover;
 pub mod matcher;
 pub mod metacognitive;
+pub mod semantic_matcher;
 
 pub mod capability_bus;
 pub mod capability_graph;

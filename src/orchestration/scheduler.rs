@@ -2,9 +2,12 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
+#[cfg(feature = "backend-sqlite")]
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
+use tokio::sync::Semaphore;
 use tracing::{debug, error, info, warn};
 
 // ──────────────────────────────────────────────
@@ -87,17 +90,24 @@ pub struct SchedulerConfig {
     pub default_max_retries: u32,
     /// Aging check interval in seconds
     pub aging_interval_secs: u64,
+    /// Queue depth at which backpressure is triggered (rejects with 429).
+    /// When the pending queue exceeds this, new submissions are rejected.
+    pub backpressure_queue_depth: usize,
 }
+
+/// Default queue depth for backpressure: 500 pending tasks.
+pub const DEFAULT_BACKPRESSURE_QUEUE_DEPTH: usize = 500;
 
 impl Default for SchedulerConfig {
     fn default() -> Self {
         Self {
-            global_max_concurrent_tasks: 10,
+            global_max_concurrent_tasks: 100,
             max_workers_per_role: 3,
             aging_rate: 0.1,
             max_aging_bonus: 5.0,
             default_max_retries: 3,
             aging_interval_secs: 5,
+            backpressure_queue_depth: DEFAULT_BACKPRESSURE_QUEUE_DEPTH,
         }
     }
 }
@@ -119,6 +129,8 @@ pub struct SchedulerProfile {
     pub total_failed: u64,
     /// Starvation events prevented
     pub starvation_events_prevented: u64,
+    /// Backpressure rejections (429s)
+    pub backpressure_rejections: u64,
 }
 
 // ──────────────────────────────────────────────
@@ -139,10 +151,18 @@ pub struct TaskScheduler {
     stats: Mutex<SchedulerProfile>,
     /// Last aging update timestamp
     last_aging: Mutex<Instant>,
+    /// Global concurrency limiter using a semaphore.
+    concurrency_limiter: Arc<Semaphore>,
+    /// Per-role concurrency limiters (role name → semaphore).
+    role_limiters: Mutex<HashMap<String, Arc<Semaphore>>>,
+    /// Optional persistence for surviving restarts (SQLite-backed)
+    #[cfg(feature = "backend-sqlite")]
+    persistence: Option<Arc<SchedulerPersistence>>,
 }
 
 impl TaskScheduler {
     pub fn new(config: SchedulerConfig) -> Self {
+        let global_permits = config.global_max_concurrent_tasks;
         Self {
             queue: Mutex::new(BinaryHeap::new()),
             active_tasks: Mutex::new(HashSet::new()),
@@ -156,13 +176,82 @@ impl TaskScheduler {
                 total_completed: 0,
                 total_failed: 0,
                 starvation_events_prevented: 0,
+                backpressure_rejections: 0,
             }),
             last_aging: Mutex::new(Instant::now()),
+            concurrency_limiter: Arc::new(Semaphore::new(global_permits)),
+            role_limiters: Mutex::new(HashMap::new()),
+            #[cfg(feature = "backend-sqlite")]
+            persistence: None,
             config,
         }
     }
 
+    /// Create a scheduler with SQLite-backed persistence.
+    ///
+    /// On creation, attempts to restore any tasks that were persisted
+    /// in a previous session and re-enqueues them.
+    #[cfg(feature = "backend-sqlite")]
+    pub fn new_with_persistence(
+        config: SchedulerConfig,
+        persistence: SchedulerPersistence,
+    ) -> Self {
+        let global_permits = config.global_max_concurrent_tasks;
+        let persistence = if persistence.is_enabled() {
+            Some(Arc::new(persistence))
+        } else {
+            None
+        };
+
+        let scheduler = Self {
+            queue: Mutex::new(BinaryHeap::new()),
+            active_tasks: Mutex::new(HashSet::new()),
+            task_map: Mutex::new(HashMap::new()),
+            role_active_count: Mutex::new(HashMap::new()),
+            stats: Mutex::new(SchedulerProfile {
+                l1_queue_depth: 0,
+                l2_active_workers: 0,
+                l2_fan_out_count: 0,
+                total_submitted: 0,
+                total_completed: 0,
+                total_failed: 0,
+                starvation_events_prevented: 0,
+                backpressure_rejections: 0,
+            }),
+            last_aging: Mutex::new(Instant::now()),
+            concurrency_limiter: Arc::new(Semaphore::new(global_permits)),
+            role_limiters: Mutex::new(HashMap::new()),
+            persistence,
+            config,
+        };
+
+        // Restore previously persisted tasks
+        if let Some(ref p) = scheduler.persistence {
+            match p.restore_queue() {
+                Ok(tasks) => {
+                    let count = tasks.len();
+                    for task in tasks {
+                        if let Err(e) = scheduler.submit(task) {
+                            warn!("Failed to restore persisted task: {}", e);
+                        }
+                    }
+                    if count > 0 {
+                        info!("Restored {} tasks from persistence", count);
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to restore scheduler queue: {}", e);
+                }
+            }
+        }
+
+        scheduler
+    }
+
     /// Submit a task to the queue. Pushes into BinaryHeap, stores in task_map.
+    ///
+    /// Returns `Err` if the queue depth exceeds the backpressure threshold
+    /// (configured via `SchedulerConfig::backpressure_queue_depth`).
     pub fn submit(&self, task: ScheduledTask) -> Result<()> {
         let task_id = task.task_id.clone();
         if self
@@ -173,6 +262,25 @@ impl TaskScheduler {
         {
             return Err(anyhow!("Task {} already submitted", task_id));
         }
+
+        // Check backpressure: reject if queue depth exceeds threshold.
+        let queue_depth = self
+            .queue
+            .lock()
+            .map_err(|e| anyhow!("Lock error: {}", e))?
+            .len();
+        if queue_depth >= self.config.backpressure_queue_depth {
+            if let Ok(mut stats) = self.stats.lock() {
+                stats.backpressure_rejections += 1;
+            }
+            return Err(anyhow!(
+                "Backpressure: queue depth ({}) exceeds threshold ({}) — rejected task {}",
+                queue_depth,
+                self.config.backpressure_queue_depth,
+                task_id
+            ));
+        }
+
         self.queue
             .lock()
             .map_err(|e| anyhow!("Lock error: {}", e))?
@@ -186,11 +294,71 @@ impl TaskScheduler {
             .map_err(|e| anyhow!("Lock error: {}", e))?
             .total_submitted += 1;
         debug!("Submitted task {}", task_id);
+
+        // Persist the task if persistence is enabled
+        #[cfg(feature = "backend-sqlite")]
+        if let Some(ref p) = self.persistence {
+            if let Ok(task_map) = self.task_map.lock() {
+                if let Some(saved) = task_map.get(&task_id) {
+                    if let Err(e) = p.save_task(saved) {
+                        warn!("Failed to persist task {}: {}", task_id, e);
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
+    /// Acquire a global concurrency permit (async-safe).
+    ///
+    /// Returns a `SemaphorePermit` that must be held while the task
+    /// is executing. Drop the permit to release the slot.
+    #[allow(dead_code)]
+    pub async fn acquire_permit(&self) -> Result<tokio::sync::OwnedSemaphorePermit> {
+        self.concurrency_limiter
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|e| anyhow!("Failed to acquire concurrency permit: {}", e))
+    }
+
+    /// Try to acquire a global concurrency permit without waiting.
+    #[allow(dead_code)]
+    pub fn try_acquire_permit(&self) -> Result<Option<tokio::sync::OwnedSemaphorePermit>> {
+        match self.concurrency_limiter.clone().try_acquire_owned() {
+            Ok(permit) => Ok(Some(permit)),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Acquire a per-role concurrency permit.
+    ///
+    /// If no per-role limiter exists for this role, one is created
+    /// with the configured `max_workers_per_role` permits.
+    #[allow(dead_code)]
+    pub async fn acquire_role_permit(
+        &self,
+        role: &str,
+    ) -> Result<tokio::sync::OwnedSemaphorePermit> {
+        let limiter = {
+            let mut role_limiters = self
+                .role_limiters
+                .lock()
+                .map_err(|e| anyhow!("Lock error: {}", e))?;
+            role_limiters
+                .entry(role.to_string())
+                .or_insert_with(|| Arc::new(Semaphore::new(self.config.max_workers_per_role)))
+                .clone()
+        };
+        limiter
+            .acquire_owned()
+            .await
+            .map_err(|e| anyhow!("Failed to acquire role permit for '{}': {}", role, e))
+    }
+
     /// Dequeue the highest-priority task matching the role.
-    /// Checks global concurrency cap and per-role cap.
+    /// Checks global concurrency cap, per-role cap, and semaphore availability.
     /// On success, adds task_id to active_tasks and increments role counter.
     pub fn dequeue(&self, role: &str) -> Option<ScheduledTask> {
         // Refresh dynamic priorities before picking the next task.
@@ -203,6 +371,22 @@ impl TaskScheduler {
         if self.is_role_at_capacity(role) {
             debug!("Role {} at capacity, cannot dequeue", role);
             return None;
+        }
+
+        // Check semaphore availability as an additional guard.
+        if self.available_concurrency() == 0 {
+            debug!("Semaphore exhausted, cannot dequeue");
+            return None;
+        }
+
+        // Check per-role semaphore availability.
+        if let Ok(limiters) = self.role_limiters.lock() {
+            if let Some(limiter) = limiters.get(role) {
+                if limiter.available_permits() == 0 {
+                    debug!("Role '{}' semaphore exhausted, cannot dequeue", role);
+                    return None;
+                }
+            }
         }
 
         // We need to find the highest-priority task matching the role.
@@ -295,6 +479,15 @@ impl TaskScheduler {
             .map_err(|e| anyhow!("Lock error: {}", e))?
             .total_completed += 1;
         info!("Task {} completed", task_id);
+
+        // Remove from persistence on completion
+        #[cfg(feature = "backend-sqlite")]
+        if let Some(ref p) = self.persistence {
+            if let Err(e) = p.remove_task(task_id) {
+                warn!("Failed to remove task {} from persistence: {}", task_id, e);
+            }
+        }
+
         Ok(())
     }
 
@@ -459,6 +652,7 @@ impl TaskScheduler {
                 total_completed: 0,
                 total_failed: 0,
                 starvation_events_prevented: 0,
+                backpressure_rejections: 0,
             });
         if let Ok(queue) = self.queue.lock() {
             profile.l1_queue_depth = queue.len() as u32;
@@ -479,7 +673,9 @@ impl TaskScheduler {
         }
     }
 
-    /// Check if global concurrency cap is reached
+    /// Check if global concurrency cap is reached.
+    ///
+    /// Considers both the active task count and the semaphore availability.
     pub fn is_global_at_capacity(&self) -> bool {
         if let Ok(active) = self.active_tasks.lock() {
             active.len() >= self.config.global_max_concurrent_tasks
@@ -487,6 +683,262 @@ impl TaskScheduler {
             true
         }
     }
+
+    /// Returns the number of permits currently available in the global semaphore.
+    pub fn available_concurrency(&self) -> usize {
+        self.concurrency_limiter.available_permits()
+    }
+
+    /// Returns a reference to the global concurrency limiter, for external
+    /// consumers that need to acquire permits manually.
+    #[allow(dead_code)]
+    pub fn concurrency_limiter(&self) -> &Arc<Semaphore> {
+        &self.concurrency_limiter
+    }
+
+    /// Returns a reference to a per-role concurrency limiter, creating one
+    /// lazily if it doesn't exist.
+    #[allow(dead_code)]
+    pub fn role_limiter(&self, role: &str) -> Result<Arc<Semaphore>> {
+        let mut limiters = self
+            .role_limiters
+            .lock()
+            .map_err(|e| anyhow!("Lock error: {}", e))?;
+        let limiter = limiters
+            .entry(role.to_string())
+            .or_insert_with(|| Arc::new(Semaphore::new(self.config.max_workers_per_role)));
+        Ok(Arc::clone(limiter))
+    }
+
+    /// Persist the entire queue to storage (for graceful shutdown).
+    ///
+    /// This is a no-op unless a `SchedulerPersistence` was provided
+    /// via `new_with_persistence`.
+    #[cfg(feature = "backend-sqlite")]
+    pub fn persist_all(&self) -> Result<()> {
+        if let Some(ref p) = self.persistence {
+            let task_map = self
+                .task_map
+                .lock()
+                .map_err(|e| anyhow!("Lock error: {}", e))?;
+            let tasks: Vec<ScheduledTask> = task_map.values().cloned().collect();
+            p.snapshot_queue(&tasks)?;
+            info!("Persisted {} tasks to storage", tasks.len());
+        }
+        Ok(())
+    }
+}
+
+// ──────────────────────────────────────────────
+// Scheduler Persistence (SQLite-backed, feature-gated)
+// ──────────────────────────────────────────────
+
+/// SQLite-backed persistence for scheduler state.
+///
+/// Persists the task queue so that pending tasks survive process restarts.
+/// Only compiled when the `backend-sqlite` feature is enabled.
+#[cfg(feature = "backend-sqlite")]
+pub struct SchedulerPersistence {
+    /// Path to the SQLite database file.  `None` disables persistence.
+    db_path: Option<PathBuf>,
+}
+
+#[cfg(feature = "backend-sqlite")]
+impl SchedulerPersistence {
+    /// Create a new persistence layer.
+    ///
+    /// Pass `Some(path)` to enable persistence to a SQLite file.
+    /// Pass `None` to disable persistence (all methods become no-ops).
+    pub fn new(db_path: Option<PathBuf>) -> Self {
+        Self { db_path }
+    }
+
+    /// Whether persistence is enabled.
+    pub fn is_enabled(&self) -> bool {
+        self.db_path.is_some()
+    }
+
+    /// Initialize the database schema (idempotent).
+    fn ensure_schema(&self, conn: &rusqlite::Connection) -> Result<()> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS scheduler_queue (
+                task_id    TEXT PRIMARY KEY,
+                role       TEXT NOT NULL,
+                priority   INTEGER NOT NULL,
+                base_score REAL NOT NULL,
+                urgency    REAL NOT NULL,
+                cost_efficiency REAL NOT NULL,
+                deadline_pressure REAL NOT NULL,
+                aging_bonus REAL NOT NULL,
+                submitted_at INTEGER NOT NULL,
+                retries    INTEGER NOT NULL,
+                max_retries INTEGER NOT NULL
+            );",
+        )?;
+        Ok(())
+    }
+
+    /// Serialize all pending tasks and write them to the database.
+    pub fn snapshot_queue(&self, tasks: &[ScheduledTask]) -> Result<()> {
+        let db_path = match &self.db_path {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+        let conn = rusqlite::Connection::open(db_path)?;
+        self.ensure_schema(&conn)?;
+
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM scheduler_queue", [])?;
+
+        let mut stmt = tx.prepare(
+            "INSERT INTO scheduler_queue
+             (task_id, role, priority, base_score, urgency,
+              cost_efficiency, deadline_pressure, aging_bonus,
+              submitted_at, retries, max_retries)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+        )?;
+
+        for task in tasks {
+            stmt.execute(rusqlite::params![
+                task.task_id,
+                task.role,
+                task.priority.0,
+                task.base_score,
+                task.urgency,
+                task.cost_efficiency,
+                task.deadline_pressure,
+                task.aging_bonus,
+                task.submitted_at,
+                task.retries,
+                task.max_retries,
+            ])?;
+        }
+        drop(stmt);
+        tx.commit()?;
+
+        debug!(
+            "Persisted {} scheduler tasks to {}",
+            tasks.len(),
+            db_path.display()
+        );
+        Ok(())
+    }
+
+    /// Restore the task queue from the database.
+    pub fn restore_queue(&self) -> Result<Vec<ScheduledTask>> {
+        let db_path = match &self.db_path {
+            Some(p) => p,
+            None => return Ok(Vec::new()),
+        };
+        if !db_path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let conn = rusqlite::Connection::open(db_path)?;
+        self.ensure_schema(&conn)?;
+
+        let mut stmt = conn.prepare(
+            "SELECT task_id, role, priority, base_score, urgency,
+                    cost_efficiency, deadline_pressure, aging_bonus,
+                    submitted_at, retries, max_retries
+             FROM scheduler_queue
+             ORDER BY submitted_at ASC",
+        )?;
+
+        let tasks: Vec<ScheduledTask> = stmt
+            .query_map([], |row| {
+                Ok(ScheduledTask {
+                    task_id: row.get(0)?,
+                    role: row.get(1)?,
+                    priority: Priority(row.get(2)?),
+                    base_score: row.get(3)?,
+                    urgency: row.get(4)?,
+                    cost_efficiency: row.get(5)?,
+                    deadline_pressure: row.get(6)?,
+                    aging_bonus: row.get(7)?,
+                    submitted_at: row.get(8)?,
+                    retries: row.get::<_, u32>(9)?,
+                    max_retries: row.get::<_, u32>(10)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        info!(
+            "Restored {} scheduler tasks from {}",
+            tasks.len(),
+            db_path.display()
+        );
+        Ok(tasks)
+    }
+
+    /// Remove a single task from the persistence store (called on completion).
+    pub fn remove_task(&self, task_id: &str) -> Result<()> {
+        let db_path = match &self.db_path {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+        if !db_path.exists() {
+            return Ok(());
+        }
+        let conn = rusqlite::Connection::open(db_path)?;
+        conn.execute(
+            "DELETE FROM scheduler_queue WHERE task_id = ?1",
+            rusqlite::params![task_id],
+        )?;
+        Ok(())
+    }
+
+    /// Persist a single task (called on submit).
+    pub fn save_task(&self, task: &ScheduledTask) -> Result<()> {
+        let db_path = match &self.db_path {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+        let conn = rusqlite::Connection::open(db_path)?;
+        self.ensure_schema(&conn)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO scheduler_queue
+             (task_id, role, priority, base_score, urgency,
+              cost_efficiency, deadline_pressure, aging_bonus,
+              submitted_at, retries, max_retries)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            rusqlite::params![
+                task.task_id,
+                task.role,
+                task.priority.0,
+                task.base_score,
+                task.urgency,
+                task.cost_efficiency,
+                task.deadline_pressure,
+                task.aging_bonus,
+                task.submitted_at,
+                task.retries,
+                task.max_retries,
+            ],
+        )?;
+        Ok(())
+    }
+}
+
+/// Factory: create a scheduler with SQLite-backed persistence when
+/// the `backend-sqlite` feature is enabled.  Falls back to an in-memory
+/// scheduler otherwise.
+#[cfg(feature = "backend-sqlite")]
+pub fn create_persistent_scheduler(db_path: Option<std::path::PathBuf>) -> TaskScheduler {
+    let config = SchedulerConfig::default();
+    let persistence = SchedulerPersistence::new(db_path);
+    let scheduler = TaskScheduler::new_with_persistence(config, persistence);
+    // Persist empty state to initialise the database.
+    let _ = scheduler.persist_all();
+    scheduler
+}
+
+/// Factory: create a scheduler with SQLite-backed persistence when
+/// the `backend-sqlite` feature is enabled.  Falls back to an in-memory
+/// scheduler otherwise.
+#[cfg(not(feature = "backend-sqlite"))]
+pub fn create_persistent_scheduler(_db_path: Option<std::path::PathBuf>) -> TaskScheduler {
+    TaskScheduler::new(SchedulerConfig::default())
 }
 
 // ──────────────────────────────────────────────
@@ -1040,5 +1492,157 @@ mod tests {
         // Now we can assign again for coder
         let (worker_id4, _) = l2.assign_next("coder").unwrap();
         assert!(worker_id4 == "worker-alpha" || worker_id4 == "worker-beta");
+    }
+
+    #[test]
+    fn test_backpressure_rejects_when_queue_full() {
+        let mut config = SchedulerConfig::default();
+        config.backpressure_queue_depth = 2;
+        let scheduler = TaskScheduler::new(config);
+
+        scheduler.submit(make_task("t1", "w", 1, 10.0)).unwrap();
+        scheduler.submit(make_task("t2", "w", 2, 20.0)).unwrap();
+        // Third task should be rejected since queue depth >= 2.
+        let result = scheduler.submit(make_task("t3", "w", 3, 30.0));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Backpressure"));
+
+        let profile = scheduler.profile();
+        assert_eq!(profile.backpressure_rejections, 1);
+    }
+
+    #[test]
+    fn test_available_concurrency_reflects_semaphore() {
+        let config = SchedulerConfig::default();
+        let scheduler = TaskScheduler::new(config);
+        assert_eq!(scheduler.available_concurrency(), 100);
+    }
+
+    #[test]
+    fn test_concurrency_limiter_access() {
+        let config = SchedulerConfig::default();
+        let scheduler = TaskScheduler::new(config);
+        let limiter = scheduler.concurrency_limiter();
+        assert_eq!(limiter.available_permits(), 100);
+    }
+
+    #[tokio::test]
+    async fn test_acquire_permit_reduces_available() {
+        let config = SchedulerConfig::default();
+        let scheduler = TaskScheduler::new(config);
+        let initial = scheduler.available_concurrency();
+        let permit = scheduler.acquire_permit().await.unwrap();
+        assert_eq!(scheduler.available_concurrency(), initial - 1);
+        drop(permit);
+        assert_eq!(scheduler.available_concurrency(), initial);
+    }
+
+    #[tokio::test]
+    async fn test_acquire_role_permit_works() {
+        let mut config = SchedulerConfig::default();
+        config.max_workers_per_role = 2;
+        let scheduler = TaskScheduler::new(config);
+
+        let p1 = scheduler.acquire_role_permit("coder").await.unwrap();
+        let p2 = scheduler.acquire_role_permit("coder").await.unwrap();
+
+        // Third acquisition for same role would block; we test with try.
+        let limiter = scheduler.role_limiter("coder").unwrap();
+        assert_eq!(limiter.available_permits(), 0);
+
+        drop(p1);
+        assert_eq!(limiter.available_permits(), 1);
+        drop(p2);
+        assert_eq!(limiter.available_permits(), 2);
+    }
+
+    #[test]
+    fn test_try_acquire_permit_non_blocking() {
+        let mut config = SchedulerConfig::default();
+        config.global_max_concurrent_tasks = 1;
+        let scheduler = TaskScheduler::new(config);
+
+        let permit = scheduler.try_acquire_permit().unwrap();
+        assert!(permit.is_some());
+        // Second attempt should fail since only 1 permit.
+        let none = scheduler.try_acquire_permit().unwrap();
+        assert!(none.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_semaphore_integration_with_dequeue() {
+        let mut config = SchedulerConfig::default();
+        config.global_max_concurrent_tasks = 2;
+        let scheduler = TaskScheduler::new(config);
+
+        // Submit tasks.
+        scheduler.submit(make_task("t1", "w", 1, 100.0)).unwrap();
+        scheduler.submit(make_task("t2", "w", 2, 50.0)).unwrap();
+
+        // Dequeue should work when under capacity.
+        let task1 = scheduler.dequeue("w");
+        assert!(task1.is_some());
+
+        let task2 = scheduler.dequeue("w");
+        assert!(task2.is_some());
+
+        // Complete to free up capacity.
+        scheduler.complete("t1").unwrap();
+
+        // Submit and dequeue again.
+        scheduler.submit(make_task("t3", "w", 3, 30.0)).unwrap();
+        let task3 = scheduler.dequeue("w");
+        assert!(task3.is_some());
+    }
+
+    // ── persistence smoke tests (backend-sqlite) ───────────────────────
+
+    #[test]
+    #[cfg(feature = "backend-sqlite")]
+    fn persistence_smoke_new_and_is_enabled() {
+        use tempfile::NamedTempFile;
+        let tmp = NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        let p = SchedulerPersistence::new(Some(path));
+        assert!(p.is_enabled());
+
+        let p_disabled = SchedulerPersistence::new(None);
+        assert!(!p_disabled.is_enabled());
+    }
+
+    #[test]
+    #[cfg(feature = "backend-sqlite")]
+    fn persistence_smoke_snapshot_and_restore() {
+        use tempfile::NamedTempFile;
+        let tmp = NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        let p = SchedulerPersistence::new(Some(path));
+
+        let tasks = vec![make_task("persist-1", "worker", 5, 10.0)];
+        p.snapshot_queue(&tasks).unwrap();
+        let restored = p.restore_queue().unwrap();
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].task_id, "persist-1");
+    }
+
+    #[test]
+    #[cfg(feature = "backend-sqlite")]
+    fn scheduler_with_persistence_smoke() {
+        use std::sync::Arc;
+        use tempfile::NamedTempFile;
+
+        let tmp = NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        let config = SchedulerConfig::default();
+        let persistence = SchedulerPersistence::new(Some(path));
+        let scheduler = TaskScheduler::new_with_persistence(config, persistence);
+
+        // Submit a task and persist.
+        scheduler
+            .submit(make_task("p-task", "worker", 3, 20.0))
+            .unwrap();
+        let arc_scheduler = Arc::new(scheduler);
+        // Verify persist_all does not panic.
+        arc_scheduler.persist_all().unwrap();
     }
 }

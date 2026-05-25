@@ -13,6 +13,19 @@
 
 #![allow(clippy::module_inception)]
 
+/// Acquire a lock on a `Mutex`, recovering from a poisoned state with a warning.
+pub fn lock_mutex<T>(mtx: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    match mtx.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("observability mutex poisoned, recovering");
+            poisoned.into_inner()
+        }
+    }
+}
+
+pub mod live_performance;
+
 pub mod memory_health;
 pub mod observability;
 pub mod performance;

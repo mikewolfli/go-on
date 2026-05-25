@@ -117,6 +117,44 @@ impl OpenAiAgent {
 
         stream_sse_to_sender(response, sender).await
     }
+
+    /// Chat with optional SSE compression.
+    ///
+    /// When `options` contains `"sse_compress": true`, the SSE stream is
+    /// compressed with gzip before parsing, reducing bandwidth on large
+    /// responses. This is transparent to the token extraction layer.
+    async fn chat_once_compressed(
+        &self,
+        messages: Vec<Message>,
+        principles: Option<Vec<String>>,
+        options: Option<HashMap<String, Value>>,
+        sender: crate::agent::StreamingSender,
+        compress_cfg: &crate::agents::StreamingConfig,
+    ) -> anyhow::Result<()> {
+        let api_key = resolve_secret(&self.api_key_env, "openai.api_key_env")?;
+        let endpoint = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+        let payload = self.build_payload(messages, principles, &options, None);
+
+        let response = self
+            .client
+            .post(endpoint)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "{}",
+                chat_request_failed_msg("openai", &status.to_string(), &body)
+            );
+        }
+
+        crate::agents::stream_sse_to_sender_compressed(response, sender, compress_cfg).await
+    }
 }
 
 #[async_trait]
@@ -130,16 +168,42 @@ impl Agent for OpenAiAgent {
     ) -> crate::core::error::Result<()> {
         let mut last_error: Option<anyhow::Error> = None;
 
+        // Check if SSE compression is requested via options
+        let use_compression = options
+            .as_ref()
+            .and_then(|o| o.get("sse_compress"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let compress_cfg = if use_compression {
+            Some(crate::agents::StreamingConfig {
+                enable_compression: true,
+                ..Default::default()
+            })
+        } else {
+            None
+        };
+
         for attempt in 0..=2 {
-            match self
-                .chat_once(
+            let result = if let Some(ref cfg) = compress_cfg {
+                self.chat_once_compressed(
+                    messages.clone(),
+                    principles.clone(),
+                    options.clone(),
+                    sender.clone(),
+                    cfg,
+                )
+                .await
+            } else {
+                self.chat_once(
                     messages.clone(),
                     principles.clone(),
                     options.clone(),
                     sender.clone(),
                 )
                 .await
-            {
+            };
+            match result {
                 Ok(()) => return Ok(()),
                 Err(err) => {
                     last_error = Some(err);

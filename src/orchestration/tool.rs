@@ -79,9 +79,11 @@ pub trait Tool: Send + Sync {
     /// The default implementation wraps the sync `run` in `tokio::task::block_in_place`
     /// to prevent blocking the async runtime during I/O-bound tool operations.
     /// Tool implementations may override this to provide native async execution.
-    async fn run_async(&self, input: &ToolInput) -> Result<ToolOutput> {
+    fn run_async<'a>(&'a self, input: &'a ToolInput) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
         let input = input.clone();
-        tokio::task::block_in_place(move || self.run(&input))
+        Box::pin(async move {
+            tokio::task::block_in_place(move || self.run(&input))
+        })
     }
 }
 

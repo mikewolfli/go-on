@@ -18,6 +18,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use crate::agents::progress_reporter::ProgressReporter;
+
 /// Lock a Mutex, recovering from poison with a log.
 fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
     match mtx.lock() {
@@ -151,6 +153,8 @@ struct BrainLoopInner {
     total_plans_started: u64,
     completed_plans_total: u64,
     failed_plans_total: u64,
+    /// Optional progress reporter for streaming status hints.
+    progress_reporter: Option<ProgressReporter>,
 }
 
 // ---------------------------------------------------------------------------
@@ -179,6 +183,7 @@ impl BrainLoop {
                 total_plans_started: 0,
                 completed_plans_total: 0,
                 failed_plans_total: 0,
+                progress_reporter: None,
             })),
             next_plan_id: Arc::new(AtomicU64::new(1)),
         }
@@ -218,6 +223,15 @@ impl BrainLoop {
             .get(id)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("plan `{id}` not found"))
+    }
+
+    /// Attach a progress reporter for streaming status hints.
+    ///
+    /// When set, the brain loop will emit phase and progress tokens
+    /// through the reporter during its Think-Act-Observe cycle.
+    pub fn set_progress_reporter(&self, reporter: ProgressReporter) {
+        let mut inner = lock_guard(&self.inner);
+        inner.progress_reporter = Some(reporter);
     }
 
     /// Return a list of all known plan ids.
@@ -290,6 +304,11 @@ impl BrainLoop {
         plan.steps[step_idx].output = output.to_string();
         plan.phase = BrainLoopPhase::Executing;
 
+        // Emit phase hint for streaming consumers.
+        if let Some(ref mut reporter) = inner.progress_reporter {
+            reporter.report_phase(crate::agents::progress_reporter::TOKEN_PHASE_EXECUTING);
+        }
+
         inner.plans.insert(plan_id.to_string(), plan);
         Ok(())
     }
@@ -341,6 +360,11 @@ impl BrainLoop {
         plan.steps[step_idx].completed_ms = now;
         plan.steps[step_idx].duration_ms = now.saturating_sub(started);
         plan.phase = BrainLoopPhase::Reflecting;
+
+        // Emit phase hint for streaming consumers.
+        if let Some(ref mut reporter) = inner.progress_reporter {
+            reporter.report_phase(crate::agents::progress_reporter::TOKEN_PHASE_REFLECTING);
+        }
 
         let confidence = if issues.is_empty() {
             1.0
@@ -394,6 +418,11 @@ impl BrainLoop {
         plan.steps.extend(new_steps);
         plan.phase = BrainLoopPhase::Replanning;
 
+        // Emit phase hint for streaming consumers.
+        if let Some(ref mut reporter) = inner.progress_reporter {
+            reporter.report_phase(crate::agents::progress_reporter::TOKEN_PHASE_PLANNING);
+        }
+
         Ok(())
     }
 
@@ -412,6 +441,12 @@ impl BrainLoop {
         }
         plan.phase = BrainLoopPhase::Completed;
         inner.completed_plans_total += 1;
+
+        // Emit completion hint for streaming consumers.
+        if let Some(ref mut reporter) = inner.progress_reporter {
+            reporter.report_complete();
+        }
+
         Self::evict_oldest_terminal_plan(&mut inner.plans);
         Ok(())
     }
@@ -430,6 +465,12 @@ impl BrainLoop {
         plan.phase = BrainLoopPhase::Failed;
         plan.fail_reason = reason.to_string();
         inner.failed_plans_total += 1;
+
+        // Emit completion hint on terminal state.
+        if let Some(ref mut reporter) = inner.progress_reporter {
+            reporter.report_complete();
+        }
+
         Self::evict_oldest_terminal_plan(&mut inner.plans);
         Ok(())
     }
@@ -447,6 +488,12 @@ impl BrainLoop {
         }
         plan.phase = BrainLoopPhase::Cancelled;
         inner.failed_plans_total += 1;
+
+        // Emit completion hint on terminal state.
+        if let Some(ref mut reporter) = inner.progress_reporter {
+            reporter.report_complete();
+        }
+
         Self::evict_oldest_terminal_plan(&mut inner.plans);
         Ok(())
     }

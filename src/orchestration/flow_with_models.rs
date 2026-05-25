@@ -7,7 +7,7 @@ use crate::agent::{Agent, ModelInfo};
 use crate::config::AppConfig;
 use crate::flow::ResolvedRouting;
 use crate::model_selector::{AutomaticModePolicy, ModelSelectionStrategy, SelectionCriteria};
-use crate::orchestration::orchestrator::select_model_for_task;
+use crate::orchestration::orchestrator::{select_model_for_task, select_model_semantic};
 use anyhow::Result;
 
 /// Extended routing information with selected model
@@ -76,6 +76,21 @@ impl FlowModelSelector {
         let selected_model = if agent.supports_model_override() {
             let available = agent.available_models();
             if !available.is_empty() && strategy != ModelSelectionStrategy::Explicit {
+                // Use semantic matching when task description is available
+                // and config requests it, falling back to criteria-based.
+                if let Some(desc) = task_description {
+                    if config.model_selection_mode == "semantic" {
+                        return AgentModelSelection {
+                            selected_model: select_model_semantic(
+                                available,
+                                desc,
+                                strategy.clone(),
+                            ),
+                            selection_strategy: strategy,
+                            task_complexity,
+                        };
+                    }
+                }
                 let criteria = Self::build_selection_criteria(task_complexity, task_description);
                 select_model_for_task(available, &criteria, strategy.clone())
             } else if !available.is_empty() {
@@ -100,6 +115,7 @@ impl FlowModelSelector {
             "capable" => ModelSelectionStrategy::MostCapable,
             "cost" => ModelSelectionStrategy::Cheapest,
             "speed" => ModelSelectionStrategy::Fastest,
+            "semantic" => ModelSelectionStrategy::MostCapable, // Use MostCapable as fallback
             _ => ModelSelectionStrategy::Balanced,
         }
     }

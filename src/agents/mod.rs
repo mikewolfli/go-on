@@ -32,9 +32,11 @@ pub mod nim;
 pub mod openai;
 pub mod openai_compatible;
 pub mod perplexity;
+pub mod progress_reporter;
 pub mod qianfan;
 pub mod replicate;
 pub mod skywork;
+pub mod sse_compressor;
 pub mod stepfun;
 pub mod titan;
 pub mod together;
@@ -48,7 +50,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use futures_util::StreamExt;
 use serde_json::Value;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::orchestration::autonomy_runtime::{build_thinking_token, build_tool_call_token};
 
@@ -85,6 +87,8 @@ pub use together::TogetherAgent;
 pub use wenxin::WenxinAgent;
 pub use xihu::XihuAgent;
 pub use yi::YiAgent;
+
+pub use sse_compressor::{SseCompressor, StreamingConfig};
 
 /// Convert principles to text format
 ///
@@ -394,6 +398,104 @@ pub async fn stream_sse_to_sender(
         Ok(SseEventAction::Continue)
     })
     .await
+}
+
+/// Stream SSE events to sender with optional gzip compression.
+///
+/// When `config.enable_compression` is true, response chunks are buffered
+/// and compressed with gzip before being processed, reducing bandwidth for
+/// large streaming responses. This is particularly useful for models that
+/// return verbose output or when operating over constrained networks.
+pub async fn stream_sse_to_sender_compressed(
+    response: reqwest::Response,
+    sender: crate::agent::StreamingSender,
+    config: &StreamingConfig,
+) -> anyhow::Result<()> {
+    if !config.enable_compression {
+        return stream_sse_to_sender(response, sender).await;
+    }
+
+    let cfg = config.clone();
+    let mut compressor = SseCompressor::new(&cfg);
+
+    // Verify compression is active and track buffer state
+    if !compressor.is_enabled() {
+        return stream_sse_to_sender(response, sender).await;
+    }
+    debug!(
+        "SSE compression active, buffer threshold={}, initial_size={}",
+        config.compression_threshold,
+        compressor.buffered_bytes()
+    );
+
+    let mut stream = response.bytes_stream();
+    let mut parser = SseEventParser::default();
+
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = chunk_result?;
+        let compressed = compressor.compress_chunk(&chunk);
+        let chunk_text = String::from_utf8_lossy(&compressed);
+        match parser.push_chunk(&chunk_text) {
+            Ok(events) => {
+                for event in events {
+                    if event.trim() == "[DONE]" {
+                        return Ok(());
+                    }
+                    if let Ok(json) = serde_json::from_str::<Value>(&event) {
+                        if let Some(token) = extract_token(&json) {
+                            if sender.send(token).is_err() {
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("SSE parse error (compressed chunk), continuing stream: {e}");
+                parser = SseEventParser::default();
+            }
+        }
+    }
+
+    // Flush remaining compressed data
+    let tail = compressor.flush();
+    if !tail.is_empty() {
+        let tail_text = String::from_utf8_lossy(&tail);
+        for event in parser.finish() {
+            if event.trim() == "[DONE]" {
+                break;
+            }
+            if let Ok(json) = serde_json::from_str::<Value>(&event) {
+                if let Some(token) = extract_token(&json) {
+                    let _ = sender.send(token);
+                }
+            }
+        }
+        // Also parse any data in the flushed tail
+        let mut tail_parser = SseEventParser::default();
+        if let Ok(events) = tail_parser.push_chunk(&tail_text) {
+            for event in events {
+                if let Ok(json) = serde_json::from_str::<Value>(&event) {
+                    if let Some(token) = extract_token(&json) {
+                        let _ = sender.send(token);
+                    }
+                }
+            }
+        }
+    }
+
+    for event in parser.finish() {
+        if event.trim() == "[DONE]" {
+            break;
+        }
+        if let Ok(json) = serde_json::from_str::<Value>(&event) {
+            if let Some(token) = extract_token(&json) {
+                let _ = sender.send(token);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn extract_token(value: &Value) -> Option<String> {

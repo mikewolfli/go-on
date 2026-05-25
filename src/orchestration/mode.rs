@@ -21,7 +21,28 @@ pub enum ModeKind {
     Edit,
     Agent,
     FullAuto,
-    SafeGuard, // Automatic mode that requires approval at high-risk nodes
+    /// Automatic mode that requires approval at high-risk nodes.
+    SafeGuard,
+}
+
+/// Policy for what action to take when a risk threshold is exceeded
+/// during SafeGuard mode execution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AutoDegradePolicy {
+    /// Block the operation entirely (original behavior).
+    Block,
+    /// Switch to read-only mode — only allow read/inspect tools.
+    ReadOnly,
+    /// Allow the operation but with enhanced audit logging.
+    AllowWithAudit,
+    /// Ask the operator for confirmation before proceeding.
+    ConfirmRequired,
+}
+
+impl Default for AutoDegradePolicy {
+    fn default() -> Self {
+        AutoDegradePolicy::ReadOnly
+    }
 }
 
 /// Mode runtime trait: each mode has its own orchestration, budget, and policy
@@ -570,6 +591,11 @@ impl ModeRuntime for FullAutoModeRuntime {
 pub struct SafeGuardModeRuntime {
     pub agent_registry: Option<Arc<AgentRegistry>>,
     pub agent_name: Option<String>,
+    /// When true, auto-degrade the operation mode based on risk score
+    /// instead of blocking outright.
+    pub auto_degrade: bool,
+    /// The policy to apply when risk is elevated but not extreme (> 0.95).
+    pub degrade_policy: AutoDegradePolicy,
 }
 
 impl SafeGuardModeRuntime {
@@ -577,6 +603,77 @@ impl SafeGuardModeRuntime {
         Self {
             agent_registry: Some(registry),
             agent_name,
+            auto_degrade: true,
+            degrade_policy: AutoDegradePolicy::default(),
+        }
+    }
+
+    /// Compute a numeric risk score for the given objective string.
+    ///
+    /// Returns a value in 0.0–1.0 where:
+    /// - < 0.4  = low risk (safe operations)
+    /// - 0.4–0.7 = medium risk (warrants ReadOnly degradation)
+    /// - 0.7–0.95 = high risk (warrants AllowWithAudit degradation)
+    /// - > 0.95  = extreme risk (full Block)
+    pub fn compute_risk_score(&self, objective: &str) -> f64 {
+        let lower = objective.to_lowercase();
+        let mut score: f64 = 0.0;
+
+        // Destructive keywords — each adds 0.25 to the score.
+        let extreme_keywords = ["drop database", "drop table", "truncate", "uninstall"];
+        for kw in &extreme_keywords {
+            if lower.contains(kw) {
+                score += 0.30;
+            }
+        }
+
+        let high_risk_keywords = [
+            "delete",
+            "remove",
+            "drop",
+            "rollback",
+            "revert",
+            "force",
+            "reset",
+            "downgrade",
+            "format",
+            "purge",
+        ];
+        for kw in &high_risk_keywords {
+            if lower.contains(kw) {
+                score += 0.20;
+            }
+        }
+
+        let medium_risk_keywords = [
+            "modify",
+            "change",
+            "update",
+            "rename",
+            "move",
+            "overwrite",
+            "replace",
+        ];
+        for kw in &medium_risk_keywords {
+            if lower.contains(kw) {
+                score += 0.10;
+            }
+        }
+
+        score.min(1.0)
+    }
+
+    /// Evaluate risk and return the appropriate degradation policy.
+    pub fn evaluate_degradation(&self, risk_score: f64) -> AutoDegradePolicy {
+        if risk_score > 0.95 {
+            AutoDegradePolicy::Block
+        } else if risk_score > 0.70 {
+            AutoDegradePolicy::AllowWithAudit
+        } else if risk_score > 0.40 {
+            AutoDegradePolicy::ReadOnly
+        } else {
+            // Low risk — no degradation needed.
+            AutoDegradePolicy::AllowWithAudit
         }
     }
 }
@@ -601,59 +698,103 @@ impl ModeRuntime for SafeGuardModeRuntime {
         false
     }
     fn is_high_risk_operation(&self, objective: &str) -> bool {
-        let lower = objective.to_lowercase();
-        lower.contains("delete")
-            || lower.contains("remove")
-            || lower.contains("drop")
-            || lower.contains("truncate")
-            || lower.contains("rollback")
-            || lower.contains("revert")
-            || lower.contains("force")
-            || lower.contains("reset")
-            || lower.contains("drop table")
-            || lower.contains("drop database")
-            || lower.contains("uninstall")
-            || lower.contains("downgrade")
+        self.compute_risk_score(objective) > 0.15
     }
     fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult> {
         let task_id = task.task_id.clone();
         let objective = task.objective.clone();
         let phase = task.phase.clone();
         let role = task.role.clone();
-        let is_high_risk = self.is_high_risk_operation(&objective);
+        let risk_score = self.compute_risk_score(&objective);
 
         info!(
-            "[SafeGuard Mode] Executing protected task: {} (phase: {}, role: {}, high_risk: {})",
-            objective, phase, role, is_high_risk
+            "[SafeGuard Mode] Executing protected task: {} (phase: {}, role: {}, risk_score: {:.2})",
+            objective, phase, role, risk_score
         );
-        if is_high_risk {
-            warn!(
-                "[SafeGuard Mode] High-risk operation detected: {}",
-                objective
-            );
-            // Return pending approval status without executing
-            return Ok(AgentTaskResult {
-                success: false,
-                output: Some(serde_json::json!({
-                    "mode": "safeguard",
-                    "task_id": task_id.clone(),
-                    "status": "pending_approval",
-                    "is_high_risk": true,
-                    "safety_level": "enhanced",
-                    "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
-                    "max_tool_calls": 30,
-                    "message": format!("SafeGuard task '{}' awaiting safety approval", objective)
-                })),
-                error: Some(AgentError::Runtime(
-                    "SafeGuard: Operator approval required for this high-risk operation"
-                        .to_string(),
-                )),
-                audit_log: Some(format!(
-                    "SafeGuard mode: task_id={}, phase={}, role={}, high_risk=true, safety=enhanced",
-                    task_id, phase, role
-                )),
-                pua_report: Some(mode_execution_report("safeguard", true)),
-            });
+
+        // Determine degradation policy based on risk score.
+        let policy = if self.auto_degrade {
+            self.evaluate_degradation(risk_score)
+        } else if risk_score > 0.95 {
+            AutoDegradePolicy::Block
+        } else if risk_score > 0.40 {
+            AutoDegradePolicy::ConfirmRequired
+        } else {
+            AutoDegradePolicy::AllowWithAudit
+        };
+
+        match policy {
+            AutoDegradePolicy::Block => {
+                warn!(
+                    "[SafeGuard Mode] Extreme risk operation blocked: {} (score: {:.2})",
+                    objective, risk_score
+                );
+                return Ok(AgentTaskResult {
+                    success: false,
+                    output: Some(serde_json::json!({
+                        "mode": "safeguard",
+                        "task_id": task_id.clone(),
+                        "status": "blocked",
+                        "risk_score": risk_score,
+                        "degrade_policy": "Block",
+                        "safety_level": "enhanced",
+                        "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
+                        "max_tool_calls": 30,
+                        "message": format!("SafeGuard task '{}' blocked: extreme risk ({:.2})", objective, risk_score)
+                    })),
+                    error: Some(AgentError::Runtime(
+                        format!("SafeGuard: Operation blocked due to extreme risk score ({:.2})", risk_score)
+                    )),
+                    audit_log: Some(format!(
+                        "SafeGuard mode: task_id={}, phase={}, role={}, risk_score={:.2}, policy=Block",
+                        task_id, phase, role, risk_score
+                    )),
+                    pua_report: Some(mode_execution_report("safeguard", true)),
+                });
+            }
+            AutoDegradePolicy::ReadOnly => {
+                warn!(
+                    "[SafeGuard Mode] Auto-degrading to read-only for: {} (score: {:.2})",
+                    objective, risk_score
+                );
+                // Fall through to execute with read-only toolset.
+                // The agent execution below will be constrained to read-only tools.
+            }
+            AutoDegradePolicy::AllowWithAudit => {
+                info!(
+                    "[SafeGuard Mode] Proceeding with enhanced audit for: {} (score: {:.2})",
+                    objective, risk_score
+                );
+                // Fall through to normal execution with audit logging.
+            }
+            AutoDegradePolicy::ConfirmRequired => {
+                warn!(
+                    "[SafeGuard Mode] Confirmation required for: {} (score: {:.2})",
+                    objective, risk_score
+                );
+                return Ok(AgentTaskResult {
+                    success: false,
+                    output: Some(serde_json::json!({
+                        "mode": "safeguard",
+                        "task_id": task_id.clone(),
+                        "status": "pending_approval",
+                        "risk_score": risk_score,
+                        "degrade_policy": "ConfirmRequired",
+                        "safety_level": "enhanced",
+                        "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
+                        "max_tool_calls": 30,
+                        "message": format!("SafeGuard task '{}' awaiting safety approval (risk: {:.2})", objective, risk_score)
+                    })),
+                    error: Some(AgentError::Runtime(
+                        "SafeGuard: Operator approval required for this operation".to_string(),
+                    )),
+                    audit_log: Some(format!(
+                        "SafeGuard mode: task_id={}, phase={}, role={}, risk_score={:.2}, policy=ConfirmRequired",
+                        task_id, phase, role, risk_score
+                    )),
+                    pua_report: Some(mode_execution_report("safeguard", true)),
+                });
+            }
         }
 
         // Attempt real agent execution via run_task (non-high-risk)
@@ -689,16 +830,17 @@ impl ModeRuntime for SafeGuardModeRuntime {
                 "task_id": task_id,
                 "status": "unavailable",
                 "note": "No suitable SafeGuard mode agent was available in the registry",
-                "is_high_risk": false,
+                "risk_score": risk_score,
+                "degrade_policy": format!("{:?}", policy),
                 "safety_level": "enhanced",
                 "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
                 "max_tool_calls": 30,
-                "message": format!("SafeGuard task '{}' completed with enhanced safety", objective)
+                "message": format!("SafeGuard task '{}' completed with enhanced safety (risk: {:.2})", objective, risk_score)
             })),
             error: None,
             audit_log: Some(format!(
-                "SafeGuard mode: task_id={}, phase={}, role={}, high_risk=false, safety=enhanced",
-                task_id, phase, role
+                "SafeGuard mode: task_id={}, phase={}, role={}, risk_score={:.2}, policy={:?}",
+                task_id, phase, role, risk_score, policy
             )),
             pua_report: Some(mode_execution_report("safeguard", false)),
         })

@@ -24,6 +24,7 @@ use crate::orchestration::fast_path_cache::{
     EnvCacheValue, FastPathCache, IntentCacheValue, SkillCacheValue,
 };
 use crate::orchestration::skill::SkillRegistry;
+use crate::orchestration::threshold_learner::ThresholdLearner;
 use crate::orchestration::tool::ToolRegistry;
 
 // ---------------------------------------------------------------------------
@@ -199,6 +200,8 @@ impl AutoExecutionReport {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FullAutoConfig {
     /// Minimum composite score (0.0 – 1.0) for a skill to be matched.
+    /// When a `ThresholdLearner` is attached, this value is dynamically
+    /// adjusted based on trial outcomes.
     pub min_match_score: f64,
     /// Maximum number of skills to execute in a single run.
     pub max_skills_to_execute: usize,
@@ -233,6 +236,8 @@ pub struct FullAutoFlow {
     config: FullAutoConfig,
     /// Fast-path cache for parsing, discovery, environment, and route matching.
     cache: FastPathCache,
+    /// Optional dynamic threshold learner for adaptive skill matching.
+    threshold_learner: Option<Mutex<ThresholdLearner>>,
 }
 
 impl std::fmt::Debug for FullAutoFlow {
@@ -257,6 +262,48 @@ impl FullAutoFlow {
             tool_registry,
             config: FullAutoConfig::default(),
             cache: FastPathCache::with_default_routes(),
+            threshold_learner: None,
+        }
+    }
+
+    /// Attach a threshold learner for dynamic skill-match threshold tuning.
+    #[allow(dead_code)]
+    pub fn with_threshold_learner(mut self, learner: ThresholdLearner) -> Self {
+        self.threshold_learner = Some(Mutex::new(learner));
+        self
+    }
+
+    /// Record a trial outcome for the threshold learner.
+    ///
+    /// Called after a skill match is executed to tune future thresholds.
+    /// `false_positive` — the matched skill was inappropriate.
+    /// `missed_match` — a relevant skill was not matched.
+    pub fn record_match_outcome(&self, success: bool, false_positive: bool, missed_match: bool) {
+        if let Some(ref learner) = self.threshold_learner {
+            if let Ok(mut guard) = learner.lock() {
+                let current = guard.get_optimal_threshold("skill_match");
+                guard.record_trial(
+                    "skill_match",
+                    current,
+                    success,
+                    false_positive,
+                    missed_match,
+                );
+            }
+        }
+    }
+
+    /// Get the effective minimum match score, which may be dynamically
+    /// learned if a ThresholdLearner is attached.
+    pub fn effective_min_match_score(&self) -> f64 {
+        if let Some(ref learner) = self.threshold_learner {
+            if let Ok(guard) = learner.lock() {
+                guard.get_optimal_threshold("skill_match")
+            } else {
+                self.config.min_match_score
+            }
+        } else {
+            self.config.min_match_score
         }
     }
 
@@ -272,6 +319,7 @@ impl FullAutoFlow {
             tool_registry,
             config,
             cache: FastPathCache::new(),
+            threshold_learner: None,
         }
     }
 
@@ -288,6 +336,7 @@ impl FullAutoFlow {
             tool_registry,
             config: FullAutoConfig::default(),
             cache,
+            threshold_learner: None,
         }
     }
 
@@ -474,7 +523,8 @@ impl FullAutoFlow {
                     + desc_score * WEIGHT_DESCRIPTION
                     + desc.score * WEIGHT_RUNTIME;
 
-                if composite < self.config.min_match_score {
+                let effective_threshold = self.effective_min_match_score();
+                if composite < effective_threshold {
                     return None;
                 }
 
@@ -739,6 +789,9 @@ impl FullAutoFlow {
                         "Skill '{}' succeeded in {}ms",
                         skill_match.name, duration_ms
                     );
+
+                    // Record successful match for threshold learning.
+                    self.record_match_outcome(true, false, false);
                 }
                 Err(e) => {
                     let elapsed = step_start.elapsed();
@@ -746,6 +799,9 @@ impl FullAutoFlow {
                     let error_msg = format!("Skill '{}' failed: {}", skill_match.name, e);
                     warn!("{}", error_msg);
                     errors.push(error_msg.clone());
+
+                    // Record failed match for threshold learning.
+                    self.record_match_outcome(false, true, false);
 
                     // Record the failure.
                     {
@@ -1330,5 +1386,73 @@ mod tests {
             env_snapshot: HashMap::new(),
         };
         assert!(!env.is_ready());
+    }
+
+    #[test]
+    fn threshold_learner_integration_smoke() {
+        let tool_registry = Arc::new(ToolRegistry::default());
+        let skill_registry = setup_registry();
+
+        let learner = ThresholdLearner::default_learner();
+        let flow = FullAutoFlow::new(skill_registry, tool_registry).with_threshold_learner(learner);
+
+        // Initially at 0.40.
+        let initial = flow.effective_min_match_score();
+        assert!((initial - 0.40).abs() < 0.001);
+
+        // Record a false positive — should raise threshold.
+        flow.record_match_outcome(false, true, false);
+        let after_fp = flow.effective_min_match_score();
+        assert!(after_fp > initial, "False positive should raise threshold");
+
+        // Record a missed match — should lower threshold.
+        flow.record_match_outcome(false, false, true);
+        let after_miss = flow.effective_min_match_score();
+        assert!(after_miss < after_fp, "Missed match should lower threshold");
+
+        // Record a success — should keep threshold stable.
+        let before_success = flow.effective_min_match_score();
+        flow.record_match_outcome(true, false, false);
+        assert_eq!(flow.effective_min_match_score(), before_success);
+    }
+
+    #[test]
+    fn effective_min_match_score_falls_back_to_config_when_no_learner() {
+        let tool_registry = Arc::new(ToolRegistry::default());
+        let skill_registry = setup_registry();
+        let flow = FullAutoFlow::new(skill_registry, tool_registry);
+
+        // Without a learner, should fall back to config value.
+        assert_eq!(flow.effective_min_match_score(), DEFAULT_MIN_MATCH_SCORE);
+    }
+
+    #[test]
+    fn discover_skills_uses_dynamic_threshold() {
+        let tool_registry = Arc::new(ToolRegistry::default());
+        let skill_registry = setup_registry();
+
+        // Create a flow with a learner that has a very high threshold.
+        let mut learner = ThresholdLearner::new(1.0, 0.95);
+        learner.adjust_threshold("skill_match", 0.0); // reset to exactly 0.95
+        let flow = FullAutoFlow::new(skill_registry.clone(), tool_registry.clone())
+            .with_threshold_learner(learner);
+
+        // With threshold 0.95, only very good matches pass.
+        let intent = TaskIntent {
+            goals: vec!["fix bugs in source code".to_string()],
+            constraints: vec![],
+            prerequisites: vec![],
+            deliverables: vec![],
+        };
+
+        let matches = flow.discover_skills(&intent);
+        // The point is that discover_skills uses the dynamic threshold.
+        let score = flow.effective_min_match_score();
+        assert!((score - 0.95).abs() < 0.001);
+
+        // All returned matches should have score >= effective threshold.
+        for m in &matches {
+            assert!(m.score >= 0.95, "{} scored {}", m.name, m.score);
+        }
     }
 }

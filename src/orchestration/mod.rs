@@ -28,6 +28,7 @@ pub mod prompt_layers;
 pub mod recovery; // BLUE43 Step 16: Auto recovery orchestration with escalation
 pub mod roles;
 pub mod scheduler;
+pub mod session_compressor; // BLUE44: Session summary compression for memory management
 pub mod skill;
 pub mod skill_import;
 pub mod startup_context;
@@ -36,6 +37,7 @@ pub mod task_graph;
 pub mod task_graph_store;
 pub mod task_router;
 pub mod task_schema;
+pub mod threshold_learner; // BLUE44: Dynamic threshold learning for skill matching
 pub mod token_layers;
 pub mod tool;
 pub mod tool_extended; // BLUE44: Extended built-in tools (10 additional tools)

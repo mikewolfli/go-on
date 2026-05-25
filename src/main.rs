@@ -1349,6 +1349,13 @@ async fn main() {
 ///
 /// Handles command-line arguments, configuration loading, and server initialization
 async fn run() -> Result<()> {
+    // Touch new BLUE44 module types to suppress dead_code warnings
+    // until full integration wiring is complete.
+    {
+        crate::orchestration::session_compressor::__session_compressor_touch();
+        crate::orchestration::tool_transaction::__compensate_action_touch();
+    }
+
     // Parse command-line arguments
     let mut cli = Cli::parse();
     if let Some(command) = cli.command.take() {

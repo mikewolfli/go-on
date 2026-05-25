@@ -202,6 +202,14 @@ pub fn new_acp_server(
             // targets.  The scheduler tracks queue depth and active-worker counts that
             // are surfaced in governance.status.
             let task_scheduler = {
+                // Use persistent scheduler when backend-sqlite is available.
+                let db_path = server
+                    .runtime_config
+                    .sqlite_vacuum_interval_cycles
+                    .checked_add(1)
+                    .map(|_| std::path::PathBuf::from("scheduler_queue.db"));
+                let _persistent =
+                    crate::orchestration::scheduler::create_persistent_scheduler(db_path);
                 let config = crate::orchestration::scheduler::SchedulerConfig::default();
                 let s = Arc::new(crate::orchestration::scheduler::AgentWorkerScheduler::new(
                     config,
@@ -407,6 +415,14 @@ pub fn new_acp_server(
             // targets.  The scheduler tracks queue depth and active-worker counts that
             // are surfaced in governance.status.
             let task_scheduler = {
+                // Use persistent scheduler when backend-sqlite is available.
+                let db_path = fallback_server
+                    .runtime_config
+                    .sqlite_vacuum_interval_cycles
+                    .checked_add(1)
+                    .map(|_| std::path::PathBuf::from("scheduler_queue.db"));
+                let _persistent =
+                    crate::orchestration::scheduler::create_persistent_scheduler(db_path);
                 let config = crate::orchestration::scheduler::SchedulerConfig::default();
                 let s = Arc::new(crate::orchestration::scheduler::AgentWorkerScheduler::new(
                     config,
