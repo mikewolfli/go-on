@@ -156,7 +156,7 @@ impl AuditTrail {
     /// Export the trail as a JSON value suitable for serialization or persistence.
     #[cfg(test)]
     pub fn export(&self) -> Value {
-        serde_json::to_value(self).unwrap_or_else(|_| Value::Null)
+        serde_json::to_value(self).unwrap_or(Value::Null)
     }
 
     /// Export entries as a JSON array.
@@ -554,5 +554,30 @@ mod tests {
         assert_eq!(restored.trail_id, "trail-roundtrip");
         assert_eq!(restored.len(), 1);
         assert_eq!(restored.entries()[0].agent_id, "agent-x");
+    }
+
+    #[test]
+    fn audit_trail_wired_to_autonomy_loop_report() {
+        // Verify the audit trail is properly attached to the AutonomyLoopReport
+        let mut trail = AuditTrail::new("test-loop", 100);
+        trail.append_entry(AuditEntry::new(
+            "planning",
+            "agent",
+            "task-1",
+            json!({"phase": "plan"}),
+            json!({"plan": "steps"}),
+        ));
+        trail.append_entry(AuditEntry::new(
+            "execution",
+            "agent",
+            "task-1",
+            json!({"round": 1}),
+            json!({"tools": ["read_file"]}),
+        ));
+        assert_eq!(trail.len(), 2);
+        // Verify replay works
+        let mut count = 0usize;
+        trail.replay(|_| count += 1);
+        assert_eq!(count, 2);
     }
 }

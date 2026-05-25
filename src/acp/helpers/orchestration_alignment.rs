@@ -43,7 +43,10 @@ fn collect_executed_tools(tool_execution_results: &[Value]) -> Vec<String> {
             .and_then(Value::as_array)
         {
             for item in iterations {
-                let stage = item.get("stage").and_then(Value::as_str).unwrap_or_default();
+                let stage = item
+                    .get("stage")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 if !stage.eq_ignore_ascii_case("act") {
                     continue;
                 }

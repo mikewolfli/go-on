@@ -32,7 +32,7 @@ pub fn parse_tool_call_token(token: &str) -> Option<(&str, &str)> {
     Some((tool_name, args))
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn parse_model_used_token(token: &str) -> Option<&str> {
     token
         .strip_prefix(TOKEN_MODEL_USED_PREFIX)
@@ -40,7 +40,7 @@ pub fn parse_model_used_token(token: &str) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn parse_thinking_token(token: &str) -> Option<&str> {
     token.strip_prefix(TOKEN_THINKING_PREFIX)
 }
@@ -94,5 +94,17 @@ mod tests {
     fn build_tool_call_token_uses_shared_prefix() {
         let token = build_tool_call_token("read_file", r#"{"path":"a.txt"}"#);
         assert_eq!(token, r#"__tool_call__:read_file:{"path":"a.txt"}"#);
+    }
+
+    #[test]
+    fn parse_model_and_thinking_tokens() {
+        let model_token = build_model_used_token("gpt-4.1");
+        assert_eq!(parse_model_used_token(&model_token), Some("gpt-4.1"));
+
+        let thinking_token = build_thinking_token("reasoning...", Some("final"));
+        assert_eq!(
+            parse_thinking_token(&thinking_token),
+            Some("reasoning...final")
+        );
     }
 }

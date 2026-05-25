@@ -15,7 +15,6 @@ use crate::orchestration::planner_executor::{ExecutionPlan, Planner};
 /// Build an `ExecutionGraph` DAG from a `Planner::plan()` output.
 ///
 /// Each `PlanStep` becomes a node in the DAG with its dependency edges.
-#[allow(dead_code)]
 pub fn build_execution_graph_from_plan(plan: &ExecutionPlan) -> ExecutionGraph {
     let mut graph = ExecutionGraph::new(&format!("plan-{}", plan.plan_id));
 
@@ -55,7 +54,6 @@ pub fn build_execution_graph_from_plan(plan: &ExecutionPlan) -> ExecutionGraph {
 
 /// Bridge result containing both the DAG and derived metadata
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct PlannerExecutionBridge {
     /// The execution plan from Planner
     pub plan: ExecutionPlan,
@@ -65,10 +63,8 @@ pub struct PlannerExecutionBridge {
     pub total_steps: usize,
 }
 
-#[allow(dead_code)]
 impl PlannerExecutionBridge {
     /// Create a new bridge from a task envelope.
-    #[allow(dead_code)]
     pub fn from_task(task: &AgentTaskEnvelope) -> Self {
         let plan = Planner::plan(task);
         let graph = build_execution_graph_from_plan(&plan);
@@ -86,11 +82,13 @@ impl PlannerExecutionBridge {
     }
 
     /// Mark a step as completed in the DAG.
+    #[cfg(test)]
     pub fn complete_step(&mut self, step_id: &str, output: Value) {
         let _ = self.graph.complete_task(step_id, output);
     }
 
     /// Mark a step as failed in the DAG.
+    #[cfg(test)]
     pub fn fail_step(&mut self, step_id: &str, error: String) {
         let _ = self
             .graph

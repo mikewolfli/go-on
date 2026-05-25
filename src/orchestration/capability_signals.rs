@@ -80,11 +80,26 @@ impl CapabilitySignals {
     }
 
     /// Returns true if the capability bus explicitly recommended this agent.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn is_agent_preferred(&self, agent_name: &str) -> bool {
         self.preferred_agent
             .as_ref()
             .map(|pa| pa == agent_name)
             .unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CapabilitySignals;
+
+    #[test]
+    fn preferred_agent_helper_reflects_preference() {
+        let signals = CapabilitySignals {
+            preferred_agent: Some("alpha".to_string()),
+            ..CapabilitySignals::default()
+        };
+        assert!(signals.is_agent_preferred("alpha"));
+        assert!(!signals.is_agent_preferred("beta"));
     }
 }

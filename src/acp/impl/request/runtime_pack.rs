@@ -3830,6 +3830,16 @@ pub(super) async fn handle_governance_status(
         "token_gate_count": token_gate_count,
     });
 
+    // BLUE43 Step 1: Read live DAG metrics from the most recent autonomy loop planning phase
+    let dag = crate::acp::helpers::autonomy_loop::read_latest_dag_metrics().unwrap_or_default();
+
+    // BLUE44: Read FastPathCache metrics from the most recent FullAutoFlow run
+    let fast_path_cache_metrics = crate::orchestration::fast_path_cache::read_cache_metrics();
+
+    // BLUE44: Read IdempotencyStore conflict rate from tool_transaction
+    let idempotency_conflict_rate =
+        crate::orchestration::tool_transaction::read_idempotency_conflict_rate();
+
     let autonomy_behavior_validation = json!({
         "ready": layered_token_trigger_ready,
         "behavior_backed": true,
@@ -3850,11 +3860,15 @@ pub(super) async fn handle_governance_status(
         "orchestration_node_unmapped_total": orchestration_node_unmapped_total,
         // BLUE43 Step 1: DAG observability metrics from execution traces
         "dag_metrics": {
-            "dag_width": 0,
-            "dag_depth": 0,
-            "dag_parallel_group_count": 0,
-            "dag_total_steps": 0,
+            "dag_width": dag.width,
+            "dag_depth": dag.depth,
+            "dag_parallel_group_count": dag.parallel_group_count,
+            "dag_total_steps": dag.total_steps,
         },
+        // BLUE44: FastPathCache metrics wired from FullAutoFlow run
+        "fast_path_cache_metrics": fast_path_cache_metrics,
+        // BLUE44: IdempotencyStore conflict rate wired from tool_transaction
+        "idempotency_conflict_rate": idempotency_conflict_rate,
         "autonomy_runtime_metrics": autonomy_runtime_metrics,
         "autonomy_perf": autonomy_perf,
         "signals": autonomy_behavior_signals,
@@ -3988,6 +4002,17 @@ pub(super) async fn handle_governance_status(
                         .get("orchestration_node_unmapped_total")
                         .cloned()
                         .unwrap_or_else(|| serde_json::json!(0u64)),
+                    // BLUE43 Step 1: DAG observability metrics from execution traces
+                    "dag_metrics": {
+                        "dag_width": dag.width,
+                        "dag_depth": dag.depth,
+                        "dag_parallel_group_count": dag.parallel_group_count,
+                        "dag_total_steps": dag.total_steps,
+                    },
+                    // BLUE44: FastPathCache metrics wired from FullAutoFlow run
+                    "fast_path_cache_metrics": fast_path_cache_metrics,
+                    // BLUE44: IdempotencyStore conflict rate wired from tool_transaction
+                    "idempotency_conflict_rate": idempotency_conflict_rate,
                     "autonomy_runtime_metrics": autonomy_runtime_metrics,
                     "autonomy_perf": autonomy_perf,
                 },

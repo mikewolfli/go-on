@@ -20,6 +20,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tracing::{debug, info, warn};
 
+use crate::orchestration::fast_path_cache::{
+    EnvCacheValue, FastPathCache, IntentCacheValue, SkillCacheValue,
+};
 use crate::orchestration::skill::SkillRegistry;
 use crate::orchestration::tool::ToolRegistry;
 
@@ -166,6 +169,8 @@ pub struct AutoExecutionReport {
     pub errors: Vec<String>,
     /// Total wall‑clock duration of the entire flow in milliseconds.
     pub total_duration_ms: u64,
+    /// Cache metrics snapshot from the fast-path cache.
+    pub cache_metrics: Value,
 }
 
 impl AutoExecutionReport {
@@ -226,6 +231,8 @@ pub struct FullAutoFlow {
     skill_registry: Arc<Mutex<SkillRegistry>>,
     tool_registry: Arc<ToolRegistry>,
     config: FullAutoConfig,
+    /// Fast-path cache for parsing, discovery, environment, and route matching.
+    cache: FastPathCache,
 }
 
 impl std::fmt::Debug for FullAutoFlow {
@@ -234,12 +241,13 @@ impl std::fmt::Debug for FullAutoFlow {
             .field("skill_registry", &"Arc<Mutex<SkillRegistry>>")
             .field("tool_registry", &"Arc<ToolRegistry>")
             .field("config", &self.config)
+            .field("cache", &"FastPathCache")
             .finish()
     }
 }
 
 impl FullAutoFlow {
-    /// Create a new `FullAutoFlow` with default configuration.
+    /// Create a new `FullAutoFlow` with default configuration and default routes.
     pub fn new(
         skill_registry: Arc<Mutex<SkillRegistry>>,
         tool_registry: Arc<ToolRegistry>,
@@ -248,6 +256,7 @@ impl FullAutoFlow {
             skill_registry,
             tool_registry,
             config: FullAutoConfig::default(),
+            cache: FastPathCache::with_default_routes(),
         }
     }
 
@@ -262,6 +271,23 @@ impl FullAutoFlow {
             skill_registry,
             tool_registry,
             config,
+            cache: FastPathCache::new(),
+        }
+    }
+
+    /// Create a new `FullAutoFlow` with a custom cache.
+    /// Only used in tests; production uses `with_default_routes()`.
+    #[cfg(test)]
+    pub fn with_cache(
+        skill_registry: Arc<Mutex<SkillRegistry>>,
+        tool_registry: Arc<ToolRegistry>,
+        cache: FastPathCache,
+    ) -> Self {
+        Self {
+            skill_registry,
+            tool_registry,
+            config: FullAutoConfig::default(),
+            cache,
         }
     }
 
@@ -276,7 +302,16 @@ impl FullAutoFlow {
     /// with `-` or `*` are classified by keyword (`goal:`, `constraint:`,
     /// `require:`, `deliverable:`, `output:`). Unclassified bullet lines
     /// and multi‑word standalone lines default to goals.
+    ///
+    /// Results are cached via the fast-path cache so that repeated calls
+    /// with the same task text avoid re-parsing.
     pub fn parse_task(&self, task: &str) -> TaskIntent {
+        // Fast-path cache check.
+        if let Some(cached) = self.cache.get_intent(task) {
+            debug!("parse_task: returning cached intent");
+            return cached.into_task_intent();
+        }
+
         let mut goals: Vec<String> = Vec::new();
         let mut constraints: Vec<String> = Vec::new();
         let mut prerequisites: Vec<String> = Vec::new();
@@ -346,12 +381,18 @@ impl FullAutoFlow {
             goals.push(task.to_string());
         }
 
-        TaskIntent {
+        let intent = TaskIntent {
             goals,
             constraints,
             prerequisites,
             deliverables,
-        }
+        };
+
+        // Store in cache for future fast-path lookups.
+        self.cache
+            .set_intent(task, IntentCacheValue::from(intent.clone()));
+
+        intent
     }
 
     /// Strip one of the recognised labels from the front of `content`.
@@ -378,8 +419,28 @@ impl FullAutoFlow {
     /// - **Description similarity** – keyword overlap between goals and
     ///   the skill description.
     /// - **Runtime score** – historical success rate from the registry.
+    ///
+    /// Results are cached keyed by the goal text so that repeated discovery
+    /// for the same intent goals avoids recomputation.
     pub fn discover_skills(&self, intent: &TaskIntent) -> Vec<SkillMatch> {
         let goal_text = intent.goal_text();
+
+        // Fast-path cache check.
+        if let Some(cached) = self.cache.get_skills(&goal_text) {
+            debug!("discover_skills: returning cached skills");
+            return cached
+                .skill_names
+                .into_iter()
+                .zip(cached.scores)
+                .map(|(name, score)| SkillMatch {
+                    name,
+                    description: String::new(),
+                    score,
+                    reason: "cached".into(),
+                })
+                .collect();
+        }
+
         let goal_tokens = tokenize(&goal_text);
 
         let registry = self
@@ -439,6 +500,14 @@ impl FullAutoFlow {
                 .then_with(|| a.name.cmp(&b.name))
         });
         matches.truncate(self.config.max_skills_to_execute);
+
+        // Store in cache for future fast-path lookups.
+        let cached = SkillCacheValue {
+            skill_names: matches.iter().map(|m| m.name.clone()).collect(),
+            scores: matches.iter().map(|m| m.score).collect(),
+        };
+        self.cache.set_skills(&goal_text, cached);
+
         matches
     }
 
@@ -451,11 +520,24 @@ impl FullAutoFlow {
     /// Builds a snapshot of relevant context (mode, goals, constraints) and
     /// checks whether prerequisites are declared (proxy for runtime
     /// readiness).
+    ///
+    /// Results are cached keyed by the prerequisites list so that repeated
+    /// calls with the same prerequisites avoid recomputation.
     pub fn prepare_environment(&self, intent: &TaskIntent) -> ExecutionEnvironment {
         if !self.config.enable_env_check {
             return ExecutionEnvironment {
                 dependencies_checked: true,
                 runtime_ready: true,
+                env_snapshot: HashMap::new(),
+            };
+        }
+
+        // Fast-path cache check.
+        if let Some(cached) = self.cache.get_env(&intent.prerequisites) {
+            debug!("prepare_environment: returning cached environment");
+            return ExecutionEnvironment {
+                dependencies_checked: cached.dependencies_checked,
+                runtime_ready: cached.runtime_ready,
                 env_snapshot: HashMap::new(),
             };
         }
@@ -471,11 +553,22 @@ impl FullAutoFlow {
         let dependencies_checked = true;
         let runtime_ready = !intent.prerequisites.is_empty();
 
-        ExecutionEnvironment {
+        let result = ExecutionEnvironment {
             dependencies_checked,
             runtime_ready,
             env_snapshot,
-        }
+        };
+
+        // Store in cache for future fast-path lookups.
+        self.cache.set_env(
+            &intent.prerequisites,
+            EnvCacheValue {
+                dependencies_checked: result.dependencies_checked,
+                runtime_ready: result.runtime_ready,
+            },
+        );
+
+        result
     }
 
     // -----------------------------------------------------------------------
@@ -484,11 +577,13 @@ impl FullAutoFlow {
 
     /// Run the complete full-auto flow:
     ///
-    /// 1. Parse the task description into a `TaskIntent`.
-    /// 2. Discover matching skills via the `SkillRegistry`.
-    /// 3. Prepare the execution environment.
-    /// 4. Execute each matched skill in priority order.
-    /// 5. Return a complete `AutoExecutionReport`.
+    /// 1. Try a fast-path route template match (bypasses parsing and
+    ///    discovery for known task types like bug fixes and features).
+    /// 2. Parse the task description into a `TaskIntent`.
+    /// 3. Discover matching skills via the `SkillRegistry`.
+    /// 4. Prepare the execution environment.
+    /// 5. Execute each matched skill in priority order.
+    /// 6. Return a complete `AutoExecutionReport`.
     ///
     /// This is an `async` method because skill execution may involve I/O.
     pub async fn run(&self, task: &str) -> AutoExecutionReport {
@@ -502,27 +597,60 @@ impl FullAutoFlow {
         let tool_count = self.tool_registry.names().len();
         debug!("FullAutoFlow: {} tools available in registry", tool_count);
 
-        // ---- Step 1: Parse ----
-        let intent = self.parse_task(task);
-        debug!(
-            "Parsed task: {} goals, {} constraints, {} prerequisites, {} deliverables",
-            intent.goals.len(),
-            intent.constraints.len(),
-            intent.prerequisites.len(),
-            intent.deliverables.len()
-        );
+        // ---- Step 0: Fast-path route template match ----
+        let (intent, matched_skills) = if let Some(route) = self.cache.match_route(task) {
+            info!(
+                "Fast-path route matched: {} (planning={})",
+                route.task_type, route.requires_planning
+            );
 
-        // ---- Step 2: Discover ----
-        let matched_skills = self.discover_skills(&intent);
-        info!(
-            "Discovered {} matching skills for task with {} goal(s)",
-            matched_skills.len(),
-            intent.goals.len()
-        );
+            let intent = TaskIntent {
+                goals: route.default_goals.clone(),
+                constraints: vec![],
+                prerequisites: vec![],
+                deliverables: vec![],
+            };
 
-        if matched_skills.is_empty() {
-            warn!("No skills matched the task; flow will produce an empty execution log");
-        }
+            // Convert default skill names into SkillMatch entries.
+            let matched_skills: Vec<SkillMatch> = route
+                .default_skills
+                .iter()
+                .map(|name| SkillMatch {
+                    name: name.clone(),
+                    description: String::new(),
+                    score: 1.0,
+                    reason: format!("fast-path route: {}", route.task_type),
+                })
+                .collect();
+
+            (intent, matched_skills)
+        } else {
+            debug!("No fast-path route matched; falling through to full flow");
+
+            // ---- Step 1: Parse ----
+            let intent = self.parse_task(task);
+            debug!(
+                "Parsed task: {} goals, {} constraints, {} prerequisites, {} deliverables",
+                intent.goals.len(),
+                intent.constraints.len(),
+                intent.prerequisites.len(),
+                intent.deliverables.len()
+            );
+
+            // ---- Step 2: Discover ----
+            let matched_skills = self.discover_skills(&intent);
+            info!(
+                "Discovered {} matching skills for task with {} goal(s)",
+                matched_skills.len(),
+                intent.goals.len()
+            );
+
+            if matched_skills.is_empty() {
+                warn!("No skills matched the task; flow will produce an empty execution log");
+            }
+
+            (intent, matched_skills)
+        };
 
         // ---- Step 3: Environment ----
         let environment_status = self.prepare_environment(&intent);
@@ -654,6 +782,11 @@ impl FullAutoFlow {
             }
         }
 
+        let cache_snapshot = self.cache.cache_metrics_snapshot();
+
+        // BLUE44: Store cache metrics for governance observability
+        crate::orchestration::fast_path_cache::store_cache_metrics(cache_snapshot.clone());
+
         info!(
             "Full-auto flow completed: {} successful, {} failed, {} errors in {}ms",
             execution_log.iter().filter(|s| s.success).count(),
@@ -670,6 +803,7 @@ impl FullAutoFlow {
             final_output,
             errors,
             total_duration_ms,
+            cache_metrics: cache_snapshot,
         }
     }
 }
@@ -762,6 +896,17 @@ mod tests {
     fn make_flow(registry: Arc<Mutex<SkillRegistry>>) -> FullAutoFlow {
         let tool_registry = Arc::new(ToolRegistry::new_empty());
         FullAutoFlow::new(registry, tool_registry)
+    }
+
+    #[test]
+    fn with_cache_constructor_smoke() {
+        let registry = setup_registry();
+        let tool_registry = Arc::new(ToolRegistry::new_empty());
+        let cache = crate::orchestration::fast_path_cache::FastPathCache::new();
+        let flow = FullAutoFlow::with_cache(registry, tool_registry, cache);
+
+        let intent = flow.parse_task("- goal: validate custom cache constructor");
+        assert!(intent.has_goals());
     }
 
     // ── TaskIntent tests ───────────────────────────────────────────────
@@ -1064,6 +1209,7 @@ mod tests {
             final_output: None,
             errors: vec![],
             total_duration_ms: 1,
+            cache_metrics: json!({}),
         };
         assert!(report.is_success());
         assert_eq!(report.success_count(), 1);
@@ -1089,6 +1235,7 @@ mod tests {
             final_output: None,
             errors: vec!["something went wrong".to_string()],
             total_duration_ms: 0,
+            cache_metrics: json!({}),
         };
         assert!(!report.is_success());
     }
@@ -1131,6 +1278,7 @@ mod tests {
             final_output: None,
             errors: vec![],
             total_duration_ms: 3,
+            cache_metrics: json!({}),
         };
         assert!(!report.is_success());
         assert_eq!(report.success_count(), 1);

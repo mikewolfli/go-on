@@ -69,8 +69,8 @@ pub mod agent_router;
 // BLUE42: metacognitive/world-model execution intelligence bridge
 pub mod execution_intelligence;
 
+pub mod response_assembler;
 pub mod review_gate;
 pub mod vote_orchestration;
-pub mod response_assembler;
 
 // Re-export for convenience

@@ -350,11 +350,8 @@ async fn run_agent_with_tools(agent: &Arc<dyn Agent>, messages: &mut Vec<Message
         }
     }
 
-    let autonomy_contract = terminal_chat_contract_snapshot(
-        tool_calls.len(),
-        followup_round_executed,
-        &response,
-    );
+    let autonomy_contract =
+        terminal_chat_contract_snapshot(tool_calls.len(), followup_round_executed, &response);
     debug!(
         target: "go_on::cli::chat",
         autonomy_contract = %autonomy_contract,

@@ -5,11 +5,10 @@ use crate::intelligence::metacognitive::{MetacognitiveConfig, MetacognitiveContr
 use crate::intelligence::self_model::{SelfModelConfig, SelfModelCore};
 use crate::intelligence::world_model::{EntityType, WorldModel, WorldModelConfig};
 
-#[allow(dead_code)]
 pub(crate) struct ExecutionPreCheck {
     pub should_degrade: bool,
     pub reason: Option<String>,
-    pub consecutive_failures: u32,
+    pub _consecutive_failures: u32,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -67,7 +66,7 @@ pub(crate) fn pre_check(
     ExecutionPreCheck {
         should_degrade,
         reason,
-        consecutive_failures,
+        _consecutive_failures: consecutive_failures,
     }
 }
 
@@ -146,7 +145,7 @@ pub(crate) fn post_check(
 
 #[cfg(test)]
 mod tests {
-    use super::{corrective_actions_for_summary, post_check, should_degrade};
+    use super::{corrective_actions_for_summary, post_check, pre_check, should_degrade};
 
     #[test]
     fn degrade_threshold_checks_limits_and_failures() {
@@ -183,5 +182,74 @@ mod tests {
         assert!(actions
             .iter()
             .any(|a| a.contains("escalate") || a.contains("halt")));
+    }
+
+    #[test]
+    fn intelligence_chain_pre_check_uses_self_model() {
+        // Verify that pre_check() actually calls self_model() and world_model()
+        let result = pre_check("integration-test", "test-agent", 0);
+        // Default self model has 0 limitations, so should not degrade
+        assert!(!result.should_degrade);
+        // With 3 consecutive failures, should degrade
+        let result3 = pre_check("integration-test-3", "test-agent", 3);
+        assert!(result3.should_degrade);
+    }
+
+    #[test]
+    fn intelligence_chain_post_check_records_to_metacognitive() {
+        // Verify post_check records observations to metacognitive when failing
+        let outcome = post_check(
+            "test-task",
+            "test-agent",
+            false,
+            "tool execution failed timeout",
+        );
+        assert!(!outcome.corrective_actions.is_empty());
+        // High severity triggers escalation
+        let severe = post_check(
+            "severe-task",
+            "test-agent",
+            false,
+            "critical security crash",
+        );
+        assert!(severe
+            .corrective_actions
+            .iter()
+            .any(|a| a.contains("escalate") || a.contains("halt")));
+    }
+
+    #[test]
+    fn intelligence_chain_self_model_affects_pre_check_decision() {
+        // self_model profile().limitations_count should affect pre_check
+        // Default self model has 0 limitations -> no degrade
+        let result = pre_check("e2e-test", "test-agent", 0);
+        assert!(
+            !result.should_degrade,
+            "default self model should not trigger degrade"
+        );
+
+        // With 3 consecutive failures -> should degrade (regardless of self model)
+        let result_fail = pre_check("e2e-test-fail", "test-agent", 3);
+        assert!(
+            result_fail.should_degrade,
+            "3 consecutive failures must trigger degrade"
+        );
+        assert!(result_fail
+            .reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("consecutive_failures"));
+    }
+
+    #[test]
+    fn intelligence_chain_world_model_records_events() {
+        // post_check should record events to world model via record_event
+        let outcome = post_check("e2e-world-test", "test-agent", false, "timeout occurred");
+        assert!(!outcome.corrective_actions.is_empty());
+        // Timeout should trigger specific action
+        assert!(outcome
+            .corrective_actions
+            .iter()
+            .any(|a| a.contains("timeout") || a.contains("fanout")));
     }
 }

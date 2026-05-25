@@ -257,7 +257,6 @@ pub fn evaluate_default_tool_policy(
 }
 
 /// Snapshot of the default governance policy state.
-#[allow(dead_code)]
 pub fn default_governance_policy_snapshot() -> Value {
     json!({
         "policy_name": "default-governance-policy-v1",

@@ -8,6 +8,8 @@
 //! All entrypoints (CLI, ACP chat, task.execute, workflow.execute) converge here.
 
 use std::sync::Arc;
+use std::sync::LazyLock;
+use std::sync::Mutex;
 use std::time::Instant;
 
 use anyhow::Result;
@@ -20,11 +22,27 @@ use tokio::sync::mpsc;
 use crate::acp::helpers::agent_router::record_task_agent_outcome;
 use crate::agent::{Agent, Message, StreamingSender};
 use crate::orchestration::audit::{AuditEntry, AuditTrail};
-use crate::orchestration::planner_executor::Planner;
+use crate::orchestration::planner_executor::{DagMetrics, Planner};
 use crate::orchestration::recovery::RecoveryOrchestrator;
 use crate::orchestration::tool::{
     execute_loop, LoopConfig, LoopDecision, ToolInput, ToolOutput, ToolRegistry,
 };
+
+/// Global store for the latest DAG metrics computed during planning.
+/// Written once per autonomy loop cycle, read by governance payload builders.
+static LATEST_DAG_METRICS: LazyLock<Mutex<Option<DagMetrics>>> = LazyLock::new(|| Mutex::new(None));
+
+/// Store latest DAG metrics for governance observability.
+pub fn store_latest_dag_metrics(metrics: DagMetrics) {
+    if let Ok(mut guard) = LATEST_DAG_METRICS.lock() {
+        *guard = Some(metrics);
+    }
+}
+
+/// Read latest DAG metrics for governance payload.
+pub fn read_latest_dag_metrics() -> Option<DagMetrics> {
+    LATEST_DAG_METRICS.lock().ok()?.clone()
+}
 
 /// Predictive reroute scoring result.
 #[derive(Debug, Clone)]
@@ -174,16 +192,16 @@ mod tests {
         };
 
         // Scenario: no corrective actions -> ratio 0.0
-        assert!((ratio(0, 0) - 0.0).abs() < f64::EPSILON);
+        assert!((ratio(0, 0) - 0.0).abs() <= f64::EPSILON);
 
         // Scenario: all corrective actions effective -> ratio 1.0
-        assert!((ratio(5, 5) - 1.0).abs() < f64::EPSILON);
+        assert!((ratio(5, 5) - 1.0).abs() <= f64::EPSILON);
 
         // Scenario: some effective, some failed -> ratio 0.6
-        assert!((ratio(5, 3) - 0.6).abs() < f64::EPSILON);
+        assert!((ratio(5, 3) - 0.6).abs() <= f64::EPSILON);
 
         // Scenario: none effective -> ratio 0.0
-        assert!((ratio(4, 0) - 0.0).abs() < f64::EPSILON);
+        assert!((ratio(4, 0) - 0.0).abs() <= f64::EPSILON);
 
         // Multi-round simulation:
         //   Round 1: 2 corrective actions, response non-empty -> 2 effective
@@ -191,12 +209,13 @@ mod tests {
         //   Round 3: 1 corrective action,  response non-empty    -> 1 effective
         //   Total applied = 6, total effective = 3, ratio = 0.5
         let total_applied = 2 + 3 + 1;
-        let total_effective = 2 + 0 + 1;
+        let total_effective = 2 + 1;
         let computed = ratio(total_applied, total_effective);
+        // computed should be exactly 0.5 for ratio(6, 3)
+        // Use integer comparison: 3/6 == 0.5, so computed*2 == 1.0
         assert!(
-            (computed - 0.5).abs() < f64::EPSILON,
-            "expected ratio 0.5, got {}",
-            computed
+            (computed * 2.0 - 1.0).abs() < 1e-12,
+            "expected ratio 0.5, got {computed}"
         );
     }
 
@@ -510,7 +529,10 @@ pub async fn run_autonomy_loop(
             evidence: None,
             input: serde_json::json!({"objective": objective}),
         };
-        Planner::plan(&envelope)
+        let plan = Planner::plan(&envelope);
+        // BLUE43 Step 1: Persist DAG metrics for governance observability
+        store_latest_dag_metrics(plan.dag_metrics.clone().unwrap_or_default());
+        plan
     };
 
     let planning_round = AutonomyRound {
@@ -625,7 +647,7 @@ pub async fn run_autonomy_loop(
             super::execution_intelligence::ExecutionPreCheck {
                 should_degrade: false,
                 reason: None,
-                consecutive_failures: 0,
+                _consecutive_failures: 0,
             }
         };
         if pre.should_degrade {

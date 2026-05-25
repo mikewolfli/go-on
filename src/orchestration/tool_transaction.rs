@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::{Instant, SystemTime};
 
@@ -46,6 +47,27 @@ pub enum ToolCallStatus {
     },
 }
 
+/// Global store for the latest idempotency conflict rate.
+/// Updated on each call to `conflict_rate()`, read by governance payload
+/// builders to expose tool transaction idempotency health.
+static LATEST_IDEMPOTENCY_CONFLICT_RATE: LazyLock<Mutex<Option<f64>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+/// Store the latest idempotency conflict rate for governance observability.
+pub fn store_idempotency_conflict_rate(rate: f64) {
+    if let Ok(mut guard) = LATEST_IDEMPOTENCY_CONFLICT_RATE.lock() {
+        *guard = Some(rate);
+    }
+}
+
+/// Read the latest idempotency conflict rate.
+pub fn read_idempotency_conflict_rate() -> Option<f64> {
+    LATEST_IDEMPOTENCY_CONFLICT_RATE
+        .lock()
+        .ok()
+        .and_then(|guard| *guard)
+}
+
 // ---------------------------------------------------------------------------
 // IdempotencyStore
 // ---------------------------------------------------------------------------
@@ -60,10 +82,9 @@ pub struct IdempotencyStore {
 }
 
 /// Internal record for a single idempotency key.
-#[allow(dead_code)]
 struct IdempotencyRecord {
-    key: String,
-    first_seen_ms: u64,
+    _key: String,
+    _first_seen_ms: u64,
     last_result: Option<ToolCallResult>,
     conflict_count: u32,
 }
@@ -111,8 +132,8 @@ impl IdempotencyStore {
         keys.insert(
             composite,
             IdempotencyRecord {
-                key: key.to_string(),
-                first_seen_ms: now_ms,
+                _key: key.to_string(),
+                _first_seen_ms: now_ms,
                 last_result: None,
                 conflict_count: 0,
             },
@@ -140,14 +161,20 @@ impl IdempotencyStore {
 
     /// Returns the fraction of keys that have experienced at least one
     /// conflict (duplicate submission).
+    ///
+    /// Also stores the computed rate in the global governance store so that
+    /// the governance status endpoint can expose idempotency health.
     pub fn conflict_rate(&self) -> f64 {
         let keys = self.keys.lock().expect("IdempotencyStore lock poisoned");
         let total = keys.len();
         if total == 0 {
+            store_idempotency_conflict_rate(0.0);
             return 0.0;
         }
         let conflicted = keys.values().filter(|r| r.conflict_count > 0).count();
-        conflicted as f64 / total as f64
+        let rate = conflicted as f64 / total as f64;
+        store_idempotency_conflict_rate(rate);
+        rate
     }
 }
 

@@ -515,10 +515,11 @@ fn assert_regression_gate(report: &BenchmarkReport) {
     );
     eprintln!();
     eprintln!(
-        "{:<24} {:>10} {:>10} {:>10}  {}",
-        "Dimension", "Go-On", "Baseline", "Threshold", "Status"
+        "{:<24} {:>10} {:>10} {:>10}  {:>6}",
+        "Dim", "Go-On", "Baseline", "p95", "Status"
     );
-    eprintln!("{}", "-".repeat(70));
+    const SEP: &str = "----------------------------------------------------------------------";
+    eprintln!("{SEP}");
 
     for result in &report.results {
         let status = if result.passed { "PASS" } else { "FAIL" };

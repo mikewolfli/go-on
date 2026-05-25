@@ -9,7 +9,6 @@ use serde_json::{json, Value};
 
 /// Classification of a repair diagnosis
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[allow(dead_code)]
 pub enum DiagnosisKind {
     /// Transient error — retry with same inputs
     Retry,
@@ -25,7 +24,6 @@ pub enum DiagnosisKind {
 
 /// A single diagnosis result
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct RepairDiagnosis {
     /// What kind of diagnosis
     pub kind: DiagnosisKind,
@@ -44,7 +42,6 @@ pub struct RepairDiagnosis {
 /// This is a heuristic classifier — it uses the error message, tool name,
 /// and subtask outcome to classify the failure. In a full implementation,
 /// this would feed into an LLM for richer diagnosis.
-#[allow(dead_code)]
 pub fn diagnose_repair(
     subtask_id: &str,
     _outcome: &str,
@@ -167,7 +164,6 @@ pub fn diagnose_repair(
 }
 
 /// Convert a repair diagnosis to a strategy adjustment hint for the repair context.
-#[allow(dead_code)]
 pub fn diagnosis_to_strategy_adjustment(diagnosis: &RepairDiagnosis) -> Value {
     let strategy = match diagnosis.kind {
         DiagnosisKind::Retry => "continue targeted retry with context-preserving adjustments",
@@ -186,7 +182,6 @@ pub fn diagnosis_to_strategy_adjustment(diagnosis: &RepairDiagnosis) -> Value {
 }
 
 /// Summarize diagnoses into a readable snapshot for the repair history.
-#[allow(dead_code)]
 pub fn diagnose_and_summarize(
     subtask_id: &str,
     outcome: &str,

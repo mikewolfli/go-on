@@ -50,7 +50,10 @@ mod tests {
 
     #[test]
     fn success_rate_is_zero_when_missing() {
-        assert_eq!(task_agent_success_rate("missing-task", "missing-agent"), 0.0);
+        assert_eq!(
+            task_agent_success_rate("missing-task", "missing-agent"),
+            0.0
+        );
     }
 
     #[test]

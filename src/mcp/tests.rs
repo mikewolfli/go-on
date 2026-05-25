@@ -219,7 +219,9 @@ async fn test_mcp_cancelled_request_returns_cancel_error() {
         .handle_request(request)
         .await
         .expect("request should return response envelope");
-    let error = response.error.expect("cancelled request should return error");
+    let error = response
+        .error
+        .expect("cancelled request should return error");
     assert_eq!(error.code, super::error_codes::REQUEST_CANCELLED);
 }
 

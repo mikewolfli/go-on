@@ -8,12 +8,12 @@
 #[cfg(all(feature = "backend-sqlite", feature = "backend-postgres"))]
 compile_error!("features 'backend-sqlite' and 'backend-postgres' cannot be enabled simultaneously");
 
+use crate::acp::prelude::now_ts;
 #[cfg(not(feature = "backend-postgres"))]
 use std::path::Path;
 use std::sync::Mutex;
 #[cfg(not(feature = "backend-postgres"))]
 use std::sync::Once;
-use crate::acp::prelude::now_ts;
 
 use anyhow::Result;
 #[cfg(feature = "backend-postgres")]
@@ -638,8 +638,6 @@ fn build_memory_key(phase: &str, query_text: &str) -> String {
     let digest = hasher.finalize();
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
-
-
 
 #[cfg(all(test, not(feature = "backend-postgres")))]
 mod tests {

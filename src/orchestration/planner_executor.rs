@@ -32,6 +32,18 @@ pub struct DagMetrics {
     pub complexity_level: String,
 }
 
+impl Default for DagMetrics {
+    fn default() -> Self {
+        Self {
+            width: 0,
+            depth: 0,
+            parallel_group_count: 0,
+            total_steps: 0,
+            complexity_level: "Unknown".into(),
+        }
+    }
+}
+
 /// An execution plan produced by the Planner
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionPlan {
@@ -549,6 +561,77 @@ mod tests {
         assert!(metrics.depth >= 1);
         assert_eq!(metrics.total_steps, plan.steps.len());
         assert!(!metrics.complexity_level.is_empty());
+    }
+
+    /// BLUE44: Verify DAG metrics are populated with non-zero values when a plan
+    /// is created, confirming the metrics flow through governance integration.
+    #[test]
+    fn test_dag_metrics_populated_with_non_zero_values() {
+        // Test with a complex task to ensure non-trivial metrics
+        let task = AgentTaskEnvelope {
+            task_id: "complex-verify".to_string(),
+            phase: "planning".to_string(),
+            role: "architect".to_string(),
+            objective: "Design and implement a distributed caching layer with write-through and write-behind strategies, including cluster rebalancing, failure recovery, and monitoring dashboards."
+                .to_string(),
+            constraints: None,
+            evidence: None,
+            input: serde_json::json!({"priority": "high", "team_size": 5}),
+        };
+        let plan = Planner::plan(&task);
+        let metrics = plan
+            .dag_metrics
+            .expect("DAG metrics must be present when a plan is created");
+
+        // All numeric metrics must be > 0
+        assert!(
+            metrics.width > 0,
+            "dag_width must be non-zero, got {}",
+            metrics.width
+        );
+        assert!(
+            metrics.depth > 0,
+            "dag_depth must be non-zero, got {}",
+            metrics.depth
+        );
+        // parallel_group_count may be 0 for linear DAGs with no fan-out
+        // so we only verify it doesn't exceed total_steps
+        assert!(
+            metrics.parallel_group_count <= metrics.total_steps,
+            "dag_parallel_group_count ({}) should not exceed total_steps ({})",
+            metrics.parallel_group_count,
+            metrics.total_steps
+        );
+        assert!(
+            metrics.total_steps > 0,
+            "dag_total_steps must be non-zero, got {}",
+            metrics.total_steps
+        );
+        assert!(
+            !metrics.complexity_level.is_empty(),
+            "complexity_level must not be empty"
+        );
+
+        // Verify consistency: total_steps should equal the number of plan steps
+        assert_eq!(
+            metrics.total_steps,
+            plan.steps.len(),
+            "dag_total_steps should equal plan.steps.len()"
+        );
+
+        // Verify that width and depth are within reasonable bounds
+        assert!(
+            metrics.width <= metrics.total_steps,
+            "dag_width ({}) should not exceed total_steps ({})",
+            metrics.width,
+            metrics.total_steps
+        );
+        assert!(
+            metrics.depth <= metrics.total_steps,
+            "dag_depth ({}) should not exceed total_steps ({})",
+            metrics.depth,
+            metrics.total_steps
+        );
     }
 
     #[test]

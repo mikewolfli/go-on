@@ -4,6 +4,7 @@
 //! Tool trait, registry, and implementations will be connected to the execution flow
 //! once orchestration logic integrates them.
 
+use crate::governance::pua::{tool_execution_report, PuaExecutionReport};
 use crate::i18n::runtime::{t, tf};
 use anyhow::{Context, Result};
 use glob::Pattern;
@@ -15,8 +16,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::NamedTempFile;
 use tracing::{debug, info, warn};
-
-use crate::pua::{tool_execution_report, PuaExecutionReport};
 
 /// Tool input envelope
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +74,15 @@ pub trait Tool: Send + Sync {
     fn name(&self) -> &'static str;
     /// Executes the tool with the given input. Should emit tracing spans for performance analysis (implementations only).
     fn run(&self, input: &ToolInput) -> Result<ToolOutput>;
+
+    /// Async variant of `run` for non-blocking execution in async contexts.
+    /// The default implementation wraps the sync `run` in `tokio::task::block_in_place`
+    /// to prevent blocking the async runtime during I/O-bound tool operations.
+    /// Tool implementations may override this to provide native async execution.
+    async fn run_async(&self, input: &ToolInput) -> Result<ToolOutput> {
+        let input = input.clone();
+        tokio::task::block_in_place(move || self.run(&input))
+    }
 }
 
 /// Tool registry
@@ -170,6 +178,137 @@ impl ToolRegistry {
                 retry_policy: RetryPolicy {
                     max_retries: 1,
                     retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        // ── Extended tools ───────────────────────────────────────────
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::ShellExecTool,
+            ToolCapabilityProfile {
+                capability: "shell_execution".to_string(),
+                risk_level: ToolRiskLevel::High,
+                timeout_budget_ms: 60_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::HttpRequestTool,
+            ToolCapabilityProfile {
+                capability: "http_request".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 30_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::GrepTool,
+            ToolCapabilityProfile {
+                capability: "content_search".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 15_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: vec!["search_files".to_string()],
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::FindFilesTool,
+            ToolCapabilityProfile {
+                capability: "file_discovery".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 10_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: vec!["search_files".to_string()],
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::GitTool,
+            ToolCapabilityProfile {
+                capability: "version_control".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 15_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: vec!["inspect_git_diff".to_string()],
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::ListDirectoryTool,
+            ToolCapabilityProfile {
+                capability: "directory_listing".to_string(),
+                risk_level: ToolRiskLevel::Low,
+                timeout_budget_ms: 5_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::CargoCheckTool,
+            ToolCapabilityProfile {
+                capability: "compilation_check".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 120_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::CargoTestTool,
+            ToolCapabilityProfile {
+                capability: "test_execution".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 300_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 1,
+                    retry_on_failure: true,
+                },
+                fallback_chain: vec!["cargo_check".to_string()],
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::FileMoveTool,
+            ToolCapabilityProfile {
+                capability: "filesystem_move".to_string(),
+                risk_level: ToolRiskLevel::Medium,
+                timeout_budget_ms: 10_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
+                },
+                fallback_chain: Vec::new(),
+            },
+        );
+        registry.register_with_profile(
+            crate::orchestration::tool_extended::FileDeleteTool,
+            ToolCapabilityProfile {
+                capability: "filesystem_delete".to_string(),
+                risk_level: ToolRiskLevel::High,
+                timeout_budget_ms: 10_000,
+                retry_policy: RetryPolicy {
+                    max_retries: 0,
+                    retry_on_failure: false,
                 },
                 fallback_chain: Vec::new(),
             },
@@ -284,7 +423,7 @@ impl Default for ToolRegistry {
 /// 1. Resolves the path relative to the current working directory.
 /// 2. Canonicalizes (or normalizes) the resolved path.
 /// 3. If `allowed_base_dir` is set, verifies the resolved path starts with it.
-fn sanitize_path(input: &ToolInput, path: &str) -> Result<PathBuf> {
+pub fn sanitize_path(input: &ToolInput, path: &str) -> Result<PathBuf> {
     let resolved = PathBuf::from(path);
     let canonical = if resolved.is_absolute() {
         std::fs::canonicalize(&resolved)
@@ -294,6 +433,53 @@ fn sanitize_path(input: &ToolInput, path: &str) -> Result<PathBuf> {
         let joined = cwd.join(&resolved);
         std::fs::canonicalize(&joined)
             .map_err(|e| anyhow::anyhow!("path canonicalization failed: {e}"))?
+    };
+
+    if let Some(ref base_dir) = input.allowed_base_dir {
+        let base_canonical = std::fs::canonicalize(base_dir).unwrap_or_else(|_| base_dir.clone());
+        if !canonical.starts_with(&base_canonical) {
+            anyhow::bail!(
+                "{}",
+                tf(
+                    "error.path_traversal_denied",
+                    &[("path", path), ("base", &base_dir.display().to_string())]
+                )
+            );
+        }
+    }
+
+    Ok(canonical)
+}
+
+/// Sanitize and validate a path that may not exist yet (e.g. destination for
+/// move/write operations). Resolves the parent directory and joins the
+/// filename, then validates against the allowed base directory.
+pub fn sanitize_path_for_write(input: &ToolInput, path: &str) -> Result<PathBuf> {
+    let resolved = PathBuf::from(path);
+
+    // Try canonicalizing the resolved path first; if it exists, use it directly.
+    let canonical = if resolved.is_absolute() {
+        std::fs::canonicalize(&resolved).unwrap_or_else(|_| {
+            // Path doesn't exist — resolve via parent directory
+            let parent = resolved
+                .parent()
+                .and_then(|p| std::fs::canonicalize(p).ok())
+                .unwrap_or_else(|| {
+                    // If parent can't be canonicalized either, return resolved as-is
+                    PathBuf::from(path)
+                });
+            parent.join(resolved.file_name().unwrap_or_default())
+        })
+    } else {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let joined = cwd.join(&resolved);
+        std::fs::canonicalize(&joined).unwrap_or_else(|_| {
+            let parent = joined
+                .parent()
+                .and_then(|p| std::fs::canonicalize(p).ok())
+                .unwrap_or_else(|| cwd.clone());
+            parent.join(joined.file_name().unwrap_or_default())
+        })
     };
 
     if let Some(ref base_dir) = input.allowed_base_dir {

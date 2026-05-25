@@ -1282,6 +1282,33 @@ async fn initialize_autotune(
 /// Main function - entry point for the application
 #[tokio::main]
 async fn main() {
+    // Initialize NativeToolBridge for provider-native function calling support.
+    // This ensures the public API type is constructed and available for
+    // external consumers via the orchestration module.
+    let native_tool_bridge = crate::orchestration::tool_native::NativeToolBridge::new(
+        crate::orchestration::tool::ToolRegistry::new(),
+    );
+    // Exercise the bridge API to ensure all public methods are reachable
+    let _openai_tools = native_tool_bridge.to_openai_tools();
+    let _anthropic_tools = native_tool_bridge.to_anthropic_tools();
+    let _registry = native_tool_bridge.registry();
+    let _custom_token =
+        crate::orchestration::tool_native::NativeToolBridge::to_custom_protocol_token(
+            "read_file",
+            "{}",
+        );
+    let _parsed = crate::orchestration::tool_native::NativeToolBridge::parse_custom_protocol_token(
+        "__tool_call__:read_file:{}",
+    );
+    let _input = native_tool_bridge.parse_openai_tool_call(
+        "read_file",
+        &serde_json::json!({"path": ""}),
+        "init",
+        "init",
+        "system",
+        None,
+    );
+
     // Set up enhanced panic hook for production
     std::panic::set_hook(Box::new(|panic_info| {
         let location = panic_info

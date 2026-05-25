@@ -1621,9 +1621,7 @@ pub(crate) async fn handle_workflow_execute(
             + execution_report.subtasks_skipped,
         stop_reason,
     );
-    crate::acp::helpers::autonomy_metrics::record_autonomy_loop_stop_reason(
-        stop_reason,
-    );
+    crate::acp::helpers::autonomy_metrics::record_autonomy_loop_stop_reason(stop_reason);
     // BLUE42 Step 6: Record agent outcome for learning feedback
     crate::acp::helpers::agent_router::record_task_agent_outcome(
         &task,
@@ -2339,9 +2337,7 @@ pub(super) async fn handle_task_execute(
         ],
     );
 
-    crate::acp::helpers::autonomy_metrics::record_autonomy_loop_stop_reason(
-        stop_reason,
-    );
+    crate::acp::helpers::autonomy_metrics::record_autonomy_loop_stop_reason(stop_reason);
 
     {
         let mut cache = task_execute_idempotency_cache()

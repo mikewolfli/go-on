@@ -286,7 +286,10 @@ impl ToolBus {
 
         // ── Record statistics ────────────────────────────────────────
         let duration_ms = start.elapsed().as_millis() as u64;
-        let success = result.as_ref().map(|output| output.success).unwrap_or(false);
+        let success = result
+            .as_ref()
+            .map(|output| output.success)
+            .unwrap_or(false);
         // Use an immutable snapshot of the name for the record call.
         // (record_tool_call needs &str, not the moved tool_name if we
         //  consumed it — but we keep a copy.)
@@ -615,7 +618,10 @@ mod tests {
         let output = bus
             .execute_tool("logical_failure", &input)
             .expect("tool should return logical failure output");
-        assert!(!output.success, "logical failure output should be unsuccessful");
+        assert!(
+            !output.success,
+            "logical failure output should be unsuccessful"
+        );
 
         let stats = bus.tool_stats();
         let lf_stats = stats

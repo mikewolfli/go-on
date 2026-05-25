@@ -41,6 +41,7 @@ impl OpenAiAgent {
         messages: Vec<Message>,
         principles: Option<Vec<String>>,
         options: &Option<HashMap<String, Value>>,
+        tools: Option<Vec<Value>>,
     ) -> Value {
         let mut final_messages: Vec<Message> = Vec::new();
 
@@ -71,6 +72,17 @@ impl OpenAiAgent {
 
         apply_openai_common_options(&mut payload, options);
 
+        // Attach native function-calling tools to the payload
+        if let Some(tool_defs) = tools {
+            if !tool_defs.is_empty() {
+                payload["tools"] = Value::Array(tool_defs);
+                // Only set tool_choice when not already specified via options
+                if payload.get("tool_choice").is_none() {
+                    payload["tool_choice"] = json!("auto");
+                }
+            }
+        }
+
         payload
     }
 
@@ -83,7 +95,7 @@ impl OpenAiAgent {
     ) -> anyhow::Result<()> {
         let api_key = resolve_secret(&self.api_key_env, "openai.api_key_env")?;
         let endpoint = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        let payload = self.build_payload(messages, principles, &options);
+        let payload = self.build_payload(messages, principles, &options, None);
 
         let response = self
             .client

@@ -14,7 +14,7 @@ pub(super) fn open_skill_import_store(server: &AcpServer) -> Result<SkillImportS
     SkillImportStore::load(skill_import_policy(server))
 }
 
-pub(super) fn build_mcp_tool_descriptors(server: &AcpServer) -> Vec<Value> {
+pub(crate) fn build_mcp_tool_descriptors(server: &AcpServer) -> Vec<Value> {
     let mut tools = vec![
         json!({
             "name": "acp_trace_get",

@@ -93,13 +93,43 @@ export function registerViewCommands(
 
   const runWorkflowCommand = vscode.commands.registerCommand(
     "go-on.runWorkflow",
-    () => {
-      // TODO: This is a stub. Implement full workflow execution with step-by-step
-      // progress reporting, cancellation support, and result aggregation.
-      // i18n
-      vscode.window.showInformationMessage(
-        i18n.getMessage(MessageKeys.selectWorkflow),
-      );
+    async () => {
+      if (!deps.isRunning()) {
+        vscode.window.showErrorMessage(
+          i18n.getMessage(MessageKeys.goOnNotRunningRpc),
+        );
+        return;
+      }
+
+      const objective = await vscode.window.showInputBox({
+        prompt: i18n.getMessage(MessageKeys.promptWorkflowObjective),
+        placeHolder: i18n.getMessage(
+          MessageKeys.promptWorkflowObjectivePlaceholder,
+        ),
+      });
+      if (!objective) {
+        return;
+      }
+
+      try {
+        const result = await deps.sendRequest("workflow.execute", {
+          task: objective,
+        });
+        vscode.window.showInformationMessage(
+          i18n.getMessage(MessageKeys.rpcCommandCompleted, [
+            "workflow.execute",
+            JSON.stringify(result),
+          ]),
+        );
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        vscode.window.showErrorMessage(
+          i18n.getMessage(MessageKeys.rpcCommandFailed, [
+            "workflow.execute",
+            message,
+          ]),
+        );
+      }
     },
   );
 

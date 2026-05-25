@@ -202,10 +202,10 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     text: string,
     attachments?: { name: string; type: string; dataUrl: string }[],
   ) {
-    // TODO: Streaming support (go-on.chat.streaming) is not implemented yet.
-    // Currently all responses are awaited synchronously. To add streaming,
-    // the backend response would need to be streamed via WebSocket or SSE,
-    // and the UI would need incremental token rendering.
+    // Current mode is request/response (non-streaming).
+    // When streaming transport is enabled, this handler should emit
+    // incremental token updates to the webview instead of awaiting one final
+    // payload.
     if (!this._view) return;
 
     try {
@@ -227,13 +227,13 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
       let messagesPayload: Array<{
         role: string;
         content:
-          | string
-          | Array<{
-              type: string;
-              text?: string;
-              image_url?: { url: string; detail: string };
-              file_data?: { data: string; filename: string; mime_type: string };
-            }>;
+        | string
+        | Array<{
+          type: string;
+          text?: string;
+          image_url?: { url: string; detail: string };
+          file_data?: { data: string; filename: string; mime_type: string };
+        }>;
       }>;
       if (!attachments || attachments.length === 0) {
         // Backward compatible: plain text
@@ -244,9 +244,9 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
           | { type: "text"; text: string }
           | { type: "image_url"; image_url: { url: string; detail: string } }
           | {
-              type: "file";
-              file_data: { data: string; filename: string; mime_type: string };
-            }
+            type: "file";
+            file_data: { data: string; filename: string; mime_type: string };
+          }
         )[] = [{ type: "text", text }];
         for (const a of attachments) {
           if (a.type && a.type.startsWith("image/")) {

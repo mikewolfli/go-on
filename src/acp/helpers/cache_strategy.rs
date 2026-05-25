@@ -12,7 +12,6 @@ use crate::intelligence::token_cache::{CacheEntry, TokenMultiLevelCache};
 
 /// Decision from the cache strategy
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum CacheDecision {
     /// Use cached response
     Hit { response: String, level: String },
@@ -23,7 +22,7 @@ pub enum CacheDecision {
 }
 
 /// Result of a cache store operation
-#[allow(dead_code)]
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct CacheStoreResult {
     pub stored: bool,
@@ -31,10 +30,8 @@ pub struct CacheStoreResult {
 }
 
 /// Independent cache strategy that encapsulates all cache-related decisions.
-#[allow(dead_code)]
 pub struct CacheStrategy;
 
-#[allow(dead_code)]
 impl CacheStrategy {
     /// Determine whether an execution-like request should bypass cache.
     pub fn should_bypass(mode: &str, messages_text: &str) -> bool {
@@ -203,6 +200,16 @@ mod tests {
         assert!(CacheStrategy::should_bypass("chat", "fix the bug"));
         assert!(CacheStrategy::should_bypass("chat", "refactor module"));
         assert!(!CacheStrategy::should_bypass("chat", "what is rust?"));
+    }
+
+    #[test]
+    fn cache_store_result_shape_is_constructible() {
+        let stored = CacheStoreResult {
+            stored: true,
+            level: "L2".to_string(),
+        };
+        assert!(stored.stored);
+        assert_eq!(stored.level, "L2");
     }
 
     #[test]

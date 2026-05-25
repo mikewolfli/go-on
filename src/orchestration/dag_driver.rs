@@ -283,6 +283,62 @@ mod tests {
     }
 
     #[test]
+    fn dag_evidence_chain_preserves_tool_output() {
+        // Create a DagExecutionTrace with both successful (with tool_output)
+        // and failed (with error_payload) nodes.
+        let trace = DagExecutionTrace {
+            nodes: vec![
+                DagNodeResult {
+                    node_id: "tool-read_file-0".into(),
+                    tool_name: "read_file".into(),
+                    state: ExNodeState::Completed,
+                    duration_ms: 12,
+                    tool_output: Some(serde_json::json!({"content": "evidence data"})),
+                    error_payload: None,
+                },
+                DagNodeResult {
+                    node_id: "tool-write_file-1".into(),
+                    tool_name: "write_file".into(),
+                    state: ExNodeState::Failed("io_error".to_string()),
+                    duration_ms: 8,
+                    tool_output: None,
+                    error_payload: Some("Disk full".to_string()),
+                },
+            ],
+            total_duration_ms: 20,
+            branch_count: 1,
+            join_count: 1,
+        };
+
+        let obs = dag_trace_to_observability(&trace);
+        let exec = &obs["dag_execution"];
+
+        // Verify has_tool_evidence is true (one node has tool_output)
+        assert!(exec["has_tool_evidence"].as_bool().unwrap());
+
+        // Verify completed/failed counts are correct
+        assert_eq!(exec["completed"].as_u64(), Some(1));
+        assert_eq!(exec["failed"].as_u64(), Some(1));
+        assert_eq!(exec["total_nodes"].as_u64(), Some(2));
+
+        // Verify node_details contains both nodes with correct state
+        let details = exec["node_details"].as_array().unwrap();
+        assert_eq!(details.len(), 2);
+
+        assert_eq!(details[0]["node_id"].as_str(), Some("tool-read_file-0"));
+        assert_eq!(details[0]["tool"].as_str(), Some("read_file"));
+        assert_eq!(details[0]["state"].as_str(), Some("Completed"));
+        assert!(details[0]["has_output"].as_bool().unwrap());
+        assert!(!details[0]["has_error"].as_bool().unwrap());
+
+        assert_eq!(details[1]["node_id"].as_str(), Some("tool-write_file-1"));
+        assert_eq!(details[1]["tool"].as_str(), Some("write_file"));
+        assert_eq!(details[1]["state"].as_str(), Some("Failed(\"io_error\")"));
+        assert!(!details[1]["has_output"].as_bool().unwrap());
+        assert!(details[1]["has_error"].as_bool().unwrap());
+    }
+
+    #[test]
     fn build_tool_execution_dag_returns_ids() {
         let calls = vec![
             ("read_file".to_string(), "{}".to_string()),

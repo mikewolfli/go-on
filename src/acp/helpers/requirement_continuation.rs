@@ -212,8 +212,7 @@ pub fn requirement_gate_payload_for_response(continuation: &RequirementContinuat
             continuation.gate.success_payload()
         }
         RequirementContinuationKind::ClarificationRequired
-        |
-        RequirementContinuationKind::HumanConfirmationRequired => {
+        | RequirementContinuationKind::HumanConfirmationRequired => {
             continuation.gate.blocked_payload()
         }
     }

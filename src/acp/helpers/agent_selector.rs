@@ -12,7 +12,6 @@ use crate::intelligence::reputation::ReputationStore;
 use serde::{Deserialize, Serialize};
 
 /// Result of a single agent selection
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSelection {
     pub winner: String,
@@ -22,7 +21,6 @@ pub struct AgentSelection {
 }
 
 /// A candidate agent with its computed score
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScoredAgent {
     pub name: String,
@@ -33,7 +31,6 @@ pub struct ScoredAgent {
 }
 
 /// Configuration for the agent selector
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct AgentSelectorConfig {
     pub capability_weight: f64,
@@ -53,13 +50,12 @@ impl Default for AgentSelectorConfig {
     }
 }
 
-#[allow(dead_code)]
 pub struct AgentSelector {
     config: AgentSelectorConfig,
 }
 
-#[allow(dead_code)]
 impl AgentSelector {
+    #[cfg(test)]
     pub fn new(config: AgentSelectorConfig) -> Self {
         Self { config }
     }
@@ -226,6 +222,31 @@ mod tests {
         ];
         let scores = selector.score_candidates(&agents, None, None, &[], "test");
         assert_eq!(scores.len(), 2);
+    }
+
+    #[test]
+    fn selector_new_uses_custom_config() {
+        let selector = AgentSelector::new(AgentSelectorConfig {
+            capability_weight: 1.0,
+            reputation_weight: 0.0,
+            history_weight: 0.0,
+            eligibility_threshold: 0.0,
+        });
+
+        let agents: Vec<(String, Arc<dyn Agent>)> = vec![
+            ("preferred".into(), Arc::new(MockAgent)),
+            ("other".into(), Arc::new(MockAgent)),
+        ];
+
+        let scored = selector.score_candidates(
+            &agents,
+            Some("preferred"),
+            None,
+            &[("preferred".to_string(), 0.0), ("other".to_string(), 1.0)],
+            "coding",
+        );
+
+        assert_eq!(scored[0].name, "preferred");
     }
 
     #[test]

@@ -12,11 +12,11 @@ pub mod council; // F-GAP-15
 pub mod dag_driver; // BLUE42: DAG execution driver for autonomy loop
 pub mod dag_execution; // AUTON-07: DAG-driven execution adapter
 pub mod execution_graph;
+pub mod fast_path_cache; // BLUE43 Steps 11-14: Fast-path cache
 pub mod flow;
 pub mod flow_with_models;
 pub mod fork_registry;
 pub mod full_auto; // BLUE43 Step 10: Full-auto flow orchestrator
-pub mod recovery; // BLUE43 Step 16: Auto recovery orchestration with escalation
 pub mod r#loop; // F-GAP-17 (structured sub-module)
 pub mod mode;
 pub mod omnipotent;
@@ -25,6 +25,7 @@ pub mod planner_execution_graph; // Bridge: Planner → ExecutionGraph DAG
 pub mod planner_executor;
 pub mod promotion_plugin;
 pub mod prompt_layers;
+pub mod recovery; // BLUE43 Step 16: Auto recovery orchestration with escalation
 pub mod roles;
 pub mod scheduler;
 pub mod skill;
@@ -37,6 +38,8 @@ pub mod task_router;
 pub mod task_schema;
 pub mod token_layers;
 pub mod tool;
+pub mod tool_extended; // BLUE44: Extended built-in tools (10 additional tools)
+pub mod tool_native; // BLUE44: Native function call bridge for OpenAI/Anthropic
 pub mod tool_transaction; // BLUE43 Step 15: Tool call transactional semantics
 pub mod workflow_optimizer;
 pub mod workflow_registry;

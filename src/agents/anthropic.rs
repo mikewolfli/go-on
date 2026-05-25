@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+#[cfg(test)]
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -104,6 +105,7 @@ impl AnthropicAgent {
         messages: Vec<Message>,
         principles: Option<Vec<String>>,
         options: Option<HashMap<String, Value>>,
+        tools: Option<Vec<Value>>,
     ) -> Value {
         let mut system_parts: Vec<String> = Vec::new();
         if let Some(items) = principles {
@@ -194,13 +196,18 @@ impl AnthropicAgent {
             payload["stop_sequences"] = Value::Array(stop_sequences.clone());
         }
 
-        // Forward tools parameter if present
-        if let Some(tools) = options
+        // Forward tools parameter if present (from options, higher priority)
+        if let Some(tool_opts) = options
             .as_ref()
             .and_then(|map| map.get("tools"))
             .and_then(|v| v.as_array())
         {
-            payload["tools"] = Value::Array(tools.clone());
+            payload["tools"] = Value::Array(tool_opts.clone());
+        } else if let Some(tool_defs) = tools {
+            // Use native tool definitions passed directly
+            if !tool_defs.is_empty() {
+                payload["tools"] = Value::Array(tool_defs);
+            }
         }
 
         // Forward tool_choice parameter if present
@@ -211,6 +218,9 @@ impl AnthropicAgent {
             if tool_choice.is_object() {
                 payload["tool_choice"] = tool_choice.clone();
             }
+        } else if payload.get("tools").is_some() && payload.get("tool_choice").is_none() {
+            // Default to auto tool_choice when tools are present
+            payload["tool_choice"] = json!({"type": "auto"});
         }
 
         payload
@@ -229,25 +239,113 @@ impl AnthropicAgent {
         response: reqwest::Response,
         sender: crate::agent::StreamingSender,
     ) -> anyhow::Result<()> {
-        stream_sse_events(response, move |data| match parse_anthropic_event(data) {
-            Ok((action, maybe_text)) => {
-                if let Some(text) = maybe_text {
-                    if sender.send(text).is_err() {
+        let mut current_tool_name: Option<String> = None;
+        let mut accumulated_args: String = String::new();
+
+        stream_sse_events(response, move |data| {
+            let value = match serde_json::from_str::<Value>(data) {
+                Ok(v) => v,
+                Err(e) => {
+                    let total = ANTHROPIC_SSE_PARSE_ERROR_TOTAL.fetch_add(1, Ordering::Relaxed) + 1;
+                    warn!(
+                        error = %e,
+                        parse_error_total = total,
+                        data_preview = %truncate_event_data(data, 160),
+                        "anthropic SSE frame parse failed; continue streaming"
+                    );
+                    return Ok(SseEventAction::Continue);
+                }
+            };
+            let event_type = value.get("type").and_then(|v| v.as_str());
+
+            // Detect tool_use start (Anthropic native function calling)
+            if event_type == Some("content_block_start") {
+                if let Some(block) = value.get("content_block") {
+                    if block.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+                        current_tool_name = block
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        accumulated_args.clear();
+                        // Accumulate initial input if present
+                        if let Some(input) = block
+                            .get("input")
+                            .and_then(|v| serde_json::to_string(v).ok())
+                        {
+                            if input != "{}" {
+                                accumulated_args.push_str(&input);
+                            }
+                        }
+                        return Ok(SseEventAction::Continue);
+                    }
+                }
+                // A new non-tool_use content block means any previous tool_use is done
+                if let Some(ref name) = current_tool_name.take() {
+                    let token = crate::orchestration::autonomy_runtime::build_tool_call_token(
+                        &name,
+                        &accumulated_args,
+                    );
+                    if sender.send(token).is_err() {
                         return Ok(SseEventAction::Stop);
                     }
                 }
-                Ok(action)
+                accumulated_args.clear();
             }
-            Err(err) => {
-                let total = ANTHROPIC_SSE_PARSE_ERROR_TOTAL.fetch_add(1, Ordering::Relaxed) + 1;
-                warn!(
-                    error = %err,
-                    parse_error_total = total,
-                    data_preview = %truncate_event_data(data, 160),
-                    "anthropic SSE frame parse failed; continue streaming"
+
+            // Accumulate input_json_delta chunks
+            if event_type == Some("content_block_delta") {
+                if let Some(delta) = value.get("delta") {
+                    if delta.get("type").and_then(|v| v.as_str()) == Some("input_json_delta") {
+                        if let Some(partial) = delta.get("partial_json").and_then(|v| v.as_str()) {
+                            accumulated_args.push_str(partial);
+                        }
+                        return Ok(SseEventAction::Continue);
+                    }
+                }
+            }
+
+            // On content_block_stop or message_stop, finalize any pending tool_use
+            if event_type == Some("content_block_stop") || event_type == Some("message_stop") {
+                if let Some(ref name) = current_tool_name.take() {
+                    let token = crate::orchestration::autonomy_runtime::build_tool_call_token(
+                        &name,
+                        &accumulated_args,
+                    );
+                    if sender.send(token).is_err() {
+                        return Ok(SseEventAction::Stop);
+                    }
+                    accumulated_args.clear();
+                }
+                if event_type == Some("message_stop") {
+                    return Ok(SseEventAction::Stop);
+                }
+                return Ok(SseEventAction::Continue);
+            }
+
+            // Flush any pending tool_use before processing text content
+            if let Some(ref name) = current_tool_name.take() {
+                let token = crate::orchestration::autonomy_runtime::build_tool_call_token(
+                    &name,
+                    &accumulated_args,
                 );
-                Ok(SseEventAction::Continue)
+                if sender.send(token).is_err() {
+                    return Ok(SseEventAction::Stop);
+                }
+                accumulated_args.clear();
             }
+
+            // Standard delta text extraction
+            if let Some(token) = value
+                .get("delta")
+                .and_then(|v| v.get("text"))
+                .and_then(|v| v.as_str())
+            {
+                if sender.send(token.to_string()).is_err() {
+                    return Ok(SseEventAction::Stop);
+                }
+            }
+
+            Ok(SseEventAction::Continue)
         })
         .await
     }
@@ -271,7 +369,7 @@ impl AnthropicAgent {
     ) -> anyhow::Result<()> {
         let api_key = resolve_secret(&self.api_key_env, "claude.api_key_env")?;
 
-        let payload = self.to_anthropic_payload(messages, principles, options);
+        let payload = self.to_anthropic_payload(messages, principles, options, None);
         let endpoint = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
 
         let response = self
@@ -304,6 +402,7 @@ impl AnthropicAgent {
 ///
 /// # Returns
 /// * `Result<(SseEventAction, Option<String>)>` - Returns `Ok((SseEventAction, Option<String>))` with the action and optional token, or an error if parsing fails
+#[cfg(test)]
 fn parse_anthropic_event(data: &str) -> Result<(SseEventAction, Option<String>)> {
     if data.trim() == "[DONE]" {
         return Ok((SseEventAction::Stop, None));
@@ -526,6 +625,7 @@ mod tests {
                 ("max_tokens".to_string(), json!(2048)),
                 ("temperature".to_string(), json!(0.2)),
             ])),
+            None,
         );
 
         let system = payload["system"].as_str().unwrap();

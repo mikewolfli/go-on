@@ -22,7 +22,6 @@ use crate::orchestration::planner_execution_graph::PlannerExecutionBridge;
 /// This returns the complete plan order (topological phases), not just the
 /// first set of currently-ready nodes. Structural nodes (Start/End/Join/
 /// Condition) are excluded because the planner bridge tracks only plan steps.
-#[allow(dead_code)]
 pub fn dag_execution_order(bridge: &PlannerExecutionBridge) -> Vec<Vec<String>> {
     let plan_step_ids: HashSet<String> = bridge
         .plan
@@ -74,7 +73,6 @@ pub fn dag_execution_order(bridge: &PlannerExecutionBridge) -> Vec<Vec<String>> 
 
 /// Extract progress information from the DAG as a serializable value.
 /// Includes both the raw progress snapshot and a derived "next step" hint.
-#[allow(dead_code)]
 pub fn dag_progress_with_suggested_next(bridge: &PlannerExecutionBridge) -> Value {
     let snapshot = bridge.progress_snapshot();
     let ready = bridge.ready_nodes();
@@ -101,7 +99,6 @@ pub fn dag_progress_with_suggested_next(bridge: &PlannerExecutionBridge) -> Valu
 }
 
 /// Check whether the bridge DAG indicates a stalled state (no progress possible).
-#[allow(dead_code)]
 pub fn dag_is_stalled(bridge: &PlannerExecutionBridge) -> bool {
     let completed = bridge
         .graph

@@ -5,6 +5,7 @@ use tracing::{info, warn};
 
 use crate::acp::r#impl::request::{
     inject_platform_profiles_if_absent, record_tool_call_audit_with_protocol,
+    tools_pack::build_mcp_tool_descriptors,
 };
 use crate::protocol::rpc_protocol::RequestTraceContext;
 use crate::tool::ToolInput;
@@ -403,6 +404,16 @@ impl McpServer {
     }
 
     async fn handle_list_tools(&self, _request: &JsonRpcRequest) -> Value {
+        if let Some(acp_server) = self.acp_server.as_ref() {
+            let tools = build_mcp_tool_descriptors(acp_server.as_ref());
+            let count = tools.len();
+            info!("MCP: Listing {} tools/skills", count);
+            let mut result = serde_json::to_value(McpListToolsResult::new(tools))
+                .expect("McpListToolsResult is always serializable");
+            result["x_skills_available"] = json!(self.skill_registry().is_some());
+            return result;
+        }
+
         let mut tools = self
             .tool_registry
             .names()
