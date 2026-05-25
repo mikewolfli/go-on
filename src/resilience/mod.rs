@@ -4,6 +4,7 @@
 //! multi-level circuit breaking, cascading degradation handling,
 //! and automated self-healing capabilities.
 
+pub mod chaos;
 pub mod hyper_resilience;
 
 #[allow(unused_imports)]

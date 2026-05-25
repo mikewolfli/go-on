@@ -51,4 +51,12 @@ const MAX_CACHE_ENTRIES: usize = 200;
 
 /// A single entry in the skill index, holding all metadata needed for
 /// semantic search and scoring.
-#[derive(Debug, Clone
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillIndexEntry {
+    pub name: String,
+    pub description: String,
+    pub tokens: Vec<String>,
+    pub category: String,
+    pub score: f64,
+    pub last_used_ms: u64,
+}

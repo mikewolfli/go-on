@@ -3,6 +3,9 @@
 //! Recommends tools based on task descriptions, historical usage statistics,
 //! and co‑occurrence patterns learned from the DiscoveryCenter.
 
+#![allow(dead_code)]
+#![allow(unused_imports)]
+
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -146,14 +149,13 @@ impl ToolRecommender {
     ///
     /// `context` is an optional list of already‑planned tool names used to
     /// boost co‑occurrence signals.
-    pub fn recommend(
-        &self,
-        task_description: &str,
-        context: &[String],
-    ) -> Vec<ToolRecommendation> {
+    pub fn recommend(&self, task_description: &str, context: &[String]) -> Vec<ToolRecommendation> {
         let keywords: Vec<String> = task_description
             .split_whitespace()
-            .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase())
+            .map(|w| {
+                w.trim_matches(|c: char| !c.is_alphanumeric())
+                    .to_lowercase()
+            })
             .filter(|w| w.len() >= 2)
             .collect();
 
@@ -207,16 +209,12 @@ impl ToolRecommender {
         }
 
         // --- Phase 2: recency bonus ---
-        let now_ms = if let Some(max_ts) = self
+        let now_ms = self
             .tool_stats
             .values()
             .map(|s| s.last_used_ms)
             .max()
-        {
-            max_ts
-        } else {
-            0
-        };
+            .unwrap_or_default();
 
         for (tool, (score, _)) in scores.iter_mut() {
             if let Some(stats) = self.tool_stats.get(tool) {
@@ -328,7 +326,11 @@ pub fn default_recommender() -> ToolRecommender {
         weight: 1.0,
     });
     rec.add_pattern(TaskToolPattern {
-        keywords: vec!["write".to_string(), "create".to_string(), "edit".to_string()],
+        keywords: vec![
+            "write".to_string(),
+            "create".to_string(),
+            "edit".to_string(),
+        ],
         tools: vec!["write_file".to_string(), "edit_file".to_string()],
         weight: 1.0,
     });
@@ -344,7 +346,10 @@ pub fn format_recommendation(rec: &ToolRecommendation) -> String {
 }
 
 /// Look up usage stats for a tool, returning a reference.
-pub fn get_tool_stats(recommender: &ToolRecommender, tool_name: &str) -> Option<&ToolUsageStats> {
+pub fn get_tool_stats<'a>(
+    recommender: &'a ToolRecommender,
+    tool_name: &str,
+) -> Option<&'a ToolUsageStats> {
     recommender.tool_stats.get(tool_name)
 }
 

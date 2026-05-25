@@ -36,6 +36,7 @@ pub mod discovery;
 pub mod hot_failover;
 pub mod matcher;
 pub mod metacognitive;
+pub mod multi_model_voter;
 pub mod semantic_matcher;
 
 pub mod capability_bus;

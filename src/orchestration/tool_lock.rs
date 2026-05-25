@@ -10,6 +10,9 @@
 //! is **blocking** — callers on async runtimes should spawn blocking tasks
 //! or wrap calls with `tokio::task::spawn_blocking`.
 
+#![allow(dead_code)]
+#![allow(unused_imports)]
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 

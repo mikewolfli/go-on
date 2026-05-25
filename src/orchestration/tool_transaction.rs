@@ -524,7 +524,7 @@ impl ToolRegistry {
                 }
                 _ => {
                     // Failure — roll back everything completed so far.
-                    let _ = tokio::runtime::Handle::current().block_on(scope.rollback());
+                    tokio::runtime::Handle::current().block_on(scope.rollback());
 
                     let completed: Vec<String> = scope.completed_tools.clone();
                     let failed: Vec<String> = vec![tool_name.clone()];

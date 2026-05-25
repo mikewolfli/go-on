@@ -183,10 +183,14 @@ fn task_fit_score(task: &TaskContext, agent_name: &str) -> f64 {
             }
         }
         crate::governance::pua::TaskType::Refactor => {
-            if prefers(&["refactor", "planner", "review", "coder"]) {
-                0.95
+            if prefers(&["refactor"]) {
+                1.00
+            } else if prefers(&["planner", "review"]) {
+                0.80
+            } else if prefers(&["coder"]) {
+                0.55
             } else {
-                0.70
+                0.25
             }
         }
         crate::governance::pua::TaskType::SecurityPatch => {
@@ -1951,7 +1955,8 @@ mod tests {
     #[test]
     fn configured_candidate_score_weights_are_normalized() {
         let weights = super::configured_candidate_score_weights();
-        let total = weights.reputation + weights.recency + weights.task_fit;
+        let total =
+            weights.reputation + weights.recency + weights.task_fit + weights.recent_outcome;
         assert!((total - 1.0).abs() < 0.0001);
     }
 
@@ -1986,7 +1991,8 @@ mod tests {
     #[test]
     fn configured_weights_env_override_respected_and_normalized() {
         let weights = super::configured_candidate_score_weights();
-        let total = weights.reputation + weights.recency + weights.task_fit;
+        let total =
+            weights.reputation + weights.recency + weights.task_fit + weights.recent_outcome;
         assert!(
             (total - 1.0).abs() < 0.0001,
             "weights must sum to 1.0, got {}",

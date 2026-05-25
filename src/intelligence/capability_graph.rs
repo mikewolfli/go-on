@@ -10,6 +10,8 @@ use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 
 use ordered_float::OrderedFloat;
 
+type HeuristicQueueEntry = (OrderedFloat<f64>, usize, String, Option<String>);
+
 /// A single capability declaration by an agent
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapabilityDecl {
@@ -378,8 +380,7 @@ impl CapabilityGraph {
         // Priority queue stored as (cost, depth, node, parent).
         // Use OrderedFloat to allow f64 in BinaryHeap (which requires Ord).
         // Reverse so BinaryHeap acts as a min-heap.
-        let mut pq: BinaryHeap<Reverse<(OrderedFloat<f64>, usize, String, Option<String>)>> =
-            BinaryHeap::new();
+        let mut pq: BinaryHeap<Reverse<HeuristicQueueEntry>> = BinaryHeap::new();
 
         // best_cost[node] = lowest cost discovered so far
         let mut best_cost: HashMap<String, f64> = HashMap::new();

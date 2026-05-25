@@ -3,6 +3,9 @@
 //! Builds on the tool registry to support sequential, parallel, and
 //! conditional tool execution with configurable error handling strategies.
 
+#![allow(dead_code)]
+#![allow(unused_imports)]
+
 use serde_json::Value;
 use std::time::Instant;
 use tracing;
@@ -16,18 +19,11 @@ use crate::orchestration::tool::{ToolInput, ToolRegistry};
 /// A single step in a tool execution pipeline.
 pub enum PipelineStep {
     /// Single tool execution.
-    Single {
-        tool_name: String,
-        input: Value,
-    },
+    Single { tool_name: String, input: Value },
     /// Parallel execution of multiple tools.
-    Parallel {
-        steps: Vec<PipelineStep>,
-    },
+    Parallel { steps: Vec<PipelineStep> },
     /// Sequential execution with optional condition.
-    Sequence {
-        steps: Vec<PipelineStep>,
-    },
+    Sequence { steps: Vec<PipelineStep> },
     /// Conditional branch that evaluates a field value and chooses a path.
     Conditional {
         /// JSON field name to evaluate (dot-notation path supported, e.g. "result.status").
@@ -107,11 +103,7 @@ impl ToolPipeline {
     ///
     /// Walks the pipeline DAG respecting sequence, parallel, and conditional
     /// semantics.  The `context` value is available for conditional evaluations.
-    pub async fn execute(
-        &self,
-        registry: &ToolRegistry,
-        context: &Value,
-    ) -> PipelineResult {
+    pub async fn execute(&self, registry: &ToolRegistry, context: &Value) -> PipelineResult {
         let total_start = Instant::now();
         let mut step_results: Vec<PipelineStepResult> = Vec::new();
         let mut all_success = true;
@@ -207,7 +199,7 @@ async fn run_single_tool(
         allowed_base_dir: None,
     };
 
-    let output = match registry.run_with_fallback_async(tool_name, &tool_input).await {
+    let output = match registry.run_with_fallback(tool_name, &tool_input) {
         Ok(out) => out,
         Err(e) => {
             let duration_ms = start.elapsed().as_millis() as u64;
@@ -221,10 +213,21 @@ async fn run_single_tool(
     };
 
     let duration_ms = start.elapsed().as_millis() as u64;
+    let logical_error = if output.success {
+        None
+    } else {
+        Some(
+            output
+                .error
+                .clone()
+                .unwrap_or_else(|| format!("tool '{}' reported unsuccessful result", tool_name)),
+        )
+    };
+
     PipelineStepResult {
         tool_name: tool_name.to_string(),
         output: Some(output.result.unwrap_or(Value::Null)),
-        error: None,
+        error: logical_error,
         duration_ms,
     }
 }
@@ -239,8 +242,7 @@ async fn execute_sequence(
     let mut results: Vec<PipelineStepResult> = Vec::new();
 
     for step in steps {
-        let (step_results, should_continue) =
-            execute_step(registry, step, context, strategy).await;
+        let (step_results, should_continue) = execute_step(registry, step, context, strategy).await;
 
         let step_ok = step_results.iter().all(|r| r.error.is_none());
         results.extend(step_results);
@@ -266,7 +268,9 @@ async fn execute_parallel(
 ) -> (Vec<PipelineStepResult>, bool) {
     // Build plain futures (not tokio::spawn tasks) to avoid 'static
     // lifetime requirements on registry references.
-    let mut futures: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PipelineStepResult>> + Send + '_>>> = Vec::with_capacity(steps.len());
+    let mut futures: Vec<
+        std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PipelineStepResult>> + Send + '_>>,
+    > = Vec::with_capacity(steps.len());
 
     for step in steps {
         match step {
@@ -287,8 +291,7 @@ async fn execute_parallel(
                     "parallel execution of nested complex steps is not yet \
                      supported; falling back to sequential"
                 );
-                let (sub_results, _) =
-                    execute_step(registry, step, context, strategy).await;
+                let (sub_results, _) = execute_step(registry, step, context, strategy).await;
                 let fut = Box::pin(async move { sub_results });
                 futures.push(fut);
             }
@@ -301,7 +304,10 @@ async fn execute_parallel(
 
     for step_results in join_results {
         results.extend(step_results);
-        let last_ok = results.iter().rev().next().map_or(true, |r| r.error.is_none());
+        let last_ok = results
+            .iter()
+            .next_back()
+            .is_none_or(|r| r.error.is_none());
         if !last_ok {
             all_ok = false;
         }
@@ -349,8 +355,6 @@ fn evaluate_field(value: &Value, field_path: &str, expected: &Value) -> bool {
     current == expected
 }
 
-
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -362,10 +366,11 @@ fn evaluate_field(value: &Value, field_path: &str, expected: &Value) -> bool {
 
 /// Create a pipeline that executes a single tool.
 pub fn single_tool_pipeline(tool_name: impl Into<String>) -> ToolPipeline {
+    let name: String = tool_name.into();
     ToolPipeline {
-        name: format!("single-{}", tool_name.into()),
+        name: format!("single-{}", name),
         steps: vec![PipelineStep::Single {
-            tool_name: tool_name.into(),
+            tool_name: name,
             input: serde_json::Value::Null,
         }],
         on_error: PipelineErrorStrategy::Stop,
@@ -373,7 +378,11 @@ pub fn single_tool_pipeline(tool_name: impl Into<String>) -> ToolPipeline {
 }
 
 /// Construct a result for a successfully executed pipeline step.
-pub fn make_step_result(tool_name: impl Into<String>, output: serde_json::Value, duration_ms: u64) -> PipelineStepResult {
+pub fn make_step_result(
+    tool_name: impl Into<String>,
+    output: serde_json::Value,
+    duration_ms: u64,
+) -> PipelineStepResult {
     PipelineStepResult {
         tool_name: tool_name.into(),
         output: Some(output),
@@ -394,12 +403,13 @@ pub fn format_pipeline_summary(result: &PipelineResult) -> String {
 
 // Ensure all internal functions are referenced (compile-time reachability).
 #[doc(hidden)]
-pub fn __pipeline_internals_used(
-    registry: &ToolRegistry,
-    step: &PipelineStep,
-    context: &serde_json::Value,
+pub fn __pipeline_internals_used<'a>(
+    registry: &'a ToolRegistry,
+    step: &'a PipelineStep,
+    context: &'a serde_json::Value,
     strategy: PipelineErrorStrategy,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = (Vec<PipelineStepResult>, bool)> + Send + '_>> {
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = (Vec<PipelineStepResult>, bool)> + Send + 'a>>
+{
     Box::pin(execute_step(registry, step, context, strategy))
 }
 
@@ -424,7 +434,6 @@ mod tests {
                 verification: None,
                 audit_log: None,
                 pua_report: None,
-
             })
         }
     }
@@ -444,7 +453,6 @@ mod tests {
                 verification: None,
                 audit_log: None,
                 pua_report: None,
-
             })
         }
     }
@@ -465,8 +473,6 @@ mod tests {
     // -----------------------------------------------------------------------
     // Pipeline execute helper
     // -----------------------------------------------------------------------
-
-
 
     // -----------------------------------------------------------------------
     // Tests

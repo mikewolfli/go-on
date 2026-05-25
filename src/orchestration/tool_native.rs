@@ -5,8 +5,8 @@
 //! ToolInput, and falls back to custom `__tool_call__:` protocol when
 //! a provider does not support native function calling.
 
-use crate::orchestration::tool::{ToolInput, ToolRegistry};
 use crate::orchestration::autonomy_runtime::{build_tool_call_token, parse_tool_call_token};
+use crate::orchestration::tool::{ToolInput, ToolRegistry};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
@@ -459,9 +459,7 @@ impl NativeToolBridge {
         agent_role: &str,
         allowed_base_dir: Option<&std::path::Path>,
     ) -> Option<ToolInput> {
-        if self.registry.get(tool_name).is_none() {
-            return None;
-        }
+        self.registry.get(tool_name)?;
         Some(ToolInput {
             task_id: task_id.to_string(),
             phase: phase.to_string(),
@@ -549,10 +547,8 @@ mod tests {
 
     #[test]
     fn custom_protocol_roundtrip() {
-        let token = NativeToolBridge::to_custom_protocol_token(
-            "read_file",
-            r#"{"path":"test.txt"}"#,
-        );
+        let token =
+            NativeToolBridge::to_custom_protocol_token("read_file", r#"{"path":"test.txt"}"#);
         assert!(token.starts_with("__tool_call__:"));
         let (name, args) =
             NativeToolBridge::parse_custom_protocol_token(&token).expect("should parse");

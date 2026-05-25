@@ -41,7 +41,6 @@ impl OpenAiAgent {
         messages: Vec<Message>,
         principles: Option<Vec<String>>,
         options: &Option<HashMap<String, Value>>,
-        tools: Option<Vec<Value>>,
     ) -> Value {
         let mut final_messages: Vec<Message> = Vec::new();
 
@@ -72,15 +71,9 @@ impl OpenAiAgent {
 
         apply_openai_common_options(&mut payload, options);
 
-        // Attach native function-calling tools to the payload
-        if let Some(tool_defs) = tools {
-            if !tool_defs.is_empty() {
-                payload["tools"] = Value::Array(tool_defs);
-                // Only set tool_choice when not already specified via options
-                if payload.get("tool_choice").is_none() {
-                    payload["tool_choice"] = json!("auto");
-                }
-            }
+        // If tools were set via options but tool_choice wasn't, default to "auto"
+        if payload.get("tools").is_some() && payload.get("tool_choice").is_none() {
+            payload["tool_choice"] = json!("auto");
         }
 
         payload
@@ -95,7 +88,7 @@ impl OpenAiAgent {
     ) -> anyhow::Result<()> {
         let api_key = resolve_secret(&self.api_key_env, "openai.api_key_env")?;
         let endpoint = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        let payload = self.build_payload(messages, principles, &options, None);
+        let payload = self.build_payload(messages, principles, &options);
 
         let response = self
             .client
@@ -133,7 +126,7 @@ impl OpenAiAgent {
     ) -> anyhow::Result<()> {
         let api_key = resolve_secret(&self.api_key_env, "openai.api_key_env")?;
         let endpoint = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        let payload = self.build_payload(messages, principles, &options, None);
+        let payload = self.build_payload(messages, principles, &options);
 
         let response = self
             .client
@@ -220,49 +213,7 @@ impl Agent for OpenAiAgent {
     }
 
     fn available_models(&self) -> Vec<crate::agent::ModelInfo> {
-        vec![
-            crate::agent::ModelInfo {
-                id: "gpt-5.5".to_string(),
-                name: "GPT-5.5".to_string(),
-                description: "OpenAI GPT-5.5 (1M context, flagship model)".to_string(),
-                is_default: self.model == "gpt-5.5",
-                capabilities: vec![
-                    "chat".to_string(),
-                    "vision".to_string(),
-                    "function_calling".to_string(),
-                    "streaming".to_string(),
-                    "reasoning".to_string(),
-                ],
-                context_window: Some(1_000_000),
-            },
-            crate::agent::ModelInfo {
-                id: "gpt-5.4".to_string(),
-                name: "GPT-5.4".to_string(),
-                description: "OpenAI GPT-5.4 (1M context, affordable)".to_string(),
-                is_default: self.model == "gpt-5.4",
-                capabilities: vec![
-                    "chat".to_string(),
-                    "vision".to_string(),
-                    "function_calling".to_string(),
-                    "streaming".to_string(),
-                    "reasoning".to_string(),
-                ],
-                context_window: Some(1_000_000),
-            },
-            crate::agent::ModelInfo {
-                id: "gpt-5.4-mini".to_string(),
-                name: "GPT-5.4 Mini".to_string(),
-                description: "OpenAI GPT-5.4 Mini (400K context, strongest mini)".to_string(),
-                is_default: self.model == "gpt-5.4-mini",
-                capabilities: vec![
-                    "chat".to_string(),
-                    "vision".to_string(),
-                    "function_calling".to_string(),
-                    "streaming".to_string(),
-                    "reasoning".to_string(),
-                ],
-                context_window: Some(400_000),
-            },
+        let mut models = vec![
             crate::agent::ModelInfo {
                 id: "gpt-4.1".to_string(),
                 name: "GPT-4.1".to_string(),
@@ -365,7 +316,29 @@ impl Agent for OpenAiAgent {
                 ],
                 context_window: Some(16_385),
             },
-        ]
+        ];
+
+        // Keep runtime resilient to newly released model IDs configured by users.
+        if !self.model.is_empty() && !models.iter().any(|m| m.id == self.model) {
+            models.insert(
+                0,
+                crate::agent::ModelInfo {
+                    id: self.model.clone(),
+                    name: self.model.clone(),
+                    description: "Configured OpenAI model".to_string(),
+                    is_default: true,
+                    capabilities: vec![
+                        "chat".to_string(),
+                        "vision".to_string(),
+                        "function_calling".to_string(),
+                        "streaming".to_string(),
+                    ],
+                    context_window: None,
+                },
+            );
+        }
+
+        models
     }
 
     fn supports_model_override(&self) -> bool {

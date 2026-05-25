@@ -36,17 +36,31 @@ impl Tool for ShellExecTool {
 
         let current_dir = sanitize_path(input, directory)?;
 
-        // Use timeout command to enforce execution limit
+        // Prefer GNU `timeout` when available, but keep a portable fallback for
+        // environments like macOS where `timeout` is not installed by default.
         let timeout_secs = (timeout_ms as f64 / 1000.0).ceil() as u64;
         let max_timeout = std::cmp::min(timeout_secs, 300); // Cap at 5 minutes
 
-        let output = Command::new("timeout")
-            .arg(format!("{}", max_timeout))
-            .arg("sh")
-            .arg("-c")
-            .arg(command)
-            .current_dir(&current_dir)
-            .output();
+        let timeout_available = Command::new("timeout")
+            .arg("--version")
+            .output()
+            .is_ok();
+
+        let output = if timeout_available {
+            Command::new("timeout")
+                .arg(format!("{}", max_timeout))
+                .arg("sh")
+                .arg("-c")
+                .arg(command)
+                .current_dir(&current_dir)
+                .output()
+        } else {
+            Command::new("sh")
+                .arg("-c")
+                .arg(command)
+                .current_dir(&current_dir)
+                .output()
+        };
 
         match output {
             Ok(output) => {
@@ -147,7 +161,7 @@ impl Tool for HttpRequestTool {
         let response_body = response
             .text()
             .unwrap_or_else(|_| "(body read failed)".to_string());
-        let success = status >= 200 && status < 400;
+        let success = (200..400).contains(&status);
 
         Ok(ToolOutput {
             success,
@@ -172,6 +186,13 @@ impl Tool for HttpRequestTool {
 
 pub struct GrepTool;
 
+struct GrepCollectState<'a> {
+    matches: &'a mut Vec<serde_json::Value>,
+    files_scanned: &'a mut u64,
+    total_matches: &'a mut u64,
+    max_matches: u64,
+}
+
 impl Tool for GrepTool {
     fn name(&self) -> &'static str {
         "grep"
@@ -191,23 +212,21 @@ impl Tool for GrepTool {
         };
 
         let root = sanitize_path(input, directory)?;
-        let glob_matcher = include_pattern.map(|p| Pattern::new(p).ok()).flatten();
+        let glob_matcher = include_pattern.and_then(|p| Pattern::new(p).ok());
 
         let mut matches: Vec<serde_json::Value> = Vec::new();
         let mut files_scanned = 0u64;
         let mut total_matches = 0u64;
         let max_matches = 1000u64;
 
-        collect_grep_matches(
-            &root,
-            &root,
-            &regex,
-            &glob_matcher,
-            &mut matches,
-            &mut files_scanned,
-            &mut total_matches,
+        let mut state = GrepCollectState {
+            matches: &mut matches,
+            files_scanned: &mut files_scanned,
+            total_matches: &mut total_matches,
             max_matches,
-        )?;
+        };
+
+        collect_grep_matches(&root, &root, &regex, &glob_matcher, &mut state)?;
 
         Ok(ToolOutput {
             success: true,
@@ -233,12 +252,9 @@ fn collect_grep_matches(
     current: &Path,
     regex: &Regex,
     glob_matcher: &Option<Pattern>,
-    matches: &mut Vec<serde_json::Value>,
-    files_scanned: &mut u64,
-    total_matches: &mut u64,
-    max_matches: u64,
+    state: &mut GrepCollectState<'_>,
 ) -> Result<()> {
-    if *total_matches >= max_matches {
+    if *state.total_matches >= state.max_matches {
         return Ok(());
     }
 
@@ -258,10 +274,7 @@ fn collect_grep_matches(
                 &path,
                 regex,
                 glob_matcher,
-                matches,
-                files_scanned,
-                total_matches,
-                max_matches,
+                state,
             )?;
             continue;
         }
@@ -274,18 +287,18 @@ fn collect_grep_matches(
             }
         }
 
-        *files_scanned += 1;
+        *state.files_scanned += 1;
 
         // Try to read file as UTF-8 text
         if let Ok(content) = fs::read_to_string(&path) {
             for (line_num, line) in content.lines().enumerate() {
-                if *total_matches >= max_matches {
+                if *state.total_matches >= state.max_matches {
                     break;
                 }
                 if regex.is_match(line) {
-                    *total_matches += 1;
+                    *state.total_matches += 1;
                     let relative = path.strip_prefix(root).unwrap_or(&path);
-                    matches.push(serde_json::json!({
+                    state.matches.push(serde_json::json!({
                         "file": relative.to_string_lossy(),
                         "line": line_num + 1,
                         "content": line,

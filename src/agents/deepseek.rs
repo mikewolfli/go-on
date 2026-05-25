@@ -37,6 +37,28 @@ impl DeepSeekAgent {
         }
     }
 
+    fn completion_endpoint(&self) -> String {
+        // Official DeepSeek Chat Completions path is /chat/completions.
+        format!("{}/chat/completions", self.base_url.trim_end_matches('/'))
+    }
+
+    fn normalize_user_id(value: &Value) -> Option<String> {
+        let raw = value.as_str()?.trim();
+        if raw.is_empty() || raw.len() > 512 {
+            return None;
+        }
+
+        // DeepSeek docs: user_id character set is [a-zA-Z0-9-_].
+        if raw
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+        {
+            Some(raw.to_string())
+        } else {
+            None
+        }
+    }
+
     fn build_payload(
         &self,
         messages: Vec<Message>,
@@ -72,6 +94,28 @@ impl DeepSeekAgent {
             payload["thinking"] = thinking.clone();
         }
 
+        // DeepSeek official field is `user_id`. Accept upstream `user` and map it.
+        if payload.get("user_id").is_none() {
+            if let Some(user) = options.as_ref().and_then(|o| o.get("user")) {
+                if let Some(user_id) = Self::normalize_user_id(user) {
+                    payload["user_id"] = Value::String(user_id);
+                }
+            }
+        }
+
+        if payload.get("user").is_some() {
+            payload
+                .as_object_mut()
+                .expect("payload object")
+                .remove("user");
+        }
+
+        // DeepSeek marks these as deprecated/no-op; drop to avoid stale semantics.
+        if let Some(obj) = payload.as_object_mut() {
+            obj.remove("frequency_penalty");
+            obj.remove("presence_penalty");
+        }
+
         payload
     }
 
@@ -85,10 +129,7 @@ impl DeepSeekAgent {
         let api_key = resolve_secret(&self.api_key_env, "deepseek.api_key_env")?;
         let payload = self.build_payload(messages, principles, options);
 
-        let url = format!(
-            "{}/v1/chat/completions",
-            self.base_url.trim_end_matches('/')
-        );
+        let url = self.completion_endpoint();
         let response = self
             .client
             .post(url)
@@ -302,5 +343,76 @@ mod tests {
         assert!(content.contains("Be concise"));
         assert!(content.contains("Use examples"));
         assert_eq!(payload["model"], "deepseek-v4-flash");
+    }
+
+    #[test]
+    fn build_payload_maps_user_to_user_id() {
+        let agent = DeepSeekAgent::new(
+            "https://api.deepseek.com".to_string(),
+            "DEEPSEEK_API_KEY".to_string(),
+            "deepseek-v4-flash".to_string(),
+            reqwest::Client::new(),
+        );
+
+        let payload = agent.build_payload(
+            vec![message("user", "hello")],
+            None,
+            Some(HashMap::from([("user".to_string(), json!("tenant-a"))])),
+        );
+
+        assert_eq!(payload["user_id"], "tenant-a");
+        assert!(payload.get("user").is_none());
+    }
+
+    #[test]
+    fn completion_endpoint_uses_official_path() {
+        let agent = DeepSeekAgent::new(
+            "https://api.deepseek.com".to_string(),
+            "DEEPSEEK_API_KEY".to_string(),
+            "deepseek-v4-flash".to_string(),
+            reqwest::Client::new(),
+        );
+
+        assert_eq!(agent.completion_endpoint(), "https://api.deepseek.com/chat/completions");
+    }
+
+    #[test]
+    fn normalize_user_id_rejects_invalid_chars_and_too_long() {
+        let bad_chars = json!("user@tenant");
+        assert!(DeepSeekAgent::normalize_user_id(&bad_chars).is_none());
+
+        let too_long = json!("a".repeat(513));
+        assert!(DeepSeekAgent::normalize_user_id(&too_long).is_none());
+    }
+
+    #[test]
+    fn normalize_user_id_accepts_allowed_charset() {
+        let valid = json!("tenant_A-01");
+        assert_eq!(
+            DeepSeekAgent::normalize_user_id(&valid).as_deref(),
+            Some("tenant_A-01")
+        );
+    }
+
+    #[test]
+    fn build_payload_drops_deprecated_penalty_fields() {
+        let agent = DeepSeekAgent::new(
+            "https://api.deepseek.com".to_string(),
+            "DEEPSEEK_API_KEY".to_string(),
+            "deepseek-v4-flash".to_string(),
+            reqwest::Client::new(),
+        );
+
+        let payload = agent.build_payload(
+            vec![message("user", "hello")],
+            None,
+            Some(HashMap::from([
+                ("frequency_penalty".to_string(), json!(0.2)),
+                ("presence_penalty".to_string(), json!(0.4)),
+            ])),
+        );
+
+        assert!(payload.get("frequency_penalty").is_none());
+        assert!(payload.get("presence_penalty").is_none());
     }
 }

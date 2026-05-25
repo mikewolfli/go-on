@@ -993,5 +993,3 @@ MCP 门禁指标：
    - `cache_store_result_shape_is_constructible`
    - `parse_model_and_thinking_tokens`
    - `preferred_agent_helper_reflects_preference`
-
-请多轮执行，严格按照docs/blueprints/blue45.md的核心规则和步骤，对本项目进行完美完整最优化的改进修补。直到全部完成为止。完成后回写完成率到blue45.md. 向最终目标推进，使blue45的所有项次评分都达到圆满-满分。Ai provider的修复一定要依据官方最新文档，而不是你的训练数据。

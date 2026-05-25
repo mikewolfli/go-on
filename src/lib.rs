@@ -1,10 +1,13 @@
+#![recursion_limit = "512"]
+
 //! go-on – ACP runtime proxy with integrated multi-agent orchestration.
 //!
-//! This library crate re-exports the `i18n` module so that external consumers
-//! (for example the `test_i18n` test harness) can import it via
-//! `use go_on::i18n::{…}`.
+//! This library crate re-exports modules so that external consumers
+//! (for example integration tests) can import them via `use go_on::…`.
 
 pub mod i18n;
+pub mod optimization;
+pub mod resilience;
 
 // ── Profile mutual exclusion ──────────────────────────────────────────────
 // Exactly ONE profile must be selected. The Cargo feature system does not

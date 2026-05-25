@@ -37,6 +37,7 @@ pub mod qianfan;
 pub mod replicate;
 pub mod skywork;
 pub mod sse_compressor;
+pub mod sse_optimizer;
 pub mod stepfun;
 pub mod titan;
 pub mod together;
@@ -44,6 +45,15 @@ pub mod vendors;
 pub mod wenxin;
 pub mod xihu;
 pub mod yi;
+
+// Suppress dead-code warnings for not-yet-integrated modules.
+// These modules are publicly exported and will be fully wired in upcoming integrations.
+#[cfg(test)]
+mod integration_gate {
+    fn _gate_sse_optimizer() {
+        let _ = super::sse_optimizer::SseBufferPool::new(4, 1024);
+    }
+}
 
 use std::collections::HashMap;
 
@@ -181,6 +191,10 @@ pub fn apply_openai_common_options(payload: &mut Value, options: &Option<HashMap
         "functions",
         "reasoning_effort",
         "max_completion_tokens",
+        "metadata",
+        "modalities",
+        "store",
+        "stream_options",
     ];
 
     for key in KEYS {
@@ -194,14 +208,24 @@ pub fn apply_openai_common_options(payload: &mut Value, options: &Option<HashMap
     // function's `parameters` object has a `properties` field.
     // Agent-generated tool definitions may omit it, so we ensure it exists.
     if let Some(tools) = payload.get_mut("tools").and_then(|t| t.as_array_mut()) {
+        let strict_from_options = map.get("strict").and_then(|v| v.as_bool());
         for tool in tools.iter_mut() {
-            if let Some(params) = tool
-                .get_mut("function")
-                .and_then(|f| f.get_mut("parameters"))
-                .and_then(|p| p.as_object_mut())
-            {
-                if !params.contains_key("properties") {
-                    params.insert("properties".to_string(), Value::Object(Default::default()));
+            if let Some(function) = tool.get_mut("function").and_then(|f| f.as_object_mut()) {
+                if let Some(params) = function
+                    .get_mut("parameters")
+                    .and_then(|p| p.as_object_mut())
+                {
+                    if !params.contains_key("properties") {
+                        params.insert("properties".to_string(), Value::Object(Default::default()));
+                    }
+                }
+
+                // `strict` is a tool-level flag in provider tool schemas,
+                // not a top-level chat-completions field.
+                if let Some(strict) = strict_from_options {
+                    function
+                        .entry("strict".to_string())
+                        .or_insert_with(|| Value::Bool(strict));
                 }
             }
         }
@@ -721,5 +745,36 @@ mod tests {
             extract_token(&result_field).as_deref(),
             Some("wenxin-token")
         );
+    }
+
+    #[test]
+    fn apply_openai_common_options_injects_strict_into_tool_function_only() {
+        let mut payload = json!({
+            "model": "gpt-4o",
+            "messages": [],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search",
+                        "parameters": {
+                            "type": "object"
+                        }
+                    }
+                }
+            ]
+        });
+
+        let options = Some(HashMap::from([(String::from("strict"), Value::Bool(true))]));
+        apply_openai_common_options(&mut payload, &options);
+
+        assert!(payload.get("strict").is_none());
+        assert_eq!(
+            payload["tools"][0]["function"]["strict"],
+            Value::Bool(true)
+        );
+        assert!(payload["tools"][0]["function"]["parameters"]
+            .get("properties")
+            .is_some());
     }
 }

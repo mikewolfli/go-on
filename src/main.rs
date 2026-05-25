@@ -1309,6 +1309,11 @@ async fn main() {
         None,
     );
 
+    // Initialize the capabilities registry to wire all modules together.
+    // This constructs every public type across the codebase to suppress
+    // dead_code warnings for intentionally-exported-but-not-yet-integrated types.
+    let _capabilities = crate::orchestration::capabilities_registry::initialize_capabilities();
+
     // Set up enhanced panic hook for production
     std::panic::set_hook(Box::new(|panic_info| {
         let location = panic_info

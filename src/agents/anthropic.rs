@@ -6,8 +6,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-#[cfg(test)]
-use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::time::sleep;
@@ -39,6 +37,52 @@ pub struct AnthropicAgent {
 static ANTHROPIC_SSE_PARSE_ERROR_TOTAL: AtomicU64 = AtomicU64::new(0);
 
 impl AnthropicAgent {
+    fn normalize_thinking_option(options: &Option<HashMap<String, Value>>) -> Option<Value> {
+        let thinking = options.as_ref().and_then(|map| map.get("thinking"))?;
+        if thinking.is_object() {
+            return Some(thinking.clone());
+        }
+
+        // Anthropic messages API expects object-style thinking.
+        if let Some(mode) = thinking.as_str() {
+            let normalized = match mode {
+                "enabled" | "on" | "true" => json!({"type": "enabled"}),
+                "disabled" | "off" | "false" => json!({"type": "disabled"}),
+                // Reject unknown free-form values to avoid invalid API payloads.
+                _ => return None,
+            };
+            return Some(normalized);
+        }
+
+        None
+    }
+
+    fn normalize_tool_choice_option(options: &Option<HashMap<String, Value>>) -> Option<Value> {
+        let tool_choice = options.as_ref().and_then(|map| map.get("tool_choice"))?;
+        if tool_choice.is_object() {
+            return Some(tool_choice.clone());
+        }
+
+        // Anthropic tool_choice canonical shape is object-based.
+        if let Some(mode) = tool_choice.as_str() {
+            if let Some(tool_name) = mode.strip_prefix("tool:") {
+                let name = tool_name.trim();
+                if !name.is_empty() {
+                    return Some(json!({"type": "tool", "name": name}));
+                }
+                return None;
+            }
+
+            return match mode {
+                "auto" | "any" | "none" => Some(json!({"type": mode})),
+                "tool" => None,
+                _ => None,
+            };
+        }
+
+        None
+    }
+
     /// Create a new Anthropic agent
     ///
     /// # Arguments
@@ -167,15 +211,9 @@ impl AnthropicAgent {
             payload["top_k"] = Value::from(value);
         }
 
-        // Forward thinking parameter if present
-        // Anthropic's extended thinking can be a simple enabled string or an object with type and budget_tokens
-        if let Some(thinking) = option_string(&options, "thinking") {
-            payload["thinking"] = Value::String(thinking);
-        } else if let Some(thinking) = options.as_ref().and_then(|map| map.get("thinking")) {
-            // Also support object-style thinking (e.g. {"type": "enabled", "budget_tokens": 16000})
-            if thinking.is_object() {
-                payload["thinking"] = thinking.clone();
-            }
+        // Forward thinking parameter as object style for Anthropic API.
+        if let Some(thinking) = Self::normalize_thinking_option(&options) {
+            payload["thinking"] = thinking;
         }
 
         // Forward metadata parameter if present (e.g. user_id)
@@ -210,14 +248,9 @@ impl AnthropicAgent {
             }
         }
 
-        // Forward tool_choice parameter if present
-        if let Some(tool_choice) = option_string(&options, "tool_choice") {
-            payload["tool_choice"] = Value::String(tool_choice);
-        } else if let Some(tool_choice) = options.as_ref().and_then(|map| map.get("tool_choice")) {
-            // Also support object-style tool_choice (e.g. {"type": "auto"})
-            if tool_choice.is_object() {
-                payload["tool_choice"] = tool_choice.clone();
-            }
+        // Forward tool_choice parameter as object style.
+        if let Some(tool_choice) = Self::normalize_tool_choice_option(&options) {
+            payload["tool_choice"] = tool_choice;
         } else if payload.get("tools").is_some() && payload.get("tool_choice").is_none() {
             // Default to auto tool_choice when tools are present
             payload["tool_choice"] = json!({"type": "auto"});
@@ -282,7 +315,7 @@ impl AnthropicAgent {
                 // A new non-tool_use content block means any previous tool_use is done
                 if let Some(ref name) = current_tool_name.take() {
                     let token = crate::orchestration::autonomy_runtime::build_tool_call_token(
-                        &name,
+                        name,
                         &accumulated_args,
                     );
                     if sender.send(token).is_err() {
@@ -308,7 +341,7 @@ impl AnthropicAgent {
             if event_type == Some("content_block_stop") || event_type == Some("message_stop") {
                 if let Some(ref name) = current_tool_name.take() {
                     let token = crate::orchestration::autonomy_runtime::build_tool_call_token(
-                        &name,
+                        name,
                         &accumulated_args,
                     );
                     if sender.send(token).is_err() {
@@ -325,7 +358,7 @@ impl AnthropicAgent {
             // Flush any pending tool_use before processing text content
             if let Some(ref name) = current_tool_name.take() {
                 let token = crate::orchestration::autonomy_runtime::build_tool_call_token(
-                    &name,
+                    name,
                     &accumulated_args,
                 );
                 if sender.send(token).is_err() {
@@ -403,7 +436,7 @@ impl AnthropicAgent {
 /// # Returns
 /// * `Result<(SseEventAction, Option<String>)>` - Returns `Ok((SseEventAction, Option<String>))` with the action and optional token, or an error if parsing fails
 #[cfg(test)]
-fn parse_anthropic_event(data: &str) -> Result<(SseEventAction, Option<String>)> {
+fn parse_anthropic_event(data: &str) -> anyhow::Result<(SseEventAction, Option<String>)> {
     if data.trim() == "[DONE]" {
         return Ok((SseEventAction::Stop, None));
     }
@@ -479,7 +512,7 @@ impl Agent for AnthropicAgent {
     }
 
     fn available_models(&self) -> Vec<crate::agent::ModelInfo> {
-        vec![
+        let mut models = vec![
             crate::agent::ModelInfo {
                 id: "claude-sonnet-4-20250514".to_string(),
                 name: "Claude Sonnet 4 (20250514)".to_string(),
@@ -582,7 +615,29 @@ impl Agent for AnthropicAgent {
                 ],
                 context_window: Some(200_000),
             },
-        ]
+        ];
+
+        // Keep runtime resilient to newly released model IDs configured by users.
+        if !self.model.is_empty() && !models.iter().any(|m| m.id == self.model) {
+            models.insert(
+                0,
+                crate::agent::ModelInfo {
+                    id: self.model.clone(),
+                    name: self.model.clone(),
+                    description: "Configured Anthropic model".to_string(),
+                    is_default: true,
+                    capabilities: vec![
+                        "chat".to_string(),
+                        "vision".to_string(),
+                        "function_calling".to_string(),
+                        "streaming".to_string(),
+                    ],
+                    context_window: None,
+                },
+            );
+        }
+
+        models
     }
 
     fn supports_model_override(&self) -> bool {
@@ -658,5 +713,47 @@ mod tests {
             parse_anthropic_event(r#"{"type":"message_stop"}"#).expect("message_stop should parse");
         assert!(matches!(stop_action, SseEventAction::Stop));
         assert!(stop_token.is_none());
+    }
+
+    #[test]
+    fn normalize_tool_choice_string_to_object_shape() {
+        let mut options = HashMap::new();
+        options.insert("tool_choice".to_string(), json!("auto"));
+
+        let normalized = AnthropicAgent::normalize_tool_choice_option(&Some(options))
+            .expect("normalized tool_choice");
+
+        assert_eq!(normalized["type"], "auto");
+    }
+
+    #[test]
+    fn normalize_thinking_string_to_object_shape() {
+        let mut options = HashMap::new();
+        options.insert("thinking".to_string(), json!("enabled"));
+
+        let normalized = AnthropicAgent::normalize_thinking_option(&Some(options))
+            .expect("normalized thinking");
+
+        assert_eq!(normalized["type"], "enabled");
+    }
+
+    #[test]
+    fn normalize_thinking_rejects_unknown_string_mode() {
+        let mut options = HashMap::new();
+        options.insert("thinking".to_string(), json!("custom"));
+
+        assert!(AnthropicAgent::normalize_thinking_option(&Some(options)).is_none());
+    }
+
+    #[test]
+    fn normalize_tool_choice_supports_tool_prefixed_name() {
+        let mut options = HashMap::new();
+        options.insert("tool_choice".to_string(), json!("tool:search_docs"));
+
+        let normalized = AnthropicAgent::normalize_tool_choice_option(&Some(options))
+            .expect("normalized tool choice");
+
+        assert_eq!(normalized["type"], "tool");
+        assert_eq!(normalized["name"], "search_docs");
     }
 }

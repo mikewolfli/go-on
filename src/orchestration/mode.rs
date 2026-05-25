@@ -27,22 +27,17 @@ pub enum ModeKind {
 
 /// Policy for what action to take when a risk threshold is exceeded
 /// during SafeGuard mode execution.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum AutoDegradePolicy {
     /// Block the operation entirely (original behavior).
     Block,
     /// Switch to read-only mode — only allow read/inspect tools.
+    #[default]
     ReadOnly,
     /// Allow the operation but with enhanced audit logging.
     AllowWithAudit,
     /// Ask the operator for confirmation before proceeding.
     ConfirmRequired,
-}
-
-impl Default for AutoDegradePolicy {
-    fn default() -> Self {
-        AutoDegradePolicy::ReadOnly
-    }
 }
 
 /// Mode runtime trait: each mode has its own orchestration, budget, and policy

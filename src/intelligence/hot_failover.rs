@@ -127,8 +127,7 @@ impl HotFailover {
         let failover_start = Instant::now();
         let mut last_error: Option<E> = None;
 
-        for i in 0..max_attempts {
-            let (model_id, f) = &attempts[i];
+        for (i, (model_id, f)) in attempts.iter().enumerate().take(max_attempts) {
 
             // Skip blacklisted models.
             if self.is_blacklisted(model_id) {

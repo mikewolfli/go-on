@@ -80,8 +80,7 @@ impl SseCompressor {
             self.buffer.clear();
             compressed
         } else if !self.enabled {
-            let data = std::mem::take(&mut self.buffer);
-            data
+            std::mem::take(&mut self.buffer)
         } else {
             Vec::new()
         }

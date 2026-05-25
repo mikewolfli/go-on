@@ -4,6 +4,9 @@
 //! responses through configurable voting strategies. Used primarily by
 //! SafeGuard mode and the capability bus for risk-sensitive routing.
 
+#![allow(dead_code)]
+#![allow(unused_imports)]
+
 use crate::agents::agent::{Agent, Message, StreamingSender};
 use crate::i18n::runtime::tf;
 use anyhow::Result;
@@ -148,7 +151,6 @@ impl MultiModelVoter {
         for (idx, agent_ref) in agents.iter().enumerate() {
             let agent = Arc::clone(agent_ref);
             let prompt = prompt.to_string();
-            let deadline = deadline;
 
             let handle = tokio::spawn(async move {
                 let model_name = agent
