@@ -8,6 +8,7 @@
 - [Architecture Overview](en/overview.md)
 - [Setup Wizard](en/setup-wizard.md)
 - [Backend CLI](en/backend-cli.md)
+- [Advanced Orchestration](en/advanced-orchestration.md)
 
 ## Deployment Guides
 - [Local Mode](en/deployment/local.md)
@@ -37,6 +38,7 @@
 - [架构总览](zh-CN/overview.md)
 - [设置向导](zh-CN/setup-wizard.md)
 - [后端 CLI](zh-CN/backend-cli.md)
+- [高级编排](zh-CN/advanced-orchestration.md)
 
 ## 部署指南
 - [本地模式](zh-CN/deployment/local.md)
@@ -66,6 +68,7 @@
 - [架構總覽](zh-TW/overview.md)
 - [設置嚮導](zh-TW/setup-wizard.md)
 - [後端 CLI](zh-TW/backend-cli.md)
+- [高級編排](zh-TW/advanced-orchestration.md)
 
 ## 部署指南
 - [本地模式](zh-TW/deployment/local.md)

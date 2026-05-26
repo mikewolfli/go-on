@@ -4,7 +4,9 @@
 //! Each channel is isolated with its own queue, configuration, and statistics.
 //! Messages are routed to the appropriate channel based on their `TransportChannel` type.
 
-#![allow(dead_code)]
+// Reserved for future protocol enhancement — gated behind `sub-bus-protocol` feature.
+// When that feature is enabled and this module is actively adopted, remove this suppression.
+#![allow(dead_code, unused_imports)]
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
@@ -40,13 +42,13 @@ pub enum TransportChannel {
     /// Event channel — notifications, streaming events
     Event,
     /// Logging channel — telemetry, tracing, audit
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-10 — reserved for multi-channel transport wiring
     Logging,
     /// Side channel — out-of-band communication
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-10 — reserved for multi-channel transport wiring
     Sideband,
     /// Custom named channel
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-10 — reserved for multi-channel transport wiring
     Custom(String),
 }
 
@@ -70,10 +72,10 @@ pub enum QosLevel {
     /// At most once (fire and forget)
     AtMostOnce,
     /// At least once (retry until ack)
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-10 — reserved for multi-channel transport wiring
     AtLeastOnce,
     /// Exactly once (dedup + ack)
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-10 — reserved for multi-channel transport wiring
     ExactlyOnce,
 }
 
@@ -94,9 +96,9 @@ pub enum MessagePriority {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum DeliveryStatus {
     Pending,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-10 — reserved for multi-channel transport wiring
     InFlight,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-10 — reserved for multi-channel transport wiring
     Delivered {
         timestamp_ms: u64,
     },
@@ -104,7 +106,7 @@ pub enum DeliveryStatus {
         reason: String,
         retry_count: u32,
     },
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-10 — reserved for multi-channel transport wiring
     Expired,
 }
 

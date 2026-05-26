@@ -236,7 +236,7 @@ pub async fn dispatch_server(
                 registry,
                 Arc::new(tr),
                 "go-on".into(),
-                "1.0.0".into(),
+                "1.1.0".into(),
             );
             s.run().await
         }
@@ -246,7 +246,7 @@ pub async fn dispatch_server(
                 registry,
                 Arc::new(tr),
                 "go-on".into(),
-                "1.0.0".into(),
+                "1.1.0".into(),
                 acp_http_bind.into(),
             );
             s.run().await

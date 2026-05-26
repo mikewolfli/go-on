@@ -374,3 +374,53 @@ impl TaskDecomposer {
         phases
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_characteristics(task_type: TaskType, complexity: u8) -> TaskCharacteristics {
+        TaskCharacteristics {
+            description: "test task".to_string(),
+            task_type,
+            complexity,
+            required_capabilities: vec!["coding".to_string()],
+            involves_multiple_modules: false,
+            is_time_critical: false,
+            needs_verification: true,
+            has_safety_concerns: false,
+        }
+    }
+
+    #[test]
+    fn test_decompose_bug_fix_produces_subtasks() {
+        let chars = make_characteristics(TaskType::BugFix, 3);
+        let result = TaskDecomposer::decompose(&chars);
+        assert!(!result.subtasks.is_empty());
+        // Bug fix should produce 5 subtasks.
+        assert_eq!(result.subtasks.len(), 5);
+        // Execution phases should be non-empty.
+        assert!(!result.execution_phases.is_empty());
+    }
+
+    #[test]
+    fn test_decompose_feature_produces_subtasks() {
+        let chars = make_characteristics(TaskType::FeatureImplementation, 4);
+        let result = TaskDecomposer::decompose(&chars);
+        assert_eq!(result.subtasks.len(), 5);
+        // design_api should be in the first phase (no dependencies).
+        let first_phase = &result.execution_phases[0];
+        assert!(first_phase.contains(&"design_api".to_string()));
+    }
+
+    #[test]
+    fn test_decompose_unknown_uses_generic() {
+        let chars = make_characteristics(TaskType::Unknown, 2);
+        let result = TaskDecomposer::decompose(&chars);
+        // Complexity 2 => clamp(2,2,5) => 2 subtasks.
+        assert_eq!(result.subtasks.len(), 2);
+        // Generic subtasks should follow "step_0", "step_1" naming.
+        assert!(result.subtasks.iter().any(|s| s.id == "step_0"));
+        assert!(result.subtasks.iter().any(|s| s.id == "step_1"));
+    }
+}

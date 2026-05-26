@@ -1,5 +1,6 @@
-//! Integration Hub — Wires orphaned modules into the main execution path.
-//! Called during system initialization from main.rs.
+//! Integration Hub — reserved for future wiring.
+//! Gated behind `sub-bus-tool-future` feature.
+#![cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code, unused_imports))]
 
 use crate::orchestration::cache_warming::CacheWarmingEngine;
 use crate::orchestration::complexity_estimator::ComplexityEstimator;
@@ -9,19 +10,12 @@ use crate::orchestration::tool_lock::ToolLockManager;
 use crate::orchestration::tool_recommender::ToolRecommender;
 
 /// Initializes all subsystems during application startup.
-#[allow(dead_code)]
 pub struct SystemIntegration {
-    #[allow(dead_code)]
     pub session_context: SessionContextManager,
-    #[allow(dead_code)]
     pub cache_warming: CacheWarmingEngine,
-    #[allow(dead_code)]
     pub complexity_estimator: ComplexityEstimator,
-    #[allow(dead_code)]
     pub diagnostic_feedback: DiagnosticFeedbackEngine,
-    #[allow(dead_code)]
     pub tool_recommender: ToolRecommender,
-    #[allow(dead_code)]
     pub tool_lock: ToolLockManager,
 }
 

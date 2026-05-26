@@ -234,7 +234,18 @@ impl AcpLockMonitor {
             ACP_LOCK_CIRCUIT_BREAKERS => &self.circuit_breakers,
             ACP_LOCK_PHASE_RATE_LIMITER => &self.phase_rate_limiter,
             ACP_LOCK_INFLIGHT_LIMITER => &self.inflight_limiter,
-            _ => unreachable!("unknown ACP lock monitor component: {name}"),
+            _ => {
+                warn!("Unknown ACP lock monitor component: {name}, using fallback mutex");
+                static FALLBACK: AcpLockCounters = AcpLockCounters {
+                    acquisitions: AtomicU64::new(0),
+                    poisoned_total: AtomicU64::new(0),
+                    recovered_total: AtomicU64::new(0),
+                    slow_wait_total: AtomicU64::new(0),
+                    total_wait_nanos: AtomicU64::new(0),
+                    max_wait_nanos: AtomicU64::new(0),
+                };
+                &FALLBACK
+            }
         }
     }
 

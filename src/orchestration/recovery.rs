@@ -174,7 +174,7 @@ impl RecoveryAction {
     }
 
     /// Returns the action as a JSON value for evidence logging.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-17 — reserved for evidence logging integration
     pub fn to_json(&self) -> Value {
         match self {
             RecoveryAction::Retry {
@@ -272,7 +272,7 @@ impl RecoveryStrategy {
     }
 
     /// Returns the success rate of this strategy (0.0–1.0).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-17 — reserved for recovery diagnostics
     pub fn success_rate(&self) -> f64 {
         if self.attempt_count == 0 {
             0.0
@@ -579,7 +579,7 @@ impl RecoveryOrchestrator {
     ///
     /// This measures how often automatic recovery attempts succeed.
     /// A low rate suggests the system should escalate to human sooner.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-17 — reserved for recovery diagnostics
     pub fn auto_recovery_rate(&self) -> f64 {
         let auto_attempts: Vec<&RecoveryAttempt> = self
             .recovery_attempts
@@ -600,7 +600,7 @@ impl RecoveryOrchestrator {
     /// The ratio of escalation actions to all recovery attempts.
     /// A value near 1.0 means almost all failures escalate to human.
     /// A value near 0.0 means auto-recovery handles most failures.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-17 — reserved for recovery diagnostics
     pub fn human_intervention_ratio(&self) -> f64 {
         let total = self.recovery_attempts.len();
         if total == 0 {
@@ -618,7 +618,7 @@ impl RecoveryOrchestrator {
     ///
     /// Each entry corresponds to one recovery attempt containing the failure,
     /// action taken, success status, duration, and evidence context.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-17 — reserved for recovery diagnostics
     pub fn recovery_evidence_chain(&self) -> Vec<Value> {
         self.recovery_attempts
             .iter()

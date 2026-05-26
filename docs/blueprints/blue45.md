@@ -1,7 +1,7 @@
 # blue45.md — go-on 多Agents编排系统全方位考评报告
 
 > **评估日期**: 2026-05-25  
-> **项目**: go-on v1.0.0 — Rust-based ACP/MCP Agent Runtime  
+> **项目**: go-on v1.1.0 — Rust-based ACP/MCP Agent Runtime  
 > **代码规模**: 142,305 行 Rust | 237 个源文件 | 35+ AI 供应商  
 > **评估轮次**: 多轮递进式（架构层→执行层→集成层→压测层）
 

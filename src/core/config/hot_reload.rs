@@ -17,9 +17,6 @@
 //!
 //! `Arc<RwLock<AppConfig>>` enables lock-free reads and exclusive write during reload.
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -186,22 +183,7 @@ impl WatchDog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    struct TestObserver {
-        started: AtomicBool,
-        succeeded: AtomicBool,
-    }
-
-    impl ReloadObserver for TestObserver {
-        fn on_reload_started(&self, _path: &Path) {
-            self.started.store(true, Ordering::Relaxed);
-        }
-        fn on_reload_succeeded(&self, _path: &Path) {
-            self.succeeded.store(true, Ordering::Relaxed);
-        }
-        fn on_reload_failed(&self, _path: &Path, _error: &anyhow::Error) {}
-    }
+    use serde_json;
 
     #[test]
     fn test_hot_reload_config_default() {

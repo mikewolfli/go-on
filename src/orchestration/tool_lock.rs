@@ -10,9 +10,6 @@
 //! is **blocking** — callers on async runtimes should spawn blocking tasks
 //! or wrap calls with `tokio::task::spawn_blocking`.
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
-
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -24,6 +21,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LockMode {
     /// Shared / read lock — multiple readers allowed concurrently.
+    #[allow(dead_code)] // F-GAP-12 — reserved for tool lock integration
     Read,
     /// Exclusive / write lock — only one writer, no concurrent readers.
     Write,
@@ -47,6 +45,7 @@ pub struct LockHandle {
 
 impl LockHandle {
     /// Release the lock manually (normally done on drop).
+    #[allow(dead_code)] // F-GAP-12 — reserved for tool lock integration
     pub fn release(self) {
         // Drop will call release automatically.
         drop(self);
@@ -112,12 +111,13 @@ impl ToolLockManager {
     /// # Blocking behaviour
     ///
     /// This function **blocks** the calling thread until the lock is
-    /// available. Callers on async runtimes should use
+    /// available.  Callers on async runtimes should use
     /// `tokio::task::spawn_blocking` to avoid blocking the runtime.
     ///
     /// # Panics
     ///
     /// Panics if the internal mutex is poisoned.
+    #[allow(dead_code)] // F-GAP-12 — reserved for tool lock integration
     pub fn acquire(&self, path: &str, mode: LockMode) -> LockHandle {
         loop {
             {

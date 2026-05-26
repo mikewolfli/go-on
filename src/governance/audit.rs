@@ -101,7 +101,7 @@ struct AuditLogInner {
     log_path: Option<PathBuf>,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-11 — reserved for Phase 2 audit pipeline integration
 impl ThreadSafeAuditLog {
     /// Create a new thread-safe audit log with the given capacity.
     pub fn new(max_entries: usize) -> Self {

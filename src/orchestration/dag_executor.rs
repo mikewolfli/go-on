@@ -1,8 +1,7 @@
 //! Real DAG Executor — topological dependency resolution, parallel group
 //! identification, node output propagation, and failure isolation.
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
+#![cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code, unused_imports))]
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

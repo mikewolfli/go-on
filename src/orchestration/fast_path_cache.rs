@@ -29,7 +29,7 @@ pub fn store_cache_metrics(metrics: Value) {
 }
 
 /// Read the latest FastPathCache metrics snapshot.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-09 — reserved for cache metrics integration
 pub fn read_cache_metrics() -> Option<Value> {
     LATEST_CACHE_METRICS.lock().ok()?.clone()
 }

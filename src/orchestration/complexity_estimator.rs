@@ -5,9 +5,6 @@
 //! keyword analysis, similarity to historical complex tasks) to produce
 //! a 1-10 complexity score that feeds into the BrainLoop and scheduler.
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -64,6 +61,7 @@ impl ComplexityLevel {
         }
     }
 
+    #[allow(dead_code)] // F-GAP-17 — reserved for complexity level label access
     pub fn label(&self) -> &str {
         match self {
             Self::Trivial => "trivial",
@@ -81,7 +79,7 @@ impl ComplexityLevel {
 
 /// Individual signals that contribute to complexity estimation.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-17 — reserved for complexity signal diagnostics
 struct ComplexitySignal {
     /// Description of the signal.
     pub name: String,
@@ -124,6 +122,7 @@ pub struct ComplexityEstimator {
     /// Keywords that indicate low complexity.
     simple_keywords: Vec<String>,
     /// Historical complexity scores for similar tasks (task summary → score).
+    #[allow(dead_code)] // F-GAP-17 — reserved for historical complexity tracking
     history: HashMap<String, u8>,
 }
 

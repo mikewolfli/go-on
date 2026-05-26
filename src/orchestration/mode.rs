@@ -948,3 +948,44 @@ impl ModeRuntime for SafeGuardModeRuntime {
         base.run(self, task)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mode_kind_variants_exist() {
+        // Verify all expected variants can be constructed.
+        let ask = ModeKind::Ask;
+        let edit = ModeKind::Edit;
+        let agent = ModeKind::Agent;
+        let full_auto = ModeKind::FullAuto;
+        let safe_guard = ModeKind::SafeGuard;
+
+        // Equality checks.
+        assert_eq!(ask, ModeKind::Ask);
+        assert_eq!(edit, ModeKind::Edit);
+        assert_eq!(agent, ModeKind::Agent);
+        assert_eq!(full_auto, ModeKind::FullAuto);
+        assert_eq!(safe_guard, ModeKind::SafeGuard);
+        assert_ne!(ask, edit);
+    }
+
+    #[test]
+    fn test_mode_kind_debug_format() {
+        let debug_str = format!("{:?}", ModeKind::FullAuto);
+        assert!(debug_str.contains("FullAuto"));
+    }
+
+    #[test]
+    fn test_auto_degrade_policy_default() {
+        let policy = AutoDegradePolicy::default();
+        assert_eq!(policy, AutoDegradePolicy::ReadOnly);
+
+        // All variants should be constructable.
+        let _block = AutoDegradePolicy::Block;
+        let _read_only = AutoDegradePolicy::ReadOnly;
+        let _allow = AutoDegradePolicy::AllowWithAudit;
+        let _confirm = AutoDegradePolicy::ConfirmRequired;
+    }
+}

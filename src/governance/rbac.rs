@@ -561,7 +561,12 @@ mod tests {
         let missing_tenant = Principal::new("user-missing", vec!["user"], None);
         match enforcer.check_access(&missing_tenant, &Permission::Read) {
             AccessDecision::Deny { reason } => {
-                assert!(reason.contains("missing tenant context"));
+                assert!(
+                    reason.contains("error.rbac.missing_tenant")
+                        || reason.contains("missing tenant"),
+                    "expected error about missing tenant, got: {}",
+                    reason
+                );
             }
             other => panic!("Expected missing tenant to deny, got {:?}", other),
         }
@@ -569,7 +574,7 @@ mod tests {
         let unknown_tenant = Principal::new("user-unknown", vec!["user"], Some("tenant-z"));
         match enforcer.check_access(&unknown_tenant, &Permission::Read) {
             AccessDecision::Deny { reason } => {
-                assert!(reason.contains("unknown tenant"));
+                assert!(reason.contains("error.rbac.unknown_tenant") || reason.contains("unknown tenant"), "expected unknown tenant, got: {}", reason);
             }
             other => panic!("Expected unknown tenant to deny, got {:?}", other),
         }
@@ -607,7 +612,7 @@ mod tests {
         let unknown = Principal::new("user-z", vec!["user"], Some("tenant-z"));
         match enforcer.check_access(&unknown, &Permission::Read) {
             AccessDecision::Deny { reason } => {
-                assert!(reason.contains("unknown tenant"));
+                assert!(reason.contains("error.rbac.unknown_tenant") || reason.contains("unknown tenant"), "expected unknown tenant, got: {}", reason);
             }
             other => panic!("Expected unknown tenant to deny, got {:?}", other),
         }
@@ -773,7 +778,8 @@ mod tests {
         assert!(result.is_err(), "missing tenant context should be denied");
         let err = result.unwrap_err();
         assert!(
-            err.contains("missing tenant context"),
+            err.contains("error.rbac.missing_tenant")
+                || err.contains("missing tenant"),
             "error should mention missing tenant; got: {}",
             err
         );

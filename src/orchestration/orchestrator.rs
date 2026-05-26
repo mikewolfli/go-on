@@ -218,7 +218,7 @@ pub async fn execute_tool_pipeline(
         .collect();
 
     let pipeline = ToolPipeline {
-        name: "orchestrator-pipeline".to_string(),
+        _name: "orchestrator-pipeline".to_string(),
         steps,
         on_error: crate::orchestration::tool_pipeline::PipelineErrorStrategy::Continue,
     };

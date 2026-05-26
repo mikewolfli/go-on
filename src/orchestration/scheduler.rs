@@ -151,7 +151,7 @@ pub struct TaskScheduler {
     /// Statistics
     stats: Mutex<SchedulerProfile>,
     /// Last aging update timestamp
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-12 — reserved for task scheduling diagnostics
     last_aging: Mutex<Instant>,
     /// Global concurrency limiter using a semaphore.
     concurrency_limiter: Arc<Semaphore>,
@@ -331,7 +331,7 @@ impl TaskScheduler {
     ///
     /// Returns a `SemaphorePermit` that must be held while the task
     /// is executing. Drop the permit to release the slot.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-12 — reserved for task scheduling integration
     pub async fn acquire_permit(&self) -> Result<tokio::sync::OwnedSemaphorePermit> {
         self.concurrency_limiter
             .clone()
@@ -341,7 +341,7 @@ impl TaskScheduler {
     }
 
     /// Try to acquire a global concurrency permit without waiting.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-12 — reserved for task scheduling integration
     pub fn try_acquire_permit(&self) -> Result<Option<tokio::sync::OwnedSemaphorePermit>> {
         match self.concurrency_limiter.clone().try_acquire_owned() {
             Ok(permit) => Ok(Some(permit)),
@@ -353,7 +353,7 @@ impl TaskScheduler {
     ///
     /// If no per-role limiter exists for this role, one is created
     /// with the configured `max_workers_per_role` permits.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-12 — reserved for task scheduling integration
     pub async fn acquire_role_permit(
         &self,
         role: &str,
@@ -575,7 +575,7 @@ impl TaskScheduler {
     ///
     /// This should be called periodically by a background timer, not synchronously
     /// on every `dequeue()` call.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-12 — reserved for task scheduling integration
     pub fn apply_aging(&self) {
         let now = Instant::now();
         let elapsed = {
@@ -692,7 +692,7 @@ impl TaskScheduler {
     ///
     /// Delegates to the global semaphore: if no permits are available, the
     /// system is at capacity.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-12 — reserved for task scheduling diagnostics
     pub fn is_global_at_capacity(&self) -> bool {
         self.available_concurrency() == 0
     }
@@ -704,14 +704,14 @@ impl TaskScheduler {
 
     /// Returns a reference to the global concurrency limiter, for external
     /// consumers that need to acquire permits manually.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-12 — reserved for task scheduling diagnostics
     pub fn concurrency_limiter(&self) -> &Arc<Semaphore> {
         &self.concurrency_limiter
     }
 
     /// Returns a reference to a per-role concurrency limiter, creating one
     /// lazily if it doesn't exist.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-12 — reserved for task scheduling diagnostics
     pub fn role_limiter(&self, role: &str) -> Result<Arc<Semaphore>> {
         let mut limiters = self
             .role_limiters

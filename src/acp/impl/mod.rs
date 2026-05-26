@@ -22,7 +22,7 @@ pub mod session;
 
 // Re-export for convenience — retained for ACP consumer API surface.
 #[allow(unused_imports)]
-pub use runtime::*;
+pub use runtime::*; // re-exported for ACP consumer API surface
 pub use session::UserSession;
 
 // Note: During migration, this module serves as a bridge between

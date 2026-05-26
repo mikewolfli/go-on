@@ -23,7 +23,7 @@ pub mod transport_factory;
 // Explicit re-exports of items that external consumers need.
 // Avoid `pub use prelude::*;` to make dead-code detection easier.
 #[allow(unused_imports)]
-pub use prelude::{
+pub use prelude::{ // re-exported for ACP consumer public API surface
     checkpoint_message_chars, enforce_checkpoint_capacity, evict_oldest_conversation, now_ts,
     now_ts_ms, touch_conversation_order, with_acp_lock, AcpLockMonitor, AcpLockSnapshot,
     ChatParams, CircuitBreakerAdmission, CircuitBreakerRegistry, CircuitBreakerSnapshot,
@@ -40,13 +40,13 @@ pub use prelude::{
 };
 // `AcpServer` / `ServerBuilder` are re-exported for downstream consumers; allow unused here.
 #[allow(unused_imports)]
-pub use server::AcpServer;
+pub use server::AcpServer; // re-exported for downstream consumers
 #[allow(unused_imports)]
-pub use server::ServerBuilder;
+pub use server::ServerBuilder; // re-exported for downstream consumers
 
 // Note: The tests module is only available in test configuration
 #[cfg(test)]
 pub mod tests;
 #[cfg(test)]
 #[allow(unused_imports)]
-pub use tests::*;
+pub use tests::*; // re-exported for test configuration

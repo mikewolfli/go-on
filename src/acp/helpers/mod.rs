@@ -1,100 +1,106 @@
 //! Helper modules for ACP server
 //!
 //! This module contains utility functions and data structures used throughout
-//! the ACP server implementation.
+//! the ACP server implementation. Files are organized into subdirectories by
+//! domain, but all modules are re-exported at this level via `#[path]` to
+//! maintain backward compatibility with existing import paths.
+//!
+//! # Directory layout
+//!
+//! ```text
+//! helpers/
+//! ├── agent/          # Agent selection, routing, options, preferences
+//! ├── autonomy/       # Autonomy loop, executor, metrics
+//! ├── governance/     # Policies, review gates, voting, tool governance
+//! ├── planning/       # Planning, orchestration alignment, context
+//! ├── response/       # Response assembly and finalization
+//! ├── diagnosis/      # Repair and autonomy gate diagnosis
+//! ├── requirement/    # Requirement contracts and continuation
+//! └── (root)         # General-purpose helpers
+//! ```
 
-// Context helper functions
-pub mod context;
-
-// Policy helper functions
-pub mod policy;
-
-// Requirement helper functions
-pub mod requirement;
-
-// Conversation helper functions
-pub mod conversation;
-
-// Metrics helper functions
-pub mod metrics;
-
-// Autonomy helper functions
-pub mod autonomy;
-
-// Autonomy behavior metrics
-pub mod autonomy_metrics;
-
-// Tool governance counters
-pub mod tool_governance;
-
-// Miscellaneous helper functions
-pub mod misc;
-
-// Orchestration alignment helpers
-pub mod orchestration_alignment;
-
-// Idempotency continuation helpers
-pub mod idempotency_resume;
-
-// Autonomy loop: unified plan → act → observe → replan runtime
-pub mod autonomy_loop;
-
-// Requirement gate continuation: hard block → resumable state machine
-pub mod requirement_continuation;
-
-// Default tool governance when RBAC/HarnessBus is absent
-pub mod tool_governance_defaults;
-
-// Repair diagnosis: classify failures as retry/reroute/replan/repair/escalate
-pub mod repair_diagnosis;
-
-// AUTON gate blocker diagnosis for readiness output
-pub mod auton_gate_diagnosis;
-
-// Planner bridge runtime helpers for DAG order and observability payloads
-pub mod planner_bridge;
-
-// ACP-aware multi-round autonomy loop adapter (AUTON-01)
-pub mod autonomy_loop_adapter;
-
-// BLUE42: agent selection extraction from chat runtime
+// ── Agent selection & routing ──────────────────────────────────────────────
+#[path = "agent/agent_selector.rs"]
 pub mod agent_selector;
-
-// BLUE42: cache hit/bypass strategy extraction
-pub mod cache_strategy;
-
-// BLUE42: task-aware historical router
+#[path = "agent/agent_router.rs"]
 pub mod agent_router;
-
-// BLUE42: metacognitive/world-model execution intelligence bridge
-pub mod execution_intelligence;
-
-// BLUE42: CapabilityBus agent selection from chat runtime
+#[path = "agent/agent_options.rs"]
+pub mod agent_options;
+#[path = "agent/agent_preference.rs"]
+pub mod agent_preference;
+#[path = "agent/model_router.rs"]
+pub mod model_router;
+#[path = "agent/capability_selector.rs"]
 pub mod capability_selector;
 
-// Agent preference resolution for chat requests
-pub mod agent_preference;
-
-pub mod response_assembler;
-pub mod review_gate;
-pub mod vote_orchestration;
-
-// BLUE47 Step 2: Pipeline stage extraction from chat runtime
+// ── Autonomy loop & execution ──────────────────────────────────────────────
+#[path = "autonomy/autonomy.rs"]
+pub mod autonomy;
+#[path = "autonomy/autonomy_loop.rs"]
+pub mod autonomy_loop;
+#[path = "autonomy/autonomy_loop_adapter.rs"]
+pub mod autonomy_loop_adapter;
+#[path = "autonomy/autonomy_executor.rs"]
 pub mod autonomy_executor;
-pub mod fallback_executor;
+#[path = "autonomy/autonomy_metrics.rs"]
+pub mod autonomy_metrics;
+#[path = "autonomy/full_auto_executor.rs"]
 pub mod full_auto_executor;
-pub mod phase_resolver;
+#[path = "autonomy/execution_intelligence.rs"]
+pub mod execution_intelligence;
+
+// ── Governance & policy ────────────────────────────────────────────────────
+#[path = "governance/policy.rs"]
+pub mod policy;
+#[path = "governance/pre_route_policy.rs"]
 pub mod pre_route_policy;
+#[path = "governance/tool_governance.rs"]
+pub mod tool_governance;
+#[path = "governance/tool_governance_defaults.rs"]
+pub mod tool_governance_defaults;
+#[path = "governance/review_gate.rs"]
+pub mod review_gate;
+#[path = "governance/vote_orchestration.rs"]
+pub mod vote_orchestration;
+#[path = "governance/vote_executor.rs"]
 pub mod vote_executor;
-pub mod response_finalizer;
 
-// Model-based agent routing and high-risk vote configuration
-pub mod model_router;
-
-// BLUE42 Step 8: Council deliberation & degraded fallback
+// ── Planning & orchestration ───────────────────────────────────────────────
+#[path = "planning/planner_bridge.rs"]
+pub mod planner_bridge;
+#[path = "planning/phase_resolver.rs"]
+pub mod phase_resolver;
+#[path = "planning/orchestration_alignment.rs"]
+pub mod orchestration_alignment;
+#[path = "planning/context.rs"]
+pub mod context;
+#[path = "planning/council_deliberation.rs"]
 pub mod council_deliberation;
 
-// BLUE42 Step 8: Agent options assembly & skill injection
-pub mod agent_options;
+// ── Response assembly ──────────────────────────────────────────────────────
+#[path = "response/response_assembler.rs"]
+pub mod response_assembler;
+#[path = "response/response_finalizer.rs"]
+pub mod response_finalizer;
+
+// ── Diagnosis & repair ─────────────────────────────────────────────────────
+#[path = "diagnosis/repair_diagnosis.rs"]
+pub mod repair_diagnosis;
+#[path = "diagnosis/auton_gate_diagnosis.rs"]
+pub mod auton_gate_diagnosis;
+
+// ── Requirement contracts ──────────────────────────────────────────────────
+#[path = "requirement/requirement.rs"]
+pub mod requirement;
+#[path = "requirement/requirement_continuation.rs"]
+pub mod requirement_continuation;
+
+// ── General-purpose helpers (root) ─────────────────────────────────────────
+pub mod conversation;
+pub mod cache_strategy;
+pub mod fallback_executor;
+pub mod idempotency_resume;
+pub mod metrics;
+pub mod misc;
 
 // Re-export for convenience

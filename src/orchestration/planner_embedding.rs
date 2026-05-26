@@ -16,9 +16,9 @@ pub struct EmbeddingTaskClassifier {
     vector_store: Option<std::sync::Arc<crate::memory::vector::VectorStore>>,
 }
 
-#[allow(dead_code)]
 impl EmbeddingTaskClassifier {
     /// Create a new classifier with an optional vector store reference.
+    #[allow(dead_code)] // alternative constructor reserved for callers with vector store
     pub fn new(vector_store: Option<std::sync::Arc<crate::memory::vector::VectorStore>>) -> Self {
         Self { vector_store }
     }

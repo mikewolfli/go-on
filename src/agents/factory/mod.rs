@@ -7,8 +7,9 @@
 
 pub mod agent_factory;
 
-#[allow(unused_imports)]
-pub use agent_factory::{
-    AgentFactory, AgentFactoryConfig, AgentTemplate, CreateAgentRequest, FactoryProfile,
-    SubAgentInstance,
-};
+#[cfg(any(
+    feature = "sub-bus-tool",
+    feature = "profile-simple-server",
+    feature = "profile-multi-users-server",
+))]
+pub use agent_factory::{AgentFactory, AgentFactoryConfig};

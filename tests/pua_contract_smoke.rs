@@ -1,4 +1,5 @@
 #[path = "../src/i18n/mod.rs"]
+#[allow(dead_code)]
 mod i18n;
 #[path = "../src/governance/pua.rs"]
 mod pua;

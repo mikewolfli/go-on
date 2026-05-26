@@ -9,7 +9,6 @@
 //! Many types are defined here for future use and may trigger dead_code
 //! warnings until they are adopted by the ACP handlers.
 
-#![allow(dead_code)]
 //!
 //! ## Serde rules
 //!
@@ -30,15 +29,15 @@ mod mcp;
 mod skills;
 
 #[allow(unused_imports)]
-pub use agent::*;
+pub use agent::*; // re-exported for ACP spec public API surface
 #[allow(unused_imports)]
-pub use client::*;
+pub use client::*; // re-exported for ACP spec public API surface
 #[allow(unused_imports)]
-pub use content::*;
+pub use content::*; // re-exported for ACP spec public API surface
 #[allow(unused_imports)]
-pub use mcp::*;
+pub use mcp::*; // re-exported for ACP spec public API surface
 #[allow(unused_imports)]
-pub use skills::*;
+pub use skills::*; // re-exported for ACP spec public API surface
 
 use serde::{Deserialize, Serialize};
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -74,6 +73,7 @@ impl From<&str> for SessionId {
 pub struct ProtocolVersion(u16);
 impl ProtocolVersion {
     pub const V1: Self = Self(1);
+    #[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
     pub const LATEST: Self = Self::V1;
 }
 
@@ -100,6 +100,7 @@ impl Implementation {
     }
 }
 
+#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvVariable {
@@ -108,6 +109,7 @@ pub struct EnvVariable {
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
 }
+#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
 impl EnvVariable {
     pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
@@ -118,6 +120,7 @@ impl EnvVariable {
     }
 }
 
+#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpHeader {
@@ -126,6 +129,7 @@ pub struct HttpHeader {
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
 }
+#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
 impl HttpHeader {
     pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
@@ -142,7 +146,9 @@ impl HttpHeader {
 //   - session/request_permission — permission response handler
 //   - terminal/create, terminal/output, terminal/release, terminal/kill,
 //     terminal/wait_for_exit — full terminal process management
+#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
 pub struct AcpMethodNames;
+#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
 impl AcpMethodNames {
     pub const INITIALIZE: &'static str = "initialize";
     pub const AUTHENTICATE: &'static str = "authenticate";

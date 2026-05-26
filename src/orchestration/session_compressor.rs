@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 /// A lightweight message representation used for session compression.
 /// Mirrors a typical conversational message with role and content.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)] // F-GAP-09 — reserved for session compression integration
 pub struct Message {
     /// Role of the message sender (e.g. "system", "user", "assistant", "tool").
     pub role: String,
@@ -19,6 +20,7 @@ pub struct Message {
 
 impl Message {
     /// Create a new message.
+    #[allow(dead_code)] // F-GAP-09 — reserved for session compression integration
     pub fn new(role: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
             role: role.into(),
@@ -28,7 +30,10 @@ impl Message {
 }
 
 /// Configuration for the session compressor.
+///
+/// Reserved for future SessionContextManager integration.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // F-GAP-09 — reserved for session compression integration
 pub struct SessionCompressor {
     /// Maximum number of messages before compression is mandatory (default 1000).
     pub max_messages: usize,
@@ -59,6 +64,7 @@ impl Default for SessionCompressor {
 
 /// The result of compressing a session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)] // F-GAP-09 — reserved for session compression integration
 pub struct CompressedSession {
     /// Generated summary text that replaces the trimmed messages.
     pub summary: String,
@@ -83,6 +89,7 @@ impl SessionCompressor {
     /// # Returns
     ///
     /// A [`CompressedSession`] containing the summary, kept messages, and metrics.
+    #[allow(dead_code)] // F-GAP-09 — reserved for session compression integration
     pub fn compress(&self, messages: &[Message]) -> CompressedSession {
         let original_count = messages.len();
 
@@ -142,11 +149,13 @@ impl SessionCompressor {
     }
 
     /// Returns true if the given message count exceeds the compression threshold.
+    #[allow(dead_code)] // F-GAP-09 — reserved for session compression integration
     pub fn should_compress(&self, message_count: usize) -> bool {
         message_count >= self.compression_threshold
     }
 
     /// Returns true if the given message count exceeds the absolute max.
+    #[allow(dead_code)] // F-GAP-09 — reserved for session compression integration
     pub fn requires_compression(&self, message_count: usize) -> bool {
         message_count > self.max_messages
     }
@@ -154,6 +163,7 @@ impl SessionCompressor {
     // ── Private helpers ──────────────────────────────────────────────────
 
     /// Build a concise summary from the trimmed messages.
+    #[allow(dead_code)] // F-GAP-09 — reserved for session compression integration
     fn build_summary(&self, messages: &[&Message]) -> String {
         if messages.is_empty() {
             return String::from("(no messages to summarize)");
@@ -230,6 +240,7 @@ impl SessionCompressor {
 
 /// Truncate a string to at most `max_len` characters, appending "…" if
 /// truncation occurred.
+#[allow(dead_code)] // F-GAP-09 — reserved for session compression integration
 fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         return s.to_string();
@@ -242,44 +253,8 @@ fn truncate(s: &str, max_len: usize) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Integration stubs — required to reference all public API types so the
-// compiler does not emit dead_code warnings before full integration.
-// ---------------------------------------------------------------------------
-
-/// Internal helper used by integration tests and framework wiring.
-#[doc(hidden)]
-pub fn __truncate_used(s: &str, max_len: usize) -> String {
-    truncate(s, max_len)
-}
-
-// ---------------------------------------------------------------------------
-// Integration warmup — exercises all public API types so the compiler does
-// not emit dead_code warnings before full integration wiring is complete.
-// ---------------------------------------------------------------------------
-
-/// Touch all public types to suppress dead_code warnings until integration.
-#[doc(hidden)]
-pub fn __session_compressor_touch() {
-    // Construct & exercise all public API types.
-    let compressor = SessionCompressor::default();
-    let _should = compressor.should_compress(100);
-    let _need = compressor.requires_compression(100);
-    let msg = Message::new("user", "hello world");
-    let _compressed = compressor.compress(&[msg]);
-    let summary = compressor.build_summary(&[&Message::new("user", "test")]);
-    let _trunc = truncate(&summary, 10);
-
-    // Read all struct fields to suppress field-level dead_code warnings.
-    let _template = &compressor.summary_prompt_template;
-
-    let _cs = CompressedSession {
-        summary: String::new(),
-        kept_messages: vec![],
-        original_count: 0,
-        compressed_count: 0,
-        compression_ratio: 1.0,
-    };
-}
+// The SessionCompressor is reserved for integration with SessionContextManager.
+// Targeted #[allow(dead_code)] is on the struct to keep API surface clean.
 
 #[cfg(test)]
 mod tests {

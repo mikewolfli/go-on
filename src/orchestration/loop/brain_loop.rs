@@ -23,7 +23,7 @@
 //! the [`ToolRegistry`], but new code should prefer the CapabilityBus path.
 
 // Deprecated module — retained for backward-compatible serialized data (GAP-46-07).
-#![allow(dead_code)]
+#![cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))]
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};

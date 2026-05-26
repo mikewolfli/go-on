@@ -3,9 +3,6 @@
 //! Builds on the tool registry to support sequential, parallel, and
 //! conditional tool execution with configurable error handling strategies.
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
-
 use serde_json::Value;
 use std::time::Instant;
 use tracing;
@@ -21,10 +18,13 @@ pub enum PipelineStep {
     /// Single tool execution.
     Single { tool_name: String, input: Value },
     /// Parallel execution of multiple tools.
+    #[allow(dead_code)] // F-GAP-12 — reserved for pipeline extensibility
     Parallel { steps: Vec<PipelineStep> },
     /// Sequential execution with optional condition.
+    #[allow(dead_code)] // F-GAP-12 — reserved for pipeline extensibility
     Sequence { steps: Vec<PipelineStep> },
     /// Conditional branch that evaluates a field value and chooses a path.
+    #[allow(dead_code)] // F-GAP-12 — reserved for pipeline extensibility
     Conditional {
         /// JSON field name to evaluate (dot-notation path supported, e.g. "result.status").
         condition_field: String,
@@ -45,10 +45,13 @@ pub enum PipelineStep {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PipelineErrorStrategy {
     /// Stop execution immediately and return the partial results.
+    #[cfg(test)]
     Stop,
     /// Continue executing remaining steps despite the error.
     Continue,
     /// Stop execution and invoke rollback (requires transactional context).
+    #[cfg(test)]
+    #[allow(dead_code)]
     Rollback,
 }
 
@@ -59,7 +62,7 @@ pub enum PipelineErrorStrategy {
 /// A named, executable pipeline of tool steps with an error strategy.
 pub struct ToolPipeline {
     /// Human-readable name for observability.
-    pub name: String,
+    pub _name: String,
     /// Steps that make up this pipeline.
     pub steps: Vec<PipelineStep>,
     /// Error handling strategy applied across all steps.
@@ -360,15 +363,16 @@ fn evaluate_field(value: &Value, field_path: &str, expected: &Value) -> bool {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Integration stubs — required to reference all public API types so the
-// compiler does not emit dead_code warnings before full integration.
+// Test helpers (only compiled during tests)
 // ---------------------------------------------------------------------------
 
 /// Create a pipeline that executes a single tool.
-pub fn single_tool_pipeline(tool_name: impl Into<String>) -> ToolPipeline {
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) fn single_tool_pipeline(tool_name: impl Into<String>) -> ToolPipeline {
     let name: String = tool_name.into();
     ToolPipeline {
-        name: format!("single-{}", name),
+        _name: format!("single-{}", name),
         steps: vec![PipelineStep::Single {
             tool_name: name,
             input: serde_json::Value::Null,
@@ -378,7 +382,9 @@ pub fn single_tool_pipeline(tool_name: impl Into<String>) -> ToolPipeline {
 }
 
 /// Construct a result for a successfully executed pipeline step.
-pub fn make_step_result(
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) fn make_step_result(
     tool_name: impl Into<String>,
     output: serde_json::Value,
     duration_ms: u64,
@@ -392,7 +398,9 @@ pub fn make_step_result(
 }
 
 /// Format a pipeline result into a summary string.
-pub fn format_pipeline_summary(result: &PipelineResult) -> String {
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) fn format_pipeline_summary(result: &PipelineResult) -> String {
     format!(
         "Pipeline: {} steps, {}ms, success={}",
         result.step_results.len(),
@@ -401,17 +409,6 @@ pub fn format_pipeline_summary(result: &PipelineResult) -> String {
     )
 }
 
-// Ensure all internal functions are referenced (compile-time reachability).
-#[doc(hidden)]
-pub fn __pipeline_internals_used<'a>(
-    registry: &'a ToolRegistry,
-    step: &'a PipelineStep,
-    context: &'a serde_json::Value,
-    strategy: PipelineErrorStrategy,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = (Vec<PipelineStepResult>, bool)> + Send + 'a>>
-{
-    Box::pin(execute_step(registry, step, context, strategy))
-}
 
 #[cfg(test)]
 mod tests {
@@ -457,6 +454,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     fn dummy_input() -> ToolInput {
         ToolInput {
             task_id: "pipeline-test".to_string(),
@@ -484,7 +482,7 @@ mod tests {
         registry.register(EchoTool);
 
         let pipeline = ToolPipeline {
-            name: "test-single".to_string(),
+            _name: "test-single".to_string(),
             steps: vec![PipelineStep::Single {
                 tool_name: "echo".to_string(),
                 input: json!({}),
@@ -504,7 +502,7 @@ mod tests {
         registry.register(EchoTool);
 
         let pipeline = ToolPipeline {
-            name: "test-sequence".to_string(),
+            _name: "test-sequence".to_string(),
             steps: vec![PipelineStep::Sequence {
                 steps: vec![
                     PipelineStep::Single {
@@ -532,7 +530,7 @@ mod tests {
         registry.register(FailTool);
 
         let pipeline = ToolPipeline {
-            name: "test-stop".to_string(),
+            _name: "test-stop".to_string(),
             steps: vec![PipelineStep::Sequence {
                 steps: vec![
                     PipelineStep::Single {
@@ -566,7 +564,7 @@ mod tests {
         registry.register(FailTool);
 
         let pipeline = ToolPipeline {
-            name: "test-continue".to_string(),
+            _name: "test-continue".to_string(),
             steps: vec![PipelineStep::Sequence {
                 steps: vec![
                     PipelineStep::Single {
@@ -598,7 +596,7 @@ mod tests {
         registry.register(EchoTool);
 
         let pipeline = ToolPipeline {
-            name: "test-parallel".to_string(),
+            _name: "test-parallel".to_string(),
             steps: vec![PipelineStep::Parallel {
                 steps: vec![
                     PipelineStep::Single {
@@ -625,7 +623,7 @@ mod tests {
         registry.register(EchoTool);
 
         let pipeline = ToolPipeline {
-            name: "test-conditional-then".to_string(),
+            _name: "test-conditional-then".to_string(),
             steps: vec![PipelineStep::Conditional {
                 condition_field: "status".to_string(),
                 expected: json!("ready"),
@@ -654,7 +652,7 @@ mod tests {
         registry.register(EchoTool);
 
         let pipeline = ToolPipeline {
-            name: "test-conditional-else".to_string(),
+            _name: "test-conditional-else".to_string(),
             steps: vec![PipelineStep::Conditional {
                 condition_field: "status".to_string(),
                 expected: json!("ready"),

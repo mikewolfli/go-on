@@ -68,3 +68,32 @@ impl Default for OrchestrationContext {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_context_new_has_defaults() {
+        let ctx = OrchestrationContext::new();
+        // Accessors should return valid references without panicking.
+        let _feed = ctx.performance_feed();
+        let _failover = ctx.failover();
+    }
+
+    #[test]
+    fn test_context_default_trait() {
+        let ctx = OrchestrationContext::default();
+        let _feed = ctx.performance_feed();
+        let _failover = ctx.failover();
+    }
+
+    #[test]
+    fn test_context_with_feeds() {
+        let feed = LivePerformanceFeed::default();
+        let failover = HotFailover::new(HotFailoverConfig::default());
+        let ctx = OrchestrationContext::with_feeds(feed, failover);
+        let _feed = ctx.performance_feed();
+        let _failover = ctx.failover();
+    }
+}

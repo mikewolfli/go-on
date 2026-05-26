@@ -11,20 +11,17 @@
 //! - `ModePlugin`: Register custom mode runtimes
 //! - `PolicyPlugin`: Register custom governance policies
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
-
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 // ---------------------------------------------------------------------------
 // PluginManifest
 // ---------------------------------------------------------------------------
 
 /// Metadata describing a plugin.
+#[allow(dead_code)] // F-GAP-12 — reserved for plugin system integration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginManifest {
     /// Unique plugin identifier.
@@ -51,6 +48,7 @@ pub struct PluginManifest {
 // ---------------------------------------------------------------------------
 
 /// Current state of a loaded plugin.
+#[allow(dead_code)] // F-GAP-12 — reserved for plugin system integration
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PluginState {
     /// Plugin manifest has been read but not initialized.
@@ -66,6 +64,7 @@ pub enum PluginState {
 }
 
 impl PluginState {
+    #[allow(dead_code)] // F-GAP-12 — reserved for plugin system integration
     pub fn label(&self) -> &str {
         match self {
             Self::Registered => "registered",
@@ -83,6 +82,7 @@ impl PluginState {
 
 /// Core trait that all plugins must implement.
 #[async_trait]
+#[allow(dead_code)] // F-GAP-12 — reserved for plugin system integration
 pub trait Plugin: Send + Sync {
     /// Get the plugin manifest.
     fn manifest(&self) -> &PluginManifest;
@@ -114,6 +114,7 @@ impl PluginRegistry {
     }
 
     /// Register a new plugin.
+    #[allow(dead_code)] // F-GAP-12 — reserved for plugin system integration
     pub fn register(&self, plugin: Box<dyn Plugin>) -> Result<(), String> {
         let id = plugin.manifest().id.clone();
         let mut plugins = self.plugins.lock().map_err(|e| e.to_string())?;
@@ -125,12 +126,14 @@ impl PluginRegistry {
     }
 
     /// Get a plugin by ID.
+    #[allow(dead_code)] // F-GAP-12 — reserved for plugin system integration
     pub fn get(&self, id: &str) -> Option<PluginState> {
         let plugins = self.plugins.lock().ok()?;
         plugins.get(id).map(|p| p.state())
     }
 
     /// List all registered plugin IDs.
+    #[allow(dead_code)] // F-GAP-12 — reserved for plugin system integration
     pub fn list(&self) -> Vec<String> {
         self.plugins
             .lock()
@@ -144,6 +147,7 @@ impl PluginRegistry {
     }
 
     /// Unregister a plugin by ID.
+    #[allow(dead_code)] // F-GAP-12 — reserved for plugin system integration
     pub fn unregister(&self, id: &str) -> Result<(), String> {
         let mut plugins = self.plugins.lock().map_err(|e| e.to_string())?;
         plugins

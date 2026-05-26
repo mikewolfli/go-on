@@ -11,14 +11,13 @@
 //! 2. **Commit Phase**: If all YES, coordinator sends `commit`.
 //!    If any NO, coordinator sends `abort` and participants execute undo log.
 //!
-//! # Integration
+//! Integration
 //!
 //! - Uses `crate::intelligence::consensus::ConsensusEngine` for node management
 //! - Uses `crate::orchestration::tool_transaction::CompensateAction` for rollback
 //! - Stores transaction state in the existing WAL mechanism
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
+#![cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code, unused_imports))]
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -58,6 +57,7 @@ impl DistributedTxStatus {
     }
 
     /// Human-readable label for this status.
+    #[cfg(test)]
     pub fn label(&self) -> &str {
         match self {
             Self::Initialized => "initialized",
@@ -138,6 +138,7 @@ impl DistributedTransaction {
     }
 
     /// Count participants by their vote status.
+    #[cfg(test)]
     pub fn count_votes(&self) -> (usize, usize) {
         let yes = self.participants.iter().filter(|p| p.voted_yes).count();
         let total = self.participants.len();
@@ -145,6 +146,7 @@ impl DistributedTransaction {
     }
 
     /// Count participants by their acknowledge status.
+    #[cfg(test)]
     pub fn count_acknowledgements(&self) -> (usize, usize) {
         let acked = self.participants.iter().filter(|p| p.acknowledged).count();
         let total = self.participants.len();
@@ -422,6 +424,7 @@ impl TwoPhaseCoordinator {
     }
 
     /// Get the count of active transactions.
+    #[cfg(test)]
     pub async fn active_count(&self) -> usize {
         self.active_transactions.read().await.len()
     }

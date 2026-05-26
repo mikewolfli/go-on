@@ -5,11 +5,10 @@
 //! to maintain conversation quality across long sessions without exceeding
 //! token budget limits.
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+
+use super::session_compressor::{CompressedSession, SessionCompressor};
 
 // ---------------------------------------------------------------------------
 // ExtractedConcept
@@ -43,6 +42,7 @@ pub enum ConceptCategory {
 }
 
 impl ConceptCategory {
+    #[allow(dead_code)] // F-GAP-09 — reserved for context management diagnostics
     pub fn label(&self) -> &str {
         match self {
             Self::Entity => "entity",
@@ -57,6 +57,7 @@ impl ConceptCategory {
     }
 
     /// Retention priority: higher = more important to keep.
+    #[allow(dead_code)] // F-GAP-09 — reserved for context management diagnostics
     pub fn priority(&self) -> u8 {
         match self {
             Self::Decision => 10,
@@ -77,6 +78,7 @@ impl ConceptCategory {
 
 /// Scoring factors for intelligent message retention.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // F-GAP-09 — reserved for message retention scoring
 pub struct MessageImportanceScore {
     /// Is this an anchor message (first/last)?
     pub is_anchor: bool,
@@ -155,6 +157,7 @@ pub struct ContextWindowBudget {
     /// Current task complexity (1-10), affects retention aggressiveness.
     pub task_complexity: u8,
     /// Whether to use continuity markers when trimming.
+    #[allow(dead_code)] // F-GAP-09 — reserved for context window budget configuration
     pub use_continuity_markers: bool,
 }
 
@@ -186,6 +189,7 @@ impl ContextWindowBudget {
 
 /// A lightweight context marker inserted when conversation is trimmed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)] // F-GAP-09 — reserved for continuity marker integration
 pub struct ContinuityMarker {
     /// Summary of what was trimmed.
     pub summary: String,
@@ -326,6 +330,15 @@ impl SessionContextManager {
             return (0..total).collect();
         }
 
+        // If the number of messages far exceeds the budget, note that
+        // semantic compression (via SessionCompressor) could be used.
+        if total > max_retain * 2 {
+            tracing::debug!(
+                "select_retained_messages: {} messages exceeds budget {} by 2× — SessionCompressor could reduce overhead",
+                total, max_retain,
+            );
+        }
+
         let mut scored: Vec<(usize, MessageImportanceScore)> = messages
             .iter()
             .enumerate()
@@ -392,6 +405,26 @@ impl SessionContextManager {
         }
     }
 
+    /// Compress a list of messages using the given [`SessionCompressor`].
+    /// Delegates to `SessionCompressor::compress()` and returns the
+    /// [`CompressedSession`] containing summary, kept messages, and metrics.
+    ///
+    /// Callers should check `compressed.compression_ratio` to determine
+    /// whether compression was beneficial.
+    pub fn compress_messages(
+        &self,
+        messages: &[(String, String)],
+        compressor: &SessionCompressor,
+    ) -> CompressedSession {
+        let compressor_msgs: Vec<super::session_compressor::Message> = messages
+            .iter()
+            .map(|(role, content)| {
+                super::session_compressor::Message::new(role.clone(), content.clone())
+            })
+            .collect();
+        compressor.compress(&compressor_msgs)
+    }
+
     /// Get the current concept count.
     pub fn concept_count(&self) -> usize {
         self.concepts.len()
@@ -403,6 +436,7 @@ impl SessionContextManager {
     }
 
     /// Get the file paths referenced.
+    #[allow(dead_code)] // F-GAP-09 — reserved for context management diagnostics
     pub fn file_paths(&self) -> &HashSet<String> {
         &self.file_paths
     }
@@ -412,43 +446,6 @@ impl Default for SessionContextManager {
     fn default() -> Self {
         Self::new(ContextWindowBudget::default())
     }
-}
-
-// ---------------------------------------------------------------------------
-// Integration warmup — exercises all public API types so the compiler does
-// not emit dead_code warnings before full integration wiring is complete.
-// ---------------------------------------------------------------------------
-
-/// Touch all public types to suppress dead_code warnings until integration.
-#[doc(hidden)]
-pub fn __session_context_touch() {
-    let mut mgr = SessionContextManager::default();
-    mgr.record_message("test", "user");
-    let _score = mgr.score_message(0, 2, "test", "user");
-    let _retained = mgr.select_retained_messages(&[("user".to_string(), "test".to_string())], 1);
-    let _marker = mgr.generate_continuity_marker(&[0]);
-    let _count = mgr.concept_count();
-    let _dcount = mgr.decision_count();
-    let _paths = mgr.file_paths();
-
-    let budget = ContextWindowBudget::default();
-    let _eff = budget.effective_retain();
-    let _complexity = budget.task_complexity;
-
-    let _cat = ConceptCategory::Decision;
-    let _label = _cat.label();
-    let _prio = _cat.priority();
-
-    let _score = MessageImportanceScore::compute(true, false, false, false, false, false, 0);
-
-    let _marker2 = ContinuityMarker {
-        summary: String::new(),
-        key_concepts: vec![],
-        files_referenced: vec![],
-        decisions_made: vec![],
-        messages_trimmed: 0,
-        issues_encountered: vec![],
-    };
 }
 
 #[cfg(test)]

@@ -390,7 +390,7 @@ fn emit_config_warnings(warnings: &[ConfigWarning], mirror_stderr: bool) {
 }
 
 // Reserved for future config-driven path resolution during bootstrap.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-13 — reserved for config path resolution
 fn resolve_config_relative_path(config_path: &std::path::Path, raw_path: &str) -> PathBuf {
     let candidate = PathBuf::from(raw_path);
     if candidate.is_absolute() {
@@ -972,15 +972,9 @@ async fn main() {
 }
 
 async fn run() -> Result<()> {
-    // Touch new BLUE44 module types to suppress dead_code warnings
-    // until full integration wiring is complete.
     // GAP-46-12: PluginRegistry is now properly initialized and registered.
-    {
-        crate::orchestration::session_compressor::__session_compressor_touch();
-        crate::orchestration::tool_transaction::__compensate_action_touch();
-    }
-
-    // GAP-46-12: Initialize PluginRegistry and register available plugins.
+    // SessionCompressor and TransactionScope use targeted #[allow(dead_code)]
+    // for scaffolded API surface — no touch function needed.
     // The registry is lazily populated with built-in plugin manifests
     // and is available for runtime plugin discovery.
     let plugin_registry = crate::orchestration::plugin_system::PluginRegistry::new();
@@ -1043,6 +1037,11 @@ async fn run() -> Result<()> {
         }
     });
 
+    // Initialize the CacheWarmingEngine for post-execution cache hit tracking.
+    // The engine is pre-warmed at startup if PreWarmConfig::warm_at_startup is true.
+    let cache_engine = crate::orchestration::orchestrator::init_cache_warming();
+    tracing::info!("CacheWarmingEngine initialized and ready");
+
     // Delegate interactive agent onboarding to the onboarding module
     let onboarding_cfg = crate::core::onboarding::OnboardingConfig {
         enabled: !cli.setup
@@ -1054,7 +1053,9 @@ async fn run() -> Result<()> {
     };
     if crate::core::onboarding::run_onboarding(&onboarding_cfg, &config_path).await? {
         let config = Arc::new(AppConfig::load(&config_path)?);
-        return start_server(config, &cli, &config_path).await;
+        start_server(config, &cli, &config_path).await?;
+        crate::orchestration::orchestrator::warm_cache_after_success(&cache_engine);
+        return Ok(());
     }
 
     // Handle terminal chat mode
@@ -1063,7 +1064,12 @@ async fn run() -> Result<()> {
     }
 
     // Start the server
-    start_server(config, &cli, &config_path).await
+    start_server(config, &cli, &config_path).await?;
+
+    // Warm cache after successful server execution.
+    crate::orchestration::orchestrator::warm_cache_after_success(&cache_engine);
+
+    Ok(())
 }
 
 /// Handle terminal chat mode (--chat flag).

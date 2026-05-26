@@ -3,9 +3,6 @@
 //! Recommends tools based on task descriptions, historical usage statistics,
 //! and co‑occurrence patterns learned from the DiscoveryCenter.
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
-
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -17,13 +14,13 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub struct ToolUsageStats {
     /// Name of the tool.
-    pub tool_name: String,
+    pub _tool_name: String,
     /// Total number of calls to this tool.
     pub total_calls: u64,
     /// Number of calls that completed successfully.
     pub success_calls: u64,
     /// Average execution duration in milliseconds.
-    pub avg_duration_ms: f64,
+    pub _avg_duration_ms: f64,
     /// Timestamp (ms) of the most recent call.
     pub last_used_ms: u64,
     /// Map of other tool names to co‑occurrence counts.
@@ -72,7 +69,7 @@ pub struct ToolRecommendation {
     /// Human‑readable explanation for why this tool was recommended.
     pub reason: String,
     /// Suggested argument shape, if the recommender can infer defaults.
-    pub suggested_args: Option<Value>,
+    pub _suggested_args: Option<Value>,
 }
 
 // ---------------------------------------------------------------------------
@@ -98,11 +95,13 @@ impl ToolRecommender {
     }
 
     /// Register a task pattern for keyword‑based matching.
+    #[allow(dead_code)] // F-GAP-17 — reserved for tool recommender integration
     pub fn add_pattern(&mut self, pattern: TaskToolPattern) {
         self.task_patterns.push(pattern);
     }
 
     /// Update (or insert) usage stats for a tool after a call completes.
+    #[allow(dead_code)] // F-GAP-17 — reserved for tool recommender integration
     pub fn record_usage(
         &mut self,
         tool_name: &str,
@@ -115,18 +114,18 @@ impl ToolRecommender {
             .tool_stats
             .entry(tool_name.to_string())
             .or_insert_with(|| ToolUsageStats {
-                tool_name: tool_name.to_string(),
+                _tool_name: tool_name.to_string(),
                 total_calls: 0,
                 success_calls: 0,
-                avg_duration_ms: 0.0,
+                _avg_duration_ms: 0.0,
                 last_used_ms: 0,
                 co_occurrence: HashMap::new(),
             });
 
         // Update rolling average duration.
         let total = entry.total_calls as f64;
-        entry.avg_duration_ms =
-            (entry.avg_duration_ms * total + duration_ms as f64) / (total + 1.0);
+        entry._avg_duration_ms =
+            (entry._avg_duration_ms * total + duration_ms as f64) / (total + 1.0);
 
         entry.total_calls += 1;
         if success {
@@ -278,7 +277,7 @@ impl ToolRecommender {
                 tool_name: tool.clone(),
                 relevance_score: *score,
                 reason: reason.clone(),
-                suggested_args: None,
+                _suggested_args: None,
             });
         }
 
@@ -287,7 +286,7 @@ impl ToolRecommender {
                 tool_name: tool.clone(),
                 relevance_score: *score,
                 reason: reason.clone(),
-                suggested_args: None,
+                _suggested_args: None,
             });
         }
 
@@ -312,13 +311,10 @@ impl Default for ToolRecommender {
 // Tests
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Integration stubs — required to reference all public API types so the
-// compiler does not emit dead_code warnings before full integration.
-// ---------------------------------------------------------------------------
-
 /// Build a recommender with default search/write patterns.
-pub fn default_recommender() -> ToolRecommender {
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) fn default_recommender() -> ToolRecommender {
     let mut rec = ToolRecommender::new();
     rec.add_pattern(TaskToolPattern {
         keywords: vec!["search".to_string(), "find".to_string(), "grep".to_string()],
@@ -338,6 +334,8 @@ pub fn default_recommender() -> ToolRecommender {
 }
 
 /// Format a single recommendation for display.
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn format_recommendation(rec: &ToolRecommendation) -> String {
     format!(
         "{} (score={:.3}): {}",
@@ -346,6 +344,8 @@ pub fn format_recommendation(rec: &ToolRecommendation) -> String {
 }
 
 /// Look up usage stats for a tool, returning a reference.
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn get_tool_stats<'a>(
     recommender: &'a ToolRecommender,
     tool_name: &str,

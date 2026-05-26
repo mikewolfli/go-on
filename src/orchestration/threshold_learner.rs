@@ -134,7 +134,7 @@ impl ThresholdLearner {
     ///
     /// This can be used for offline tuning or admin overrides.
     /// The threshold is clamped to [0.10, 0.95].
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-17 — reserved for threshold learner diagnostics
     pub fn adjust_threshold(&mut self, metric: &str, delta: f64) {
         let current = self.get_optimal_threshold(metric);
         let new = (current + delta).clamp(0.10, 0.95);
@@ -142,31 +142,31 @@ impl ThresholdLearner {
     }
 
     /// Get the learning rate.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-17 — reserved for threshold learner diagnostics
     pub fn learning_rate(&self) -> f64 {
         self.learning_rate
     }
 
     /// Set a new learning rate.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-17 — reserved for threshold learner diagnostics
     pub fn set_learning_rate(&mut self, rate: f64) {
         self.learning_rate = rate.clamp(0.01, 0.50);
     }
 
     /// Get a copy of the trial history for diagnostics.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-17 — reserved for threshold learner diagnostics
     pub fn history(&self) -> &[ThresholdTrial] {
         &self.history
     }
 
     /// Number of trials recorded so far.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-17 — reserved for threshold learner diagnostics
     pub fn trial_count(&self) -> usize {
         self.history.len()
     }
 
     /// Return a snapshot of all learned thresholds.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-17 — reserved for threshold learner diagnostics
     pub fn all_thresholds(&self) -> HashMap<String, f64> {
         self.thresholds.clone()
     }

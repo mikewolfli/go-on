@@ -55,7 +55,7 @@ pub(super) fn take_error_response_mark(request_id: &str) -> bool {
         .unwrap_or(false)
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-11 — reserved for runtime gauge snapshot collection
 pub(super) fn build_runtime_gauge_snapshot(server: &AcpServer) -> RuntimeGaugeSnapshot {
     let memory_cache_entries = server
         .cache
@@ -112,7 +112,7 @@ pub(super) fn build_runtime_gauge_snapshot(server: &AcpServer) -> RuntimeGaugeSn
     }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-11 — reserved for trace metrics snapshot collection
 pub(super) fn trace_metrics_snapshot(server: &AcpServer) -> Value {
     let slow_top_n = server.runtime_config.trace_slow_top_n.max(1);
     let mut requests: Vec<(u64, Value)> = Vec::new();

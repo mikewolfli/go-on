@@ -8,9 +8,9 @@
 
 ## Version
 
-- Core runtime: **0.9.5**
-- GUI desktop: **0.9.5**
-- VS Code addon: **0.9.5**
+- Core runtime: **1.1.0**
+- GUI desktop: **1.1.0**
+- VS Code addon: **1.1.0**
 
 ## GUI Desktop App
 

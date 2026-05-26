@@ -4,15 +4,11 @@
 //! Enhances the existing FastPathCache with intelligent cache management
 //! to maximize hit rates and minimize cold-start latency.
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
-
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
-use tracing::debug;
 
 // ---------------------------------------------------------------------------
 // CacheTier

@@ -14,6 +14,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
+use tokio::sync::RwLock;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
@@ -32,6 +33,7 @@ use crate::orchestration::fast_path_cache::{
     EnvCacheValue, FastPathCache, IntentCacheValue, SkillCacheValue,
 };
 use crate::orchestration::skill::SkillRegistry;
+use crate::orchestration::skill_import::SkillImportPolicy;
 use crate::orchestration::skill_market::SkillMarketRegistry;
 use crate::orchestration::threshold_learner::ThresholdLearner;
 use crate::orchestration::tool::ToolRegistry;
@@ -258,8 +260,6 @@ pub struct FullAutoFlow {
     /// Tool lock manager for safe concurrent file access.
     tool_lock_manager: ToolLockManager,
     /// Optional skill market registry for external skill discovery.
-    // Reserved for future skill marketplace integration.
-    #[allow(dead_code)]
     skill_market: Option<SkillMarketRegistry>,
 }
 
@@ -299,7 +299,7 @@ impl FullAutoFlow {
     }
 
     /// Attach a threshold learner for dynamic skill-match threshold tuning.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-12 — reserved for threshold learner integration
     pub fn with_threshold_learner(mut self, learner: ThresholdLearner) -> Self {
         self.threshold_learner = Some(Mutex::new(learner));
         self
@@ -380,6 +380,30 @@ impl FullAutoFlow {
             tool_lock_manager: ToolLockManager::new(),
             skill_market: None,
         }
+    }
+
+    /// Enable the skill marketplace, allowing the flow to search for
+    /// external skills during the discovery phase.
+    ///
+    /// Caller-available builder method — callers should invoke
+    /// `enable_skill_market()` before `run()` for external skill discovery.
+    #[allow(dead_code)] // public builder API intended for external consumers
+    pub fn enable_skill_market(&mut self) {
+        let cache_dir = std::env::temp_dir().join("go-on-skill-market");
+        let import_policy = SkillImportPolicy {
+            enabled: true,
+            allowed_sources: vec!["*".to_string()],
+            require_sha256: false,
+            allow_floating_ref: true,
+            cache_dir: cache_dir.to_string_lossy().to_string(),
+        };
+        self.skill_market = Some(SkillMarketRegistry::new(
+            "https://marketplace.go-on.dev",
+            cache_dir,
+            Arc::new(RwLock::new(SkillRegistry::default())),
+            import_policy,
+        ));
+        info!("Skill marketplace enabled for discovery phase");
     }
 
     // -----------------------------------------------------------------------
@@ -690,7 +714,7 @@ impl FullAutoFlow {
         debug!("FullAutoFlow: {} tools available in registry", tool_count);
 
         // ---- Step 0: Fast-path route template match ----
-        let (intent, matched_skills) = if let Some(route) = self.cache.match_route(task) {
+        let (intent, mut matched_skills) = if let Some(route) = self.cache.match_route(task) {
             info!(
                 "Fast-path route matched: {} (planning={})",
                 route.task_type, route.requires_planning
@@ -730,12 +754,32 @@ impl FullAutoFlow {
             );
 
             // ---- Step 2: Discover ----
-            let matched_skills = self.discover_skills(&intent);
+            let mut matched_skills = self.discover_skills(&intent);
             info!(
                 "Discovered {} matching skills for task with {} goal(s)",
                 matched_skills.len(),
                 intent.goals.len()
             );
+
+            // Also search the skill marketplace if available.
+            if let Some(ref market) = self.skill_market {
+                let query = intent.goal_text();
+                let market_items = market.search_skills(&query).await;
+                if !market_items.is_empty() {
+                    for item in &market_items {
+                        matched_skills.push(SkillMatch {
+                            name: item.name.clone(),
+                            description: item.description.clone(),
+                            score: 0.8,
+                            reason: "marketplace skill match".into(),
+                        });
+                    }
+                    info!(
+                        "Found {} matching skills from skill marketplace",
+                        market_items.len()
+                    );
+                }
+            }
 
             if matched_skills.is_empty() {
                 warn!("No skills matched the task; flow will produce an empty execution log");
@@ -767,11 +811,30 @@ impl FullAutoFlow {
                 "ToolRecommender suggested {} additional tools",
                 recommended_tools.len()
             );
+
+            // Collect names already in the execution plan for deduplication.
+            let existing_names: BTreeSet<String> =
+                matched_skills.iter().map(|m| m.name.clone()).collect();
+
             for rec in &recommended_tools {
                 debug!(
                     "  ↳ recommended: {} (score: {:.3}, reason: {})",
                     rec.tool_name, rec.relevance_score, rec.reason
                 );
+
+                // Add recommended tools that aren't already in the plan.
+                if !existing_names.contains(&rec.tool_name) {
+                    matched_skills.push(SkillMatch {
+                        name: rec.tool_name.clone(),
+                        description: format!("Auto-recommended: {}", rec.reason),
+                        score: rec.relevance_score.min(1.0),
+                        reason: rec.reason.clone(),
+                    });
+                    debug!(
+                        "ToolRecommender: added '{}' to execution plan",
+                        rec.tool_name
+                    );
+                }
             }
         }
 
@@ -921,6 +984,15 @@ impl FullAutoFlow {
                                 "DiagnosticFeedback suggests repair strategy '{}': {}",
                                 strategy, desc
                             );
+                            // Surface the repair strategy in the error
+                            // report so callers know what was attempted.
+                            errors.push(tf(
+                                "error.full_auto.repair_attempted",
+                                &[
+                                    ("strategy", &strategy),
+                                    ("description", &desc),
+                                ],
+                            ));
                         }
                         let trend = engine.error_trend();
                         debug!("Diagnostic error trend: {}", trend);
@@ -1000,6 +1072,12 @@ impl FullAutoFlow {
         // Create a plan from the task result and execute a synthetic step so
         // the brain loop is no longer a dead module.
         // GAP-46-12: Use ComplexityEstimator to dynamically tune max_iterations.
+        //
+        // NOTE: The synthetic BrainLoop below uses the complexity-derived
+        // iteration count, but it does NOT actually re-execute any skills.
+        // Future work should connect this to real re-execution — e.g. by
+        // re-running failed or low-confidence steps up to the recommended
+        // iteration limit when the flow produces errors.
         if !execution_log.is_empty() {
             let complexity = self.complexity_estimator.estimate(task);
             info!(
@@ -1009,6 +1087,10 @@ impl FullAutoFlow {
                 complexity.level.recommended_iterations()
             );
 
+            // The recommended iteration count is plumbed through to the
+            // BrainLoop config so it's available when the loop is connected
+            // to actual re-execution. For now the synthetic run uses it
+            // as a forward-looking placeholder.
             let bl_config = BrainLoopConfig {
                 max_iterations: complexity.level.recommended_iterations(),
                 ..BrainLoopConfig::default()

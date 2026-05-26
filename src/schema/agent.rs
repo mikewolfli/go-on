@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(transparent)]
 pub struct AuthMethodId(pub String);
+#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
 impl AuthMethodId {
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
@@ -59,6 +60,7 @@ pub struct LogoutResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
 pub struct InitializeRequest {
     pub protocol_version: ProtocolVersion,
     #[serde(default)]
@@ -106,6 +108,7 @@ impl InitializeResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
 pub struct NewSessionRequest {
     pub cwd: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -146,6 +149,7 @@ impl NewSessionResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
 pub struct LoadSessionRequest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mcp_servers: Vec<McpServerConfig>,
@@ -170,6 +174,7 @@ pub struct LoadSessionResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
 pub struct PromptRequest {
     pub session_id: SessionId,
     pub prompt: Vec<ContentBlock>,
@@ -250,6 +255,7 @@ impl SessionMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
 pub struct SetSessionModeRequest {
     pub session_id: SessionId,
     pub mode_id: SessionModeId,
@@ -339,6 +345,7 @@ pub struct SessionConfigOption {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
 pub struct SetSessionConfigOptionRequest {
     pub session_id: SessionId,
     pub config_id: SessionConfigId,
@@ -359,6 +366,7 @@ pub struct SetSessionConfigOptionResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
 pub struct ClientCapabilities {
     #[serde(default)]
     pub fs: FileSystemCapabilities,
@@ -370,6 +378,7 @@ pub struct ClientCapabilities {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
 pub struct FileSystemCapabilities {
     #[serde(default)]
     pub read_text_file: bool,
@@ -454,6 +463,7 @@ pub struct SessionCloseCapabilities {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
 pub struct ResumeSessionRequest {
     pub session_id: SessionId,
     pub cwd: String,
@@ -476,6 +486,7 @@ pub struct ResumeSessionResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
 pub struct CloseSessionRequest {
     pub session_id: SessionId,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
@@ -491,6 +502,7 @@ pub struct CloseSessionResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
 pub struct ListSessionsRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,

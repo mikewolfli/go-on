@@ -1,14 +1,17 @@
 //! SSE Streaming Optimizer — Adaptive chunking, brotli compression,
 //! buffer pooling, and extraction caching for maximum throughput.
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
-
-use crate::agent::StreamingSender;
-use flate2::write::GzEncoder;
-use flate2::Compression;
-use std::collections::VecDeque;
 use std::sync::Mutex;
+
+#[cfg(test)]
+use crate::agent::StreamingSender;
+#[cfg(test)]
+use flate2::write::GzEncoder;
+#[cfg(test)]
+use flate2::Compression;
+#[cfg(test)]
+use std::collections::VecDeque;
+#[cfg(test)]
 use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
@@ -17,11 +20,13 @@ use std::time::{Duration, Instant};
 
 /// A pool of pre-allocated byte buffers for SSE event serialization.
 /// Avoids allocation churn during high-frequency streaming.
+#[allow(dead_code)] // F-GAP-10 — reserved for SSE streaming optimization
 pub struct SseBufferPool {
     buffers: Mutex<Vec<Vec<u8>>>,
     max_capacity: usize,
 }
 
+#[allow(dead_code)] // F-GAP-10 — reserved for SSE streaming optimization
 impl SseBufferPool {
     pub fn new(pool_size: usize, buffer_capacity: usize) -> Self {
         let mut buffers = Vec::with_capacity(pool_size);
@@ -54,15 +59,19 @@ impl SseBufferPool {
 // AdaptiveBatchCollector
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 const BATCH_FLUSH_BYTES: usize = 256;
+#[cfg(test)]
 const BATCH_FLUSH_MS: u64 = 50;
 
 /// Collects small text deltas and flushes them as a single batch.
+#[cfg(test)]
 pub struct AdaptiveBatchCollector {
     buffer: String,
     first_item_at: Option<Instant>,
 }
 
+#[cfg(test)]
 impl AdaptiveBatchCollector {
     pub fn new() -> Self {
         Self {
@@ -109,11 +118,13 @@ impl AdaptiveBatchCollector {
 // ---------------------------------------------------------------------------
 
 /// LRU cache for JSON-to-token extractions to avoid redundant parsing.
+#[cfg(test)]
 pub struct TokenExtractionCache {
     entries: VecDeque<(String, Option<String>)>,
     max_entries: usize,
 }
 
+#[cfg(test)]
 impl TokenExtractionCache {
     pub fn new() -> Self {
         Self {
@@ -140,6 +151,8 @@ impl TokenExtractionCache {
 
 /// Compress SSE data using brotli encoding and send via the sender.
 /// Falls back to uncompressed when brotli would expand the data.
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn compress_and_send_brotli(
     data: &str,
     sender: &StreamingSender,
@@ -175,16 +188,21 @@ pub fn compress_and_send_brotli(
 
 /// Metrics collected during streaming for adaptive tuning.
 #[derive(Debug, Clone, Default)]
+#[cfg(test)]
 pub struct StreamingMetrics {
     pub total_bytes_sent: u64,
+    #[allow(dead_code)]
     pub total_events_sent: u64,
+    #[allow(dead_code)]
     pub batches_flushed: u64,
     pub bytes_saved_by_compression: u64,
+    #[allow(dead_code)]
     pub avg_batch_size: f64,
     pub cache_hits: u64,
     pub cache_misses: u64,
 }
 
+#[cfg(test)]
 impl StreamingMetrics {
     pub fn cache_hit_rate(&self) -> f64 {
         let total = self.cache_hits + self.cache_misses;

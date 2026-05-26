@@ -1,0 +1,632 @@
+//! Requirement helper functions for ACP server
+//!
+//! This module provides utility functions for managing requirement contracts,
+//! requirement gates, and clarification metrics.
+
+use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+use crate::{
+    acp::helpers::autonomy_metrics::{
+        record_requirement_auto_recovery, record_requirement_human_confirmation,
+    },
+    acp::prelude::now_ts,
+    orchestration::task_router::TaskRouter,
+    reinforcement::{
+        persist_governance_policy, persist_requirement_contract, ArtifactLedger,
+        GovernancePolicyArtifact, RequirementContractArtifact,
+    },
+};
+
+/// Requirement gate decision
+#[derive(Debug, Clone)]
+#[allow(dead_code)] // F-GAP-02 — preserved for legacy gate decision compatibility
+pub struct RequirementGateDecision {
+    /// Whether the gate is blocked
+    pub blocked: bool,
+    /// Reason for blocking (if any)
+    pub reason: Option<String>,
+    /// Missing requirement fields
+    pub missing_fields: Vec<String>,
+    /// Path to clarification artifact (if any)
+    pub clarification_artifact_path: Option<PathBuf>,
+    /// Path to governance artifact
+    pub governance_artifact_path: PathBuf,
+}
+
+/// Unified gate facade decision used by workflow/task main paths.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequirementGateFacadeDecision {
+    /// Stable kind for cross-surface consumers.
+    pub kind: String,
+    /// Whether the gate blocks execution.
+    pub blocked: bool,
+    /// Gate reason.
+    pub reason: Option<String>,
+    /// Missing requirement fields.
+    pub missing_fields: Vec<String>,
+    /// Suggested next step.
+    pub next_step: Value,
+    /// Path to clarification artifact (if any).
+    pub clarification_artifact_path: Option<PathBuf>,
+    /// Path to governance artifact.
+    pub governance_artifact_path: PathBuf,
+}
+
+/// Result for automatic requirement-gate recovery.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequirementGateAutoRecovery {
+    /// Re-evaluated requirement gate after auto clarification.
+    pub gate: RequirementGateFacadeDecision,
+    /// Updated request params containing synthesized requirement contract.
+    pub params: Value,
+    /// Recovery metadata for observability and response payloads.
+    pub metadata: Value,
+}
+
+impl RequirementGateFacadeDecision {
+    /// Build the canonical JSON payload for blocked gate responses.
+    pub fn blocked_payload(&self) -> Value {
+        let requires_human_confirmation = self
+            .next_step
+            .get("requires_human_confirmation")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        json!({
+            "kind": self.kind,
+            "blocked": self.blocked,
+            "clarification_in_progress": self.blocked,
+            "requires_human_confirmation": requires_human_confirmation,
+            "auto_confirmable": !requires_human_confirmation,
+            "reason": self.reason,
+            "missing_fields": self.missing_fields,
+            "next_step": self.next_step,
+            "governance_artifact_path": self.governance_artifact_path.display().to_string(),
+            "clarification_artifact_path": self
+                .clarification_artifact_path
+                .as_ref()
+                .map(|path| path.display().to_string()),
+        })
+    }
+
+    /// Build the canonical JSON payload for successful gate checks.
+    pub fn success_payload(&self) -> Value {
+        json!({
+            "kind": self.kind,
+            "blocked": self.blocked,
+            "confirmed": !self.blocked,
+            "clarification_in_progress": false,
+            "requires_human_confirmation": false,
+            "auto_confirmable": true,
+            "missing_fields": self.missing_fields,
+            "next_step": self.next_step,
+            "governance_artifact_path": self.governance_artifact_path.display().to_string(),
+            "clarification_artifact_path": self
+                .clarification_artifact_path
+                .as_ref()
+                .map(|path| path.display().to_string()),
+        })
+    }
+}
+
+/// Learning clarification metrics
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)] // F-GAP-02 — reserved for clarification learning feedback loop
+pub struct LearningClarificationMetrics {
+    /// Number of clarification rounds
+    pub rounds: u32,
+    /// Quality score (0.0 to 1.0)
+    pub quality_score: f64,
+    /// Number of requirement changes
+    pub requirement_change_count: u32,
+}
+
+/// Parse string list from JSON Value
+#[allow(dead_code)] // F-GAP-02 — reserved for contract parsing utility
+fn parse_string_list(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| item.as_str())
+                .map(|item| item.trim().to_string())
+                .filter(|item| !item.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+/// Parse requirement contract from request parameters
+pub fn parse_requirement_contract_from_params(
+    params: &Value,
+    task: &str,
+) -> Option<RequirementContractArtifact> {
+    let contract = params.get("requirement_contract")?;
+    let goal = contract
+        .get("goal")
+        .and_then(|v| v.as_str())
+        .map(|v| v.trim().to_string())
+        .unwrap_or_default();
+    let scope = contract
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .map(|v| v.trim().to_string())
+        .unwrap_or_default();
+
+    Some(RequirementContractArtifact {
+        generated_at: now_ts(),
+        task: task.to_string(),
+        source: "request.params.requirement_contract".to_string(),
+        goal,
+        scope,
+        non_goals: parse_string_list(contract.get("non_goals")),
+        acceptance_criteria: parse_string_list(contract.get("acceptance_criteria")),
+        constraints: parse_string_list(contract.get("constraints")),
+        open_questions: parse_string_list(contract.get("open_questions")),
+        ambiguity_score: contract
+            .get("ambiguity_score")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0)
+            .min(5) as u8,
+        user_confirmed: contract
+            .get("user_confirmed")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+    })
+}
+
+/// Create default requirement contract
+#[allow(dead_code)] // F-GAP-17 — reserved for default requirement contract wiring
+pub fn default_requirement_contract(task: &str, source: &str) -> RequirementContractArtifact {
+    RequirementContractArtifact {
+        generated_at: now_ts(),
+        task: task.to_string(),
+        source: source.to_string(),
+        goal: String::new(),
+        scope: String::new(),
+        non_goals: Vec::new(),
+        acceptance_criteria: Vec::new(),
+        constraints: Vec::new(),
+        open_questions: Vec::new(),
+        ambiguity_score: 0,
+        user_confirmed: false,
+    }
+}
+
+/// Identify missing requirement fields
+pub fn requirement_missing_fields(contract: &RequirementContractArtifact) -> Vec<String> {
+    let mut missing = Vec::new();
+    if contract.goal.trim().is_empty() {
+        missing.push("goal".to_string());
+    }
+    if contract.scope.trim().is_empty() {
+        missing.push("scope".to_string());
+    }
+    if contract.acceptance_criteria.is_empty() {
+        missing.push("acceptance_criteria".to_string());
+    }
+    if contract.constraints.is_empty() {
+        missing.push("constraints".to_string());
+    }
+    missing
+}
+
+/// Generate clarification questions from missing fields
+#[allow(dead_code)] // F-GAP-02 — reserved for interactive clarification flow
+pub fn requirement_questions_from_missing(missing_fields: &[String]) -> Vec<String> {
+    missing_fields
+        .iter()
+        .map(|field| match field.as_str() {
+            "goal" => "这个任务最终想达成的业务目标是什么？".to_string(),
+            "scope" => "本次改动边界是什么？哪些模块必须包含？".to_string(),
+            "acceptance_criteria" => "验收标准是什么？如何证明完成？".to_string(),
+            "constraints" => "有哪些硬约束（时间、兼容性、性能、安全）？".to_string(),
+            other => format!("请补充字段: {}", other),
+        })
+        .collect::<Vec<_>>()
+}
+
+/// Estimate requirement ambiguity score
+pub fn estimate_requirement_ambiguity(task: &str, contract: &RequirementContractArtifact) -> u8 {
+    let characteristics = TaskRouter::analyze_task(task);
+    let mut score = characteristics.complexity.min(5);
+    let missing = requirement_missing_fields(contract).len() as u8;
+    score = score.saturating_add(missing.min(2));
+    score.min(5)
+}
+
+/// Load latest requirement contract for a task
+pub fn load_latest_requirement_contract(
+    ledger: &ArtifactLedger,
+    task: &str,
+) -> Option<RequirementContractArtifact> {
+    let latest = ledger.latest_path("spec", "latest-clarification.json");
+    let raw = std::fs::read_to_string(latest).ok()?;
+    let artifact = serde_json::from_str::<RequirementContractArtifact>(&raw).ok()?;
+    if artifact.task.trim() == task.trim() {
+        Some(artifact)
+    } else {
+        None
+    }
+}
+
+/// Evaluate requirement gate
+pub fn evaluate_requirement_gate(
+    ledger: &ArtifactLedger,
+    task: &str,
+    params: &Value,
+    source: &str,
+) -> anyhow::Result<RequirementGateDecision> {
+    let characteristics = TaskRouter::analyze_task(task);
+    let clarification_required = characteristics.complexity >= 3
+        || characteristics.involves_multiple_modules
+        || characteristics.needs_verification
+        || characteristics.has_safety_concerns;
+
+    let mut contract = parse_requirement_contract_from_params(params, task)
+        .or_else(|| load_latest_requirement_contract(ledger, task))
+        .unwrap_or_else(|| default_requirement_contract(task, source));
+    contract.generated_at = now_ts();
+    contract.source = source.to_string();
+    contract.ambiguity_score = estimate_requirement_ambiguity(task, &contract);
+    if let Some(v) = params
+        .get("requirement_confirmed")
+        .and_then(|v| v.as_bool())
+    {
+        contract.user_confirmed = v;
+    }
+
+    let missing_fields = requirement_missing_fields(&contract);
+    let confirmed = contract.user_confirmed && missing_fields.is_empty();
+    let blocked = clarification_required && !confirmed;
+
+    let clarification_artifact_path =
+        if parse_requirement_contract_from_params(params, task).is_some() {
+            Some(persist_requirement_contract(ledger, &contract)?)
+        } else {
+            None
+        };
+
+    let reason = if blocked {
+        Some(
+            "requirement clarification/confirmation is required before planning or execution"
+                .to_string(),
+        )
+    } else {
+        None
+    };
+    let governance = GovernancePolicyArtifact {
+        generated_at: now_ts(),
+        task: task.to_string(),
+        source: source.to_string(),
+        clarification_required,
+        confirmed,
+        blocked,
+        reason: reason.clone(),
+        next_step: if blocked {
+            serde_json::json!({
+                "method": "workflow.clarify",
+                "task": task,
+                "missing_fields": missing_fields,
+                "suggested_followup": "call workflow.confirm with completed requirement_contract and user_confirmed=true"
+            })
+        } else {
+            serde_json::json!({"status": "confirmed"})
+        },
+    };
+    let governance_artifact_path = persist_governance_policy(ledger, &governance)?;
+
+    Ok(RequirementGateDecision {
+        blocked,
+        reason,
+        missing_fields,
+        clarification_artifact_path,
+        governance_artifact_path,
+    })
+}
+
+/// Evaluate unified requirement gate facade for workflow/task main paths.
+pub fn evaluate_requirement_gate_facade(
+    ledger: &ArtifactLedger,
+    task: &str,
+    params: &Value,
+    source: &str,
+) -> anyhow::Result<RequirementGateFacadeDecision> {
+    let mut gate = evaluate_requirement_gate(ledger, task, params, source)?;
+
+    // Keep workflow/task main paths non-blocking for low-risk gaps by
+    // auto-synthesizing a minimal requirement contract and re-evaluating.
+    if gate.blocked && auto_clarification_enabled(params) {
+        let facade_gate = RequirementGateFacadeDecision {
+            kind: "requirement_contract".to_string(),
+            blocked: gate.blocked,
+            reason: gate.reason.clone(),
+            missing_fields: gate.missing_fields.clone(),
+            next_step: json!({
+                "method": "workflow.clarify",
+                "task": task,
+                "missing_fields": gate.missing_fields,
+            }),
+            clarification_artifact_path: gate.clarification_artifact_path.clone(),
+            governance_artifact_path: gate.governance_artifact_path.clone(),
+        };
+
+        if can_auto_recover_task(task, &facade_gate) {
+            let contract = synthesize_requirement_contract(task, params, source);
+            let mut recovered_params = params.clone();
+            if let Some(params_obj) = recovered_params.as_object_mut() {
+                params_obj.insert(
+                    "requirement_contract".to_string(),
+                    serde_json::to_value(&contract)?,
+                );
+                params_obj.insert("requirement_confirmed".to_string(), Value::Bool(true));
+                params_obj.insert(
+                    "auto_clarification_in_progress".to_string(),
+                    Value::Bool(true),
+                );
+
+                let recovered = evaluate_requirement_gate(ledger, task, &recovered_params, source)?;
+                if !recovered.blocked {
+                    record_requirement_auto_recovery();
+                    gate = recovered;
+                }
+            }
+        }
+    }
+
+    if gate.blocked {
+        record_requirement_human_confirmation();
+    }
+
+    let next_step = if gate.blocked {
+        json!({
+            "method": "workflow.clarify",
+            "task": task,
+            "missing_fields": gate.missing_fields,
+        })
+    } else {
+        json!({"status": "confirmed"})
+    };
+
+    Ok(RequirementGateFacadeDecision {
+        kind: "requirement_contract".to_string(),
+        blocked: gate.blocked,
+        reason: gate.reason,
+        missing_fields: gate.missing_fields,
+        next_step,
+        clarification_artifact_path: gate.clarification_artifact_path,
+        governance_artifact_path: gate.governance_artifact_path,
+    })
+}
+
+pub(crate) fn auto_clarification_enabled(params: &Value) -> bool {
+    params
+        .get("governance")
+        .and_then(|value| value.get("auto_clarification_enabled"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+pub(crate) fn can_auto_recover_task(task: &str, gate: &RequirementGateFacadeDecision) -> bool {
+    let characteristics = TaskRouter::analyze_task(task);
+    if characteristics.has_safety_concerns || characteristics.complexity >= 4 {
+        return false;
+    }
+
+    // Keep auto-clarification conservative: only recover when the gap is small.
+    gate.missing_fields.len() <= 2
+}
+
+pub(crate) fn synthesize_requirement_contract(
+    task: &str,
+    params: &Value,
+    source: &str,
+) -> RequirementContractArtifact {
+    let mut contract = parse_requirement_contract_from_params(params, task)
+        .unwrap_or_else(|| default_requirement_contract(task, source));
+
+    if contract.goal.trim().is_empty() {
+        contract.goal = format!("Complete task: {}", task.trim());
+    }
+    if contract.scope.trim().is_empty() {
+        contract.scope =
+            "Limit implementation to requested behavior and directly touched modules".to_string();
+    }
+    if contract.acceptance_criteria.is_empty() {
+        contract.acceptance_criteria = vec![
+            "Requested behavior is implemented".to_string(),
+            "Execution and verification for touched scope complete successfully".to_string(),
+        ];
+    }
+    if contract.constraints.is_empty() {
+        contract.constraints = vec![
+            "Keep profile compatibility across local/simple-server/multi-users-server".to_string(),
+            "Avoid unrelated behavior changes".to_string(),
+        ];
+    }
+
+    contract.generated_at = now_ts();
+    contract.source = format!("{}.auto_clarify", source);
+    contract.open_questions.clear();
+    contract.user_confirmed = true;
+    contract.ambiguity_score = estimate_requirement_ambiguity(task, &contract);
+    contract
+}
+
+/// Try to recover from requirement gate blocking by auto-clarifying low-risk gaps.
+pub fn try_auto_recover_requirement_gate(
+    ledger: &ArtifactLedger,
+    task: &str,
+    params: &Value,
+    source: &str,
+    gate: &RequirementGateFacadeDecision,
+) -> anyhow::Result<Option<RequirementGateAutoRecovery>> {
+    if !gate.blocked {
+        return Ok(None);
+    }
+    if !auto_clarification_enabled(params) || !can_auto_recover_task(task, gate) {
+        return Ok(None);
+    }
+
+    let contract = synthesize_requirement_contract(task, params, source);
+    let mut recovered_params = params.clone();
+    let Some(params_obj) = recovered_params.as_object_mut() else {
+        return Ok(None);
+    };
+
+    params_obj.insert(
+        "requirement_contract".to_string(),
+        serde_json::to_value(&contract)?,
+    );
+    params_obj.insert("requirement_confirmed".to_string(), Value::Bool(true));
+    params_obj.insert(
+        "auto_clarification_in_progress".to_string(),
+        Value::Bool(true),
+    );
+
+    let recovered_gate = evaluate_requirement_gate_facade(ledger, task, &recovered_params, source)?;
+    if recovered_gate.blocked {
+        return Ok(None);
+    }
+
+    Ok(Some(RequirementGateAutoRecovery {
+        gate: recovered_gate,
+        params: recovered_params,
+        metadata: json!({
+            "applied": true,
+            "mode": "auto_clarification",
+            "clarification_in_progress": true,
+            "requires_human_confirmation": false,
+            "auto_confirmable": true,
+            "resolved_missing_fields": gate.missing_fields,
+        }),
+    }))
+}
+
+/// Derive clarification quality score from contract
+pub fn derive_clarification_quality_score(contract: &RequirementContractArtifact) -> f64 {
+    let missing_count = requirement_missing_fields(contract).len() as f64;
+    let completeness_score = ((4.0 - missing_count).max(0.0) / 4.0).clamp(0.0, 1.0);
+    let ambiguity_penalty = (contract.ambiguity_score as f64 / 5.0).clamp(0.0, 1.0);
+    let quality = 0.7 * completeness_score + 0.3 * (1.0 - ambiguity_penalty);
+    quality.clamp(0.0, 1.0)
+}
+
+/// Resolve learning clarification metrics
+pub fn resolve_learning_clarification_metrics(
+    ledger: &ArtifactLedger,
+    task: &str,
+    params: &Value,
+) -> LearningClarificationMetrics {
+    let provided_contract = parse_requirement_contract_from_params(params, task);
+    let latest_contract = load_latest_requirement_contract(ledger, task);
+    let active_contract = provided_contract.as_ref().or(latest_contract.as_ref());
+
+    let rounds = params
+        .get("clarification_rounds")
+        .and_then(|v| v.as_u64())
+        .map(|v| v.min(64) as u32)
+        .unwrap_or_else(|| {
+            if let Some(contract) = active_contract {
+                let has_questions = !contract.open_questions.is_empty();
+                let base_rounds = if has_questions { 1 } else { 0 };
+                let confirm_round = if contract.user_confirmed { 1 } else { 0 };
+                (base_rounds + confirm_round).max(1)
+            } else {
+                0
+            }
+        });
+
+    let quality_score = params
+        .get("clarification_quality_score")
+        .and_then(|v| v.as_f64())
+        .map(|v| v.clamp(0.0, 1.0))
+        .unwrap_or_else(|| {
+            active_contract
+                .map(derive_clarification_quality_score)
+                .unwrap_or(0.0)
+        });
+
+    let requirement_change_count = params
+        .get("requirement_change_count")
+        .and_then(|v| v.as_u64())
+        .map(|v| v.min(4096) as u32)
+        .or_else(|| {
+            params
+                .get("requirement_contract_revision")
+                .and_then(|v| v.as_u64())
+                .map(|revision| revision.saturating_sub(1).min(4096) as u32)
+        })
+        .unwrap_or_else(|| {
+            if let (Some(current), Some(previous)) =
+                (provided_contract.as_ref(), latest_contract.as_ref())
+            {
+                let changed = current.goal != previous.goal
+                    || current.scope != previous.scope
+                    || current.non_goals != previous.non_goals
+                    || current.acceptance_criteria != previous.acceptance_criteria
+                    || current.constraints != previous.constraints;
+                if changed {
+                    1
+                } else {
+                    0
+                }
+            } else if provided_contract.is_some() {
+                1
+            } else {
+                0
+            }
+        });
+
+    LearningClarificationMetrics {
+        rounds,
+        quality_score,
+        requirement_change_count,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_recover_rejects_high_risk_or_large_gap() {
+        let high_risk = RequirementGateFacadeDecision {
+            kind: "requirement_contract".to_string(),
+            blocked: true,
+            reason: Some("blocked".to_string()),
+            missing_fields: vec![
+                "goal".to_string(),
+                "scope".to_string(),
+                "constraints".to_string(),
+            ],
+            next_step: json!({"method": "workflow.clarify"}),
+            clarification_artifact_path: None,
+            governance_artifact_path: std::path::PathBuf::from("/tmp/governance.json"),
+        };
+
+        assert!(!can_auto_recover_task(
+            "security critical migration",
+            &high_risk
+        ));
+        assert!(!can_auto_recover_task(
+            "refactor large multi module platform",
+            &high_risk
+        ));
+    }
+
+    #[test]
+    fn synthesized_contract_fills_minimum_fields() {
+        let task = "implement runtime retry";
+        let params = json!({});
+        let contract = synthesize_requirement_contract(task, &params, "task.execute");
+
+        assert!(!contract.goal.trim().is_empty());
+        assert!(!contract.scope.trim().is_empty());
+        assert!(!contract.acceptance_criteria.is_empty());
+        assert!(!contract.constraints.is_empty());
+        assert!(contract.user_confirmed);
+    }
+}

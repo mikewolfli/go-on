@@ -12,9 +12,6 @@
 //! - Uses `SkillImportPolicy` from `skill_import.rs` for import policy
 //! - Integrates with `DiscoveryCenter` for skill recommendations
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
-
 use crate::orchestration::skill::SkillRegistry;
 use crate::orchestration::skill_import::SkillImportPolicy;
 use anyhow::{Context, Result};
@@ -125,6 +122,7 @@ pub struct SkillInstallation {
 // ---------------------------------------------------------------------------
 
 /// A registry of skills available from a remote marketplace.
+#[allow(dead_code)] // F-GAP-12 — reserved for skill marketplace integration
 pub struct SkillMarketRegistry {
     /// Registry URL or identifier.
     registry_url: String,
@@ -135,13 +133,14 @@ pub struct SkillMarketRegistry {
     /// Local installations.
     installations: Arc<RwLock<Vec<SkillInstallation>>>,
     /// Reference to the local skill registry.
-    skill_registry: Arc<RwLock<SkillRegistry>>,
+    _skill_registry: Arc<RwLock<SkillRegistry>>,
     /// Import policy for security.
-    import_policy: SkillImportPolicy,
+    _import_policy: SkillImportPolicy,
     /// HTTP client for fetching remote resources.
-    http_client: reqwest::Client,
+    _http_client: reqwest::Client,
 }
 
+#[allow(dead_code)] // F-GAP-12 — reserved for skill marketplace integration
 impl SkillMarketRegistry {
     /// Create a new SkillMarketRegistry.
     pub fn new(
@@ -155,9 +154,9 @@ impl SkillMarketRegistry {
             skills: Arc::new(RwLock::new(Vec::new())),
             cache_dir,
             installations: Arc::new(RwLock::new(Vec::new())),
-            skill_registry,
-            import_policy,
-            http_client: reqwest::Client::builder()
+            _skill_registry: skill_registry,
+            _import_policy: import_policy,
+            _http_client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(30))
                 .user_agent("go-on-skill-market/1.0")
                 .build()

@@ -1,27 +1,57 @@
-﻿# go-on
+﻿<p align="center">
+  <img src="snapshots/chat.png" alt="go-on" width="600">
+</p>
 
-简体中文 | [English](README.md)
+<p align="center">
+  <strong>go-on</strong> — 用 Rust 编写的 ACP/MCP 智能体编排运行时，提供桌面 GUI、VS Code 插件，支持 35+ AI 供应商。
+</p>
 
-**go-on** 是一个基于 Rust 的 **ACP/MCP 智能体编排、治理与生产安全运行时** — 一站式 AI 智能体运行时。
-
-- 🖥️ **桌面 GUI** — 监控、对话、技能与工具管理
-- 🧠 **14 条总线智能核心** — CapabilityBus + HarnessBus 全链路闭环治理
-- 🌐 **全链路国际化** — 简体中文、繁体中文、英文（各 448+ 键值）
-- 🛡️ **安全审查模式 (Safeguard)** — AI 驱动的风险内容评估
-- 🔌 **多协议支持** — ACP + MCP，stdio + HTTP，单用户到多用户集群
-- 🤖 **35+ AI 供应商** — OpenAI、Anthropic、DeepSeek、Gemini、Groq、Ollama 等
+<p align="center">
+  <a href="README.md">English</a> | 简体中文
+</p>
 
 ---
 
-## GUI 桌面应用
+[![Rust](https://img.shields.io/badge/rust-1.1.0-orange?logo=rust)](https://www.rust-lang.org)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-1400%2B-brightgreen)]()
+[![Providers](https://img.shields.io/badge/providers-35%2B-9cf)]()
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
 
-基于 EGUI 的桌面图形界面（`gui/`）提供实时监控、多会话对话、技能管理和可视化配置 — 无需终端。
+## go-on 是什么？
+
+go-on 是一个**本地优先**、生产级的 AI 智能体运行时，使用 Rust 编写。它通过标准智能体协议（ACP / MCP）连接大语言模型与你的工具和工作流。你可以将它作为 CLI 工具、桌面应用或后端服务器运行 — 内置完整的自治循环、工具编排与治理能力。
+
+**用 go-on 你可以：**
+- 🖥️ 通过原生桌面 GUI 或终端与 AI 模型对话
+- 🤖 运行能自主规划、执行、自我纠错的智能体
+- 🔧 通过依赖感知的 DAG 执行引擎编排多工具工作流
+- 🔌 将 AI 模型连接到 MCP 服务器，或作为 MCP 服务器运行
+- 🛡️ 通过 RBAC、审计追踪和风险评估执行治理策略
+- 🧩 通过 VS Code 插件或 Rust/Python SDK 扩展
+
+## 快速开始
 
 ```bash
+# 编译并运行（自动生成默认配置）
+cargo run
+
+# 启动桌面 GUI
 cargo run --manifest-path gui/Cargo.toml
+
+# 终端对话模式
+cargo run -- --chat
+
+# 作为 MCP 服务端启动
+cargo run -- --protocol-mode mcp-stdio
 ```
 
-### 截图预览
+首次运行时会检测 AI 供应商配置，若未配置则启动交互式初始化向导。  
+默认健康检查：`http://127.0.0.1:8090/health`
+
+---
+
+## 截图预览
 
 | 监控面板 | 对话界面 |
 |:---:|:---:|
@@ -35,128 +65,147 @@ cargo run --manifest-path gui/Cargo.toml
 |:---:|
 | ![技能管理](snapshots/skills.png) |
 
-### 主要功能
-- **监控面板**：后端健康状态、AI 供应商状态、实时指标
-- **对话界面**：多会话管理、阶段/模式选择、文件附件、多模型支持、自动消息修剪（每会话最多 1000 条）、动态发送按钮
-- **技能管理**：创建和管理 AI 技能，内置 `skill-creator`
-- **设置**：供应商管理（35 供应商）、配置编辑器、6 种主题、语言切换（en/zh-CN/zh-TW）
-- **风险决策面板**：当后端检测到高风险话题（医疗、法律、金融、安全等）时，展示风险评分、应对策略（多模型投票、多智能体投票、升级处理）、审查要求及具体原因
-- **密钥管理**：系统 keyring + 配置文件双重存储
-- **自动重启**：后端崩溃后自动重启（指数退避 3→96 秒）
+---
+
+## 核心功能
+
+### 智能体编排
+- **自治循环** — 规划 → 执行 → 反思 → 重规划，迭代次数根据复杂度自适应调整
+- **DAG 任务执行** — Kahn 拓扑排序、依赖边、并行组执行、循环检测
+- **全自动流程** — 意图解析 → 技能发现 → 环境准备 → 执行 → 报告
+- **快路径缓存** — SHA-256 指纹索引、TTL/LRU 淘汰、四层缓存（意图/技能/环境/路由）
+- **预测式重路由** — 基于健康评分的主动智能体切换，非仅失败后回退
+
+### AI 供应商支持（35+）
+OpenAI · Anthropic · DeepSeek · Gemini · Groq · Ollama · Mistral · Qwen · Llama · Cohere · AI21 · Perplexity · Together · Fireworks · Replicate · MiniMax · Moonshot · 智谱 GLM · 百度千帆 · 字节豆包 · 腾讯混元 · StepFun · Skywork · 以及更多。
+
+OpenAI、Anthropic、DeepSeek、Gemini 四家供应商已支持原生 Function Call。
+
+### 协议与传输
+- **ACP**（Agent Client Protocol）— stdio + HTTP，JSON-RPC 2.0
+- **MCP**（Model Context Protocol）— stdio + HTTP，工具列表/调用、流式传输、取消、超时
+- **5 种模式**：`adaptive`（双栈）、`acp-stdio`、`acp-http`、`mcp-stdio`、`mcp-http`
+- **跨入口一致性** — 同一任务在 ACP/CLI/MCP 下产生一致的 stop_reason 与回合数
+
+### 工具系统
+- **16 个内置工具** — 读写文件、代码搜索、补丁应用、测试运行、Git Diff、Shell 执行、HTTP 请求、数据库查询等
+- **工具流水线** — 串行/并行/条件执行，可配置的错误处理策略
+- **工具事务** — 幂等键去重、WAL 持久化、补偿操作、两阶段提交（2PC）
+- **动态工具推荐** — 基于模式+近因+共现的工具推荐引擎
+- **原生函数调用** — OpenAI/Anthropic tool_choice、Gemini functionCall、DeepSeek tools 参数
+
+### 治理与安全
+- **HarnessBus** — 中央治理层，含策略评估、漂移检测、安全检查
+- **PUA 规则引擎** — 实时策略评估与升级级别
+- **RBAC 权限控制** — 基于角色的访问控制，支持多源租户注册
+- **租户隔离** — 跨租户访问阻断；基于预算的并发限制
+- **审计追踪** — 完整决策流水线记录，支持回放
+- **Safeguard 安全审查** — AI 驱动的高风险操作评估
+
+### 性能
+- **FastPathCache** — 重复查询的亚毫秒级缓存命中
+- **SSE 缓冲池** — 零分配的流式事件序列化
+- **缓存预热** — 预测性预加载，自适应 TTL，多层管理
+- **并发执行** — 按角色 BinaryHeap 出队（O(log n)），信号量背压
+- **DAG 汇聚超时** — tokio::time::timeout 防止单工具拖尾延迟
+
+### 韧性
+- **恢复编排器** — 6 种策略：重试 → 重路由 → 重规划 → 修复 → 升级 → 降级
+- **混沌测试** — 10 种故障注入（超时、分区、崩溃、数据损坏、限流等）
+- **熔断器** — 基于状态机的快速失败与冷却
+- **热故障切换** — 主备模型切换，含冷却黑名单
+
+### 可观测性
+- **governance.status 端点** — 真实 p95 延迟、DAG 宽/深度、缓存指标、幂等冲突率
+- **OpenTelemetry 追踪** — 请求路由、工具执行、智能体选择的 Span
+- **审计回放** — 完整的任务执行证据链，可重现、可筛选
+
+### 会话管理
+- **会话上下文管理** — 关键概念提取、消息重要性评分、连续性标记
+- **会话压缩** — 超限消息的语义压缩，保留最近的 + 系统 + 指令类消息
+- **上下文窗口预算** — 超令牌限制时的智能消息保留
+
+### 配置与部署
+- **配置热重载** — 基于文件监控，运行时原子替换配置
+- **Schema 版本管理** — semver 语义化版本跟踪，前向/后向迁移
+- **3 种构建配置** — local（SQLite）、simple-server（SQLite）、multi-users-server（PostgreSQL + pgvector）
+- **系统密钥环集成** — macOS Keychain、Linux Secret Service、Windows Credential Manager
 
 ---
 
-## 架构：多总线能力系统
+## 架构
 
-go-on 实现了以 **CapabilityBus** 和 **HarnessBus** 为核心的 **14 条总线架构**：
+go-on 采用 **14 条总线能力架构**，含 21 个认知（F-GAP）模块：
 
-### 核心总线
-| 总线 | 说明 |
-|:----|------|
-| **CapabilityBus** | 中央智能总线，编排 sense → decide → act → feedback → evolve 生命周期 |
-| **HarnessBus** | 治理入口，策略评估、漂移/弹性/安全检查 |
+```
+┌──────────────────────────────────────────────────────────┐
+│                     HarnessBus (治理层)                  │
+│  策略评估 · 漂移检测 · 韧性 · 安全 · 审计               │
+├──────────────────────────────────────────────────────────┤
+│                   CapabilityBus (智能层)                  │
+│  感知 → 决策 → 行动 → 反馈 → 进化                       │
+├──────────┬──────────┬──────────┬──────────┬─────────────┤
+│ ToolBus  │ObservB.  │OptimizB. │MemoryBus │ProtocolBus  │
+├──────────┼──────────┼──────────┼──────────┼─────────────┤
+│OrchestB. │          │          │DistMemB. │             │
+└──────────┴──────────┴──────────┴──────────┴─────────────┘
+```
 
-### 子总线
-| 总线 | 说明 |
-|:----|------|
-| **ToolBus** | 统一工具/Skill 调用，能力矩阵，Agent-工具匹配 |
-| **ObservabilityBus** | 延迟、错误率、Agent 健康 |
-| **OptimizationBus** | 成本/速度/可靠性推荐，熔断器 |
-| **MemoryBus** | 级联缓存（L1 内存 → L2 SQLite → L3 向量存储） |
-| **ProtocolBus** | 协议感知路由，健康/延迟追踪 |
-| **OrchestrationBus** | 流程/模式/路由编排，模式推荐 |
-| **DistributedMemoryBus** | 跨节点记忆共享（多用户配置） |
-
-### F-GAP 认知模块（21/21 全部完成 ✅）
+### 核心能力模块
 
 | 模块 | 说明 |
-|:-----|------|
-| OmnipotentMode 全能模式 | 自愈任务执行 |
-| BrainLoop 脑回路 | 计划→执行→反思→重计划 |
-| ConsensusEngine 共识引擎 | 多智能体投票治理 |
-| SelfModelCore 自模型核心 | 系统自我认知与能力追踪 |
-| ConsciousnessMetrics 意识代理指标 | 智能体意识状态机 |
-| MetacognitiveController 元认知控制器 | 观察驱动的反思与行动 |
-| WorldModel 世界模型 | 实体/事件/关系流水线 |
-| DiscoveryCenter 方案发现中心 | 跨会话模式挖掘 |
-| EvolutionGraph 演化图谱 | 能力生命周期与趋势追踪 |
-| FederatedRL 联邦强化学习 | 分布式强化学习 |
-| DriftProtection 漂移防护 | 目标/能力/行为漂移检测 |
-| HyperResilience 超弹性 | 熔断器、故障切换、自愈 |
-| FaultTolerance 跨节点容错 | 故障隔离与自动恢复 |
-| MultiChannelTransport 多渠道传输 | QoS、去重、消息探测 |
-
-### 38 维度满星评级
-
-```
-治理与合规 (5/5):    ★★★★★ 溯源, 漂移防护, 策略评估, Token门控, 安全治理
-弹性与容错 (2/2):    ★★★★★ 超弹性, 跨节点容错
-编排与执行 (6/6):    ★★★★★ 编排总线, 调度器, 执行图, 全能模式, 制品层, 脑回路
-路由与调度 (7/7):    ★★★★★ 能力图谱, 信誉, Q学习, 场景匹配, 发现中心, 工作流注册表, Agent工厂
-协议与传输 (2/2):    ★★★★★ 协议总线, 多渠道传输
-记忆与缓存 (2/2):    ★★★★★ 内存总线, 分布式内存总线
-观测与优化 (3/3):    ★★★★★ 可观测总线, 优化总线, 工具总线
-智能认知 (5/5):      ★★★★★ 知识萃取, 深度RL, 技能传承, AI进化, 自建Skills
-自我认知 (5/5):      ★★★★★ 自模型, 意识指标, 元认知, 世界模型, 共识
-───────────────────────────────────────────────────────────────────────────────────
-总计 (38/38):        100% ★★★★★
-```
+|:-----|:-----|
+| **Planner 规划器** | 任务自适应的 DAG 规划，含依赖推断 |
+| **DAG Driver 执行引擎** | 拓扑排序执行，并行组调度 |
+| **BrainLoop 脑回路** | 规划→执行→反思→重规划的认知循环 |
+| **CapabilityBus 能力总线** | 多因子智能体选择（信誉+近因+任务匹配+近期结果） |
+| **SelfModelCore 自模型** | 系统自感知与能力追踪 |
+| **MetacognitiveController 元认知** | 观察驱动的反思与纠偏 |
+| **WorldModel 世界模型** | 实体/事件/关系追踪流水线 |
+| **FederatedRL 联邦强化学习** | 跨节点的分布式强化学习 |
+| **DriftProtection 漂移防护** | 目标/能力/行为的漂移检测 |
+| **HyperResilience 超弹性** | 熔断器、故障切换组、自愈 |
+| **MultiChannelTransport 多渠道传输** | QoS 感知、去重、优先级消息传输 |
 
 ---
 
-## 协议模式
+## 扩展
 
-5 种模式适配任意集成场景：
-
-| 模式 | 说明 |
-|:-----|------|
-| `adaptive`（默认） | 双栈协议，按请求类型路由 |
-| `acp_stdio` / `acp_http` | ACP over stdio / HTTP |
-| `mcp_stdio` / `mcp_http` | MCP over stdio / HTTP |
-
-配置示例：
-```toml
-[protocol]
-mode = "adaptive"
-```
-
----
-
-## 国际化（i18n）
-
-后端全链路约 **95%** 国际化覆盖：
-
-| 语言 | 文件 | 键值数 |
-|:-----|:-----|:------:|
-| 简体中文 | `languages/zh_CN.json` | 448+ |
-| 繁体中文 | `languages/zh_TW.json` | 448+ |
-| 英语（美国） | `languages/en_US.json` | 448+ |
-
-覆盖：ACP/MCP HTTP 错误 ✅、Agent 供应商模块 ✅、配置验证 ✅、CLI 初始化 ✅、API 错误 ✅、编排层 ✅
-
----
-
-## 快速开始
+### VS Code 插件
+`vscode-addon/` 目录包含 VS Code 扩展，可启动 go-on 运行时并在编辑器内提供 60+ 命令 — 对话、工作流执行、技能管理和配置。
 
 ```bash
-# 克隆并启动（自动创建配置）
-git clone https://github.com/your-org/go-on
-cd go-on
-cargo run
-
-# 或启动桌面 GUI
-cargo run --manifest-path gui/Cargo.toml
-
-# 终端聊天模式（类似 Claude Code / Codex）
-go-on --chat
+cd vscode-addon
+npm install
+npm run compile
 ```
 
-首次运行自动检测环境 — 若未配置 AI 供应商，初始化向导将交互式引导。
+### SDK
+- **Rust SDK**（`sdk/rust/`）— 强类型客户端，覆盖 go-on ACP/MCP 端点，8 个领域 40+ 方法
+- **Python SDK**（`sdk/python/`）— 基于 HTTPX 的客户端，支持流式传输，含 `py.typed` 标记
 
-默认健康检查：`http://127.0.0.1:8090/health`
+---
+
+## 构建配置
+
+| 配置 | 后端 | 适用场景 | 构建命令 |
+|:-----|:-----|:---------|:--------|
+| `profile-local` | SQLite + sqlite-vec | 单用户本地工具 | `cargo build`（默认） |
+| `profile-simple-server` | SQLite + sqlite-vec | 单服务器部署 | `cargo build --no-default-features -F profile-simple-server` |
+| `profile-multi-users-server` | PostgreSQL + pgvector | 多用户生产环境 | `cargo build --no-default-features -F profile-multi-users-server` |
+
+---
+
+## 验证状态
+
+| 配置 | cargo check | cargo clippy `-D warnings` | 测试 |
+|:-----|:-----------:|:--------------------------:|:----:|
+| `profile-local` | ✅ 0 errors | ✅ 0 warnings | 800+ |
+| `profile-simple-server` | ✅ 0 errors | ✅ 0 warnings | 900+ |
+| `profile-multi-users-server` | ✅ 0 errors | ✅ 0 warnings | 1,000+ |
 
 ---
 
 ## 许可证
 
-MIT 或 BSD（可任选其一）。
+MIT License — 详见 [LICENSE](LICENSE)。

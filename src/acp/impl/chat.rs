@@ -57,6 +57,7 @@ use crate::orchestration::autonomy_runtime::{
 
 use crate::agents::sse_optimizer::SseBufferPool;
 use crate::orchestration::prompt_layers::PromptAssembler;
+use crate::orchestration::session_compressor::SessionCompressor;
 use crate::orchestration::session_context::SessionContextManager;
 use crate::orchestration::task_router::{TaskRouter, TaskType};
 use crate::orchestration::tool::{execute_loop, LoopConfig, LoopDecision, ToolInput, ToolRegistry};
@@ -125,7 +126,7 @@ impl ChatRequestContext {
 #[derive(Default)]
 struct AgentSwitchState {
     forced_agent_by_phase: HashMap<String, String>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-17 — reserved for agent switch state extensibility
     primary_agent_by_phase: HashMap<String, String>,
 }
 
@@ -660,19 +661,127 @@ pub async fn handle_chat(
                 concept_count, decision_count
             );
         }
-        // If the conversation is long, compute trim budget.
+        // If the conversation is long, compute trim budget and apply it.
         if msg_count > 50 {
             let effective = session_mgr.budget.effective_retain();
             debug!(
                 "SessionContextManager: effective retain budget for {} messages = {}",
                 msg_count, effective
             );
+
+            // Convert messages to the tuple format expected by select_retained_messages.
+            let msg_tuples: Vec<(String, String)> = chat_params
+                .messages
+                .iter()
+                .map(|m| (m.role.clone(), m.content.clone()))
+                .collect();
+
+            let retained_indices = session_mgr.select_retained_messages(&msg_tuples, effective);
+
+            // If messages heavily exceed budget (50%+ over), try semantic
+            // compression as an alternative to simple trimming.
+            let compression_applied = if msg_count > effective * 3 / 2 {
+                let compressor = SessionCompressor::default();
+                let compressed =
+                    session_mgr.compress_messages(&msg_tuples, &compressor);
+                if !compressed.summary.is_empty() {
+                    warn!(
+                        "SessionContextManager: compression reduced {}→{} messages (ratio: {:.2})",
+                        compressed.original_count,
+                        compressed.compressed_count,
+                        compressed.compression_ratio,
+                    );
+                    let kept_count = compressed.kept_messages.len();
+                    let orig_count = compressed.original_count;
+                    let summary_text = compressed.summary.clone();
+                    // Convert compressor messages back to agent messages.
+                    let mut compressed_msgs: Vec<Message> = compressed
+                        .kept_messages
+                        .into_iter()
+                        .map(|m| Message {
+                            role: m.role,
+                            content: m.content,
+                        })
+                        .collect();
+                    // Prepend the summary as a system message.
+                    compressed_msgs.insert(
+                        0,
+                        Message {
+                            role: "system".to_string(),
+                            content: format!(
+                                "[Session compressed: {} messages summarized]\n{}",
+                                orig_count - kept_count,
+                                summary_text,
+                            ),
+                        },
+                    );
+                    chat_params.messages = compressed_msgs;
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            if !compression_applied && retained_indices.len() < msg_count {
+                let trimmed_count = msg_count - retained_indices.len();
+                warn!(
+                    "SessionContextManager: trimming {} of {} messages (retaining {})",
+                    trimmed_count, msg_count, retained_indices.len(),
+                );
+
+                // Generate continuity marker for the trimmed messages.
+                let trimmed_indices: Vec<usize> = (0..msg_count)
+                    .filter(|i| !retained_indices.contains(i))
+                    .collect();
+                let marker = session_mgr.generate_continuity_marker(&trimmed_indices);
+
+                // Build a concise continuity marker text for the LLM.
+                let marker_text = format!(
+                    "[Continuity: {} messages trimmed to fit context window]\n\
+                     Key concepts: {}\n\
+                     Files referenced: {}\n\
+                     Decisions made: {}",
+                    marker.messages_trimmed,
+                    if marker.key_concepts.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        marker.key_concepts.join(", ")
+                    },
+                    if marker.files_referenced.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        marker.files_referenced.join(", ")
+                    },
+                    if marker.decisions_made.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        marker.decisions_made.join(", ")
+                    },
+                );
+
+                // Rebuild the message list from retained indices only.
+                chat_params.messages = retained_indices
+                    .iter()
+                    .map(|&i| chat_params.messages[i].clone())
+                    .collect();
+
+                // Prepend the continuity marker as a system message so the LLM
+                // knows what context was trimmed and can reference it if needed.
+                chat_params.messages.insert(
+                    0,
+                    Message {
+                        role: "system".to_string(),
+                        content: marker_text,
+                    },
+                );
+            }
         }
 
-        // GAP-46-12: Initialize SSE buffer pool for streaming optimization.
-        // The pool is lazily created once and reused across requests to avoid
-        // allocation churn during high-frequency SSE event serialization.
-        static SSE_BUFFER_POOL: OnceLock<SseBufferPool> = OnceLock::new();
+        // GAP-46-12: Ensure the global SSE buffer pool is initialized.
+        // The pool lives at module level and is used by `write_sse_event` in
+        // `runtime.rs` to avoid allocation churn during SSE frame serialization.
         let _pool = SSE_BUFFER_POOL.get_or_init(|| SseBufferPool::new(4, 4096));
         trace!("SseBufferPool: ready for streaming request");
 
@@ -2541,6 +2650,27 @@ const STREAM_EVENT_CHUNK: &str = "chunk";
 const STREAM_EVENT_DONE: &str = "done";
 const STREAM_EVENT_TELEMETRY: &str = "telemetry";
 
+// ── SseBufferPool (GAP-46-12) ─────────────────────────────────────────
+// Global pool of pre-allocated byte buffers for SSE event serialization.
+// Avoids allocation churn during high-frequency streaming by reusing
+// buffers across requests.  Initialized lazily on first chat request.
+static SSE_BUFFER_POOL: OnceLock<SseBufferPool> = OnceLock::new();
+
+/// Acquire a buffer from the global SSE buffer pool.
+/// Returns a pre-allocated (empty) `Vec<u8>` suitable for building an SSE frame.
+pub(crate) fn acquire_sse_buffer() -> Vec<u8> {
+    SSE_BUFFER_POOL
+        .get_or_init(|| SseBufferPool::new(4, 4096))
+        .acquire()
+}
+
+/// Release a buffer back to the global SSE buffer pool for reuse.
+pub(crate) fn release_sse_buffer(buf: Vec<u8>) {
+    if let Some(pool) = SSE_BUFFER_POOL.get() {
+        pool.release(buf);
+    }
+}
+
 async fn emit_stream_chunk(
     server: &AcpServer,
     observer: Option<&StreamObserver>,
@@ -2795,7 +2925,7 @@ pub(crate) fn extract_task_description(messages: &[Message]) -> String {
 }
 
 /// Create default requirement contract
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-17 — reserved for default requirement contract wiring
 fn default_requirement_contract(task: &str, source: &str) -> RequirementContractArtifact {
     RequirementContractArtifact {
         generated_at: std::time::SystemTime::now()
@@ -3522,7 +3652,7 @@ fn merge_context_into_messages(messages: &[Message], context: Option<String>) ->
     merged
 }
 
-fn build_phase_summary(messages: &[Message], response_text: &str, max_chars: usize) -> String {
+pub(crate) fn build_phase_summary(messages: &[Message], response_text: &str, max_chars: usize) -> String {
     if max_chars == 0 {
         return String::new();
     }

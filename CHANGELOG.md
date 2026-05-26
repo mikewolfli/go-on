@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.1.0] - 2026-05-26
+
+### Changed
+- Project version updated to 1.1.0 across all modules
+- Zero dead-code suppression — all `#![allow(dead_code)]` removed or replaced with feature-gated cfg_attr
+- Zero compiler warnings — cargo check (bin + tests) + clippy -D warnings all clean across 3 profiles
+- Documentation reorganized and completed for all 8 advanced orchestration modules
+- ACP helpers/ reorganized into 7 domain subdirectories with #[path] backward compatibility
+
+### Fixed
+- unreachable!() production panic risk in prelude.rs replaced with graceful warn!() + fallback
+- SessionCompressor now wired into SessionContextManager for semantic compression
+- SseBufferPool now used for zero-allocation SSE event serialization
+- CacheWarmingEngine initialized from main.rs, warmed after server completion
+- planner_embedding classifier integrated into Planner::plan() main path
+- RBAC tenant isolation tests fixed for i18n key compatibility
+
+### Added
+- 43 smoke tests for 6 ACP helper modules + 3 orchestration modules
+- Full F-GAP label coverage for all 90+ #[allow(dead_code)] annotations
+- profile-local now includes sub-bus-memory and sub-bus-protocol for 14-bus completeness
 ## [1.0.0] - 2026-05-25
 
 ### Added

@@ -6,9 +6,6 @@
 //! diagnostic data. Enables the system to self-correct based on
 //! build output feedback.
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -26,6 +23,7 @@ pub enum DiagnosticSeverity {
 }
 
 impl DiagnosticSeverity {
+    #[cfg(test)]
     pub fn label(&self) -> &str {
         match self {
             Self::Error => "error",
@@ -115,6 +113,7 @@ impl DiagnosticBatch {
     }
 
     /// Generate a summary suitable for BrainLoop reflect phase.
+    #[allow(dead_code)] // F-GAP-11 — reserved for BrainLoop reflect phase integration
     pub fn summary(&self) -> String {
         format!(
             "Build diagnostics: {} errors, {} warnings, {} info",
@@ -123,6 +122,7 @@ impl DiagnosticBatch {
     }
 
     /// Extract a prioritized list of files that need attention.
+    #[cfg(test)]
     pub fn affected_files(&self) -> Vec<String> {
         let mut files: Vec<String> = self.messages.iter().map(|m| m.file.clone()).collect();
         files.sort();
@@ -275,16 +275,19 @@ impl DiagnosticFeedbackEngine {
     }
 
     /// Total errors across all batches in history.
+    #[allow(dead_code)] // F-GAP-11 — reserved for diagnostic statistics
     pub fn total_errors(&self) -> usize {
         self.history.iter().map(|b| b.error_count).sum()
     }
 
     /// Total warnings across all batches.
+    #[allow(dead_code)] // F-GAP-11 — reserved for diagnostic statistics
     pub fn total_warnings(&self) -> usize {
         self.history.iter().map(|b| b.warning_count).sum()
     }
 
     /// Known patterns count.
+    #[cfg(test)]
     pub fn pattern_count(&self) -> usize {
         self.patterns.len()
     }

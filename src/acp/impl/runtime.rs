@@ -3640,13 +3640,19 @@ async fn write_sse_event(
     event: &str,
     payload: &serde_json::Value,
 ) -> Result<()> {
-    let frame = format!(
-        "event: {}\ndata: {}\n\n",
-        event,
-        serde_json::to_string(payload)?
-    );
+    // Use a pooled buffer to avoid allocation churn during high-frequency
+    // SSE streaming.  The buffer is released back to the pool after writing.
+    let mut frame = crate::acp::r#impl::chat::acquire_sse_buffer();
+    frame.extend_from_slice(b"event: ");
+    frame.extend_from_slice(event.as_bytes());
+    frame.extend_from_slice(b"\ndata: ");
+    serde_json::to_writer(&mut frame, payload)?;
+    frame.extend_from_slice(b"\n\n");
     debug!("ACP SSE event: {}", event);
-    tcp_write_timeout(socket, frame.as_bytes()).await?;
+    tcp_write_timeout(socket, &frame).await?;
+    // Release the buffer back to the pool immediately after writing;
+    // the flush below only synchronises the socket, not the buffer.
+    crate::acp::r#impl::chat::release_sse_buffer(frame);
     tokio::time::timeout(std::time::Duration::from_secs(30), socket.flush())
         .await
         .map_err(|_| anyhow::anyhow!("timeout flushing socket"))?

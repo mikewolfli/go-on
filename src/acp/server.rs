@@ -422,7 +422,7 @@ impl ServerBuilder {
     }
 
     /// Set the memory response cache
-    #[allow(dead_code)] // F-GAP-09 — planned wiring: cache configuration
+    #[allow(dead_code)] // F-GAP-09 — reserved for cache configuration wiring
     pub fn with_memory_response_cache(
         mut self,
         memory_response_cache: MemoryResponseCache,
@@ -474,7 +474,7 @@ impl ServerBuilder {
     }
 
     /// Set the planner-executor configuration (timeouts, etc.)
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-17 — reserved for planner-executor integration
     pub fn with_planner_executor_config(
         mut self,
         config: crate::orchestration::planner_executor::PlannerExecutorConfig,

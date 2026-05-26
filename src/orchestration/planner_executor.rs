@@ -13,7 +13,9 @@ use std::time::Duration;
 use crate::agent::{AgentRegistry, AgentTaskEnvelope, AgentTaskResult};
 use crate::i18n::runtime::tf;
 use crate::orchestration::mode::{ModeKind, ModeRuntime};
+use crate::orchestration::planner_embedding::EmbeddingTaskClassifier;
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 /// A single step in an execution plan
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,6 +120,19 @@ impl Planner {
     ///
     /// Delegates to `plan_to_dag` with a default context for backward compatibility.
     pub fn plan(task: &AgentTaskEnvelope) -> ExecutionPlan {
+        // Classify task via embedding-based classifier and log the outcome
+        let classifier = EmbeddingTaskClassifier::default();
+        let task_category = classifier.classify_task(&task.objective);
+        let complexity_score = match task_category {
+            TaskComplexity::Simple => 0.25,
+            TaskComplexity::Medium => 0.50,
+            TaskComplexity::Complex => 0.75,
+        };
+        info!(
+            "EmbeddingTaskClassifier: task_category={:?}, complexity_score={:.2}",
+            task_category, complexity_score
+        );
+
         let context = Planner::analyze_task(task);
         Planner::plan_to_dag(task, &context)
     }

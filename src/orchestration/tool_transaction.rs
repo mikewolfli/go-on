@@ -62,7 +62,7 @@ pub fn store_idempotency_conflict_rate(rate: f64) {
 }
 
 /// Read the latest idempotency conflict rate.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-12 — reserved for transaction diagnostics
 pub fn read_idempotency_conflict_rate() -> Option<f64> {
     LATEST_IDEMPOTENCY_CONFLICT_RATE
         .lock()
@@ -218,12 +218,14 @@ impl CompensateAction {
     }
 
     /// Set the timeout for this compensation action.
+    #[allow(dead_code)] // F-GAP-12 — reserved for transaction diagnostics
     pub fn with_timeout(mut self, timeout_ms: u64) -> Self {
         self.timeout_ms = timeout_ms;
         self
     }
 
     /// Enable retry-on-timeout for this compensation action.
+    #[allow(dead_code)] // F-GAP-12 — reserved for transaction diagnostics
     pub fn with_retry_on_timeout(mut self) -> Self {
         self.retry_on_timeout = true;
         self
@@ -273,18 +275,6 @@ async fn execute_compensate_with_timeout(
     }
 }
 
-// Integration warmup — exercises all public API methods so the compiler
-// does not emit dead_code warnings before full integration wiring.
-#[doc(hidden)]
-pub fn __compensate_action_touch() {
-    let _action = CompensateAction::new("example".to_string(), std::sync::Arc::new(|| {}))
-        .with_timeout(5000)
-        .with_retry_on_timeout();
-
-    let mut scope = TransactionScope::new("example".to_string());
-    scope.register_action(_action);
-}
-
 /// Transaction scope for group‑executing tools with rollback on failure.
 ///
 /// When a batch of tools is executed and one fails, the [`TransactionScope`]
@@ -317,6 +307,7 @@ impl TransactionScope {
     }
 
     /// Register a completed tool with a custom `CompensateAction`.
+    #[allow(dead_code)] // F-GAP-12 — reserved for transaction diagnostics
     pub fn register_action(&mut self, action: CompensateAction) {
         self.completed_tools.push(action.tool_name.clone());
         self.compensate_actions.push(action);

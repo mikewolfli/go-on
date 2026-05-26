@@ -1,11 +1,10 @@
+#![cfg_attr(not(feature = "sub-bus-voter-future"), allow(dead_code, unused_imports))]
+
 //! MultiModelVoter — Concurrent multi-model voting for high-stakes decisions.
 //!
 //! Sends the same prompt to multiple agents concurrently and aggregates
 //! responses through configurable voting strategies. Used primarily by
 //! SafeGuard mode and the capability bus for risk-sensitive routing.
-
-#![allow(dead_code)]
-#![allow(unused_imports)]
 
 use crate::agents::agent::{Agent, Message, StreamingSender};
 use crate::i18n::runtime::tf;

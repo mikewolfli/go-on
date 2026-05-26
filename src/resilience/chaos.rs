@@ -4,8 +4,7 @@
 //! process crashes, resource exhaustion) and verifies that the
 //! RecoveryAction chain and fault tolerance mechanisms handle them correctly.
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
+#![cfg_attr(not(test), allow(dead_code, unused_imports))]
 
 use crate::i18n::t;
 use serde::{Deserialize, Serialize};
@@ -188,6 +187,7 @@ impl ChaosEngine {
     }
 
     /// Clear all fault injections.
+    #[allow(dead_code)] // F-GAP-12 — reserved for chaos testing integration
     pub fn clear(&self) {
         self.injections
             .write()
@@ -246,6 +246,7 @@ impl ChaosEngine {
     }
 
     /// Run a full drill scenario and return results.
+    #[allow(dead_code)] // F-GAP-12 — reserved for chaos testing integration
     pub async fn run_drills(&self, scenario: &DrillScenario) -> DrillResult {
         let start = std::time::Instant::now();
         self.set_enabled(true);
@@ -405,6 +406,7 @@ pub fn storage_resilience_scenario() -> DrillScenario {
     }
 }
 
+#[allow(dead_code)] // F-GAP-12 — reserved for chaos testing integration
 pub fn resource_exhaustion_scenario() -> DrillScenario {
     DrillScenario {
         name: "resource_exhaustion".to_string(),
