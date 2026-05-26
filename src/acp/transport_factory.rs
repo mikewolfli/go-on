@@ -24,6 +24,7 @@ fn resolve_path(config_path: &Path, raw_path: &str) -> PathBuf {
 }
 
 /// Initialize response cache.
+#[allow(unused_variables)] // config_path unused in backend-postgres code path
 pub async fn initialize_cache(
     config_path: &Path,
     cache_cfg: Option<CacheConfig>,
@@ -84,6 +85,7 @@ pub async fn initialize_cache(
 }
 
 /// Initialize vector store.
+#[allow(unused_variables)] // config_path unused in backend-postgres code path
 pub async fn initialize_vector_store(
     config_path: &Path,
     vector_cfg: Option<VectorConfig>,
@@ -173,6 +175,7 @@ pub async fn initialize_autotune(
 }
 
 /// Dispatch to the correct protocol-mode server implementation.
+#[allow(clippy::too_many_arguments)]
 pub async fn dispatch_server(
     registry: Arc<AgentRegistry>,
     cache: Option<Arc<ResponseCache>>,

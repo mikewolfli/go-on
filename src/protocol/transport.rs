@@ -20,6 +20,7 @@ fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 use anyhow::{bail, Result};
+use crate::i18n::runtime::tf;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -291,10 +292,7 @@ impl MultiChannelTransport {
         if !inner.channels.contains_key(&channel_id)
             && inner.channels.len() >= inner.config.max_channels
         {
-            bail!(
-                "maximum number of channels ({}) reached",
-                inner.config.max_channels
-            );
+            bail!(tf("error.transport.max_channels_reached", &[("max", &inner.config.max_channels.to_string())]));
         }
 
         let now = Self::now_ms();
@@ -351,7 +349,7 @@ impl MultiChannelTransport {
         let channel = inner
             .channels
             .get_mut(&channel_id)
-            .ok_or_else(|| anyhow::anyhow!("channel {} is not configured", channel_id))?;
+            .ok_or_else(|| anyhow::anyhow!(tf("error.transport.channel_not_configured", &[("id", &channel_id.to_string())])))?;
 
         // Per-channel rate limiting
         let elapsed = now.saturating_sub(channel.last_rate_ts);
@@ -361,21 +359,13 @@ impl MultiChannelTransport {
             channel.rate_count = 0;
         }
         if channel.rate_count >= channel.config.rate_limit_per_sec {
-            bail!(
-                "rate limit exceeded for channel {} ({} msg/s)",
-                channel_id,
-                channel.config.rate_limit_per_sec
-            );
+            bail!(tf("error.transport.rate_limit_exceeded", &[("id", &channel_id.to_string()), ("rate", &channel.config.rate_limit_per_sec.to_string())]));
         }
         channel.rate_count += 1;
 
         // Queue depth check
         if channel.queue.len() > channel.config.max_queue_size {
-            bail!(
-                "queue size limit ({}) reached for channel {}",
-                channel.config.max_queue_size,
-                channel_id
-            );
+            bail!(tf("error.transport.queue_full", &[("max", &channel.config.max_queue_size.to_string()), ("id", &channel_id.to_string())]));
         }
 
         // TTL check — if the message has already expired, mark it expired
@@ -386,7 +376,7 @@ impl MultiChannelTransport {
                 message_id: message.id,
                 status: DeliveryStatus::Expired,
                 delivered_ms: None,
-                error: Some("message expired before send".to_string()),
+                error: Some(tf("error.transport.message_expired_send", &[])),
             });
         }
 
@@ -436,7 +426,7 @@ impl MultiChannelTransport {
         let channel = inner
             .channels
             .get_mut(&channel_id)
-            .ok_or_else(|| anyhow::anyhow!("channel {} is not configured", channel_id))?;
+            .ok_or_else(|| anyhow::anyhow!(tf("error.transport.channel_not_configured", &[("id", &channel_id.to_string())])))?;
 
         // Drain messages from the queue that are not expired
         let mut messages = Vec::new();
@@ -493,7 +483,7 @@ impl MultiChannelTransport {
             }
         }
 
-        bail!("message {} not found in any channel", message_id)
+        bail!(tf("error.transport.message_not_found", &[("id", message_id)]))
     }
 
     /// Forward a message to a different channel.
@@ -567,7 +557,7 @@ impl MultiChannelTransport {
 
         let mut msg = match original_msg {
             Some(m) => m,
-            None => bail!("message {} not found for forwarding", message_id),
+            None => bail!(tf("error.transport.message_not_found_forward", &[("id", message_id)])),
         };
 
         // Update the message for the new channel
@@ -583,15 +573,11 @@ impl MultiChannelTransport {
         let target = inner
             .channels
             .get_mut(&channel_id)
-            .ok_or_else(|| anyhow::anyhow!("target channel {} is not configured", channel_id))?;
+            .ok_or_else(|| anyhow::anyhow!(tf("error.transport.target_not_configured", &[("id", &channel_id.to_string())])))?;
 
         // Queue depth check
         if target.queue.len() >= target.config.max_queue_size {
-            bail!(
-                "queue size limit ({}) reached on target channel {}",
-                target.config.max_queue_size,
-                channel_id
-            );
+            bail!(tf("error.transport.target_queue_full", &[("max", &target.config.max_queue_size.to_string()), ("id", &channel_id.to_string())]));
         }
 
         let now = Self::now_ms();

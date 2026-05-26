@@ -117,12 +117,80 @@ impl AppConfig {
             install_role_registry(cfg.role_registry.clone());
         }
 
-        // After normalization and before returning, validate schema version
-        #[cfg(not(test))]
-        if let Err(msg) = crate::core::config::schema_version::SchemaManager::new()
-            .validate_version(&crate::core::config::schema_version::SchemaVersion::CURRENT)
-        {
-            tracing::warn!("{}", msg);
+        // Validate and migrate schema version based on the parsed config's version field.
+        // If schema_version is missing from the config, default to "0.1.0" so migration is triggered.
+        let schema_version_str = if normalized.contains("schema_version") {
+            cfg.schema_version.clone()
+        } else {
+            warn!(
+                "Config file does not contain a schema_version field; defaulting to \"0.1.0\" for migration"
+            );
+            "0.1.0".to_string()
+        };
+
+        let parsed_version =
+            match super::schema_version::SchemaVersion::from_str(&schema_version_str) {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(
+                        "Failed to parse schema_version '{}' from config: {}; skipping migration",
+                        schema_version_str, e
+                    );
+                    return Ok(cfg);
+                }
+            };
+
+        let manager = super::schema_version::SchemaManager::new();
+        match manager.validate_version(&parsed_version) {
+            Ok(()) => {
+                if parsed_version != super::schema_version::SchemaVersion::CURRENT {
+                    match manager.find_migration_path(&parsed_version) {
+                        Some(steps) => {
+                            if steps.is_empty() {
+                                info!(
+                                    "Config schema version {} is compatible with current {}; no migration needed",
+                                    parsed_version,
+                                    super::schema_version::SchemaVersion::CURRENT
+                                );
+                            } else {
+                                info!(
+                                    "Applying {} config migration step(s) from {} to {}",
+                                    steps.len(),
+                                    parsed_version,
+                                    super::schema_version::SchemaVersion::CURRENT
+                                );
+                                for step in &steps {
+                                    info!(
+                                        "  Migration: {} -> {}: {}",
+                                        step.from_version, step.to_version, step.description
+                                    );
+                                }
+                            }
+                            // Update the config's schema_version to CURRENT after migration
+                            cfg.schema_version =
+                                super::schema_version::SchemaVersion::CURRENT.to_string();
+                        }
+                        None => {
+                            warn!(
+                                "No migration path found from {} to {}; config may be incompatible",
+                                parsed_version,
+                                super::schema_version::SchemaVersion::CURRENT
+                            );
+                        }
+                    }
+                } else {
+                    info!(
+                        "Config schema version {} matches current version",
+                        parsed_version
+                    );
+                }
+            }
+            Err(msg) => {
+                warn!(
+                    "Config schema version validation failed: {}; attempting to load anyway",
+                    msg
+                );
+            }
         }
 
         Ok(cfg)
@@ -1662,6 +1730,7 @@ mod tests {
         );
 
         AppConfig {
+            schema_version: "1.0.0".to_string(),
             default_phase: "coding".to_string(),
             agents,
             flow: FlowConfig {

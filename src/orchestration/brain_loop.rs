@@ -118,6 +118,13 @@ pub struct BrainLoopConfig {
     pub max_steps_per_iteration: u32,
     pub reflection_required: bool,
     pub auto_replan: bool,
+    /// Minimum score required to consider a task converged (0.0 – 1.0).
+    /// Default: `0.7`
+    pub min_score: f64,
+    /// If the score difference between two consecutive reflections is
+    /// below this threshold, the system considers the loop converged.
+    /// Default: `0.05`
+    pub convergence_threshold: f64,
     /// Optional directory for persisting plans as JSON files.
     pub plans_directory: Option<PathBuf>,
 }
@@ -129,6 +136,8 @@ impl Default for BrainLoopConfig {
             max_steps_per_iteration: 10,
             reflection_required: true,
             auto_replan: true,
+            min_score: 0.7,
+            convergence_threshold: 0.05,
             plans_directory: None,
         }
     }
@@ -143,6 +152,38 @@ pub struct BrainLoopProfile {
     pub failed_plans: u64,
     pub total_cycles: u64,
     pub avg_cycles_per_plan: f64,
+    /// Convergence status info (e.g. "converged after 3 iterations", "not converged").
+    pub convergence_info: String,
+    /// Average step score across all plans (0.0 – 1.0).
+    pub avg_step_score: f64,
+    /// Total steps across all plans.
+    pub total_steps: u64,
+}
+
+/// Summary report produced by a full Plan → Execute → Reflect → Replan cycle.
+// Reserved for future BrainLoop integration.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrainLoopReport {
+    /// Number of iterations executed.
+    pub iterations: usize,
+    /// Final composite score.
+    pub final_score: f64,
+    /// Whether the loop converged.
+    pub converged: bool,
+    /// Full history of steps across iterations.
+    pub history: Vec<BrainLoopStep>,
+}
+
+/// A reflection produced after analysing a plan + result pair.
+// Reserved for future BrainLoop integration.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct Reflection {
+    pub score: f64,
+    pub issues: Vec<String>,
+    pub improvements: Vec<String>,
+    pub converged: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -360,10 +401,9 @@ impl BrainLoop {
         // Compute reflection inside a scope so the mutable plan borrow is
         // dropped before we push to `inner.reflections`.
         let reflection = {
-            let plan = inner
-                .plans
-                .get_mut(plan_id)
-                .ok_or_else(|| anyhow::anyhow!("{}", tf("error.plan_not_found", &[("id", plan_id)])))?;
+            let plan = inner.plans.get_mut(plan_id).ok_or_else(|| {
+                anyhow::anyhow!("{}", tf("error.plan_not_found", &[("id", plan_id)]))
+            })?;
 
             if plan.phase.is_terminal() {
                 anyhow::bail!("{}", tf("error.plan_already_terminal", &[("id", plan_id)]));
@@ -552,6 +592,27 @@ impl BrainLoop {
         } else {
             0.0
         };
+
+        // Compute convergence info and avg step score from reflections.
+        let total_steps: u64 = inner.plans.values().map(|p| p.steps.len() as u64).sum();
+        let avg_step_score = if inner.reflections.is_empty() {
+            0.0
+        } else {
+            inner.reflections.iter().map(|r| r.confidence).sum::<f64>()
+                / inner.reflections.len() as f64
+        };
+
+        let convergence_info = if active_plans == 0 && total_plans > 0 {
+            let converged = self.check_convergence(&inner);
+            if converged {
+                format!("converged after {} plans", total_plans)
+            } else {
+                "not converged".to_string()
+            }
+        } else {
+            "in progress".to_string()
+        };
+
         BrainLoopProfile {
             total_plans,
             active_plans,
@@ -559,7 +620,35 @@ impl BrainLoop {
             failed_plans: inner.failed_plans_total,
             total_cycles: inner.total_cycles,
             avg_cycles_per_plan: avg,
+            convergence_info,
+            avg_step_score,
+            total_steps,
         }
+    }
+
+    /// Check whether the loop has converged based on recent reflection confidence scores.
+    ///
+    /// Convergence is detected when:
+    /// - At least two reflections exist, AND
+    /// - The latest confidence score is >= `min_score`, OR
+    /// - The score delta between the last two reflections is <= `convergence_threshold`.
+    fn check_convergence(&self, inner: &BrainLoopInner) -> bool {
+        let config = &inner.config;
+        let reflections = &inner.reflections;
+
+        if reflections.len() < 2 {
+            return false;
+        }
+
+        let latest = &reflections[reflections.len() - 1];
+        let previous = &reflections[reflections.len() - 2];
+
+        if latest.confidence >= config.min_score {
+            return true;
+        }
+
+        let delta = (latest.confidence - previous.confidence).abs();
+        delta <= config.convergence_threshold && latest.confidence > 0.3
     }
 
     // ── Persistence ────────────────────────────────────────────────────────
@@ -611,7 +700,10 @@ impl BrainLoop {
             Ok(content) => match serde_json::from_str::<BrainLoopPlan>(&content) {
                 Ok(plan) => Some(plan),
                 Err(e) => {
-                    tracing::warn!("failed to deserialize plan `{plan_id}` from {:?}: {e}", path);
+                    tracing::warn!(
+                        "failed to deserialize plan `{plan_id}` from {:?}: {e}",
+                        path
+                    );
                     None
                 }
             },
@@ -683,6 +775,8 @@ mod tests {
             max_steps_per_iteration: 10,
             reflection_required: true,
             auto_replan: true,
+            min_score: 0.7,
+            convergence_threshold: 0.05,
             plans_directory: None,
         }
     }
@@ -926,6 +1020,8 @@ mod tests {
             max_steps_per_iteration: 10,
             reflection_required: true,
             auto_replan: true,
+            min_score: 0.7,
+            convergence_threshold: 0.05,
             plans_directory: None,
         };
         let bl = BrainLoop::new(config);

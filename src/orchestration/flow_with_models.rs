@@ -238,6 +238,7 @@ mod tests {
 
     fn test_config(mode: &str) -> AppConfig {
         AppConfig {
+            schema_version: "1.0.0".to_string(),
             default_phase: "coding".to_string(),
             agents: HashMap::new(),
             flow: crate::config::FlowConfig {

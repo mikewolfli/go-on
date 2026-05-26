@@ -280,7 +280,7 @@ impl HyperResilienceEngine {
         let cb = inner
             .circuit_breakers
             .get_mut(breaker_name)
-            .with_context(|| format!("Circuit breaker '{}' not found", breaker_name))?;
+            .with_context(|| tf("error.circuit_breaker_not_found", &[("name", breaker_name)]))?;
 
         let now = now_millis();
 
@@ -323,7 +323,7 @@ impl HyperResilienceEngine {
         let cb = inner
             .circuit_breakers
             .get_mut(breaker_name)
-            .with_context(|| format!("Circuit breaker '{}' not found", breaker_name))?;
+            .with_context(|| tf("error.circuit_breaker_not_found", &[("name", breaker_name)]))?;
 
         match cb.state {
             CircuitState::HalfOpen => {
@@ -399,12 +399,21 @@ impl HyperResilienceEngine {
     ) -> Result<()> {
         let mut inner = lock_guard(&self.inner);
         if inner.failover_groups.contains_key(group_id) {
-            bail!("Failover group '{}' is already registered", group_id);
+            bail!(
+                "{}",
+                tf(
+                    "error.hyper_resilience.failover_already_registered",
+                    &[("name", group_id)]
+                )
+            );
         }
         if replicas.is_empty() {
             bail!(
-                "Failover group '{}' requires at least one replica node",
-                group_id
+                "{}",
+                tf(
+                    "error.hyper_resilience.failover_requires_replica",
+                    &[("name", group_id)]
+                )
             );
         }
         inner.failover_groups.insert(
@@ -430,7 +439,7 @@ impl HyperResilienceEngine {
         let group = inner
             .failover_groups
             .get_mut(group_id)
-            .with_context(|| format!("Failover group '{}' not found", group_id))?;
+            .with_context(|| tf("error.failover_group_not_found", &[("name", group_id)]))?;
 
         // Find the next replica (round-robin through replicas).
         let current_idx = group
@@ -529,7 +538,7 @@ impl HyperResilienceEngine {
                     cb.half_open_attempts = 0;
                     (
                         true,
-                        format!("Circuit breaker '{}' reset to closed", target),
+                        tf("status.hyper_resilience.breaker_reset", &[("name", target)]),
                     )
                 } else {
                     (
@@ -552,7 +561,10 @@ impl HyperResilienceEngine {
                     group.last_failover_ms = now_millis();
                     (
                         true,
-                        format!("Promoted replica '{}' for group '{}'", new_leader, target),
+                        tf(
+                            "status.hyper_resilience.replica_promoted",
+                            &[("replica", &new_leader), ("group", target)],
+                        ),
                     )
                 } else {
                     (
@@ -565,7 +577,10 @@ impl HyperResilienceEngine {
                 // Generic simulation for other actions.
                 (
                     true,
-                    format!("{:?} executed on '{}' (test)", action, target),
+                    tf(
+                        "status.hyper_resilience.healing_executed",
+                        &[("action", &format!("{:?}", action)), ("target", target)],
+                    ),
                 )
             }
         };

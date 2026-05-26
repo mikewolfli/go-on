@@ -520,6 +520,12 @@ impl GoOnApp {
                     "hunyuan-turbo-latest",
                     false,
                 ),
+                "kimi" => (
+                    "kimi",
+                    Some("https://api.moonshot.cn/v1"),
+                    "kimi-k2.6",
+                    false,
+                ),
                 "doubao" => (
                     "doubao",
                     Some("https://ark.cn-beijing.volces.com/api/v3"),

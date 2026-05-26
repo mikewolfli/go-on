@@ -48,12 +48,21 @@ pub enum Language {
 }
 
 impl Language {
-    /// Get language code string
+    /// Get language code string (underscore format for internal use)
     pub fn code(&self) -> &'static str {
         match self {
             Language::ZhCN => "zh_CN",
             Language::ZhTW => "zh_TW",
             Language::EnUS => "en_US",
+        }
+    }
+
+    /// Get BCP 47 language code string (hyphen format for file naming)
+    pub fn bcp47_code(&self) -> &'static str {
+        match self {
+            Language::ZhCN => "zh-CN",
+            Language::ZhTW => "zh-TW",
+            Language::EnUS => "en-US",
         }
     }
 
@@ -160,8 +169,20 @@ impl I18nManager {
     }
 
     /// Load specific language file
+    ///
+    /// Tries BCP 47 (hyphen) filename first, falls back to underscore for backward compat.
     pub fn load_language(&self, language: Language) -> Result<()> {
-        let file_path = self.languages_dir.join(format!("{}.json", language.code()));
+        // Try BCP 47 hyphen format first (e.g., zh-CN.json)
+        let bcp47_path = self
+            .languages_dir
+            .join(format!("{}.json", language.bcp47_code()));
+        let underscore_path = self.languages_dir.join(format!("{}.json", language.code()));
+
+        let file_path = if bcp47_path.exists() {
+            bcp47_path
+        } else {
+            underscore_path
+        };
 
         let content = match fs::read_to_string(&file_path) {
             Ok(c) => c,
@@ -395,7 +416,7 @@ mod tests {
             "setup.onboarding_next",
         ];
 
-        for lang in ["en_US", "zh_CN", "zh_TW"] {
+        for lang in ["en-US", "zh-CN", "zh-TW"] {
             let path = root.join("languages").join(format!("{}.json", lang));
             let raw = std::fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));

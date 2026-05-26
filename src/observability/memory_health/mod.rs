@@ -38,9 +38,13 @@ pub const MEMORY_WARN_MB: u64 = 512;
 pub const MEMORY_CRITICAL_MB: u64 = 256;
 
 /// Free memory threshold (MB) below which we abort immediately.
+// Reserved for future runtime monitor integration.
+#[allow(dead_code)]
 pub const MEMORY_JETSAM_RISK_MB: u64 = 128;
 
 /// How often the runtime monitor checks memory pressure (seconds).
+// Reserved for future runtime monitor integration.
+#[allow(dead_code)]
 pub const MEMORY_MONITOR_INTERVAL_SECS: u64 = 30;
 
 // ── System Memory Info ──────────────────────────────────────────────────────
@@ -397,6 +401,8 @@ fn query_windows_memory() -> SystemMemoryInfo {
 // ── Startup Health Check ────────────────────────────────────────────────────
 
 /// Result of a pre-startup memory health check.
+// Reserved for future startup health-check integration.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum MemoryHealth {
     /// Memory is sufficient to run normally.
@@ -414,6 +420,8 @@ pub enum MemoryHealth {
 /// Returns `MemoryHealth::Healthy` if the system has sufficient memory.
 /// Returns `MemoryHealth::Low` if memory is constrained (warns user).
 /// Returns `MemoryHealth::Critical` if starting would likely trigger OOM.
+// Reserved for future startup health-check integration.
+#[allow(dead_code)]
 pub fn check_startup_memory() -> MemoryHealth {
     let info = query_system_memory();
     let free_mb = info.free_mb();
@@ -490,6 +498,8 @@ pub fn check_startup_memory() -> MemoryHealth {
 }
 
 /// Print a formatted memory health report to stderr.
+// Reserved for future startup health-check integration.
+#[allow(dead_code)]
 pub fn print_memory_health(health: &MemoryHealth) {
     match health {
         MemoryHealth::Healthy => {
@@ -533,6 +543,8 @@ pub fn print_memory_health(health: &MemoryHealth) {
 static RUNTIME_MEMORY_FREE_MB: AtomicU64 = AtomicU64::new(0);
 static RUNTIME_MEMORY_TOTAL_MB: AtomicU64 = AtomicU64::new(0);
 static RUNTIME_PRESSURE_LEVEL: AtomicU64 = AtomicU64::new(0);
+// Reserved for future runtime monitor integration.
+#[allow(dead_code)]
 static MEMORY_MONITOR_INITIALIZED: OnceLock<bool> = OnceLock::new();
 
 #[allow(dead_code)] // Public API — used by external runtime consumers
@@ -558,6 +570,8 @@ pub fn runtime_pressure_level() -> u8 {
 /// Spawns a tokio task that queries `query_system_memory()` every
 /// `MEMORY_MONITOR_INTERVAL_SECS` seconds and logs warnings if
 /// memory is critically low.
+// Reserved for future runtime monitor integration.
+#[allow(dead_code)]
 pub fn start_memory_monitor() {
     MEMORY_MONITOR_INITIALIZED.set(true).unwrap_or(());
 

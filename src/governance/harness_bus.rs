@@ -58,10 +58,11 @@ use crate::orchestration::artifact::{ArtifactLayer, ArtifactProfile};
 use crate::orchestration::brain_loop::{BrainLoop, BrainLoopConfig, BrainLoopProfile};
 use crate::orchestration::omnipotent::{OmnipotentMode, OmnipotentProfile};
 use crate::orchestration::promotion_plugin::PromotionRegistry;
-use crate::orchestration::r#loop::brain_loop::{
-    BrainLoop as BrainLoopRunner, BrainLoopConfig as BrainLoopRunnerConfig,
-    BrainLoopProfile as BrainLoopRunnerProfile,
-};
+// Structured brain_loop (loop/brain_loop.rs) has been superseded by the flat
+// brain_loop (brain_loop.rs).  The flat BrainLoopProfile now includes
+// convergence_info, avg_step_score, and total_steps — all data previously
+// exposed by the structured version's profile.
+use crate::i18n::runtime::tf;
 use crate::orchestration::token_layers::{
     estimate_cost, GateContext, TokenCostEstimate, TokenGateVerdict, TokenLayerChain,
 };
@@ -618,7 +619,7 @@ impl PolicyEvaluator {
             if let Err(_err) = budget.check_wall_clock() {
                 return PolicyVerdict::Deny(PolicyViolation {
                     kind: "budget".to_string(),
-                    detail: "wall clock budget exceeded".to_string(),
+                    detail: tf("error.harness_bus.budget_exceeded", &[]),
                 });
             }
         }
@@ -629,8 +630,7 @@ impl PolicyEvaluator {
                 // Record the escalation for adaptive control metrics
                 ctrl.record(false, _start.elapsed().as_millis() as u64);
                 return PolicyVerdict::Escalate(EscalationReason {
-                    reason: "runtime escalation triggered (failure rate or P95 latency threshold)"
-                        .to_string(),
+                    reason: tf("error.harness_bus.runtime_escalation", &[]),
                     suggested_level: 3,
                 });
             }
@@ -646,11 +646,11 @@ impl PolicyEvaluator {
             || ctx.file_count >= 8
             || matches!(ctx.task_type, TaskType::SecurityPatch);
         let review_response = if requires_manual_review {
-            "REJECT: governance policy requires manual review"
+            tf("status.harness_bus.review_rejected", &[])
         } else {
-            "APPROVE: governance policy pre-check passed"
+            tf("status.harness_bus.review_approved", &[])
         };
-        let verdict = Self::resolve_review_policy(review_response, 8);
+        let verdict = Self::resolve_review_policy(&review_response, 8);
         let outcome = match verdict {
             ReviewVerdict::Approve => ReviewGateOutcome::Approved(vec![
                 crate::governance::review_controls::ReviewDecision {
@@ -691,7 +691,7 @@ impl PolicyEvaluator {
         );
         if !verdict.is_approved() {
             return PolicyVerdict::Review(ReviewReason {
-                reason: "manual review required by governance review gate".to_string(),
+                reason: tf("error.harness_bus.review_gate_manual", &[]),
             });
         }
 
@@ -700,7 +700,7 @@ impl PolicyEvaluator {
             let mut annotation = RationalizationAnnotation::default();
             if guard.evaluate(&mut annotation, ctx.risk_score as f32, false) {
                 return PolicyVerdict::Review(ReviewReason {
-                    reason: "self-rationalization guard flagged low confidence".to_string(),
+                    reason: tf("error.harness_bus.low_confidence", &[]),
                 });
             }
         }
@@ -726,7 +726,7 @@ impl PolicyEvaluator {
                         .reasons
                         .first()
                         .cloned()
-                        .unwrap_or_else(|| "denied by security governor".to_string()),
+                        .unwrap_or_else(|| tf("error.harness_bus.security_governor_denied", &[])),
                 });
             }
             if sg_verdict.required_review {
@@ -735,7 +735,7 @@ impl PolicyEvaluator {
                         .reasons
                         .first()
                         .cloned()
-                        .unwrap_or_else(|| "review required by security governor".to_string()),
+                        .unwrap_or_else(|| tf("error.harness_bus.security_governor_review", &[])),
                 });
             }
         }
@@ -914,7 +914,8 @@ pub struct HarnessBus {
     pub omnipotent_mode: Arc<OmnipotentMode>,
     pub promotion_registry: Arc<Mutex<PromotionRegistry>>,
     pub token_chain: Arc<Mutex<TokenLayerChain>>,
-    pub brain_runner: Arc<BrainLoopRunner>,
+    /// Second brain loop instance for runner profile snapshots (consolidated with flat version).
+    pub brain_runner: Arc<BrainLoop>,
     /// Hyper-resilience engine — circuit breakers, failover, self-healing (F-GAP-27)
     pub resilience_engine: Arc<HyperResilienceEngine>,
     /// Fault tolerance engine — node isolation, heartbeat detection (F-GAP-28)
@@ -952,7 +953,7 @@ impl HarnessBus {
             omnipotent_mode: Arc::new(OmnipotentMode::new()),
             promotion_registry: Arc::new(Mutex::new(PromotionRegistry::new())),
             token_chain: Arc::new(Mutex::new(TokenLayerChain::new())),
-            brain_runner: Arc::new(BrainLoopRunner::new(BrainLoopRunnerConfig::default())),
+            brain_runner: Arc::new(BrainLoop::new(BrainLoopConfig::default())),
             resilience_engine: Arc::new(HyperResilienceEngine::new(ResilienceConfig::default())),
             fault_tolerance: Arc::new(FaultToleranceEngine::new(FaultToleranceConfig::default())),
         };
@@ -994,9 +995,9 @@ impl HarnessBus {
             if let Ok(ctrl) = self.evaluator.runtime_control.lock() {
                 p.current_escalation_level = ctrl.control_mode();
                 p.runtime_control_mode = if ctrl.should_escalate() {
-                    "restricted".to_string()
+                    tf("status.harness_bus.mode_restricted", &[])
                 } else {
-                    "standard".to_string()
+                    tf("status.harness_bus.mode_standard", &[])
                 };
                 p.policy_violation_trend = ctrl.violation_trend();
                 // current_active_policies: count how many active policy layers are engaged
@@ -1152,8 +1153,8 @@ impl HarnessBus {
             .unwrap_or(TokenGateVerdict::Allow)
     }
 
-    /// Brain loop runner profile snapshot (loop/brain_loop).
-    pub fn brain_runner_profile(&self) -> BrainLoopRunnerProfile {
+    /// Brain loop runner profile snapshot (consolidated flat version).
+    pub fn brain_runner_profile(&self) -> BrainLoopProfile {
         self.brain_runner.profile()
     }
 

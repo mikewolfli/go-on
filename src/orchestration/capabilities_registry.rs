@@ -55,6 +55,20 @@ pub struct CapabilitiesHandle {
     pub sse_buffer_pool: SseBufferPool,
 }
 
+/// Global singleton for the PluginRegistry, initialized at startup.
+static GLOBAL_PLUGIN_REGISTRY: std::sync::OnceLock<PluginRegistry> = std::sync::OnceLock::new();
+
+/// Register a PluginRegistry instance for global access.
+/// Called once during system initialization from `main.rs`.
+pub fn register_plugin_registry(registry: PluginRegistry) {
+    let _ = GLOBAL_PLUGIN_REGISTRY.set(registry);
+}
+
+/// Get a reference to the global PluginRegistry.
+pub fn global_plugin_registry() -> Option<&'static PluginRegistry> {
+    GLOBAL_PLUGIN_REGISTRY.get()
+}
+
 impl CapabilitiesHandle {
     pub fn new() -> Self {
         // Ensure all type constructors are reachable to suppress dead_code warnings

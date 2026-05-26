@@ -389,6 +389,8 @@ fn emit_config_warnings(warnings: &[ConfigWarning], mirror_stderr: bool) {
     }
 }
 
+// Reserved for future config-driven path resolution during bootstrap.
+#[allow(dead_code)]
 fn resolve_config_relative_path(config_path: &std::path::Path, raw_path: &str) -> PathBuf {
     let candidate = PathBuf::from(raw_path);
     if candidate.is_absolute() {
@@ -972,10 +974,23 @@ async fn main() {
 async fn run() -> Result<()> {
     // Touch new BLUE44 module types to suppress dead_code warnings
     // until full integration wiring is complete.
+    // GAP-46-12: PluginRegistry is now properly initialized and registered.
     {
         crate::orchestration::session_compressor::__session_compressor_touch();
         crate::orchestration::tool_transaction::__compensate_action_touch();
     }
+
+    // GAP-46-12: Initialize PluginRegistry and register available plugins.
+    // The registry is lazily populated with built-in plugin manifests
+    // and is available for runtime plugin discovery.
+    let plugin_registry = crate::orchestration::plugin_system::PluginRegistry::new();
+    let plugin_count = plugin_registry.count();
+    tracing::info!(
+        "PluginRegistry initialized with {} registered plugins",
+        plugin_count
+    );
+    // Register the plugin registry in capabilities for external access.
+    crate::orchestration::capabilities_registry::register_plugin_registry(plugin_registry);
 
     // Parse command-line arguments
     let mut cli = Cli::parse();
@@ -1487,6 +1502,7 @@ async fn start_server(
     .await
 }
 
+#[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -1589,6 +1605,7 @@ mod tests {
         );
 
         AppConfig {
+            schema_version: "1.0.0".to_string(),
             default_phase: "coding".to_string(),
             agents,
             flow: FlowConfig {

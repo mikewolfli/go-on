@@ -1,3 +1,4 @@
+use crate::i18n::runtime::tf;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -262,7 +263,10 @@ impl TaskScheduler {
             .map_err(|e| anyhow!("Lock error: {}", e))?
             .contains_key(&task_id)
         {
-            return Err(anyhow!("Task {} already submitted", task_id));
+            return Err(anyhow!(tf(
+                "error.scheduler.task_already_submitted",
+                &[("task_id", &task_id)]
+            )));
         }
 
         // Check backpressure: reject if total pending queue depth exceeds threshold.
@@ -277,12 +281,17 @@ impl TaskScheduler {
             if let Ok(mut stats) = self.stats.lock() {
                 stats.backpressure_rejections += 1;
             }
-            return Err(anyhow!(
-                "Backpressure: total pending ({}) exceeds threshold ({}) — rejected task {}",
-                total_pending,
-                self.config.backpressure_queue_depth,
-                task_id
-            ));
+            return Err(anyhow!(tf(
+                "error.scheduler.backpressure_rejected",
+                &[
+                    ("total_pending", &total_pending.to_string()),
+                    (
+                        "threshold",
+                        &self.config.backpressure_queue_depth.to_string()
+                    ),
+                    ("task_id", &task_id)
+                ]
+            )));
         }
 
         // Push into the role-specific heap
@@ -447,9 +456,12 @@ impl TaskScheduler {
                 .active
                 .lock()
                 .map_err(|e| anyhow!("Lock error: {}", e))?;
-            let _ = active
-                .remove(task_id)
-                .ok_or_else(|| anyhow!("Task {} not found in active tasks", task_id))?;
+            let _ = active.remove(task_id).ok_or_else(|| {
+                anyhow!(tf(
+                    "error.scheduler.task_not_active",
+                    &[("task_id", task_id)]
+                ))
+            })?;
         }
 
         // Remove completed task from task_map
@@ -509,8 +521,15 @@ impl TaskScheduler {
                             .map_err(|e| anyhow!("Lock error: {}", e))?
                             .total_failed += 1;
                         warn!(
-                            "Task {} failed, requeueing (retry {}/{})",
-                            task_id, task.retries, task.max_retries
+                            "{}",
+                            tf(
+                                "status.scheduler.task_requeued",
+                                &[
+                                    ("task_id", task_id),
+                                    ("retries", &task.retries.to_string()),
+                                    ("max_retries", &task.max_retries.to_string()),
+                                ]
+                            )
                         );
                         return Ok(());
                     }
@@ -537,8 +556,14 @@ impl TaskScheduler {
             .map_err(|e| anyhow!("Lock error: {}", e))?
             .total_failed += 1;
         error!(
-            "Task {} failed permanently after {} retries",
-            task_id, max_retries
+            "{}",
+            tf(
+                "status.scheduler.task_failed_permanently",
+                &[
+                    ("task_id", task_id),
+                    ("max_retries", &max_retries.to_string()),
+                ]
+            )
         );
         Ok(())
     }
@@ -962,7 +987,13 @@ impl AgentWorkerScheduler {
             .entry(role.to_string())
             .or_default()
             .insert(worker_id.to_string());
-        info!("Worker {} registered for role {}", worker_id, role);
+        info!(
+            "{}",
+            tf(
+                "status.scheduler.worker_registered",
+                &[("worker_id", worker_id), ("role", role)]
+            )
+        );
         Ok(())
     }
 
@@ -985,10 +1016,19 @@ impl AgentWorkerScheduler {
                     let _ = self.level1.fail(&task_id, true);
                 }
             }
-            info!("Worker {} unregistered from role {}", worker_id, role);
+            info!(
+                "{}",
+                tf(
+                    "status.scheduler.worker_unregistered",
+                    &[("worker_id", worker_id), ("role", role)]
+                )
+            );
             Ok(())
         } else {
-            Err(anyhow!("Worker {} not found for role {}", worker_id, role))
+            Err(anyhow!(tf(
+                "error.scheduler.worker_not_found",
+                &[("worker_id", worker_id), ("role", role)]
+            )))
         }
     }
 
@@ -1042,9 +1082,12 @@ impl AgentWorkerScheduler {
                 .assignments
                 .lock()
                 .map_err(|e| anyhow!("Lock error: {}", e))?;
-            assignments
-                .remove(worker_id)
-                .ok_or_else(|| anyhow!("No active assignment for worker {}", worker_id))?
+            assignments.remove(worker_id).ok_or_else(|| {
+                anyhow!(tf(
+                    "error.scheduler.no_active_assignment",
+                    &[("worker_id", worker_id)]
+                ))
+            })?
         };
         self.level1.complete(&task_id)
     }
@@ -1072,7 +1115,13 @@ impl AgentWorkerScheduler {
             stats.l2_fan_out_count += 1;
         }
 
-        info!("Created fan-out group {} with {} tasks", group_id, count);
+        info!(
+            "{}",
+            tf(
+                "status.scheduler.fan_out_created",
+                &[("group_id", &group_id), ("count", &count.to_string())]
+            )
+        );
         Ok(group_id)
     }
 
@@ -1082,9 +1131,12 @@ impl AgentWorkerScheduler {
             .fan_out_groups
             .lock()
             .map_err(|e| anyhow!("Lock error: {}", e))?;
-        let task_ids = groups
-            .get(group_id)
-            .ok_or_else(|| anyhow!("Fan-out group {} not found", group_id))?;
+        let task_ids = groups.get(group_id).ok_or_else(|| {
+            anyhow!(tf(
+                "error.scheduler.fan_out_group_not_found",
+                &[("group_id", group_id)]
+            ))
+        })?;
         let total = task_ids.len();
 
         let task_map = self

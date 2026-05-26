@@ -10,77 +10,70 @@
           "title": "Explain Code",
           "description": "Detailed code explanation covering control flow, data structures, risks",
           "content": "Explain the following code in detail. Cover the control flow, key data structures, and any risks or tradeoffs.\n\n{{input}}",
-          "tags": [
-            "code",
-            "analysis",
-            "learning"
-          ]
+          "tags": ["code", "analysis", "learning"]
         },
         {
           "id": "code_review",
           "title": "Code Review",
           "description": "Thorough code review with suggestions for improvement",
           "content": "Review the following code. Identify potential bugs, performance issues, style violations, and security concerns. Provide specific improvement suggestions.\n\n{{input}}",
-          "tags": [
-            "code",
-            "review",
-            "quality"
-          ]
+          "tags": ["code", "review", "quality"]
         },
         {
           "id": "refactor_suggestion",
           "title": "Refactoring Suggestions",
           "description": "Suggest design improvements and code restructurings",
           "content": "Analyze the following code and suggest meaningful refactoring opportunities. Focus on improving modularity, testability, and adherence to design patterns.\n\n{{input}}",
-          "tags": [
-            "code",
-            "refactoring",
-            "design-patterns"
-          ]
+          "tags": ["code", "refactoring", "design-patterns"]
         },
         {
           "id": "generate_unit_test",
           "title": "Generate Unit Tests",
           "description": "Comprehensive unit test generation for functions or modules",
           "content": "Write thorough unit tests for the following code. Cover edge cases, error conditions, and happy paths. Use {{test_framework}} if applicable.\n\n{{input}}",
-          "tags": [
-            "testing",
-            "unit-test",
-            "code-generation"
-          ]
+          "tags": ["testing", "unit-test", "code-generation"]
         },
         {
           "id": "debug_error",
           "title": "Debug Error Message",
           "description": "Root cause analysis for error logs and stack traces",
           "content": "Analyze the error message and stack trace below. Identify the root cause, explain what went wrong, and provide a fix.\n\n{{input}}",
-          "tags": [
-            "debugging",
-            "error-analysis",
-            "troubleshooting"
-          ]
+          "tags": ["debugging", "error-analysis", "troubleshooting"]
         },
         {
           "id": "generate_documentation",
           "title": "Generate Documentation",
           "description": "Generate comprehensive API or function documentation",
           "content": "Write clear and comprehensive documentation for the following code. Include parameter descriptions, return values, examples, and caveats.\n\n{{input}}",
-          "tags": [
-            "documentation",
-            "code-generation",
-            "api-docs"
-          ]
+          "tags": ["documentation", "code-generation", "api-docs"]
         },
         {
           "id": "architecture_design",
           "title": "Architecture Design",
           "description": "Design system architecture for given requirements",
           "content": "Design a software architecture for the following requirements. Discuss component boundaries, data flow, communication protocols, and tradeoffs.\n\n{{input}}",
-          "tags": [
-            "architecture",
-            "design",
-            "system-design"
-          ]
+          "tags": ["architecture", "design", "system-design"]
+        },
+        {
+          "id": "api_design",
+          "title": "API Design Review",
+          "description": "Review API design against RESTful best practices",
+          "content": "Review the following API design. Check for RESTful compliance, proper HTTP method usage, correct status codes, consistent error response format, and adequate security considerations.\n\n{{input}}",
+          "tags": ["api", "rest", "design"]
+        },
+        {
+          "id": "architecture_review",
+          "title": "Architecture Review",
+          "description": "Evaluate system architecture for scalability and reliability",
+          "content": "Evaluate the following system architecture. Analyze its scalability, reliability, maintainability, and potential bottlenecks. Suggest improvements based on industry best practices.\n\n{{input}}",
+          "tags": ["architecture", "scalability", "design"]
+        },
+        {
+          "id": "generate_unit_tests",
+          "title": "Generate Unit Tests",
+          "description": "Generate comprehensive unit tests covering edge cases",
+          "content": "Write thorough unit tests for the following code. Cover normal cases, edge cases, error conditions, and boundary tests. Use a testing framework appropriate for the language.\n\n{{input}}",
+          "tags": ["testing", "unit-tests", "quality"]
         }
       ]
     },
@@ -94,66 +87,84 @@
           "title": "Blog Post Outline",
           "description": "Create a structured outline for a blog article",
           "content": "Create a detailed outline for a blog post on the following topic. Include an engaging title suggestion, introduction, main sections with key points, and a conclusion with call-to-action.\n\n{{input}}",
-          "tags": [
-            "blogging",
-            "outline",
-            "content-planning"
-          ]
+          "tags": ["blogging", "outline", "content-planning"]
         },
         {
           "id": "proofread_text",
           "title": "Proofread & Polish",
           "description": "Grammar, style, and clarity improvement for any text",
           "content": "Proofread and polish the following text. Fix grammar, spelling, and punctuation errors. Improve sentence structure and clarity while preserving the original tone and meaning.\n\n{{input}}",
-          "tags": [
-            "proofreading",
-            "editing",
-            "grammar"
-          ]
+          "tags": ["proofreading", "editing", "grammar"]
         },
         {
           "id": "creative_story",
           "title": "Creative Writing Prompt",
           "description": "Generate a short story or narrative based on a prompt",
           "content": "Write a creative short story based on the following prompt. Develop compelling characters, vivid settings, and engaging plot. Aim for {{word_count}} words.\n\n{{input}}",
-          "tags": [
-            "creative",
-            "storytelling",
-            "fiction"
-          ]
+          "tags": ["creative", "storytelling", "fiction"]
         },
         {
           "id": "copywriting_slogan",
           "title": "Copywriting & Slogans",
           "description": "Compelling marketing copy and tagline generation",
           "content": "Write persuasive copy and catchy slogans for the following product or service. Highlight unique value propositions and appeal to the target audience.\n\n{{input}}",
-          "tags": [
-            "copywriting",
-            "marketing",
-            "branding"
-          ]
+          "tags": ["copywriting", "marketing", "branding"]
         },
         {
           "id": "email_template",
           "title": "Email Template",
           "description": "Professional email writing for various contexts",
           "content": "Write a professional email for the following scenario. Maintain appropriate tone, include a clear subject line, and ensure the message achieves its intended purpose.\n\n{{input}}",
-          "tags": [
-            "email",
-            "professional",
-            "communication"
-          ]
+          "tags": ["email", "professional", "communication"]
         },
         {
           "id": "technical_writing",
           "title": "Technical Writing",
           "description": "Translate complex technical concepts into clear prose",
           "content": "Explain the following technical concept in clear, accessible language suitable for {{audience}}. Use analogies and examples where appropriate.\n\n{{input}}",
-          "tags": [
-            "technical-writing",
-            "documentation",
-            "explanation"
-          ]
+          "tags": ["technical-writing", "documentation", "explanation"]
+        },
+        {
+          "id": "email_draft",
+          "title": "Draft Professional Email",
+          "description": "Draft a well-structured professional email",
+          "content": "Write a professional email based on the following context. Include a clear subject line, appropriate salutation, well-organized body, and proper closing.\n\n{{input}}",
+          "tags": ["email", "professional", "communication"]
+        },
+        {
+          "id": "headline_generator",
+          "title": "Headline Generator",
+          "description": "Generate attention-grabbing headlines",
+          "content": "Generate 10 compelling headlines for the following article or topic. Use diverse styles: direct, question-based, listicle, how-to, and thought-provoking.\n\nTopic: {{input}}",
+          "tags": ["headlines", "titles", "marketing"]
+        },
+        {
+          "id": "outline_article",
+          "title": "Article Outline",
+          "description": "Create a structured outline with main points and subpoints",
+          "content": "Create a detailed outline for an article on the following topic. Include an engaging introduction, 3-5 core sections with supporting arguments, and a strong conclusion.\n\nTopic: {{input}}",
+          "tags": ["outline", "structure", "planning"]
+        },
+        {
+          "id": "proofread",
+          "title": "Proofread & Polish",
+          "description": "Check grammar, style, and clarity of any text",
+          "content": "Proofread the following text. Fix grammar, spelling, and punctuation errors. Improve sentence structure and clarity while preserving the original tone and style.\n\n{{input}}",
+          "tags": ["proofreading", "grammar", "editing"]
+        },
+        {
+          "id": "rewrite_tone",
+          "title": "Rewrite with Specific Tone",
+          "description": "Rewrite content with a specified tone (formal, casual, persuasive)",
+          "content": "Rewrite the following content with a {{tone}} tone. Keep key information and factual accuracy while adjusting style appropriately.\n\n{{input}}",
+          "tags": ["rewrite", "tone", "style"]
+        },
+        {
+          "id": "summarize_content",
+          "title": "Content Summary",
+          "description": "Condense long content into a concise summary",
+          "content": "Summarize the following content into a concise version. Capture the main points, key arguments, and important conclusions. Aim for about one-third the original length.\n\n{{input}}",
+          "tags": ["summary", "condense", "key-points"]
         }
       ]
     },
@@ -167,66 +178,56 @@
           "title": "Literature Review",
           "description": "Summarize and synthesize academic papers on a topic",
           "content": "Conduct a literature review on the following research topic. Summarize key findings from major papers, identify trends and gaps, and suggest future research directions.\n\n{{input}}",
-          "tags": [
-            "research",
-            "literature-review",
-            "academic"
-          ]
+          "tags": ["research", "literature-review", "academic"]
         },
         {
           "id": "abstract_generation",
           "title": "Abstract Generation",
           "description": "Generate a concise abstract from research notes",
           "content": "Write a concise and informative abstract for the following research work. Include the research problem, methodology, key findings, and implications. Keep within {{word_limit}} words.\n\n{{input}}",
-          "tags": [
-            "abstract",
-            "research-paper",
-            "summary"
-          ]
+          "tags": ["abstract", "research-paper", "summary"]
         },
         {
           "id": "peer_review",
           "title": "Peer Review Response",
           "description": "Help draft responses to reviewer comments",
           "content": "Draft a professional and constructive response to the following peer review comments. Address each point clearly, explain any changes made, and maintain a respectful tone.\n\n{{input}}",
-          "tags": [
-            "peer-review",
-            "response",
-            "academic"
-          ]
+          "tags": ["peer-review", "response", "academic"]
         },
         {
           "id": "research_proposal",
           "title": "Research Proposal Outline",
           "description": "Structure a compelling research funding proposal",
           "content": "Help structure a research proposal for the following topic. Include problem statement, research questions, methodology, expected outcomes, and timeline.\n\n{{input}}",
-          "tags": [
-            "proposal",
-            "research",
-            "funding"
-          ]
+          "tags": ["proposal", "research", "funding"]
         },
         {
           "id": "citation_format",
           "title": "Citation Formatting",
           "description": "Format references in various citation styles",
           "content": "Format the following references in {{citation_style}} style. Ensure correct punctuation, italics, and ordering according to the style guide.\n\n{{input}}",
-          "tags": [
-            "citation",
-            "bibliography",
-            "formatting"
-          ]
+          "tags": ["citation", "bibliography", "formatting"]
         },
         {
           "id": "thesis_statement",
           "title": "Thesis Statement Refinement",
           "description": "Sharpen and strengthen thesis statements",
           "content": "Review and refine the following thesis statement. Make it more specific, arguable, and impactful. Suggest alternative formulations if appropriate.\n\n{{input}}",
-          "tags": [
-            "thesis",
-            "argumentation",
-            "academic-writing"
-          ]
+          "tags": ["thesis", "argumentation", "academic-writing"]
+        },
+        {
+          "id": "research_methodology",
+          "title": "Research Methodology Design",
+          "description": "Design appropriate research methods for a study",
+          "content": "Design a research methodology for the following study. Recommend suitable research design, data collection methods, sampling strategy, and analysis techniques. Justify each choice.\n\nResearch question: {{input}}",
+          "tags": ["methodology", "research-design", "data-collection"]
+        },
+        {
+          "id": "data_analysis_interpretation",
+          "title": "Data Analysis Interpretation",
+          "description": "Interpret statistical results for academic writing",
+          "content": "Explain the following statistical results from an academic study. Describe what the data means in plain language, discuss significance, and suggest how to present the findings effectively.\n\nResults: {{input}}",
+          "tags": ["statistics", "interpretation", "analysis"]
         }
       ]
     },
@@ -240,66 +241,63 @@
           "title": "SWOT Analysis",
           "description": "Comprehensive strengths, weaknesses, opportunities, threats analysis",
           "content": "Perform a SWOT analysis for the following business scenario. Identify internal strengths and weaknesses, and external opportunities and threats. Provide strategic recommendations.\n\n{{input}}",
-          "tags": [
-            "swot",
-            "strategy",
-            "business-analysis"
-          ]
+          "tags": ["swot", "strategy", "business-analysis"]
         },
         {
           "id": "business_plan",
           "title": "Business Plan Outline",
           "description": "Structure a comprehensive business plan",
           "content": "Create an outline for a business plan covering the following idea. Include executive summary, market analysis, competitive landscape, financial projections, and operational plan.\n\n{{input}}",
-          "tags": [
-            "business-plan",
-            "entrepreneurship",
-            "strategy"
-          ]
+          "tags": ["business-plan", "entrepreneurship", "strategy"]
         },
         {
           "id": "meeting_agenda",
           "title": "Meeting Agenda",
           "description": "Efficient and focused meeting planning",
           "content": "Design a meeting agenda for the following purpose. Allocate time slots, define objectives for each segment, and identify required participants and preparation materials.\n\n{{input}}",
-          "tags": [
-            "meetings",
-            "agenda",
-            "productivity"
-          ]
+          "tags": ["meetings", "agenda", "productivity"]
         },
         {
           "id": "competitive_analysis",
           "title": "Competitive Analysis",
           "description": "In-depth competitor assessment and positioning",
           "content": "Analyze the competitive landscape for the following product or market. Compare key competitors on features, pricing, market share, and differentiators. Suggest positioning strategy.\n\n{{input}}",
-          "tags": [
-            "competitors",
-            "market-analysis",
-            "strategy"
-          ]
+          "tags": ["competitors", "market-analysis", "strategy"]
         },
         {
           "id": "risk_assessment",
           "title": "Risk Assessment",
           "description": "Identify and evaluate business risks",
           "content": "Identify and assess risks for the following business initiative. Categorize risks by likelihood and impact, and propose mitigation strategies for each.\n\n{{input}}",
-          "tags": [
-            "risk-management",
-            "assessment",
-            "business"
-          ]
+          "tags": ["risk-management", "assessment", "business"]
         },
         {
           "id": "presentation_outline",
           "title": "Presentation Outline",
           "description": "Structure a compelling business presentation",
           "content": "Outline a business presentation on the following topic. Structure the narrative arc, design key slides, and suggest visual aids and delivery techniques.\n\n{{input}}",
-          "tags": [
-            "presentation",
-            "slides",
-            "communication"
-          ]
+          "tags": ["presentation", "slides", "communication"]
+        },
+        {
+          "id": "cost_benefit",
+          "title": "Cost-Benefit Analysis",
+          "description": "Evaluate business decisions with cost-benefit analysis",
+          "content": "Perform a cost-benefit analysis for the following business decision. Identify all direct and indirect costs, quantify expected benefits, calculate ROI, and assess risks.\n\nDecision: {{input}}",
+          "tags": ["cost-benefit", "roi", "analysis"]
+        },
+        {
+          "id": "executive_summary",
+          "title": "Executive Summary",
+          "description": "Write a compelling executive summary for business documents",
+          "content": "Write a persuasive executive summary for the following business document. In 1-2 paragraphs, summarize the problem statement, proposed solution, key metrics, and expected outcomes.\n\nDocument: {{input}}",
+          "tags": ["executive-summary", "briefing", "report"]
+        },
+        {
+          "id": "pitch_deck",
+          "title": "Pitch Deck Outline",
+          "description": "Structure a pitch deck for investor presentations",
+          "content": "Create a slide-by-slide outline for an investor pitch deck. Include problem, solution, market size, business model, traction, team, competition, and financial projections.\n\nCompany: {{input}}",
+          "tags": ["pitch-deck", "investors", "fundraising"]
         }
       ]
     },
@@ -313,66 +311,91 @@
           "title": "Marketing Strategy",
           "description": "Develop a comprehensive go-to-market strategy",
           "content": "Develop a marketing strategy for the following product or service. Define target personas, key messaging, channels, budget allocation, and success metrics.\n\n{{input}}",
-          "tags": [
-            "strategy",
-            "go-to-market",
-            "marketing"
-          ]
+          "tags": ["strategy", "go-to-market", "marketing"]
         },
         {
           "id": "social_media_content",
           "title": "Social Media Content",
           "description": "Create engaging posts for social media platforms",
           "content": "Create {{num_posts}} social media posts for {{platform}} about the following topic. Use appropriate tone, hashtags, and formats for the platform. Include calls-to-action.\n\n{{input}}",
-          "tags": [
-            "social-media",
-            "content",
-            "engagement"
-          ]
+          "tags": ["social-media", "content", "engagement"]
         },
         {
           "id": "seo_optimization",
           "title": "SEO Content Optimization",
           "description": "Optimize web content for search engines",
           "content": "Optimize the following content for search engines. Suggest primary and secondary keywords, improve meta descriptions, headers, and internal linking structure.\n\n{{input}}",
-          "tags": [
-            "seo",
-            "keywords",
-            "content-optimization"
-          ]
+          "tags": ["seo", "keywords", "content-optimization"]
         },
         {
           "id": "landing_page_copy",
           "title": "Landing Page Copy",
           "description": "Conversion-focused landing page text",
           "content": "Write persuasive landing page copy for the following offer. Craft a compelling headline, subheadline, benefit-driven body, and a strong call-to-action.\n\n{{input}}",
-          "tags": [
-            "landing-page",
-            "conversion",
-            "copywriting"
-          ]
+          "tags": ["landing-page", "conversion", "copywriting"]
         },
         {
           "id": "email_marketing",
           "title": "Email Marketing Campaign",
           "description": "Draft a multi-email marketing sequence",
           "content": "Draft an email marketing sequence for the following campaign. Include a welcome email, nurture emails, and a conversion email with compelling subject lines and CTA.\n\n{{input}}",
-          "tags": [
-            "email-marketing",
-            "campaign",
-            "automation"
-          ]
+          "tags": ["email-marketing", "campaign", "automation"]
         },
         {
           "id": "brand_voice_guide",
           "title": "Brand Voice Guide",
           "description": "Define a consistent brand voice and tone",
           "content": "Define a brand voice guide for the following company. Specify tone characteristics, do and don't examples, and how to adapt the voice across different channels.\n\n{{input}}",
-          "tags": [
-            "branding",
-            "voice",
-            "guidelines"
-          ]
+          "tags": ["branding", "voice", "guidelines"]
+        },
+        {
+          "id": "social_media_post",
+          "title": "Social Media Post",
+          "description": "Generate platform-optimized social media posts",
+          "content": "Write a social media post for {{platform}} about the following topic. Optimize for the platform's best practices, character limits, and audience expectations. Include relevant hashtags.\n\nTopic: {{input}}",
+          "tags": ["social-media", "copywriting", "content"]
+        },
+        {
+          "id": "seo_content",
+          "title": "SEO Content Writing",
+          "description": "Create search-engine-optimized content",
+          "content": "Create SEO-optimized content for the following keywords. Include proper heading structure, meta description, keyword density, internal linking suggestions, and engaging copy that ranks well.\n\nKeywords: {{input}}",
+          "tags": ["seo", "content", "keywords"]
+        },
+        {
+          "id": "email_campaign",
+          "title": "Email Marketing Campaign",
+          "description": "Design a multi-email marketing sequence",
+          "content": "Design a 5-email marketing sequence for the following product or offer. Include a welcome email, value email, social proof email, offer email, and follow-up email, each with compelling subject lines.\n\nProduct/Offer: {{input}}",
+          "tags": ["email", "campaign", "marketing"]
+        },
+        {
+          "id": "ad_copy",
+          "title": "Ad Copy Generator",
+          "description": "Create persuasive advertising copy",
+          "content": "Create persuasive ad copy for {{platform}} targeting {{audience}}. Write 3 variations of headlines and body copy, highlighting unique selling points and including a clear call-to-action.\n\nProduct: {{input}}",
+          "tags": ["advertising", "copywriting", "ppc"]
+        },
+        {
+          "id": "brand_voice",
+          "title": "Brand Voice & Tone Guide",
+          "description": "Define a consistent brand voice and style",
+          "content": "Define a brand voice guide for the following company. Describe personality traits, language style, do's and don'ts, and provide examples for different scenarios (social, support, marketing, formal).\n\nCompany: {{input}}",
+          "tags": ["brand", "voice", "guidelines"]
+        },
+        {
+          "id": "content_calendar",
+          "title": "Content Calendar",
+          "description": "Plan a monthly content calendar",
+          "content": "Create a 4-week content calendar for the following topic or brand. Include content themes, post types, publishing platforms, posting schedule, and KPIs for each piece of content.\n\nTopic/Brand: {{input}}",
+          "tags": ["calendar", "planning", "content-strategy"]
+        },
+        {
+          "id": "landing_page",
+          "title": "Landing Page Copy",
+          "description": "Write high-converting landing page content",
+          "content": "Write high-converting landing page copy. Include a compelling headline, subheadline, benefit description, social proof, objection handling, and a strong call-to-action.\n\nProduct/Service: {{input}}",
+          "tags": ["landing-page", "conversion", "copywriting"]
         }
       ]
     },
@@ -386,66 +409,77 @@
           "title": "Contract Clause Drafting",
           "description": "Draft or review specific contract clauses",
           "content": "Draft a {{clause_type}} clause for the following contract context. Ensure clarity, enforceability, and alignment with applicable laws.\n\n{{input}}",
-          "tags": [
-            "contracts",
-            "clauses",
-            "legal-drafting"
-          ]
+          "tags": ["contracts", "clauses", "legal-drafting"]
         },
         {
           "id": "legal_disclaimer",
           "title": "Legal Disclaimer",
           "description": "Generate appropriate disclaimers for products or services",
           "content": "Draft a legal disclaimer for the following product, service, or content. Cover liability limitations and comply with relevant regulations.\n\n{{input}}",
-          "tags": [
-            "disclaimer",
-            "liability",
-            "compliance"
-          ]
+          "tags": ["disclaimer", "liability", "compliance"]
         },
         {
           "id": "privacy_policy_summary",
           "title": "Privacy Policy Summary",
           "description": "Summarize privacy policies in plain language",
           "content": "Summarize the following privacy policy in plain, understandable language. Highlight key data collection, usage, sharing practices, and user rights.\n\n{{input}}",
-          "tags": [
-            "privacy",
-            "gdpr",
-            "policy"
-          ]
+          "tags": ["privacy", "gdpr", "policy"]
         },
         {
           "id": "terms_of_service",
           "title": "Terms of Service Review",
           "description": "Review terms of service for potential issues",
           "content": "Review the following terms of service. Identify potentially unfair clauses, ambiguities, and compliance issues with {{jurisdiction}} regulations.\n\n{{input}}",
-          "tags": [
-            "terms-of-service",
-            "review",
-            "compliance"
-          ]
+          "tags": ["terms-of-service", "review", "compliance"]
         },
         {
           "id": "compliance_checklist",
           "title": "Compliance Checklist",
           "description": "Create a regulatory compliance checklist",
           "content": "Create a compliance checklist for the following business activity under {{regulation}}. Include required actions, documentation, and deadlines.\n\n{{input}}",
-          "tags": [
-            "compliance",
-            "checklist",
-            "regulation"
-          ]
+          "tags": ["compliance", "checklist", "regulation"]
         },
         {
           "id": "cease_and_desist",
           "title": "Cease and Desist Draft",
           "description": "Draft cease and desist correspondence",
           "content": "Draft a cease and desist letter for the following situation. Clearly state the infringement, demand specific actions, and specify a response deadline.\n\n{{input}}",
-          "tags": [
-            "legal-notice",
-            "cease-and-desist",
-            "enforcement"
-          ]
+          "tags": ["legal-notice", "cease-and-desist", "enforcement"]
+        },
+        {
+          "id": "contract_review",
+          "title": "Contract Review Checklist",
+          "description": "Review key clauses and risks in a contract",
+          "content": "Review the following contract or contract summary. Identify key clauses, obligations, liabilities, termination conditions, and potential risks. Flag any unfavorable terms and suggest revisions.\n\nContract: {{input}}",
+          "tags": ["contract", "review", "legal"]
+        },
+        {
+          "id": "legal_memo",
+          "title": "Legal Memorandum",
+          "description": "Write a structured legal memorandum",
+          "content": "Write a legal memorandum on the following legal issue. Include statement of facts, legal questions, brief answers, applicable law analysis, application to facts, and conclusion.\n\nLegal issue: {{input}}",
+          "tags": ["memorandum", "legal-research", "writing"]
+        },
+        {
+          "id": "privacy_policy",
+          "title": "Privacy Policy Summary",
+          "description": "Summarize privacy policies for compliance review",
+          "content": "Summarize the key aspects of the following privacy policy. Identify data collection practices, user rights, data sharing, security measures, and compliance with regulations like GDPR or CCPA.\n\nPolicy: {{input}}",
+          "tags": ["privacy", "gdpr", "compliance"]
+        },
+        {
+          "id": "nda_draft",
+          "title": "NDA Drafting",
+          "description": "Draft a non-disclosure agreement",
+          "content": "Draft a non-disclosure agreement for the following parties and purpose. Include definition of confidential information, obligations, exclusions, term, governing law, and remedies.\n\nParties and purpose: {{input}}",
+          "tags": ["nda", "confidentiality", "agreement"]
+        },
+        {
+          "id": "case_brief",
+          "title": "Case Brief",
+          "description": "Summarize a legal case with key rulings",
+          "content": "Summarize the following legal case. Include case name, court, citation, key facts, procedural history, legal issues, holding, reasoning, and any dissenting opinions.\n\nCase: {{input}}",
+          "tags": ["case-law", "brief", "summary"]
         }
       ]
     },
@@ -459,66 +493,56 @@
           "title": "Symptom Analysis",
           "description": "Analyze symptoms and suggest possible conditions",
           "content": "Analyze the following symptoms and patient history. List possible differential diagnoses, recommended diagnostic tests, and red flags requiring immediate attention. Note: This is for informational purposes only and not a substitute for professional medical advice.\n\n{{input}}",
-          "tags": [
-            "symptoms",
-            "diagnosis",
-            "medical"
-          ]
+          "tags": ["symptoms", "diagnosis", "medical"]
         },
         {
           "id": "patient_education",
           "title": "Patient Education Material",
           "description": "Create accessible health information for patients",
           "content": "Create patient-friendly educational material about the following medical condition. Explain causes, symptoms, treatment options, and when to seek help. Use plain language.\n\n{{input}}",
-          "tags": [
-            "patient-education",
-            "health-literacy",
-            "medical"
-          ]
+          "tags": ["patient-education", "health-literacy", "medical"]
         },
         {
           "id": "clinical_notes",
           "title": "Clinical Notes Summary",
           "description": "Summarize clinical notes into structured format",
           "content": "Organize the following clinical notes into a structured SOAP format. Include subjective, objective, assessment, and plan sections.\n\n{{input}}",
-          "tags": [
-            "clinical",
-            "soap-notes",
-            "documentation"
-          ]
+          "tags": ["clinical", "soap-notes", "documentation"]
         },
         {
           "id": "research_summary",
           "title": "Medical Research Summary",
           "description": "Summarize medical research papers for clinicians",
           "content": "Summarize the following medical research paper. Highlight study design, sample size, key findings, statistical significance, and clinical implications.\n\n{{input}}",
-          "tags": [
-            "research",
-            "evidence-based",
-            "clinical"
-          ]
+          "tags": ["research", "evidence-based", "clinical"]
         },
         {
           "id": "medication_guide",
           "title": "Medication Guide",
           "description": "Explain medication usage, side effects, and interactions",
           "content": "Provide a clear guide for the following medication. Cover dosage, administration, common and serious side effects, drug interactions, and contraindications.\n\n{{input}}",
-          "tags": [
-            "medication",
-            "pharmacology",
-            "safety"
-          ]
+          "tags": ["medication", "pharmacology", "safety"]
         },
         {
           "id": "treatment_plan",
           "title": "Treatment Plan Outline",
           "description": "Structure a comprehensive treatment plan",
           "content": "Outline a treatment plan for the following clinical scenario. Include therapeutic goals, interventions, monitoring parameters, and follow-up schedule.\n\n{{input}}",
-          "tags": [
-            "treatment",
-            "care-plan",
-            "clinical"
-          ]
+          "tags": ["treatment", "care-plan", "clinical"]
+        },
+        {
+          "id": "drug_interaction",
+          "title": "Drug Interaction Check",
+          "description": "Check for potential drug interactions",
+          "content": "Review the following list of medications for potential drug interactions. Identify major, moderate, and minor interactions, explain the mechanism, and suggest alternatives or monitoring strategies. For educational purposes only.\n\nMedications: {{input}}",
+          "tags": ["drugs", "interactions", "pharmacology"]
+        },
+        {
+          "id": "public_health",
+          "title": "Public Health Communication",
+          "description": "Draft public health announcements and guidelines",
+          "content": "Draft a public health communication about the following topic. Include key facts, prevention measures, when to seek medical help, and reliable information sources. Use clear, accessible language.\n\nTopic: {{input}}",
+          "tags": ["public-health", "communication", "guidelines"]
         }
       ]
     },
@@ -532,66 +556,70 @@
           "title": "Lesson Plan",
           "description": "Design a structured lesson plan for any subject",
           "content": "Design a lesson plan for the following topic aimed at {{grade_level}} students. Include learning objectives, materials needed, activities, assessment methods, and differentiation strategies.\n\n{{input}}",
-          "tags": [
-            "lesson-plan",
-            "teaching",
-            "curriculum"
-          ]
+          "tags": ["lesson-plan", "teaching", "curriculum"]
         },
         {
           "id": "quiz_generation",
           "title": "Quiz Generation",
           "description": "Create quizzes and assessments on any topic",
           "content": "Create a {{num_questions}}-question quiz on the following topic. Include a mix of multiple-choice, true/false, and short-answer questions with an answer key.\n\n{{input}}",
-          "tags": [
-            "quiz",
-            "assessment",
-            "testing"
-          ]
+          "tags": ["quiz", "assessment", "testing"]
         },
         {
           "id": "study_guide",
           "title": "Study Guide",
           "description": "Comprehensive study guide from class notes or textbook",
           "content": "Create a study guide for the following subject material. Organize key concepts, definitions, formulas, and practice questions. Highlight the most important points for exam preparation.\n\n{{input}}",
-          "tags": [
-            "study",
-            "exam-prep",
-            "summary"
-          ]
+          "tags": ["study", "exam-prep", "summary"]
         },
         {
           "id": "assignment_feedback",
           "title": "Assignment Feedback",
           "description": "Constructive feedback on student assignments",
           "content": "Provide constructive feedback on the following student assignment. Highlight strengths, identify areas for improvement, and suggest specific next steps for learning.\n\n{{input}}",
-          "tags": [
-            "feedback",
-            "grading",
-            "assessment"
-          ]
+          "tags": ["feedback", "grading", "assessment"]
         },
         {
           "id": "syllabus_design",
           "title": "Syllabus Design",
           "description": "Design a course syllabus with schedule and policies",
           "content": "Design a syllabus for a course on the following subject. Include course description, learning outcomes, weekly schedule, grading policy, and required materials.\n\n{{input}}",
-          "tags": [
-            "syllabus",
-            "course-design",
-            "academic"
-          ]
+          "tags": ["syllabus", "course-design", "academic"]
         },
         {
           "id": "explain_concept",
           "title": "Explain a Concept Simply",
           "description": "Break down complex topics for any age group",
           "content": "Explain the following concept as if teaching it to a {{audience_level}} audience. Use analogies, examples, and simple language. Check for common misconceptions.\n\n{{input}}",
-          "tags": [
-            "explanation",
-            "teaching",
-            "simplification"
-          ]
+          "tags": ["explanation", "teaching", "simplification"]
+        },
+        {
+          "id": "quiz_generator",
+          "title": "Quiz Generator",
+          "description": "Generate quizzes with multiple question types",
+          "content": "Create a quiz on the following topic. Include 10 questions with a mix of multiple-choice, true/false, short answer, and essay questions. Provide an answer key with explanations.\n\nTopic: {{input}}",
+          "tags": ["quiz", "exam", "assessment"]
+        },
+        {
+          "id": "course_syllabus",
+          "title": "Course Syllabus Design",
+          "description": "Design a complete course syllabus",
+          "content": "Design a complete syllabus for the following course. Include course description, learning outcomes, required materials, weekly schedule with topics and readings, grading policy, and academic integrity guidelines.\n\nCourse: {{input}}",
+          "tags": ["syllabus", "course-design", "curriculum"]
+        },
+        {
+          "id": "feedback_on_assignment",
+          "title": "Assignment Feedback",
+          "description": "Provide constructive feedback on student work",
+          "content": "Provide constructive feedback on the following student assignment. Point out strengths, identify areas for improvement with specific examples, and suggest next steps.\n\nAssignment: {{input}}",
+          "tags": ["feedback", "grading", "assessment"]
+        },
+        {
+          "id": "discussion_prompts",
+          "title": "Discussion Prompts",
+          "description": "Generate engaging discussion questions",
+          "content": "Generate 8 engaging discussion questions for the following topic. Include open-ended questions, critical thinking prompts, debate topics, and reflective questions to encourage active participation.\n\nTopic: {{input}}",
+          "tags": ["discussion", "questions", "engagement"]
         }
       ]
     },
@@ -605,66 +633,77 @@
           "title": "Investment Analysis",
           "description": "Analyze stocks, bonds, or other investment opportunities",
           "content": "Analyze the following investment opportunity. Evaluate fundamentals, valuation metrics, competitive position, growth prospects, and risks. Provide a balanced recommendation.\n\n{{input}}",
-          "tags": [
-            "investment",
-            "analysis",
-            "valuation"
-          ]
+          "tags": ["investment", "analysis", "valuation"]
         },
         {
           "id": "financial_modeling",
           "title": "Financial Modeling",
           "description": "Structure financial projections and models",
           "content": "Help structure a financial model for the following business scenario. Outline revenue drivers, cost structure, cash flow projections, and key assumptions. Suggest sensitivity analysis variables.\n\n{{input}}",
-          "tags": [
-            "financial-modeling",
-            "forecasting",
-            "valuation"
-          ]
+          "tags": ["financial-modeling", "forecasting", "valuation"]
         },
         {
           "id": "budget_planning",
           "title": "Budget Planning",
           "description": "Personal or business budget creation and optimization",
           "content": "Create a detailed budget plan for the following financial situation. Categorize income and expenses, identify saving opportunities, and set realistic financial goals.\n\n{{input}}",
-          "tags": [
-            "budget",
-            "planning",
-            "personal-finance"
-          ]
+          "tags": ["budget", "planning", "personal-finance"]
         },
         {
           "id": "tax_guidance",
           "title": "Tax Guidance",
           "description": "Explain tax implications and planning strategies",
           "content": "Explain the tax implications of the following financial scenario. Discuss applicable deductions, credits, and compliance requirements under {{tax_jurisdiction}} tax law.\n\n{{input}}",
-          "tags": [
-            "tax",
-            "planning",
-            "compliance"
-          ]
+          "tags": ["tax", "planning", "compliance"]
         },
         {
           "id": "retirement_planning",
           "title": "Retirement Planning",
           "description": "Retirement savings strategy and projections",
           "content": "Create a retirement savings plan for the following profile. Include contribution strategies, asset allocation suggestions, withdrawal strategies, and projected income.\n\n{{input}}",
-          "tags": [
-            "retirement",
-            "savings",
-            "long-term-planning"
-          ]
+          "tags": ["retirement", "savings", "long-term-planning"]
         },
         {
           "id": "financial_report_analysis",
           "title": "Financial Report Analysis",
           "description": "Analyze income statements, balance sheets, cash flow",
           "content": "Analyze the following financial report. Discuss revenue trends, profitability ratios, liquidity position, debt levels, and overall financial health. Highlight key metrics.\n\n{{input}}",
-          "tags": [
-            "financial-analysis",
-            "reporting",
-            "ratios"
-          ]
+          "tags": ["financial-analysis", "reporting", "ratios"]
+        },
+        {
+          "id": "budget_planner",
+          "title": "Budget Planner",
+          "description": "Create a detailed personal or business budget",
+          "content": "Create a detailed budget plan for the following financial situation. Categorize income and expenses, recommend savings goals, identify cost-cutting opportunities, and project future financial position.\n\nScenario: {{input}}",
+          "tags": ["budget", "planning", "personal-finance"]
+        },
+        {
+          "id": "financial_report",
+          "title": "Financial Report Summary",
+          "description": "Summarize financial statements and reports",
+          "content": "Summarize the following financial report or statement. Highlight revenue trends, profit margins, cash flow position, debt levels, and key financial ratios. Compare against industry benchmarks.\n\nReport: {{input}}",
+          "tags": ["financial-report", "summary", "analysis"]
+        },
+        {
+          "id": "portfolio_review",
+          "title": "Portfolio Review",
+          "description": "Review and rebalance an investment portfolio",
+          "content": "Review the following investment portfolio. Analyze asset allocation, diversification, risk level, performance relative to benchmarks, and suggest rebalancing adjustments.\n\nPortfolio: {{input}}",
+          "tags": ["portfolio", "diversification", "rebalancing"]
+        },
+        {
+          "id": "risk_assessment",
+          "title": "Risk Assessment",
+          "description": "Assess financial risks and mitigation strategies",
+          "content": "Assess the financial risks of the following investment or business decision. Identify market risk, credit risk, liquidity risk, and operational risk. Recommend mitigation strategies.\n\nDecision: {{input}}",
+          "tags": ["risk", "assessment", "mitigation"]
+        },
+        {
+          "id": "tax_planning",
+          "title": "Tax Planning Strategies",
+          "description": "Develop tax-saving strategies",
+          "content": "Provide tax planning strategies for the following financial situation. Suggest deductions, credits, tax-advantaged accounts, timing strategies, and entity structures to minimize tax burden.\n\nSituation: {{input}}",
+          "tags": ["tax", "planning", "strategy"]
         }
       ]
     },
@@ -678,66 +717,77 @@
           "title": "Exploratory Data Analysis Plan",
           "description": "Plan a structured EDA approach for a dataset",
           "content": "Design an exploratory data analysis plan for the following dataset. Include data cleaning steps, statistical summaries, visualization suggestions, and hypotheses to investigate.\n\n{{input}}",
-          "tags": [
-            "eda",
-            "data-analysis",
-            "statistics"
-          ]
+          "tags": ["eda", "data-analysis", "statistics"]
         },
         {
           "id": "model_selection",
           "title": "Model Selection Guidance",
           "description": "Recommend ML models for specific problems",
           "content": "Recommend machine learning models for the following problem. Consider data characteristics, business constraints, interpretability needs, and performance requirements. Justify your choices.\n\n{{input}}",
-          "tags": [
-            "machine-learning",
-            "model-selection",
-            "ai"
-          ]
+          "tags": ["machine-learning", "model-selection", "ai"]
         },
         {
           "id": "feature_engineering",
           "title": "Feature Engineering Ideas",
           "description": "Suggest feature transformations and creation",
           "content": "Suggest feature engineering approaches for the following dataset and prediction task. Include numerical transformations, categorical encoding, date features, and interaction terms.\n\n{{input}}",
-          "tags": [
-            "feature-engineering",
-            "data-preprocessing",
-            "ml"
-          ]
+          "tags": ["feature-engineering", "data-preprocessing", "ml"]
         },
         {
           "id": "visualization_recipe",
           "title": "Data Visualization Recipe",
           "description": "Choose and design effective data visualizations",
           "content": "Recommend data visualizations for the following analysis goals. Specify chart types, encoding choices, color schemes, and layout for maximum clarity and impact.\n\n{{input}}",
-          "tags": [
-            "visualization",
-            "charting",
-            "data-storytelling"
-          ]
+          "tags": ["visualization", "charting", "data-storytelling"]
         },
         {
           "id": "experiment_design",
           "title": "A/B Test & Experiment Design",
           "description": "Design statistically sound experiments",
           "content": "Design an experiment to test the following hypothesis. Define the null and alternative hypotheses, determine sample size, randomization procedure, success metrics, and analysis method.\n\n{{input}}",
-          "tags": [
-            "a-b-testing",
-            "experiment-design",
-            "statistics"
-          ]
+          "tags": ["a-b-testing", "experiment-design", "statistics"]
         },
         {
           "id": "results_interpretation",
           "title": "Model Results Interpretation",
           "description": "Interpret model outputs and metrics",
           "content": "Interpret the following model results. Explain the metrics (accuracy, precision, recall, F1, AUC-ROC, etc.), feature importance, and limitations. Provide actionable insights.\n\n{{input}}",
-          "tags": [
-            "model-interpretation",
-            "metrics",
-            "reporting"
-          ]
+          "tags": ["model-interpretation", "metrics", "reporting"]
+        },
+        {
+          "id": "exploratory_analysis",
+          "title": "Exploratory Data Analysis",
+          "description": "Plan and guide EDA on a dataset",
+          "content": "Design an exploratory data analysis plan for the following dataset. Suggest summary statistics, visualization types, correlation analysis, outlier detection methods, and initial hypotheses to test.\n\nDataset description: {{input}}",
+          "tags": ["exploratory-analysis", "data-analysis", "statistics"]
+        },
+        {
+          "id": "evaluate_results",
+          "title": "Model Evaluation & Interpretation",
+          "description": "Evaluate and interpret model performance",
+          "content": "Evaluate the following machine learning model results. Analyze the confusion matrix, precision/recall, ROC-AUC, feature importance, error analysis, and suggest improvement strategies.\n\nResults: {{input}}",
+          "tags": ["evaluation", "interpretation", "metrics"]
+        },
+        {
+          "id": "sql_query",
+          "title": "SQL Query Generator",
+          "description": "Generate complex SQL queries from natural language",
+          "content": "Write SQL queries for the following data request. Include appropriate JOINs, WHERE clauses, aggregation functions, window functions, and performance optimizations.\n\nData request: {{input}}",
+          "tags": ["sql", "query", "database"]
+        },
+        {
+          "id": "visualization_design",
+          "title": "Data Visualization Design",
+          "description": "Design effective data visualizations",
+          "content": "Design a data visualization plan for the following analysis. Recommend chart types, color schemes, layout, interactivity, and annotation strategies to effectively communicate insights.\n\nAnalysis: {{input}}",
+          "tags": ["visualization", "charts", "design"]
+        },
+        {
+          "id": "ab_testing",
+          "title": "A/B Test Design",
+          "description": "Design rigorous A/B tests and analyze results",
+          "content": "Design an A/B test for the following experiment. Define hypotheses, determine sample size, choose significance level, design the test structure, and provide an analysis plan for interpreting results.\n\nExperiment: {{input}}",
+          "tags": ["ab-testing", "experiment", "statistics"]
         }
       ]
     },
@@ -751,66 +801,77 @@
           "title": "UX Review",
           "description": "Evaluate user experience and suggest improvements",
           "content": "Review the user experience of the following interface or flow. Evaluate usability, accessibility, information architecture, and visual hierarchy. Suggest concrete improvements.\n\n{{input}}",
-          "tags": [
-            "ux",
-            "usability",
-            "review"
-          ]
+          "tags": ["ux", "usability", "review"]
         },
         {
           "id": "design_brief",
           "title": "Design Brief",
           "description": "Create a comprehensive design brief for a project",
           "content": "Create a design brief for the following project. Include project overview, target audience, design goals, brand guidelines, deliverables, timeline, and success criteria.\n\n{{input}}",
-          "tags": [
-            "design-brief",
-            "creative-brief",
-            "planning"
-          ]
+          "tags": ["design-brief", "creative-brief", "planning"]
         },
         {
           "id": "color_palette",
           "title": "Color Palette Suggestion",
           "description": "Recommend color schemes based on brand or mood",
           "content": "Suggest a color palette for the following brand or project. Include primary, secondary, and accent colors with hex codes. Explain the psychological impact and accessibility considerations.\n\n{{input}}",
-          "tags": [
-            "color",
-            "palette",
-            "branding"
-          ]
+          "tags": ["color", "palette", "branding"]
         },
         {
           "id": "typography_guide",
           "title": "Typography Guide",
           "description": "Recommend font pairings and typographic hierarchy",
           "content": "Recommend a typography system for the following project. Suggest headline and body font pairings, size scales, line heights, and usage guidelines for different contexts.\n\n{{input}}",
-          "tags": [
-            "typography",
-            "fonts",
-            "design-system"
-          ]
+          "tags": ["typography", "fonts", "design-system"]
         },
         {
           "id": "prototype_feedback",
           "title": "Prototype Feedback",
           "description": "Detailed feedback on design prototypes",
           "content": "Provide detailed feedback on the following design prototype. Evaluate layout, navigation, visual consistency, interaction design, and alignment with user goals.\n\n{{input}}",
-          "tags": [
-            "prototype",
-            "feedback",
-            "design-review"
-          ]
+          "tags": ["prototype", "feedback", "design-review"]
         },
         {
           "id": "design_system_component",
           "title": "Design System Component",
           "description": "Define a reusable design system component",
           "content": "Define a reusable {{component_type}} component for a design system. Specify visual states (default, hover, active, disabled, error), usage guidelines, and accessibility requirements.\n\n{{input}}",
-          "tags": [
-            "design-system",
-            "components",
-            "ui"
-          ]
+          "tags": ["design-system", "components", "ui"]
+        },
+        {
+          "id": "ui_review",
+          "title": "UI/UX Review",
+          "description": "Review user interface for usability best practices",
+          "content": "Review the following UI design or description. Evaluate layout, visual hierarchy, color contrast, typography, accessibility, interaction patterns, and consistency. Suggest improvements.\n\nDesign: {{input}}",
+          "tags": ["ui", "ux", "usability"]
+        },
+        {
+          "id": "design_system",
+          "title": "Design System Documentation",
+          "description": "Document design system components and guidelines",
+          "content": "Create design system documentation for the following component library or design language. Include typography scale, spacing grid, color tokens, component states, and usage guidelines.\n\nSystem: {{input}}",
+          "tags": ["design-system", "documentation", "components"]
+        },
+        {
+          "id": "wireframe_desc",
+          "title": "Wireframe Description",
+          "description": "Describe wireframe layout for development handoff",
+          "content": "Describe the following screen/page wireframe or prototype in detail. Specify layout structure, component placement, content hierarchy, user flow, and interactive elements for development handoff.\n\nScreen/Page: {{input}}",
+          "tags": ["wireframe", "prototype", "handoff"]
+        },
+        {
+          "id": "accessibility_audit",
+          "title": "Accessibility Audit",
+          "description": "Evaluate design for accessibility compliance",
+          "content": "Perform an accessibility audit on the following design or interface. Check for WCAG compliance in color contrast, keyboard navigation, screen reader compatibility, focus indicators, and alt text.\n\nDesign: {{input}}",
+          "tags": ["accessibility", "wcag", "inclusive-design"]
+        },
+        {
+          "id": "brand_identity",
+          "title": "Brand Identity Guide",
+          "description": "Define visual brand identity elements",
+          "content": "Define a visual brand identity guide for the following brand. Cover logo usage, color palette, typography, imagery style, iconography, and application across different media.\n\nBrand: {{input}}",
+          "tags": ["brand", "identity", "guidelines"]
         }
       ]
     },
@@ -824,77 +885,70 @@
           "title": "Incident Response",
           "description": "Step-by-step guidance for system incidents",
           "content": "Provide a step-by-step incident response plan for the following scenario. Include immediate triage steps, investigation commands, mitigation actions, and post-mortem considerations.\n\n{{input}}",
-          "tags": [
-            "incident-response",
-            "sre",
-            "troubleshooting"
-          ]
+          "tags": ["incident-response", "sre", "troubleshooting"]
         },
         {
           "id": "infrastructure_design",
           "title": "Infrastructure Design",
           "description": "Design scalable and reliable system infrastructure",
           "content": "Design a infrastructure architecture for the following requirements. Discuss compute, networking, storage, redundancy, scaling strategy, and disaster recovery.\n\n{{input}}",
-          "tags": [
-            "infrastructure",
-            "architecture",
-            "devops"
-          ]
+          "tags": ["infrastructure", "architecture", "devops"]
         },
         {
           "id": "ci_cd_pipeline",
           "title": "CI/CD Pipeline Design",
           "description": "Design continuous integration and deployment pipelines",
           "content": "Design a CI/CD pipeline for the following project. Specify build stages, test automation, artifact management, deployment environments, and approval gates.\n\n{{input}}",
-          "tags": [
-            "ci-cd",
-            "automation",
-            "devops"
-          ]
+          "tags": ["ci-cd", "automation", "devops"]
         },
         {
           "id": "security_audit",
           "title": "Security Audit Checklist",
           "description": "Systematic security review for servers and services",
           "content": "Create a security audit checklist for the following system. Cover authentication, authorization, network security, data protection, logging, and patch management.\n\n{{input}}",
-          "tags": [
-            "security",
-            "audit",
-            "hardening"
-          ]
+          "tags": ["security", "audit", "hardening"]
         },
         {
           "id": "monitoring_setup",
           "title": "Monitoring & Alerting Setup",
           "description": "Design comprehensive monitoring and alerting strategy",
           "content": "Design a monitoring and alerting strategy for the following system. Suggest key metrics, log sources, dashboards, alert thresholds, and escalation policies.\n\n{{input}}",
-          "tags": [
-            "monitoring",
-            "alerting",
-            "observability"
-          ]
+          "tags": ["monitoring", "alerting", "observability"]
         },
         {
           "id": "backup_strategy",
           "title": "Backup & Disaster Recovery",
           "description": "Design backup strategies and DR plans",
           "content": "Design a backup and disaster recovery strategy for the following system. Specify backup frequency, retention policy, recovery point objective (RPO), recovery time objective (RTO), and testing procedures.\n\n{{input}}",
-          "tags": [
-            "backup",
-            "disaster-recovery",
-            "business-continuity"
-          ]
+          "tags": ["backup", "disaster-recovery", "business-continuity"]
         },
         {
           "id": "performance_tuning",
           "title": "Performance Tuning",
           "description": "Identify and resolve system performance bottlenecks",
           "content": "Analyze and suggest performance improvements for the following system. Cover CPU, memory, disk I/O, network bottlenecks, and configuration optimization.\n\n{{input}}",
-          "tags": [
-            "performance",
-            "optimization",
-            "tuning"
-          ]
+          "tags": ["performance", "optimization", "tuning"]
+        },
+        {
+          "id": "deployment_pipeline",
+          "title": "CI/CD Pipeline Design",
+          "description": "Design continuous integration and deployment pipeline",
+          "content": "Design a CI/CD pipeline for the following project. Include build stage, test automation, security scanning, artifact management, deployment strategy (blue/green, canary), and rollback procedures.\n\nProject: {{input}}",
+          "tags": ["ci-cd", "devops", "deployment"]
+        },
+        {
+          "id": "container_orchestration",
+          "title": "Container Orchestration Guide",
+          "description": "Design container orchestration configurations",
+          "content": "Design container orchestration configuration for the following application. Cover container images, resource limits, service discovery, scaling strategy, persistent storage, and networking.\n\nApplication: {{input}}",
+          "tags": ["docker", "kubernetes", "containers"]
+        },
+        {
+          "id": "security_hardening",
+          "title": "Security Hardening Checklist",
+          "description": "Generate a server security hardening checklist",
+          "content": "Generate a security hardening checklist for the following server or service. Cover OS hardening, network security, access control, encryption, logging, and regular maintenance tasks.\n\nServer/Service: {{input}}",
+          "tags": ["security", "hardening", "server"]
         }
       ]
     },
@@ -908,88 +962,56 @@
           "title": "Requirements Breakdown",
           "description": "Break high-level goals into actionable requirements",
           "content": "Break down the following goal into clear functional requirements, non-functional requirements, assumptions, constraints, and acceptance criteria. Present in a structured checklist format.\n\n{{input}}",
-          "tags": [
-            "requirements",
-            "planning",
-            "product"
-          ]
+          "tags": ["requirements", "planning", "product"]
         },
         {
           "id": "prd_draft",
           "title": "PRD Draft",
           "description": "Draft a concise and practical Product Requirements Document",
           "content": "Draft a PRD for the following feature. Include problem statement, target users, user stories, scope in/out, success metrics, risks, milestones, and open questions.\n\n{{input}}",
-          "tags": [
-            "prd",
-            "product-management",
-            "spec"
-          ]
+          "tags": ["prd", "product-management", "spec"]
         },
         {
           "id": "task_decomposition",
           "title": "Task Decomposition",
           "description": "Split work into epics, tasks, and dependencies",
           "content": "Decompose the following initiative into epics and tasks. For each task, include owner role, estimated effort, dependencies, and definition of done.\n\n{{input}}",
-          "tags": [
-            "tasks",
-            "execution",
-            "project-management"
-          ]
+          "tags": ["tasks", "execution", "project-management"]
         },
         {
           "id": "meeting_minutes",
           "title": "Meeting Minutes",
           "description": "Turn rough notes into structured meeting minutes",
           "content": "Convert the following notes into structured meeting minutes with: context, key decisions, action items, owners, deadlines, and unresolved questions.\n\n{{input}}",
-          "tags": [
-            "meeting",
-            "minutes",
-            "collaboration"
-          ]
+          "tags": ["meeting", "minutes", "collaboration"]
         },
         {
           "id": "status_report",
           "title": "Weekly Status Report",
           "description": "Generate a clear weekly update for stakeholders",
           "content": "Write a weekly status report based on the following updates. Include highlights, completed work, current focus, blockers/risks, and next-week plan. Keep it concise and executive-friendly.\n\n{{input}}",
-          "tags": [
-            "status",
-            "report",
-            "stakeholders"
-          ]
+          "tags": ["status", "report", "stakeholders"]
         },
         {
           "id": "decision_record",
           "title": "Decision Record",
           "description": "Capture decisions with rationale and consequences",
           "content": "Create a decision record from the following context. Include decision statement, alternatives considered, rationale, tradeoffs, consequences, and review date.\n\n{{input}}",
-          "tags": [
-            "decision",
-            "adr",
-            "governance"
-          ]
+          "tags": ["decision", "adr", "governance"]
         },
         {
           "id": "risk_register",
           "title": "Risk Register",
           "description": "Create a practical project risk register",
           "content": "Create a risk register for the following project. For each risk, include probability, impact, early warning signs, mitigation plan, contingency plan, and owner.\n\n{{input}}",
-          "tags": [
-            "risk",
-            "project",
-            "mitigation"
-          ]
+          "tags": ["risk", "project", "mitigation"]
         },
         {
           "id": "retro_facilitation",
           "title": "Retrospective Facilitation",
           "description": "Prepare a focused sprint retrospective",
           "content": "Design a retrospective agenda for the following sprint context. Include warm-up, what went well, what didn't, root-cause prompts, and 3 concrete improvement actions.\n\n{{input}}",
-          "tags": [
-            "retrospective",
-            "agile",
-            "team-improvement"
-          ]
+          "tags": ["retrospective", "agile", "team-improvement"]
         }
       ]
     },
@@ -1003,66 +1025,42 @@
           "title": "Bug Report Template",
           "description": "Create a complete and reproducible bug report",
           "content": "Draft a high-quality bug report from the following details. Include summary, environment, reproduction steps, expected result, actual result, severity, impact, logs, and suggested next checks.\n\n{{input}}",
-          "tags": [
-            "bug",
-            "quality",
-            "triage"
-          ]
+          "tags": ["bug", "quality", "triage"]
         },
         {
           "id": "release_notes",
           "title": "Release Notes",
           "description": "Generate clear user-facing release notes",
           "content": "Write release notes for the following version update. Include new features, improvements, fixes, known issues, upgrade notes, and rollback considerations. Tailor the tone for end users.\n\n{{input}}",
-          "tags": [
-            "release",
-            "changelog",
-            "communication"
-          ]
+          "tags": ["release", "changelog", "communication"]
         },
         {
           "id": "rca_report",
           "title": "Root Cause Analysis",
           "description": "Create a structured post-incident RCA report",
           "content": "Create an RCA report for the following incident. Include timeline, impact, root cause, contributing factors, detection gaps, remediation completed, and preventive actions with owners and deadlines.\n\n{{input}}",
-          "tags": [
-            "rca",
-            "incident",
-            "reliability"
-          ]
+          "tags": ["rca", "incident", "reliability"]
         },
         {
           "id": "test_plan",
           "title": "Test Plan",
           "description": "Draft a practical test strategy and coverage plan",
           "content": "Draft a test plan for the following feature. Include scope, test levels (unit/integration/e2e), key scenarios, edge cases, test data, environment setup, entry/exit criteria, and risk-based priorities.\n\n{{input}}",
-          "tags": [
-            "testing",
-            "qa",
-            "coverage"
-          ]
+          "tags": ["testing", "qa", "coverage"]
         },
         {
           "id": "rollback_plan",
           "title": "Rollback Plan",
           "description": "Prepare a safe rollback and recovery procedure",
           "content": "Design a rollback plan for the following deployment. Include trigger conditions, rollback steps, data consistency checks, communication steps, validation checklist, and decision owner.\n\n{{input}}",
-          "tags": [
-            "rollback",
-            "deployment",
-            "safety"
-          ]
+          "tags": ["rollback", "deployment", "safety"]
         },
         {
           "id": "change_announcement",
           "title": "Change Announcement",
           "description": "Announce technical changes with user impact clearly",
           "content": "Draft a change announcement for the following update. Explain what is changing, why it matters, user impact, required actions, timeline, and support channels. Provide a concise and reassuring tone.\n\n{{input}}",
-          "tags": [
-            "change-management",
-            "announcement",
-            "stakeholders"
-          ]
+          "tags": ["change-management", "announcement", "stakeholders"]
         }
       ]
     },
@@ -1076,66 +1074,42 @@
           "title": "Customer Reply",
           "description": "Generate professional and empathetic support replies",
           "content": "Write a customer support reply for the following case. Keep the tone empathetic and clear. Include understanding of the issue, current status, next steps, ETA if available, and escalation path if needed.\n\n{{input}}",
-          "tags": [
-            "support",
-            "customer",
-            "communication"
-          ]
+          "tags": ["support", "customer", "communication"]
         },
         {
           "id": "kb_article",
           "title": "Knowledge Base Article",
           "description": "Convert repeated issues into reusable KB content",
           "content": "Create a knowledge base article for the following issue. Include symptoms, likely causes, prerequisites, step-by-step resolution, verification, and prevention tips.\n\n{{input}}",
-          "tags": [
-            "knowledge-base",
-            "self-service",
-            "troubleshooting"
-          ]
+          "tags": ["knowledge-base", "self-service", "troubleshooting"]
         },
         {
           "id": "sla_response_plan",
           "title": "SLA Response Plan",
           "description": "Plan responses by priority and SLA target",
           "content": "Create an SLA response plan for the following support setup. Define priority levels, target first-response time, target resolution time, handoff rules, and breach handling process.\n\n{{input}}",
-          "tags": [
-            "sla",
-            "support-ops",
-            "process"
-          ]
+          "tags": ["sla", "support-ops", "process"]
         },
         {
           "id": "faq_builder",
           "title": "FAQ Builder",
           "description": "Build concise FAQs for products or policies",
           "content": "Generate an FAQ for the following product or policy topic. Provide 10 high-frequency questions with concise, accurate, and user-friendly answers.\n\n{{input}}",
-          "tags": [
-            "faq",
-            "documentation",
-            "customer-education"
-          ]
+          "tags": ["faq", "documentation", "customer-education"]
         },
         {
           "id": "oncall_handover",
           "title": "On-Call Handover",
           "description": "Create a clean handover note for the next shift",
           "content": "Prepare an on-call handover note from the following context. Include active incidents, current mitigations, pending actions, risks to watch, and immediate priorities for the next shift.\n\n{{input}}",
-          "tags": [
-            "oncall",
-            "handover",
-            "operations"
-          ]
+          "tags": ["oncall", "handover", "operations"]
         },
         {
           "id": "support_metric_review",
           "title": "Support Metrics Review",
           "description": "Interpret support KPIs and suggest improvements",
           "content": "Analyze the following support metrics and produce an actionable review. Cover trends in ticket volume, response time, resolution time, CSAT, backlog health, root causes, and top improvement actions.\n\n{{input}}",
-          "tags": [
-            "metrics",
-            "kpi",
-            "continuous-improvement"
-          ]
+          "tags": ["metrics", "kpi", "continuous-improvement"]
         }
       ]
     }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::acp::helpers::metrics::RuntimeGaugeSnapshot;
 
 static TRACE_EVENTS: OnceLock<StdMutex<Vec<TraceEvent>>> = OnceLock::new();
 static ERROR_RESPONSE_IDS: OnceLock<StdMutex<HashSet<String>>> = OnceLock::new();
@@ -54,6 +55,7 @@ pub(super) fn take_error_response_mark(request_id: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[allow(dead_code)]
 pub(super) fn build_runtime_gauge_snapshot(server: &AcpServer) -> RuntimeGaugeSnapshot {
     let memory_cache_entries = server
         .cache
@@ -110,6 +112,7 @@ pub(super) fn build_runtime_gauge_snapshot(server: &AcpServer) -> RuntimeGaugeSn
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn trace_metrics_snapshot(server: &AcpServer) -> Value {
     let slow_top_n = server.runtime_config.trace_slow_top_n.max(1);
     let mut requests: Vec<(u64, Value)> = Vec::new();

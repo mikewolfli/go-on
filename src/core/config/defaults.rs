@@ -1045,6 +1045,7 @@ mod adaptive {
             };
 
             AppConfig {
+                schema_version: "1.0.0".to_string(),
                 default_phase: self.minimal_config.default_phase.clone(),
                 agents,
                 flow,

@@ -21,7 +21,11 @@ use crate::mode::{
 use crate::model_selector::{
     ModelCharacteristics, ModelSelectionStrategy, ModelSelector, SelectionCriteria,
 };
+use crate::orchestration::cache_warming::{CacheWarmingEngine, PreWarmConfig};
+use crate::orchestration::tool::ToolRegistry;
+use crate::orchestration::tool_pipeline::{PipelineResult, PipelineStep, ToolPipeline};
 use anyhow::Result;
+use serde_json::Value;
 
 pub use crate::orchestration::context::OrchestrationContext;
 
@@ -191,6 +195,88 @@ pub fn select_skill_semantic(
         .collect();
 
     SemanticCapabilityMatcher::match_task_to_skills(task_description, &capabilities)
+}
+
+// ---------------------------------------------------------------------------
+// ToolPipeline integration (GAP-46-12)
+// ---------------------------------------------------------------------------
+
+/// Execute a chain of tools using the ToolPipeline engine.
+///
+/// Each step in the pipeline represents a tool call with its input payload.
+/// The pipeline executes tools sequentially, collecting results and handling
+/// errors according to the configured error strategy.
+///
+/// Returns `PipelineResult` with per-step outcomes and aggregate success flag.
+pub async fn execute_tool_pipeline(
+    registry: &ToolRegistry,
+    tool_steps: Vec<(String, Value)>,
+) -> PipelineResult {
+    let steps: Vec<PipelineStep> = tool_steps
+        .into_iter()
+        .map(|(tool_name, input)| PipelineStep::Single { tool_name, input })
+        .collect();
+
+    let pipeline = ToolPipeline {
+        name: "orchestrator-pipeline".to_string(),
+        steps,
+        on_error: crate::orchestration::tool_pipeline::PipelineErrorStrategy::Continue,
+    };
+
+    tracing::info!(
+        "ToolPipeline: executing {} steps via orchestrator",
+        pipeline.steps.len()
+    );
+
+    let result = pipeline.execute(registry, &Value::Null).await;
+
+    tracing::info!(
+        "ToolPipeline completed: {} steps, success={}, duration_ms={}",
+        result.step_results.len(),
+        result.success,
+        result.total_duration_ms
+    );
+
+    result
+}
+
+// ---------------------------------------------------------------------------
+// CacheWarmingEngine integration (GAP-46-12)
+// ---------------------------------------------------------------------------
+
+/// Create and warm the cache engine during system initialization.
+///
+/// The returned `CacheWarmingEngine` should be stored in the app state
+/// and used to track cache hit/miss metrics.  Pre-warming runs immediately
+/// if `PreWarmConfig::warm_at_startup` is true.
+pub fn init_cache_warming() -> CacheWarmingEngine {
+    let config = PreWarmConfig::default();
+    let engine = CacheWarmingEngine::new(config);
+
+    tracing::info!("CacheWarmingEngine initialized");
+
+    if engine.should_pre_warm() {
+        let keys = engine.get_pre_warm_keys();
+        tracing::info!("CacheWarmingEngine: pre-warming {} categories", keys.len());
+        for (category, key_list) in &keys {
+            tracing::debug!(
+                "  pre-warming category '{}' with {} keys",
+                category,
+                key_list.len()
+            );
+        }
+    }
+
+    engine
+}
+
+/// Record a cache hit for observability after a successful execution.
+pub fn warm_cache_after_success(engine: &CacheWarmingEngine) {
+    engine.record_hit(
+        "execution_success",
+        crate::orchestration::cache_warming::CacheTier::L1,
+    );
+    tracing::debug!("CacheWarmingEngine: recorded post-execution cache hit");
 }
 
 // ---------------------------------------------------------------------------

@@ -9,82 +9,136 @@ use crate::acp::server::AcpServer;
 use crate::orchestration::roles::{AgentRole, RoleRegistry};
 use crate::orchestration::task_graph::{TaskGraph, TaskNode};
 
+/// Bundles all parameters required to assemble a chat response payload.
+///
+/// Created by callers to replace the previous 30-parameter function signature.
+/// All fields are owned values; the struct is consumed by `build_chat_response`.
+#[derive(Debug, Clone)]
+pub(crate) struct ChatResponseContext {
+    // Session identifiers
+    pub mode: String,
+    pub conversation_id: String,
+    pub branch_id: String,
+    pub phase_name: String,
+    pub phase_origin: String,
+    // Agent selection
+    pub selected_agent: String,
+    pub selected_model_name: Option<String>,
+    // Response payloads
+    pub response_text: String,
+    pub checkpoint: Value,
+    pub metacognitive_loop: Value,
+    pub token_economy: Value,
+    pub knowledge: Value,
+    pub distillation: Value,
+    // Execution artifacts
+    pub agent_attempts: Vec<Value>,
+    pub reviews: Vec<Value>,
+    pub risk_decision: Value,
+    pub agent_switch_notice: Option<Value>,
+    // Tool & memory
+    pub tool_execution_results: Vec<Value>,
+    pub memory_promotion_result: Option<Value>,
+    // Task & role routing
+    pub task_graph_result: Option<Value>,
+    pub role_routing_result: Option<Value>,
+    pub verification_result: Option<Value>,
+    // Vector context
+    pub vector_hits: Vec<Value>,
+    pub summary_used: bool,
+    // Capability routing
+    pub capability_info: CapabilityRoutingInfo,
+    pub routing_diagnostics: Value,
+    // Timing & cache
+    pub cache_hit: bool,
+    pub cache_bypassed: bool,
+    pub started: std::time::Instant,
+}
+
+impl Default for ChatResponseContext {
+    fn default() -> Self {
+        Self {
+            mode: Default::default(),
+            conversation_id: Default::default(),
+            branch_id: Default::default(),
+            phase_name: Default::default(),
+            phase_origin: Default::default(),
+            selected_agent: Default::default(),
+            selected_model_name: Default::default(),
+            response_text: Default::default(),
+            checkpoint: Default::default(),
+            metacognitive_loop: Default::default(),
+            token_economy: Default::default(),
+            knowledge: Default::default(),
+            distillation: Default::default(),
+            agent_attempts: Default::default(),
+            reviews: Default::default(),
+            risk_decision: Default::default(),
+            agent_switch_notice: Default::default(),
+            tool_execution_results: Default::default(),
+            memory_promotion_result: Default::default(),
+            task_graph_result: Default::default(),
+            role_routing_result: Default::default(),
+            verification_result: Default::default(),
+            vector_hits: Default::default(),
+            summary_used: Default::default(),
+            capability_info: Default::default(),
+            routing_diagnostics: Default::default(),
+            cache_hit: Default::default(),
+            cache_bypassed: Default::default(),
+            started: std::time::Instant::now(),
+        }
+    }
+}
+
 /// Build the final response payload for a chat request.
-#[allow(clippy::too_many_arguments)]
-pub fn build_chat_response(
-    mode: &str,
-    conversation_id: &str,
-    branch_id: &str,
-    phase_name: &str,
-    phase_origin: &str,
-    selected_agent: &str,
-    selected_model_name: Option<String>,
-    response_text: &str,
-    checkpoint: Value,
-    metacognitive_loop: Value,
-    token_economy: Value,
-    vector_hits: Vec<Value>,
-    summary_used: bool,
-    knowledge: Value,
-    distillation: Value,
-    reviews: Vec<Value>,
-    agent_attempts: Vec<Value>,
-    risk_decision: Value,
-    agent_switch_notice: Option<Value>,
-    tool_execution_results: Vec<Value>,
-    memory_promotion_result: Option<Value>,
-    task_graph_result: Option<Value>,
-    role_routing_result: Option<Value>,
-    verification_result: Option<Value>,
-    capability_info: CapabilityRoutingInfo,
-    routing_diagnostics: Value,
-    cache_hit: bool,
-    cache_bypassed: bool,
-    duration_ms: u64,
-    started: std::time::Instant,
-) -> Value {
-    let actual_duration = duration_ms.max(started.elapsed().as_millis() as u64);
+pub fn build_chat_response(ctx: ChatResponseContext) -> Value {
+    let actual_duration = if ctx.cache_hit {
+        0
+    } else {
+        ctx.started.elapsed().as_millis() as u64
+    };
 
     json!({
         "done": true,
-        "conversation_id": conversation_id,
-        "branch_id": branch_id,
-        "mode": mode,
+        "conversation_id": ctx.conversation_id,
+        "branch_id": ctx.branch_id,
+        "mode": ctx.mode,
         "cache": {
-            "hit": cache_hit,
-            "bypassed_for_execution": cache_bypassed,
+            "hit": ctx.cache_hit,
+            "bypassed_for_execution": ctx.cache_bypassed,
         },
-        "phase": phase_name,
-        "phase_origin": phase_origin,
-        "agent": selected_agent,
-        "selected_model": selected_model_name,
+        "phase": ctx.phase_name,
+        "phase_origin": ctx.phase_origin,
+        "agent": ctx.selected_agent,
+        "selected_model": ctx.selected_model_name,
         "duration_ms": actual_duration,
-        "response": response_text,
-        "checkpoint": checkpoint,
-        "metacognitive_loop": metacognitive_loop,
-        "token_economy": token_economy,
-        "vector_hits": vector_hits,
-        "summary_used": summary_used,
-        "knowledge": knowledge,
-        "distillation": distillation,
-        "reviews": reviews,
-        "agent_attempts": agent_attempts,
-        "risk_decision": risk_decision,
-        "agent_switch_notice": agent_switch_notice,
-        "tool_execution": tool_execution_results,
-        "memory_policy": memory_promotion_result,
-        "task_graph": task_graph_result,
-        "role_routing": role_routing_result,
-        "enhanced_verification": verification_result,
+        "response": ctx.response_text,
+        "checkpoint": ctx.checkpoint,
+        "metacognitive_loop": ctx.metacognitive_loop,
+        "token_economy": ctx.token_economy,
+        "vector_hits": ctx.vector_hits,
+        "summary_used": ctx.summary_used,
+        "knowledge": ctx.knowledge,
+        "distillation": ctx.distillation,
+        "reviews": ctx.reviews,
+        "agent_attempts": ctx.agent_attempts,
+        "risk_decision": ctx.risk_decision,
+        "agent_switch_notice": ctx.agent_switch_notice,
+        "tool_execution": ctx.tool_execution_results,
+        "memory_policy": ctx.memory_promotion_result,
+        "task_graph": ctx.task_graph_result,
+        "role_routing": ctx.role_routing_result,
+        "enhanced_verification": ctx.verification_result,
         "capability_routing": {
-            "selected_agent": capability_info.selected_agent,
-            "recommended_mode": capability_info.recommended_mode,
-            "candidate_count": capability_info.candidate_count,
-            "decision_confidence": capability_info.decision_confidence,
-            "selection_reason": capability_info.selection_reason,
-            "optimization": capability_info.optimization_hint,
+            "selected_agent": ctx.capability_info.selected_agent,
+            "recommended_mode": ctx.capability_info.recommended_mode,
+            "candidate_count": ctx.capability_info.candidate_count,
+            "decision_confidence": ctx.capability_info.decision_confidence,
+            "selection_reason": ctx.capability_info.selection_reason,
+            "optimization": ctx.capability_info.optimization_hint,
         },
-        "routing_diagnostics": routing_diagnostics,
+        "routing_diagnostics": ctx.routing_diagnostics,
     })
 }
 
@@ -295,39 +349,38 @@ mod tests {
 
     #[test]
     fn build_chat_response_produces_canonical_structure() {
-        let info = CapabilityRoutingInfo::default();
-        let result = build_chat_response(
-            "test",
-            "conv-1",
-            "branch-1",
-            "coding",
-            "user",
-            "agent1",
-            Some("model1".into()),
-            "hello world",
-            json!({"state": "done"}),
-            json!({"loop": 1}),
-            json!({"tokens": 42}),
-            vec![],
-            false,
-            json!({}),
-            json!({}),
-            vec![],
-            vec![],
-            json!({"decision": "approve"}),
-            None,
-            vec![],
-            None,
-            None,
-            None,
-            None,
-            info,
-            json!({}),
-            false,
-            false,
-            100,
-            Instant::now(),
-        );
+        let ctx = ChatResponseContext {
+            mode: "test".to_string(),
+            conversation_id: "conv-1".to_string(),
+            branch_id: "branch-1".to_string(),
+            phase_name: "coding".to_string(),
+            phase_origin: "user".to_string(),
+            selected_agent: "agent1".to_string(),
+            selected_model_name: Some("model1".into()),
+            response_text: "hello world".to_string(),
+            checkpoint: json!({"state": "done"}),
+            metacognitive_loop: json!({"loop": 1}),
+            token_economy: json!({"tokens": 42}),
+            vector_hits: vec![],
+            summary_used: false,
+            knowledge: json!({}),
+            distillation: json!({}),
+            reviews: vec![],
+            agent_attempts: vec![],
+            risk_decision: json!({"decision": "approve"}),
+            agent_switch_notice: None,
+            tool_execution_results: vec![],
+            memory_promotion_result: None,
+            task_graph_result: None,
+            role_routing_result: None,
+            verification_result: None,
+            capability_info: CapabilityRoutingInfo::default(),
+            routing_diagnostics: json!({}),
+            cache_hit: false,
+            cache_bypassed: false,
+            started: Instant::now(),
+        };
+        let result = build_chat_response(ctx);
 
         assert_eq!(result.get("done").and_then(|v| v.as_bool()), Some(true));
         assert_eq!(

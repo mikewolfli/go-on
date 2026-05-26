@@ -20,7 +20,8 @@ pub mod cors;
 // User session management
 pub mod session;
 
-// Re-export for convenience
+// Re-export for convenience — retained for ACP consumer API surface.
+#[allow(unused_imports)]
 pub use runtime::*;
 pub use session::UserSession;
 

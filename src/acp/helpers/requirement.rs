@@ -178,6 +178,7 @@ pub fn parse_requirement_contract_from_params(
 }
 
 /// Create default requirement contract
+#[allow(dead_code)]
 pub fn default_requirement_contract(task: &str, source: &str) -> RequirementContractArtifact {
     RequirementContractArtifact {
         generated_at: now_ts(),

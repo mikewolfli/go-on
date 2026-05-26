@@ -4,6 +4,7 @@
 //! Supports leader election, round-based voting, heartbeat-based failure
 //! detection, and majority-based consensus finalization.
 
+use crate::i18n::{t, tf};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -48,11 +49,23 @@ pub enum ConsensusError {
 impl std::fmt::Display for ConsensusError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::DuplicateNode(id) => write!(f, "duplicate node: {id}"),
-            Self::NodeNotFound(id) => write!(f, "node not found: {id}"),
-            Self::RoundNotFound(id) => write!(f, "round not found: {id}"),
-            Self::NoActiveRound => write!(f, "no active round in progress"),
-            Self::UnregisteredNode(id) => write!(f, "unregistered node: {id}"),
+            Self::DuplicateNode(id) => {
+                write!(f, "{}", tf("error.consensus.duplicate_node", &[("id", id)]))
+            }
+            Self::NodeNotFound(id) => {
+                write!(f, "{}", tf("error.consensus.node_not_found", &[("id", id)]))
+            }
+            Self::RoundNotFound(id) => write!(
+                f,
+                "{}",
+                tf("error.consensus.round_not_found", &[("id", id)])
+            ),
+            Self::NoActiveRound => write!(f, "{}", t("error.consensus.no_active_round")),
+            Self::UnregisteredNode(id) => write!(
+                f,
+                "{}",
+                tf("error.consensus.unregistered_node", &[("id", id)])
+            ),
         }
     }
 }

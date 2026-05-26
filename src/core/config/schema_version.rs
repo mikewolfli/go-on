@@ -37,6 +37,32 @@ impl SchemaVersion {
         }
     }
 
+    /// Parse a schema version from a semver string (e.g. "1.0.0" or "v1.0.0").
+    // Not implementing std::str::FromStr because this returns Result<Self, String>
+    // rather than Result<Self, ParseIntError>.  String errors are more ergonomic here.
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Result<Self, String> {
+        let trimmed = s.trim().trim_start_matches('v');
+        let parts: Vec<&str> = trimmed.split('.').collect();
+        if parts.len() != 3 {
+            return Err(format!("Invalid schema version format: '{}'", s));
+        }
+        let major = parts[0]
+            .parse::<u32>()
+            .map_err(|e| format!("Invalid major version in '{}': {}", s, e))?;
+        let minor = parts[1]
+            .parse::<u32>()
+            .map_err(|e| format!("Invalid minor version in '{}': {}", s, e))?;
+        let patch = parts[2]
+            .parse::<u32>()
+            .map_err(|e| format!("Invalid patch version in '{}': {}", s, e))?;
+        Ok(Self {
+            major,
+            minor,
+            patch,
+        })
+    }
+
     /// Check if this version is compatible with another.
     /// Same major = compatible; different major = potentially breaking.
     pub fn is_compatible_with(&self, other: &Self) -> bool {
@@ -194,8 +220,7 @@ impl SchemaManager {
         }
 
         // No direct path — in production, would do BFS through migration graph
-        if from.major == target.major && (from.minor < target.minor || from.patch < target.patch)
-        {
+        if from.major == target.major && (from.minor < target.minor || from.patch < target.patch) {
             // Same major version, can migrate incrementally
             info!(
                 "Config version {} is within compatible range of {}",
@@ -293,5 +318,66 @@ mod tests {
         let manager = SchemaManager::new();
         let versions = manager.known_versions();
         assert!(versions.contains(&SchemaVersion::CURRENT));
+    }
+
+    #[test]
+    fn test_schema_version_from_config_triggers_migration() {
+        // Verify that a config with an older version (same major, older minor/patch)
+        // triggers the migration path discovery.
+        let manager = SchemaManager::new();
+        let current = SchemaVersion::CURRENT.clone();
+
+        // Same version should return an empty path (no-op).
+        let path = manager.find_migration_path(&current);
+        assert!(path.is_some(), "Migration path should be found for CURRENT");
+        assert!(
+            path.as_ref().unwrap().is_empty(),
+            "Same version should produce empty migration path"
+        );
+
+        // A config with an older minor version within same major should return Some path.
+        // CURRENT is v1.0.0, so v1.0.0 is current; testing older-than-current
+        // requires a version with lower major (which fails validation) or lower minor/patch.
+        // Since CURRENT is v1.0.0, the minimum compatible is also v1.0.0.
+        // Test that validation works correctly for the boundary.
+        assert!(manager.validate_version(&current).is_ok());
+
+        // An incompatible major version should return None for migration path.
+        let older_major = SchemaVersion::new(0, 9, 0);
+        assert!(
+            manager.find_migration_path(&older_major).is_none(),
+            "Incompatible major version should have no migration path"
+        );
+        assert!(
+            manager.validate_version(&older_major).is_err(),
+            "Older major version should fail validation"
+        );
+    }
+
+    #[test]
+    fn test_schema_version_missing_defaults_and_warns() {
+        // Verify that a completely new version (major bump) returns None for migration path.
+        let manager = SchemaManager::new();
+        let newer = SchemaVersion::new(2, 0, 0);
+        // Forward compatibility: new config, older app — allowed with warning.
+        assert!(manager.validate_version(&newer).is_ok());
+        // But no migration path from future to past.
+        let path = manager.find_migration_path(&newer);
+        assert!(path.is_none(), "No migration path for future version");
+
+        // Test from_str parsing — the safety net when schema_version is missing.
+        let v = SchemaVersion::from_str("0.1.0").expect("Should parse 0.1.0");
+        assert_eq!(v.major, 0);
+        assert_eq!(v.minor, 1);
+        assert_eq!(v.patch, 0);
+
+        // Parsing with 'v' prefix should also work.
+        let v_prefixed = SchemaVersion::from_str("v1.0.0").expect("Should parse v1.0.0");
+        assert_eq!(v_prefixed, SchemaVersion::CURRENT);
+
+        // Invalid format should return Err.
+        assert!(SchemaVersion::from_str("not-a-version").is_err());
+        assert!(SchemaVersion::from_str("1.0").is_err());
+        assert!(SchemaVersion::from_str("abc.def.ghi").is_err());
     }
 }

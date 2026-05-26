@@ -8,6 +8,7 @@ use std::time::Duration;
 use serde::Serialize;
 
 use crate::config::PhaseOptions;
+use crate::i18n::t;
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ReviewDecision {
@@ -27,11 +28,11 @@ pub(crate) enum ReviewVerdict {
 }
 
 impl ReviewVerdict {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> String {
         match self {
-            Self::Approve => "APPROVE",
-            Self::Reject => "REJECT",
-            Self::Invalid => "INVALID",
+            Self::Approve => t("status.review_controls.approve"),
+            Self::Reject => t("status.review_controls.reject"),
+            Self::Invalid => t("status.review_controls.invalid"),
         }
     }
 

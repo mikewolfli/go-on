@@ -12,25 +12,21 @@ use std::time::Instant;
 use std::{fs, path::Path};
 
 use anyhow::Result;
-use futures_util::future::join_all;
 use opentelemetry::{Context as OtelContext, KeyValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio::time::Duration;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 
-use crate::acp::helpers::agent_router::record_task_agent_outcome;
 use crate::acp::helpers::agent_selector::{collect_reputation_scores, AgentSelector};
 use crate::acp::helpers::autonomy::{
     planner_guided_tool_preferences, run_followup_after_tool_observation,
 };
 use crate::acp::helpers::autonomy_metrics::{
     record_agent_switch, record_autonomy_loop_stop_reason, record_explicit_tool_route,
-    record_fallback_reason, record_orchestration_alignment, record_orchestration_node_mapping,
     record_planner_guided_route, record_reputation_routing_applied, record_tool_followup_attempt,
-    record_tool_followup_fallback, record_tool_followup_success, record_vote_reputation_tiebreak,
-    record_vote_winner,
+    record_tool_followup_fallback, record_tool_followup_success,
 };
 use crate::acp::helpers::cache_strategy::{
     should_bypass_for_execution, store_async, CacheDecision, CacheStrategy,
@@ -41,31 +37,29 @@ use crate::acp::helpers::context::{
 };
 use crate::acp::helpers::conversation::stream_would_exceed_limits;
 use crate::acp::helpers::metrics::{stream_chunk_notification, stream_done_notification};
-use crate::acp::helpers::orchestration_alignment::derive_plan_trace_alignment;
+use crate::acp::helpers::model_router;
 use crate::acp::helpers::response_assembler::{
     build_chat_response, build_role_routing, build_task_graph_checkpoint, CapabilityRoutingInfo,
+    ChatResponseContext,
 };
 use crate::acp::helpers::review_gate::{run_enhanced_verification, run_review_gate};
-use crate::acp::helpers::vote_orchestration::derive_response_orchestration;
 use crate::acp::r#impl::UserSession;
 use crate::acp::server::AcpServer;
 use crate::agent::Message;
 use crate::config::PhaseOptions;
 use crate::evaluation::TraceEvent;
 use crate::flow::FlowManager;
-use crate::i18n::runtime::tf;
+use crate::i18n::runtime::{t, tf};
 use crate::intelligence::token_cache::ContextLengthClass;
 use crate::orchestration::autonomy_runtime::{
     build_tool_execution_followup_message, build_tool_result_block,
 };
-use crate::orchestration::council::{CouncilMember, CouncilProposal, CouncilVote, ProposalStatus};
-use crate::orchestration::planner_executor::Planner;
+
+use crate::agents::sse_optimizer::SseBufferPool;
 use crate::orchestration::prompt_layers::PromptAssembler;
-use crate::orchestration::skill::SkillDescriptor;
+use crate::orchestration::session_context::SessionContextManager;
 use crate::orchestration::task_router::{TaskRouter, TaskType};
 use crate::orchestration::tool::{execute_loop, LoopConfig, LoopDecision, ToolInput, ToolRegistry};
-use crate::orchestration::workflow_optimizer::OptimizationContext;
-use crate::pua::PuaEnforcementPlan;
 
 use crate::memory_module::{MemoryClass, MemoryEntry, MemoryPolicy, MemoryStore};
 use crate::reinforcement::{
@@ -131,6 +125,7 @@ impl ChatRequestContext {
 #[derive(Default)]
 struct AgentSwitchState {
     forced_agent_by_phase: HashMap<String, String>,
+    #[allow(dead_code)]
     primary_agent_by_phase: HashMap<String, String>,
 }
 
@@ -191,7 +186,7 @@ pub(crate) fn estimate_token_economy(messages: &[Message], response_text: &str) 
     })
 }
 
-fn is_quota_or_token_limit_error(error_text: &str) -> bool {
+pub(crate) fn is_quota_or_token_limit_error(error_text: &str) -> bool {
     let text = error_text.to_ascii_lowercase();
     text.contains("429")
         || text.contains("rate limit")
@@ -204,31 +199,31 @@ fn is_quota_or_token_limit_error(error_text: &str) -> bool {
 }
 
 #[derive(Debug, Clone)]
-struct RiskVotePolicy {
-    enabled: bool,
+pub(crate) struct RiskVotePolicy {
+    pub(crate) enabled: bool,
     threshold: usize,
     domain_keywords: Vec<String>,
     decision_keywords: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
-struct RiskAssessment {
-    score: usize,
-    is_high_risk: bool,
-    reasons: Vec<String>,
+pub(crate) struct RiskAssessment {
+    pub(crate) score: usize,
+    pub(crate) is_high_risk: bool,
+    pub(crate) reasons: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
-struct AgentStrongVoteOutcome {
-    agent: String,
-    model: Option<String>,
-    response: String,
-    reasoning: String,
+pub(crate) struct AgentStrongVoteOutcome {
+    pub(crate) agent: String,
+    pub(crate) model: Option<String>,
+    pub(crate) response: String,
+    pub(crate) reasoning: String,
 }
 
-type AgentVoteSource = (String, Arc<dyn crate::agent::Agent>, HashMap<String, Value>);
+pub(crate) type AgentVoteSource = (String, Arc<dyn crate::agent::Agent>, HashMap<String, Value>);
 
-fn option_bool(options: &HashMap<String, Value>, key: &str, default: bool) -> bool {
+pub(crate) fn option_bool(options: &HashMap<String, Value>, key: &str, default: bool) -> bool {
     options.get(key).and_then(Value::as_bool).unwrap_or(default)
 }
 
@@ -371,22 +366,22 @@ fn assess_high_risk(messages: &[Message], mode: &str, policy: &RiskVotePolicy) -
     }
 }
 
-fn normalize_vote_key(text: &str) -> String {
+pub(crate) fn normalize_vote_key(text: &str) -> String {
     text.split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
         .to_ascii_lowercase()
 }
 
-struct HighRiskVoteAttemptResult {
-    attempt_log: Value,
-    candidate: Option<AgentStrongVoteOutcome>,
-    source: Option<AgentVoteSource>,
-    failure: Option<Value>,
+pub(crate) struct HighRiskVoteAttemptResult {
+    pub(crate) attempt_log: Value,
+    pub(crate) candidate: Option<AgentStrongVoteOutcome>,
+    pub(crate) source: Option<AgentVoteSource>,
+    pub(crate) failure: Option<Value>,
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_high_risk_vote_attempt(
+pub(crate) async fn run_high_risk_vote_attempt(
     server: &AcpServer,
     phase_name: &str,
     trace_id: &str,
@@ -488,7 +483,7 @@ async fn run_high_risk_vote_attempt(
     }
 }
 
-fn select_strong_model_id(agent: &dyn crate::agent::Agent) -> Option<String> {
+pub(crate) fn select_strong_model_id(agent: &dyn crate::agent::Agent) -> Option<String> {
     let mut models = agent
         .available_models()
         .into_iter()
@@ -511,7 +506,7 @@ fn select_strong_model_id(agent: &dyn crate::agent::Agent) -> Option<String> {
     models.first().map(|model| model.id.clone())
 }
 
-fn select_top_models(agent: &dyn crate::agent::Agent, max_models: usize) -> Vec<String> {
+pub(crate) fn select_top_models(agent: &dyn crate::agent::Agent, max_models: usize) -> Vec<String> {
     let mut models = agent
         .available_models()
         .into_iter()
@@ -545,7 +540,7 @@ fn select_top_models(agent: &dyn crate::agent::Agent, max_models: usize) -> Vec<
     selected
 }
 
-fn reorder_agents_with_priority(
+pub(crate) fn reorder_agents_with_priority(
     agents: &mut Vec<(String, Arc<dyn crate::agent::Agent>)>,
     preferred: &str,
 ) -> bool {
@@ -599,7 +594,7 @@ pub async fn handle_chat(
             let lifecycle_guard = server
                 .lifecycle_state
                 .lock()
-                .map_err(|_| anyhow::anyhow!("Failed to lock lifecycle state"))?;
+                .map_err(|_| anyhow::anyhow!(t("error.chat.lifecycle_lock_failed")))?;
             if lifecycle_guard.is_shutting_down() {
                 Some(serde_json::to_value(lifecycle_guard.snapshot())?)
             } else {
@@ -611,7 +606,7 @@ pub async fn handle_chat(
                 server,
                 id,
                 -32031,
-                "server is shutting down".to_string(),
+                t("error.chat.server_shutting_down"),
                 Some(snapshot),
             )
             .await?;
@@ -639,6 +634,47 @@ pub async fn handle_chat(
             chat_params.mode = "ask".to_string();
             info!("mode not specified by client, defaulting to 'ask'");
         }
+
+        // GAP-46-12: Track session context across requests.
+        // Use SessionContextManager to extract key concepts from the conversation
+        // and maintain continuity markers for long-running sessions.
+        let mut session_mgr = SessionContextManager::default();
+        let conversation_id = chat_params
+            .conversation_id
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
+        let msg_count = chat_params.messages.len();
+        debug!(
+            "SessionContextManager: tracking conversation '{}' with {} messages",
+            conversation_id, msg_count
+        );
+        // Record each message for context extraction.
+        for msg in &chat_params.messages {
+            session_mgr.record_message(&msg.content, &msg.role);
+        }
+        let concept_count = session_mgr.concept_count();
+        let decision_count = session_mgr.decision_count();
+        if concept_count > 0 || decision_count > 0 {
+            debug!(
+                "SessionContextManager: {} concepts, {} decisions extracted",
+                concept_count, decision_count
+            );
+        }
+        // If the conversation is long, compute trim budget.
+        if msg_count > 50 {
+            let effective = session_mgr.budget.effective_retain();
+            debug!(
+                "SessionContextManager: effective retain budget for {} messages = {}",
+                msg_count, effective
+            );
+        }
+
+        // GAP-46-12: Initialize SSE buffer pool for streaming optimization.
+        // The pool is lazily created once and reused across requests to avoid
+        // allocation churn during high-frequency SSE event serialization.
+        static SSE_BUFFER_POOL: OnceLock<SseBufferPool> = OnceLock::new();
+        let _pool = SSE_BUFFER_POOL.get_or_init(|| SseBufferPool::new(4, 4096));
+        trace!("SseBufferPool: ready for streaming request");
 
         // Check if should escalate approval strategy
         let should_escalate = should_escalate_approval_strategy(
@@ -866,96 +902,14 @@ pub(crate) async fn process_chat_request(
     // Get routing handles
     let (flow, registry) = routing_handles(server)?;
 
-    // ── HarnessBus pre-route policy evaluation ─────────────────────────
-    // Reset budget clock so long-running backends don't exceed wall clock budget.
-    if let Some(ref harness) = server.harness_bus {
-        if let Ok(mut budget) = harness.evaluator.budget.lock() {
-            budget.reset();
-        }
-        let task_ctx = crate::governance::pua::TaskContext {
-            task_type: crate::governance::pua::TaskType::Other,
-            file_count: params.messages.len(),
-            risk_score: 0.3,
-        };
-        let verdict = harness.evaluate(&task_ctx);
-        match &verdict {
-            crate::governance::harness_bus::PolicyVerdict::Deny(v) => {
-                anyhow::bail!("harness policy denied: {}", v.detail);
-            }
-            crate::governance::harness_bus::PolicyVerdict::Escalate(r) => {
-                warn!("harness policy escalation: {}", r.reason);
-                // Continue with degraded mode — the runtime will apply
-                // stricter constraints via AgentExecutionPolicy later.
-            }
-            crate::governance::harness_bus::PolicyVerdict::Review(r) => {
-                info!("harness policy flagged for review: {}", r.reason);
-            }
-            _ => {
-                warn!("unexpected PolicyVerdict variant in gate evaluation");
-            }
-        }
-    }
-
-    // ── HarnessBus token gate evaluation (ARCH-04) ─────────────────────
-    // Evaluate the L0-L5 token layer chain to determine the routing tier
-    // for this request.  The evaluation updates per-layer counters that are
-    // exposed in governance.status as layered_token_trigger_profile.  A
-    // Reject verdict from L0 stops processing immediately; other verdicts
-    // are informational and do not block execution.
-    if let Some(ref harness) = server.harness_bus {
-        let input_chars: usize = params.messages.iter().map(|m| m.content.len()).sum();
-        let estimated_input = (input_chars / 4).max(1) as u64;
-        let gate_ctx = crate::orchestration::token_layers::GateContext {
-            request_id: trace.request_id.clone(),
-            estimated_input_tokens: estimated_input,
-            estimated_output_tokens: estimated_input / 2,
-            keywords: vec![],
-            has_cache_hit: false,
-            confidence_score: 0.8,
-            request_text: String::new(),
-            max_input_tokens: None,
-            max_output_tokens: None,
-        };
-        let verdict = harness.evaluate_token_gate(&gate_ctx);
-        if matches!(
-            verdict,
-            crate::orchestration::token_layers::TokenGateVerdict::Reject(_)
-        ) {
-            let reason = match verdict {
-                crate::orchestration::token_layers::TokenGateVerdict::Reject(r) => r,
-                _ => "token gate rejected".to_string(),
-            };
-            anyhow::bail!("token gate L0 rejected request: {}", reason);
-        }
-        debug!("token gate verdict: {:?}", verdict);
-    }
-
-    // ── TenantBudgetEnforcer pre-route check (F-GAP-08) ───────────────
-    // Check per-tenant resource quotas before allocating compute.
-    // Uses the tenant_id resolved from the ChatRequestContext (which comes
-    // from the user session when auth is enabled, or falls back to default).
+    // ── Pre-route policy evaluation ───────────────────────────────────
+    // Evaluate HarnessBus policies, token gate, and tenant budget.
+    // If any policy denies the request, this will return an error.
     let tenant_id = &ctx.tenant_id;
-    if let Ok(mut budget) = server.tenant_budget.lock() {
-        if server.runtime_config.production_strict {
-            if let Err(e) = budget.check_can_start(tenant_id) {
-                warn!("tenant budget limit reached for {}: {}", tenant_id, e);
-                return Err(anyhow::anyhow!(
-                    "tenant '{}' at resource limit: {}",
-                    tenant_id,
-                    e
-                ));
-            }
-        } else {
-            // Non-strict mode: warn but allow through.
-            if let Err(e) = budget.check_can_start(tenant_id) {
-                warn!(
-                    "tenant budget limit reached for {}: {} (non-strict, allowing)",
-                    tenant_id, e
-                );
-            }
-        }
-        budget.start_task(tenant_id);
-    }
+    let _policy_result = crate::acp::helpers::pre_route_policy::evaluate_pre_route_policies(
+        server, params, trace, tenant_id,
+    )
+    .await?;
 
     // ── SchemaRegistry task envelope validation (F-GAP-07) ─────────────
     // Validate the incoming task envelope against registered role schemas
@@ -1116,17 +1070,6 @@ pub(crate) async fn process_chat_request(
         layered_prompt.token_estimate
     );
 
-    let mut capability_selected_agent: Option<String> = None;
-    let mut capability_recommended_mode: Option<String> = None;
-    let mut capability_candidate_count: Option<u64> = None;
-    let mut capability_decision_confidence: Option<f64> = None;
-    let mut capability_selection_reason: Option<String> = None;
-    let mut selected_agent_reputation: Option<f64> = None;
-    #[cfg(feature = "sub-bus-optimization")]
-    let mut capability_optimization_hint: Option<Value> = None;
-    #[cfg(not(feature = "sub-bus-optimization"))]
-    let capability_optimization_hint: Option<Value> = None;
-
     let capability_risk_policy = build_risk_vote_policy(&HashMap::new());
     let capability_risk = assess_high_risk(&params.messages, &params.mode, &capability_risk_policy);
 
@@ -1134,249 +1077,61 @@ pub(crate) async fn process_chat_request(
     // If a CapabilityBus is present, use its sense/decide pipeline to
     // refine or override the agent list before falling through to the
     // existing preference logic.
+    let mut capability_selected_agent: Option<String> = None;
+    let mut capability_recommended_mode: Option<String> = None;
+    let mut capability_candidate_count: Option<u64> = None;
+    let mut capability_decision_confidence: Option<f64> = None;
+    let mut capability_selection_reason: Option<String> = None;
+    let mut selected_agent_reputation: Option<f64> = None;
+    let mut capability_optimization_hint: Option<Value> = None;
     if let Some(ref cb) = server.capability_bus {
-        let task_ctx = crate::governance::pua::TaskContext {
-            task_type: crate::governance::pua::TaskType::Other,
-            file_count: params.messages.len(),
-            risk_score: (capability_risk.score as f64 / 4.0).clamp(0.1, 1.0),
-        };
-        let sensing = cb.sense(&task_ctx);
-        let decision = cb.decide(&task_ctx, &sensing);
-        capability_selected_agent = decision.selected_agent.clone();
-        capability_recommended_mode = Some(decision.recommended_mode.clone());
-        capability_candidate_count = Some(sensing.capability_agent_count as u64);
-        capability_decision_confidence = Some(decision.confidence);
-
-        // Compute optimization hint under the feature gate.
-        #[cfg(feature = "sub-bus-optimization")]
-        {
-            let opt = cb.optimization_recommendation(
-                phase_name,
-                (params.messages.len() as u64).saturating_mul(512),
-                if params.mode.eq_ignore_ascii_case("full_auto") {
-                    "high"
-                } else {
-                    "balanced"
-                },
-            );
-            capability_optimization_hint = Some(serde_json::json!({
-                "suggested_agent": opt.suggested_agent,
-                "estimated_cost": opt.estimated_cost,
-                "estimated_duration_ms": opt.estimated_duration_ms,
-                "reliability_score": opt.reliability_score,
-                "confidence": opt.confidence,
-            }));
-        }
-
-        if let Some(ref agent) = decision.selected_agent {
-            // Prune to only the capability-bus-recommended agent.
-            // SAFETY: retain before reorder — if the agent is not in the list
-            // we fall through to the phase-level agents unchanged.
-            if resolved.agents.iter().any(|(name, _)| name == agent) {
-                resolved.agents.retain(|(name, _)| name == agent);
-                capability_selection_reason = Some("capability_bus_selected".to_string());
-                routing_provenance.push("capability_bus_selected_agent_applied".to_string());
-                crate::acp::helpers::autonomy_metrics::record_capability_selection_reason(
-                    "capability_bus_selected",
-                );
-            } else {
-                capability_selection_reason = Some("capability_bus_no_match".to_string());
-                routing_provenance
-                    .push("capability_bus_selected_agent_not_in_candidates".to_string());
-                crate::acp::helpers::autonomy_metrics::record_capability_selection_reason(
-                    "capability_bus_no_match",
-                );
-            }
-            // reorder is now redundant since retain already reduced to one,
-            // but kept for clarity in case retain logic changes in future.
-            let _ = reorder_agents_with_priority(&mut resolved.agents, agent);
-        } else {
-            capability_selection_reason = Some("capability_bus_none".to_string());
-            routing_provenance.push("capability_bus_no_selected_agent".to_string());
-            crate::acp::helpers::autonomy_metrics::record_capability_selection_reason(
-                "capability_bus_none",
-            );
-        }
-        // Record the routing decision as an observable event
-        cb.record_event(
-            "sense",
-            decision.selected_agent.clone(),
-            Some(trace.request_id.clone()),
-            "success",
-            serde_json::json!({
-                "candidate_count": sensing.capability_agent_count,
-                "confidence": decision.confidence,
-                "duration_ms": decision.duration_ms,
-                "recommended_mode": decision.recommended_mode,
-                "high_risk": capability_risk.is_high_risk,
-                "risk_reasons": capability_risk.reasons,
-                "optimization": capability_optimization_hint,
-            }),
-        );
+        let result = crate::acp::helpers::capability_selector::apply_capability_bus_selection(
+            cb,
+            phase_name,
+            &params.messages,
+            &params.mode,
+            &mut resolved.agents,
+            &capability_risk,
+            &trace.request_id,
+            &mut routing_provenance,
+        )
+        .await;
+        capability_selected_agent = result.capability_selected_agent;
+        capability_recommended_mode = result.recommended_mode;
+        capability_candidate_count = Some(result.candidate_count as u64);
+        capability_decision_confidence = Some(result.confidence);
+        capability_selection_reason = Some(result.capability_selection_reason);
+        capability_optimization_hint = result.optimization_hint;
     }
 
-    // Path A: explicit config list → use first configured name.
-    // Path B: auto-map (empty config list) → fall back to first runtime-resolved agent name.
-    let configured_primary_agent = phase
-        .agent_names
-        .first()
-        .cloned()
-        .or_else(|| resolved.agents.first().map(|(name, _)| name.clone()));
-    let preferred_agent_from_request = params
-        .options
-        .as_ref()
-        .and_then(|opts| opts.extra.get("preferred_agent"))
-        .and_then(|value| value.as_str())
-        .map(|value| value.to_string());
+    // ── Agent Switch State & Preferred Agent Resolution ──────────────
+    // Delegate to the extracted helper which handles:
+    //   - configured_primary_agent / preferred_agent_from_request
+    //   - Global agent_switch_state() management (forced/primary by phase)
+    //   - Priority reordering (explicit preferred → persist; forced fallback → probe primary)
+    //   - Phase-level rate limiter (RPM/burst)
+    //   - conversation_id (with optional tenant namespace)
+    //   - branch_id, requirement_contract, and TaskPlanArtifact
+    let agent_prefs = crate::acp::helpers::agent_preference::resolve_agent_preferences(
+        server,
+        params,
+        &phase,
+        &mut resolved,
+        tenant_id,
+    )?;
 
-    if let Some(primary) = configured_primary_agent.as_ref() {
-        if let Ok(mut state) = agent_switch_state().lock() {
-            state
-                .primary_agent_by_phase
-                .insert(phase_name.clone(), primary.clone());
-        }
-    }
-
-    // Priority order rules:
-    // 1) If request explicitly chooses preferred_agent, honor it immediately and persist choice.
-    // 2) Otherwise, if phase has a stored forced fallback agent, probe primary first and then forced agent.
-    if let Some(preferred) = preferred_agent_from_request.as_deref() {
-        if reorder_agents_with_priority(&mut resolved.agents, preferred) {
-            if let Ok(mut state) = agent_switch_state().lock() {
-                state
-                    .forced_agent_by_phase
-                    .insert(phase_name.clone(), preferred.to_string());
-            }
-        }
-    } else if let Ok(state) = agent_switch_state().lock() {
-        if let Some(forced) = state.forced_agent_by_phase.get(phase_name) {
-            let primary = state.primary_agent_by_phase.get(phase_name);
-            if let Some(primary_name) = primary {
-                // Auto-recover strategy: always probe primary first, then fallback agent.
-                let _ = reorder_agents_with_priority(&mut resolved.agents, forced);
-                let _ = reorder_agents_with_priority(&mut resolved.agents, primary_name);
-            }
-        }
-    }
+    let configured_primary_agent = agent_prefs.configured_primary_agent;
+    let _preferred_agent_from_request = agent_prefs.preferred_agent_from_request;
+    let conversation_id = agent_prefs.conversation_id;
+    let branch_id = agent_prefs.branch_id;
+    let _requirement_contract = agent_prefs.requirement_contract;
+    let _plan = agent_prefs.plan;
 
     // ── Record feedback to CapabilityBus on completion ─────────────────
     // This is registered as a callback-style hook.  The actual feedback
     // call is invoked at the end of this function after the agent response
     // is received, so we stash the agent name and timing details now.
     // (Feedback is recorded at function exit — see the Ok() return below.)
-
-    // Phase-level rate limiter support migrated from legacy ACP behavior.
-    if let Some(options) = phase.options.as_ref() {
-        let rpm_limit = options
-            .extra
-            .get("rate_limit_rpm")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(u64::MAX);
-        let burst = options
-            .extra
-            .get("rate_limit_burst")
-            .and_then(|v| v.as_u64());
-        if rpm_limit != u64::MAX {
-            let allowed = server
-                .phase_rate_limiter
-                .lock()
-                .map(|guard| guard.allow(phase_name, rpm_limit, burst))
-                .unwrap_or_else(|e| {
-                    warn!("rate limiter lock failed: {e}");
-                    true
-                });
-            if !allowed {
-                let burst_str = burst
-                    .map(|b| b.to_string())
-                    .unwrap_or_else(|| "none".to_string());
-                anyhow::bail!(
-                    "rate limited for phase '{}' (rpm={}, burst={})",
-                    phase_name,
-                    rpm_limit,
-                    burst_str
-                );
-            }
-        }
-    }
-
-    // Get or create conversation state
-    // When user auth is enabled, namespace the conversation ID with the tenant_id
-    // to enforce cross-user/tenant isolation.  The raw ID from the client is
-    // embedded after the namespace delimiter so existing logic is preserved.
-    let raw_conversation_id = params.conversation_id.clone().unwrap_or_else(|| {
-        format!(
-            "conv_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        )
-    });
-    let conversation_id = if server.runtime_config.user_auth_enabled {
-        format!("{}:{}", tenant_id, raw_conversation_id)
-    } else {
-        raw_conversation_id
-    };
-    let branch_id = params
-        .branch_id
-        .clone()
-        .unwrap_or_else(|| "main".to_string());
-
-    // Get or create requirement contract
-    let _requirement_contract = if let Some(contract) = &params.requirement_contract {
-        contract.clone()
-    } else {
-        // Create default requirement contract
-        let task_description = extract_task_description(&params.messages);
-        default_requirement_contract(&task_description, "chat")
-    };
-
-    // Get or create task plan
-    let _plan = if let Some(existing_plan) = &params.plan {
-        existing_plan.clone()
-    } else {
-        // Create default task plan
-        TaskPlanArtifact {
-            generated_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64,
-            task: String::new(),
-            characteristics: crate::orchestration::task_router::TaskCharacteristics {
-                description: String::new(),
-                task_type: crate::orchestration::task_router::TaskType::BugFix,
-                complexity: 1,
-                required_capabilities: Vec::new(),
-                involves_multiple_modules: false,
-                is_time_critical: false,
-                needs_verification: false,
-                has_safety_concerns: false,
-            },
-            routing: crate::orchestration::task_router::RoutingDecision {
-                roles: Vec::new(),
-                requirements: Vec::new(),
-                predicted_success_rate: 1.0,
-                estimated_duration_seconds: 1000,
-                can_parallelize: Vec::new(),
-                risk_factors: Vec::new(),
-                recommended_safeguards: Vec::new(),
-                pua_enforcement: PuaEnforcementPlan {
-                    escalation_level: String::new(),
-                    mandatory_roles: Vec::new(),
-                    red_lines: Vec::new(),
-                    quality_compass: Vec::new(),
-                    mandatory_safeguards: Vec::new(),
-                    mandatory_evidence: Vec::new(),
-                    stage_requirements: Vec::new(),
-                },
-            },
-            decomposition: None,
-            planned_subtasks: Vec::new(),
-            sub_agent_recommended: false,
-            activation_reasons: Vec::new(),
-            action_checks_required: Vec::new(),
-        }
-    };
 
     let vector_context =
         load_vector_context(server, phase_name, phase.options.as_ref(), params).await;
@@ -1575,178 +1330,38 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         agent_attempts.push(CacheStrategy::attempt_entry(&CacheDecision::Miss));
     }
 
-    let mut base_agent_options = phase
-        .options
-        .as_ref()
-        .and_then(|opts| opts.agent_options())
-        .unwrap_or_default();
-    if let Some(request_options) = params.options.as_ref() {
-        for (key, value) in &request_options.extra {
-            if key == "extra" {
-                // Defensive flatten: legacy clients may nest options under "extra" key
-                if let Some(obj) = value.as_object() {
-                    for (k, v) in obj {
-                        base_agent_options.insert(k.clone(), v.clone());
-                    }
-                }
-            } else {
-                base_agent_options.insert(key.clone(), value.clone());
-            }
-        }
-    }
+    let base_agent_options =
+        crate::acp::helpers::agent_options::assemble_agent_options(server, &resolved.phase, params);
 
-    // BLUE42 Step 8: Seed config flags from RuntimeConfig so autonomy_loop_adapter picks them up
-    base_agent_options.insert(
-        "enable_dag_execution".to_string(),
-        json!(server.runtime_config.enable_dag_execution),
-    );
-    base_agent_options.insert(
-        "enable_agent_reroute".to_string(),
-        json!(server.runtime_config.enable_agent_reroute),
-    );
-    base_agent_options.insert(
-        "enable_metacognitive_feedback".to_string(),
-        json!(server.runtime_config.enable_metacognitive_feedback),
-    );
-
-    // ── Inject registered skills as LLM-callable tools ──────────────────
-    // When skills are registered in the skill_registry, expose them as
-    // function-calling tools to the LLM provider so the AI can invoke them
-    // during chat conversations (P0 requirement).
-    //
-    // NOTE: DeepSeek and some other providers enforce a strict pattern on
-    // function names: ^[a-zA-Z0-9_-]+$. We sanitize skill names to match.
-    {
-        if let Ok(registry) = server.skill_registry.lock() {
-            let sanitize_fn_name = |name: &str| -> String {
-                name.chars()
-                    .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
-                    .collect::<String>()
-            };
-            let skill_tools: Vec<Value> = registry
-                .list()
-                .iter()
-                .map(|skill: &SkillDescriptor| {
-                    let safe_name = sanitize_fn_name(&skill.name);
-                    let fallback_name = if safe_name.is_empty() {
-                        format!("skill-{}", skill.name.len())
-                    } else {
-                        safe_name
-                    };
-                    json!({
-                        "type": "function",
-                        "function": {
-                            "name": fallback_name,
-                            "description": skill.description,
-                            "parameters": skill.input_schema,
-                        }
-                    })
-                })
-                .collect();
-            if !skill_tools.is_empty() {
-                base_agent_options.insert("tools".to_string(), json!(skill_tools));
-                base_agent_options.insert("tool_choice".to_string(), json!("auto"));
-            }
-        }
-    }
-
-    // ── Model-based agent routing ────────────────────────────────────
-    // When user picks a specific model (e.g. "deepseek-v4-flash"), replace
-    // resolved.agents with only the matching agent(s) so we don't waste time
-    // on unrelated providers.  When model is "auto" or empty, keep phase list.
-    // "copilot-auto" routes exclusively to the copilot agent.
-    let model_is_specific = base_agent_options
-        .get("model")
-        .and_then(|v| v.as_str())
-        .is_some_and(|m| !m.is_empty() && m != "auto");
-
-    if let Some(model_str) = base_agent_options.get("model").and_then(|v| v.as_str()) {
-        if model_str == "copilot/auto" || model_str == "copilot-auto" || model_str == "copilot" {
-            resolved
-                .agents
-                .retain(|(name, _)| name.eq_ignore_ascii_case("copilot"));
-        }
-    }
-
-    if model_is_specific {
-        let agents_before_model_filter = resolved.agents.clone();
-        let model = base_agent_options
-            .get("model")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let model_lower = model.to_ascii_lowercase();
-        // Keep only agents whose name is a prefix of or contained in the model string.
-        // e.g. "deepseek" matches "deepseek-v4-flash", "openai" matches "gpt-4o".
-        // Exception: model IDs containing '/' (e.g. "deepseek-ai/DeepSeek-V3.2")
-        // are typically vendor-qualified IDs (siliconflow, openrouter, etc.) and
-        // should NOT match a simple agent prefix like "deepseek".
-        resolved.agents.retain(|(name, _)| {
-            let name_lower = name.to_ascii_lowercase();
-            if model_lower.starts_with(&name_lower) && model_lower.contains('/') {
-                // Qualified model ID like "deepseek-ai/..." → only match if
-                // the agent name also appears after the '/', or the agent is
-                // the model vendor (e.g. "siliconflow/deepseek-...").
-                // For now, skip prefix match when '/' is present.
-                name_lower.starts_with(&model_lower)
-                    || model_lower.ends_with(&format!("/{}", name_lower))
-            } else {
-                model_lower.starts_with(&name_lower) || name_lower.starts_with(&model_lower)
-            }
-        });
-
-        if resolved.agents.is_empty() {
-            warn!(
-                model = %model,
-                "model filter did not match any agent, falling back to phase candidate agents"
-            );
-            resolved.agents = agents_before_model_filter;
-        }
-    }
+    // ── Model-based agent routing / Filtering ──────────────────────
+    let filter_result =
+        model_router::filter_agents_by_model(&mut resolved.agents, &base_agent_options);
 
     let risk_policy = build_risk_vote_policy(&base_agent_options);
     let risk_assessment = assess_high_risk(&params.messages, &params.mode, &risk_policy);
-    let enable_high_risk_vote =
-        risk_policy.enabled && risk_assessment.is_high_risk && !model_is_specific;
-    let enable_high_risk_multi_agent_vote = enable_high_risk_vote
-        && option_bool(
-            &base_agent_options,
-            "high_risk_multi_agent_vote_enabled",
-            true,
-        );
-    let min_vote_agents =
-        option_usize(&base_agent_options, "high_risk_vote_min_agents", 2).clamp(1, 6);
-    let max_vote_agents = option_usize(&base_agent_options, "high_risk_vote_max_agents", 3)
-        .max(min_vote_agents)
-        .clamp(min_vote_agents, 8);
-    let escalation_enabled = option_bool(
+    let vote_config = model_router::build_high_risk_vote_config(
         &base_agent_options,
-        "high_risk_escalate_multi_model_enabled",
-        true,
+        &risk_policy,
+        &risk_assessment,
+        filter_result.model_is_specific,
     );
-    let escalation_models_per_agent = option_usize(
-        &base_agent_options,
-        "high_risk_escalate_models_per_agent",
-        2,
-    )
-    .clamp(2, 6);
-    let escalation_max_agents = option_usize(
-        &base_agent_options,
-        "high_risk_escalate_max_agents",
-        max_vote_agents,
-    )
-    .clamp(1, max_vote_agents);
+
+    let model_is_specific = filter_result.model_is_specific;
+    let enable_high_risk_vote = vote_config.enable_high_risk_vote;
+    let enable_high_risk_multi_agent_vote = vote_config.enable_high_risk_multi_agent_vote;
+    let min_vote_agents = vote_config.min_vote_agents;
+    let max_vote_agents = vote_config.max_vote_agents;
+    let escalation_enabled = vote_config.escalation_enabled;
+    let escalation_models_per_agent = vote_config.escalation_models_per_agent;
+    let escalation_max_agents = vote_config.escalation_max_agents;
 
     let mut used_multi_model_vote = false;
     let mut used_multi_agent_vote = false;
     let mut review_required = false;
     let mut vote_report: Option<Value> = None;
-    let mut agent_vote_candidates: Vec<AgentStrongVoteOutcome> = Vec::new();
-    let mut agent_vote_failures: Vec<Value> = Vec::new();
-    let mut agent_vote_sources: Vec<AgentVoteSource> = Vec::new();
+    let agent_vote_candidates: Vec<AgentStrongVoteOutcome> = Vec::new();
     let mut emit_final_vote_response = false;
     let mut vote_winner: Option<String> = None;
-    let mut fallback_reason: Option<String> = None;
-    let mut council_decision: Option<Value> = None;
     let mut high_risk_vote_jobs: Vec<(
         String,
         Arc<dyn crate::agent::Agent>,
@@ -1755,55 +1370,17 @@ You have access to {} registered skill(s). Skills are reusable templates that au
     )> = Vec::new();
     let vote_timeout = request_timeout(phase.options.as_ref());
 
-    // Degraded fallback: if all candidates are marked unhealthy, still attempt
-    // the first candidate so the request can make progress instead of failing fast.
-    let unhealthy_fallback_agent = if let Some(ref cb) = server.capability_bus {
-        let healthy_count = resolved
-            .agents
-            .iter()
-            .filter(|(name, _)| cb.is_agent_healthy(name))
-            .count();
-        if healthy_count == 0 {
-            let selected = resolved.agents.first().map(|(name, _)| name.clone());
-            if let Some(ref name) = selected {
-                warn!(
-                    phase = %phase_name,
-                    fallback_agent = %name,
-                    "all candidate agents unhealthy; forcing degraded fallback attempt"
-                );
-                fallback_reason = Some("all_agents_unhealthy".to_string());
-                routing_provenance.push("degraded_fallback_all_agents_unhealthy".to_string());
-                record_fallback_reason("all_agents_unhealthy");
-            }
-            selected
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    let should_use_council_deliberation = risk_assessment.is_high_risk
-        && !model_is_specific
-        && resolved.agents.len() >= 2
-        && option_bool(&base_agent_options, "council_deliberation_enabled", true);
-    if should_use_council_deliberation {
-        if let Some(ref cb) = server.capability_bus {
-            let candidate_names = resolved
-                .agents
-                .iter()
-                .map(|(name, _)| name.clone())
-                .collect::<Vec<_>>();
-            if let Some((winner, decision)) =
-                run_council_route_deliberation(cb, phase_name, &candidate_names, &reputation_scores)
-            {
-                if reorder_agents_with_priority(&mut resolved.agents, &winner) {
-                    routing_provenance.push("council_deliberation_selected_route".to_string());
-                }
-                council_decision = Some(decision);
-            }
-        }
-    }
+    let (unhealthy_fallback_agent, fallback_reason, council_decision) =
+        crate::acp::helpers::council_deliberation::run_council_deliberation_and_fallback(
+            server.capability_bus.as_ref().map(|arc| arc.as_ref()),
+            risk_assessment.is_high_risk,
+            model_is_specific,
+            &mut resolved.agents,
+            &base_agent_options,
+            phase_name,
+            &reputation_scores,
+            &mut routing_provenance,
+        );
 
     // AUTON-01: Use multi-round autonomy loop for full_auto / execution-like requests.
     // The autonomy loop runs think → act → observe → replan cycles until the task
@@ -1914,7 +1491,7 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                             "ok": false,
                             "skipped_unhealthy": true,
                             "duration_ms": 0u64,
-                            "error": "agent unhealthy by capability bus"
+                            "error": t("error.chat.agent_unhealthy")
                         }));
                         continue;
                     }
@@ -2054,287 +1631,51 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                     }
                     // Wrap the error with agent name so GUI can display which agent failed.
                     let agent_label = agent_name.clone();
-                    let enriched_err = anyhow::anyhow!("{}: {}", agent_label, err);
+                    let enriched_err = anyhow::anyhow!(tf(
+                        "error.chat.agent_error_prefix",
+                        &[("agent", &agent_label), ("error", &err.to_string())]
+                    ));
                     last_err = Some(enriched_err);
                 }
             }
         }
     }
 
-    if !high_risk_vote_jobs.is_empty() {
-        let vote_results = join_all(high_risk_vote_jobs.into_iter().map(
-            |(agent_name, agent, vote_options, strong_model)| {
-                let server_ref = server;
-                let agent_messages = agent_messages.clone();
-                let phase_principles = phase.principles.clone();
-                let trace_id = &trace.trace_id;
-                async move {
-                    run_high_risk_vote_attempt(
-                        server_ref,
-                        phase_name,
-                        trace_id,
-                        agent_name,
-                        agent,
-                        agent_messages,
-                        phase_principles,
-                        vote_options,
-                        vote_timeout,
-                        strong_model,
-                        "strong_model",
-                    )
-                    .await
-                }
-            },
-        ))
-        .await;
+    // ── High-Risk Vote Execution & Escalation (extracted to helpers) ──
+    let vote_result = crate::acp::helpers::vote_executor::execute_high_risk_vote(
+        server,
+        phase_name,
+        &trace.trace_id,
+        high_risk_vote_jobs,
+        &agent_messages,
+        phase.principles.clone(),
+        vote_timeout,
+        cache_hit,
+        enable_high_risk_multi_agent_vote,
+        min_vote_agents,
+        max_vote_agents,
+        escalation_enabled,
+        escalation_models_per_agent,
+        escalation_max_agents,
+        &reputation_scores,
+        &mut routing_provenance,
+    )
+    .await;
 
-        for result in vote_results {
-            agent_attempts.push(result.attempt_log);
-            if let Some(candidate) = result.candidate {
-                agent_vote_candidates.push(candidate);
-            }
-            if let Some(source) = result.source {
-                agent_vote_sources.push(source);
-            }
-            if let Some(failure) = result.failure {
-                if last_err.is_none() {
-                    let reason = failure
-                        .get("reason")
-                        .and_then(Value::as_str)
-                        .unwrap_or("vote attempt failed");
-                    last_err = Some(anyhow::anyhow!("high-risk vote failed: {}", reason));
-                }
-                agent_vote_failures.push(failure);
-            }
-        }
-    }
+    // Unpack result — only overwrite variables that the vote pipeline may have set.
+    agent_attempts.extend(vote_result.agent_attempts);
 
-    if !cache_hit
-        && enable_high_risk_multi_agent_vote
-        && agent_vote_candidates.len() >= min_vote_agents
-        && response_text.is_empty()
-    {
-        let mut vote_counts: HashMap<String, usize> = HashMap::new();
-        for candidate in &agent_vote_candidates {
-            let key = normalize_vote_key(&candidate.response);
-            let entry = vote_counts.entry(key).or_insert(0);
-            *entry += 1;
-        }
-
-        let mut winner_index = 0usize;
-        let mut winner_votes = 0usize;
-        let mut winner_rep = 0.0f64;
-        let mut winner_len = 0usize;
-        for (idx, candidate) in agent_vote_candidates.iter().enumerate() {
-            let key = normalize_vote_key(&candidate.response);
-            let votes = vote_counts.get(&key).copied().unwrap_or(0);
-            let rep = reputation_scores
-                .get(&candidate.agent)
-                .copied()
-                .unwrap_or(0.5);
-            let length = candidate.response.chars().count();
-            if votes > winner_votes
-                || (votes == winner_votes && rep > winner_rep)
-                || (votes == winner_votes
-                    && (rep - winner_rep).abs() < f64::EPSILON
-                    && length > winner_len)
-            {
-                winner_index = idx;
-                winner_votes = votes;
-                winner_rep = rep;
-                winner_len = length;
-            }
-        }
-        let max_vote_count = winner_votes;
-        let tied_candidates = agent_vote_candidates
-            .iter()
-            .filter(|candidate| {
-                let key = normalize_vote_key(&candidate.response);
-                vote_counts.get(&key).copied().unwrap_or(0) == max_vote_count
-            })
-            .count();
-        if tied_candidates > 1 {
-            record_vote_reputation_tiebreak();
-            routing_provenance.push("vote_tiebreaked_by_reputation".to_string());
-        }
-
-        let winner = agent_vote_candidates[winner_index].clone();
-        selected_agent = winner.agent.clone();
-        response_text = winner.response.clone();
-        reasoning_text = winner.reasoning.clone();
-        used_multi_agent_vote = true;
-        used_multi_model_vote = false;
-        review_required = winner_votes * 2 <= agent_vote_candidates.len();
-        last_err = None;
+    if vote_result.emit_final_vote_response {
+        response_text = vote_result.response_text;
+        reasoning_text = vote_result.reasoning_text;
+        selected_agent = vote_result.selected_agent;
+        last_err = vote_result.last_err;
+        vote_winner = vote_result.vote_winner;
+        vote_report = vote_result.vote_report;
+        used_multi_agent_vote = vote_result.used_multi_agent_vote;
+        used_multi_model_vote = vote_result.used_multi_model_vote;
+        review_required = vote_result.review_required;
         emit_final_vote_response = true;
-
-        let strong_vote_report = json!({
-            "strategy": "multi_agent_strong_model_vote",
-            "candidate_agents": agent_vote_candidates
-                .iter()
-                .map(|candidate| candidate.agent.clone())
-                .collect::<Vec<_>>(),
-            "candidate_details": agent_vote_candidates
-                .iter()
-                .map(|candidate| json!({
-                    "agent": candidate.agent.clone(),
-                    "model": candidate.model.clone(),
-                }))
-                .collect::<Vec<_>>(),
-            "winner_agent": selected_agent.clone(),
-            "winner_votes": winner_votes,
-            "total_successes": agent_vote_candidates.len(),
-            "min_vote_agents": min_vote_agents,
-            "max_vote_agents": max_vote_agents,
-            "failed_agents": agent_vote_failures,
-            "review_required": review_required,
-        });
-
-        vote_report = Some(strong_vote_report.clone());
-        vote_winner = Some("multi_agent_strong_model_vote".to_string());
-        record_vote_winner("multi_agent_strong_model_vote");
-
-        if review_required && escalation_enabled {
-            let mut escalation_jobs: Vec<(
-                String,
-                Arc<dyn crate::agent::Agent>,
-                HashMap<String, Value>,
-                Option<String>,
-            )> = Vec::new();
-
-            for (agent_name, agent, base_options) in
-                agent_vote_sources.iter().take(escalation_max_agents)
-            {
-                if !agent.supports_model_override() {
-                    continue;
-                }
-
-                for model_id in select_top_models(agent.as_ref(), escalation_models_per_agent) {
-                    let mut model_options = base_options.clone();
-                    model_options.insert("model".to_string(), Value::String(model_id.clone()));
-                    escalation_jobs.push((
-                        agent_name.clone(),
-                        Arc::clone(agent),
-                        model_options,
-                        Some(model_id),
-                    ));
-                }
-            }
-
-            let escalation_results = join_all(escalation_jobs.into_iter().map(
-                |(agent_name, agent, model_options, model_id)| {
-                    let server_ref = server;
-                    let agent_messages = agent_messages.clone();
-                    let phase_principles = phase.principles.clone();
-                    let trace_id = &trace.trace_id;
-
-                    async move {
-                        run_high_risk_vote_attempt(
-                            server_ref,
-                            phase_name,
-                            trace_id,
-                            agent_name,
-                            agent,
-                            agent_messages,
-                            phase_principles,
-                            model_options,
-                            vote_timeout,
-                            model_id,
-                            "escalation",
-                        )
-                        .await
-                    }
-                },
-            ))
-            .await;
-
-            let mut escalation_ballots: Vec<AgentStrongVoteOutcome> = Vec::new();
-            let mut escalation_failures: Vec<Value> = Vec::new();
-
-            for result in escalation_results {
-                if let Some(ballot) = result.candidate {
-                    escalation_ballots.push(ballot);
-                }
-                if let Some(failure) = result.failure {
-                    escalation_failures.push(failure);
-                }
-            }
-
-            if !escalation_ballots.is_empty() {
-                let mut escalation_counts: HashMap<String, usize> = HashMap::new();
-                for ballot in &escalation_ballots {
-                    let key = normalize_vote_key(&ballot.response);
-                    let entry = escalation_counts.entry(key).or_insert(0);
-                    *entry += 1;
-                }
-
-                let mut escalation_winner_index = 0usize;
-                let mut escalation_winner_votes = 0usize;
-                let mut escalation_winner_rep = 0.0f64;
-                let mut escalation_winner_len = 0usize;
-                for (idx, ballot) in escalation_ballots.iter().enumerate() {
-                    let key = normalize_vote_key(&ballot.response);
-                    let votes = escalation_counts.get(&key).copied().unwrap_or(0);
-                    let rep = reputation_scores.get(&ballot.agent).copied().unwrap_or(0.5);
-                    let length = ballot.response.chars().count();
-                    if votes > escalation_winner_votes
-                        || (votes == escalation_winner_votes && rep > escalation_winner_rep)
-                        || (votes == escalation_winner_votes
-                            && (rep - escalation_winner_rep).abs() < f64::EPSILON
-                            && length > escalation_winner_len)
-                    {
-                        escalation_winner_index = idx;
-                        escalation_winner_votes = votes;
-                        escalation_winner_rep = rep;
-                        escalation_winner_len = length;
-                    }
-                }
-                let escalation_max_vote_count = escalation_winner_votes;
-                let escalation_tied_candidates = escalation_ballots
-                    .iter()
-                    .filter(|ballot| {
-                        let key = normalize_vote_key(&ballot.response);
-                        escalation_counts.get(&key).copied().unwrap_or(0)
-                            == escalation_max_vote_count
-                    })
-                    .count();
-                if escalation_tied_candidates > 1 {
-                    record_vote_reputation_tiebreak();
-                    routing_provenance.push("escalation_vote_tiebreaked_by_reputation".to_string());
-                }
-
-                let escalation_winner = escalation_ballots[escalation_winner_index].clone();
-                selected_agent = escalation_winner.agent.clone();
-                response_text = escalation_winner.response.clone();
-                reasoning_text = escalation_winner.reasoning.clone();
-                used_multi_model_vote = true;
-                review_required = escalation_winner_votes * 2 <= escalation_ballots.len();
-                last_err = None;
-                emit_final_vote_response = true;
-
-                vote_report = Some(json!({
-                    "strategy": "multi_agent_multi_model_escalation",
-                    "strong_round": strong_vote_report,
-                    "candidate_details": escalation_ballots
-                        .iter()
-                        .map(|ballot| json!({
-                            "agent": ballot.agent.clone(),
-                            "model": ballot.model.clone(),
-                        }))
-                        .collect::<Vec<_>>(),
-                    "winner_agent": selected_agent.clone(),
-                    "winner_model": escalation_winner.model,
-                    "winner_votes": escalation_winner_votes,
-                    "total_successes": escalation_ballots.len(),
-                    "max_agents": escalation_max_agents,
-                    "models_per_agent": escalation_models_per_agent,
-                    "failed_ballots": escalation_failures,
-                    "review_required": review_required,
-                }));
-                vote_winner = Some("multi_agent_multi_model_escalation".to_string());
-                record_vote_winner("multi_agent_multi_model_escalation");
-            }
-        }
     }
 
     if emit_final_vote_response {
@@ -2395,15 +1736,9 @@ You have access to {} registered skill(s). Skills are reusable templates that au
             budget.record_usage(tenant_id, 0, 0);
         }
         if all_empty_responses {
-            anyhow::bail!(
-                "all candidate agents returned empty responses for phase '{}'",
-                phase_name
-            );
+            anyhow::bail!(tf("error.chat.all_agents_empty", &[("phase", phase_name)]));
         }
-        anyhow::bail!(
-            "no healthy agent produced a response for phase '{}'",
-            phase_name
-        );
+        anyhow::bail!(tf("error.chat.no_healthy_agent", &[("phase", phase_name)]));
     }
 
     if let Some(err) = last_err {
@@ -2429,9 +1764,9 @@ You have access to {} registered skill(s). Skills are reusable templates that au
             if let Ok(mut budget) = server.tenant_budget.lock() {
                 budget.record_usage(tenant_id, 0, 0);
             }
-            let switch_prompt = format!(
-                "All available agents hit token/quota limits in phase '{}'. Choose another agent via options.preferred_agent and retry.",
-                phase_name
+            let switch_prompt = tf(
+                "error.chat.all_agents_quota_limited",
+                &[("phase", phase_name)],
             );
             return Ok(json!({
                 "done": false,
@@ -2741,15 +2076,11 @@ You have access to {} registered skill(s). Skills are reusable templates that au
     let agent_switch_notice = if switched_from_quota_limit {
         Some(json!({
             "type": "quota_fallback",
-            "message": format!(
-                "Some agents reached token/quota limits ({}). Active agent switched to '{}'. You can choose agent via options.extra.preferred_agent.",
-                quota_failed_agents.join(", "),
-                selected_agent
-            ),
+            "message": tf("status.chat.quota_fallback_notice", &[("agents", &quota_failed_agents.join(", ")), ("agent", &selected_agent)]),
             "quota_failed_agents": quota_failed_agents,
             "active_agent": selected_agent.clone(),
             "available_agents": candidate_agents,
-            "auto_recover": "primary agent is probed first on subsequent requests; if recovered, routing switches back automatically"
+            "auto_recover": t("status.chat.auto_recover_notice")
         }))
     } else {
         None
@@ -2842,363 +2173,83 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         }
     }
 
-    let result = build_chat_response(
+    let result = crate::acp::helpers::response_finalizer::finalize_chat_response(
+        server,
+        trace,
         &params.mode,
-        &conversation_id,
-        &branch_id,
         phase_name,
-        phase_origin,
         &selected_agent,
-        selected_model_name.clone(),
+        &selected_model_name,
         &response_text,
-        json!(checkpoint),
-        metacognitive_loop,
-        token_economy,
-        vector_context.hits.clone(),
-        vector_context.summary.is_some(),
-        knowledge,
-        distillation,
-        reviews,
-        agent_attempts,
-        risk_decision,
-        agent_switch_notice,
-        tool_execution_results.clone(),
-        memory_promotion_result,
-        task_graph_result,
-        role_routing_result,
-        verification_result,
-        CapabilityRoutingInfo {
-            selected_agent: capability_selected_agent,
-            recommended_mode: capability_recommended_mode,
-            candidate_count: capability_candidate_count,
-            decision_confidence: capability_decision_confidence,
-            selection_reason: capability_selection_reason,
-            optimization_hint: capability_optimization_hint,
-        },
-        json!({
-            "routing_provenance": routing_provenance,
-            "candidate_reputation_scores": reputation_scores,
-            "selected_agent_reputation": selected_agent_reputation,
-            "council_decision": council_decision,
-            "vote_winner": vote_winner,
-            "fallback_reason": fallback_reason,
+        &reasoning_text,
+        tenant_id,
+        started,
+        build_chat_response(ChatResponseContext {
+            mode: params.mode.clone(),
+            conversation_id: conversation_id.clone(),
+            branch_id: branch_id.clone(),
+            phase_name: phase_name.to_string(),
+            phase_origin: phase_origin.to_string(),
+            selected_agent: selected_agent.clone(),
+            selected_model_name: selected_model_name.clone(),
+            response_text: response_text.clone(),
+            checkpoint: json!(checkpoint),
+            metacognitive_loop,
+            token_economy,
+            vector_hits: vector_context.hits.clone(),
+            summary_used: vector_context.summary.is_some(),
+            knowledge,
+            distillation,
+            reviews,
+            agent_attempts,
+            risk_decision,
+            agent_switch_notice,
+            tool_execution_results: tool_execution_results.clone(),
+            memory_promotion_result,
+            task_graph_result,
+            role_routing_result,
+            verification_result,
+            capability_info: CapabilityRoutingInfo {
+                selected_agent: capability_selected_agent,
+                recommended_mode: capability_recommended_mode,
+                candidate_count: capability_candidate_count,
+                decision_confidence: capability_decision_confidence,
+                selection_reason: capability_selection_reason,
+                optimization_hint: capability_optimization_hint,
+            },
+            routing_diagnostics: json!({
+                "routing_provenance": routing_provenance,
+                "candidate_reputation_scores": reputation_scores,
+                "selected_agent_reputation": selected_agent_reputation,
+                "council_decision": council_decision,
+                "vote_winner": vote_winner,
+                "fallback_reason": fallback_reason,
+            }),
+            cache_hit,
+            cache_bypassed: cache_bypassed_for_execution,
+            started,
         }),
+        &conversation_id,
+        schema_warnings,
+        schema_error,
+        layered_prompt.segments.len(),
+        &tool_execution_results,
+        &sched_task_id,
+        &candidate_agents,
+        &routing_provenance,
+        &reputation_scores,
+        selected_agent_reputation,
+        &council_decision,
+        &vote_winner,
+        &fallback_reason,
         cache_hit,
         cache_bypassed_for_execution,
-        started.elapsed().as_millis() as u64,
-        started,
+        params
+            .messages
+            .first()
+            .map(|m| m.content.as_str())
+            .unwrap_or(""),
     );
-
-    // ── Request-level routing provenance (BLUE41 Step 7) ──────────────
-    // Persist route decisions and diagnostics so future learning and audits
-    // can explain why this request selected a specific execution path.
-    if let Some(ref ledger) = server.provenance_ledger {
-        let route_input = json!({
-            "request_id": trace.request_id.clone(),
-            "mode": params.mode,
-            "phase": phase_name,
-            "candidate_agents": candidate_agents,
-            "capability_routing": result.get("capability_routing").cloned().unwrap_or_default(),
-            "routing_diagnostics": result.get("routing_diagnostics").cloned().unwrap_or_default(),
-        });
-        let route_output = json!({
-            "selected_agent": selected_agent.clone(),
-            "selected_model": selected_model_name.clone(),
-            "duration_ms": started.elapsed().as_millis() as u64,
-            "success": !response_text.trim().is_empty(),
-        });
-        let timestamp_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        ledger.append(crate::observability::provenance::ProvenanceEntry {
-            id: format!("routing:{}", trace.request_id),
-            task_id: trace.request_id.clone(),
-            phase: phase_name.to_string(),
-            agent: selected_agent.clone(),
-            tool: "routing.deliberation".to_string(),
-            input_digest: crate::observability::provenance::ProvenanceLedger::digest(&route_input),
-            output_digest: crate::observability::provenance::ProvenanceLedger::digest(
-                &route_output,
-            ),
-            upstream_ids: Vec::new(),
-            timestamp_ms,
-            metadata: json!({
-                "route_input": route_input,
-                "route_output": route_output,
-            }),
-        });
-    }
-
-    // ── Scheduler task completion (ARCH-02) ────────────────────────────
-    // Mark the scheduled task as completed so the active-worker counter
-    // decrements and queue depth reflects the true in-flight load.
-    if let Some(ref sched) = server.scheduler {
-        if let Err(e) = sched.level1.complete(&sched_task_id) {
-            tracing::warn!("scheduler complete failed: {}", e);
-        }
-    }
-
-    // ── CapabilityBus feedback on execution outcome ────────────────────
-    // Record the execution result back into the sub-buses (learning,
-    // reputation, etc.) so that subsequent routes benefit from this
-    // experience.
-    if let Some(ref cb) = server.capability_bus {
-        let elapsed = started.elapsed().as_millis() as u64;
-        let used_tokens = result
-            .get("token_economy")
-            .and_then(|v| v.get("total_tokens"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        let request_succeeded = !response_text.trim().is_empty();
-        cb.feedback(
-            &selected_agent,
-            phase_name,
-            &conversation_id,
-            request_succeeded,
-            elapsed,
-            used_tokens,
-            1.0,
-        );
-        // Also update the reinforcement learning loop with the outcome
-        cb.evolve(
-            &(phase_name.clone(), selected_agent.clone()),
-            "execute",
-            &(phase_name.clone(), selected_agent.clone()),
-            used_tokens,
-            request_succeeded,
-            1.0,
-        );
-    }
-
-    record_task_agent_outcome(
-        phase_name,
-        &selected_agent,
-        !response_text.trim().is_empty(),
-    );
-
-    // ── TenantBudgetEnforcer record usage (F-GAP-08) ───────────────────
-    // Record resource consumption after task completion so subsequent
-    // pre-route checks can enforce per-tenant quotas.
-    if let Ok(mut budget) = server.tenant_budget.lock() {
-        let used_tokens = result
-            .get("token_economy")
-            .and_then(|v| v.get("total_tokens"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as usize;
-        budget.record_usage(tenant_id, used_tokens, 1);
-    }
-
-    // ── PromotionPlugin evaluation (ARCH-10) ──────────────────────────
-    // Evaluate promotion/demotion decisions for the selected agent based
-    // on execution outcome.  Results are logged and could feed back into
-    // routing weights in a future iteration.
-    let promotion_decisions: Vec<String> = {
-        let elapsed = started.elapsed().as_millis() as u64;
-        let used_tokens = result
-            .get("token_economy")
-            .and_then(|v| v.get("total_tokens"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as f64;
-        let success_rate = if response_text.trim().is_empty() {
-            0.0
-        } else {
-            1.0
-        };
-        let latency_ms = elapsed as f64;
-        let cost_score = (used_tokens / 100_000.0).min(1.0);
-        if let Ok(reg) = server.promotion_registry.lock() {
-            reg.evaluate_all(&selected_agent, success_rate, latency_ms, cost_score)
-                .into_iter()
-                .map(|d| format!("{:?}", d))
-                .collect()
-        } else {
-            vec![]
-        }
-    };
-    info!(
-        agent = %selected_agent,
-        decisions = ?promotion_decisions,
-        "promotion plugin evaluation"
-    );
-
-    // ── OptimizerRegistry recommendations (ARCH-11) ────────────────────
-    // Collect optimization recommendations based on execution metrics.
-    // These can be applied in future routing decisions.
-    let optimizer_recommendations: Vec<serde_json::Value> = {
-        let elapsed = started.elapsed().as_millis() as u64;
-        if let Ok(reg) = server.optimizer_registry.lock() {
-            // Use a rolling success rate from the capability bus if available,
-            // otherwise default to 1.0 for the current request.
-            let _historical_success_rate = server
-                .capability_bus
-                .as_ref()
-                .and_then(|cb| {
-                    cb.learning_bus
-                        .lock()
-                        .ok()
-                        .and_then(|lb| lb.agent_success_rate(&selected_agent))
-                })
-                .unwrap_or(1.0);
-            reg.optimize_all(&OptimizationContext {
-                workflow_type: phase_name.clone(),
-                phases: vec![phase_name.clone()],
-                history: vec![],
-                token_usage: 0,
-                latency_ms: elapsed,
-            })
-            .into_iter()
-            .map(|r| {
-                serde_json::json!({
-                    "strategy": r.suggestion_type,
-                    "expected_improvement": r.estimated_improvement,
-                    "description": r.description,
-                })
-            })
-            .collect()
-        } else {
-            vec![]
-        }
-    };
-
-    // ── Planner/Executor integration (F-GAP-05) ────────────────────────
-    // Build a lightweight execution plan for observability/debugging.
-    // The plan shows the 3-phase decomposition (plan → execute → review)
-    // that was implicitly followed by the mode runtime.
-    let execution_plan = {
-        let envelope = crate::agent::AgentTaskEnvelope {
-            task_id: conversation_id.clone(),
-            phase: phase_name.clone(),
-            role: selected_agent.clone(),
-            objective: params
-                .messages
-                .first()
-                .map(|m| m.content.clone())
-                .unwrap_or_default(),
-            constraints: Some("600".to_string()),
-            evidence: None,
-            input: serde_json::json!({
-                "mode": params.mode,
-                "message_count": params.messages.len(),
-            }),
-        };
-        let plan = Planner::plan(&envelope);
-        serde_json::json!({
-            "plan_id": plan.plan_id,
-            "steps": plan.steps.iter().map(|s| serde_json::json!({
-                "step_id": s.step_id,
-                "description": s.description,
-                "depends_on": s.depends_on,
-            })).collect::<Vec<_>>(),
-        })
-    };
-
-    let orchestration_alignment =
-        derive_plan_trace_alignment(&execution_plan, &tool_execution_results);
-    let alignment_coverage = orchestration_alignment
-        .get("coverage_ratio")
-        .and_then(serde_json::Value::as_f64)
-        .unwrap_or(0.0);
-    record_orchestration_alignment(alignment_coverage);
-
-    let orchestration_node_decisions =
-        derive_response_orchestration(&execution_plan, &tool_execution_results);
-    let mapped_nodes = orchestration_node_decisions
-        .get("mapped_nodes")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0);
-    let unmapped_nodes = orchestration_node_decisions
-        .get("unmapped_nodes")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0);
-    record_orchestration_node_mapping(mapped_nodes, unmapped_nodes);
-
-    // ── ForkRegistry cleanup (ARCH-05) ─────────────────────────────────
-    // Register a fork entry for this execution to track sub-agent
-    // isolation boundaries.  Completed forks are cleaned up immediately
-    // so the registry stays within its capacity.
-    let fork_id = {
-        if let Ok(fr) = server.fork_registry.lock() {
-            match fr.register(&conversation_id) {
-                Ok(Some(fid)) => {
-                    let _ = fr.complete(&fid);
-                    Some(fid)
-                }
-                Ok(None) => None,
-                Err(e) => {
-                    warn!("ForkRegistry lock poisoned: {e}");
-                    None
-                }
-            }
-        } else {
-            None
-        }
-    };
-
-    // ── Evaluation Suite scoring (F-GAP-06) ────────────────────────────
-    // Run benchmark evaluations against the response text for quality
-    // measurement.  Results are embedded in the response for observability.
-    let evaluation_results: Vec<serde_json::Value> = {
-        if let Ok(suite) = server.evaluation_suite.lock() {
-            let mut agent_outputs = std::collections::HashMap::new();
-            for case in suite.all() {
-                agent_outputs.insert(case.id.clone(), response_text.clone());
-            }
-            crate::intelligence::evaluation::ReplayEngine::run_suite(&suite, &agent_outputs)
-                .into_iter()
-                .map(|run| {
-                    serde_json::json!({
-                        "case_id": run.case_id,
-                        "passed": run.passed,
-                        "overall_score": run.score.overall(),
-                        "details": run.details,
-                    })
-                })
-                .collect()
-        } else {
-            vec![]
-        }
-    };
-
-    // ── Augment result with new wiring fields ──────────────────────────
-    let mut result = result;
-    if let Some(obj) = result.as_object_mut() {
-        obj.insert(
-            "schema_warnings".to_string(),
-            serde_json::json!(schema_warnings),
-        );
-        obj.insert("schema_error".to_string(), serde_json::json!(schema_error));
-        obj.insert(
-            "layered_prompt_segments".to_string(),
-            serde_json::json!(layered_prompt.segments.len()),
-        );
-        obj.insert(
-            "promotion_decisions".to_string(),
-            serde_json::json!(promotion_decisions),
-        );
-        obj.insert(
-            "optimizer_recommendations".to_string(),
-            serde_json::json!(optimizer_recommendations),
-        );
-        obj.insert("execution_plan".to_string(), execution_plan);
-        obj.insert(
-            "orchestration_alignment".to_string(),
-            orchestration_alignment,
-        );
-        obj.insert(
-            "orchestration_node_decisions".to_string(),
-            orchestration_node_decisions,
-        );
-        obj.insert("fork_id".to_string(), serde_json::json!(fork_id));
-        obj.insert(
-            "evaluation_results".to_string(),
-            serde_json::json!(evaluation_results),
-        );
-        obj.insert("tenant_id".to_string(), serde_json::json!(tenant_id));
-        if !reasoning_text.is_empty() {
-            obj.insert("thinking".to_string(), serde_json::json!(reasoning_text));
-        }
-    }
 
     // P3: Auto-create skills from conversation patterns
     // After a successful chat completion, analyze the conversation to
@@ -3217,7 +2268,7 @@ You have access to {} registered skill(s). Skills are reusable templates that au
 /// Returns `(response_text, reasoning_text, selected_model)`.
 /// The third element is `Some(model_id)` when the agent
 /// explicitly reports which model it used (e.g. Copilot auto-select).
-async fn run_agent_collecting(
+pub(crate) async fn run_agent_collecting(
     server: &AcpServer,
     stream_ctx: StreamNotificationContext<'_>,
     agent: Arc<dyn crate::agent::Agent>,
@@ -3265,7 +2316,7 @@ async fn run_agent_collecting(
 
             let next_chars = token.chars().count();
             if stream_would_exceed_limits(chunk_index, total_chars, next_chars) {
-                anyhow::bail!("stream output exceeded configured safety limits");
+                anyhow::bail!(t("error.chat.stream_output_limits"));
             }
 
             // Check for reasoning tokens (prefixed with __thinking__)
@@ -3464,15 +2515,18 @@ async fn run_agent_collecting(
                 ))
             }
             Ok(Err(err)) => Err(err.into()),
-            Err(join_err) => Err(anyhow::anyhow!("agent task panicked: {join_err}")),
+            Err(join_err) => Err(anyhow::anyhow!(tf(
+                "error.chat.agent_task_panicked",
+                &[("error", &join_err.to_string())]
+            ))),
         }
     };
 
     run_with_optional_timeout(timeout_duration, collect, |duration| {
-        anyhow::anyhow!(
-            "agent request timed out after {}s",
-            duration.as_secs().max(1)
-        )
+        anyhow::anyhow!(tf(
+            "error.chat.agent_request_timeout",
+            &[("seconds", &duration.as_secs().max(1).to_string())]
+        ))
     })
     .await
     .inspect_err(|err| {
@@ -3730,7 +2784,7 @@ async fn check_phase_escalation_rules(
 }
 
 /// Extract task description from messages
-fn extract_task_description(messages: &[Message]) -> String {
+pub(crate) fn extract_task_description(messages: &[Message]) -> String {
     messages
         .iter()
         .rev()
@@ -3741,6 +2795,7 @@ fn extract_task_description(messages: &[Message]) -> String {
 }
 
 /// Create default requirement contract
+#[allow(dead_code)]
 fn default_requirement_contract(task: &str, source: &str) -> RequirementContractArtifact {
     RequirementContractArtifact {
         generated_at: std::time::SystemTime::now()
@@ -3786,18 +2841,18 @@ struct VectorContext {
 }
 
 #[derive(Debug, Clone)]
-struct StreamNotificationContext<'a> {
-    stream_observer: Option<StreamObserver>,
-    agent_name: &'a str,
-    phase_name: &'a str,
-    trace_id: &'a str,
+pub(crate) struct StreamNotificationContext<'a> {
+    pub(crate) stream_observer: Option<StreamObserver>,
+    pub(crate) agent_name: &'a str,
+    pub(crate) phase_name: &'a str,
+    pub(crate) trace_id: &'a str,
 }
 
 #[derive(Debug, Clone, Copy)]
-struct StreamEventMeta<'a> {
-    agent_name: &'a str,
-    phase_name: &'a str,
-    trace_id: &'a str,
+pub(crate) struct StreamEventMeta<'a> {
+    pub(crate) agent_name: &'a str,
+    pub(crate) phase_name: &'a str,
+    pub(crate) trace_id: &'a str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3829,15 +2884,15 @@ impl StreamObserver {
 }
 
 #[derive(Debug, Clone)]
-struct EffectiveVectorSettings {
-    min_query_chars: usize,
-    top_k: usize,
-    min_similarity: f32,
-    max_snippet_chars: usize,
-    summary_enabled: bool,
-    summary_trigger_messages: usize,
-    summary_max_chars: usize,
-    auto_mode: bool,
+pub(crate) struct EffectiveVectorSettings {
+    pub(crate) min_query_chars: usize,
+    pub(crate) top_k: usize,
+    pub(crate) min_similarity: f32,
+    pub(crate) max_snippet_chars: usize,
+    pub(crate) summary_enabled: bool,
+    pub(crate) summary_trigger_messages: usize,
+    pub(crate) summary_max_chars: usize,
+    pub(crate) auto_mode: bool,
 }
 
 async fn load_vector_context(
@@ -3934,7 +2989,7 @@ async fn load_vector_context(
     }
 }
 
-fn rerank_hits_with_phase_summary(
+pub(crate) fn rerank_hits_with_phase_summary(
     mut hits: Vec<crate::vector::VectorHit>,
     summary: Option<&str>,
     top_k: usize,
@@ -4083,7 +3138,7 @@ fn extract_terms(text: &str, max_terms: usize) -> Vec<String> {
     terms
 }
 
-fn load_recent_knowledge_context(
+pub(crate) fn load_recent_knowledge_context(
     server: &AcpServer,
     phase_name: &str,
     limit: usize,
@@ -4269,7 +3324,7 @@ fn build_summary_dialogue(messages: &[Message], response_text: &str, max_chars: 
     truncate_chars(&rendered.join("\n"), max_chars)
 }
 
-async fn load_phase_summary(
+pub(crate) async fn load_phase_summary(
     server: &AcpServer,
     phase_name: &str,
     phase_options: Option<&PhaseOptions>,
@@ -5007,89 +4062,6 @@ fn routing_handles(
     crate::acp::r#impl::runtime::routing_handles(server)
 }
 
-fn run_council_route_deliberation(
-    cb: &crate::intelligence::capability_bus::core::CapabilityBus,
-    phase_name: &str,
-    candidate_agents: &[String],
-    reputation_scores: &HashMap<String, f64>,
-) -> Option<(String, Value)> {
-    if candidate_agents.len() < 2 {
-        return None;
-    }
-
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    let proposal_id = format!("route-{}-{}", phase_name, now_ms);
-
-    let council = cb.council.lock().ok()?;
-    for agent in candidate_agents {
-        let _ = council.add_member(CouncilMember {
-            id: agent.clone(),
-            name: agent.clone(),
-            role: "routing_member".to_string(),
-            voting_power: 100,
-            specializations: vec![phase_name.to_string()],
-            is_active: true,
-            joined_ms: now_ms,
-        });
-    }
-
-    let proposal = CouncilProposal {
-        id: proposal_id.clone(),
-        title: format!("Route selection for phase {}", phase_name),
-        description: "Select the best routing agent for this high-complexity request".to_string(),
-        submitted_by: "capability_bus".to_string(),
-        options: candidate_agents.to_vec(),
-        status: ProposalStatus::Active,
-        created_ms: now_ms,
-    };
-    if council.submit_proposal(proposal).is_err() {
-        return None;
-    }
-
-    let winner_guess = candidate_agents.iter().cloned().max_by(|a, b| {
-        let sa = reputation_scores.get(a).copied().unwrap_or(0.5);
-        let sb = reputation_scores.get(b).copied().unwrap_or(0.5);
-        sa.partial_cmp(&sb)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| b.cmp(a))
-    })?;
-
-    for agent in candidate_agents {
-        let weight = (reputation_scores.get(agent).copied().unwrap_or(0.5) * 100.0)
-            .round()
-            .clamp(1.0, 100.0) as u32;
-        let _ = council.cast_vote(CouncilVote {
-            member_id: agent.clone(),
-            proposal_id: proposal_id.clone(),
-            selected_option: winner_guess.clone(),
-            weight,
-            vote_ms: now_ms,
-            rationale: Some("Reputation-weighted route deliberation".to_string()),
-        });
-    }
-
-    let tally = council.tally_votes(&proposal_id).ok()?;
-    let winner = tally
-        .winning_option
-        .clone()
-        .unwrap_or_else(|| winner_guess.clone());
-    Some((
-        winner,
-        json!({
-            "proposal_id": proposal_id,
-            "winner": tally.winning_option,
-            "tie": tally.tie,
-            "passed": tally.passed,
-            "total_votes": tally.total_votes,
-            "option_tallies": tally.option_tallies,
-            "candidate_count": candidate_agents.len(),
-        }),
-    ))
-}
-
 fn reorder_chat_agents_by_runtime_score(
     server: &AcpServer,
     phase_name: &str,
@@ -5154,7 +4126,7 @@ fn run_tool_execution_loop(task: &str, subtask: &str, record_index: usize) -> St
 }
 
 /// Extract model tool calls from response
-fn extract_tool_calls_from_response(response: &str, max_calls: usize) -> Vec<String> {
+pub(crate) fn extract_tool_calls_from_response(response: &str, max_calls: usize) -> Vec<String> {
     // Parse only explicit tool-call markers; never synthesize placeholder calls.
     let mut calls: Vec<String> = Vec::new();
     let mut json_block: Vec<String> = Vec::new();
@@ -5743,809 +4715,7 @@ fn generate_skill_description(user_msg: &str, _ai_response: &str) -> String {
     }
 }
 
+// Test suite extracted to separate file for code organization.
 #[cfg(test)]
-mod tests {
-    #[cfg(not(feature = "backend-postgres"))]
-    use std::collections::HashMap;
-    #[cfg(not(feature = "backend-postgres"))]
-    use std::sync::{Arc, Mutex};
-
-    #[cfg(not(feature = "backend-postgres"))]
-    use async_trait::async_trait;
-    #[cfg(not(feature = "backend-postgres"))]
-    use serde_json::json;
-    #[cfg(not(feature = "backend-postgres"))]
-    use serde_json::Value;
-
-    #[cfg(not(feature = "backend-postgres"))]
-    use super::{extract_tool_calls_from_response, process_chat_request, ChatParams};
-    #[cfg(not(feature = "backend-postgres"))]
-    use crate::acp::server::ServerBuilder;
-    #[cfg(not(feature = "backend-postgres"))]
-    use crate::agent::AgentRegistry;
-    use crate::agent::Message;
-    #[cfg(not(feature = "backend-postgres"))]
-    use crate::agent::{Agent, StreamingSender};
-    #[cfg(not(feature = "backend-postgres"))]
-    use crate::config::{AppConfig, FlowConfig, PhaseConfig, PhaseOptions, VectorConfig};
-    #[cfg(not(feature = "backend-postgres"))]
-    use crate::flow::FlowManager;
-    #[cfg(not(feature = "backend-postgres"))]
-    use crate::rpc_protocol::chat_trace_context;
-    #[cfg(not(feature = "backend-postgres"))]
-    use crate::vector::VectorStore;
-
-    use super::build_phase_summary;
-
-    #[cfg(not(feature = "backend-postgres"))]
-    struct RecordingAgent {
-        seen_messages: Arc<Mutex<Vec<Message>>>,
-        output: String,
-    }
-
-    #[cfg(not(feature = "backend-postgres"))]
-    #[async_trait]
-    impl Agent for RecordingAgent {
-        async fn chat(
-            &self,
-            messages: Vec<Message>,
-            _principles: Option<Vec<String>>,
-            _options: Option<HashMap<String, Value>>,
-            sender: StreamingSender,
-        ) -> crate::core::error::Result<()> {
-            if let Ok(mut guard) = self.seen_messages.lock() {
-                *guard = messages;
-            } else {
-                tracing::error!("seen_messages lock poisoned, recovering");
-                *self.seen_messages.lock().unwrap_or_else(|e| e.into_inner()) = messages;
-            }
-            sender
-                .send(self.output.clone())
-                .map_err(|err| anyhow::anyhow!(err.to_string()))?;
-            Ok(())
-        }
-    }
-
-    #[cfg(not(feature = "backend-postgres"))]
-    fn test_config() -> AppConfig {
-        let mut phases = HashMap::new();
-        phases.insert(
-            "coding".to_string(),
-            PhaseConfig {
-                description: "coding".to_string(),
-                agents: vec!["test-agent".to_string()],
-                fallback: Some(true),
-                principles: None,
-                options: Some(PhaseOptions {
-                    vector_enabled: Some(true),
-                    vector_min_query_chars: Some(4),
-                    vector_top_k: Some(2),
-                    vector_min_similarity: Some(0.0),
-                    vector_max_snippet_chars: Some(120),
-                    summary_enabled: Some(true),
-                    summary_trigger_messages: Some(1),
-                    summary_max_chars: Some(240),
-                    extra: std::iter::once(("llm_summary_enabled".to_string(), json!(false)))
-                        .collect(),
-                    ..PhaseOptions::default()
-                }),
-            },
-        );
-
-        AppConfig {
-            default_phase: "coding".to_string(),
-            agents: HashMap::new(),
-            flow: FlowConfig {
-                name: "flow".to_string(),
-                phases: vec!["coding".to_string()],
-                workflow_type: crate::config::WorkflowType::Auto,
-            },
-            phases,
-            runtime: None,
-            cache: None,
-            vector: Some(VectorConfig {
-                enabled: true,
-                auto_mode: false,
-                path: "vector.sqlite3".to_string(),
-                connection_string: None,
-                dimensions: 32,
-                min_query_chars: 4,
-                top_k: 2,
-                min_similarity: 0.0,
-                max_snippet_chars: 120,
-                max_entries: 128,
-                summary_enabled: true,
-                summary_trigger_messages: 1,
-                summary_max_chars: 240,
-            }),
-            autotune: None,
-            model_selection_mode: "adaptive".to_string(),
-            compliance: None,
-            startup_context: None,
-            scheduler: None,
-            reputation: None,
-            role_registry: HashMap::new(),
-        }
-    }
-
-    #[cfg(not(feature = "backend-postgres"))]
-    #[tokio::test]
-    async fn process_chat_request_wires_vector_context_and_checkpoint_tree() {
-        let temp = tempfile::tempdir().expect("tempdir should exist");
-        let vector_path = temp.path().join("vector.sqlite3");
-        let vector_store = Arc::new(
-            VectorStore::new(&vector_path, 32, 128).expect("vector store should initialize"),
-        );
-        vector_store
-            .upsert(
-                "coding",
-                "rust stream notifications",
-                "Use structured stream notifications for chunked output.",
-            )
-            .expect("seed vector entry");
-        vector_store
-            .upsert_phase_summary("coding", "Existing coding summary")
-            .expect("seed phase summary");
-
-        let seen_messages = Arc::new(Mutex::new(Vec::new()));
-        let mut registry = AgentRegistry::new();
-        registry.register_arc(
-            "test-agent",
-            Arc::new(RecordingAgent {
-                seen_messages: Arc::clone(&seen_messages),
-                output: "streamed answer".to_string(),
-            }),
-        );
-
-        let config = Arc::new(test_config());
-        let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
-
-        let mut server = ServerBuilder::new().build().expect("server should build");
-        server.flow_manager = Some(flow);
-        server.agent_registry = Some(Arc::new(registry));
-        server.cache.vector_store = Some(Arc::clone(&vector_store));
-        server.vector_config = config.vector.clone();
-        let config_path = temp.path().join("config.toml");
-        std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
-        server.config_path = Some(config_path.display().to_string());
-        if let Ok(mut ledger) = server.artifact_ledger.lock() {
-            *ledger = crate::reinforcement::ArtifactLedger::new(Some(&config_path));
-        }
-
-        let params = ChatParams {
-            mode: "ask".to_string(),
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: "How should rust stream notifications be implemented?".to_string(),
-            }],
-            conversation_id: Some("conv-chat".to_string()),
-            branch_id: Some("feature-a".to_string()),
-            phase: Some("coding".to_string()),
-            options: None,
-            requirement_contract: None,
-            plan: None,
-            vector_hits: None,
-            execution_decision_candidate: None,
-        };
-
-        let trace = chat_trace_context(&Some(json!(1)), "chat.test");
-        let result = process_chat_request(&server, &params, None, &trace, None, None)
-            .await
-            .expect("chat request should succeed");
-
-        assert_eq!(result["branch_id"], "feature-a");
-        assert_eq!(result["response"], "streamed answer");
-        assert_eq!(
-            result["vector_hits"].as_array().map(|items| items.len()),
-            Some(1)
-        );
-        assert_eq!(result["checkpoint"]["branch_id"], "feature-a");
-        assert!(
-            result["metacognitive_loop"]["cycle_count"]
-                .as_u64()
-                .unwrap_or(0)
-                >= 1
-        );
-        assert_eq!(
-            result["checkpoint"]["metacognitive_loop"]["checkpoint_id"],
-            result["checkpoint"]["checkpoint_id"]
-        );
-        assert!(result["token_economy"]["compression_ratio"].is_number());
-        assert_eq!(result["knowledge"]["vector_memory_written"], true);
-        assert!(result["knowledge"]["artifact_path"].is_string());
-        assert_eq!(
-            result["distillation"]["shared_epistemic_base_updated"],
-            true
-        );
-
-        let captured = seen_messages.lock().expect("messages lock").clone();
-        assert_eq!(
-            captured.first().map(|msg| msg.role.as_str()),
-            Some("system")
-        );
-        let system_text = &captured.first().expect("system message expected").content;
-        assert!(system_text.contains("Existing coding summary"));
-        assert!(system_text.contains("stream notifications"));
-
-        let state = server.conversation_state.lock().await;
-        assert_eq!(state.checkpoints.len(), 1);
-        assert!(state.branch_heads.contains_key("conv-chat:feature-a"));
-
-        assert_eq!(vector_store.memory_entry_count().expect("count"), 3);
-        assert!(vector_store
-            .get_phase_summary("coding")
-            .expect("summary read")
-            .expect("summary should exist")
-            .contains("Intent:"));
-
-        let artifact_path = result["knowledge"]["artifact_path"]
-            .as_str()
-            .expect("artifact path should be present");
-        assert!(std::path::Path::new(artifact_path).exists());
-
-        let distillation_path = result["distillation"]["artifact_path"]
-            .as_str()
-            .expect("distillation artifact path should be present");
-        assert!(std::path::Path::new(distillation_path).exists());
-    }
-
-    #[test]
-    fn estimate_token_economy_reports_compression_ratio() {
-        let payload = super::estimate_token_economy(
-            &[Message {
-                role: "user".to_string(),
-                content: "Summarize this large body of implementation detail into one paragraph."
-                    .to_string(),
-            }],
-            "Short summary.",
-        );
-
-        assert!(payload["input_tokens"].as_u64().unwrap_or(0) > 0);
-        assert!(payload["output_tokens"].as_u64().unwrap_or(0) > 0);
-        assert!(payload["compression_ratio"].as_f64().unwrap_or(2.0) <= 1.0);
-    }
-
-    #[test]
-    fn build_phase_summary_trims_to_requested_size() {
-        let summary = build_phase_summary(
-            &[Message {
-                role: "user".to_string(),
-                content: "0123456789abcdef".to_string(),
-            }],
-            "response",
-            12,
-        );
-
-        assert!(summary.chars().count() <= 12);
-        assert!(!summary.is_empty());
-    }
-
-    #[test]
-    fn extract_tool_calls_from_explicit_marker() {
-        let response = "Here is the plan\n__tool_call__:read_file:{\"path\":\"src/main.rs\"}\n__tool_call__:apply_patch:{\"path\":\"src/lib.rs\"}";
-        let calls = extract_tool_calls_from_response(response, 5);
-        assert_eq!(
-            calls,
-            vec!["read_file".to_string(), "apply_patch".to_string()]
-        );
-    }
-
-    #[test]
-    fn extract_tool_calls_from_json_fence() {
-        let response = "```json\n{\"tool_calls\":[{\"name\":\"read_file\"},{\"tool\":\"apply_patch\"}],\"tool_call\":\"bash\"}\n```";
-        let calls = extract_tool_calls_from_response(response, 5);
-        assert_eq!(
-            calls,
-            vec![
-                "bash".to_string(),
-                "read_file".to_string(),
-                "apply_patch".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn extract_tool_calls_from_action_plan_alias() {
-        let response = "```json\n{\"action_plan\":{\"actions\":[{\"action\":\"read_file\"},{\"tool\":\"apply_patch\"},{\"name\":\"bash\"}]}}\n```";
-        let calls = extract_tool_calls_from_response(response, 5);
-        assert_eq!(
-            calls,
-            vec![
-                "read_file".to_string(),
-                "apply_patch".to_string(),
-                "bash".to_string()
-            ]
-        );
-    }
-
-    #[cfg(not(feature = "backend-postgres"))]
-    #[tokio::test]
-    async fn process_chat_request_wires_harness_and_capability_bus_closed_loop() {
-        let temp = tempfile::tempdir().expect("tempdir should exist");
-        let vector_path = temp.path().join("e2e_vector.sqlite3");
-        let vector_store = Arc::new(
-            VectorStore::new(&vector_path, 32, 128).expect("vector store should initialize"),
-        );
-        vector_store
-            .upsert("coding", "rust e2e test", "E2E dual bus integration test")
-            .expect("seed vector entry");
-
-        let seen_messages = Arc::new(Mutex::new(Vec::new()));
-        let mut registry = AgentRegistry::new();
-        registry.register_arc(
-            "test-agent",
-            Arc::new(RecordingAgent {
-                seen_messages: Arc::clone(&seen_messages),
-                output: "e2e dual bus answer".to_string(),
-            }),
-        );
-
-        let mut config = test_config();
-        config.reputation = Some(crate::config::ReputationConfig {
-            enabled: true,
-            ema_alpha: 0.3,
-            exclusion_threshold: 0.1,
-            degraded_threshold: 0.3,
-        });
-        let config = Arc::new(config);
-        let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
-
-        let harness_bus = Arc::new(crate::governance::harness_bus::default_harness_bus(None));
-        let workflow_registry = Arc::new(std::sync::Mutex::new(
-            crate::orchestration::workflow_registry::WorkflowRegistry::new(),
-        ));
-        let capability_bus = Arc::new(
-            crate::intelligence::capability_bus::core::CapabilityBus::new_default(
-                Arc::clone(&harness_bus),
-                Some(Arc::clone(&workflow_registry)),
-            ),
-        );
-
-        let mut server = ServerBuilder::new().build().expect("server should build");
-        server.flow_manager = Some(flow);
-        server.agent_registry = Some(Arc::new(registry));
-        server.cache.vector_store = Some(Arc::clone(&vector_store));
-        server.vector_config = config.vector.clone();
-        server.harness_bus = Some(Arc::clone(&harness_bus));
-        server.capability_bus = Some(Arc::clone(&capability_bus));
-        let config_path = temp.path().join("e2e_config.toml");
-        std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
-        server.config_path = Some(config_path.display().to_string());
-
-        let params = ChatParams {
-            mode: "ask".to_string(),
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: "Test dual bus closed loop integration".to_string(),
-            }],
-            conversation_id: Some("e2e-conv".to_string()),
-            branch_id: Some("e2e-branch".to_string()),
-            phase: Some("coding".to_string()),
-            options: None,
-            requirement_contract: None,
-            plan: None,
-            vector_hits: None,
-            execution_decision_candidate: None,
-        };
-
-        let trace = chat_trace_context(&Some(json!(1)), "chat.e2e");
-        let result = process_chat_request(&server, &params, None, &trace, None, None)
-            .await
-            .expect("e2e dual bus chat request should succeed");
-
-        // Phase 0: HarnessBus evaluate() was called during request
-        let hp = harness_bus.governance_profile();
-        assert!(
-            hp.total_evaluations >= 1,
-            "HarnessBus evaluate() must be called"
-        );
-        assert!(
-            hp.allow_count + hp.deny_count + hp.escalate_count + hp.review_count >= 1,
-            "HarnessBus must produce at least one verdict"
-        );
-
-        // Phase 1: CapabilityBus sense/decide was called during request
-        let cp = capability_bus.capability_bus_profile();
-        assert!(
-            cp.routing_count >= 1,
-            "CapabilityBus must route at least once"
-        );
-
-        // Verify response content
-        assert_eq!(result["branch_id"], "e2e-branch");
-        assert_eq!(result["response"], "e2e dual bus answer");
-
-        // Verify vector context was injected
-        let captured = seen_messages.lock().expect("messages lock").clone();
-        assert_eq!(
-            captured.first().map(|msg| msg.role.as_str()),
-            Some("system")
-        );
-        let system_text = &captured.first().expect("system message expected").content;
-        assert!(
-            system_text.contains("E2E dual bus integration test"),
-            "vector context must be injected into system message"
-        );
-    }
-
-    #[cfg(not(feature = "backend-postgres"))]
-    #[tokio::test]
-    async fn process_chat_request_skips_empty_agent_output_and_uses_next_agent() {
-        let temp = tempfile::tempdir().expect("tempdir should exist");
-
-        let seen_messages = Arc::new(Mutex::new(Vec::new()));
-        let mut registry = AgentRegistry::new();
-        registry.register_arc(
-            "empty-agent",
-            Arc::new(RecordingAgent {
-                seen_messages: Arc::new(Mutex::new(Vec::new())),
-                output: "   ".to_string(),
-            }),
-        );
-        registry.register_arc(
-            "test-agent",
-            Arc::new(RecordingAgent {
-                seen_messages: Arc::clone(&seen_messages),
-                output: "fallback answer".to_string(),
-            }),
-        );
-
-        let mut config = test_config();
-        config
-            .phases
-            .get_mut("coding")
-            .expect("coding phase must exist")
-            .agents = vec!["empty-agent".to_string(), "test-agent".to_string()];
-        let config = Arc::new(config);
-        let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
-
-        let mut server = ServerBuilder::new().build().expect("server should build");
-        server.flow_manager = Some(flow);
-        server.agent_registry = Some(Arc::new(registry));
-        server.vector_config = config.vector.clone();
-        let config_path = temp.path().join("config.toml");
-        std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
-        server.config_path = Some(config_path.display().to_string());
-
-        let params = ChatParams {
-            mode: "ask".to_string(),
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: "Return a concise answer".to_string(),
-            }],
-            conversation_id: Some("empty-output-conv".to_string()),
-            branch_id: Some("main".to_string()),
-            phase: Some("coding".to_string()),
-            options: None,
-            requirement_contract: None,
-            plan: None,
-            vector_hits: None,
-            execution_decision_candidate: None,
-        };
-
-        let trace = chat_trace_context(&Some(json!(1)), "chat.empty_output");
-        let result = process_chat_request(&server, &params, None, &trace, None, None)
-            .await
-            .expect("chat request should succeed by trying next agent");
-
-        assert_eq!(result["response"], "fallback answer");
-
-        let attempts = result["agent_attempts"]
-            .as_array()
-            .expect("agent attempts should be an array");
-        assert!(attempts.iter().any(|attempt| {
-            attempt["agent"] == "empty-agent" && attempt["error"] == "empty_response"
-        }));
-        assert!(attempts
-            .iter()
-            .any(|attempt| attempt["agent"] == "test-agent" && attempt["ok"] == true));
-
-        let captured = seen_messages.lock().expect("messages lock").clone();
-        assert_eq!(
-            captured.last().map(|msg| msg.role.as_str()),
-            Some("user"),
-            "second agent should receive the request"
-        );
-    }
-
-    #[cfg(not(feature = "backend-postgres"))]
-    #[tokio::test]
-    async fn process_chat_request_all_empty_outputs_returns_specific_error() {
-        let temp = tempfile::tempdir().expect("tempdir should exist");
-
-        let mut registry = AgentRegistry::new();
-        registry.register_arc(
-            "empty-agent",
-            Arc::new(RecordingAgent {
-                seen_messages: Arc::new(Mutex::new(Vec::new())),
-                output: " ".to_string(),
-            }),
-        );
-
-        let mut config = test_config();
-        config
-            .phases
-            .get_mut("coding")
-            .expect("coding phase must exist")
-            .agents = vec!["empty-agent".to_string()];
-        let config = Arc::new(config);
-        let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
-
-        let mut server = ServerBuilder::new().build().expect("server should build");
-        server.flow_manager = Some(flow);
-        server.agent_registry = Some(Arc::new(registry));
-        server.vector_config = config.vector.clone();
-        let config_path = temp.path().join("config.toml");
-        std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
-        server.config_path = Some(config_path.display().to_string());
-
-        let params = ChatParams {
-            mode: "ask".to_string(),
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: "Return a concise answer".to_string(),
-            }],
-            conversation_id: Some("all-empty-conv".to_string()),
-            branch_id: Some("main".to_string()),
-            phase: Some("coding".to_string()),
-            options: None,
-            requirement_contract: None,
-            plan: None,
-            vector_hits: None,
-            execution_decision_candidate: None,
-        };
-
-        let trace = chat_trace_context(&Some(json!(1)), "chat.all_empty");
-        let err = process_chat_request(&server, &params, None, &trace, None, None)
-            .await
-            .expect_err("all empty outputs should fail with a specific error");
-
-        assert!(
-            err.to_string()
-                .contains("all candidate agents returned empty responses"),
-            "error should explain empty responses"
-        );
-    }
-
-    #[cfg(not(feature = "backend-postgres"))]
-    #[tokio::test]
-    async fn process_chat_request_specific_model_without_match_keeps_phase_agents() {
-        let temp = tempfile::tempdir().expect("tempdir should exist");
-
-        let seen_messages = Arc::new(Mutex::new(Vec::new()));
-        let mut registry = AgentRegistry::new();
-        registry.register_arc(
-            "test-agent",
-            Arc::new(RecordingAgent {
-                seen_messages: Arc::clone(&seen_messages),
-                output: "model fallback answer".to_string(),
-            }),
-        );
-
-        let config = Arc::new(test_config());
-        let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
-
-        let mut server = ServerBuilder::new().build().expect("server should build");
-        server.flow_manager = Some(flow);
-        server.agent_registry = Some(Arc::new(registry));
-        server.vector_config = config.vector.clone();
-        let config_path = temp.path().join("config.toml");
-        std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
-        server.config_path = Some(config_path.display().to_string());
-
-        let params = ChatParams {
-            mode: "ask".to_string(),
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: "Return a concise answer".to_string(),
-            }],
-            conversation_id: Some("model-fallback-conv".to_string()),
-            branch_id: Some("main".to_string()),
-            phase: Some("coding".to_string()),
-            options: Some(PhaseOptions {
-                extra: [(
-                    "model".to_string(),
-                    json!("gpt-4o-mini-not-mapped-to-agent-name"),
-                )]
-                .into_iter()
-                .collect(),
-                ..PhaseOptions::default()
-            }),
-            requirement_contract: None,
-            plan: None,
-            vector_hits: None,
-            execution_decision_candidate: None,
-        };
-
-        let trace = chat_trace_context(&Some(json!(1)), "chat.model_filter_fallback");
-        let result = process_chat_request(&server, &params, None, &trace, None, None)
-            .await
-            .expect("chat request should succeed by falling back to phase agents");
-
-        assert_eq!(result["response"], "model fallback answer");
-        let attempts = result["agent_attempts"]
-            .as_array()
-            .expect("agent attempts should be an array");
-        assert!(attempts
-            .iter()
-            .any(|attempt| attempt["agent"] == "test-agent" && attempt["ok"] == true));
-    }
-
-    #[cfg(not(feature = "backend-postgres"))]
-    #[tokio::test]
-    async fn process_chat_request_high_risk_multi_candidate_emits_council_decision() {
-        let temp = tempfile::tempdir().expect("tempdir should exist");
-
-        let mut registry = AgentRegistry::new();
-        registry.register_arc(
-            "agent-a",
-            Arc::new(RecordingAgent {
-                seen_messages: Arc::new(Mutex::new(Vec::new())),
-                output: "agent-a answer".to_string(),
-            }),
-        );
-        registry.register_arc(
-            "agent-b",
-            Arc::new(RecordingAgent {
-                seen_messages: Arc::new(Mutex::new(Vec::new())),
-                output: "agent-b answer".to_string(),
-            }),
-        );
-
-        let mut config = test_config();
-        config
-            .phases
-            .get_mut("coding")
-            .expect("coding phase must exist")
-            .agents = vec!["agent-a".to_string(), "agent-b".to_string()];
-        let config = Arc::new(config);
-        let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
-
-        let harness_bus = Arc::new(crate::governance::harness_bus::default_harness_bus(None));
-        let workflow_registry = Arc::new(std::sync::Mutex::new(
-            crate::orchestration::workflow_registry::WorkflowRegistry::new(),
-        ));
-        let capability_bus = Arc::new(
-            crate::intelligence::capability_bus::core::CapabilityBus::new_default(
-                Arc::clone(&harness_bus),
-                Some(Arc::clone(&workflow_registry)),
-            ),
-        );
-
-        let mut server = ServerBuilder::new().build().expect("server should build");
-        server.flow_manager = Some(flow);
-        server.agent_registry = Some(Arc::new(registry));
-        server.vector_config = config.vector.clone();
-        server.harness_bus = Some(Arc::clone(&harness_bus));
-        server.capability_bus = Some(Arc::clone(&capability_bus));
-        let config_path = temp.path().join("config.toml");
-        std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
-        server.config_path = Some(config_path.display().to_string());
-
-        let params = ChatParams {
-            mode: "ask".to_string(),
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: "Need medical diagnosis and prescription decision with legal compliance considerations"
-                    .to_string(),
-            }],
-            conversation_id: Some("council-smoke-conv".to_string()),
-            branch_id: Some("main".to_string()),
-            phase: Some("coding".to_string()),
-            options: None,
-            requirement_contract: None,
-            plan: None,
-            vector_hits: None,
-            execution_decision_candidate: None,
-        };
-
-        let trace = chat_trace_context(&Some(json!(1)), "chat.council_smoke");
-        let result = process_chat_request(&server, &params, None, &trace, None, None)
-            .await
-            .expect("chat request should succeed");
-
-        let decision = result["routing_diagnostics"]["council_decision"]
-            .as_object()
-            .expect("council decision should be present for high-risk multi-candidate request");
-        assert!(decision.contains_key("proposal_id"));
-
-        let provenance = result["routing_diagnostics"]["routing_provenance"]
-            .as_array()
-            .expect("routing provenance must be an array")
-            .iter()
-            .filter_map(|v| v.as_str())
-            .collect::<Vec<_>>();
-        assert!(
-            provenance.contains(&"council_deliberation_selected_route"),
-            "routing provenance should indicate council deliberation route selection"
-        );
-
-        let response_text = result["response"].as_str().unwrap_or_default();
-        assert!(response_text == "agent-a answer" || response_text == "agent-b answer");
-    }
-
-    #[cfg(not(feature = "backend-postgres"))]
-    #[tokio::test]
-    async fn process_chat_request_execute_mode_exposes_stable_autonomy_contract() {
-        let temp = tempfile::tempdir().expect("tempdir should exist");
-
-        let mut registry = AgentRegistry::new();
-        registry.register_arc(
-            "test-agent",
-            Arc::new(RecordingAgent {
-                seen_messages: Arc::new(Mutex::new(Vec::new())),
-                output: "execute mode answer".to_string(),
-            }),
-        );
-
-        let config = Arc::new(test_config());
-        let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
-
-        let mut server = ServerBuilder::new().build().expect("server should build");
-        server.flow_manager = Some(flow);
-        server.agent_registry = Some(Arc::new(registry));
-        server.vector_config = config.vector.clone();
-        let config_path = temp.path().join("config.toml");
-        std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
-        server.config_path = Some(config_path.display().to_string());
-
-        let params = ChatParams {
-            mode: "execute".to_string(),
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: "Fix the build and return the result".to_string(),
-            }],
-            conversation_id: Some("autonomy-contract-conv".to_string()),
-            branch_id: Some("main".to_string()),
-            phase: Some("coding".to_string()),
-            options: None,
-            requirement_contract: None,
-            plan: None,
-            vector_hits: None,
-            execution_decision_candidate: None,
-        };
-
-        let trace = chat_trace_context(&Some(json!(1)), "chat.autonomy_contract");
-        let result = process_chat_request(&server, &params, None, &trace, None, None)
-            .await
-            .expect("chat request should succeed");
-
-        let attempts = result["agent_attempts"]
-            .as_array()
-            .expect("agent_attempts should be an array");
-        let autonomy_attempt = attempts
-            .iter()
-            .find(|attempt| attempt["autonomy_loop"].as_bool().unwrap_or(false))
-            .expect("autonomy loop attempt should exist");
-
-        let rounds = autonomy_attempt["total_rounds"]
-            .as_u64()
-            .expect("total_rounds should be set");
-        assert!((1..=6).contains(&rounds));
-
-        let stop_reason = autonomy_attempt["stop_reason"]
-            .as_str()
-            .expect("stop_reason should be set");
-        assert!(
-            stop_reason == "completed_without_tool_calls"
-                || stop_reason == "max_iterations_reached"
-                || stop_reason == "tools_exhausted_task_complete"
-        );
-
-        let contract = autonomy_attempt["autonomy_contract"]
-            .as_object()
-            .expect("autonomy_contract should be present");
-        assert_eq!(
-            contract
-                .get("total_rounds")
-                .and_then(serde_json::Value::as_u64),
-            Some(rounds)
-        );
-        assert_eq!(
-            contract
-                .get("stop_reason")
-                .and_then(serde_json::Value::as_str),
-            Some(stop_reason)
-        );
-    }
-}
+#[path = "chat_tests.rs"]
+mod tests;

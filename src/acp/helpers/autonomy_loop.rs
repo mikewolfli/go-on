@@ -21,6 +21,7 @@ use tokio::sync::mpsc;
 
 use crate::acp::helpers::agent_router::record_task_agent_outcome;
 use crate::agent::{Agent, Message, StreamingSender};
+use crate::i18n::runtime::tf;
 use crate::orchestration::audit::{AuditEntry, AuditTrail};
 use crate::orchestration::planner_executor::{DagMetrics, Planner};
 use crate::orchestration::recovery::RecoveryOrchestrator;
@@ -40,6 +41,7 @@ pub fn store_latest_dag_metrics(metrics: DagMetrics) {
 }
 
 /// Read latest DAG metrics for governance payload.
+#[allow(dead_code)]
 pub fn read_latest_dag_metrics() -> Option<DagMetrics> {
     LATEST_DAG_METRICS.lock().ok()?.clone()
 }
@@ -326,9 +328,9 @@ fn apply_corrective_actions(messages: &mut Vec<Message>, outcome: &PostCheckOutc
 
     messages.push(Message {
         role: "user".to_string(),
-        content: format!(
-            "Execution intelligence corrective actions detected. Apply these before next decision:\n{}",
-            guidance
+        content: tf(
+            "info.autonomy.corrective_actions_detected",
+            &[("guidance", &guidance)],
         ),
     });
 }
@@ -393,7 +395,7 @@ impl Default for AutonomyLoopConfig {
             enable_early_stop: true,
             early_stop_confidence_threshold: 0.85,
             capability_signals: None,
-            use_dag_execution: false,
+            use_dag_execution: true,
             enable_agent_reroute: false,
             enable_execution_intelligence: true,
             recovery_orchestrator: None,
@@ -544,7 +546,7 @@ pub async fn run_autonomy_loop(
         error: None,
         round_start_offset_ms: 0,
         retry_count: 0,
-        round_stop_reason: "planned".to_string(),
+        round_stop_reason: tf("status.autonomy.round_planned", &[]),
         agent_switched: false,
         agent_switch_reason: None,
         candidate_agent_count: 1,
@@ -616,7 +618,7 @@ pub async fn run_autonomy_loop(
                     error: pre.reason.clone(),
                     round_start_offset_ms: start.elapsed().as_millis() as u64,
                     retry_count: 0,
-                    round_stop_reason: "degraded_by_execution_intelligence".to_string(),
+                    round_stop_reason: tf("status.autonomy.degraded_by_ei", &[]),
                     agent_switched: false,
                     agent_switch_reason: None,
                     candidate_agent_count: 0,
@@ -663,7 +665,7 @@ pub async fn run_autonomy_loop(
                 error: Some("degraded_by_execution_intelligence".to_string()),
                 round_start_offset_ms: start.elapsed().as_millis() as u64,
                 retry_count: 0,
-                round_stop_reason: "degraded".to_string(),
+                round_stop_reason: tf("status.autonomy.round_degraded", &[]),
                 agent_switched: false,
                 agent_switch_reason: None,
                 candidate_agent_count,
@@ -760,6 +762,7 @@ pub async fn run_autonomy_loop(
                             objective,
                             iteration,
                             &tool_calls,
+                            Some(&plan),
                         )
                         .await;
                     let dag_results: Vec<(String, LoopDecision)> = nodes
@@ -795,7 +798,7 @@ pub async fn run_autonomy_loop(
                                     }),
                                 },
                                 _ => LoopDecision::Failed {
-                                    reason: "dag_node_skipped".to_string(),
+                                    reason: tf("status.autonomy.dag_node_skipped", &[]),
                                     last_output: None,
                                 },
                             };
@@ -963,17 +966,12 @@ pub async fn run_autonomy_loop(
             let continuation = if config.require_replan_for_complex
                 && plan.steps.len() >= config.replan_complexity_threshold
             {
-                format!(
-                    "Tool results above. Task has {} plan steps. \
-                     Continue: use more tools if needed, or provide the final answer \
-                     when the original task is complete.",
-                    plan.steps.len()
+                tf(
+                    "info.autonomy.continuation_complex",
+                    &[("n", &plan.steps.len().to_string())],
                 )
             } else {
-                "Tool results above. Continue the original task. \
-                 Use more tools as needed, then provide the final answer \
-                 once the task is complete."
-                    .to_string()
+                tf("info.autonomy.continuation_simple", &[])
             };
             messages.push(Message {
                 role: "user".to_string(),
@@ -1027,12 +1025,12 @@ pub async fn run_autonomy_loop(
                 || (tools_were_called && response.trim().is_empty());
             if has_failure && consecutive_failures > 0 {
                 let failure_type = if response.trim().is_empty() {
-                    "empty_response"
+                    tf("status.autonomy.failure_empty", &[])
                 } else {
-                    "tool_failure"
+                    tf("status.autonomy.failure_tool", &[])
                 };
                 match revo.attempt_recovery(
-                    failure_type,
+                    &failure_type,
                     serde_json::json!({
                         "iteration": iteration,
                         "round": iteration + 1,
@@ -1075,13 +1073,13 @@ pub async fn run_autonomy_loop(
         }
 
         let mut round_stop_reason: String = if !tools_were_called {
-            "no_tools_needed".to_string()
+            tf("status.autonomy.no_tools_needed", &[])
         } else if iteration >= config.max_iterations {
-            "max_iterations_reached".to_string()
+            tf("status.autonomy.max_iterations", &[])
         } else if response.trim().is_empty() {
-            "empty_response".to_string()
+            tf("status.autonomy.empty_response", &[])
         } else {
-            "tools_completed".to_string()
+            tf("status.autonomy.tools_completed", &[])
         };
         // BLUE43 Step 5: Predictive reroute scoring — uses composite health
         // (reputation + task success + round health + tool error) to decide
@@ -1129,7 +1127,10 @@ pub async fn run_autonomy_loop(
                 // BLUE43 Step 5: Early exit when predictive reroute detects switching
                 // would be beneficial. This allows the caller to try alternative agents
                 // proactively rather than waiting for complete failure.
-                round_stop_reason = format!("predictive_reroute_{}", score.reason_code);
+                round_stop_reason = tf(
+                    "status.autonomy.predictive_reroute",
+                    &[("reason", &score.reason_code)],
+                );
                 should_break_early = true;
             }
         }
@@ -1241,11 +1242,11 @@ pub async fn run_autonomy_loop(
         corrective_actions_effective_total as f64 / corrective_actions_applied_total as f64
     };
     let stop_reason = if iteration == 0 {
-        "completed_without_tool_calls"
+        tf("status.autonomy.completed_no_tools", &[])
     } else if iteration >= config.max_iterations {
-        "max_iterations_reached"
+        tf("status.autonomy.max_iterations_reached", &[])
     } else {
-        "tools_exhausted_task_complete"
+        tf("status.autonomy.tools_exhausted", &[])
     };
 
     let report = AutonomyLoopReport {
@@ -1258,7 +1259,7 @@ pub async fn run_autonomy_loop(
         total_duration_ms,
         corrective_actions_applied_total,
         corrective_action_effectiveness_ratio,
-        stop_reason: stop_reason.to_string(),
+        stop_reason,
         audit_trail: Some(audit_trail),
     };
 

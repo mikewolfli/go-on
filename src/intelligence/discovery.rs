@@ -4,6 +4,7 @@
 //! patterns across the system.  Indexes solutions by problem pattern, success
 //! rate, and applicability.
 
+use crate::i18n::tf;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -97,8 +98,16 @@ pub enum DiscoveryError {
 impl std::fmt::Display for DiscoveryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::DuplicatePattern(name) => write!(f, "duplicate pattern: {name}"),
-            Self::EntryNotFound(id) => write!(f, "entry not found: {id}"),
+            Self::DuplicatePattern(name) => write!(
+                f,
+                "{}",
+                tf("error.discovery.duplicate_pattern", &[("name", name)])
+            ),
+            Self::EntryNotFound(id) => write!(
+                f,
+                "{}",
+                tf("error.discovery.entry_not_found", &[("id", id)])
+            ),
         }
     }
 }

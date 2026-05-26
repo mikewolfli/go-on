@@ -69,8 +69,32 @@ pub mod agent_router;
 // BLUE42: metacognitive/world-model execution intelligence bridge
 pub mod execution_intelligence;
 
+// BLUE42: CapabilityBus agent selection from chat runtime
+pub mod capability_selector;
+
+// Agent preference resolution for chat requests
+pub mod agent_preference;
+
 pub mod response_assembler;
 pub mod review_gate;
 pub mod vote_orchestration;
+
+// BLUE47 Step 2: Pipeline stage extraction from chat runtime
+pub mod autonomy_executor;
+pub mod fallback_executor;
+pub mod full_auto_executor;
+pub mod phase_resolver;
+pub mod pre_route_policy;
+pub mod vote_executor;
+pub mod response_finalizer;
+
+// Model-based agent routing and high-risk vote configuration
+pub mod model_router;
+
+// BLUE42 Step 8: Council deliberation & degraded fallback
+pub mod council_deliberation;
+
+// BLUE42 Step 8: Agent options assembly & skill injection
+pub mod agent_options;
 
 // Re-export for convenience

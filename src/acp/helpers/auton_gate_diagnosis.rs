@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 
 /// Shared runtime signals used by AUTON gate diagnostics.
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 pub struct AutonGateSignals {
     pub blue30_release_closure_ready: bool,
     pub blue33_release_closure_ready: bool,
@@ -16,6 +17,7 @@ pub struct AutonGateSignals {
 }
 
 /// Build blocker list for AUTON start gate: `autonomy_boundary_governance`.
+#[allow(dead_code)]
 pub fn autonomy_boundary_blockers(signals: AutonGateSignals) -> Vec<Value> {
     let mut blockers = Vec::new();
 
@@ -63,6 +65,7 @@ pub fn autonomy_boundary_blockers(signals: AutonGateSignals) -> Vec<Value> {
 }
 
 /// Build blocker list for AUTON scope gate: `autonomy_scope_matrix`.
+#[allow(dead_code)]
 pub fn autonomy_scope_blockers(signals: AutonGateSignals) -> Vec<Value> {
     let mut blockers = Vec::new();
 

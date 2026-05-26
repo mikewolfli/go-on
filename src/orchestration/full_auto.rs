@@ -20,15 +20,23 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tracing::{debug, info, warn};
 
+use crate::i18n::runtime::tf;
 use crate::orchestration::brain_loop::{
     BrainLoop, BrainLoopConfig, BrainLoopPhase, BrainLoopStep, StepStatus,
+};
+use crate::orchestration::complexity_estimator::ComplexityEstimator;
+use crate::orchestration::diagnostic_feedback::{
+    DiagnosticBatch, DiagnosticFeedbackEngine, DiagnosticMessage, DiagnosticSeverity,
 };
 use crate::orchestration::fast_path_cache::{
     EnvCacheValue, FastPathCache, IntentCacheValue, SkillCacheValue,
 };
 use crate::orchestration::skill::SkillRegistry;
+use crate::orchestration::skill_market::SkillMarketRegistry;
 use crate::orchestration::threshold_learner::ThresholdLearner;
 use crate::orchestration::tool::ToolRegistry;
+use crate::orchestration::tool_lock::{LockMode, ToolLockManager};
+use crate::orchestration::tool_recommender::{ToolRecommendation, ToolRecommender};
 
 // ---------------------------------------------------------------------------
 // Weight constants used for composite skill-matching scores
@@ -241,6 +249,18 @@ pub struct FullAutoFlow {
     cache: FastPathCache,
     /// Optional dynamic threshold learner for adaptive skill matching.
     threshold_learner: Option<Mutex<ThresholdLearner>>,
+    /// Complexity estimator for dynamic BrainLoop iteration tuning.
+    complexity_estimator: ComplexityEstimator,
+    /// Diagnostic feedback engine for error analysis and recovery.
+    diagnostic_engine: Mutex<DiagnosticFeedbackEngine>,
+    /// Tool recommender for suggesting complementary tools.
+    tool_recommender: Mutex<ToolRecommender>,
+    /// Tool lock manager for safe concurrent file access.
+    tool_lock_manager: ToolLockManager,
+    /// Optional skill market registry for external skill discovery.
+    // Reserved for future skill marketplace integration.
+    #[allow(dead_code)]
+    skill_market: Option<SkillMarketRegistry>,
 }
 
 impl std::fmt::Debug for FullAutoFlow {
@@ -250,6 +270,10 @@ impl std::fmt::Debug for FullAutoFlow {
             .field("tool_registry", &"Arc<ToolRegistry>")
             .field("config", &self.config)
             .field("cache", &"FastPathCache")
+            .field("complexity_estimator", &"ComplexityEstimator")
+            .field("diagnostic_engine", &"Mutex<DiagnosticFeedbackEngine>")
+            .field("tool_recommender", &"Mutex<ToolRecommender>")
+            .field("tool_lock_manager", &"ToolLockManager")
             .finish()
     }
 }
@@ -266,6 +290,11 @@ impl FullAutoFlow {
             config: FullAutoConfig::default(),
             cache: FastPathCache::with_default_routes(),
             threshold_learner: None,
+            complexity_estimator: ComplexityEstimator::new(),
+            diagnostic_engine: Mutex::new(DiagnosticFeedbackEngine::new()),
+            tool_recommender: Mutex::new(ToolRecommender::new()),
+            tool_lock_manager: ToolLockManager::new(),
+            skill_market: None,
         }
     }
 
@@ -323,6 +352,11 @@ impl FullAutoFlow {
             config,
             cache: FastPathCache::new(),
             threshold_learner: None,
+            complexity_estimator: ComplexityEstimator::new(),
+            diagnostic_engine: Mutex::new(DiagnosticFeedbackEngine::new()),
+            tool_recommender: Mutex::new(ToolRecommender::new()),
+            tool_lock_manager: ToolLockManager::new(),
+            skill_market: None,
         }
     }
 
@@ -340,6 +374,11 @@ impl FullAutoFlow {
             config: FullAutoConfig::default(),
             cache,
             threshold_learner: None,
+            complexity_estimator: ComplexityEstimator::new(),
+            diagnostic_engine: Mutex::new(DiagnosticFeedbackEngine::new()),
+            tool_recommender: Mutex::new(ToolRecommender::new()),
+            tool_lock_manager: ToolLockManager::new(),
+            skill_market: None,
         }
     }
 
@@ -639,7 +678,7 @@ impl FullAutoFlow {
     /// 6. Return a complete `AutoExecutionReport`.
     ///
     /// This is an `async` method because skill execution may involve I/O.
-    pub async fn run(&self, task: &str) -> AutoExecutionReport {
+    pub async fn run(&mut self, task: &str) -> AutoExecutionReport {
         let flow_start = Instant::now();
         let mut errors: Vec<String> = Vec::new();
         let mut execution_log: Vec<ExecutionStep> = Vec::new();
@@ -713,11 +752,34 @@ impl FullAutoFlow {
         );
 
         // ---- Step 4: Execute ----
+        // GAP-46-12: Run ToolRecommender to get additional tool suggestions.
+        let recommended_tools: Vec<ToolRecommendation> = {
+            let recommender = self
+                .tool_recommender
+                .lock()
+                .expect("tool_recommender lock poisoned");
+            let current_tools: Vec<String> =
+                matched_skills.iter().map(|m| m.name.clone()).collect();
+            recommender.recommend(task, &current_tools)
+        };
+        if !recommended_tools.is_empty() {
+            info!(
+                "ToolRecommender suggested {} additional tools",
+                recommended_tools.len()
+            );
+            for rec in &recommended_tools {
+                debug!(
+                    "  ↳ recommended: {} (score: {:.3}, reason: {})",
+                    rec.tool_name, rec.relevance_score, rec.reason
+                );
+            }
+        }
+
         for skill_match in &matched_skills {
             if execution_log.len() >= self.config.max_execution_steps {
-                let msg = format!(
-                    "Max execution steps ({}) reached; stopping further skill execution",
-                    self.config.max_execution_steps
+                let msg = tf(
+                    "error.full_auto.max_steps_reached",
+                    &[("max_steps", &self.config.max_execution_steps.to_string())],
                 );
                 warn!("{}", msg);
                 errors.push(msg);
@@ -738,7 +800,10 @@ impl FullAutoFlow {
             let skill = match skill_opt {
                 Some(s) => s,
                 None => {
-                    let msg = format!("Skill '{}' not found in registry", skill_match.name);
+                    let msg = tf(
+                        "error.full_auto.skill_not_found",
+                        &[("skill_name", &skill_match.name)],
+                    );
                     warn!("{}", msg);
                     errors.push(msg);
                     continue;
@@ -751,6 +816,31 @@ impl FullAutoFlow {
                 "constraints": intent.constraints,
                 "skill_name": skill_match.name,
             });
+
+            // GAP-46-12: Acquire tool lock for file-modifying skills.
+            // Best-effort lock — non-blocking try_acquire to avoid stalling the flow.
+            let _lock_handle = if skill_match.name.contains("write")
+                || skill_match.name.contains("edit")
+                || skill_match.name.contains("file")
+            {
+                let handle = self
+                    .tool_lock_manager
+                    .try_acquire(&skill_match.name, LockMode::Write);
+                if handle.is_some() {
+                    debug!(
+                        "ToolLockManager: acquired write lock for '{}'",
+                        skill_match.name
+                    );
+                } else {
+                    debug!(
+                        "ToolLockManager: could not acquire lock for '{}', proceeding anyway",
+                        skill_match.name
+                    );
+                }
+                handle
+            } else {
+                None
+            };
 
             match skill.execute(&input).await {
                 Ok(output) => {
@@ -784,8 +874,10 @@ impl FullAutoFlow {
                         // Cap at ~1 MB to avoid storing enormous blobs.
                         final_output = Some(output_text);
                     } else {
-                        final_output =
-                            Some(format!("Output truncated ({} bytes)", output_text.len()));
+                        final_output = Some(tf(
+                            "status.full_auto.output_truncated",
+                            &[("bytes", &output_text.len().to_string())],
+                        ));
                     }
 
                     debug!(
@@ -799,9 +891,40 @@ impl FullAutoFlow {
                 Err(e) => {
                     let elapsed = step_start.elapsed();
                     let duration_ms = elapsed.as_millis() as u64;
-                    let error_msg = format!("Skill '{}' failed: {}", skill_match.name, e);
+                    let error_msg = tf(
+                        "error.full_auto.skill_failed",
+                        &[("skill_name", &skill_match.name), ("error", &e.to_string())],
+                    );
                     warn!("{}", error_msg);
                     errors.push(error_msg.clone());
+
+                    // GAP-46-12: Feed error to DiagnosticFeedbackEngine for analysis.
+                    let diag_msg = DiagnosticMessage {
+                        file: skill_match.name.clone(),
+                        line: 0,
+                        column: 0,
+                        severity: DiagnosticSeverity::Error,
+                        code: Some(format!("SKILL_FAILED/{}", skill_match.name)),
+                        message: error_msg.clone(),
+                        suggestion: None,
+                        source_snippet: None,
+                    };
+                    let batch = DiagnosticBatch::new(vec![diag_msg]);
+                    {
+                        let mut engine = self
+                            .diagnostic_engine
+                            .lock()
+                            .expect("diagnostic_engine lock poisoned");
+                        engine.submit_batch(batch);
+                        if let Some((strategy, desc)) = engine.recommend_repair() {
+                            info!(
+                                "DiagnosticFeedback suggests repair strategy '{}': {}",
+                                strategy, desc
+                            );
+                        }
+                        let trend = engine.error_trend();
+                        debug!("Diagnostic error trend: {}", trend);
+                    }
 
                     // Record failed match for threshold learning.
                     self.record_match_outcome(false, true, false);
@@ -847,18 +970,51 @@ impl FullAutoFlow {
         crate::orchestration::fast_path_cache::store_cache_metrics(cache_snapshot.clone());
 
         info!(
-            "Full-auto flow completed: {} successful, {} failed, {} errors in {}ms",
-            execution_log.iter().filter(|s| s.success).count(),
-            execution_log.iter().filter(|s| !s.success).count(),
-            errors.len(),
-            total_duration_ms
+            "{}",
+            tf(
+                "status.full_auto.flow_completed",
+                &[
+                    (
+                        "successful",
+                        &execution_log
+                            .iter()
+                            .filter(|s| s.success)
+                            .count()
+                            .to_string()
+                    ),
+                    (
+                        "failed",
+                        &execution_log
+                            .iter()
+                            .filter(|s| !s.success)
+                            .count()
+                            .to_string()
+                    ),
+                    ("errors", &errors.len().to_string()),
+                    ("duration_ms", &total_duration_ms.to_string()),
+                ]
+            )
         );
 
         // ── BrainLoop integration (GAP-46-07) ───────────────────────────
         // Create a plan from the task result and execute a synthetic step so
         // the brain loop is no longer a dead module.
+        // GAP-46-12: Use ComplexityEstimator to dynamically tune max_iterations.
         if !execution_log.is_empty() {
-            let bl = BrainLoop::new(BrainLoopConfig::default());
+            let complexity = self.complexity_estimator.estimate(task);
+            info!(
+                "ComplexityEstimator: level={:?} (score={}), recommended_iterations={}",
+                complexity.level,
+                complexity.score,
+                complexity.level.recommended_iterations()
+            );
+
+            let bl_config = BrainLoopConfig {
+                max_iterations: complexity.level.recommended_iterations(),
+                ..BrainLoopConfig::default()
+            };
+
+            let bl = BrainLoop::new(bl_config);
             let bl_steps: Vec<BrainLoopStep> = execution_log
                 .iter()
                 .enumerate()
@@ -1207,7 +1363,7 @@ mod tests {
     #[tokio::test]
     async fn run_flow_with_matching_skills() {
         let registry = setup_registry();
-        let flow = make_flow(registry);
+        let mut flow = make_flow(registry);
 
         let report = flow
             .run("- goal: fix bugs in the source code\n- constraint: keep it simple")
@@ -1232,7 +1388,7 @@ mod tests {
     #[tokio::test]
     async fn run_flow_no_matching_skills_produces_empty_report() {
         let registry = setup_registry();
-        let flow = FullAutoFlow::with_config(
+        let mut flow = FullAutoFlow::with_config(
             registry,
             Arc::new(ToolRegistry::new_empty()),
             FullAutoConfig {
@@ -1257,7 +1413,7 @@ mod tests {
 
         // Use the flow with the flakey_tool registered.
         let tool_registry = Arc::new(ToolRegistry::new_empty());
-        let flow = FullAutoFlow::new(registry, tool_registry);
+        let mut flow = FullAutoFlow::new(registry, tool_registry);
 
         let report = flow
             .run("- goal: test the flakey tool execution path")

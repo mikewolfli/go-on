@@ -53,7 +53,11 @@ pub fn classify_failure(error: &str) -> FailureKind {
         FailureKind::PermissionDenied
     } else if e.contains("not found") || e.contains("no such") || e.contains("unknown tool") {
         FailureKind::ToolNotFound
-    } else if e.contains("execution error") || e.contains("runtime error") || e.contains("crash") {
+    } else if e.contains("execution error")
+        || e.contains("runtime error")
+        || e.contains("crash")
+        || e.contains("empty response")
+    {
         FailureKind::ToolExecutionError
     } else if e.contains("invalid") || e.contains("bad request") || e.contains("malformed") {
         FailureKind::InvalidInput

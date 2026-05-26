@@ -2,6 +2,7 @@
 //!
 //! PUA enforcement model shared across routing, execution, verification, and review.
 
+use crate::i18n::tf;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -59,7 +60,17 @@ pub struct PuaViolation {
 
 impl std::fmt::Display for PuaViolation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}: {}", self.kind, self.detail)
+        write!(
+            f,
+            "{}",
+            tf(
+                "error.pua.violation",
+                &[
+                    ("kind", &format!("{:?}", self.kind)),
+                    ("detail", &self.detail)
+                ]
+            )
+        )
     }
 }
 

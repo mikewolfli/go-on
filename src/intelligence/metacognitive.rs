@@ -4,6 +4,7 @@
 //! triggers corrective actions.  All mutable state is guarded behind
 //! `Arc<Mutex<>>` for thread-safe concurrent access.
 
+use crate::i18n::{t, tf};
 use crate::intelligence::lock_guard;
 use crate::intelligence::now_ms;
 use anyhow::Result;
@@ -248,7 +249,12 @@ impl MetacognitiveController {
             .iter()
             .find(|o| o.id == id)
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("observation '{}' not found", id))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}",
+                    tf("error.metacognitive.observation_not_found", &[("id", id)])
+                )
+            })
     }
 
     /// List all observations, optionally filtered to unresolved ones only.
@@ -273,7 +279,12 @@ impl MetacognitiveController {
             .observations
             .iter_mut()
             .find(|o| o.id == id)
-            .ok_or_else(|| anyhow::anyhow!("observation '{}' not found", id))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}",
+                    tf("error.metacognitive.observation_not_found", &[("id", id)])
+                )
+            })?;
         obs.is_resolved = true;
         Ok(())
     }
@@ -294,7 +305,13 @@ impl MetacognitiveController {
 
         // Validate that the observation exists.
         if !inner.observations.iter().any(|o| o.id == observation_id) {
-            anyhow::bail!("observation '{}' not found", observation_id);
+            anyhow::bail!(
+                "{}",
+                tf(
+                    "error.metacognitive.observation_not_found",
+                    &[("id", observation_id)]
+                )
+            );
         }
 
         let id = format!("action-{}", inner.next_id);
@@ -327,13 +344,23 @@ impl MetacognitiveController {
             .actions
             .iter_mut()
             .find(|a| a.id == action_id)
-            .ok_or_else(|| anyhow::anyhow!("action '{}' not found", action_id))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}",
+                    tf("error.metacognitive.action_not_found", &[("id", action_id)])
+                )
+            })?;
 
         if action.status != CorrectiveStatus::Pending {
             anyhow::bail!(
-                "action '{}' is {:?}, expected Pending",
-                action_id,
-                action.status
+                "{}",
+                tf(
+                    "error.metacognitive.action_status_pending",
+                    &[
+                        ("id", action_id),
+                        ("status", &format!("{:?}", action.status))
+                    ]
+                )
             );
         }
 
@@ -348,13 +375,23 @@ impl MetacognitiveController {
             .actions
             .iter_mut()
             .find(|a| a.id == action_id)
-            .ok_or_else(|| anyhow::anyhow!("action '{}' not found", action_id))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}",
+                    tf("error.metacognitive.action_not_found", &[("id", action_id)])
+                )
+            })?;
 
         if action.status != CorrectiveStatus::InProgress {
             anyhow::bail!(
-                "action '{}' is {:?}, expected InProgress",
-                action_id,
-                action.status
+                "{}",
+                tf(
+                    "error.metacognitive.action_status_in_progress",
+                    &[
+                        ("id", action_id),
+                        ("status", &format!("{:?}", action.status))
+                    ]
+                )
             );
         }
 
@@ -370,20 +407,34 @@ impl MetacognitiveController {
             .actions
             .iter_mut()
             .find(|a| a.id == action_id)
-            .ok_or_else(|| anyhow::anyhow!("action '{}' not found", action_id))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}",
+                    tf("error.metacognitive.action_not_found", &[("id", action_id)])
+                )
+            })?;
 
         if action.status != CorrectiveStatus::InProgress {
             anyhow::bail!(
-                "action '{}' is {:?}, expected InProgress",
-                action_id,
-                action.status
+                "{}",
+                tf(
+                    "error.metacognitive.action_status_in_progress",
+                    &[
+                        ("id", action_id),
+                        ("status", &format!("{:?}", action.status))
+                    ]
+                )
             );
         }
 
         action.status = CorrectiveStatus::Failed;
         action.resolved_ms = now_ms();
         // Append failure reason to the description for traceability.
-        action.description = format!("{} (FAILED: {})", action.description, reason);
+        action.description = format!(
+            "{} {}",
+            action.description,
+            tf("error.metacognitive.failed_suffix", &[("reason", reason)])
+        );
         Ok(())
     }
 
@@ -394,13 +445,23 @@ impl MetacognitiveController {
             .actions
             .iter_mut()
             .find(|a| a.id == action_id)
-            .ok_or_else(|| anyhow::anyhow!("action '{}' not found", action_id))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}",
+                    tf("error.metacognitive.action_not_found", &[("id", action_id)])
+                )
+            })?;
 
         if action.status != CorrectiveStatus::Pending {
             anyhow::bail!(
-                "action '{}' is {:?}, expected Pending",
-                action_id,
-                action.status
+                "{}",
+                tf(
+                    "error.metacognitive.action_status_pending",
+                    &[
+                        ("id", action_id),
+                        ("status", &format!("{:?}", action.status))
+                    ]
+                )
             );
         }
 
@@ -507,9 +568,17 @@ impl MetacognitiveController {
             .filter(|a| a.status == CorrectiveStatus::Pending)
             .count();
 
-        let overall_assessment = format!(
-            "Task '{}': {} observations ({} unresolved, {} actions taken, {} completed, {} pending). Confidence: {:.2}.",
-            task_id, total, unresolved_count, action_count, completed_actions, pending_actions, confidence_score
+        let overall_assessment = tf(
+            "status.metacognitive.report_assessment",
+            &[
+                ("task_id", task_id),
+                ("total", &total.to_string()),
+                ("unresolved", &unresolved_count.to_string()),
+                ("actions", &action_count.to_string()),
+                ("completed", &completed_actions.to_string()),
+                ("pending", &pending_actions.to_string()),
+                ("confidence", &format!("{:.2}", confidence_score)),
+            ],
         );
 
         let report = ReflectionReport {
@@ -535,7 +604,12 @@ impl MetacognitiveController {
             .iter()
             .find(|r| r.id == id)
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("report '{}' not found", id))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}",
+                    tf("error.metacognitive.report_not_found", &[("id", id)])
+                )
+            })
     }
 
     /// List all generated reflection reports.
@@ -606,37 +680,52 @@ impl MetacognitiveController {
                     let (action_type, prompt) = match obs.observation_type.to_lowercase().as_str() {
                         "latency_spike" | "timeout" => (
                             "adjust_timeout",
-                            format!(
-                                "Observation: {} - {}. Suggestion: Increase timeout or reduce complexity.",
-                                obs.severity, obs.description
+                            tf(
+                                "status.metacognitive.insight.latency",
+                                &[
+                                    ("severity", &obs.severity),
+                                    ("description", &obs.description),
+                                ],
                             ),
                         ),
                         "low_confidence" | "uncertain" => (
                             "request_clarification",
-                            format!(
-                                "Observation: {} - {}. Suggestion: Break down the task or request more context.",
-                                obs.severity, obs.description
+                            tf(
+                                "status.metacognitive.insight.clarification",
+                                &[
+                                    ("severity", &obs.severity),
+                                    ("description", &obs.description),
+                                ],
                             ),
                         ),
                         "error" | "execution_error" | "tool_failure" => (
                             "fallback_strategy",
-                            format!(
-                                "Observation: {} - {}. Suggestion: Switch to fallback tool or alternative approach.",
-                                obs.severity, obs.description
+                            tf(
+                                "status.metacognitive.insight.fallback",
+                                &[
+                                    ("severity", &obs.severity),
+                                    ("description", &obs.description),
+                                ],
                             ),
                         ),
                         "reroute_needed" | "agent_switch" => (
                             "reroute",
-                            format!(
-                                "Observation: {} - {}. Suggestion: Reroute to alternative agent.",
-                                obs.severity, obs.description
+                            tf(
+                                "status.metacognitive.insight.reroute",
+                                &[
+                                    ("severity", &obs.severity),
+                                    ("description", &obs.description),
+                                ],
                             ),
                         ),
                         _ => (
                             "review",
-                            format!(
-                                "Observation: {} - {}. Suggestion: Review and adjust execution strategy.",
-                                obs.severity, obs.description
+                            tf(
+                                "status.metacognitive.insight.review",
+                                &[
+                                    ("severity", &obs.severity),
+                                    ("description", &obs.description),
+                                ],
                             ),
                         ),
                     };
@@ -661,7 +750,7 @@ impl MetacognitiveController {
         if success {
             self.complete_action(&action_id)?;
         } else {
-            self.fail_action(&action_id, "insight did not improve outcome")?;
+            self.fail_action(&action_id, &t("status.metacognitive.rl.failed_outcome"))?;
         }
         Ok(action_id)
     }
@@ -740,11 +829,11 @@ impl MetacognitiveController {
     pub fn reflect_for_rl(&self) -> (f64, f64, Vec<String>) {
         let state = match self.inner.lock() {
             Ok(s) => Inner::clone(&s),
-            Err(_) => return (1.0, 0.1, vec!["Lock poisoned".to_string()]),
+            Err(_) => return (1.0, 0.1, vec![t("status.metacognitive.rl.lock_poisoned")]),
         };
 
         if state.observations.is_empty() {
-            return (1.0, 0.1, vec!["No observations yet".to_string()]);
+            return (1.0, 0.1, vec![t("status.metacognitive.rl.no_observations")]);
         }
 
         let total = state.observations.len();
@@ -763,15 +852,15 @@ impl MetacognitiveController {
 
         // Adjust reward multiplier based on recent success rate
         let reward_mult = if success_rate < 0.3 {
-            insights.push(format!(
-                "Low success rate ({:.2}): consider increasing exploration",
-                success_rate
+            insights.push(tf(
+                "status.metacognitive.rl.low_success_rate",
+                &[("rate", &format!("{:.2}", success_rate))],
             ));
             0.5 // Decrease reward signal when failing often (focus on exploration)
         } else if success_rate > 0.9 {
-            insights.push(format!(
-                "High success rate ({:.2}): consider reducing exploration",
-                success_rate
+            insights.push(tf(
+                "status.metacognitive.rl.high_success_rate",
+                &[("rate", &format!("{:.2}", success_rate))],
             ));
             1.5 // Increase reward signal when succeeding (focus on exploitation)
         } else {
@@ -786,16 +875,13 @@ impl MetacognitiveController {
             .collect();
         let diversity = unique_actions.len() as f64 / total.max(1) as f64;
         let exploration_rate = if diversity < 0.2 {
-            insights.push(format!(
-                "Low action diversity ({:.2}): increase exploration rate",
-                diversity
+            insights.push(tf(
+                "status.metacognitive.rl.low_diversity",
+                &[("diversity", &format!("{:.2}", diversity))],
             ));
             0.3
         } else if success_rate < 0.4 {
-            insights.push(
-                "Frequent failures detected: increase exploration to discover better strategies"
-                    .to_string(),
-            );
+            insights.push(t("status.metacognitive.rl.frequent_failures"));
             0.25
         } else {
             0.1
@@ -811,18 +897,20 @@ impl MetacognitiveController {
             }
         }
         for (category, count) in failure_patterns.iter().filter(|(_, c)| **c >= 3) {
-            insights.push(format!(
-                "Recurring failure pattern in '{}' ({} times): consider avoiding this action",
-                category, count
+            insights.push(tf(
+                "status.metacognitive.rl.recurring_failure",
+                &[("category", category), ("count", &count.to_string())],
             ));
         }
 
         // Check if corrective actions are addressing root causes
         if state.actions.len() > state.observations.len() / 3 {
-            insights.push(format!(
-                "High corrective action rate ({}/{}): system may be in a correction loop",
-                state.actions.len(),
-                total
+            insights.push(tf(
+                "status.metacognitive.rl.correction_loop",
+                &[
+                    ("actions", &state.actions.len().to_string()),
+                    ("total", &total.to_string()),
+                ],
             ));
         }
 

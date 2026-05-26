@@ -10,6 +10,7 @@ use serde_json::{json, Map, Value};
 use crate::observability::observability::{push_metric_header, push_scalar_metric};
 
 /// Histogram bucket boundaries for latency monitoring (seconds)
+#[allow(dead_code)] // Infrastructure — reserved for future histogram metric exposure
 const HISTOGRAM_BUCKETS_SECONDS: [f64; 9] = [
     0.001, // 1ms
     0.005, // 5ms
@@ -99,6 +100,7 @@ pub fn stream_done_notification(
 }
 
 /// Generate Prometheus histogram lines
+#[allow(dead_code)] // Infrastructure — reserved for future Prometheus exposition
 pub fn histogram_prometheus_lines(
     name: &str,
     count: u64,
@@ -139,6 +141,7 @@ pub fn classify_agent_failure(err: &anyhow::Error) -> &'static str {
 }
 
 /// Escape Prometheus label value
+#[allow(dead_code)] // Infrastructure — reserved for future Prometheus exposition
 pub fn escape_prometheus_label(value: &str) -> String {
     value
         .replace('\\', "\\\\")
@@ -147,6 +150,7 @@ pub fn escape_prometheus_label(value: &str) -> String {
 }
 
 /// Metrics snapshot structure
+#[allow(dead_code)] // Infrastructure type — reserved for future metrics aggregation
 #[derive(Debug, Clone)]
 pub struct MetricsSnapshot {
     /// Total chat requests
@@ -250,6 +254,7 @@ pub struct MetricsSnapshot {
 }
 
 /// Runtime gauge snapshot
+#[allow(dead_code)] // Infrastructure type — reserved for future gauge snapshot collection
 #[derive(Debug, Clone)]
 pub struct RuntimeGaugeSnapshot {
     /// Memory cache entries
@@ -277,6 +282,7 @@ pub struct RuntimeGaugeSnapshot {
 }
 
 /// Circuit breaker snapshot
+#[allow(dead_code)] // Infrastructure type — reserved for future circuit breaker metrics
 #[derive(Debug, Clone)]
 pub struct CircuitBreakerSnapshot {
     /// Circuit breaker state
@@ -286,6 +292,7 @@ pub struct CircuitBreakerSnapshot {
 }
 
 /// Lifecycle snapshot
+#[allow(dead_code)] // Infrastructure type — reserved for future lifecycle metrics
 #[derive(Debug, Clone)]
 pub struct LifecycleSnapshot {
     /// Whether shutting down
@@ -293,6 +300,7 @@ pub struct LifecycleSnapshot {
 }
 
 /// Maintenance snapshot
+#[allow(dead_code)] // Infrastructure type — reserved for future maintenance metrics
 #[derive(Debug, Clone)]
 pub struct MaintenanceSnapshot {
     /// Maintenance cycles total
@@ -303,6 +311,7 @@ pub struct MaintenanceSnapshot {
 }
 
 /// Build Prometheus metrics string
+#[allow(dead_code)] // Infrastructure — reserved for future Prometheus endpoint
 #[allow(clippy::too_many_arguments)]
 pub fn build_prometheus_metrics(
     snapshot: &MetricsSnapshot,

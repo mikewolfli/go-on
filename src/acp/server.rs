@@ -133,6 +133,8 @@ pub struct AcpServer {
     pub planner: crate::orchestration::planner_executor::Planner,
     /// Executor — plan execution engine (F-GAP-05)
     pub executor: crate::orchestration::planner_executor::Executor,
+    /// Planner-Executor configuration (BLUE47 Step 7)
+    pub planner_executor_config: crate::orchestration::planner_executor::PlannerExecutorConfig,
     /// BenchmarkSuite — evaluation suite for agent quality (F-GAP-06)
     pub evaluation_suite: Arc<StdMutex<crate::intelligence::evaluation::BenchmarkSuite>>,
     /// SchemaRegistry — task envelope validation (F-GAP-07)
@@ -359,6 +361,7 @@ pub struct ServerBuilder {
     task_graph_store: Option<Arc<TaskGraphStore>>,
     scheduler: Option<Arc<AgentWorkerScheduler>>,
     provenance_ledger: Option<Arc<ProvenanceLedger>>,
+    planner_executor_config: crate::orchestration::planner_executor::PlannerExecutorConfig,
 }
 
 impl ServerBuilder {
@@ -378,6 +381,7 @@ impl ServerBuilder {
             task_graph_store: None,
             scheduler: None,
             provenance_ledger: None,
+            planner_executor_config: Default::default(),
         }
     }
 
@@ -466,6 +470,16 @@ impl ServerBuilder {
     #[allow(dead_code)] // F-GAP-11 — planned wiring: checkpoint/conversation
     pub fn with_provenance_ledger(mut self, ledger: Arc<ProvenanceLedger>) -> Self {
         self.provenance_ledger = Some(ledger);
+        self
+    }
+
+    /// Set the planner-executor configuration (timeouts, etc.)
+    #[allow(dead_code)]
+    pub fn with_planner_executor_config(
+        mut self,
+        config: crate::orchestration::planner_executor::PlannerExecutorConfig,
+    ) -> Self {
+        self.planner_executor_config = config;
         self
     }
 
@@ -582,6 +596,7 @@ impl ServerBuilder {
             fork_registry: Arc::new(StdMutex::new(ForkRegistry::new(ForkConfig::default()))),
             planner: crate::orchestration::planner_executor::Planner,
             executor: crate::orchestration::planner_executor::Executor,
+            planner_executor_config: self.planner_executor_config,
             evaluation_suite: Arc::new(StdMutex::new(
                 crate::intelligence::evaluation::BenchmarkSuite::new(),
             )),

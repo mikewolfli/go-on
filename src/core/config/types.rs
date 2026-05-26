@@ -6,11 +6,19 @@ use serde_json::Value;
 use super::autotune::AutoTuneConfig;
 use crate::orchestration::roles::RoleDefinition;
 
+/// Default schema version string for deserialization fallback.
+fn default_schema_version() -> String {
+    "1.0.0".to_string()
+}
+
 /// Application configuration structure
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 #[derive(Default)]
 pub struct AppConfig {
+    /// Config schema version for migration tracking
+    #[serde(default = "default_schema_version")]
+    pub schema_version: String,
     /// Default phase to use when none is specified
     pub default_phase: String,
     /// Map of agent configurations

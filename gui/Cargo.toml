@@ -20,5 +20,32 @@ base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["ico"] }
 webbrowser = "1"
 
+[package.metadata.bundle]
+name = "Go-On GUI"
+identifier = "com.go-on.gui"
+icon = ["icons/icon.icns", "icons/icon.ico", "icons/icon.png"]
+sign = false
+# macOS bundle settings
+osx_minimum_system_version = "12.0"
+osx_static_linking = true
+
+[package.metadata.deb]
+name = "go-on-gui"
+maintainer = "Go-On Team <dev@go-on.dev>"
+copyright = "2025 Go-On Contributors"
+license_file = "../LICENSE"
+long_description = "Go-On is an open-source ACP/MCP intelligent agent orchestration runtime with a cross-platform GUI."
+depends = "$auto"
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/go-on-gui-egui", "usr/bin/go-on-gui", "755"],
+]
+
+[package.metadata.msi]
+product_name = "Go-On GUI"
+manufacturer = "Go-On Contributors"
+authors = ["Go-On Team"]
+
 [build-dependencies]
 winres = "0.1"

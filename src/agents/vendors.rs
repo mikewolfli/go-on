@@ -28,6 +28,7 @@ impl VendorCategory {
                 "glm",
                 "yi",
                 "hunyuan",
+                "kimi",
                 "doubao",
                 "facewall",
                 "langboat",

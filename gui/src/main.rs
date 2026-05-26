@@ -9,6 +9,8 @@ mod config;
 mod fs_util;
 mod i18n;
 mod keyring_util;
+#[cfg(test)]
+mod tests;
 mod theme;
 mod views;
 mod widgets;

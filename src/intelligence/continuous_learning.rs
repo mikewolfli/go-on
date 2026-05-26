@@ -6,6 +6,7 @@
 //!
 //! All mutable state is guarded behind `Arc<Mutex<>>`.
 
+use crate::i18n::{t, tf};
 use crate::intelligence::now_ms;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -231,7 +232,10 @@ impl ContinuousLearningCenter {
         let curriculum = (0..config.curriculum_stages)
             .map(|stage| CurriculumStage {
                 stage,
-                name: format!("Stage {}", stage + 1),
+                name: tf(
+                    "status.continuous_learning.stage_format",
+                    &[("number", &(stage + 1).to_string())],
+                ),
                 difficulty: (stage as f64 + 1.0) / config.curriculum_stages as f64,
                 tasks_completed: 0,
                 mastery_threshold: 0.8,
@@ -261,11 +265,23 @@ impl ContinuousLearningCenter {
         priority: u8,
     ) -> Result<String> {
         if priority > 10 {
-            bail!("priority must be in 0..=10, got {}", priority);
+            bail!(
+                "{}",
+                tf(
+                    "error.continuous_learning.priority_out_of_range",
+                    &[("value", &priority.to_string())]
+                )
+            );
         }
         let mut state = lock_guard(&self.state);
         if state.tasks.len() >= self.config.max_tasks {
-            bail!("task limit reached ({})", self.config.max_tasks);
+            bail!(
+                "{}",
+                tf(
+                    "error.continuous_learning.task_limit",
+                    &[("max", &self.config.max_tasks.to_string())]
+                )
+            );
         }
 
         let id = format!("task-{}", state.next_task_id);
@@ -287,10 +303,12 @@ impl ContinuousLearningCenter {
     pub fn update_task_status(&self, task_id: &str, status: LearningStatus) -> Result<()> {
         let was_completed = status == LearningStatus::Completed;
         let mut state = lock_guard(&self.state);
-        let task = state
-            .tasks
-            .get_mut(task_id)
-            .with_context(|| format!("task {} not found", task_id))?;
+        let task = state.tasks.get_mut(task_id).with_context(|| {
+            tf(
+                "error.continuous_learning.task_not_found",
+                &[("id", task_id)],
+            )
+        })?;
         task.status = status;
 
         // If the task completed, advance the curriculum.
@@ -316,7 +334,13 @@ impl ContinuousLearningCenter {
         let importance = importance.clamp(0.0, 1.0);
         let mut state = lock_guard(&self.state);
         if state.memories.len() >= self.config.max_memories {
-            bail!("memory limit reached ({})", self.config.max_memories);
+            bail!(
+                "{}",
+                tf(
+                    "error.continuous_learning.memory_limit",
+                    &[("max", &self.config.max_memories.to_string())]
+                )
+            );
         }
 
         let id = format!("mem-{}", state.next_memory_id);
@@ -354,7 +378,12 @@ impl ContinuousLearningCenter {
         let curve = state
             .forgetting_curves
             .get_mut(memory_id)
-            .with_context(|| format!("memory {} not found", memory_id))?;
+            .with_context(|| {
+                tf(
+                    "error.continuous_learning.memory_not_found",
+                    &[("id", memory_id)],
+                )
+            })?;
 
         let now = now_ms();
         curve.current_strength = curve.original_strength;
@@ -423,7 +452,7 @@ impl ContinuousLearningCenter {
             // All stages completed; return a terminal stage.
             return Ok(CurriculumStage {
                 stage: self.config.curriculum_stages,
-                name: "Completed".to_string(),
+                name: t("status.continuous_learning.stage_completed"),
                 difficulty: 1.0,
                 tasks_completed: self.config.tasks_per_stage,
                 mastery_threshold: 1.0,
@@ -437,7 +466,7 @@ impl ContinuousLearningCenter {
             if state.curriculum.is_empty() {
                 return Ok(CurriculumStage {
                     stage: self.config.curriculum_stages,
-                    name: "Completed".to_string(),
+                    name: t("status.continuous_learning.stage_completed"),
                     difficulty: 1.0,
                     tasks_completed: self.config.tasks_per_stage,
                     mastery_threshold: 1.0,

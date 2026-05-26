@@ -18,7 +18,7 @@ use crate::error::ProxyError;
 use crate::pua::merge_phase_principles;
 
 /// Resolved phase information
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ResolvedPhase {
     /// Flow name
     pub flow_name: String,
@@ -37,6 +37,7 @@ pub struct ResolvedPhase {
 }
 
 /// Resolved routing information
+#[allow(missing_debug_implementations)]
 pub struct ResolvedRouting {
     /// Resolved phase information
     pub phase: ResolvedPhase,
@@ -44,7 +45,17 @@ pub struct ResolvedRouting {
     pub agents: Vec<(String, Arc<dyn Agent>)>,
 }
 
+impl std::fmt::Debug for ResolvedRouting {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolvedRouting")
+            .field("phase", &self.phase)
+            .field("agents", &self.agents.iter().map(|(n, _)| n).collect::<Vec<_>>())
+            .finish()
+    }
+}
+
 /// Flow manager for handling phase resolution and routing
+#[derive(Debug)]
 pub struct FlowManager {
     /// Application configuration
     config: Arc<AppConfig>,
@@ -304,6 +315,7 @@ mod tests {
         );
 
         AppConfig {
+            schema_version: "1.0.0".to_string(),
             default_phase: "coding".to_string(),
             agents,
             flow: FlowConfig {

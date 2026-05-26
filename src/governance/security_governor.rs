@@ -21,6 +21,7 @@
 //! println!("{:?}", verdict);
 //! ```
 
+use crate::i18n::{t, tf};
 use anyhow::Result;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -255,7 +256,7 @@ impl PolicyVerdict {
             required_review: false,
             escalation_level: "normal".into(),
             matched_policy: None,
-            reasons: vec!["Allowed by default".into()],
+            reasons: vec![t("error.security_governor.allowed_default")],
         }
     }
 
@@ -266,7 +267,13 @@ impl PolicyVerdict {
             required_review: false,
             escalation_level: "normal".into(),
             matched_policy: Some(policy.into()),
-            reasons: vec![reason.into()],
+            reasons: vec![
+                tf(
+                    "error.security_governor.denied_by_policy",
+                    &[("name", policy)],
+                ),
+                reason.into(),
+            ],
         }
     }
 
@@ -277,7 +284,13 @@ impl PolicyVerdict {
             required_review: true,
             escalation_level: "normal".into(),
             matched_policy: Some(policy.into()),
-            reasons: vec![reason.into()],
+            reasons: vec![
+                tf(
+                    "error.security_governor.review_required",
+                    &[("name", policy)],
+                ),
+                reason.into(),
+            ],
         }
     }
 
@@ -288,7 +301,13 @@ impl PolicyVerdict {
             required_review: false,
             escalation_level: level.into(),
             matched_policy: Some(policy.into()),
-            reasons: vec![reason.into()],
+            reasons: vec![
+                tf(
+                    "error.security_governor.escalated_by_policy",
+                    &[("name", policy)],
+                ),
+                reason.into(),
+            ],
         }
     }
 }
@@ -501,7 +520,10 @@ impl SecurityGovernor {
                     required_review: false,
                     escalation_level: "normal".into(),
                     matched_policy: Some(id),
-                    reasons: vec![format!("Allowed by policy '{}'", name)],
+                    reasons: vec![tf(
+                        "error.security_governor.allowed_by_policy",
+                        &[("name", &name)],
+                    )],
                 },
                 PolicyAction::Deny => {
                     inner.total_denials += 1;
@@ -510,7 +532,10 @@ impl SecurityGovernor {
                         required_review: false,
                         escalation_level: "normal".into(),
                         matched_policy: Some(id),
-                        reasons: vec![format!("Denied by policy '{}'", name)],
+                        reasons: vec![tf(
+                            "error.security_governor.denied_by_policy",
+                            &[("name", &name)],
+                        )],
                     }
                 }
                 PolicyAction::RequireReview => {
@@ -520,7 +545,10 @@ impl SecurityGovernor {
                         required_review: true,
                         escalation_level: "normal".into(),
                         matched_policy: Some(id),
-                        reasons: vec![format!("Review required by policy '{}'", name)],
+                        reasons: vec![tf(
+                            "error.security_governor.review_required",
+                            &[("name", &name)],
+                        )],
                     }
                 }
                 PolicyAction::Escalate => {
@@ -531,7 +559,10 @@ impl SecurityGovernor {
                         required_review: false,
                         escalation_level: level,
                         matched_policy: Some(id),
-                        reasons: vec![format!("Escalated by policy '{}'", name)],
+                        reasons: vec![tf(
+                            "error.security_governor.escalated_by_policy",
+                            &[("name", &name)],
+                        )],
                     }
                 }
             });
@@ -544,7 +575,7 @@ impl SecurityGovernor {
                 required_review: false,
                 escalation_level: "normal".into(),
                 matched_policy: None,
-                reasons: vec!["No matching policy; allowed by default".into()],
+                reasons: vec![t("error.security_governor.no_match_allowed")],
             },
             PolicyAction::Deny => {
                 inner.total_denials += 1;
@@ -553,7 +584,7 @@ impl SecurityGovernor {
                     required_review: false,
                     escalation_level: "normal".into(),
                     matched_policy: None,
-                    reasons: vec!["No matching policy; denied by default".into()],
+                    reasons: vec![t("error.security_governor.no_match_denied")],
                 }
             }
             PolicyAction::RequireReview => {
@@ -563,7 +594,7 @@ impl SecurityGovernor {
                     required_review: true,
                     escalation_level: "normal".into(),
                     matched_policy: None,
-                    reasons: vec!["No matching policy; review required by default".into()],
+                    reasons: vec![t("error.security_governor.no_match_review")],
                 }
             }
             PolicyAction::Escalate => {
@@ -573,7 +604,7 @@ impl SecurityGovernor {
                     required_review: false,
                     escalation_level: "elevated".into(),
                     matched_policy: None,
-                    reasons: vec!["No matching policy; escalated by default".into()],
+                    reasons: vec![t("error.security_governor.no_match_escalated")],
                 }
             }
         })

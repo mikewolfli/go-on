@@ -225,6 +225,7 @@ mod tests {
         );
 
         let config = AppConfig {
+            schema_version: "1.0.0".to_string(),
             default_phase: "coding".to_string(),
             agents,
             flow: FlowConfig {

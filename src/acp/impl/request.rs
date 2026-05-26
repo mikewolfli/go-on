@@ -49,157 +49,148 @@ fn normalize_mcp_method(method: &str) -> String {
 
 /// Returns true if the method belongs to the ACP/A2A protocol.
 fn is_acp_request(method: &str) -> bool {
-    // Common ACP/A2A JSON-RPC methods.
-    matches!(
-        method,
-        "initialize"
-            // Standard ACP lifecycle methods
-            | "authenticate"
-            | "logout"
-            // Standard ACP session lifecycle methods
-            | "session/new"
-            | "session/load"
-            | "session/prompt"
-            | "session/cancel"
-            | "session/list"
-            | "session/set_mode"
-            | "session/set_config_option"
-            | "session/resume"
-            | "session/close"
-            | "session/request_permission"
-            // Terminal methods
-            | "terminal/create"
-            | "terminal/output"
-            | "terminal/release"
-            | "terminal/kill"
-            | "terminal/wait_for_exit"
-            // Protocol-level notifications
-            | "$/cancel_request"
-            // Go-On custom methods (backward compat)
-            | "chat"
-            | "phase"
-            | "phase.status"
-            | "metrics.get"
-            | "metrics"
-            | "metrics.prometheus"
-            | "metrics.window.query"
-            | "metrics.errors.summary"
-            | "shutdown"
-            | "health"
-            | "runtime.health"
-            | "health.probes"
-            | "lock.status"
-            | "runtime.self_model"
-            | "provider.status"
-            | "release.readiness"
-            | "runtime.stability"
-            | "runtime.features"
-            | "observability.alerts"
-            | "security.baseline"
-            | "harness.status"
-            | "breaker.status"
-            | "breaker.reset"
-            | "breaker.recovery"
-            | "cache.clear"
-            | "vector.clear"
-            | "maintenance.gc"
-                | "data.lifecycle"
-               | "error.contract"
-            | "action.check"
-            | "conversation.checkpoint.create"
-            | "conversation.checkpoint.list"
-            | "checkpoint.list"
-            | "conversation.rollback"
-            | "conversation.checkpoint.prune"
-            | "config.reload"
-            | "config.baseline"
-            | "build.repro"
-            | "optimization.peak"
-            | "autotune.get"
-            | "autotune.status"
-            | "autotune.reset"
-            | "selector.status"
-            | "hardness.status"
-            | "cost.status"
-            | "workflow.confirm"
-            | "workflow.clarify"
-            | "workflow.research"
-            | "workflow.ask"
-            | "workflow.consult"
-            | "workflow.generate"
-            | "workflow.generate_from_chat"
-            | "workflow.execute"
-            | "workflow.run.list"
-            | "workflow.run.get"
-            | "workflow.run.cancel"
-            | "workflow.run.pause"
-            | "workflow.run.resume"
-            | "task.plan"
-            | "task.execute"
-            | "learning.summary"
-            | "learning.replay"
-            | "learning.guardrail"
-            | "knowledge.distill"
-            | "rl.alignment.offline_eval"
-                | "governance.plan.get"
-                | "governance.plan.update"
-                | "governance.audit.recent"
-                | "skill.import"
-                | "skill.enable"
-                | "skill.disable"
-                | "skill.list_imported"
-                | "skill.list"
-                | "skill.remove"
-                | "skill.create"
-                | "skill.update"
-                | "skill.version.list"
-                | "skill.version.rollback"
-                | "provider.test_connection"
-                | "provider.test_completion"
-                | "provider.capabilities"
-                | "provider.copilot_device_code"
-                | "provider.copilot_device_code_poll"
-                | "provider.catalog"
-                | "runtime.restart"
-                | "phase.policy.replay"
-            | "primary_secondary.summary"
-            | "summary/primary_secondary"
-            | "governance.status"
-            | "governance.remediate"
-            | "governance.config.save"
-            | "capabilities.list"
-            | "health.check"
-             // diagnostics / ops also used by vscode-addon in ACP mode
-             | "metrics.reset"
-             | "trace.get"
-             | "trace.metrics"
-             | "debug_panel.get"
-             | "debug.panel.get"
-            // MCP-bridge methods that ACP stdio also dispatches
-            // (all 11 mcp.* methods that have dispatch handlers)
-            | "mcp.initialize"
-            | "mcp.notifications_initialized"
-            | "mcp.ping"
-            | "mcp.tools.list"
-            | "mcp.tools.call"
-            | "mcp.resources.list"
-            | "mcp.resources.read"
-            | "mcp.resources.subscribe"
-            | "mcp.logging.setLevel"
-            | "mcp.completion.complete"
-            | "mcp.sampling.createMessage"
-            | "models.list"
-            | "models/list"
-            | "provider.configure"
-            | "provider.list_models"
-            // Prompt template methods
-            | "prompts.list"
-            | "prompts.search"
-            | "prompts.get"
-            | "prompts.create"
-            | "prompts.update"
-            | "prompts.delete"
-    )
+    // Common ACP/A2A JSON-RPC methods. Sorted alphabetically for binary_search.
+    const ACP_METHODS: &[&str] = &[
+        "$/cancel_request",
+        "action.check",
+        "authenticate",
+        "autotune.get",
+        "autotune.reset",
+        "autotune.status",
+        "breaker.recovery",
+        "breaker.reset",
+        "breaker.status",
+        "build.repro",
+        "cache.clear",
+        "capabilities.list",
+        "chat",
+        "checkpoint.list",
+        "config.baseline",
+        "config.reload",
+        "conversation.checkpoint.create",
+        "conversation.checkpoint.list",
+        "conversation.checkpoint.prune",
+        "conversation.rollback",
+        "cost.status",
+        "data.lifecycle",
+        "debug.panel.get",
+        "debug_panel.get",
+        "error.contract",
+        "governance.audit.recent",
+        "governance.config.save",
+        "governance.plan.get",
+        "governance.plan.update",
+        "governance.remediate",
+        "governance.status",
+        "hardness.status",
+        "harness.status",
+        "health",
+        "health.check",
+        "health.probes",
+        "initialize",
+        "knowledge.distill",
+        "learning.guardrail",
+        "learning.replay",
+        "learning.summary",
+        "lock.status",
+        "logout",
+        "maintenance.gc",
+        "mcp.completion.complete",
+        "mcp.initialize",
+        "mcp.logging.setLevel",
+        "mcp.notifications_initialized",
+        "mcp.ping",
+        "mcp.resources.list",
+        "mcp.resources.read",
+        "mcp.resources.subscribe",
+        "mcp.sampling.createMessage",
+        "mcp.tools.call",
+        "mcp.tools.list",
+        "metrics",
+        "metrics.errors.summary",
+        "metrics.get",
+        "metrics.prometheus",
+        "metrics.reset",
+        "metrics.window.query",
+        "models.list",
+        "models/list",
+        "observability.alerts",
+        "optimization.peak",
+        "phase",
+        "phase.policy.replay",
+        "phase.status",
+        "primary_secondary.summary",
+        "prompts.create",
+        "prompts.delete",
+        "prompts.get",
+        "prompts.list",
+        "prompts.search",
+        "prompts.update",
+        "provider.capabilities",
+        "provider.catalog",
+        "provider.configure",
+        "provider.copilot_device_code",
+        "provider.copilot_device_code_poll",
+        "provider.list_models",
+        "provider.status",
+        "provider.test_completion",
+        "provider.test_connection",
+        "release.readiness",
+        "rl.alignment.offline_eval",
+        "runtime.features",
+        "runtime.health",
+        "runtime.restart",
+        "runtime.self_model",
+        "runtime.stability",
+        "security.baseline",
+        "selector.status",
+        "session/cancel",
+        "session/close",
+        "session/list",
+        "session/load",
+        "session/new",
+        "session/prompt",
+        "session/request_permission",
+        "session/resume",
+        "session/set_config_option",
+        "session/set_mode",
+        "shutdown",
+        "skill.create",
+        "skill.disable",
+        "skill.enable",
+        "skill.import",
+        "skill.list",
+        "skill.list_imported",
+        "skill.remove",
+        "skill.update",
+        "skill.version.list",
+        "skill.version.rollback",
+        "summary/primary_secondary",
+        "task.execute",
+        "task.plan",
+        "terminal/create",
+        "terminal/kill",
+        "terminal/output",
+        "terminal/release",
+        "terminal/wait_for_exit",
+        "trace.get",
+        "trace.metrics",
+        "vector.clear",
+        "workflow.ask",
+        "workflow.clarify",
+        "workflow.confirm",
+        "workflow.consult",
+        "workflow.execute",
+        "workflow.generate",
+        "workflow.generate_from_chat",
+        "workflow.research",
+        "workflow.run.cancel",
+        "workflow.run.get",
+        "workflow.run.list",
+        "workflow.run.pause",
+        "workflow.run.resume",
+    ];
+    ACP_METHODS.binary_search(&method).is_ok()
 }
 // Request handling implementation functions for ACP server
 //
@@ -234,16 +225,9 @@ tokio::task_local! {
 
 use crate::acp::background::{run_health_check, run_maintenance_cycle};
 
-use crate::acp::helpers::metrics::{
-    build_prometheus_metrics, CircuitBreakerSnapshot as PrometheusCircuitBreakerSnapshot,
-    LifecycleSnapshot as PrometheusLifecycleSnapshot,
-    MaintenanceSnapshot as PrometheusMaintenanceSnapshot,
-    MetricsSnapshot as PrometheusMetricsSnapshot, RuntimeGaugeSnapshot,
-};
 use crate::acp::prelude::{
     enforce_checkpoint_capacity, with_acp_lock, AcpLockSnapshot, ACP_LOCK_PHASE_RATE_LIMITER,
 };
-use crate::acp::r#impl::storage::cache_clear;
 use crate::acp::server::AcpServer;
 use crate::agent::{AgentAuditLog, AgentTaskEnvelope, Message};
 use crate::config::{
@@ -257,13 +241,13 @@ use crate::acp::helpers::requirement::{
     parse_requirement_contract_from_params, resolve_learning_clarification_metrics,
 };
 use crate::flow_with_models::FlowModelSelector;
-use crate::orchestration::orchestrator::OrchestrationContext;
 use crate::governance::hardening::{
     enforce_action, policy_bundle_for_target, task_budget_for_target, AuditLogger,
     AutonomousEditAuditEntry, BudgetTracker, GovernanceAction, Idempotency, IdempotencyCache,
 };
 use crate::i18n::runtime::{t, tf};
 use crate::memory_module::{MemoryClass, MemoryEntry, MemoryPromotionReport, MemoryStore};
+use crate::orchestration::orchestrator::OrchestrationContext;
 use crate::orchestration::skill_import::{
     ImportedSkillRecord, SkillImportManifest, SkillImportPolicy, SkillImportRequest,
     SkillImportStore,
@@ -298,18 +282,26 @@ use crate::rpc_protocol::{value_to_id, JsonRpcRequest, RequestTraceContext};
 
 mod chat_pack;
 mod checkpoint_pack;
+mod config_handlers;
 mod config_pack;
+mod diagnostic_pack;
 pub(crate) mod exec_pack;
+mod governance_handlers;
 mod governance_pack;
 mod hardness_pack;
+mod health_pack;
 mod learning_pack;
+mod lifecycle_handlers;
 mod lifecycle_pack;
+mod metrics_pack;
 mod ops_pack;
 pub mod prompts_pack;
 mod protocol_pack;
 mod pua_pack;
+mod repro_handlers;
 mod repro_pack;
 mod runtime_pack;
+mod status_pack;
 pub(crate) mod tools_pack;
 mod trace_pack;
 pub(crate) mod workflow_pack;
@@ -318,19 +310,21 @@ pub(crate) use self::checkpoint_pack::create_checkpoint_record;
 pub(crate) use self::checkpoint_pack::persist_checkpoint_metacognitive_loop;
 use self::checkpoint_pack::*;
 use self::config_pack::*;
+use self::diagnostic_pack::*;
 use self::exec_pack::*;
 pub use self::governance_pack::build_knowledge_refinement_profile;
 pub use self::governance_pack::build_learning_profile;
 pub(crate) use self::governance_pack::inject_platform_profiles_if_absent;
 use self::governance_pack::*;
 use self::hardness_pack::*;
+use self::health_pack::*;
 use self::learning_pack::*;
 use self::lifecycle_pack::*;
-use self::ops_pack::*;
 pub use self::protocol_pack::record_tool_call_audit_with_protocol;
 use self::protocol_pack::*;
 use self::pua_pack::*;
 use self::runtime_pack::*;
+use self::status_pack::*;
 use self::tools_pack::*;
 use self::trace_pack::*;
 
@@ -405,7 +399,10 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             server,
             request.id,
             -32003,
-            format!("PUA red line violation: {}", violation.detail),
+            tf(
+                "error.request.pua_red_line_violation",
+                &[("detail", &violation.detail)],
+            ),
             Some(json!({
                 "type": "pua_violation",
                 "kind": format!("{:?}", violation.kind),
@@ -444,7 +441,10 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     server,
                     request.id,
                     -32003,
-                    format!("PUA stage violation: {}", violation.detail),
+                    tf(
+                        "error.request.pua_stage_violation",
+                        &[("detail", &violation.detail)],
+                    ),
                     Some(json!({
                         "type": "pua_violation",
                         "kind": format!("{:?}", violation.kind),
@@ -709,7 +709,10 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                                 server,
                                 request_id,
                                 -32603,
-                                format!("prompts.list failed: {}", e),
+                                tf(
+                                    "error.request.prompts_list_failed",
+                                    &[("error", &e.to_string())],
+                                ),
                                 None,
                             )
                             .await
@@ -739,7 +742,10 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                                 server,
                                 request_id,
                                 -32603,
-                                format!("prompts.search failed: {}", e),
+                                tf(
+                                    "error.request.prompts_search_failed",
+                                    &[("error", &e.to_string())],
+                                ),
                                 None,
                             )
                             .await
@@ -774,7 +780,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                                 server,
                                 request_id,
                                 -32602,
-                                "missing required field: id".to_string(),
+                                tf("error.request.missing_field_id", &[]),
                                 None,
                             )
                             .await
@@ -797,7 +803,10 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                                 server,
                                 request_id,
                                 -32603,
-                                format!("prompts.create failed: {}", e),
+                                tf(
+                                    "error.request.prompts_create_failed",
+                                    &[("error", &e.to_string())],
+                                ),
                                 None,
                             )
                             .await
@@ -820,7 +829,10 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                                 server,
                                 request_id,
                                 -32603,
-                                format!("prompts.update failed: {}", e),
+                                tf(
+                                    "error.request.prompts_update_failed",
+                                    &[("error", &e.to_string())],
+                                ),
                                 None,
                             )
                             .await
@@ -843,7 +855,10 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                                 server,
                                 request_id,
                                 -32603,
-                                format!("prompts.delete failed: {}", e),
+                                tf(
+                                    "error.request.prompts_delete_failed",
+                                    &[("error", &e.to_string())],
+                                ),
                                 None,
                             )
                             .await
@@ -937,13 +952,13 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     )
                     .await
                 }
-                "metrics.get" => runtime_pack::handle_metrics_get(server, request_id).await,
-                "metrics" => runtime_pack::handle_metrics(server, request_id).await,
+                "metrics.get" => metrics_pack::handle_metrics_get(server, request_id).await,
+                "metrics" => metrics_pack::handle_metrics(server, request_id).await,
                 "metrics.prometheus" => {
-                    runtime_pack::handle_metrics_prometheus(server, request_id).await
+                    metrics_pack::handle_metrics_prometheus(server, request_id).await
                 }
                 "metrics.window.query" => {
-                    runtime_pack::handle_metrics_window_query(
+                    metrics_pack::handle_metrics_window_query(
                         server,
                         request.params.unwrap_or_default(),
                         request_id,
@@ -951,16 +966,16 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     .await
                 }
                 "metrics.errors.summary" => {
-                    runtime_pack::handle_metrics_errors_summary(
+                    metrics_pack::handle_metrics_errors_summary(
                         server,
                         request.params.unwrap_or_default(),
                         request_id,
                     )
                     .await
                 }
-                "metrics.reset" => runtime_pack::handle_metrics_reset(server, request_id).await,
+                "metrics.reset" => metrics_pack::handle_metrics_reset(server, request_id).await,
                 "debug_panel.get" | "debug.panel.get" => {
-                    runtime_pack::handle_debug_panel_get(
+                    config_handlers::handle_debug_panel_get(
                         server,
                         request.params.unwrap_or_default(),
                         request_id,
@@ -968,24 +983,26 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     .await
                 }
                 "trace.get" => {
-                    runtime_pack::handle_trace_get(
+                    config_handlers::handle_trace_get(
                         server,
                         request.params.unwrap_or_default(),
                         request_id,
                     )
                     .await
                 }
-                "trace.metrics" => runtime_pack::handle_trace_metrics(server, request_id).await,
-                "shutdown" => runtime_pack::handle_shutdown(server, request_id).await,
+                "trace.metrics" => config_handlers::handle_trace_metrics(server, request_id).await,
+                "shutdown" => lifecycle_handlers::handle_shutdown(server, request_id).await,
                 "health" | "runtime.health" => {
-                    runtime_pack::handle_health(server, request_id).await
+                    lifecycle_handlers::handle_health(server, request_id).await
                 }
-                "health.probes" => runtime_pack::handle_health_probes(server, request_id).await,
+                "health.probes" => {
+                    lifecycle_handlers::handle_health_probes(server, request_id).await
+                }
                 "lock.status" => {
                     handle_lock_status(server, request.params.unwrap_or_default(), request_id).await
                 }
                 "runtime.self_model" => {
-                    runtime_pack::handle_runtime_self_model(
+                    lifecycle_handlers::handle_runtime_self_model(
                         server,
                         request.params.unwrap_or_default(),
                         request_id,
@@ -993,7 +1010,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     .await
                 }
                 "provider.status" => {
-                    runtime_pack::handle_provider_status(
+                    lifecycle_handlers::handle_provider_status(
                         server,
                         request.params.unwrap_or_default(),
                         request_id,
@@ -1005,7 +1022,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                         .await
                 }
                 "runtime.stability" => {
-                    runtime_pack::handle_runtime_stability(
+                    lifecycle_handlers::handle_runtime_stability(
                         server,
                         request.params.unwrap_or_default(),
                         request_id,
@@ -1013,7 +1030,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     .await
                 }
                 "runtime.features" => {
-                    runtime_pack::handle_runtime_features(server, request_id).await
+                    lifecycle_handlers::handle_runtime_features(server, request_id).await
                 }
                 "observability.alerts" => {
                     handle_observability_alerts(
@@ -1094,7 +1111,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                 }
                 "build.repro" => repro_pack::handle_build_repro(server, request_id).await,
                 "optimization.peak" => {
-                    runtime_pack::handle_optimization_peak(
+                    repro_handlers::handle_optimization_peak(
                         server,
                         request.params.unwrap_or_default(),
                         request_id,
@@ -1287,7 +1304,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     .await
                 }
                 "governance.status" => {
-                    runtime_pack::handle_governance_status(
+                    governance_handlers::handle_governance_status(
                         server,
                         request.params.unwrap_or_default(),
                         request_id,
@@ -1295,7 +1312,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     .await
                 }
                 "capabilities.list" => {
-                    runtime_pack::handle_capabilities_list(server, request_id).await
+                    lifecycle_handlers::handle_capabilities_list(server, request_id).await
                 }
                 "models.list" | "models/list" => {
                     protocol_pack::handle_models_list(
@@ -1306,10 +1323,10 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     .await
                 }
                 "governance.plan.get" => {
-                    runtime_pack::handle_governance_plan_get(server, request_id).await
+                    governance_handlers::handle_governance_plan_get(server, request_id).await
                 }
                 "governance.plan.update" => {
-                    runtime_pack::handle_governance_plan_update(
+                    governance_handlers::handle_governance_plan_update(
                         server,
                         request.params.unwrap_or_default(),
                         request_id,
@@ -1317,7 +1334,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     .await
                 }
                 "governance.audit.recent" => {
-                    runtime_pack::handle_governance_audit_recent(
+                    governance_handlers::handle_governance_audit_recent(
                         server,
                         request.params.unwrap_or_default(),
                         request_id,
@@ -1347,7 +1364,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     send_result(server, request_id, json!({ "ok": true })).await
                 }
                 "governance.remediate" => {
-                    runtime_pack::handle_governance_remediate(
+                    governance_handlers::handle_governance_remediate(
                         server,
                         request.params.unwrap_or_default(),
                         request_id,
@@ -1355,7 +1372,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     .await
                 }
                 "governance.config.save" => {
-                    runtime_pack::handle_governance_config_save(
+                    governance_handlers::handle_governance_config_save(
                         server,
                         request.params.unwrap_or_default(),
                         request_id,
@@ -1426,13 +1443,18 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     )
                     .await
                 }
-                "runtime.restart" => runtime_pack::handle_runtime_restart(server, request_id).await,
+                "runtime.restart" => {
+                    lifecycle_handlers::handle_runtime_restart(server, request_id).await
+                }
                 _ => {
                     send_error(
                         server,
                         request_id,
                         -32601,
-                        format!("unknown method: {}", request.method),
+                        tf(
+                            "error.request.unknown_method",
+                            &[("method", &request.method)],
+                        ),
                         None,
                     )
                     .await
@@ -1543,14 +1565,12 @@ fn session_id_for_task(task: &str) -> String {
         .filter(|ch| ch.is_ascii_alphanumeric())
         .take(24)
         .collect::<String>();
-    format!(
-        "clarify-{}",
-        if compact.is_empty() {
-            "session"
-        } else {
-            compact.as_str()
-        }
-    )
+    let id = if compact.is_empty() {
+        "session"
+    } else {
+        compact.as_str()
+    };
+    tf("info.request.session_id_format", &[("id", id)])
 }
 
 #[cfg(test)]
@@ -1560,12 +1580,39 @@ mod tests {
     #[cfg(not(feature = "backend-postgres"))]
     use super::collect_vector_context_snippets;
     use super::{
-        classify_request_error_kind, infer_workflow_parallelism, rebalance_execution_order,
-        session_id_for_task, summarize_lock_health, with_error_contract_data,
+        classify_request_error_kind, infer_workflow_parallelism, is_acp_request,
+        rebalance_execution_order, session_id_for_task, summarize_lock_health,
+        with_error_contract_data,
     };
     use crate::acp::prelude::AcpLockSnapshot;
     #[cfg(not(feature = "backend-postgres"))]
     use crate::vector::VectorStore;
+
+    #[test]
+    fn is_acp_request_recognizes_known_methods() {
+        // Key protocol methods
+        assert!(is_acp_request("initialize"));
+        assert!(is_acp_request("chat"));
+        assert!(is_acp_request("session/new"));
+        assert!(is_acp_request("shutdown"));
+        // MCP-bridge methods
+        assert!(is_acp_request("mcp.initialize"));
+        assert!(is_acp_request("mcp.tools.list"));
+        assert!(is_acp_request("mcp.tools.call"));
+        // Skill methods
+        assert!(is_acp_request("skill.import"));
+        assert!(is_acp_request("skill.create"));
+        // Workflow methods
+        assert!(is_acp_request("workflow.execute"));
+        assert!(is_acp_request("workflow.confirm"));
+        // Prompt methods
+        assert!(is_acp_request("prompts.list"));
+        assert!(is_acp_request("prompts.get"));
+        // Unknown methods return false
+        assert!(!is_acp_request("unknown.method"));
+        assert!(!is_acp_request(""));
+        assert!(!is_acp_request("tools/list"));
+    }
 
     #[test]
     fn session_id_for_task_compacts_to_ascii_alnum() {

@@ -5,6 +5,7 @@
 //! to determine outcomes. Supports quorum checks, time-based expiration, and
 //! runtime profile snapshots.
 
+use crate::i18n::runtime::tf;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -181,10 +182,10 @@ impl OrchestrationCouncil {
             .map_err(|e| anyhow!("Failed to acquire lock on members: {}", e))?;
 
         if members.contains_key(&member.id) {
-            return Err(anyhow!(
-                "Member '{}' already exists in the council",
-                member.id
-            ));
+            return Err(anyhow!(tf(
+                "error.council.member_already_exists",
+                &[("member_id", &member.id)]
+            )));
         }
 
         members.insert(member.id.clone(), member);
@@ -214,7 +215,7 @@ impl OrchestrationCouncil {
         members
             .get(id)
             .cloned()
-            .ok_or_else(|| anyhow!("Member '{}' not found", id))
+            .ok_or_else(|| anyhow!(tf("error.council.member_not_found", &[("member_id", id)])))
     }
 
     /// List all registered council members.
@@ -241,14 +242,17 @@ impl OrchestrationCouncil {
             .map_err(|e| anyhow!("Failed to acquire lock on proposals: {}", e))?;
 
         if proposals.contains_key(&proposal.id) {
-            return Err(anyhow!("Proposal '{}' already exists", proposal.id));
+            return Err(anyhow!(tf(
+                "error.council.proposal_already_exists",
+                &[("proposal_id", &proposal.id)]
+            )));
         }
 
         if proposals.len() >= self.config.max_proposals {
-            return Err(anyhow!(
-                "Maximum number of proposals ({}) reached",
-                self.config.max_proposals
-            ));
+            return Err(anyhow!(tf(
+                "error.council.max_proposals_reached",
+                &[("max", &self.config.max_proposals.to_string())]
+            )));
         }
 
         proposals.insert(proposal.id.clone(), proposal);
@@ -275,10 +279,10 @@ impl OrchestrationCouncil {
                 .ok_or_else(|| anyhow!("Member '{}' not found", vote.member_id))?;
 
             if !member.is_active {
-                return Err(anyhow!(
-                    "Member '{}' is inactive and cannot vote",
-                    vote.member_id
-                ));
+                return Err(anyhow!(tf(
+                    "error.council.member_inactive",
+                    &[("member_id", &vote.member_id)]
+                )));
             }
         }
 
@@ -289,25 +293,32 @@ impl OrchestrationCouncil {
                 .lock()
                 .map_err(|e| anyhow!("Failed to acquire lock on proposals: {}", e))?;
 
-            let proposal = proposals
-                .get(&vote.proposal_id)
-                .ok_or_else(|| anyhow!("Proposal '{}' not found", vote.proposal_id))?;
+            let proposal = proposals.get(&vote.proposal_id).ok_or_else(|| {
+                anyhow!(tf(
+                    "error.council.proposal_not_found",
+                    &[("proposal_id", &vote.proposal_id)]
+                ))
+            })?;
 
             if proposal.status != ProposalStatus::Active {
-                return Err(anyhow!(
-                    "Proposal '{}' is not active (status: {:?})",
-                    vote.proposal_id,
-                    proposal.status
-                ));
+                return Err(anyhow!(tf(
+                    "error.council.proposal_not_active",
+                    &[
+                        ("proposal_id", &vote.proposal_id),
+                        ("status", &format!("{:?}", proposal.status))
+                    ]
+                )));
             }
 
             if !proposal.options.contains(&vote.selected_option) {
-                return Err(anyhow!(
-                    "'{}' is not a valid option for proposal '{}'. Valid options: {:?}",
-                    vote.selected_option,
-                    vote.proposal_id,
-                    proposal.options
-                ));
+                return Err(anyhow!(tf(
+                    "error.council.invalid_option",
+                    &[
+                        ("option", &vote.selected_option),
+                        ("proposal_id", &vote.proposal_id),
+                        ("valid_options", &format!("{:?}", proposal.options))
+                    ]
+                )));
             }
         }
 
@@ -319,11 +330,13 @@ impl OrchestrationCouncil {
 
         let key = (vote.member_id.clone(), vote.proposal_id.clone());
         if votes.contains_key(&key) {
-            return Err(anyhow!(
-                "Member '{}' has already voted on proposal '{}'",
-                vote.member_id,
-                vote.proposal_id
-            ));
+            return Err(anyhow!(tf(
+                "error.council.duplicate_vote",
+                &[
+                    ("member_id", &vote.member_id),
+                    ("proposal_id", &vote.proposal_id)
+                ]
+            )));
         }
 
         votes.insert(key, vote);
@@ -341,16 +354,21 @@ impl OrchestrationCouncil {
             .lock()
             .map_err(|e| anyhow!("Failed to acquire lock on proposals: {}", e))?;
 
-        let proposal = proposals
-            .get(proposal_id)
-            .ok_or_else(|| anyhow!("Proposal '{}' not found", proposal_id))?;
+        let proposal = proposals.get(proposal_id).ok_or_else(|| {
+            anyhow!(tf(
+                "error.council.proposal_not_found",
+                &[("proposal_id", proposal_id)]
+            ))
+        })?;
 
         if proposal.status != ProposalStatus::Active {
-            return Err(anyhow!(
-                "Proposal '{}' is not active (status: {:?})",
-                proposal_id,
-                proposal.status
-            ));
+            return Err(anyhow!(tf(
+                "error.council.proposal_not_active",
+                &[
+                    ("proposal_id", proposal_id),
+                    ("status", &format!("{:?}", proposal.status))
+                ]
+            )));
         }
 
         let votes = self
@@ -455,10 +473,12 @@ impl OrchestrationCouncil {
             .lock()
             .map_err(|e| anyhow!("Failed to acquire lock on proposals: {}", e))?;
 
-        proposals
-            .get(id)
-            .cloned()
-            .ok_or_else(|| anyhow!("Proposal '{}' not found", id))
+        proposals.get(id).cloned().ok_or_else(|| {
+            anyhow!(tf(
+                "error.council.proposal_not_found",
+                &[("proposal_id", id)]
+            ))
+        })
     }
 
     /// List proposals, optionally filtered by status.

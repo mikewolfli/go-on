@@ -369,6 +369,7 @@ pub fn new_acp_server(
                 )),
                 planner: crate::orchestration::planner_executor::Planner,
                 executor: crate::orchestration::planner_executor::Executor,
+                planner_executor_config: Default::default(),
                 evaluation_suite: Arc::new(StdMutex::new(
                     crate::intelligence::evaluation::BenchmarkSuite::new(),
                 )),

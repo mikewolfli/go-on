@@ -117,6 +117,7 @@ pub struct ComplexityEstimate {
 // ---------------------------------------------------------------------------
 
 /// Estimates task complexity from task descriptions and metadata.
+#[derive(Debug)]
 pub struct ComplexityEstimator {
     /// Keywords that indicate high complexity.
     complex_keywords: Vec<String>,

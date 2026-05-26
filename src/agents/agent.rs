@@ -27,6 +27,7 @@ use crate::agents::vendors;
 use crate::agents::{
     Ai21Agent, AlephAgent, AnthropicAgent, CohereAgent, CopilotAgent, DeepQuestAgent,
     DeepSeekAgent, FaceWallAgent, FireworksAgent, GeminiAgent, GlmAgent, GroqAgent, HunyuanAgent,
+    KimiAgent,
     LangboatAgent, LlamaAgent, LoopAiAgent, MiniMaxAgent, MistralAgent, MoonshotAgent, NimAgent,
     OpenAiAgent, OpenAiCompatibleAgent, PerplexityAgent, QianfanAgent, ReplicateAgent,
     SkyworkAgent, StepFunAgent, TitanAgent, TogetherAgent, WenxinAgent, XihuAgent, YiAgent,
@@ -483,6 +484,7 @@ pub trait Agent: Send + Sync {
 }
 
 /// Agent registry for managing and accessing agents
+#[allow(missing_debug_implementations)]
 pub struct AgentRegistry {
     /// Map of agent names to agent instances
     agents: HashMap<String, Arc<dyn Agent>>,
@@ -491,6 +493,15 @@ pub struct AgentRegistry {
     token_cache: RwLock<Option<Arc<TokenCache>>>,
     /// Capability graph for capability-based agent routing
     capability_graph: Arc<Mutex<CapabilityGraph>>,
+}
+
+impl std::fmt::Debug for AgentRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentRegistry")
+            .field("agents", &self.agents.keys())
+            .field("capability_graph", &self.capability_graph)
+            .finish_non_exhaustive()
+    }
 }
 
 impl AgentRegistry {
@@ -1073,6 +1084,12 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
             let model = required_field("hunyuan", &config.model, "model")?;
             Ok(Arc::new(HunyuanAgent::new(api_key_env, url, model, client)))
         }
+        "kimi" => {
+            let api_key_env = required_field("kimi", &config.api_key_env, "api_key_env")?;
+            let url = required_field("kimi", &config.url, "url")?;
+            let model = required_field("kimi", &config.model, "model")?;
+            Ok(Arc::new(KimiAgent::new(api_key_env, url, model, client)))
+        }
         other => anyhow::bail!(
             "{}",
             tf("error.agent_unsupported_type", &[("agent_type", other)])
@@ -1237,6 +1254,7 @@ mod tests {
         agents.insert("hunyuan".to_string(), build_agent_config("hunyuan"));
 
         let app_config = AppConfig {
+            schema_version: "1.0.0".to_string(),
             default_phase: "coding".to_string(),
             agents,
             flow: FlowConfig {

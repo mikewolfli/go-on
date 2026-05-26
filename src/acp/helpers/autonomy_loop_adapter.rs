@@ -92,7 +92,7 @@ pub(crate) async fn run_full_auto_flow(
     task_text: &str,
 ) -> Result<AutonomyLoopResult> {
     let tool_registry = Arc::new(ToolRegistry::new());
-    let flow = FullAutoFlow::new(skill_registry, tool_registry);
+    let mut flow = FullAutoFlow::new(skill_registry, tool_registry);
     let report = flow.run(task_text).await;
 
     let success = report.is_success();

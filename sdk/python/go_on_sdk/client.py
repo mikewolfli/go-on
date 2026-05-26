@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import httpx
 
@@ -20,7 +21,25 @@ class GoOnJsonRpcError(GoOnClientError):
         super().__init__(f"JSON-RPC error [{code}]: {message}")
 
 
-# ── Response types ────────────────────────────────────────────────────
+# ── Chat types (streaming support) ──────────────────────────────────
+
+
+@dataclass
+class ChatMessage:
+    role: str
+    content: str
+
+
+@dataclass
+class ChatRequest:
+    messages: List[ChatMessage]
+    model: Optional[str] = None
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    stream: Optional[bool] = None
+
+
+# ── Response types ──────────────────────────────────────────────────
 
 
 @dataclass
@@ -87,7 +106,7 @@ class HarnessStatusResponse:
     harness: Dict[str, Any]
 
 
-# ── Client ────────────────────────────────────────────────────────────
+# ── Client ──────────────────────────────────────────────────────────
 
 
 class GoOnClient:
@@ -97,12 +116,32 @@ class GoOnClient:
     and direct HTTP GET for ``/health``.
 
     Phase 4 coverage: runtime, governance, observability, reliability,
-    checkpoint, workflow, learning, optimization.
+    checkpoint, workflow, learning, optimization, streaming chat.
+
+    Parameters
+    ----------
+    base_url:
+        The base URL of the go-on server (e.g. ``http://127.0.0.1:8090``).
+    timeout:
+        Timeout in seconds for HTTP requests (default: 30.0).
+    max_retries:
+        Number of retries for transient HTTP failures (default: 3).
+    retry_delay:
+        Delay in seconds between retries (default: 1.0).
     """
 
-    def __init__(self, base_url: str) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        timeout: float = 30.0,
+        max_retries: int = 3,
+        retry_delay: float = 1.0,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
-        self._client = httpx.AsyncClient()
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
+        self._client = httpx.AsyncClient(timeout=httpx.Timeout(timeout))
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -118,22 +157,84 @@ class GoOnClient:
             "method": method,
             "params": params or {},
         }
-        resp = await self._client.post(f"{self.base_url}/v1/responses", json=payload)
-        resp.raise_for_status()
-        try:
-            data = resp.json()
-        except json.JSONDecodeError:
-            raise GoOnClientError(
-                f"Server returned non-JSON response: {resp.text[:500]}"
-            ) from None
 
-        if "error" in data:
-            err = data["error"]
-            raise GoOnJsonRpcError(
-                code=err.get("code", -1),
-                message=err.get("message", "unknown"),
-            )
-        return data.get("result", {})
+        last_error: Optional[Exception] = None
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                resp = await self._client.post(
+                    f"{self.base_url}/v1/responses", json=payload
+                )
+                resp.raise_for_status()
+                try:
+                    data = resp.json()
+                except json.JSONDecodeError:
+                    raise GoOnClientError(
+                        f"Server returned non-JSON response: {resp.text[:500]}"
+                    ) from None
+
+                if "error" in data:
+                    err = data["error"]
+                    raise GoOnJsonRpcError(
+                        code=err.get("code", -1),
+                        message=err.get("message", "unknown"),
+                    )
+                return data.get("result", {})
+            except (
+                httpx.TimeoutException,
+                httpx.NetworkError,
+                httpx.RemoteProtocolError,
+            ) as e:
+                last_error = e
+                if attempt < self.max_retries:
+                    await asyncio.sleep(self.retry_delay)
+            except (GoOnClientError, httpx.HTTPStatusError, json.JSONDecodeError):
+                # Non-transient errors — do not retry
+                raise
+            except Exception as e:
+                last_error = e
+                if attempt < self.max_retries:
+                    await asyncio.sleep(self.retry_delay)
+
+        raise GoOnClientError(
+            f"Request failed after {self.max_retries} retries: {last_error}"
+        ) from last_error
+
+    # ── Streaming chat ────────────────────────────────────────────────
+
+    async def chat_stream(self, request: ChatRequest) -> AsyncGenerator[dict, None]:
+        """Send a chat request and yield SSE events as they arrive.
+
+        Each yielded value is a parsed JSON object from a ``data:`` line
+        in the SSE stream.
+
+        Yields
+        ------
+        dict
+            A JSON chunk from the stream.
+        """
+        request_dict: Dict[str, Any] = {
+            "messages": [
+                {"role": m.role, "content": m.content} for m in request.messages
+            ],
+        }
+        if request.model is not None:
+            request_dict["model"] = request.model
+        if request.temperature is not None:
+            request_dict["temperature"] = request.temperature
+        if request.max_tokens is not None:
+            request_dict["max_tokens"] = request.max_tokens
+        if request.stream is not None:
+            request_dict["stream"] = request.stream
+
+        async with self._client.stream(
+            "POST",
+            f"{self.base_url}/acp/chat",
+            json=request_dict,
+        ) as response:
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    yield json.loads(line[6:])
 
     # ── Core Runtime ──────────────────────────────────────────────────
 

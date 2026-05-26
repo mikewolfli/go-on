@@ -6,6 +6,7 @@
 //! This provides a minimal but functional RBAC system that can be extended
 //! for full OpenCLAW compliance.
 
+use crate::i18n::tf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -270,15 +271,15 @@ impl RbacEnforcer {
         if !self.tenants.is_empty() {
             let Some(tenant_id) = principal.tenant_id.as_deref() else {
                 return AccessDecision::Deny {
-                    reason: format!("Principal '{}' is missing tenant context", principal.id),
+                    reason: tf("error.rbac.missing_tenant", &[("principal", &principal.id)]),
                 };
             };
 
             if !self.tenants.contains(tenant_id) {
                 return AccessDecision::Deny {
-                    reason: format!(
-                        "Principal '{}' has unknown tenant '{}'",
-                        principal.id, tenant_id
+                    reason: tf(
+                        "error.rbac.unknown_tenant",
+                        &[("principal", &principal.id), ("tenant", tenant_id)],
                     ),
                 };
             }
@@ -312,9 +313,12 @@ impl RbacEnforcer {
         // If the principal has no known roles, deny without escalation suggestion.
         if !has_known_role {
             return AccessDecision::Deny {
-                reason: format!(
-                    "Principal '{}' has unknown role(s): {:?}",
-                    principal.id, principal.roles
+                reason: tf(
+                    "error.rbac.unknown_role",
+                    &[
+                        ("principal", &principal.id),
+                        ("roles", &format!("{:?}", principal.roles)),
+                    ],
                 ),
             };
         }
@@ -339,9 +343,12 @@ impl RbacEnforcer {
         }
 
         AccessDecision::Deny {
-            reason: format!(
-                "Principal '{}' lacks permission {:?}",
-                principal.id, required_perm
+            reason: tf(
+                "error.rbac.lacks_permission",
+                &[
+                    ("principal", &principal.id),
+                    ("perm", &format!("{:?}", required_perm)),
+                ],
             ),
         }
     }
@@ -377,9 +384,9 @@ impl RbacEnforcer {
             AccessDecision::Allow => {}
             AccessDecision::Deny { reason } => return Err(reason),
             AccessDecision::Escalate { required_role } => {
-                return Err(format!(
-                    "Principal '{}' needs escalation to role '{}'",
-                    principal.id, required_role
+                return Err(tf(
+                    "error.rbac.needs_escalation",
+                    &[("principal", &principal.id), ("role", &required_role)],
                 ));
             }
         }
@@ -390,9 +397,12 @@ impl RbacEnforcer {
             // If the tenant is not registered in the budget enforcer yet, auto-provision is expected
             // to have happened at startup; if it's still missing, let it through.
             if enforcer.quotas().contains_key(tenant_id) {
-                enforcer
-                    .check_can_start(tenant_id)
-                    .map_err(|e| format!("Budget exceeded for tenant '{}': {}", tenant_id, e))?;
+                enforcer.check_can_start(tenant_id).map_err(|e| {
+                    tf(
+                        "error.rbac.budget_exceeded",
+                        &[("tenant", tenant_id), ("detail", &e)],
+                    )
+                })?;
             }
         }
 
