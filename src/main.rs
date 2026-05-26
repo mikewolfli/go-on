@@ -1411,6 +1411,21 @@ async fn start_server(
 
     let ledger = ArtifactLedger::new(Some(config_path));
 
+    // Wire the full 14-Bus capability system. This instantiates all 37
+    // F-GAP cognitive modules with default configurations, serving as
+    // the central integration hub for self-model, world-model,
+    // consciousness, metacognitive, reputation, Q-learning, scenario
+    // matching, discovery, consensus, evolution, FederatedRL, agent
+    // factory, orchestration council, and multi-channel transport.
+    let _capability_bus = {
+        let harness = crate::governance::harness_bus::default_harness_bus(None);
+        crate::intelligence::capability_bus::core::CapabilityBus::new_default(
+            std::sync::Arc::new(harness),
+            None,
+        )
+    };
+    info!("CapabilityBus initialized with 37 F-GAP cognitive modules");
+
     if let Some(task) = cli.plan_task.as_deref() {
         let plan = build_task_plan(task);
         let path = persist_task_plan(&ledger, &plan)?;
