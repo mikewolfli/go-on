@@ -29,7 +29,8 @@ use crate::agents::{
     DeepSeekAgent, FaceWallAgent, FireworksAgent, GeminiAgent, GlmAgent, GroqAgent, HunyuanAgent,
     KimiAgent, LangboatAgent, LlamaAgent, LoopAiAgent, MiniMaxAgent, MistralAgent, MoonshotAgent,
     NimAgent, OpenAiAgent, OpenAiCompatibleAgent, PerplexityAgent, QianfanAgent, ReplicateAgent,
-    SkyworkAgent, StepFunAgent, TitanAgent, TogetherAgent, WenxinAgent, XihuAgent, YiAgent,
+    SiliconFlowAgent, SkyworkAgent, StepFunAgent, TitanAgent, TogetherAgent, WenxinAgent, XaiAgent,
+    XihuAgent, YiAgent,
 };
 use crate::core::error::Result as AppResult;
 
@@ -1046,6 +1047,23 @@ fn build_agent(config: &AgentConfig, client: reqwest::Client) -> Result<Arc<dyn 
             let url = required_field("yi", &config.url, "url")?;
             let model = required_field("yi", &config.model, "model")?;
             Ok(Arc::new(YiAgent::new(api_key_env, url, model, client)))
+        }
+        "xai" => {
+            let api_key_env = required_field("xai", &config.api_key_env, "api_key_env")?;
+            let url = required_field("xai", &config.url, "url")?;
+            let model = required_field("xai", &config.model, "model")?;
+            Ok(Arc::new(XaiAgent::new(api_key_env, url, model, client)))
+        }
+        "siliconflow" => {
+            let api_key_env = required_field("siliconflow", &config.api_key_env, "api_key_env")?;
+            let url = required_field("siliconflow", &config.url, "url")?;
+            let model = required_field("siliconflow", &config.model, "model")?;
+            Ok(Arc::new(SiliconFlowAgent::new(
+                api_key_env,
+                url,
+                model,
+                client,
+            )))
         }
         "qianfan" => {
             let api_key_env = required_field("qianfan", &config.api_key_env, "api_key_env")?;

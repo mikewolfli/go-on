@@ -305,12 +305,25 @@ impl Agent for GeminiAgent {
             ModelInfo {
                 id: "gemini-2.0-flash".to_string(),
                 name: "Gemini 2.0 Flash".to_string(),
-                description: "Google Gemini 2.0 Flash (DEPRECATED - shutting down soon)"
+                description: "Google Gemini 2.0 Flash (DEPRECATED — shutting down soon)"
                     .to_string(),
                 is_default: self.model == "gemini-2.0-flash",
                 capabilities: vec![
                     "chat".to_string(),
                     "vision".to_string(),
+                    "streaming".to_string(),
+                    "tools".to_string(),
+                ],
+                context_window: Some(1_048_576),
+            },
+            ModelInfo {
+                id: "gemini-2.0-flash-lite-preview-02-2025".to_string(),
+                name: "Gemini 2.0 Flash Lite".to_string(),
+                description: "Google Gemini 2.0 Flash Lite (DEPRECATED — shutting down)"
+                    .to_string(),
+                is_default: self.model == "gemini-2.0-flash-lite-preview-02-2025",
+                capabilities: vec![
+                    "chat".to_string(),
                     "streaming".to_string(),
                     "tools".to_string(),
                 ],

@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>go-on</strong> — 用 Rust 编写的 ACP/MCP 智能体编排运行时，提供桌面 GUI、VS Code 插件，支持 35+ AI 供应商。
+  <strong>go-on</strong> — 用 Rust 编写的 ACP/MCP 智能体编排运行时，提供桌面 GUI、VS Code 插件，支持 37+ AI 供应商。
 </p>
 
 <p align="center">
@@ -14,8 +14,8 @@
 
 [![Rust](https://img.shields.io/badge/rust-1.1.0-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-1400%2B-brightgreen)]()
-[![Providers](https://img.shields.io/badge/providers-35%2B-9cf)]()
+[![Tests](https://img.shields.io/badge/tests-1472-brightgreen)]()
+[![Providers](https://img.shields.io/badge/providers-37%2B-9cf)]()
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
 
 ## go-on 是什么？
@@ -43,10 +43,15 @@ cargo run --manifest-path gui/Cargo.toml
 cargo run -- --chat
 
 # 作为 MCP 服务端启动
-cargo run -- --protocol-mode mcp-stdio
+cargo run -- --protocol-mode mcp_stdio
 ```
 
-首次运行时会检测 AI 供应商配置，若未配置则启动交互式初始化向导。  
+上次运行：**lib 37 + bin 1435 = 1472 项测试，0 失败**
+
+首次运行时会检测 AI 供应商配置，若未配置则启动交互式初始化向导。
+
+**完整文档**：`DOC/` 目录（mdBook 格式） — `cd DOC && mdbook serve --open`
+
 默认健康检查：`http://127.0.0.1:8090/health`
 
 ---
@@ -76,10 +81,10 @@ cargo run -- --protocol-mode mcp-stdio
 - **快路径缓存** — SHA-256 指纹索引、TTL/LRU 淘汰、四层缓存（意图/技能/环境/路由）
 - **预测式重路由** — 基于健康评分的主动智能体切换，非仅失败后回退
 
-### AI 供应商支持（35+）
-OpenAI · Anthropic · DeepSeek · Gemini · Groq · Ollama · Mistral · Qwen · Llama · Cohere · AI21 · Perplexity · Together · Fireworks · Replicate · MiniMax · Moonshot · 智谱 GLM · 百度千帆 · 字节豆包 · 腾讯混元 · StepFun · Skywork · 以及更多。
+### AI 供应商支持（37+）
+OpenAI · Anthropic · DeepSeek · Gemini · xAI Grok · Groq · Mistral · Qwen · Llama · SiliconFlow · Cohere · AI21 · Perplexity · Together · Fireworks · Replicate · MiniMax · Moonshot · 智谱 GLM · 百度千帆 · 字节豆包 · 腾讯混元 · StepFun · Skywork · 以及更多。
 
-OpenAI、Anthropic、DeepSeek、Gemini 四家供应商已支持原生 Function Call。
+OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家供应商已支持原生 Function Call。
 
 ### 协议与传输
 - **ACP**（Agent Client Protocol）— stdio + HTTP，JSON-RPC 2.0
@@ -200,9 +205,9 @@ npm run compile
 
 | 配置 | cargo check | cargo clippy `-D warnings` | 测试 |
 |:-----|:-----------:|:--------------------------:|:----:|
-| `profile-local` | ✅ 0 errors | ✅ 0 warnings | 800+ |
-| `profile-simple-server` | ✅ 0 errors | ✅ 0 warnings | 900+ |
-| `profile-multi-users-server` | ✅ 0 errors | ✅ 0 warnings | 1,000+ |
+| `profile-local` | ✅ 0 errors | ✅ 0 warnings | **1472**（lib 37 + bin 1435） |
+| `profile-simple-server` | ✅ 0 errors | ✅ 0 warnings | **900+** |
+| `profile-multi-users-server` | ✅ 0 errors | ✅ 0 warnings | **1,000+** |
 
 ---
 

@@ -1,10 +1,29 @@
+use std::sync::{Arc, Mutex, OnceLock};
+
 use super::prompts_pack::{build_prompts_get_tool, build_prompts_list_tool};
 use super::*;
 use crate::acp::helpers::tool_governance::{
     record_tool_allowed, record_tool_budget_denied, record_tool_harness_sandbox_denied,
     record_tool_policy_denied, record_tool_rbac_denied,
 };
+use crate::orchestration::skill::SkillRegistry;
+use crate::orchestration::skill_discovery::SkillDiscovery;
 use crate::orchestration::skill_import::{SkillImportPolicy, SkillImportRequest, SkillImportStore};
+
+/// Global `SkillDiscovery` engine, lazily initialized on first `skill-finder` call.
+static SKILL_DISCOVERY: OnceLock<Mutex<SkillDiscovery>> = OnceLock::new();
+
+/// Get or create the global `SkillDiscovery` instance.
+pub(crate) fn skill_discovery() -> &'static Mutex<SkillDiscovery> {
+    SKILL_DISCOVERY.get_or_init(|| Mutex::new(SkillDiscovery::new()))
+}
+
+/// Initialize the global SkillDiscovery with a registry reference.
+/// Called during server startup to wire the live skill registry into the discovery engine.
+pub(crate) fn init_skill_discovery(registry: Arc<Mutex<SkillRegistry>>) {
+    let mut discovery = skill_discovery().lock().unwrap_or_else(|e| e.into_inner());
+    discovery.set_registry(registry);
+}
 
 pub(super) fn skill_import_policy(server: &AcpServer) -> SkillImportPolicy {
     SkillImportPolicy::from_runtime(&server.runtime_config)

@@ -41,8 +41,10 @@ pub mod scheduler;
 pub mod session_compressor; // BLUE44: Session summary compression for memory management
 pub mod session_context; // BLUE44: Key concept extraction & intelligent message retention
 pub mod skill;
+pub mod skill_discovery;
 pub mod skill_import;
 pub mod skill_market;
+pub mod skills_folder;
 pub mod startup_context;
 pub mod task_decomposer;
 pub mod task_graph;

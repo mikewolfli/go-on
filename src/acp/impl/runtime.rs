@@ -188,6 +188,7 @@ pub fn new_acp_server(
             server.capability_bus = Some(capability_bus);
             server.provenance_ledger = Some(provenance_ledger);
             server.rbac_enforcer = Some(rbac_enforcer);
+            server.skill_market_registry = None;
 
             // Create session manager if user auth is enabled
             if server.runtime_config.user_auth_enabled {
@@ -234,6 +235,11 @@ pub fn new_acp_server(
                     ),
                 ));
             }
+
+            // Wire the skill registry into the global discovery engine
+            crate::acp::r#impl::request::tools_pack::init_skill_discovery(
+                server.skill_registry.clone(),
+            );
 
             // Wire the new modules' state from CapabilityBus into the server's
             // standalone fields so process_chat_request can access them directly.
@@ -398,6 +404,7 @@ pub fn new_acp_server(
                 ),
                 session_manager: None,
                 rbac_enforcer: None,
+                skill_market_registry: None,
             };
 
             // Create session manager if user auth is enabled
@@ -448,6 +455,11 @@ pub fn new_acp_server(
                     ),
                 ));
             }
+
+            // Wire the skill registry into the global discovery engine
+            crate::acp::r#impl::request::tools_pack::init_skill_discovery(
+                fallback_server.skill_registry.clone(),
+            );
 
             // Wire the new modules' state from CapabilityBus into the fallback server's
             // standalone fields so process_chat_request can access them directly.

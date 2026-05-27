@@ -114,6 +114,32 @@ impl Agent for GroqAgent {
     fn available_models(&self) -> Vec<ModelInfo> {
         vec![
             ModelInfo {
+                id: "llama-4-maverick".to_string(),
+                name: "Llama 4 Maverick".to_string(),
+                description: "Llama 4 Maverick (experimental, fast, function calling)"
+                    .to_string(),
+                is_default: self.model == "llama-4-maverick",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                ],
+                context_window: Some(1_000_000),
+            },
+            ModelInfo {
+                id: "llama-4-scout-17b-16e-instruct".to_string(),
+                name: "Llama 4 Scout 17B MoE".to_string(),
+                description: "Llama 4 Scout 17B MoE Instruct (10M context, efficient)"
+                    .to_string(),
+                is_default: self.model == "llama-4-scout-17b-16e-instruct",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                ],
+                context_window: Some(10_000_000),
+            },
+            ModelInfo {
                 id: "llama-3.3-70b-versatile".to_string(),
                 name: "Llama 3.3 70B Versatile".to_string(),
                 description: "Llama 3.3 70B Versatile (flagship LLM for chat, function calling, and streaming)".to_string(),
@@ -130,11 +156,12 @@ impl Agent for GroqAgent {
                 context_window: Some(128_000),
             },
             ModelInfo {
-                id: "openai/gpt-oss-120b".to_string(),
-                name: "GPT-OSS 120B".to_string(),
-                description: "OpenAI GPT-OSS 120B (production)".to_string(),
-                is_default: self.model == "openai/gpt-oss-120b",
-                capabilities: vec!["chat".to_string(), "streaming".to_string()],
+                id: "deepseek-r1-distill-llama-70b".to_string(),
+                name: "DeepSeek R1 Distill Llama 70B".to_string(),
+                description: "DeepSeek R1 Distill Llama 70B (reasoning, Groq hosted)"
+                    .to_string(),
+                is_default: self.model == "deepseek-r1-distill-llama-70b",
+                capabilities: vec!["chat".to_string(), "reasoning".to_string(), "streaming".to_string()],
                 context_window: Some(128_000),
             },
             ModelInfo {
@@ -143,14 +170,6 @@ impl Agent for GroqAgent {
                 description: "Qwen3 32B (preview)".to_string(),
                 is_default: self.model == "qwen/qwen3-32b",
                 capabilities: vec!["chat".to_string(), "streaming".to_string()],
-                context_window: Some(128_000),
-            },
-            ModelInfo {
-                id: "llama-4-maverick".to_string(),
-                name: "Llama 4 Maverick".to_string(),
-                description: "Llama 4 Maverick (experimental, fast, function calling)".to_string(),
-                is_default: self.model == "llama-4-maverick",
-                capabilities: vec!["chat".to_string(), "function_calling".to_string(), "streaming".to_string()],
                 context_window: Some(128_000),
             },
             ModelInfo {

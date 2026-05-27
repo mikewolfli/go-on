@@ -112,18 +112,18 @@ impl Agent for ReplicateAgent {
     fn available_models(&self) -> Vec<ModelInfo> {
         vec![
             ModelInfo {
-                id: "meta/meta-llama-3-70b-instruct".to_string(),
-                name: "Meta Llama 3 70B Instruct".to_string(),
-                description: "Meta Llama 3 70B Instruct (128K context)".to_string(),
-                is_default: self.model == "meta/meta-llama-3-70b-instruct",
+                id: "meta/meta-llama-3.1-70b-instruct".to_string(),
+                name: "Meta Llama 3.1 70B Instruct".to_string(),
+                description: "Meta Llama 3.1 70B Instruct (128K context)".to_string(),
+                is_default: self.model == "meta/meta-llama-3.1-70b-instruct",
                 capabilities: vec!["chat".to_string(), "streaming".to_string()],
                 context_window: Some(128_000),
             },
             ModelInfo {
-                id: "meta/meta-llama-3-8b-instruct".to_string(),
-                name: "Meta Llama 3 8B Instruct".to_string(),
-                description: "Meta Llama 3 8B Instruct (128K context)".to_string(),
-                is_default: self.model == "meta/meta-llama-3-8b-instruct",
+                id: "meta/meta-llama-3.1-8b-instruct".to_string(),
+                name: "Meta Llama 3.1 8B Instruct".to_string(),
+                description: "Meta Llama 3.1 8B Instruct (128K context)".to_string(),
+                is_default: self.model == "meta/meta-llama-3.1-8b-instruct",
                 capabilities: vec!["chat".to_string(), "streaming".to_string()],
                 context_window: Some(128_000),
             },

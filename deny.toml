@@ -1,17 +1,20 @@
 # cargo-deny configuration
 [advisories]
-vulnerability = "deny"
-unmaintained = "warn"
-unsound = "deny"
-notice = "warn"
+ignore = [
+    #"RUSTSEC-0000-0000",
+    #{ id = "RUSTSEC-0000-0000", reason = "you can specify a reason the advisory is ignored" },
+]
+#git-fetch-with-cli = true
 
 [licenses]
-allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MPL-2.0", "Unicode-DFS-2016", "Zlib", "OpenSSL"]
-deny = []
-copyleft = "deny"
-allow-osi-fsf-free = "neither"
-default = "deny"
+allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MPL-2.0", "Unicode-DFS-2016", "Unicode-3.0", "CDLA-Permissive-2.0", "Zlib", "OpenSSL"]
+confidence-threshold = 0.8
+
+[licenses.private]
+ignore = false
 
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+highlight = "all"
+allow-workspace = false

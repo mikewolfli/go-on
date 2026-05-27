@@ -36,6 +36,7 @@ pub mod perplexity;
 pub mod progress_reporter;
 pub mod qianfan;
 pub mod replicate;
+pub mod siliconflow;
 pub mod skywork;
 pub mod sse_compressor;
 pub mod sse_optimizer;
@@ -44,15 +45,33 @@ pub mod titan;
 pub mod together;
 pub mod vendors;
 pub mod wenxin;
+pub mod xai;
 pub mod xihu;
 pub mod yi;
 
-// Suppress dead-code warnings for not-yet-integrated modules.
 // These modules are publicly exported and will be fully wired in upcoming integrations.
 #[cfg(test)]
 mod integration_gate {
     fn _gate_sse_optimizer() {
         let _ = super::sse_optimizer::SseBufferPool::new(4, 1024);
+    }
+
+    fn _gate_siliconflow() {
+        let _ = super::siliconflow::SiliconFlowAgent::new(
+            "KEY".to_string(),
+            "https://api.siliconflow.cn".to_string(),
+            "test-model".to_string(),
+            reqwest::Client::new(),
+        );
+    }
+
+    fn _gate_xai() {
+        let _ = super::xai::XaiAgent::new(
+            "KEY".to_string(),
+            "https://api.x.ai".to_string(),
+            "grok-3".to_string(),
+            reqwest::Client::new(),
+        );
     }
 }
 
@@ -92,11 +111,13 @@ pub use openai_compatible::OpenAiCompatibleAgent;
 pub use perplexity::PerplexityAgent;
 pub use qianfan::QianfanAgent;
 pub use replicate::ReplicateAgent;
+pub use siliconflow::SiliconFlowAgent;
 pub use skywork::SkyworkAgent;
 pub use stepfun::StepFunAgent;
 pub use titan::TitanAgent;
 pub use together::TogetherAgent;
 pub use wenxin::WenxinAgent;
+pub use xai::XaiAgent;
 pub use xihu::XihuAgent;
 pub use yi::YiAgent;
 

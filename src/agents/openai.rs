@@ -253,6 +253,20 @@ impl Agent for OpenAiAgent {
                 context_window: Some(1_000_000),
             },
             crate::agent::ModelInfo {
+                id: "o4-mini".to_string(),
+                name: "o4-mini".to_string(),
+                description: "OpenAI o4-mini (latest reasoning model, fast & cost-efficient)"
+                    .to_string(),
+                is_default: self.model == "o4-mini",
+                capabilities: vec![
+                    "chat".to_string(),
+                    "reasoning".to_string(),
+                    "function_calling".to_string(),
+                    "streaming".to_string(),
+                ],
+                context_window: Some(200_000),
+            },
+            crate::agent::ModelInfo {
                 id: "o3-mini".to_string(),
                 name: "o3-mini".to_string(),
                 description: "OpenAI o3-mini (reasoning model)".to_string(),

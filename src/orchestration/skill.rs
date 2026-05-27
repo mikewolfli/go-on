@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -10,6 +10,25 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::i18n::runtime::tf;
+
+/// Trait for providing LLM-based prompt execution to PromptBasedSkill.
+#[async_trait]
+pub trait PromptSkillAgent: Send + Sync {
+    /// Execute a prompt and return the LLM response as a string.
+    async fn execute_prompt(&self, prompt: &str) -> Result<String>;
+}
+
+/// Global LLM agent provider for PromptBasedSkill execution.
+/// Set during server startup to enable real LLM-based skill execution.
+static PROMPT_SKILL_AGENT: OnceLock<Arc<dyn PromptSkillAgent>> = OnceLock::new();
+
+/// Set the global prompt skill agent for LLM execution.
+/// Must be called before any PromptBasedSkill.execute() invocations that
+/// require real LLM execution.
+#[cfg_attr(not(test), allow(dead_code))] // public API — reserved for LLM agent wiring
+pub fn set_prompt_skill_agent(agent: Arc<dyn PromptSkillAgent>) {
+    let _ = PROMPT_SKILL_AGENT.set(agent);
+}
 
 #[async_trait]
 pub trait Skill: Send + Sync {
@@ -252,7 +271,7 @@ impl SkillRegistry {
                 let name_score = name_similarity(&normalized_requested, &normalized_name);
                 let runtime_score = self.score_of(&name).unwrap_or(0.5);
                 let semantic_score = semantic_similarity(&intent_tokens, skill);
-                let composite = (0.45 * name_score + 0.35 * runtime_score + 0.20 * semantic_score)
+                let composite = (0.35 * name_score + 0.25 * runtime_score + 0.40 * semantic_score)
                     .clamp(0.0, 1.0);
                 (name.clone(), composite)
             })
@@ -570,6 +589,25 @@ impl Skill for PromptBasedSkill {
             self.prompt_template.clone()
         };
 
+        // If a global LLM prompt agent is available, use it directly for
+        // real LLM execution instead of the retry fallback loop.
+        if let Some(agent) = PROMPT_SKILL_AGENT.get() {
+            let agent_prompt = prompt.clone();
+            return agent
+                .execute_prompt(&agent_prompt)
+                .await
+                .map(|response| {
+                    json!({
+                        "success": true,
+                        "response": response,
+                        "skill_type": "prompt_based_llm",
+                    })
+                })
+                .map_err(|e| {
+                    anyhow::anyhow!("Prompt skill '{}' LLM execution failed: {}", self.name, e)
+                });
+        }
+
         // Execute with retry loop and timeout per attempt
         let mut last_error = None;
         for attempt in 0..=max_retries {
@@ -630,7 +668,7 @@ impl Skill for PromptBasedSkill {
 impl PromptBasedSkill {
     /// Convenience method: wraps this skill into `Arc<dyn Skill>` for registry registration.
     /// Not called internally but kept as a public utility for consumers.
-    #[allow(dead_code)] // F-GAP-12 — planned wiring: skill system
+    #[cfg_attr(not(test), allow(dead_code))] // public API — reserved for external registry wiring
     pub fn boxed(self) -> Arc<dyn Skill> {
         Arc::new(self)
     }

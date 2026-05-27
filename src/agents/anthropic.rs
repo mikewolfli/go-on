@@ -577,7 +577,8 @@ impl Agent for AnthropicAgent {
             crate::agent::ModelInfo {
                 id: "claude-3-opus".to_string(),
                 name: "Claude 3 Opus".to_string(),
-                description: "Anthropic Claude 3 Opus (most capable)".to_string(),
+                description: "Anthropic Claude 3 Opus (DEPRECATED — use claude-opus-4-7)"
+                    .to_string(),
                 is_default: self.model == "claude-3-opus",
                 capabilities: vec![
                     "chat".to_string(),
@@ -590,7 +591,8 @@ impl Agent for AnthropicAgent {
             crate::agent::ModelInfo {
                 id: "claude-3-haiku".to_string(),
                 name: "Claude 3 Haiku".to_string(),
-                description: "Anthropic Claude 3 Haiku (fast & cost-efficient)".to_string(),
+                description: "Anthropic Claude 3 Haiku (DEPRECATED — use claude-haiku-4-5)"
+                    .to_string(),
                 is_default: self.model == "claude-3-haiku",
                 capabilities: vec![
                     "chat".to_string(),

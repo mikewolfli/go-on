@@ -33,6 +33,7 @@ use crate::orchestration::promotion_plugin::PromotionRegistry;
 use crate::orchestration::prompt_layers::PromptAssembler;
 use crate::orchestration::scheduler::AgentWorkerScheduler;
 use crate::orchestration::skill::SkillRegistry;
+use crate::orchestration::skill_market::SkillMarketRegistry;
 use crate::orchestration::task_graph_store::TaskGraphStore;
 use crate::orchestration::task_schema::SchemaRegistry;
 use crate::orchestration::workflow_optimizer::OptimizerRegistry;
@@ -169,6 +170,8 @@ pub struct AcpServer {
     pub prompt_manager: PromptManager,
     /// RBAC enforcer for request-level authorization
     pub rbac_enforcer: Option<Arc<std::sync::RwLock<crate::governance::rbac::RbacEnforcer>>>,
+    /// Skill market registry for external skill discovery and installation
+    pub skill_market_registry: Option<Arc<SkillMarketRegistry>>,
 }
 
 impl AcpServer {
@@ -528,6 +531,18 @@ impl ServerBuilder {
         }
         let skill_registry = Arc::new(StdMutex::new(registry));
 
+        // Register built-in skills
+        {
+            let mut reg = skill_registry.lock().unwrap_or_else(|e| e.into_inner());
+            let _ = reg.register(Arc::new(crate::orchestration::skill::EchoSkill));
+            let _ = reg.register(Arc::new(
+                crate::orchestration::skill::SkillCreatorSkill::new(skill_registry.clone()),
+            ));
+        }
+
+        // Wire the skill registry into the global discovery engine
+        crate::acp::r#impl::request::tools_pack::init_skill_discovery(skill_registry.clone());
+
         let telemetry_runtime = Arc::new(StdMutex::new(TelemetryRuntime::new(
             &RuntimeConfig::default(),
         )));
@@ -619,6 +634,7 @@ impl ServerBuilder {
             session_manager: None,
             prompt_manager,
             rbac_enforcer: None,
+            skill_market_registry: None,
         })
     }
 }

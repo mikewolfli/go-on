@@ -122,7 +122,6 @@ pub struct SkillInstallation {
 // ---------------------------------------------------------------------------
 
 /// A registry of skills available from a remote marketplace.
-#[allow(dead_code)] // F-GAP-12 — reserved for skill marketplace integration
 pub struct SkillMarketRegistry {
     /// Registry URL or identifier.
     registry_url: String,
@@ -140,7 +139,6 @@ pub struct SkillMarketRegistry {
     _http_client: reqwest::Client,
 }
 
-#[allow(dead_code)] // F-GAP-12 — reserved for skill marketplace integration
 impl SkillMarketRegistry {
     /// Create a new SkillMarketRegistry.
     pub fn new(

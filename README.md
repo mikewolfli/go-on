@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>go-on</strong> — A Rust-based ACP/MCP agent orchestration runtime with desktop GUI, VS Code extension, and 35+ AI provider support.
+  <strong>go-on</strong> — A Rust-based ACP/MCP agent orchestration runtime with desktop GUI, VS Code extension, and 37+ AI provider support.
 </p>
 
 <p align="center">
@@ -14,8 +14,8 @@
 
 [![Rust](https://img.shields.io/badge/rust-1.1.0-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-1400%2B-brightgreen)]()
-[![Providers](https://img.shields.io/badge/providers-35%2B-9cf)]()
+[![Tests](https://img.shields.io/badge/tests-1472-brightgreen)]()
+[![Providers](https://img.shields.io/badge/providers-37%2B-9cf)]()
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
 
 ## What is go-on?
@@ -43,10 +43,15 @@ cargo run --manifest-path gui/Cargo.toml
 cargo run -- --chat
 
 # Start as MCP server
-cargo run -- --protocol-mode mcp-stdio
+cargo run -- --protocol-mode mcp_stdio
 ```
 
-First run opens an interactive setup wizard if no AI providers are configured.  
+Last run: **lib 37 + bin 1435 = 1472 tests, 0 failed**
+
+First run opens an interactive setup wizard if no AI providers are configured.
+
+**Full documentation**: see the `DOC/` directory (mdBook format) — `cd DOC && mdbook serve --open`
+
 Default health check: `http://127.0.0.1:8090/health`
 
 ---
@@ -76,10 +81,10 @@ Default health check: `http://127.0.0.1:8090/health`
 - **Fast path cache** — SHA-256 fingerprint, TTL/LRU eviction, 4-tier caching (intent/skill/env/route)
 - **Predictive reroute** — Proactive agent switching based on health scoring, not just failure recovery
 
-### AI Provider Support (35+)
-OpenAI · Anthropic · DeepSeek · Gemini · Groq · Ollama · Mistral · Qwen · Llama · Cohere · AI21 · Perplexity · Together · Fireworks · Replicate · MiniMax · Moonshot · Zhipu GLM · Baidu Qianfan · ByteDance Doubao · Tencent Hunyuan · StepFun · Skywork · and more.
+### AI Provider Support (37+)
+OpenAI · Anthropic · DeepSeek · Gemini · xAI Grok · Groq · Mistral · Qwen · Llama · SiliconFlow · Cohere · AI21 · Perplexity · Together · Fireworks · Replicate · MiniMax · Moonshot · Zhipu GLM · Baidu Qianfan · ByteDance Doubao · Tencent Hunyuan · StepFun · Skywork · and more.
 
-Native function calling is supported for OpenAI, Anthropic, DeepSeek, and Gemini providers.
+Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Groq, and xAI Grok providers.
 
 ### Protocols & Transport
 - **ACP** (Agent Client Protocol) — stdio + HTTP, with JSON-RPC 2.0
@@ -200,9 +205,9 @@ npm run compile
 
 | Profile | cargo check | cargo clippy `-D warnings` | Tests |
 |:--------|:-----------:|:--------------------------:|:-----:|
-| `profile-local` | ✅ 0 errors | ✅ 0 warnings | 800+ |
-| `profile-simple-server` | ✅ 0 errors | ✅ 0 warnings | 900+ |
-| `profile-multi-users-server` | ✅ 0 errors | ✅ 0 warnings | 1,000+ |
+| `profile-local` | ✅ 0 errors | ✅ 0 warnings | **1472** (37 lib + 1435 bin) |
+| `profile-simple-server` | ✅ 0 errors | ✅ 0 warnings | **900+** |
+| `profile-multi-users-server` | ✅ 0 errors | ✅ 0 warnings | **1,000+** |
 
 ---
 

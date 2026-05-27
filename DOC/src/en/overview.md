@@ -37,7 +37,7 @@ Three build profiles support different deployment scenarios:
 | `profile-simple-server` | SQLite + sqlite-vec | Single-server deployment | `cargo build --no-default-features -F profile-simple-server` |
 | `profile-multi-users-server` | PostgreSQL + pgvector | Multi-user production | `cargo build --no-default-features -F profile-multi-users-server` |
 
-## Verification Status (Phase 4+ — 25 Rounds of Deep Scan Complete, GUI 7 Rounds)
+## Verification Status (Phase 4+ — 26 Rounds of Deep Scan Complete, GUI 7 Rounds)
 
 | Profile | `cargo check` | `cargo clippy -D warnings` | `cargo test` |
 |---------|:-----------:|:------------------------:|:----------:|
@@ -181,13 +181,13 @@ go-on provides full i18n coverage (~95%) across the Rust backend:
 | Chinese (Simplified) | `languages/zh_CN.json` | 448+ |
 | Chinese (Traditional) | `languages/zh_TW.json` | 448+ |
 
-Covered layers: ACP/MCP HTTP errors (100%), agent provider modules (100%), config validation (100%), CLI setup (100%), API handler errors (100%), orchestration (100%), GUI (~98%), VS Code addon (70+ keys).
+Covered layers: ACP/MCP HTTP errors (100%), agent provider modules (100%, 37+ providers), config validation (100%), CLI setup (100%), API handler errors (100%), orchestration (100%), GUI (~98%), VS Code addon (70+ keys).
 
 ## Repository areas that map to the architecture
 
 - `src/`: backend runtime, CLI, setup, ACP and MCP implementation.
   - `src/acp/`: ACP server, request routing, workflow/task/chat/checkpoint
-  - `src/agents/`: Provider adapters (OpenAI, Anthropic, DeepSeek, Ollama), AgentFactory
+  - `src/agents/`: Provider adapters (OpenAI, Anthropic, DeepSeek, Gemini, xAI Grok, SiliconFlow, and 32+ more), AgentFactory
   - `src/core/`: Config, setup, readiness, error model
   - `src/governance/`: Policy/rule governance, audit, security governor, drift protection
   - `src/intelligence/`: Selectors, RL, capability bus, discovery, consensus, evolution

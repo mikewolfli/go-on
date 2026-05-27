@@ -37,7 +37,7 @@ cargo run --manifest-path gui/Cargo.toml
 | `profile-simple-server` | SQLite + sqlite-vec | 單服務部署 | `cargo build --no-default-features -F profile-simple-server` |
 | `profile-multi-users-server` | PostgreSQL + pgvector | 多用戶生產環境 | `cargo build --no-default-features -F profile-multi-users-server` |
 
-## 驗證狀態（Phase 4+ — 25 輪深度掃描完成，GUI 7 輪）
+## 驗證狀態（Phase 4+ — 26 輪深度掃描完成，GUI 7 輪）
 
 | 配置文件 | `cargo check` | `cargo clippy -D warnings` | `cargo test` |
 |---------|:-----------:|:------------------------:|:----------:|
@@ -179,13 +179,13 @@ go-on 在後端實現了約 **95%** 的全鏈路國際化覆蓋：
 | 簡體中文 | `languages/zh_CN.json` | 448+ |
 | 繁體中文 | `languages/zh_TW.json` | 448+ |
 
-覆蓋層：ACP/MCP HTTP 錯誤（100%）、Agent 供應商模塊（100%）、配置驗證（100%）、CLI 初始化（100%）、API 處理錯誤（100%）、編排層（100%）、GUI（約 98%）、VS Code 插件（70+ 鍵值）。
+覆蓋層：ACP/MCP HTTP 錯誤（100%）、Agent 供應商模塊（100%，37+ 供應商）、配置驗證（100%）、CLI 初始化（100%）、API 處理錯誤（100%）、編排層（100%）、GUI（約 98%）、VS Code 插件（70+ 鍵值）。
 
 ## 與架構對應的倉庫目錄
 
 - `src/`：後端運行時、CLI、setup、ACP 與 MCP 實現。
   - `src/acp/`：ACP 服務、請求路由、workflow/task/chat/checkpoint
-  - `src/agents/`：Provider 適配器（OpenAI、Anthropic、DeepSeek、Ollama），AgentFactory
+  - `src/agents/`：Provider 適配器（OpenAI、Anthropic、DeepSeek、Gemini、xAI Grok、SiliconFlow 等 37+），AgentFactory
   - `src/core/`：配置、初始化、就緒性檢查、錯誤模型
   - `src/governance/`：策略/規則治理、審計、安全治理器、漂移防護
   - `src/intelligence/`：選擇器、強化學習、能力總線、發現、共識、演化

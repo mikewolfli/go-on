@@ -3,7 +3,7 @@ use crate::i18n::{I18n, Lang};
 use crate::theme::Theme;
 
 #[cfg(test)]
-mod tests {
+mod unit_tests {
     use super::*;
 
     // ── App config tests ──────────────────────────────────────────────

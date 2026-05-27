@@ -39,17 +39,17 @@ impl I18n {
     fn load_all(m: &mut HashMap<&'static str, HashMap<Lang, &'static str>>) {
         for (key, val) in en::all() {
             m.entry(key)
-                .or_insert_with(HashMap::new)
+                .or_default()
                 .insert(Lang::En, val);
         }
         for (key, val) in zh_cn::all() {
             m.entry(key)
-                .or_insert_with(HashMap::new)
+                .or_default()
                 .insert(Lang::ZhCn, val);
         }
         for (key, val) in zh_tw::all() {
             m.entry(key)
-                .or_insert_with(HashMap::new)
+                .or_default()
                 .insert(Lang::ZhTw, val);
         }
     }

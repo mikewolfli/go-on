@@ -1,8 +1,9 @@
 [book]
-title = "go-on Documentation"
-authors = ["GitHub Copilot"]
+title = "go-on Documentation — AI Agent Orchestration System"
+authors = ["go-on Team"]
 language = "en"
 src = "src"
+description = "Complete documentation for go-on: ACP/MCP agent orchestration runtime with 37+ AI providers, 14-bus architecture, and 21 F-GAP modules"
 
 [build]
 build-dir = "book"

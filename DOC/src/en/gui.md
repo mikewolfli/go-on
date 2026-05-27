@@ -74,7 +74,7 @@ The GUI displays a **Risk Decision panel** on AI responses when the backend's go
 The panel adapts theme-wise: high-risk topics get a warm orange/red background, normal risk gets a subtle green tint — both respecting dark/light mode correctly.
 
 ### Settings Tab
-- **Provider Management**: dynamic environment variable injection (all 34+ providers), no longer hardcoded to 8
+- **Provider Management**: dynamic environment variable injection (all 37+ providers), no longer hardcoded to 8
 - **Config Editor**: manages `gui_config.json` with JSON syntax validation
 - **Theme Selection**: 6 visual themes (Minimal / Chinese-Classic / Wuxia / Landscape / Hello Kitty / Dark)
 - **Language Switching**: English, Simplified Chinese, Traditional Chinese

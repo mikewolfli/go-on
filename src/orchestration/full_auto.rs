@@ -387,7 +387,7 @@ impl FullAutoFlow {
     ///
     /// Caller-available builder method — callers should invoke
     /// `enable_skill_market()` before `run()` for external skill discovery.
-    #[allow(dead_code)] // public builder API intended for external consumers
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn enable_skill_market(&mut self) {
         let cache_dir = std::env::temp_dir().join("go-on-skill-market");
         let import_policy = SkillImportPolicy {
