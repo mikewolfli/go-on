@@ -157,5 +157,5 @@ jobs:
       - name: Package VSIX (dry-run, skip marketplace auth)
         run: |
           npm install -g @vscode/vsce 2>/dev/null || true
-          vsce package --out vscode-addon/go-on-vscode.vsix 2>&1 || \
+          cd vscode-addon && vsce package --out go-on-vscode.vsix 2>&1 || \
             echo "[warn] VSIX packaging skipped (requires marketplace publisher)"
