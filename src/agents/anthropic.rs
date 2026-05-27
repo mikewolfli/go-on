@@ -716,8 +716,8 @@ mod tests {
         let mut options = HashMap::new();
         options.insert("thinking".to_string(), json!("enabled"));
 
-        let normalized = AnthropicAgent::normalize_thinking_option(&Some(options))
-            .expect("normalized thinking");
+        let normalized =
+            AnthropicAgent::normalize_thinking_option(&Some(options)).expect("normalized thinking");
 
         assert_eq!(normalized["type"], "enabled");
     }

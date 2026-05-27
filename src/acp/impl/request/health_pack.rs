@@ -235,12 +235,11 @@ pub(super) async fn handle_cache_clear(
         .lock()
         .map(|cache| cache.clear_all())
         .unwrap_or(0);
-    let persistent_removed =
-        if let Some(cache) = server.cache.response_cache.clone() {
-            crate::acp::r#impl::storage::cache_clear(server, cache).await?
-        } else {
-            0
-        };
+    let persistent_removed = if let Some(cache) = server.cache.response_cache.clone() {
+        crate::acp::r#impl::storage::cache_clear(server, cache).await?
+    } else {
+        0
+    };
 
     send_result(
         server,
@@ -263,12 +262,11 @@ pub(super) async fn handle_vector_clear(
     server: &AcpServer,
     request_id: Option<Value>,
 ) -> Result<()> {
-    let (memory_removed, summary_removed) =
-        if let Some(store) = server.cache.vector_store.clone() {
-            store.clear_all()?
-        } else {
-            (0, 0)
-        };
+    let (memory_removed, summary_removed) = if let Some(store) = server.cache.vector_store.clone() {
+        store.clear_all()?
+    } else {
+        (0, 0)
+    };
 
     send_result(
         server,

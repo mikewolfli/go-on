@@ -282,7 +282,6 @@ mod tests {
         let _ = post_check("no-panic-post-b", "agent", false, "something failed");
         let _ = post_check("no-panic-post-c", "agent", false, "critical crash");
         // If we got here without panicking, the warning paths are safe
-        assert!(true);
     }
 
     #[test]

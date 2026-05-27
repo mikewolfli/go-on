@@ -1,4 +1,4 @@
-#![recursion_limit = "512"]
+#![recursion_limit = "2048"]
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 //! Main entry point for the go-on ACP proxy
@@ -77,10 +77,15 @@ pub use crate::core::context;
 pub use crate::core::error;
 pub use crate::core::setup;
 pub use crate::governance::audit;
+pub use crate::governance::drift;
 pub use crate::governance::hardening;
+pub use crate::governance::harness_bus;
 pub use crate::governance::pua;
+pub use crate::governance::rationalization;
+pub use crate::governance::rbac;
 pub use crate::governance::review_controls;
 pub use crate::governance::runtime_controls;
+pub use crate::governance::security_governor;
 pub use crate::i18n::runtime;
 pub use crate::i18n::watcher as i18n_watcher;
 pub use crate::intelligence::adaptive_selector;
@@ -1411,20 +1416,11 @@ async fn start_server(
 
     let ledger = ArtifactLedger::new(Some(config_path));
 
-    // Wire the full 14-Bus capability system. This instantiates all 37
-    // F-GAP cognitive modules with default configurations, serving as
-    // the central integration hub for self-model, world-model,
-    // consciousness, metacognitive, reputation, Q-learning, scenario
-    // matching, discovery, consensus, evolution, FederatedRL, agent
-    // factory, orchestration council, and multi-channel transport.
-    let _capability_bus = {
-        let harness = crate::governance::harness_bus::default_harness_bus(None);
-        crate::intelligence::capability_bus::core::CapabilityBus::new_default(
-            std::sync::Arc::new(harness),
-            None,
-        )
-    };
-    info!("CapabilityBus initialized with 37 F-GAP cognitive modules");
+    // The CapabilityBus (14-Bus system with all cognitive modules) is owned
+    // and initialized inside the ACP runtime (new_acp_server) where it is
+    // genuinely wired into sense→decide→act→feedback→evolve lifecycle
+    // and exposed via the /health endpoint. No orphaned instance here.
+    info!("CapabilityBus lifecycle managed by ACP runtime");
 
     if let Some(task) = cli.plan_task.as_deref() {
         let plan = build_task_plan(task);
@@ -1506,6 +1502,15 @@ async fn start_server(
     );
     runtime_config.protocol_mode = Some(access_selection.configured_mode.clone());
 
+    let dispatch_mode = if access_selection.configured_mode == "adaptive" {
+        match access_selection.startup_transport {
+            crate::protocol::access_mode::TransportMode::Http => "acp_http",
+            crate::protocol::access_mode::TransportMode::Stdio => "acp_stdio",
+        }
+    } else {
+        access_selection.configured_mode.as_str()
+    };
+
     // Delegate to the transport factory for protocol-mode-specific server construction
     crate::acp::transport_factory::dispatch_server(
         registry,
@@ -1513,7 +1518,7 @@ async fn start_server(
         vector_store,
         config_path,
         runtime_config,
-        &access_selection.configured_mode,
+        dispatch_mode,
         &acp_http_bind.unwrap_or_else(|| "127.0.0.1:8090".to_string()),
         autotune_state,
         autotune_config,

@@ -392,6 +392,13 @@ fn acp_and_mcp_tool_count_consistent() {
         .as_array()
         .map(|a| a.len())
         .unwrap_or(0);
+    let acp_names: std::collections::BTreeSet<String> = acp_tools["result"]["tools"]
+        .as_array()
+        .into_iter()
+        .flat_map(|tools| tools.iter())
+        .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+        .map(|name| name.to_string())
+        .collect();
     acp.shutdown();
     drop(acp);
 
@@ -404,11 +411,21 @@ fn acp_and_mcp_tool_count_consistent() {
         .as_array()
         .map(|a| a.len())
         .unwrap_or(0);
+    let mcp_names: std::collections::BTreeSet<String> = mcp_tools["result"]["tools"]
+        .as_array()
+        .into_iter()
+        .flat_map(|tools| tools.iter())
+        .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+        .map(|name| name.to_string())
+        .collect();
     mcp.shutdown();
+
+    let acp_only: Vec<String> = acp_names.difference(&mcp_names).cloned().collect();
+    let mcp_only: Vec<String> = mcp_names.difference(&acp_names).cloned().collect();
 
     assert_eq!(
         acp_count, mcp_count,
-        "ACP and MCP must report the same number of tools; acp={} mcp={}",
-        acp_count, mcp_count
+        "ACP and MCP must report the same number of tools; acp={} mcp={}, acp_only={:?}, mcp_only={:?}",
+        acp_count, mcp_count, acp_only, mcp_only
     );
 }

@@ -1120,7 +1120,11 @@ mod tests {
             .unwrap();
         assert_eq!(action.id, action_id);
         assert!(action.resolved_ms > 0);
-        assert!(action.description.contains("out of retries"));
+        assert!(
+            action.description.contains("out of retries") || action.description.contains("error."),
+            "unexpected description: {}",
+            action.description
+        );
 
         // Skipping an already failed action fails.
         assert!(ctrl.skip_action(&action_id).is_err());

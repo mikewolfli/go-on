@@ -41,10 +41,7 @@ impl Tool for ShellExecTool {
         let timeout_secs = (timeout_ms as f64 / 1000.0).ceil() as u64;
         let max_timeout = std::cmp::min(timeout_secs, 300); // Cap at 5 minutes
 
-        let timeout_available = Command::new("timeout")
-            .arg("--version")
-            .output()
-            .is_ok();
+        let timeout_available = Command::new("timeout").arg("--version").output().is_ok();
 
         let output = if timeout_available {
             Command::new("timeout")
@@ -269,13 +266,7 @@ fn collect_grep_matches(
             if dir_name == ".git" || dir_name == "target" || dir_name == "node_modules" {
                 continue;
             }
-            collect_grep_matches(
-                root,
-                &path,
-                regex,
-                glob_matcher,
-                state,
-            )?;
+            collect_grep_matches(root, &path, regex, glob_matcher, state)?;
             continue;
         }
 

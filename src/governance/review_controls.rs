@@ -1,4 +1,4 @@
-//! Review controls — verdict parsing, timeout policy, gate outcomes.
+//! F-GAP-14: Review controls, verdict parsing
 //!
 //! # Status
 //! Complete implementation ready for CapabilityBus integration (ARCH-13).

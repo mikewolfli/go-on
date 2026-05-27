@@ -292,7 +292,13 @@ impl RpcHarness {
                 let msg = match self.stdout_rx.recv_timeout(remaining) {
                     Ok(msg) => msg,
                     Err(_) => {
-                        eprintln!("request(id={id}, method={method}) attempt {attempt}: channel closed, respawning...");
+                        let status = self.child.try_wait().ok().flatten();
+                        let stderr_tail = self.stderr_tail(20);
+                        eprintln!(
+                            "request(id={id}, method={method}) attempt {attempt}: channel closed (status: {:?}); stderr tail:\n{}\nrespawning...",
+                            status,
+                            stderr_tail
+                        );
                         self.respawn();
                         break; // retry outer loop
                     }

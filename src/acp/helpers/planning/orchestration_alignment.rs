@@ -203,135 +203,6 @@ pub(crate) fn derive_orchestration_node_decisions(
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_sample_execution_plan() -> Value {
-        json!({
-            "plan_id": "test-plan-1",
-            "steps": [
-                {
-                    "step_id": "step-1",
-                    "description": "Search for relevant files and discover the codebase",
-                    "depends_on": []
-                },
-                {
-                    "step_id": "step-2",
-                    "description": "Read and analyze the source code",
-                    "depends_on": ["step-1"]
-                },
-                {
-                    "step_id": "step-3",
-                    "description": "Write a patch to fix the issue",
-                    "depends_on": ["step-2"]
-                },
-                {
-                    "step_id": "step-4",
-                    "description": "Run tests to verify correctness",
-                    "depends_on": ["step-3"]
-                }
-            ]
-        })
-    }
-
-    fn make_sample_tool_results_with_search_and_read() -> Vec<Value> {
-        vec![json!({
-            "trace": {
-                "iterations": [
-                    {
-                        "stage": "act",
-                        "tool": "search_files"
-                    },
-                    {
-                        "stage": "act",
-                        "tool": "read_file"
-                    }
-                ]
-            }
-        })]
-    }
-
-    #[test]
-    fn test_derive_plan_trace_alignment_with_matching_tools() {
-        let plan = make_sample_execution_plan();
-        let results = make_sample_tool_results_with_search_and_read();
-        let alignment = derive_plan_trace_alignment(&plan, &results);
-
-        assert!(alignment.get("coverage_ratio").is_some());
-        assert!(alignment.get("tool_required_step_count").is_some());
-        assert!(alignment.get("matched_step_count").is_some());
-        assert!(alignment.get("executed_tools").is_some());
-        assert!(alignment.get("missing_steps").is_some());
-
-        let coverage = alignment["coverage_ratio"].as_f64().unwrap();
-        assert!(coverage >= 0.0 && coverage <= 1.0, "coverage should be in [0, 1]");
-    }
-
-    #[test]
-    fn test_derive_plan_trace_alignment_with_empty_results() {
-        let plan = make_sample_execution_plan();
-        let results: Vec<Value> = vec![];
-        let alignment = derive_plan_trace_alignment(&plan, &results);
-
-        assert_eq!(alignment["executed_tools"].as_array().unwrap().len(), 0);
-        let coverage = alignment["coverage_ratio"].as_f64().unwrap();
-        assert!(coverage >= 0.0 && coverage <= 1.0);
-    }
-
-    #[test]
-    fn test_derive_orchestration_node_decisions_returns_mapped_nodes() {
-        let plan = make_sample_execution_plan();
-        let results = make_sample_tool_results_with_search_and_read();
-        let decisions = derive_orchestration_node_decisions(&plan, &results);
-
-        assert!(decisions.get("nodes").is_some());
-        assert!(decisions.get("mapped_nodes").is_some());
-        assert!(decisions.get("unmapped_nodes").is_some());
-        assert!(decisions.get("mapping_ratio").is_some());
-
-        let mapping_ratio = decisions["mapping_ratio"].as_f64().unwrap();
-        assert!(
-            mapping_ratio >= 0.0 && mapping_ratio <= 1.0,
-            "mapping_ratio should be in [0, 1]"
-        );
-
-        let nodes = decisions["nodes"].as_array().unwrap();
-        assert!(!nodes.is_empty(), "should have at least one node");
-    }
-
-    #[test]
-    fn test_derive_runtime_subtask_node_decisions_handles_completed_status() {
-        let records = vec![
-            json!({"id": "sub-1", "description": "first task", "outcome": "completed"}),
-            json!({"id": "sub-2", "description": "second task", "outcome": "failed"}),
-            json!({"id": "sub-3", "description": "third task", "outcome": "in_progress"}),
-        ];
-        let decisions = derive_runtime_subtask_node_decisions(&records);
-
-        assert_eq!(decisions["mapped_nodes"].as_u64().unwrap(), 1);
-        assert_eq!(decisions["unmapped_nodes"].as_u64().unwrap(), 2);
-        let nodes = decisions["nodes"].as_array().unwrap();
-        assert_eq!(nodes.len(), 3);
-
-        // First should be tool_executed
-        assert_eq!(nodes[0]["decision"].as_str().unwrap(), "tool_executed");
-        // Second should be replan_required
-        assert_eq!(nodes[1]["decision"].as_str().unwrap(), "replan_required");
-        // Third should be observe_only (not a terminal outcome)
-        assert_eq!(nodes[2]["decision"].as_str().unwrap(), "observe_only");
-    }
-
-    #[test]
-    fn test_derive_runtime_subtask_node_decisions_empty_records() {
-        let records: Vec<Value> = vec![];
-        let decisions = derive_runtime_subtask_node_decisions(&records);
-        assert_eq!(decisions["mapped_nodes"].as_u64().unwrap(), 0);
-        assert_eq!(decisions["unmapped_nodes"].as_u64().unwrap(), 0);
-        assert_eq!(decisions["mapping_ratio"].as_f64().unwrap(), 1.0);
-    }
-}
-
 pub(crate) fn derive_runtime_subtask_node_decisions(records: &[Value]) -> Value {
     let mut mapped_nodes = 0_u64;
     let mut unmapped_nodes = 0_u64;
@@ -398,4 +269,136 @@ pub(crate) fn derive_runtime_subtask_node_decisions(records: &[Value]) -> Value 
         "unmapped_nodes": unmapped_nodes,
         "mapping_ratio": mapping_ratio,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_sample_execution_plan() -> Value {
+        json!({
+            "plan_id": "test-plan-1",
+            "steps": [
+                {
+                    "step_id": "step-1",
+                    "description": "Search for relevant files and discover the codebase",
+                    "depends_on": []
+                },
+                {
+                    "step_id": "step-2",
+                    "description": "Read and analyze the source code",
+                    "depends_on": ["step-1"]
+                },
+                {
+                    "step_id": "step-3",
+                    "description": "Write a patch to fix the issue",
+                    "depends_on": ["step-2"]
+                },
+                {
+                    "step_id": "step-4",
+                    "description": "Run tests to verify correctness",
+                    "depends_on": ["step-3"]
+                }
+            ]
+        })
+    }
+
+    fn make_sample_tool_results_with_search_and_read() -> Vec<Value> {
+        vec![json!({
+            "trace": {
+                "iterations": [
+                    {
+                        "stage": "act",
+                        "tool": "search_files"
+                    },
+                    {
+                        "stage": "act",
+                        "tool": "read_file"
+                    }
+                ]
+            }
+        })]
+    }
+
+    #[test]
+    fn test_derive_plan_trace_alignment_with_matching_tools() {
+        let plan = make_sample_execution_plan();
+        let results = make_sample_tool_results_with_search_and_read();
+        let alignment = derive_plan_trace_alignment(&plan, &results);
+
+        assert!(alignment.get("coverage_ratio").is_some());
+        assert!(alignment.get("tool_required_step_count").is_some());
+        assert!(alignment.get("matched_step_count").is_some());
+        assert!(alignment.get("executed_tools").is_some());
+        assert!(alignment.get("missing_steps").is_some());
+
+        let coverage = alignment["coverage_ratio"].as_f64().unwrap();
+        assert!(
+            (0.0..=1.0).contains(&coverage),
+            "coverage should be in [0, 1]"
+        );
+    }
+
+    #[test]
+    fn test_derive_plan_trace_alignment_with_empty_results() {
+        let plan = make_sample_execution_plan();
+        let results: Vec<Value> = vec![];
+        let alignment = derive_plan_trace_alignment(&plan, &results);
+
+        assert_eq!(alignment["executed_tools"].as_array().unwrap().len(), 0);
+        let coverage = alignment["coverage_ratio"].as_f64().unwrap();
+        assert!((0.0..=1.0).contains(&coverage));
+    }
+
+    #[test]
+    fn test_derive_orchestration_node_decisions_returns_mapped_nodes() {
+        let plan = make_sample_execution_plan();
+        let results = make_sample_tool_results_with_search_and_read();
+        let decisions = derive_orchestration_node_decisions(&plan, &results);
+
+        assert!(decisions.get("nodes").is_some());
+        assert!(decisions.get("mapped_nodes").is_some());
+        assert!(decisions.get("unmapped_nodes").is_some());
+        assert!(decisions.get("mapping_ratio").is_some());
+
+        let mapping_ratio = decisions["mapping_ratio"].as_f64().unwrap();
+        assert!(
+            (0.0..=1.0).contains(&mapping_ratio),
+            "mapping_ratio should be in [0, 1]"
+        );
+
+        let nodes = decisions["nodes"].as_array().unwrap();
+        assert!(!nodes.is_empty(), "should have at least one node");
+    }
+
+    #[test]
+    fn test_derive_runtime_subtask_node_decisions_handles_completed_status() {
+        let records = vec![
+            json!({"id": "sub-1", "description": "first task", "outcome": "completed"}),
+            json!({"id": "sub-2", "description": "second task", "outcome": "failed"}),
+            json!({"id": "sub-3", "description": "third task", "outcome": "in_progress"}),
+        ];
+        let decisions = derive_runtime_subtask_node_decisions(&records);
+
+        assert_eq!(decisions["mapped_nodes"].as_u64().unwrap(), 1);
+        assert_eq!(decisions["unmapped_nodes"].as_u64().unwrap(), 2);
+        let nodes = decisions["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 3);
+
+        // First should be tool_executed
+        assert_eq!(nodes[0]["decision"].as_str().unwrap(), "tool_executed");
+        // Second should be replan_required
+        assert_eq!(nodes[1]["decision"].as_str().unwrap(), "replan_required");
+        // Third should be observe_only (not a terminal outcome)
+        assert_eq!(nodes[2]["decision"].as_str().unwrap(), "observe_only");
+    }
+
+    #[test]
+    fn test_derive_runtime_subtask_node_decisions_empty_records() {
+        let records: Vec<Value> = vec![];
+        let decisions = derive_runtime_subtask_node_decisions(&records);
+        assert_eq!(decisions["mapped_nodes"].as_u64().unwrap(), 0);
+        assert_eq!(decisions["unmapped_nodes"].as_u64().unwrap(), 0);
+        assert_eq!(decisions["mapping_ratio"].as_f64().unwrap(), 1.0);
+    }
 }

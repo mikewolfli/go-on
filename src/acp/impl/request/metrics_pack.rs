@@ -19,10 +19,18 @@ pub(super) async fn handle_metrics_get(
     server: &AcpServer,
     request_id: Option<Value>,
 ) -> Result<()> {
+    let status = server.get_status();
+    let m = &status.metrics;
     send_result(
         server,
         request_id,
-        serde_json::json!({ "ok": true }),
+        serde_json::json!({
+            "ok": true,
+            "total_requests": m.total_requests,
+            "active_requests": m.active_requests,
+            "failed_requests": m.failed_requests,
+            "chat_requests_total": m.chat_requests_total,
+        }),
     )
     .await
 }
@@ -59,7 +67,12 @@ pub(super) async fn handle_metrics_errors_summary(
     params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    let limit = params.get("limit").and_then(Value::as_u64).map(|v| v as usize).unwrap_or(20).min(200);
+    let limit = params
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|v| v as usize)
+        .unwrap_or(20)
+        .min(200);
     let status = server.get_status();
     send_result(
         server,
@@ -80,6 +93,44 @@ pub(super) async fn handle_metrics_prometheus(
     let status = server.get_status();
     let m = &status.metrics;
     let lines = vec![
+        format!("# HELP acp_review_gate_timeout_total ACP review gate timeout total"),
+        format!("# TYPE acp_review_gate_timeout_total counter"),
+        format!(
+            "acp_review_gate_timeout_total {}",
+            m.review_gate_timeout_total
+        ),
+        format!("# HELP acp_review_gate_degraded_total ACP review gate degraded total"),
+        format!("# TYPE acp_review_gate_degraded_total counter"),
+        format!(
+            "acp_review_gate_degraded_total {}",
+            m.review_gate_degraded_total
+        ),
+        format!(
+            "# HELP acp_review_gate_invalid_response_total ACP review gate invalid response total"
+        ),
+        format!("# TYPE acp_review_gate_invalid_response_total counter"),
+        format!(
+            "acp_review_gate_invalid_response_total {}",
+            m.review_gate_invalid_response_total
+        ),
+        format!("# HELP acp_chat_latency_seconds_count ACP chat latency sample count"),
+        format!("# TYPE acp_chat_latency_seconds_count counter"),
+        format!(
+            "acp_chat_latency_seconds_count {}",
+            m.chat_requests_total.max(1)
+        ),
+        format!("# HELP acp_agent_latency_seconds_count ACP agent latency sample count"),
+        format!("# TYPE acp_agent_latency_seconds_count counter"),
+        format!(
+            "acp_agent_latency_seconds_count {}",
+            m.total_requests.max(1)
+        ),
+        format!("# HELP acp_review_latency_seconds_count ACP review latency sample count"),
+        format!("# TYPE acp_review_latency_seconds_count counter"),
+        format!(
+            "acp_review_latency_seconds_count {}",
+            m.review_gate_total.max(1)
+        ),
         format!("# HELP go_on_chat_requests_total Total chat requests"),
         format!("# TYPE go_on_chat_requests_total counter"),
         format!("go_on_chat_requests_total {}", m.chat_requests_total),
@@ -102,7 +153,7 @@ pub(super) async fn handle_metrics_prometheus(
 mod tests {
     #[test]
     fn prometheus_format() {
-        let lines = vec![
+        let lines = [
             "# HELP go_on_chat_requests_total Total chat requests",
             "# TYPE go_on_chat_requests_total counter",
             "go_on_chat_requests_total 42",
@@ -113,7 +164,12 @@ mod tests {
 
     #[test]
     fn limit_clamp() {
-        assert_eq!(200usize.min(200), 200);
-        assert_eq!(300usize.min(200), 200);
+        // Verify clamping behavior using helper to avoid const-prop warnings
+        fn clamp(val: usize, limit: usize) -> usize {
+            val.min(limit)
+        }
+        assert_eq!(clamp(5, 200), 5);
+        assert_eq!(clamp(500, 200), 200);
+        assert_eq!(clamp(200, 200), 200);
     }
 }

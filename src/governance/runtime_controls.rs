@@ -1,4 +1,4 @@
-//! Runtime controls — online adaptive control, sliding window, bandit-based phase selection.
+//! F-GAP-08: Runtime adaptive controls
 //!
 //! # Status
 //! Complete implementation ready for CapabilityBus integration (ARCH-13).

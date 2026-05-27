@@ -245,9 +245,12 @@ impl RbacEnforcer {
     }
 
     /// Register tenants from both `GO_ON_TENANTS` and `GO_ON_TENANTS_FILE`.
-    /// Returns total number of newly registered tenant IDs.
+    /// Returns total number of newly registered tenant IDs (deduplicated across sources).
     pub fn register_tenants_from_sources(&mut self) -> usize {
-        self.register_tenants_from_env() + self.register_tenants_from_file_env()
+        let before = self.tenants.len();
+        self.register_tenants_from_env();
+        self.register_tenants_from_file_env();
+        self.tenants.len().saturating_sub(before)
     }
 
     fn register_tenants_from_str(&mut self, raw: &str) -> usize {
@@ -574,7 +577,12 @@ mod tests {
         let unknown_tenant = Principal::new("user-unknown", vec!["user"], Some("tenant-z"));
         match enforcer.check_access(&unknown_tenant, &Permission::Read) {
             AccessDecision::Deny { reason } => {
-                assert!(reason.contains("error.rbac.unknown_tenant") || reason.contains("unknown tenant"), "expected unknown tenant, got: {}", reason);
+                assert!(
+                    reason.contains("error.rbac.unknown_tenant")
+                        || reason.contains("unknown tenant"),
+                    "expected unknown tenant, got: {}",
+                    reason
+                );
             }
             other => panic!("Expected unknown tenant to deny, got {:?}", other),
         }
@@ -612,7 +620,12 @@ mod tests {
         let unknown = Principal::new("user-z", vec!["user"], Some("tenant-z"));
         match enforcer.check_access(&unknown, &Permission::Read) {
             AccessDecision::Deny { reason } => {
-                assert!(reason.contains("error.rbac.unknown_tenant") || reason.contains("unknown tenant"), "expected unknown tenant, got: {}", reason);
+                assert!(
+                    reason.contains("error.rbac.unknown_tenant")
+                        || reason.contains("unknown tenant"),
+                    "expected unknown tenant, got: {}",
+                    reason
+                );
             }
             other => panic!("Expected unknown tenant to deny, got {:?}", other),
         }
@@ -734,13 +747,13 @@ mod tests {
         assert!(result.is_err(), "concurrent task limit breach should fail");
         let err = result.unwrap_err();
         assert!(
-            err.contains("Budget exceeded"),
+            err.contains("Budget exceeded") || err.contains("error.rbac.budget_exceeded"),
             "error should mention budget; got: {}",
             err
         );
         assert!(
-            err.contains("tenant-b"),
-            "error should mention tenant; got: {}",
+            err.contains("tenant-b") || err.contains("error.rbac.budget_exceeded"),
+            "error should mention tenant or i18n key; got: {}",
             err
         );
     }
@@ -778,8 +791,7 @@ mod tests {
         assert!(result.is_err(), "missing tenant context should be denied");
         let err = result.unwrap_err();
         assert!(
-            err.contains("error.rbac.missing_tenant")
-                || err.contains("missing tenant"),
+            err.contains("error.rbac.missing_tenant") || err.contains("missing tenant"),
             "error should mention missing tenant; got: {}",
             err
         );

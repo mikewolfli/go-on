@@ -331,7 +331,13 @@ impl ModeStrategy for AskModeRuntime {
             objective, phase, role
         );
     }
-    fn fallback_result(&self, task_id: &str, objective: &str, phase: &str, role: &str) -> AgentTaskResult {
+    fn fallback_result(
+        &self,
+        task_id: &str,
+        objective: &str,
+        phase: &str,
+        role: &str,
+    ) -> AgentTaskResult {
         AgentTaskResult {
             success: true,
             output: Some(serde_json::json!({
@@ -411,7 +417,13 @@ impl ModeStrategy for EditModeRuntime {
             objective, phase, role
         );
     }
-    fn fallback_result(&self, task_id: &str, objective: &str, phase: &str, role: &str) -> AgentTaskResult {
+    fn fallback_result(
+        &self,
+        task_id: &str,
+        objective: &str,
+        phase: &str,
+        role: &str,
+    ) -> AgentTaskResult {
         AgentTaskResult {
             success: true,
             output: Some(serde_json::json!({
@@ -531,7 +543,13 @@ impl ModeStrategy for AgentModeRuntime {
             None
         }
     }
-    fn fallback_result(&self, task_id: &str, objective: &str, phase: &str, role: &str) -> AgentTaskResult {
+    fn fallback_result(
+        &self,
+        task_id: &str,
+        objective: &str,
+        phase: &str,
+        role: &str,
+    ) -> AgentTaskResult {
         AgentTaskResult {
             success: true,
             output: Some(serde_json::json!({
@@ -623,7 +641,13 @@ impl ModeStrategy for FullAutoModeRuntime {
             objective, phase, role
         );
     }
-    fn fallback_result(&self, task_id: &str, objective: &str, phase: &str, role: &str) -> AgentTaskResult {
+    fn fallback_result(
+        &self,
+        task_id: &str,
+        objective: &str,
+        phase: &str,
+        role: &str,
+    ) -> AgentTaskResult {
         AgentTaskResult {
             success: true,
             output: Some(serde_json::json!({
@@ -885,7 +909,13 @@ impl ModeStrategy for SafeGuardModeRuntime {
             }
         }
     }
-    fn fallback_result(&self, task_id: &str, objective: &str, phase: &str, role: &str) -> AgentTaskResult {
+    fn fallback_result(
+        &self,
+        task_id: &str,
+        objective: &str,
+        phase: &str,
+        role: &str,
+    ) -> AgentTaskResult {
         let risk_score = self.compute_risk_score(objective);
         let policy = if self.auto_degrade {
             self.evaluate_degradation(risk_score)

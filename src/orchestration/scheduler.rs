@@ -1535,8 +1535,10 @@ mod tests {
 
     #[test]
     fn test_backpressure_rejects_when_queue_full() {
-        let mut config = SchedulerConfig::default();
-        config.backpressure_queue_depth = 2;
+        let config = SchedulerConfig {
+            backpressure_queue_depth: 2,
+            ..Default::default()
+        };
         let scheduler = TaskScheduler::new(config);
 
         scheduler.submit(make_task("t1", "w", 1, 10.0)).unwrap();
@@ -1544,7 +1546,10 @@ mod tests {
         // Third task should be rejected since queue depth >= 2.
         let result = scheduler.submit(make_task("t3", "w", 3, 30.0));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Backpressure"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("error.scheduler.backpressure_rejected"));
 
         let profile = scheduler.profile();
         assert_eq!(profile.backpressure_rejections, 1);
@@ -1578,8 +1583,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_acquire_role_permit_works() {
-        let mut config = SchedulerConfig::default();
-        config.max_workers_per_role = 2;
+        let config = SchedulerConfig {
+            max_workers_per_role: 2,
+            ..Default::default()
+        };
         let scheduler = TaskScheduler::new(config);
 
         let p1 = scheduler.acquire_role_permit("coder").await.unwrap();
@@ -1597,8 +1604,10 @@ mod tests {
 
     #[test]
     fn test_try_acquire_permit_non_blocking() {
-        let mut config = SchedulerConfig::default();
-        config.global_max_concurrent_tasks = 1;
+        let config = SchedulerConfig {
+            global_max_concurrent_tasks: 1,
+            ..Default::default()
+        };
         let scheduler = TaskScheduler::new(config);
 
         let permit = scheduler.try_acquire_permit().unwrap();
@@ -1610,8 +1619,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_semaphore_integration_with_dequeue() {
-        let mut config = SchedulerConfig::default();
-        config.global_max_concurrent_tasks = 2;
+        let config = SchedulerConfig {
+            global_max_concurrent_tasks: 2,
+            ..Default::default()
+        };
         let scheduler = TaskScheduler::new(config);
 
         // Submit tasks.

@@ -307,10 +307,7 @@ async fn execute_parallel(
 
     for step_results in join_results {
         results.extend(step_results);
-        let last_ok = results
-            .iter()
-            .next_back()
-            .is_none_or(|r| r.error.is_none());
+        let last_ok = results.iter().next_back().is_none_or(|r| r.error.is_none());
         if !last_ok {
             all_ok = false;
         }
@@ -408,7 +405,6 @@ pub(crate) fn format_pipeline_summary(result: &PipelineResult) -> String {
         result.success,
     )
 }
-
 
 #[cfg(test)]
 mod tests {

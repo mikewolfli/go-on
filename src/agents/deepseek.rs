@@ -373,7 +373,10 @@ mod tests {
             reqwest::Client::new(),
         );
 
-        assert_eq!(agent.completion_endpoint(), "https://api.deepseek.com/chat/completions");
+        assert_eq!(
+            agent.completion_endpoint(),
+            "https://api.deepseek.com/chat/completions"
+        );
     }
 
     #[test]

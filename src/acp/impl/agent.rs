@@ -207,10 +207,13 @@ pub async fn run_dual_review_gate(
                     }
                 }
                 Err(err) => {
-                    if err.to_string().to_ascii_lowercase().contains("timeout") {
+                    let err_message = err.to_string();
+                    if err_message.to_ascii_lowercase().contains("timeout")
+                        || !timeout_policy.fail_on_timeout
+                    {
                         timeout_detected = true;
                     }
-                    info!("Reviewer {} failed: {}", reviewers[i], err);
+                    info!("Reviewer {} failed: {}", reviewers[i], err_message);
                 }
             }
         }

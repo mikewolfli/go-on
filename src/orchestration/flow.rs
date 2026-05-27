@@ -49,7 +49,10 @@ impl std::fmt::Debug for ResolvedRouting {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ResolvedRouting")
             .field("phase", &self.phase)
-            .field("agents", &self.agents.iter().map(|(n, _)| n).collect::<Vec<_>>())
+            .field(
+                "agents",
+                &self.agents.iter().map(|(n, _)| n).collect::<Vec<_>>(),
+            )
             .finish()
     }
 }

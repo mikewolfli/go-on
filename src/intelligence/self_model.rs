@@ -262,7 +262,12 @@ impl SelfModelCore {
             .limitations
             .iter_mut()
             .find(|l| l.name == name)
-            .ok_or_else(|| anyhow::anyhow!("{}", tf("error.self_model.limitation_not_found", &[("name", name)])))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}",
+                    tf("error.self_model.limitation_not_found", &[("name", name)])
+                )
+            })?;
         lim.is_acknowledged = true;
         inner.last_update_ms = now_ms();
         Ok(())

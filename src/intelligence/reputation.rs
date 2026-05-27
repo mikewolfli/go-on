@@ -1,4 +1,4 @@
-//! S13: Node Reputation Tracker
+//! F-GAP-02: Reputation Store
 //!
 //! Maintains an EMA-based reliability score per agent/node.  Scores feed the
 //! router's ranking to downweight consistently failing agents.
@@ -98,6 +98,10 @@ impl ReputationStore {
 
     /// Record a task outcome for an agent
     pub fn record_outcome(&mut self, agent: &str, success: bool) {
+        if !self.config.enabled {
+            return;
+        }
+
         let alpha = self.config.ema_alpha;
         let r = self.record(agent);
 

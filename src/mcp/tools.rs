@@ -3,10 +3,6 @@ use serde_json::Value;
 
 use crate::shared::tool_descriptors;
 
-pub(crate) fn tool_descriptor(name: &'static str) -> crate::mcp::McpTool {
-    tool_descriptors::tool_descriptor(name)
-}
-
 pub(crate) fn validate_required_arguments(tool_name: &str, tool_input: &Value) -> Result<()> {
     tool_descriptors::validate_required_arguments(tool_name, tool_input)
 }

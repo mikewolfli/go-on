@@ -1,4 +1,4 @@
-//! S11: Capability Graph
+//! F-GAP-01: Capability Graph
 //!
 //! Tracks agent capabilities as a directed graph where edges represent
 //! "agent A can hand off to agent B for capability C".

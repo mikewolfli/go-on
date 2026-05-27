@@ -46,6 +46,15 @@ pub fn apply_dag_order_to_workflow(
     true
 }
 
+/// Build rich planner execution graph payload for response observability.
+pub fn planner_execution_graph_payload(bridge: &PlannerExecutionBridge) -> Value {
+    let mut payload = dag_progress_with_suggested_next(bridge);
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("stalled".to_string(), Value::Bool(dag_is_stalled(bridge)));
+    }
+    payload
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -55,8 +64,7 @@ mod tests {
             task_id: "bridge-test".to_string(),
             phase: "exec".to_string(),
             role: "tester".to_string(),
-            objective: "Analyze and fix the authentication bug in the login system"
-                .to_string(),
+            objective: "Analyze and fix the authentication bug in the login system".to_string(),
             constraints: None,
             evidence: None,
             input: json!({}),
@@ -65,12 +73,7 @@ mod tests {
 
     #[test]
     fn test_build_planner_bridge_returns_valid_bridge() {
-        let bridge = build_planner_bridge(
-            "task-1",
-            "execution",
-            "Fix the bug",
-            &json!({}),
-        );
+        let bridge = build_planner_bridge("task-1", "execution", "Fix the bug", &json!({}));
         // Bridge should be constructed without panicking
         assert!(bridge.total_steps > 0, "planner should produce steps");
     }
@@ -98,21 +101,21 @@ mod tests {
         let bridge = PlannerExecutionBridge::from_task(&make_task_envelope());
         let payload = planner_execution_graph_payload(&bridge);
 
-        assert!(payload.get("progress").is_some(), "payload should have progress");
-        assert!(payload.get("ready_nodes").is_some(), "payload should have ready_nodes");
-        assert!(payload.get("stalled").is_some(), "payload should have stalled flag");
+        assert!(
+            payload.get("progress").is_some(),
+            "payload should have progress"
+        );
+        assert!(
+            payload.get("ready_nodes").is_some(),
+            "payload should have ready_nodes"
+        );
+        assert!(
+            payload.get("stalled").is_some(),
+            "payload should have stalled flag"
+        );
         assert!(
             payload["stalled"].as_bool().is_some(),
             "stalled should be a boolean"
         );
     }
-}
-
-/// Build rich planner execution graph payload for response observability.
-pub fn planner_execution_graph_payload(bridge: &PlannerExecutionBridge) -> Value {
-    let mut payload = dag_progress_with_suggested_next(bridge);
-    if let Some(obj) = payload.as_object_mut() {
-        obj.insert("stalled".to_string(), Value::Bool(dag_is_stalled(bridge)));
-    }
-    payload
 }

@@ -771,10 +771,7 @@ mod tests {
         apply_openai_common_options(&mut payload, &options);
 
         assert!(payload.get("strict").is_none());
-        assert_eq!(
-            payload["tools"][0]["function"]["strict"],
-            Value::Bool(true)
-        );
+        assert_eq!(payload["tools"][0]["function"]["strict"], Value::Bool(true));
         assert!(payload["tools"][0]["function"]["parameters"]
             .get("properties")
             .is_some());

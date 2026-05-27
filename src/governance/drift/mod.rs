@@ -6,8 +6,13 @@
 
 pub mod drift_protection;
 
-#[allow(unused_imports)]
 pub use drift_protection::{
-    DriftAlert, DriftMetric, DriftPolicy, DriftProfile, DriftProtectionConfig,
-    DriftProtectionEngine, DriftSeverity, DriftType, // re-exported for public API surface
+    DriftAlert,
+    DriftMetric,
+    DriftPolicy,
+    DriftProfile,
+    DriftProtectionConfig,
+    DriftProtectionEngine,
+    DriftSeverity,
+    DriftType, // re-exported for public API surface
 };

@@ -82,6 +82,7 @@ fn ephemeral_bind_addr() -> String {
 
 fn write_local_echo_config(path: &Path) {
     let config = r#"default_phase = "coding"
+schema_version = "1.0.0"
 
 [flow]
 name = "Transport Parity Test"
@@ -169,6 +170,42 @@ async fn wait_healthy(client: &reqwest::Client, base_url: &str, timeout: Duratio
     panic!("server at {base_url} did not become healthy within {timeout:?}");
 }
 
+async fn post_json_with_retry(
+    client: &reqwest::Client,
+    url: &str,
+    payload: &Value,
+    attempts: usize,
+) -> reqwest::Response {
+    let total = attempts.max(1);
+    for i in 0..total {
+        match client
+            .post(url)
+            .header("Connection", "close")
+            .json(payload)
+            .send()
+            .await
+        {
+            Ok(resp) => return resp,
+            Err(err) if i + 1 < total => {
+                eprintln!(
+                    "post_json_with_retry attempt {}/{} failed for {}: {}",
+                    i + 1,
+                    total,
+                    url,
+                    err
+                );
+                tokio::time::sleep(Duration::from_millis(120)).await;
+            }
+            Err(err) => panic!(
+                "request failed after {} attempts for {}: {}",
+                total, url, err
+            ),
+        }
+    }
+
+    unreachable!("attempt loop must return or panic")
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -187,18 +224,19 @@ async fn acp_http_chat_response_has_platform_context() {
         .expect("build client");
     wait_healthy(&client, &harness.base_url, Duration::from_secs(15)).await;
 
-    let body: Value = client
-        .post(format!("{}/chat", harness.base_url))
-        .json(&json!({
+    let body: Value = post_json_with_retry(
+        &client,
+        &format!("{}/chat", harness.base_url),
+        &json!({
             "mode": "ask",
             "messages": [{"role": "user", "content": "hello parity"}]
-        }))
-        .send()
-        .await
-        .expect("/chat request failed")
-        .json()
-        .await
-        .expect("invalid /chat json");
+        }),
+        4,
+    )
+    .await
+    .json()
+    .await
+    .expect("invalid /chat json");
 
     assert!(
         body.get("platform_context").is_some(),
@@ -387,18 +425,19 @@ async fn acp_stdio_and_acp_http_share_same_schema_version() {
         .expect("build client");
     wait_healthy(&client, &harness.base_url, Duration::from_secs(15)).await;
 
-    let body: Value = client
-        .post(format!("{}/chat", harness.base_url))
-        .json(&json!({
+    let body: Value = post_json_with_retry(
+        &client,
+        &format!("{}/chat", harness.base_url),
+        &json!({
             "mode": "ask",
             "messages": [{"role": "user", "content": "schema version check"}]
-        }))
-        .send()
-        .await
-        .expect("/chat request failed")
-        .json()
-        .await
-        .expect("invalid /chat json");
+        }),
+        4,
+    )
+    .await
+    .json()
+    .await
+    .expect("invalid /chat json");
 
     let http_ver = body["platform_context"]["schema_version"]
         .as_str()

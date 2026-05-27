@@ -63,6 +63,31 @@ pub(super) async fn handle_lock_status(
 ) -> Result<()> {
     let lock_components = server.observability.lock_monitor.snapshot();
     let summary = summarize_lock_health(&lock_components);
+    let mut contention_top = lock_components
+        .iter()
+        .map(|c| {
+            json!({
+                "name": c.name,
+                "slow_wait_total": c.slow_wait_total,
+                "max_wait_ms": c.max_wait_ms,
+            })
+        })
+        .collect::<Vec<_>>();
+    contention_top.sort_by(|a, b| {
+        let a_slow = a
+            .get("slow_wait_total")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let b_slow = b
+            .get("slow_wait_total")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        b_slow.cmp(&a_slow)
+    });
+    if contention_top.len() > 5 {
+        contention_top.truncate(5);
+    }
+
     send_result(
         server,
         request_id,
@@ -75,6 +100,7 @@ pub(super) async fn handle_lock_status(
                 "slow_wait_total": summary.slow_wait_total,
                 "max_wait_ms": summary.max_wait_ms,
                 "components_tracked": summary.components_tracked,
+                "contention_top": contention_top,
                 "components": lock_components.iter().map(|c| json!({
                     "name": c.name,
                     "acquisitions": c.acquisitions,
@@ -144,13 +170,18 @@ pub(super) async fn handle_observability_alerts(
         }
     }
 
+    let alert_total = alerts.len();
+
     send_result(
         server,
         request_id,
         json!({
             "ok": true,
-            "alerts": alerts,
-            "total": alerts.len(),
+            "alerts": {
+                "items": alerts,
+                "total": alert_total,
+            },
+            "total": alert_total,
         }),
     )
     .await

@@ -1,4 +1,4 @@
-//! Token layer chain — L0-L5 layered token gate architecture.
+//! F-GAP-09: L0-L5 token gate
 //!
 //! Implements BLUE38 ARCH-04: full L0 (fast reject/routing) → L1 (cache reuse) →
 //! L2 (cheap classify) → L3 (context compress) → L4 (primary generation) →

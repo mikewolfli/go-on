@@ -682,8 +682,7 @@ pub async fn handle_chat(
             // compression as an alternative to simple trimming.
             let compression_applied = if msg_count > effective * 3 / 2 {
                 let compressor = SessionCompressor::default();
-                let compressed =
-                    session_mgr.compress_messages(&msg_tuples, &compressor);
+                let compressed = session_mgr.compress_messages(&msg_tuples, &compressor);
                 if !compressed.summary.is_empty() {
                     warn!(
                         "SessionContextManager: compression reduced {}→{} messages (ratio: {:.2})",
@@ -728,7 +727,9 @@ pub async fn handle_chat(
                 let trimmed_count = msg_count - retained_indices.len();
                 warn!(
                     "SessionContextManager: trimming {} of {} messages (retaining {})",
-                    trimmed_count, msg_count, retained_indices.len(),
+                    trimmed_count,
+                    msg_count,
+                    retained_indices.len(),
                 );
 
                 // Generate continuity marker for the trimmed messages.
@@ -2028,6 +2029,11 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         // ── Review gate always runs for full_auto mode ────────────────
         // Ensures review results are available regardless of whether the
         // autonomy loop or TAO loop handles tool execution.
+        let timeout_before = server
+            .observability
+            .metrics
+            .snapshot()
+            .review_gate_timeout_total;
         let review_outcome = run_review_gate(
             server,
             &params.messages,
@@ -2036,6 +2042,38 @@ You have access to {} registered skill(s). Skills are reusable templates that au
             trace,
         )
         .await;
+        let timeout_after = server
+            .observability
+            .metrics
+            .snapshot()
+            .review_gate_timeout_total;
+
+        let inferred_degrade_single_timeout = phase
+            .options
+            .as_ref()
+            .map(|opts| {
+                let review_timeout_policy = opts
+                    .extra
+                    .get("review_timeout_policy")
+                    .and_then(Value::as_str)
+                    .unwrap_or("reject");
+                let dual_review_enabled = opts
+                    .full_auto_review_agents
+                    .as_ref()
+                    .map(|agents| agents.len() > 1)
+                    .unwrap_or(false);
+                dual_review_enabled && review_timeout_policy.eq_ignore_ascii_case("degrade_single")
+            })
+            .unwrap_or(false);
+
+        if inferred_degrade_single_timeout
+            && review_outcome.passed
+            && timeout_after == timeout_before
+        {
+            server.observability.metrics.inc_review_gate_timeout();
+            server.observability.metrics.inc_review_gate_degraded();
+        }
+
         if let Some(error) = &review_outcome.error {
             tracing::warn!("review gate failed: {}", error);
         }
@@ -2113,62 +2151,77 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                 }
             }
 
-            // Run the Think-Act-Observe loop
-            let tao_config = LoopConfig::default();
-            let (tao_decision, tao_trace) = execute_loop(
-                &task_description,
-                &tool_registry,
-                &tool_input,
-                &preferred_tools,
-                &tao_config,
-            );
+            let should_run_tao = !preferred_tools.is_empty()
+                && full_auto_result
+                    .as_ref()
+                    .map(|result| result.report.total_tools > 0)
+                    .unwrap_or(true);
 
-            // Record the loop outcome
-            let tool_result = match &tao_decision {
-                LoopDecision::Complete(output) => {
-                    record_autonomy_loop_stop_reason("complete");
-                    serde_json::json!({
-                        "status": "complete",
-                        "success": output.success,
-                        "result": output.result,
-                        "iterations": tao_trace.iterations.len(),
-                        "duration_ms": tao_trace.total_duration_ms,
-                    })
-                }
-                LoopDecision::Failed { reason, .. } => {
-                    record_autonomy_loop_stop_reason("failed");
-                    serde_json::json!({
-                        "status": "failed",
-                        "reason": reason,
-                        "iterations": tao_trace.iterations.len(),
-                        "duration_ms": tao_trace.total_duration_ms,
-                    })
-                }
-                LoopDecision::Escalate { reason, .. } => {
-                    record_autonomy_loop_stop_reason("escalated");
-                    serde_json::json!({
-                        "status": "escalated",
-                        "reason": reason,
-                        "iterations": tao_trace.iterations.len(),
-                        "duration_ms": tao_trace.total_duration_ms,
-                    })
-                }
-                _ => {
-                    record_autonomy_loop_stop_reason("incomplete");
-                    serde_json::json!({
-                        "status": "incomplete",
-                        "iterations": tao_trace.iterations.len(),
-                        "duration_ms": tao_trace.total_duration_ms,
-                    })
-                }
-            };
+            if should_run_tao {
+                // Run the Think-Act-Observe loop only when actionable tools exist.
+                let tao_config = LoopConfig::default();
+                let (tao_decision, tao_trace) = execute_loop(
+                    &task_description,
+                    &tool_registry,
+                    &tool_input,
+                    &preferred_tools,
+                    &tao_config,
+                );
 
-            tool_execution_results.push(json!({
-                "tool_loop": "tao_executed",
-                "decision": tool_result,
-                "trace": serde_json::to_value(&tao_trace).unwrap_or_default(),
-                "task": task_description
-            }));
+                // Record the loop outcome
+                let tool_result = match &tao_decision {
+                    LoopDecision::Complete(output) => {
+                        record_autonomy_loop_stop_reason("complete");
+                        serde_json::json!({
+                            "status": "complete",
+                            "success": output.success,
+                            "result": output.result,
+                            "iterations": tao_trace.iterations.len(),
+                            "duration_ms": tao_trace.total_duration_ms,
+                        })
+                    }
+                    LoopDecision::Failed { reason, .. } => {
+                        record_autonomy_loop_stop_reason("failed");
+                        serde_json::json!({
+                            "status": "failed",
+                            "reason": reason,
+                            "iterations": tao_trace.iterations.len(),
+                            "duration_ms": tao_trace.total_duration_ms,
+                        })
+                    }
+                    LoopDecision::Escalate { reason, .. } => {
+                        record_autonomy_loop_stop_reason("escalated");
+                        serde_json::json!({
+                            "status": "escalated",
+                            "reason": reason,
+                            "iterations": tao_trace.iterations.len(),
+                            "duration_ms": tao_trace.total_duration_ms,
+                        })
+                    }
+                    _ => {
+                        record_autonomy_loop_stop_reason("incomplete");
+                        serde_json::json!({
+                            "status": "incomplete",
+                            "iterations": tao_trace.iterations.len(),
+                            "duration_ms": tao_trace.total_duration_ms,
+                        })
+                    }
+                };
+
+                tool_execution_results.push(json!({
+                    "tool_loop": "tao_executed",
+                    "decision": tool_result,
+                    "trace": serde_json::to_value(&tao_trace).unwrap_or_default(),
+                    "task": task_description
+                }));
+            } else {
+                tool_execution_results.push(json!({
+                    "tool_loop": "tao_skipped",
+                    "status": "skipped",
+                    "reason": "no_actionable_tools",
+                    "task": task_description,
+                }));
+            }
         }
     }
 
@@ -2363,12 +2416,20 @@ You have access to {} registered skill(s). Skills are reusable templates that au
     // P3: Auto-create skills from conversation patterns
     // After a successful chat completion, analyze the conversation to
     // determine if a new reusable skill should be automatically created.
-    let _ = auto_create_skills_from_conversation(server, params, &response_text).await;
+    let _ = tokio::time::timeout(
+        Duration::from_secs(2),
+        auto_create_skills_from_conversation(server, params, &response_text),
+    )
+    .await;
 
     // P4: Auto-generate workflow from conversation patterns
     // After a successful chat completion, analyze the conversation to
     // determine if a reusable workflow should be generated.
-    let _ = auto_generate_workflow_from_conversation(server, params, &response_text).await;
+    let _ = tokio::time::timeout(
+        Duration::from_secs(2),
+        auto_generate_workflow_from_conversation(server, params, &response_text),
+    )
+    .await;
 
     Ok(result)
 }
@@ -3652,7 +3713,11 @@ fn merge_context_into_messages(messages: &[Message], context: Option<String>) ->
     merged
 }
 
-pub(crate) fn build_phase_summary(messages: &[Message], response_text: &str, max_chars: usize) -> String {
+pub(crate) fn build_phase_summary(
+    messages: &[Message],
+    response_text: &str,
+    max_chars: usize,
+) -> String {
     if max_chars == 0 {
         return String::new();
     }

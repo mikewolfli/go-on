@@ -514,8 +514,8 @@ mod tests {
 
         let result = coord.execute_2pc(&tx_id).await;
         assert_eq!(result.status, DistributedTxStatus::Committed);
-        assert_eq!(result.participants[0].voted_yes, true);
-        assert_eq!(result.participants[0].acknowledged, true);
+        assert!(result.participants[0].voted_yes);
+        assert!(result.participants[0].acknowledged);
     }
 
     #[test]

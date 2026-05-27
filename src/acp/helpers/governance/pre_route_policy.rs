@@ -173,9 +173,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_evaluate_pre_route_policies_with_empty_server() {
-        let server = ServerBuilder::new()
-            .build()
-            .expect("server should build");
+        let server = ServerBuilder::new().build().expect("server should build");
         let params = make_chat_params();
         let trace = make_trace();
 
@@ -191,9 +189,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_evaluate_pre_route_policies_different_tenant() {
-        let server = ServerBuilder::new()
-            .build()
-            .expect("server should build");
+        let server = ServerBuilder::new().build().expect("server should build");
         let params = make_chat_params();
         let trace = make_trace();
 
@@ -203,9 +199,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_evaluate_pre_route_policies_with_multiple_messages() {
-        let server = ServerBuilder::new()
-            .build()
-            .expect("server should build");
+        let server = ServerBuilder::new().build().expect("server should build");
         let params = ChatParams {
             messages: vec![
                 Message {

@@ -14,7 +14,7 @@ pub(super) fn open_skill_import_store(server: &AcpServer) -> Result<SkillImportS
     SkillImportStore::load(skill_import_policy(server))
 }
 
-pub(crate) fn build_mcp_tool_descriptors(server: &AcpServer) -> Vec<Value> {
+pub(crate) fn build_mcp_tool_descriptors(server: Option<&AcpServer>) -> Vec<Value> {
     let mut tools = vec![
         json!({
             "name": "acp_trace_get",
@@ -143,6 +143,27 @@ pub(crate) fn build_mcp_tool_descriptors(server: &AcpServer) -> Vec<Value> {
                 "required": ["query"]
             }
         }),
+        json!({
+            "name": "echo_skill",
+            "description": "Echo back structured input for skill pipeline diagnostics.",
+            "input_schema": {
+                "type": "object"
+            }
+        }),
+        json!({
+            "name": "skill-creator",
+            "description": "Create or update prompt skills from structured definitions.",
+            "input_schema": {
+                "type": "object"
+            }
+        }),
+        json!({
+            "name": "builtin.echo",
+            "description": "Echo tool payload for connectivity and contract diagnostics.",
+            "input_schema": {
+                "type": "object"
+            }
+        }),
     ];
 
     let registry = ToolRegistry::new();
@@ -158,58 +179,71 @@ pub(crate) fn build_mcp_tool_descriptors(server: &AcpServer) -> Vec<Value> {
         })
     }));
 
-    if let Ok(registry) = server.skill_registry.lock() {
-        tools.extend(registry.list().into_iter().map(|skill| {
-            json!({
-                "name": skill.name,
-                "description": skill.description,
-                "input_schema": skill.input_schema,
-                "x_runtime": {
-                    "score": skill.score,
-                    "total_calls": skill.total_calls,
-                    "success_calls": skill.success_calls,
-                    "failure_calls": skill.failure_calls,
-                    "average_latency_ms": skill.average_latency_ms,
-                }
-            })
-        }));
-    }
-
-    if let Ok(store) = open_skill_import_store(server) {
-        for record in store.list().into_iter().filter(|record| record.enabled) {
-            let (description, input_schema) = load_imported_skill_manifest(&record)
-                .map(|manifest| {
-                    let description = if manifest.description.trim().is_empty() {
-                        format!(
-                            "Imported skill manifest {}@{}",
-                            manifest.name, manifest.version
-                        )
-                    } else {
-                        manifest.description
-                    };
-                    (description, manifest.input_schema)
+    if let Some(server) = server {
+        if let Ok(registry) = server.skill_registry.lock() {
+            tools.extend(registry.list().into_iter().map(|skill| {
+                json!({
+                    "name": skill.name,
+                    "description": skill.description,
+                    "input_schema": skill.input_schema,
+                    "x_runtime": {
+                        "score": skill.score,
+                        "total_calls": skill.total_calls,
+                        "success_calls": skill.success_calls,
+                        "failure_calls": skill.failure_calls,
+                        "average_latency_ms": skill.average_latency_ms,
+                    }
                 })
-                .unwrap_or_else(|| {
-                    (
-                        format!("Imported skill manifest {}@{}", record.name, record.version),
-                        json!({"type": "object"}),
-                    )
-                });
-
-            tools.push(json!({
-                "name": record.name,
-                "description": description,
-                "input_schema": input_schema,
-                "x_import": {
-                    "source": record.source,
-                    "source_ref": record.source_ref,
-                    "sha256": record.sha256,
-                    "version": record.version,
-                    "manifest_path": record.manifest_path,
-                }
             }));
         }
+
+        if let Ok(store) = open_skill_import_store(server) {
+            for record in store.list().into_iter().filter(|record| record.enabled) {
+                let (description, input_schema) = load_imported_skill_manifest(&record)
+                    .map(|manifest| {
+                        let description = if manifest.description.trim().is_empty() {
+                            format!(
+                                "Imported skill manifest {}@{}",
+                                manifest.name, manifest.version
+                            )
+                        } else {
+                            manifest.description
+                        };
+                        (description, manifest.input_schema)
+                    })
+                    .unwrap_or_else(|| {
+                        (
+                            format!("Imported skill manifest {}@{}", record.name, record.version),
+                            json!({"type": "object"}),
+                        )
+                    });
+
+                tools.push(json!({
+                    "name": record.name,
+                    "description": description,
+                    "input_schema": input_schema,
+                    "x_import": {
+                        "source": record.source,
+                        "source_ref": record.source_ref,
+                        "sha256": record.sha256,
+                        "version": record.version,
+                        "manifest_path": record.manifest_path,
+                    }
+                }));
+            }
+        }
     }
+
+    // Keep descriptor names unique across baseline/runtime/imported sources.
+    // This avoids count drift between ACP and MCP routes when the same skill
+    // is exposed by both static baseline and dynamic registries.
+    let mut seen = std::collections::HashSet::new();
+    tools.retain(|tool| {
+        let Some(name) = tool.get("name").and_then(Value::as_str) else {
+            return true;
+        };
+        seen.insert(name.to_string())
+    });
 
     tools
 }

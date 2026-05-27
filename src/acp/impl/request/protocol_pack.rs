@@ -623,8 +623,15 @@ pub(super) async fn handle_session_prompt(
         Ok(Err(err)) => {
             let msg = err.to_string();
             tracing::warn!("ACP session/prompt: error: {}", msg);
-            if msg.to_ascii_lowercase().contains("rate limited") {
-                crate::acp::r#impl::io::send_error(server, request_id, -32029, msg, None).await
+            if is_rate_limited_message(&msg) {
+                crate::acp::r#impl::io::send_error(
+                    server,
+                    request_id,
+                    -32029,
+                    normalize_rate_limited_message(&msg),
+                    None,
+                )
+                .await
             } else {
                 crate::acp::r#impl::io::send_error(server, request_id, -32603, msg, None).await
             }
@@ -1083,7 +1090,7 @@ pub(super) async fn handle_mcp_tools_list(
     request_id: Option<Value>,
 ) -> Result<()> {
     use crate::mcp::McpListToolsResult;
-    let tools = build_mcp_tool_descriptors(server);
+    let tools = build_mcp_tool_descriptors(Some(server));
     let result = McpListToolsResult::new(tools);
     let value = serde_json::to_value(&result)?;
     // Inject platform context for consistency with other handlers.
@@ -1936,6 +1943,22 @@ fn audit_file_path_from_arguments(name: &str, arguments: &Value) -> String {
     format!("tool:{name}")
 }
 
+fn is_rate_limited_message(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("rate limited")
+        || normalized.contains("rate_limited")
+        || normalized.contains("error.chat.rate_limited")
+        || normalized.contains("too many requests")
+}
+
+fn normalize_rate_limited_message(message: &str) -> String {
+    if message.to_ascii_lowercase().contains("rate limited") {
+        message.to_string()
+    } else {
+        format!("rate limited: {message}")
+    }
+}
+
 pub(super) async fn handle_chat(
     server: &AcpServer,
     params: Value,
@@ -1956,8 +1979,15 @@ pub(super) async fn handle_chat(
         Ok(()) => Ok(()),
         Err(err) => {
             let message = err.to_string();
-            if message.to_ascii_lowercase().contains("rate limited") {
-                crate::acp::r#impl::io::send_error(server, request_id, -32029, message, None).await
+            if is_rate_limited_message(&message) {
+                crate::acp::r#impl::io::send_error(
+                    server,
+                    request_id,
+                    -32029,
+                    normalize_rate_limited_message(&message),
+                    None,
+                )
+                .await
             } else {
                 crate::acp::r#impl::io::send_error(server, request_id, -32603, message, None).await
             }

@@ -387,9 +387,7 @@ mod tests {
 
     #[test]
     fn test_finalize_chat_response_returns_augmented_result() {
-        let server = ServerBuilder::new()
-            .build()
-            .expect("server should build");
+        let server = ServerBuilder::new().build().expect("server should build");
         let trace = make_trace();
         let started = Instant::now();
         let result_input = json!({
@@ -428,7 +426,10 @@ mod tests {
         );
 
         // Verify the result includes the augmented fields
-        assert!(augmented.get("response").is_some(), "should retain original fields");
+        assert!(
+            augmented.get("response").is_some(),
+            "should retain original fields"
+        );
         assert!(
             augmented.get("execution_plan").is_some(),
             "should have execution_plan"
@@ -449,9 +450,7 @@ mod tests {
 
     #[test]
     fn test_finalize_chat_response_handles_empty_tools() {
-        let server = ServerBuilder::new()
-            .build()
-            .expect("server should build");
+        let server = ServerBuilder::new().build().expect("server should build");
         let trace = make_trace();
         let started = Instant::now();
         let result_input = json!({"response": "empty tools test"});
@@ -499,9 +498,7 @@ mod tests {
 
     #[test]
     fn test_finalize_chat_response_with_tool_results() {
-        let server = ServerBuilder::new()
-            .build()
-            .expect("server should build");
+        let server = ServerBuilder::new().build().expect("server should build");
         let trace = make_trace();
         let started = Instant::now();
         let result_input = json!({

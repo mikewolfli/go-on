@@ -473,8 +473,10 @@ mod tests {
 
     #[test]
     fn test_context_window_budget_complexity() {
-        let mut budget = ContextWindowBudget::default();
-        budget.task_complexity = 1;
+        let mut budget = ContextWindowBudget {
+            task_complexity: 1,
+            ..Default::default()
+        };
         assert!(budget.effective_retain() < budget.max_messages);
         budget.task_complexity = 10;
         assert_eq!(budget.effective_retain(), budget.max_messages);

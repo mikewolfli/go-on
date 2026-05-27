@@ -501,14 +501,88 @@ pub fn role_keywords_for(role: &str) -> Vec<&'static str> {
     }
 }
 
+/// Rank execution agents based on role match and rotation
+pub fn rank_execution_agents(
+    agent_names: &[String],
+    desired_role: Option<&str>,
+    phase_index: usize,
+    task_index: usize,
+) -> Vec<ExecutionDecisionCandidate> {
+    if agent_names.is_empty() {
+        return Vec::new();
+    }
+
+    let total = agent_names.len() as f64;
+    let mut ranked = agent_names
+        .iter()
+        .enumerate()
+        .map(|(idx, agent_name)| {
+            let lower = agent_name.to_ascii_lowercase();
+            let history_order_score =
+                ((agent_names.len().saturating_sub(idx)) as f64 / total) * 0.55;
+
+            let (role_match_score, role_reason) = if let Some(role) = desired_role {
+                let role = role.to_ascii_lowercase();
+                let keywords = role_keywords_for(role.as_str());
+                let dynamic_keywords = if keywords.is_empty() {
+                    role_registry_keywords_for(role.as_str())
+                } else {
+                    Vec::new()
+                };
+                let static_match =
+                    !keywords.is_empty() && keywords.iter().any(|keyword| lower.contains(keyword));
+                let dynamic_match = !dynamic_keywords.is_empty()
+                    && dynamic_keywords
+                        .iter()
+                        .any(|keyword| lower.contains(&keyword.to_ascii_lowercase()));
+                if static_match || dynamic_match {
+                    (0.35f64, format!("role match for {}", role))
+                } else if keywords.is_empty() {
+                    (0.0f64, format!("custom role neutral for {}", role))
+                } else {
+                    (-0.12f64, format!("no explicit role match for {}", role))
+                }
+            } else {
+                (0.08f64, "no role constraint".to_string())
+            };
+
+            let rotation_target = (phase_index + task_index) % agent_names.len();
+            let spread_score = if idx == rotation_target { 0.10 } else { 0.02 };
+            let score = (history_order_score + role_match_score + spread_score).clamp(0.0, 1.0);
+
+            ExecutionDecisionCandidate {
+                agent: agent_name.clone(),
+                score,
+                reason: format!(
+                    "history_order={:.3}, {}, spread_score={:.3}",
+                    history_order_score, role_reason, spread_score
+                ),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    ranked.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.agent.cmp(&b.agent))
+    });
+    ranked
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::orchestration::task_router::{RoutingDecision, TaskCharacteristics, TaskType};
-    use crate::roles::AgentRole;
     use crate::reinforcement::TaskPlanArtifact;
+    use crate::roles::AgentRole;
 
-    fn make_task_plan(complexity: u8, safety: bool, multi_module: bool, success_rate: f32) -> TaskPlanArtifact {
+    fn make_task_plan(
+        complexity: u8,
+        safety: bool,
+        multi_module: bool,
+        success_rate: f32,
+    ) -> TaskPlanArtifact {
         TaskPlanArtifact {
             generated_at: 0,
             task: "test task".to_string(),
@@ -555,8 +629,14 @@ mod tests {
         assert_eq!(WorkGrade::parse(Some("ask")), Some(WorkGrade::Ask));
         assert_eq!(WorkGrade::parse(Some("edit")), Some(WorkGrade::Edit));
         assert_eq!(WorkGrade::parse(Some("agent")), Some(WorkGrade::Agent));
-        assert_eq!(WorkGrade::parse(Some("safeguard")), Some(WorkGrade::Safeguard));
-        assert_eq!(WorkGrade::parse(Some("full_auto")), Some(WorkGrade::FullAuto));
+        assert_eq!(
+            WorkGrade::parse(Some("safeguard")),
+            Some(WorkGrade::Safeguard)
+        );
+        assert_eq!(
+            WorkGrade::parse(Some("full_auto")),
+            Some(WorkGrade::FullAuto)
+        );
         assert_eq!(WorkGrade::parse(Some("auto")), Some(WorkGrade::FullAuto));
     }
 
@@ -577,9 +657,18 @@ mod tests {
 
     #[test]
     fn test_work_grade_action_detects_differences() {
-        assert_eq!(work_grade_action(WorkGrade::Ask, WorkGrade::Agent), "upgraded");
-        assert_eq!(work_grade_action(WorkGrade::Agent, WorkGrade::Edit), "downgraded");
-        assert_eq!(work_grade_action(WorkGrade::Agent, WorkGrade::Agent), "unchanged");
+        assert_eq!(
+            work_grade_action(WorkGrade::Ask, WorkGrade::Agent),
+            "upgraded"
+        );
+        assert_eq!(
+            work_grade_action(WorkGrade::Agent, WorkGrade::Edit),
+            "downgraded"
+        );
+        assert_eq!(
+            work_grade_action(WorkGrade::Agent, WorkGrade::Agent),
+            "unchanged"
+        );
     }
 
     // ── ReviewPolicy ───────────────────────────────────────────────────
@@ -656,7 +745,10 @@ mod tests {
         let candidates = rank_execution_agents(&agents, Some("coder"), 0, 0);
         assert_eq!(candidates.len(), 3);
         for c in &candidates {
-            assert!(c.score >= 0.0 && c.score <= 1.0, "score should be in [0, 1]");
+            assert!(
+                c.score >= 0.0 && c.score <= 1.0,
+                "score should be in [0, 1]"
+            );
         }
         // Should be sorted descending by score
         for i in 1..candidates.len() {
@@ -691,74 +783,4 @@ mod tests {
         assert!(is_supported_optimization_module("failure_prevention"));
         assert!(!is_supported_optimization_module("unknown_module"));
     }
-}
-
-/// Rank execution agents based on role match and rotation
-pub fn rank_execution_agents(
-    agent_names: &[String],
-    desired_role: Option<&str>,
-    phase_index: usize,
-    task_index: usize,
-) -> Vec<ExecutionDecisionCandidate> {
-    if agent_names.is_empty() {
-        return Vec::new();
-    }
-
-    let total = agent_names.len() as f64;
-    let mut ranked = agent_names
-        .iter()
-        .enumerate()
-        .map(|(idx, agent_name)| {
-            let lower = agent_name.to_ascii_lowercase();
-            let history_order_score =
-                ((agent_names.len().saturating_sub(idx)) as f64 / total) * 0.55;
-
-            let (role_match_score, role_reason) = if let Some(role) = desired_role {
-                let role = role.to_ascii_lowercase();
-                let keywords = role_keywords_for(role.as_str());
-                let dynamic_keywords = if keywords.is_empty() {
-                    role_registry_keywords_for(role.as_str())
-                } else {
-                    Vec::new()
-                };
-                let static_match =
-                    !keywords.is_empty() && keywords.iter().any(|keyword| lower.contains(keyword));
-                let dynamic_match = !dynamic_keywords.is_empty()
-                    && dynamic_keywords
-                        .iter()
-                        .any(|keyword| lower.contains(&keyword.to_ascii_lowercase()));
-                if static_match || dynamic_match {
-                    (0.35f64, format!("role match for {}", role))
-                } else if keywords.is_empty() {
-                    // Custom or unknown role: neutral score (no penalty)
-                    (0.0f64, format!("custom role neutral for {}", role))
-                } else {
-                    (-0.12f64, format!("no explicit role match for {}", role))
-                }
-            } else {
-                (0.08f64, "no role constraint".to_string())
-            };
-
-            let rotation_target = (phase_index + task_index) % agent_names.len();
-            let spread_score = if idx == rotation_target { 0.10 } else { 0.02 };
-            let score = (history_order_score + role_match_score + spread_score).clamp(0.0, 1.0);
-
-            ExecutionDecisionCandidate {
-                agent: agent_name.clone(),
-                score,
-                reason: format!(
-                    "history_order={:.3}, {}, spread_score={:.3}",
-                    history_order_score, role_reason, spread_score
-                ),
-            }
-        })
-        .collect::<Vec<_>>();
-
-    ranked.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.agent.cmp(&b.agent))
-    });
-    ranked
 }

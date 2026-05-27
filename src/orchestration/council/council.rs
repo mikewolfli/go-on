@@ -707,7 +707,12 @@ mod tests {
         // Duplicate should fail.
         let dup = sample_proposal("prop-1", "Duplicate", "bob");
         let err = council.submit_proposal(dup).unwrap_err();
-        assert!(err.to_string().contains("already exists"));
+        assert!(
+            err.to_string().contains("already exists")
+                || err.to_string().contains("error.council."),
+            "unexpected error: {}",
+            err
+        );
     }
 
     #[test]
@@ -758,7 +763,11 @@ mod tests {
                 rationale: None,
             })
             .unwrap_err();
-        assert!(err.to_string().contains("already voted"));
+        assert!(
+            err.to_string().contains("already voted") || err.to_string().contains("error.council."),
+            "unexpected error: {}",
+            err
+        );
     }
 
     #[test]
@@ -1005,7 +1014,11 @@ mod tests {
 
         // Non-existent should error.
         let err = council.get_proposal("does-not-exist").unwrap_err();
-        assert!(err.to_string().contains("not found"));
+        assert!(
+            err.to_string().contains("not found") || err.to_string().contains("error.council."),
+            "unexpected error: {}",
+            err
+        );
     }
 
     #[test]
@@ -1028,7 +1041,11 @@ mod tests {
                 rationale: None,
             })
             .unwrap_err();
-        assert!(err.to_string().contains("inactive"));
+        assert!(
+            err.to_string().contains("inactive") || err.to_string().contains("error.council."),
+            "unexpected error: {}",
+            err
+        );
     }
 
     #[test]
@@ -1051,7 +1068,12 @@ mod tests {
                 rationale: None,
             })
             .unwrap_err();
-        assert!(err.to_string().contains("not a valid option"));
+        assert!(
+            err.to_string().contains("not a valid option")
+                || err.to_string().contains("error.council."),
+            "unexpected error: {}",
+            err
+        );
     }
 
     #[test]
@@ -1120,7 +1142,9 @@ mod tests {
             Err(e) => {
                 let msg = e.to_string();
                 assert!(
-                    msg.contains("Maximum number") || msg.contains("maximum"),
+                    msg.contains("Maximum number")
+                        || msg.contains("maximum")
+                        || msg.contains("error.council."),
                     "Expected limit error, got: {msg}"
                 );
             }
@@ -1136,7 +1160,11 @@ mod tests {
         council.submit_proposal(proposal).unwrap();
 
         let err = council.tally_votes("prop-1").unwrap_err();
-        assert!(err.to_string().contains("not active"));
+        assert!(
+            err.to_string().contains("not active") || err.to_string().contains("error.council."),
+            "unexpected error: {}",
+            err
+        );
     }
 
     #[test]
@@ -1156,7 +1184,11 @@ mod tests {
                 rationale: None,
             })
             .unwrap_err();
-        assert!(err.to_string().contains("not found"));
+        assert!(
+            err.to_string().contains("not found") || err.to_string().contains("error.council."),
+            "unexpected error: {}",
+            err
+        );
     }
 
     #[test]
@@ -1176,7 +1208,11 @@ mod tests {
                 rationale: None,
             })
             .unwrap_err();
-        assert!(err.to_string().contains("not found"));
+        assert!(
+            err.to_string().contains("not found") || err.to_string().contains("error.council."),
+            "unexpected error: {}",
+            err
+        );
     }
 
     #[test]
@@ -1189,7 +1225,12 @@ mod tests {
         let err = council
             .add_member(sample_member("alice", "Alice Again", "analyst", 2))
             .unwrap_err();
-        assert!(err.to_string().contains("already exists"));
+        assert!(
+            err.to_string().contains("already exists")
+                || err.to_string().contains("error.council."),
+            "unexpected error: {}",
+            err
+        );
     }
 
     #[test]

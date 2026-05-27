@@ -1538,6 +1538,14 @@ async fn handle_openai_chat_completions(
     user_session: Option<crate::acp::r#impl::session::UserSession>,
     cors_headers: &str,
 ) -> Result<()> {
+    let started = std::time::Instant::now();
+    let record_outcome = |success: bool| {
+        server
+            .observability
+            .metrics
+            .record_request_outcome(success, started.elapsed().as_millis() as f64);
+    };
+
     let openai_req: OpenAiChatRequest = match serde_json::from_value(body) {
         Ok(value) => value,
         Err(err) => {
@@ -1555,6 +1563,7 @@ async fn handle_openai_chat_completions(
                 cors_headers,
             )
             .await?;
+            record_outcome(false);
             return Ok(());
         }
     };
@@ -1591,6 +1600,7 @@ async fn handle_openai_chat_completions(
                     let payload =
                         inject_platform_profiles_if_absent(payload, "openai.chat.completions");
                     write_http_json_response(socket, 200, payload, cors_headers).await?;
+                    record_outcome(true);
                     return Ok(());
                 }
                 let payload = serde_json::json!({
@@ -1607,6 +1617,7 @@ async fn handle_openai_chat_completions(
                     cors_headers,
                 )
                 .await?;
+                record_outcome(false);
                 return Ok(());
             }
         };
@@ -1617,6 +1628,7 @@ async fn handle_openai_chat_completions(
         let payload = build_openai_completion(&request_id, &model, response_text);
         let payload = inject_platform_profiles_if_absent(payload, "openai.chat.completions");
         write_http_json_response(socket, 200, payload, cors_headers).await?;
+        record_outcome(true);
         return Ok(());
     }
 
@@ -1657,6 +1669,7 @@ async fn handle_openai_chat_completions(
             // Client disconnected while backend task is still producing tokens.
             // Abort task to avoid orphan compute and channel buildup.
             task.abort();
+            record_outcome(false);
             return Err(err);
         }
     }
@@ -1666,6 +1679,7 @@ async fn handle_openai_chat_completions(
             let done_payload = build_openai_chunk(&request_id, &model, "", Some("stop"));
             write_openai_sse_data(socket, &done_payload).await?;
             write_openai_sse_done(socket).await?;
+            record_outcome(true);
         }
         Ok(Err(err)) => {
             if is_setup_or_upstream_unavailable(&err) {
@@ -1677,16 +1691,19 @@ async fn handle_openai_chat_completions(
                 );
                 write_openai_sse_data(socket, &payload).await?;
                 write_openai_sse_done(socket).await?;
+                record_outcome(true);
                 return Ok(());
             }
             let payload = serde_json::json!({"error": {"message": err.to_string()}});
             write_openai_sse_data(socket, &payload).await?;
             write_openai_sse_done(socket).await?;
+            record_outcome(false);
         }
         Err(err) => {
             let payload = serde_json::json!({"error": {"message": tf("error.chat_task_panicked", &[("error", &err.to_string())])}});
             write_openai_sse_data(socket, &payload).await?;
             write_openai_sse_done(socket).await?;
+            record_outcome(false);
         }
     }
 
@@ -2852,7 +2869,7 @@ async fn route_http_post(
                     let ctx = Some(crate::acp::r#impl::chat::ChatRequestContext::new(
                         user_session,
                     ));
-                    let result = crate::acp::r#impl::chat::process_chat_request(
+                    let result = match crate::acp::r#impl::chat::process_chat_request(
                         server.as_ref(),
                         &params,
                         None,
@@ -2860,7 +2877,26 @@ async fn route_http_post(
                         None,
                         ctx,
                     )
-                    .await?;
+                    .await
+                    {
+                        Ok(result) => result,
+                        Err(err) => {
+                            write_http_json_response_with_context(
+                                socket,
+                                502,
+                                serde_json::json!({
+                                    "error": {
+                                        "message": err.to_string(),
+                                        "type": "go_on_upstream_error"
+                                    }
+                                }),
+                                "chat",
+                                cors_headers,
+                            )
+                            .await?;
+                            return Ok(());
+                        }
+                    };
                     let result = inject_platform_profiles_if_absent(result, "chat");
                     write_http_json_response(socket, 200, result, cors_headers).await?;
                 }

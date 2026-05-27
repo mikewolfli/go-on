@@ -804,7 +804,7 @@ mod e2e_tests {
         // Validate PipelineErrorStrategy enum-like contract
         let error_strategies = json!(["Stop", "Continue", "Rollback"]);
         assert_eq!(error_strategies.as_array().unwrap().len(), 3);
-        let valid_strategies = vec!["Stop", "Continue", "Rollback"];
+        let valid_strategies = ["Stop", "Continue", "Rollback"];
         for s in error_strategies.as_array().unwrap() {
             assert!(valid_strategies.contains(&s.as_str().unwrap()));
         }
@@ -816,7 +816,7 @@ mod e2e_tests {
         // Validate LockMode enum-like contract
         let lock_modes = json!(["Read", "Write"]);
         assert_eq!(lock_modes.as_array().unwrap().len(), 2);
-        let valid_modes = vec!["Read", "Write"];
+        let valid_modes = ["Read", "Write"];
         for mode in lock_modes.as_array().unwrap() {
             assert!(valid_modes.contains(&mode.as_str().unwrap()));
         }
@@ -932,7 +932,7 @@ mod e2e_tests {
         ]);
         for p in default_patterns.as_array().unwrap() {
             assert!(p["keywords"].as_array().unwrap().len() >= 2);
-            assert!(p["tools"].as_array().unwrap().len() >= 1);
+            assert!(!p["tools"].as_array().unwrap().is_empty());
         }
 
         // Validate keyword matching contract: keywords are lowercased, trimmed
@@ -949,7 +949,7 @@ mod e2e_tests {
         // Validate VotingStrategy enum-like contract
         let voting_strategies = json!(["Majority", "Weighted", "Unanimous", "BestOfN"]);
         assert_eq!(voting_strategies.as_array().unwrap().len(), 4);
-        let valid_strategies = vec!["Majority", "Weighted", "Unanimous", "BestOfN"];
+        let valid_strategies = ["Majority", "Weighted", "Unanimous", "BestOfN"];
         for s in voting_strategies.as_array().unwrap() {
             assert!(valid_strategies.contains(&s.as_str().unwrap()));
         }
@@ -1112,7 +1112,7 @@ mod e2e_tests {
         // Validate should_compress / requires_compression logic
         let threshold = compressor_config["compression_threshold"].as_u64().unwrap();
         let max_msgs = compressor_config["max_messages"].as_u64().unwrap();
-        assert!(!(500 >= threshold)); // below threshold → no compression needed
+        assert!(500 < threshold); // below threshold → no compression needed
         assert!(800 >= threshold); // at threshold → should compress
         assert!(1001 > max_msgs); // above max → requires compression
     }
@@ -1287,10 +1287,8 @@ mod e2e_tests {
         let mut seen_phases: Vec<&str> = Vec::new();
         for token in cycle_tokens.as_array().unwrap() {
             let t = token.as_str().unwrap();
-            if t.starts_with("__phase__:") {
-                if !seen_phases.contains(&t) {
-                    seen_phases.push(t);
-                }
+            if t.starts_with("__phase__:") && !seen_phases.contains(&t) {
+                seen_phases.push(t);
             }
         }
         assert_eq!(seen_phases.len(), 4); // planning, executing, reflecting, complete

@@ -27,9 +27,8 @@ use crate::agents::vendors;
 use crate::agents::{
     Ai21Agent, AlephAgent, AnthropicAgent, CohereAgent, CopilotAgent, DeepQuestAgent,
     DeepSeekAgent, FaceWallAgent, FireworksAgent, GeminiAgent, GlmAgent, GroqAgent, HunyuanAgent,
-    KimiAgent,
-    LangboatAgent, LlamaAgent, LoopAiAgent, MiniMaxAgent, MistralAgent, MoonshotAgent, NimAgent,
-    OpenAiAgent, OpenAiCompatibleAgent, PerplexityAgent, QianfanAgent, ReplicateAgent,
+    KimiAgent, LangboatAgent, LlamaAgent, LoopAiAgent, MiniMaxAgent, MistralAgent, MoonshotAgent,
+    NimAgent, OpenAiAgent, OpenAiCompatibleAgent, PerplexityAgent, QianfanAgent, ReplicateAgent,
     SkyworkAgent, StepFunAgent, TitanAgent, TogetherAgent, WenxinAgent, XihuAgent, YiAgent,
 };
 use crate::core::error::Result as AppResult;

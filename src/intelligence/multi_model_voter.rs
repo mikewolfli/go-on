@@ -1,4 +1,8 @@
-#![cfg_attr(not(feature = "sub-bus-voter-future"), allow(dead_code, unused_imports))]
+//! F-GAP-16: Multi-model voting
+#![cfg_attr(
+    not(feature = "sub-bus-voter-future"),
+    allow(dead_code, unused_imports)
+)]
 
 //! MultiModelVoter — Concurrent multi-model voting for high-stakes decisions.
 //!

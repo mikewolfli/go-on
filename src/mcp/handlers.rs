@@ -13,7 +13,7 @@ use crate::tool::ToolInput;
 use super::tools::validate_required_arguments;
 use super::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpCallToolResult, McpInitializeResult,
-    McpListResourcesResult, McpListToolsResult, McpResource, McpServer, McpTool, JSONRPC_VERSION,
+    McpListResourcesResult, McpListToolsResult, McpResource, McpServer, JSONRPC_VERSION,
     MCP_VERSION,
 };
 
@@ -405,7 +405,7 @@ impl McpServer {
 
     async fn handle_list_tools(&self, _request: &JsonRpcRequest) -> Value {
         if let Some(acp_server) = self.acp_server.as_ref() {
-            let tools = build_mcp_tool_descriptors(acp_server.as_ref());
+            let tools = build_mcp_tool_descriptors(Some(acp_server.as_ref()));
             let count = tools.len();
             info!("MCP: Listing {} tools/skills", count);
             let mut result = serde_json::to_value(McpListToolsResult::new(tools))
@@ -414,55 +414,32 @@ impl McpServer {
             return result;
         }
 
-        let mut tools = self
-            .tool_registry
-            .names()
-            .into_iter()
-            .map(crate::mcp::tools::tool_descriptor)
-            .collect::<Vec<_>>();
+        // Keep fallback semantics aligned with ACP `mcp.tools.list` by
+        // reusing the same shared baseline descriptor set.
+        let mut tools = build_mcp_tool_descriptors(None);
 
         // Inject registered skills from ACP server (if available)
         if let Some(registry) = self.skill_registry() {
             if let Ok(guard) = registry.lock() {
                 for descriptor in guard.list() {
-                    tools.push(McpTool {
-                        name: descriptor.name,
-                        description: Some(descriptor.description),
-                        input_schema: Some(descriptor.input_schema),
-                    });
+                    tools.push(json!({
+                        "name": descriptor.name,
+                        "description": descriptor.description,
+                        "input_schema": descriptor.input_schema,
+                    }));
                 }
             }
         }
 
-        // Sort: tools first, then skills (alphabetically within groups)
-        let tool_names: std::collections::HashSet<String> = self
-            .tool_registry
-            .names()
-            .into_iter()
-            .map(|s| s.to_string())
-            .collect();
         tools.sort_by(|a, b| {
-            let a_is_tool = tool_names.contains(&a.name);
-            let b_is_tool = tool_names.contains(&b.name);
-            if a_is_tool != b_is_tool {
-                // Tools before skills
-                if a_is_tool {
-                    std::cmp::Ordering::Less
-                } else {
-                    std::cmp::Ordering::Greater
-                }
-            } else {
-                a.name.cmp(&b.name)
-            }
+            let a_name = a.get("name").and_then(Value::as_str).unwrap_or_default();
+            let b_name = b.get("name").and_then(Value::as_str).unwrap_or_default();
+            a_name.cmp(b_name)
         });
 
         let count = tools.len();
         info!("MCP: Listing {} tools/skills", count);
-        let tools_value: Vec<Value> = tools
-            .into_iter()
-            .map(|t| serde_json::to_value(t).expect("McpTool is always serializable"))
-            .collect();
-        let mut result = serde_json::to_value(McpListToolsResult::new(tools_value))
+        let mut result = serde_json::to_value(McpListToolsResult::new(tools))
             .expect("McpListToolsResult is always serializable");
         result["x_skills_available"] = json!(self.skill_registry().is_some());
         result

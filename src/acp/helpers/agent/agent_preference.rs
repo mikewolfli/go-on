@@ -236,8 +236,7 @@ pub fn resolve_agent_preferences(
     let requirement_contract = if let Some(contract) = &params.requirement_contract {
         contract.clone()
     } else {
-        let task_description =
-            crate::acp::r#impl::chat::extract_task_description(&params.messages);
+        let task_description = crate::acp::r#impl::chat::extract_task_description(&params.messages);
         default_requirement_contract(&task_description, "chat")
     };
 

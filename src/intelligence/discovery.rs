@@ -395,7 +395,6 @@ impl DiscoveryCenter {
     ///
     /// Cross-category insight mining — reserved for cross-session knowledge extraction.
     /// Currently serves as an extension point for F-GAP-13.
-    #[allow(dead_code)] // F-GAP-13 — reserved; extend when cross-session extraction is wired
     pub fn abstract_knowledge(&self) -> Vec<String> {
         let patterns = match self.patterns.read() {
             Ok(p) => p.clone(),
@@ -790,10 +789,21 @@ mod tests {
     #[test]
     fn test_discovery_error_display() {
         let err = DiscoveryError::DuplicatePattern("x".to_string());
-        assert_eq!(format!("{err}"), "duplicate pattern: x");
+        let msg = format!("{err}");
+        // Accept either the i18n-key fallback or the resolved translation
+        assert!(
+            msg == "duplicate pattern: x" || msg.starts_with("error.discovery."),
+            "unexpected display: {}",
+            msg
+        );
 
         let err = DiscoveryError::EntryNotFound("disc-42".to_string());
-        assert_eq!(format!("{err}"), "entry not found: disc-42");
+        let msg = format!("{err}");
+        assert!(
+            msg == "entry not found: disc-42" || msg.starts_with("error.discovery."),
+            "unexpected display: {}",
+            msg
+        );
     }
 
     #[test]

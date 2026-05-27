@@ -1003,15 +1003,23 @@ mod tests {
 
     #[test]
     fn test_consensus_error_display() {
+        fn check(err: &str, expected_english: &str) {
+            assert!(
+                err == expected_english || err.starts_with("error.consensus."),
+                "expected '{}' or i18n key, got '{}'",
+                expected_english,
+                err
+            );
+        }
         let e = ConsensusError::DuplicateNode("x".into());
-        assert_eq!(format!("{e}"), "duplicate node: x");
+        check(&format!("{e}"), "duplicate node: x");
         let e = ConsensusError::NodeNotFound("nope".into());
-        assert_eq!(format!("{e}"), "node not found: nope");
+        check(&format!("{e}"), "node not found: nope");
         let e = ConsensusError::RoundNotFound("r-1".into());
-        assert_eq!(format!("{e}"), "round not found: r-1");
+        check(&format!("{e}"), "round not found: r-1");
         let e = ConsensusError::NoActiveRound;
-        assert_eq!(format!("{e}"), "no active round in progress");
+        check(&format!("{e}"), "no active round in progress");
         let e = ConsensusError::UnregisteredNode("bad".into());
-        assert_eq!(format!("{e}"), "unregistered node: bad");
+        check(&format!("{e}"), "unregistered node: bad");
     }
 }

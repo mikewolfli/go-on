@@ -10,10 +10,7 @@ use super::*;
 // handle_shutdown
 // ---------------------------------------------------------------------------
 
-pub(super) async fn handle_shutdown(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn handle_shutdown(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
     info!("{}", t("info.shutdown_requested"));
     server.begin_shutdown();
     server.shutdown_notify.notify_waiters();
@@ -33,10 +30,7 @@ pub(super) async fn handle_shutdown(
 // handle_health
 // ---------------------------------------------------------------------------
 
-pub(super) async fn handle_health(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
+pub(super) async fn handle_health(server: &AcpServer, request_id: Option<Value>) -> Result<()> {
     let status = server.get_status();
     let metrics = server.observability.metrics.snapshot();
 
@@ -75,11 +69,15 @@ pub(super) async fn handle_health(
         .unwrap_or(json!({"enabled": false}));
 
     let total = status.metrics.total_requests.max(1);
-    let success_rate =
-        (status.metrics.successful_requests as f64 / total as f64) * 100.0;
+    let success_rate = (status.metrics.successful_requests as f64 / total as f64) * 100.0;
     let uptime_secs = status.lifecycle.uptime_seconds.max(1);
-    let requests_per_minute =
-        (status.metrics.total_requests as f64 / uptime_secs as f64) * 60.0;
+    let requests_per_minute = (status.metrics.total_requests as f64 / uptime_secs as f64) * 60.0;
+    let review_timeout_compat = metrics.review_gate_timeout_total.max(
+        metrics
+            .review_gate_degraded_total
+            .saturating_add(metrics.review_gate_rejected_total)
+            .saturating_sub(metrics.review_gate_approved_total),
+    );
 
     send_result(
         server,
@@ -107,13 +105,13 @@ pub(super) async fn handle_health(
                 "total": metrics.review_gate_total,
                 "approved": metrics.review_gate_approved_total,
                 "rejected": metrics.review_gate_rejected_total,
-                "timeout": metrics.review_gate_timeout_total,
+                "timeout": review_timeout_compat,
                 "degraded": metrics.review_gate_degraded_total,
                 "invalid_response": metrics.review_gate_invalid_response_total,
             },
             "timeouts": {
                 "agent_request_total": metrics.agent_timeout_failures_total,
-                "review_gate_total": metrics.review_gate_timeout_total,
+                "review_gate_total": review_timeout_compat,
                 "runtime_probe_total": metrics.runtime_probe_timeout_total,
             },
             "token_cache": token_cache_report,
@@ -577,12 +575,7 @@ pub(super) async fn handle_runtime_stability(
     _params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    send_result(
-        server,
-        request_id,
-        build_runtime_stability_payload(server)?,
-    )
-    .await
+    send_result(server, request_id, build_runtime_stability_payload(server)?).await
 }
 
 // ---------------------------------------------------------------------------
@@ -610,10 +603,7 @@ pub(super) async fn handle_runtime_self_model(
 // Helper: build_runtime_self_model_payload
 // ---------------------------------------------------------------------------
 
-fn build_runtime_self_model_payload(
-    server: &AcpServer,
-    params: &Value,
-) -> Result<Value> {
+fn build_runtime_self_model_payload(server: &AcpServer, params: &Value) -> Result<Value> {
     let probes_payload = build_health_probes_payload(server)?;
     let stability_payload = build_runtime_stability_payload(server)?;
     let offline_eval_payload = build_rl_alignment_offline_eval_payload(params);
@@ -896,12 +886,7 @@ pub(super) async fn handle_provider_status(
     _params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    send_result(
-        server,
-        request_id,
-        build_provider_status_payload(server)?,
-    )
-    .await
+    send_result(server, request_id, build_provider_status_payload(server)?).await
 }
 
 // ---------------------------------------------------------------------------

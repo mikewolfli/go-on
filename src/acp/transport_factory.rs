@@ -69,7 +69,7 @@ pub async fn initialize_cache(
             match r {
                 Ok(c) => Ok(c),
                 Err(e) => {
-                    tracing::warn!("cache init failed: {e}");
+                    tracing::warn!("cache init failed: {e}; continuing without cache");
                     Ok(None)
                 }
             }
@@ -130,7 +130,7 @@ pub async fn initialize_vector_store(
             match r {
                 Ok(v) => Ok(v),
                 Err(e) => {
-                    tracing::warn!("vector init failed: {e}");
+                    tracing::warn!("vector init failed: {e}; continuing without vector");
                     Ok(None)
                 }
             }
@@ -189,10 +189,12 @@ pub async fn dispatch_server(
     autotune_state_path: Option<String>,
     client: reqwest::Client,
 ) -> Result<()> {
+    let runtime_flow = flow_manager(config_path);
+
     match protocol_mode {
         "acp_stdio" | "adaptive" => {
             let mut server = crate::acp::r#impl::runtime::new_acp_server(
-                flow_manager(),
+                Arc::clone(&runtime_flow),
                 registry,
                 cache,
                 vector_store,
@@ -210,7 +212,7 @@ pub async fn dispatch_server(
         }
         "acp_http" => {
             let server = crate::acp::r#impl::runtime::new_acp_server(
-                flow_manager(),
+                Arc::clone(&runtime_flow),
                 registry,
                 cache,
                 vector_store,
@@ -255,9 +257,18 @@ pub async fn dispatch_server(
     }
 }
 
-fn flow_manager() -> Arc<FlowManager> {
-    Arc::new(FlowManager::new(
-        Arc::new(crate::config::AppConfig::default()),
-        None,
-    ))
+fn flow_manager(config_path: &Path) -> Arc<FlowManager> {
+    let app_config = match crate::config::AppConfig::load(config_path) {
+        Ok(config) => Arc::new(config),
+        Err(err) => {
+            tracing::warn!(
+                "failed to load app config for flow manager from {}: {}; falling back to defaults",
+                config_path.display(),
+                err
+            );
+            Arc::new(crate::config::AppConfig::default())
+        }
+    };
+
+    Arc::new(FlowManager::new(app_config, None))
 }

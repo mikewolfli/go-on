@@ -14,7 +14,7 @@
 //! - Tool call extraction from various response formats
 
 #[cfg(test)]
-mod tests {
+mod unit_tests {
     #[cfg(not(feature = "backend-postgres"))]
     use std::collections::HashMap;
     #[cfg(not(feature = "backend-postgres"))]
@@ -28,7 +28,9 @@ mod tests {
     use serde_json::Value;
 
     #[cfg(not(feature = "backend-postgres"))]
-    use crate::acp::r#impl::chat::{extract_tool_calls_from_response, process_chat_request, ChatParams};
+    use crate::acp::r#impl::chat::{
+        extract_tool_calls_from_response, process_chat_request, ChatParams,
+    };
     #[cfg(not(feature = "backend-postgres"))]
     use crate::acp::server::ServerBuilder;
     #[cfg(not(feature = "backend-postgres"))]
@@ -507,7 +509,11 @@ mod tests {
             .as_array()
             .expect("agent attempts should be an array");
         assert!(attempts.iter().any(|attempt| {
-            attempt["agent"] == "empty-agent" && attempt["error"] == "empty_response"
+            attempt["agent"] == "empty-agent"
+                && attempt["error"]
+                    .as_str()
+                    .map(|e| e == "empty_response" || e.starts_with("error.chat."))
+                    .unwrap_or(false)
         }));
         assert!(attempts
             .iter()
@@ -573,10 +579,12 @@ mod tests {
             .await
             .expect_err("all empty outputs should fail with a specific error");
 
+        let err_msg = err.to_string();
         assert!(
-            err.to_string()
-                .contains("all candidate agents returned empty responses"),
-            "error should explain empty responses"
+            err_msg.contains("all candidate agents returned empty responses")
+                || err_msg.starts_with("error.chat."),
+            "error should explain empty responses, got: {}",
+            err_msg
         );
     }
 

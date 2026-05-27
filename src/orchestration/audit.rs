@@ -1,4 +1,4 @@
-//! BLUE43 Step 20 — Audit trail / replay / evidence system
+//! F-GAP-03: Audit trail, replay, evidence
 //!
 //! Provides structured audit entries that capture the full decision path
 //! of an agent interaction, supporting replay and evidence export.

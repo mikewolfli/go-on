@@ -293,9 +293,11 @@ mod tests {
         assert_eq!(branch_id, "branch-tools");
         assert_eq!(node_ids.len(), 3);
 
-        // Each node ID must match the pattern "tool-{name}-{index}"
-        assert_eq!(node_ids[0], "tool-read_file-0");
-        assert_eq!(node_ids[1], "tool-grep-1");
+        // Sort node IDs for deterministic comparison (DAG order may vary)
+        let mut node_ids = node_ids;
+        node_ids.sort();
+        assert_eq!(node_ids[0], "tool-grep-1");
+        assert_eq!(node_ids[1], "tool-read_file-0");
         assert_eq!(node_ids[2], "tool-search_files-2");
 
         // Verify structural invariants: at least one node, all IDs are non-empty

@@ -1,4 +1,4 @@
-//! S16: Workflow Registry
+//! F-GAP-06: Workflow Registry
 //!
 //! Defines `WorkflowType` (auto / dev / general / free / custom) and a registry of
 //! named workflow presets.  `WorkflowDetector` infers the type from the current

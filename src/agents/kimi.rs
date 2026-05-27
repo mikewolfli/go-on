@@ -153,7 +153,8 @@ impl Agent for KimiAgent {
             ModelInfo {
                 id: "kimi-k2.6".to_string(),
                 name: "Kimi K2.6".to_string(),
-                description: "Kimi K2.6 with 128K context window, supports thinking mode".to_string(),
+                description: "Kimi K2.6 with 128K context window, supports thinking mode"
+                    .to_string(),
                 is_default: self.model == "kimi-k2.6",
                 capabilities: vec!["chat".to_string(), "thinking".to_string()],
                 context_window: Some(128000),

@@ -14,8 +14,8 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
-use tokio::sync::RwLock;
 use std::time::Instant;
+use tokio::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -988,10 +988,7 @@ impl FullAutoFlow {
                             // report so callers know what was attempted.
                             errors.push(tf(
                                 "error.full_auto.repair_attempted",
-                                &[
-                                    ("strategy", &strategy),
-                                    ("description", &desc),
-                                ],
+                                &[("strategy", &strategy), ("description", &desc)],
                             ));
                         }
                         let trend = engine.error_trend();

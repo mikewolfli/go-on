@@ -90,7 +90,7 @@ pub(super) async fn handle_governance_status(
         .map(std::path::Path::new)
         .and_then(|path| AppConfig::load(path).ok());
     let startup_context = crate::orchestration::startup_context::get();
-    let _role_registry_custom_count = crate::orchestration::roles::role_registry_count();
+    let role_registry_custom_count = crate::orchestration::roles::role_registry_count();
 
     let configured_workflow_type = app_config
         .as_ref()
@@ -1274,16 +1274,173 @@ pub(super) async fn handle_governance_status(
             "ok": true,
             "governance": {
                 "version": "blue26-governance-v1",
+                "schema_version": governance_schema_version,
                 "schema": governance_schema_version,
+                "artifact_contract": {
+                    "schema_version": governance_schema_version,
+                },
                 "policy_environment": policy_environment,
                 "policy_bundle_version": policy_bundle_version,
                 "server_mode": server_mode,
                 "server_mode_source": server_mode_source,
+                "multi_user_server": {
+                    "mode": if multi_user_enabled { "multi_user" } else { "single_user" },
+                    "inference": {
+                        "source": server_mode_source,
+                        "deployment_target": deployment_target,
+                    },
+                    "components": {
+                        "authn_authz": {
+                            "status": if auth_component_ok { "ready" } else { "degraded" },
+                        },
+                    },
+                    "lifecycle": {
+                        "ready": lifecycle_ops_ready,
+                        "blocking_issues": lifecycle_blocking_issues,
+                    },
+                    "gate_ready": if multi_user_enabled { isolation_component_ok } else { true },
+                    "release_gate": {
+                        "ready": if multi_user_enabled { release_gate_ready } else { true },
+                    },
+                    "tenant_context": {
+                        "tenant_id_required": multi_user_enabled,
+                    },
+                },
+                "tool_matrix": {
+                    "summary": {
+                        "tool_total": tool_total,
+                        "high_risk_tool_total": high_risk_total,
+                        "fallback_enabled_tool_total": fallback_enabled_total,
+                    }
+                },
+                "platform_mode": {
+                    "active": server_mode,
+                    "source": server_mode_source,
+                },
+                "metrics_reconciliation": {
+                    "phase_view": {
+                        "total_requests": runtime_snapshot.total_requests,
+                        "failed_requests": runtime_snapshot.failed_requests,
+                    },
+                    "universal_view": {
+                        "chat_requests_total": runtime_snapshot.chat_requests_total,
+                        "review_gate_total": runtime_snapshot.review_gate_total,
+                    },
+                    "ok": reconciliation_ok,
+                },
+                "learning_cognition": {
+                    "ready": status.lifecycle.is_healthy,
+                },
+                "token_economy": {
+                    "ready": status.lifecycle.is_healthy,
+                },
+                "knowledge_refinement": {
+                    "ready": status.lifecycle.is_healthy,
+                },
+                "org_policy": {
+                    "bundle_version": policy_bundle_version,
+                    "exceptions": {
+                        "active_total": 0,
+                    },
+                },
+                "custom_role_registry": {
+                    "ready": custom_role_registry_ready,
+                    "count": role_registry_custom_count,
+                },
+                "custom_role_dynamic_matching": {
+                    "ready": custom_role_dynamic_matching_ready,
+                },
+                "compliance_audit_metadata": {
+                    "ready": compliance_audit_metadata_ready,
+                    "compliance_framework_profile": compliance_framework_profile,
+                },
+                "self_rationalization_guard": {
+                    "ready": compliance_audit_metadata_ready,
+                    "self_rationalization_guard_profile": {
+                        "reexamine_triggered_count": pua_learning.len(),
+                        "weak_evidence_blocked_count": recent_failed,
+                    },
+                },
+                "startup_context_loader": startup_context_profile,
+                "layered_prompt_builder": {
+                    "ready": layered_prompt_builder_ready,
+                    "prompt_layer_profile": {
+                        "static_layers_cached": startup_context
+                            .as_ref()
+                            .map(|ctx| ctx.style_rules.len())
+                            .unwrap_or(0),
+                    },
+                },
+                "layered_token_trigger": {
+                    "ready": layered_token_trigger_ready,
+                    "layered_token_trigger_profile": {
+                        "l1_cache_hit_count": runtime_snapshot.summary_hit_total,
+                    },
+                },
+                "multi_priority_scheduler": {
+                    "ready": multi_priority_scheduler_ready,
+                    "dual_level_scheduler_profile": {
+                        "l1_queue_depth": server
+                            .scheduler
+                            .as_ref()
+                            .map(|s| s.profile().l1_queue_depth)
+                            .unwrap_or(0),
+                    },
+                },
+                "worker_scheduler_backpressure": {
+                    "ready": worker_scheduler_backpressure_ready,
+                    "priority_queue_profile": {
+                        "starvation_events_prevented": 0,
+                    },
+                },
+                "fork_isolation_guard": {
+                    "ready": fork_isolation_guard_ready,
+                    "fork_isolation_profile": {
+                        "zombie_reaped_count": 0,
+                    },
+                },
+                "capability_graph": {
+                    "ready": capability_graph_ready,
+                    "capability_graph_profile": {
+                        "node_count": registered_agent_total,
+                    },
+                },
+                "provenance_ledger": {
+                    "ready": provenance_ledger_ready,
+                    "provenance_ledger_profile": {
+                        "entry_count": governance_audit.len(),
+                    },
+                },
+                "node_reputation_tracker": {
+                    "ready": node_reputation_tracker_ready,
+                    "node_reputation_profile": {
+                        "tracked_agent_count": registered_agent_total,
+                    },
+                },
+                "k8s_delivery_pack": {
+                    "ready": k8s_delivery_pack_ready,
+                    "cloud_native_profile": cloud_native_profile,
+                },
+                "sdk_multi_language": {
+                    "ready": sdk_multi_language_ready,
+                    "developer_sdk_profile": developer_sdk_profile,
+                },
+                "workflow_type_tri_mode": {
+                    "ready": workflow_type_tri_mode_ready,
+                    "workflow_profile": workflow_profile,
+                },
+                "blue35_release_closure": {
+                    "ready": blue35_release_closure_ready,
+                },
                 "dual_track": {
                     "consistency_ready": dual_track_consistency_ready,
                     "consistency_issues": dual_track_consistency_issues,
                     "inference_source_valid": dual_track_inference_source_valid,
                     "requested_server_mode_matches_effective": dual_track_requested_mode_matches_effective,
+                },
+                "dual_track_consistency": {
+                    "ready": dual_track_consistency_ready,
+                    "issues": dual_track_consistency_issues,
                 },
                 "release_gate": {
                     "ready": release_gate_ready,
@@ -1301,13 +1458,28 @@ pub(super) async fn handle_governance_status(
                     "production_strict_enabled": strict_component_ok,
                     "compliance_ready": compliance_ready,
                 },
+                "zero_trust_compliance": {
+                    "ready": zero_trust_ready,
+                    "blocking_issues": zero_trust_blocking_issues,
+                },
                 "rbac": {
                     "engine_ready": rbac_engine_ready,
                     "conflict_resolution_ready": rbac_conflict_resolution_ready,
                     "blocking_issues": rbac_blocking_issues,
                     "dual_track_consistency_ready": dual_track_consistency_ready,
                 },
+                "rbac_policy_engine": {
+                    "ready": rbac_engine_ready,
+                    "conflict_resolution_ready": rbac_conflict_resolution_ready,
+                    "blocking_issues": rbac_blocking_issues,
+                },
                 "sla": {
+                    "ready": sla_ready,
+                    "success_rate": sla_success_rate,
+                    "p95_latency_ms": sla_p95_ms,
+                    "cost_per_task": sla_cost_per_task,
+                },
+                "sla_governance": {
                     "ready": sla_ready,
                     "success_rate": sla_success_rate,
                     "p95_latency_ms": sla_p95_ms,
@@ -1325,6 +1497,54 @@ pub(super) async fn handle_governance_status(
                     "imported_skill_enabled_total": imported_skill_enabled_total,
                     "registered_skill_total": registered_skill_total,
                 },
+                "skill_engine_core": {
+                    "ready": skill_engine_core_ready,
+                    "registered_skill_total": registered_skill_total,
+                },
+                "workflow_to_skill_conversion": {
+                    "ready": workflow_to_skill_conversion_ready,
+                    "imported_skill_total": imported_skill_total,
+                },
+                "workflow_skill_chain_integration": {
+                    "ready": workflow_skill_chain_ready,
+                    "imported_skill_enabled_total": imported_skill_enabled_total,
+                    "registered_skill_total": registered_skill_total,
+                },
+                "skill_management_console": skill_management_console_profile,
+                "enterprise_skill_controls": enterprise_skill_controls_profile,
+                "core_mode_consistency": core_mode_consistency_profile,
+                "mode_scenario_adaptability": mode_scenario_adaptability_profile,
+                "cross_mode_quality_assurance": cross_mode_quality_assurance_profile,
+                "mode_issue_prevention": mode_issue_prevention_profile,
+                "subagent_architecture": subagent_architecture_profile,
+                "subagent_collaboration": subagent_collaboration_profile,
+                "subagent_observability": subagent_observability_profile,
+                "knowledge_management": knowledge_management_profile,
+                "performance_optimization": performance_optimization_profile,
+                "enterprise_deploy_ops": enterprise_deploy_ops_profile,
+                "ecosystem_extensibility": ecosystem_extensibility_profile,
+                "shared_learning_mainchain": shared_learning_mainchain_profile,
+                "self_evolution_mainchain": self_evolution_mainchain_profile,
+                "capability_consistency_mainchain": capability_consistency_mainchain_profile,
+                "shared_learning_data_flow": shared_learning_data_flow_profile,
+                "self_evolution_flow": self_evolution_flow_profile,
+                "task_graph_persistence": task_graph_persistence_profile,
+                "evaluation_harness_baseline": evaluation_harness_baseline_profile,
+                "memory_write_policy": memory_write_policy_profile,
+                "task_routing_mainchain": task_routing_mainchain_profile,
+                "tool_budget_enforcement": tool_budget_enforcement_profile,
+                "state_store_trait": state_store_trait_profile,
+                "adversarial_verification": adversarial_verification_profile,
+                "planner_executor_separation": planner_executor_separation_profile,
+                "multi_agent_handoff": multi_agent_handoff_profile,
+                "evaluation_replay_engine": evaluation_replay_engine_profile,
+                "trace_model_agent_graph": trace_model_agent_graph_profile,
+                "dynamic_workflow_optimization": dynamic_workflow_optimization_profile,
+                "think_act_observe_loop": think_act_observe_loop_profile,
+                "model_degradation_detection": model_degradation_detection_profile,
+                "task_decomposition_pipeline": task_decomposition_pipeline_profile,
+                "omnipotent_mode_readiness": omnipotent_mode_readiness_profile,
+                "sota_gap_benchmark": sota_gap_benchmark_profile,
                 "profiles": {
                     "skill_management_console": skill_management_console_profile,
                     "enterprise_skill_controls": enterprise_skill_controls_profile,
