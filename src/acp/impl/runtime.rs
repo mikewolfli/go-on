@@ -1493,6 +1493,8 @@ fn is_setup_or_upstream_unavailable(err: &anyhow::Error) -> bool {
         || msg.contains("error sending request")
         || msg.contains("connection refused")
         || msg.contains("timed out")
+        || msg.contains("error.chat.agent_error_prefix")
+        || msg.contains("error.chat.all_agents_failed")
 }
 
 fn degraded_openai_message(err: &anyhow::Error) -> String {

@@ -261,7 +261,9 @@ impl TwoPhaseCoordinator {
                     return DistributedTransaction::new("not_found", 0);
                 }
             };
-            if tx.participants.is_empty() {
+            let no_participants = tx.participants.is_empty();
+            drop(txs);
+            if no_participants {
                 warn!("[2PC] Transaction {} has no participants, skipping", tx_id);
                 let mut tx = tx;
                 tx.status = DistributedTxStatus::Committed;

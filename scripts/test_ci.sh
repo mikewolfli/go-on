@@ -279,12 +279,12 @@ echo "✅ Auto模式三链路共存集成测试通过"
 
 # 5.1n GUI协议模式解析单测
 echo "=== 步骤5.1n: 运行GUI协议模式解析单测 ==="
-cargo test --manifest-path GUI/src-tauri/Cargo.toml protocol_mode_parser -- --nocapture
+cargo test --manifest-path gui/Cargo.toml protocol_mode -- --nocapture
 echo "✅ GUI协议模式解析单测通过"
 
 # 5.1o GUI Tauri Rust编译检查
 echo "=== 步骤5.1o: 运行GUI Tauri Rust编译检查 ==="
-cargo test --manifest-path GUI/src-tauri/Cargo.toml --no-run
+cargo test --manifest-path gui/Cargo.toml --no-run
 echo "✅ GUI Tauri Rust编译检查通过"
 
 # 5.1p RPC Chat Provider Fallback降级集成测试
@@ -457,7 +457,7 @@ if ! cargo --list | grep -q "^    audit$"; then
 fi
 audit_ok=0
 for attempt in 1 2 3; do
-    if cargo audit; then
+    if timeout 120 cargo audit; then
         audit_ok=1
         break
     fi
@@ -477,11 +477,21 @@ echo "✅ BLUE14 Cargo Audit依赖安全门禁通过"
 
 # 6f BLUE14 P2-2 文档完整性主链测试
 echo "=== 步骤6f: 运行BLUE14文档完整性主链测试 ==="
-grep -q "BLUE14-P2-2-README-QUICKSTART" README.md
-grep -q "BLUE14-P2-2-README-MODES" README.md
-grep -q "BLUE14-P2-2-README-CHEATSHEET" README.md
-grep -q "BLUE14-P2-2-GUI-QUICKSTART" GUI/README.md
-grep -q "BLUE14-P2-2-VSCODE-QUICKSTART" vscode-addon/README.md
+grep -q "## What is go-on?" README.md
+grep -q "## Quick Start" README.md
+
+if [ -f "docs/gui-guide.md" ]; then
+    grep -q "go-on GUI 使用指南" docs/gui-guide.md
+    grep -q "## 主窗口结构" docs/gui-guide.md
+elif [ -f "DOC/src/zh-CN/gui-guide.md" ]; then
+    grep -q "go-on GUI" DOC/src/zh-CN/gui-guide.md
+else
+    echo "❌ GUI 文档不存在（期望 docs/gui-guide.md 或 DOC/src/zh-CN/gui-guide.md）"
+    exit 1
+fi
+
+grep -q "# Go-On VS Code Extension" vscode-addon/README.md
+grep -q "## Command To Backend Mapping" vscode-addon/README.md
 echo "✅ BLUE14文档完整性主链测试通过"
 
 # 6g BLUE14 AI1 Token优化与缓存主链测试
@@ -774,7 +784,14 @@ echo "✅ B16-R 系列 RPC 覆盖全量收口测试通过"
 
 # 5.2 GUI 契约烟测
 echo "=== 步骤5.2: 运行GUI契约烟测 ==="
-cd GUI
+if [ -d "gui" ]; then
+    cd gui
+elif [ -d "GUI" ]; then
+    cd GUI
+else
+    echo "❌ GUI 目录不存在（期望 gui/ 或 GUI/）"
+    exit 1
+fi
 npm test
 cd ..
 echo "✅ GUI契约烟测通过"
@@ -788,18 +805,33 @@ echo "✅ VS Code Addon 编译 + 契约烟测通过"
 
 # 6. 验证语言文件
 echo "=== 步骤6: 验证语言文件 ==="
-if [ -f "languages/en_US.json" ]; then
+EN_LANG_FILE=""
+ZH_LANG_FILE=""
+
+if [ -f "languages/en-US.json" ]; then
+    EN_LANG_FILE="languages/en-US.json"
+elif [ -f "languages/en_US.json" ]; then
+    EN_LANG_FILE="languages/en_US.json"
+fi
+
+if [ -f "languages/zh-CN.json" ]; then
+    ZH_LANG_FILE="languages/zh-CN.json"
+elif [ -f "languages/zh_CN.json" ]; then
+    ZH_LANG_FILE="languages/zh_CN.json"
+fi
+
+if [ -n "$EN_LANG_FILE" ]; then
     echo "✅ 英文语言文件存在"
-    EN_KEY_COUNT=$(jq '.messages | length' languages/en_US.json 2>/dev/null || echo "0")
+    EN_KEY_COUNT=$(jq '.messages | length' "$EN_LANG_FILE" 2>/dev/null || echo "0")
     echo "英文语言文件包含 $EN_KEY_COUNT 个翻译键"
 else
     echo "❌ 英文语言文件不存在"
     exit 1
 fi
 
-if [ -f "languages/zh_CN.json" ]; then
+if [ -n "$ZH_LANG_FILE" ]; then
     echo "✅ 中文语言文件存在"
-    ZH_KEY_COUNT=$(jq '.messages | length' languages/zh_CN.json 2>/dev/null || echo "0")
+    ZH_KEY_COUNT=$(jq '.messages | length' "$ZH_LANG_FILE" 2>/dev/null || echo "0")
     echo "中文语言文件包含 $ZH_KEY_COUNT 个翻译键"
 else
     echo "❌ 中文语言文件不存在"
@@ -818,7 +850,7 @@ REQUIRED_KEYS=(
 )
 
 for key in "${REQUIRED_KEYS[@]}"; do
-    if jq -e ".messages.\"$key\"" languages/en_US.json > /dev/null 2>&1; then
+    if jq -e ".messages.\"$key\"" "$EN_LANG_FILE" > /dev/null 2>&1; then
         echo "✅ 键 '$key' 存在于英文语言文件"
     else
         echo "❌ 键 '$key' 不存在于英文语言文件"

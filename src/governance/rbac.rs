@@ -470,6 +470,7 @@ impl RbacEnforcer {
 mod tests {
     use super::*;
     use crate::governance::hardening::{TenantBudgetEnforcer, TenantResourceQuota};
+    use serial_test::serial;
 
     #[test]
     fn test_builtin_admin_has_full_access() {
@@ -589,6 +590,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_register_tenants_from_env() {
         // Ensure env is clean before starting
         unsafe {
@@ -637,6 +639,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_register_tenants_from_file_env() {
         unsafe {
             std::env::remove_var(GO_ON_TENANTS_FILE_ENV);
@@ -661,6 +664,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_register_tenants_from_sources_deduplicates() {
         let dir = tempfile::tempdir().expect("tempdir should be created");
         let path = dir.path().join("tenants.txt");

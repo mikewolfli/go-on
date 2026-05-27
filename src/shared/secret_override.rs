@@ -216,16 +216,10 @@ mod tests {
         let k1 = format!("GO_ON_TEST_COUNT_A_{}", n);
         let k2 = format!("GO_ON_TEST_COUNT_B_{}", n);
 
-        // Track our own keys so we can clean up even if parallel tests add/remove
-        let after_add = override_count();
         set_secret_override(&k1, "a");
         set_secret_override(&k2, "b");
-        // after_add may have changed due to parallel tests, but we just verify
-        // our own two keys were actually added (not the absolute delta).
-        assert!(
-            override_count() >= after_add + 2,
-            "override_count should grow by at least 2 after adding keys"
-        );
+        assert!(has_override(&k1));
+        assert!(has_override(&k2));
         remove_secret_override(&k1);
         remove_secret_override(&k2);
         // Clean up: ensure our keys are gone

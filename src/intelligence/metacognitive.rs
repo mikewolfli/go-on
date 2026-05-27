@@ -809,6 +809,25 @@ impl MetacognitiveController {
                 / total_reports as f64
         };
 
+        // Compute effectiveness ratio from the same locked snapshot to avoid
+        // re-locking `inner` (which would deadlock with a non-reentrant Mutex).
+        let completed = inner
+            .actions
+            .iter()
+            .filter(|a| a.status == CorrectiveStatus::Completed)
+            .count() as f64;
+        let failed = inner
+            .actions
+            .iter()
+            .filter(|a| a.status == CorrectiveStatus::Failed)
+            .count() as f64;
+        let total_outcome_actions = completed + failed;
+        let action_effectiveness_ratio = if total_outcome_actions == 0.0 {
+            0.0
+        } else {
+            completed / total_outcome_actions
+        };
+
         MetacognitiveProfile {
             total_observations,
             unresolved_observations,
@@ -816,7 +835,7 @@ impl MetacognitiveController {
             successful_actions,
             total_reports,
             avg_confidence,
-            action_effectiveness_ratio: self.action_effectiveness_ratio(),
+            action_effectiveness_ratio,
         }
     }
 

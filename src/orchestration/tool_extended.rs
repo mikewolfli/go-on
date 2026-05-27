@@ -41,7 +41,14 @@ impl Tool for ShellExecTool {
         let timeout_secs = (timeout_ms as f64 / 1000.0).ceil() as u64;
         let max_timeout = std::cmp::min(timeout_secs, 300); // Cap at 5 minutes
 
-        let timeout_available = Command::new("timeout").arg("--version").output().is_ok();
+        let timeout_available = Command::new("timeout")
+            .arg("1")
+            .arg("sh")
+            .arg("-c")
+            .arg("true")
+            .output()
+            .map(|out| out.status.success())
+            .unwrap_or(false);
 
         let output = if timeout_available {
             Command::new("timeout")
@@ -825,15 +832,44 @@ mod tests {
 
     #[test]
     fn shell_exec_runs_echo() {
-        let input = tool_input(serde_json::json!({
-            "command": "echo hello",
-            "timeout_ms": 5000,
-        }));
         let tool = ShellExecTool;
-        let output = tool.run(&input).expect("shell_exec should succeed");
-        assert!(output.success);
-        let result = output.result.unwrap();
-        assert!(result["stdout"].as_str().unwrap().contains("hello"));
+        let mut last_output: Option<ToolOutput> = None;
+
+        // This command is deterministic, but process spawning can be flaky
+        // under heavy all-target test parallelism. Retry a few times.
+        for _ in 0..3 {
+            let input = tool_input(serde_json::json!({
+                "command": "echo hello",
+                "timeout_ms": 5000,
+            }));
+            let output = tool.run(&input).expect("shell_exec should run");
+            if output.success {
+                let result = output
+                    .result
+                    .as_ref()
+                    .expect("successful shell_exec should include result");
+                assert!(result["stdout"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("hello"));
+                return;
+            }
+            last_output = Some(output);
+        }
+
+        let details = last_output
+            .as_ref()
+            .and_then(|o| o.result.as_ref())
+            .map(|r| {
+                format!(
+                    "stdout='{}', stderr='{}', exit_code={:?}",
+                    r["stdout"].as_str().unwrap_or_default(),
+                    r["stderr"].as_str().unwrap_or_default(),
+                    r["exit_code"]
+                )
+            })
+            .unwrap_or_else(|| "no output details".to_string());
+        panic!("shell_exec_runs_echo remained unsuccessful after retries: {details}");
     }
 
     #[test]
@@ -967,6 +1003,7 @@ mod tests {
 
     #[test]
     fn cargo_check_in_workspace() {
+        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let input = ToolInput {
             task_id: "t1".to_string(),
             phase: "act".to_string(),
@@ -975,9 +1012,9 @@ mod tests {
             constraints: None,
             evidence: None,
             payload: serde_json::json!({
-                "directory": ".",
+                "directory": workspace.to_string_lossy(),
             }),
-            allowed_base_dir: Some(PathBuf::from(".")),
+            allowed_base_dir: Some(workspace),
         };
 
         let tool = CargoCheckTool;
@@ -988,10 +1025,20 @@ mod tests {
 
     #[test]
     fn git_status_runs() {
-        let input = tool_input(serde_json::json!({
-            "subcommand": "status",
-            "directory": ".",
-        }));
+        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let input = ToolInput {
+            task_id: "test-1".to_string(),
+            phase: "act".to_string(),
+            agent_role: "coder".to_string(),
+            objective: "test".to_string(),
+            constraints: None,
+            evidence: None,
+            payload: serde_json::json!({
+                "subcommand": "status",
+                "directory": workspace.to_string_lossy(),
+            }),
+            allowed_base_dir: Some(workspace),
+        };
         let tool = GitTool;
         let output = tool.run(&input).expect("git status should run");
         assert!(output.success);

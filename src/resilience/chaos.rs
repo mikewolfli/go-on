@@ -6,7 +6,6 @@
 
 #![cfg_attr(not(test), allow(dead_code, unused_imports))]
 
-use crate::i18n::t;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -264,32 +263,32 @@ impl ChaosEngine {
             let (recovery_action, recovery_success) = match injection.fault_type {
                 FaultType::NetworkTimeout => {
                     // Should trigger Retry then Escalate
-                    (t("error.chaos.recovery.retry"), true)
+                    ("retry".to_string(), true)
                 }
                 FaultType::NetworkPartition => {
                     // Should trigger Reroute
-                    (t("error.chaos.recovery.reroute"), true)
+                    ("reroute".to_string(), true)
                 }
                 FaultType::FileIOError => {
                     // Should trigger Degrade to alternate tool
-                    (t("error.chaos.recovery.degrade"), true)
+                    ("degrade".to_string(), true)
                 }
                 FaultType::ProcessCrash => {
                     // Should trigger Replan
-                    (t("error.chaos.recovery.replan"), true)
+                    ("replan".to_string(), true)
                 }
                 FaultType::ResourceExhaustion => {
                     // Should trigger Degrade
-                    (t("error.chaos.recovery.degrade"), true)
+                    ("degrade".to_string(), true)
                 }
                 FaultType::DataCorruption => {
                     // Should trigger Repair, then Retry
-                    (t("error.chaos.recovery.repair"), true)
+                    ("repair".to_string(), true)
                 }
-                FaultType::RateLimit => (t("error.chaos.recovery.retry"), true),
-                FaultType::AuthFailure => (t("error.chaos.recovery.reroute"), true),
-                FaultType::LatencySpike { .. } => (t("error.chaos.recovery.retry"), true),
-                FaultType::PartialWrite => (t("error.chaos.recovery.repair"), true),
+                FaultType::RateLimit => ("retry".to_string(), true),
+                FaultType::AuthFailure => ("reroute".to_string(), true),
+                FaultType::LatencySpike { .. } => ("retry".to_string(), true),
+                FaultType::PartialWrite => ("repair".to_string(), true),
             };
 
             let duration = inj_start.elapsed().as_millis() as u64;
