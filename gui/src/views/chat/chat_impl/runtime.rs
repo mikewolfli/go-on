@@ -232,6 +232,14 @@ impl ChatView {
             let outbound_clone = outbound_msg.clone();
             let model_clone = model_name.clone();
             let base_url_clone = base_url.clone();
+            // Build full conversation history (excluding empty assistant placeholders)
+            let history_messages: Vec<serde_json::Value> = self.sessions[self.active_session]
+                .messages
+                .iter()
+                .filter(|m| !m.content.is_empty() || m.role != "assistant")
+                .take(50)
+                .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
+                .collect();
             let conv_id_clone = self.sessions[self.active_session].conversation_id.clone();
             let branch_id_clone = self.sessions[self.active_session].branch_id.clone();
             let selected_agent_clone = self.selected_agent.trim().to_string();
@@ -279,7 +287,7 @@ impl ChatView {
                     })
                 } else {
                     serde_json::json!({
-                        "messages": [{"role": "user", "content": outbound_clone}],
+                        "messages": history_messages,
                         "mode": mode_clone,
                         "phase": phase_val,
                     })
