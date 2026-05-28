@@ -588,30 +588,72 @@ fn tokenize(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Maximum number of tokens to process in `embed_text` to prevent
+/// unbounded memory / CPU in the fallback embedding path.
+const EMBED_MAX_TOKEN_COUNT: usize = 1024;
+
+/// Number of hash functions used for the minhash-like locality-sensitive
+/// hashing (LSH) approach. Each hash function independently votes on a
+/// dimension, reducing collision bias from a single hash.
+const MINHASH_NUM_HASHES: usize = 4;
+
+/// Embed text into a vector of `dimensions` using a minhash-like LSH
+/// approach with multiple hash functions.
+///
+/// NOTE: This is a **hash-based fallback** embedding — it is NOT a real
+/// embedding model. It uses multiple hash functions per token (improved
+/// from the previous single SHA-256 approach) to simulate locality-sensitive
+/// hashing, which gives better semantic discrimination.
+///
+/// For production use, configure a proper embedding model (e.g., via the
+/// configured LLM provider or a dedicated embedding service).
 fn embed_text(text: &str, dimensions: usize) -> Vec<f32> {
     let mut vector = vec![0_f32; dimensions];
     if dimensions == 0 {
         return vector;
     }
 
-    // NOTE: This is a hash-based fallback embedding that splits on non-alphanumeric
-    // characters and uses SHA-256 to assign dimensions. It is NOT a real embedding model.
-    // For production use, configure a proper embedding model (e.g., via the configured
-    // LLM provider or a dedicated embedding service).
-    warn!("embed_text: using hash-based fallback embedding — no real embedding model configured");
-
-    for token in tokenize(text) {
-        let mut hasher = Sha256::new();
-        hasher.update(token.as_bytes());
-        let digest = hasher.finalize();
-
-        let mut idx_bytes = [0_u8; 8];
-        idx_bytes.copy_from_slice(&digest[0..8]);
-        let idx = (u64::from_le_bytes(idx_bytes) as usize) % dimensions;
-        let sign = if digest[8] % 2 == 0 { 1.0 } else { -1.0 };
-        vector[idx] += sign;
+    // Warn only once via a static atomic flag to avoid log spam.
+    static WARNED_ONCE: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+    if !WARNED_ONCE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        warn!(
+            "embed_text: using minhash fallback embedding —
+             no real embedding model configured"
+        );
     }
 
+    // Bound token count to prevent unbounded memory in embedding computation
+    let tokens: Vec<String> = tokenize(text)
+        .into_iter()
+        .take(EMBED_MAX_TOKEN_COUNT)
+        .collect();
+
+    if tokens.is_empty() {
+        return vector;
+    }
+
+    for token in &tokens {
+        // Use multiple hash seeds (minhash-like) for better distribution
+        for seed in 0..MINHASH_NUM_HASHES {
+            let mut hasher = Sha256::new();
+            // Incorporate seed to produce an independent hash function
+            hasher.update(seed.to_le_bytes());
+            hasher.update(token.as_bytes());
+            let digest = hasher.finalize();
+
+            // Derive index from first 8 bytes of the digest
+            let mut idx_bytes = [0_u8; 8];
+            idx_bytes.copy_from_slice(&digest[0..8]);
+            let idx = (u64::from_le_bytes(idx_bytes) as usize) % dimensions;
+
+            // Use digest bytes to determine sign (+1 or -1)
+            let sign = if digest[9] % 2 == 0 { 1.0 } else { -1.0 };
+            vector[idx] += sign;
+        }
+    }
+
+    // Normalize to unit vector
     let norm = vector.iter().map(|v| v * v).sum::<f32>().sqrt();
     if norm > 0.0 {
         for value in &mut vector {

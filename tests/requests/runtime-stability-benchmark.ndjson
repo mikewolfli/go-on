@@ -1,5 +1,0 @@
-{"jsonrpc":"2.0","method":"initialize","params":{"workflow_id":"runtime-stability-baseline","task":"BLUE15 P0-2 stability check","autonomy_mode":"autopilot"},"id":1}
-{"jsonrpc":"2.0","method":"runtime.stability","params":{},"id":2}
-{"jsonrpc":"2.0","method":"config.reload","params":{},"id":3}
-{"jsonrpc":"2.0","method":"runtime.health","params":{},"id":4}
-{"jsonrpc":"2.0","method":"shutdown","params":{},"id":5}

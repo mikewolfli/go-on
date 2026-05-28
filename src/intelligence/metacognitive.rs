@@ -171,12 +171,15 @@ pub struct MetacognitiveProfile {
 
 // ── Internal state ──────────────────────────────────────────────────────────
 
+const DEFAULT_MAX_REPORTS: usize = 1000;
+
 #[derive(Debug, Clone)]
 struct Inner {
     config: MetacognitiveConfig,
     observations: Vec<ExecutionObservation>,
     actions: Vec<CorrectiveAction>,
     reports: Vec<ReflectionReport>,
+    max_reports: usize,
     next_id: u64,
 }
 
@@ -198,6 +201,7 @@ impl MetacognitiveController {
                 observations: Vec::new(),
                 actions: Vec::new(),
                 reports: Vec::new(),
+                max_reports: DEFAULT_MAX_REPORTS,
                 next_id: 1,
             })),
         }
@@ -595,13 +599,13 @@ impl MetacognitiveController {
             created_ms: now_ms(),
         };
 
-        inner.reports.push(report);
-
-        // Evict oldest reports beyond max_observations cap.
-        let max_reports = inner.config.max_observations;
-        while inner.reports.len() > max_reports {
+        // Evict oldest report when at capacity (insert before evict so the new
+        // report is not immediately removed).
+        if inner.reports.len() >= inner.max_reports {
             inner.reports.remove(0);
         }
+
+        inner.reports.push(report);
 
         Ok(report_id)
     }

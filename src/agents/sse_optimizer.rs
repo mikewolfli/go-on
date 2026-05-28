@@ -79,6 +79,13 @@ pub struct AdaptiveBatchCollector {
 }
 
 #[cfg(test)]
+impl Default for AdaptiveBatchCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
 impl AdaptiveBatchCollector {
     pub fn new() -> Self {
         Self {
@@ -129,6 +136,13 @@ impl AdaptiveBatchCollector {
 pub struct TokenExtractionCache {
     entries: VecDeque<(String, Option<String>)>,
     max_entries: usize,
+}
+
+#[cfg(test)]
+impl Default for TokenExtractionCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]

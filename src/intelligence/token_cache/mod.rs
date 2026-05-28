@@ -411,6 +411,10 @@ impl L1ExactCache {
         self.map.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
     /// Iterate over all entries (for warmup serialization).
     pub fn entries(&self) -> Vec<CacheEntry> {
         self.map.values().cloned().collect()
@@ -426,23 +430,65 @@ impl L1ExactCache {
 /// Simple bag-of-words embedding (256 dimensions).
 ///
 /// This is a lightweight embedding that doesn't require an external model.
+/// It computes proper TF (term frequency) features over word tokens rather
+/// than the previous hash-based character approach, giving better semantic
+/// discrimination for short-to-medium texts.
+///
 /// For production use, replace with a real embedding model (e.g., from the
-/// existing VectorStore infrastructure in `src/memory/vector.rs`).
+/// existing VectorStore infrastructure in `src/memory/vector.rs`).  The
+/// `real_embedding` cfg flag can be used as a feature gate: when enabled,
+/// callers that have access to a real model can bypass this fallback.
+//
+// Feature gate placeholder:
+//   #[cfg(feature = "real_embedding")]
+//   pub fn simple_embedding(text: &str) -> Vec<f32> {
+//       // Call through to the configured embedding model instead.
+//       real_embedding_model::embed(text)
+//   }
 pub fn simple_embedding(text: &str) -> Vec<f32> {
     const DIM: usize = 256;
     let mut vec = vec![0.0f32; DIM];
 
-    // Simple hash-based feature extraction
     let lower = text.to_ascii_lowercase();
-    for (i, ch) in lower.chars().enumerate() {
-        let idx = (ch as usize) % DIM;
-        vec[idx] += 1.0;
 
-        // Bigram features
-        if i > 0 {
-            let prev = lower.as_bytes().get(i - 1).copied().unwrap_or(0) as usize;
-            let bigram_idx = (prev.wrapping_mul(ch as usize)) % DIM;
-            vec[bigram_idx] += 0.5;
+    // ── Term frequency features ──────────────────────────────────────
+    // Tokenize into words (2+ chars), count frequencies, and hash to
+    // dimension indices. This gives proper TF features rather than the
+    // earlier character-hash approach.
+    let mut term_freq: std::collections::HashMap<String, f32> =
+        std::collections::HashMap::new();
+    let mut total_terms = 0_usize;
+
+    for token in lower.split(|c: char| !c.is_alphanumeric()) {
+        if token.len() >= 2 {
+            *term_freq.entry(token.to_string()).or_insert(0.0) += 1.0;
+            total_terms += 1;
+        }
+    }
+
+    if total_terms == 0 {
+        return vec; // all-zero vector (no tokens)
+    }
+
+    // Project TF values into the embedding dimensions via hashing
+    for (term, freq) in &term_freq {
+        // Normalised TF: frequency / max frequency in document
+        let tf = freq / total_terms as f32;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(term, &mut hasher);
+        let hash = std::hash::Hasher::finish(&hasher);
+        let idx = (hash as usize) % DIM;
+        vec[idx] += tf;
+    }
+
+    // ── Bigram features (complementary signal) ───────────────────────
+    // Add a small contribution from character bigrams to capture
+    // substring-level similarity (e.g. common prefixes/suffixes).
+    for (c1, c2) in lower.chars().zip(lower.chars().skip(1)) {
+        if c1.is_alphanumeric() && c2.is_alphanumeric() {
+            let bigram_hash = (c1 as u64).wrapping_mul(31).wrapping_add(c2 as u64);
+            let idx = (bigram_hash as usize) % DIM;
+            vec[idx] += 0.25;
         }
     }
 
@@ -559,6 +605,10 @@ impl L2SemanticCache {
     pub fn len(&self) -> usize {
         self.entries.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }
 
 // L3: Template-Structure Cache
@@ -593,6 +643,8 @@ pub struct L3TemplateCache {
     /// Disk path for future template persistence
     #[allow(dead_code)] // F-GAP-09 — planned wiring for persistence
     store_path: Option<String>,
+    /// Maximum number of templates before FIFO eviction
+    max_templates: usize,
 }
 
 impl L3TemplateCache {
@@ -605,6 +657,7 @@ impl L3TemplateCache {
         Self {
             templates: HashMap::new(),
             store_path,
+            max_templates: 500,
         }
     }
 
@@ -711,6 +764,13 @@ impl L3TemplateCache {
             return;
         }
 
+        // Evict oldest template when at capacity.
+        if self.templates.len() >= self.max_templates {
+            if let Some(oldest) = self.templates.keys().next().cloned() {
+                self.templates.remove(&oldest);
+            }
+        }
+
         let pattern = TemplatePattern {
             pattern_type: if entry.input.contains("bug")
                 || entry.input.contains("fix")
@@ -742,6 +802,10 @@ impl L3TemplateCache {
     /// Number of known templates.
     pub fn len(&self) -> usize {
         self.templates.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.templates.is_empty()
     }
 
     /// All known patterns (for reporting).

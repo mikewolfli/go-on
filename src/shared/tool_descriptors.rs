@@ -244,3 +244,139 @@ pub fn validate_required_arguments(tool_name: &str, tool_input: &Value) -> Resul
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// List of all known built-in tool names.
+    const KNOWN_TOOLS: &[&str] = &[
+        "read_file",
+        "write_file",
+        "search_files",
+        "apply_patch",
+        "run_tests",
+        "inspect_git_diff",
+        "workflow_execute",
+        "workflow_ask",
+        "workflow_generate",
+        "skill_creator",
+        "github_search_skills",
+        "import_skill",
+    ];
+
+    // ── Known tool descriptors ───────────────────────────────────────
+
+    /// Verify that known tools have valid descriptors with name, description,
+    /// and input_schema populated.
+    #[test]
+    fn test_known_tools_have_valid_descriptors() {
+        for &name in KNOWN_TOOLS {
+            let desc = tool_descriptor(name);
+            assert_eq!(desc.name, name, "descriptor name should match for {}", name);
+            assert!(
+                desc.description.is_some(),
+                "descriptor for {} should have a description",
+                name
+            );
+            assert!(
+                desc.description.as_deref().unwrap().len() > 5,
+                "description for {} should be meaningful (length > 5)",
+                name
+            );
+            assert!(
+                desc.input_schema.is_some(),
+                "descriptor for {} should have input_schema",
+                name
+            );
+        }
+    }
+
+    /// Verify that tools with required arguments are properly reflected.
+    #[test]
+    fn test_tool_descriptors_have_correct_schema_format() {
+        let desc = tool_descriptor("read_file");
+        let schema = desc.input_schema.unwrap();
+        assert_eq!(schema["type"], "object");
+        let required = schema["required"].as_array().unwrap();
+        assert!(required.contains(&serde_json::Value::String("path".to_string())),
+            "read_file should require 'path'");
+
+        let desc = tool_descriptor("write_file");
+        let schema = desc.input_schema.unwrap();
+        let required = schema["required"].as_array().unwrap();
+        assert!(required.contains(&serde_json::Value::String("path".to_string())),
+            "write_file should require 'path'");
+        assert!(required.contains(&serde_json::Value::String("content".to_string())),
+            "write_file should require 'content'");
+    }
+
+    // ── validate_required_arguments ──────────────────────────────────
+
+    /// Verify that `validate_required_arguments` passes for known tools
+    /// with correct inputs.
+    #[test]
+    fn test_validate_required_arguments_known_tools() {
+        // read_file requires path
+        assert!(validate_required_arguments("read_file", &json!({"path": "foo.txt"})).is_ok());
+        // write_file requires path + content
+        assert!(validate_required_arguments("write_file", &json!({"path": "foo.txt", "content": "hello"})).is_ok());
+        // search_files requires pattern
+        assert!(validate_required_arguments("search_files", &json!({"pattern": "*.rs"})).is_ok());
+        // workflow_execute requires task
+        assert!(validate_required_arguments("workflow_execute", &json!({"task": "do something"})).is_ok());
+        // workflow_ask requires task
+        assert!(validate_required_arguments("workflow_ask", &json!({"task": "analyze this"})).is_ok());
+        // workflow_generate requires task
+        assert!(validate_required_arguments("workflow_generate", &json!({"task": "plan this"})).is_ok());
+    }
+
+    /// Verify that `validate_required_arguments` rejects missing arguments.
+    #[test]
+    fn test_validate_required_arguments_missing() {
+        // read_file without path
+        let err = validate_required_arguments("read_file", &json!({})).unwrap_err();
+        assert!(err.to_string().contains("read_file requires arguments.path"));
+
+        // write_file without content
+        let err = validate_required_arguments("write_file", &json!({"path": "x.txt"})).unwrap_err();
+        assert!(err.to_string().contains("write_file requires arguments.content"));
+
+        // search_files without pattern
+        let err = validate_required_arguments("search_files", &json!({})).unwrap_err();
+        assert!(err.to_string().contains("search_files requires arguments.pattern"));
+    }
+
+    /// Verify that unknown tools are validated successfully (no required args).
+    #[test]
+    fn test_validate_required_arguments_unknown_tool() {
+        // Unknown tools have no validation rules, so any input should pass
+        assert!(validate_required_arguments("unknown_tool", &json!({})).is_ok());
+        assert!(validate_required_arguments("unknown_tool", &json!({"anything": 42})).is_ok());
+    }
+
+    // ── Unknown tools ────────────────────────────────────────────────
+
+    /// Verify that unknown tools get a generic descriptor with "Registered MCP tool"
+    /// description and an empty object schema.
+    #[test]
+    fn test_unknown_tool_gets_generic_descriptor() {
+        let desc = tool_descriptor("some_unknown_tool");
+        assert_eq!(desc.name, "some_unknown_tool");
+        assert_eq!(
+            desc.description.as_deref(),
+            Some("Registered MCP tool"),
+            "unknown tools should get a generic description"
+        );
+        let schema = desc.input_schema.unwrap();
+        assert_eq!(schema["type"], "object");
+    }
+
+    /// Verify that `tool_descriptor_value` also returns generic structure for unknown tools.
+    #[test]
+    fn test_unknown_tool_descriptor_value() {
+        let val = tool_descriptor_value("nonexistent");
+        assert_eq!(val["name"], "nonexistent");
+        assert_eq!(val["description"], "Registered MCP tool");
+    }
+}

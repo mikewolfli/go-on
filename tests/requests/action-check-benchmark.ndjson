@@ -1,3 +1,0 @@
-{"jsonrpc":"2.0","method":"initialize","params":{"protocol":"acp","version":"1.0"},"id":1}
-{"jsonrpc":"2.0","method":"action.check","params":{"kind":"all"},"id":2}
-{"jsonrpc":"2.0","method":"shutdown","params":{},"id":3}

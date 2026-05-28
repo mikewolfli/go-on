@@ -143,12 +143,14 @@ pub fn pipeline_gate_violation(
 /// Touch conversation order (move to most recent)
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn touch_conversation_order(order: &StdMutex<Vec<String>>, conversation_id: &str) {
-    if let Ok(mut guard) = order.lock() {
-        if let Some(position) = guard.iter().position(|item| item == conversation_id) {
-            guard.remove(position);
-        }
-        guard.push(conversation_id.to_string());
+    let mut guard = order.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("lock poisoned in conversation.rs: recovering");
+        poisoned.into_inner()
+    });
+    if let Some(position) = guard.iter().position(|item| item == conversation_id) {
+        guard.remove(position);
     }
+    guard.push(conversation_id.to_string());
 }
 
 /// Evict oldest conversation
@@ -157,22 +159,17 @@ pub fn evict_oldest_conversation(
     store: &mut HashMap<String, ConversationState>,
     order: &StdMutex<Vec<String>>,
 ) -> Option<String> {
-    if let Ok(mut guard) = order.lock() {
-        while let Some(candidate) = guard.first().cloned() {
-            guard.remove(0);
-            if store.remove(&candidate).is_some() {
-                return Some(candidate);
-            }
+    let mut guard = order.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("lock poisoned in conversation.rs: recovering");
+        poisoned.into_inner()
+    });
+    while let Some(candidate) = guard.first().cloned() {
+        guard.remove(0);
+        if store.remove(&candidate).is_some() {
+            return Some(candidate);
         }
-        return None;
     }
-
-    let oldest = store
-        .iter()
-        .min_by_key(|(_, state)| state.last_touched_at)
-        .map(|(id, _)| id.clone());
-
-    oldest.and_then(|id| store.remove(&id).map(|_| id))
+    None
 }
 
 /// Enforce checkpoint capacity

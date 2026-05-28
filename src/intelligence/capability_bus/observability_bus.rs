@@ -208,6 +208,8 @@ pub struct ObservabilityBus {
     /// Keep separate from `agent_latency` so that `LatencyStats` remains
     /// cheaply clonable and we don't leak the sliding-window internals.
     windows: Arc<Mutex<HashMap<String, DurationWindow>>>,
+    /// Maximum number of tracked agents before FIFO eviction
+    max_agents: usize,
 }
 
 impl ObservabilityBus {
@@ -231,6 +233,7 @@ impl ObservabilityBus {
                 system_error_rate: 0.0,
             })),
             windows: Arc::new(Mutex::new(HashMap::new())),
+            max_agents: 1000,
         }
     }
 
@@ -286,6 +289,12 @@ impl ObservabilityBus {
                 self.agent_latency.as_ref(),
                 "ObservabilityBus agent_latency",
             );
+            // Evict oldest agent latency when at capacity for a new agent.
+            if !latency.contains_key(agent) && latency.len() >= self.max_agents {
+                if let Some(oldest) = latency.keys().next().cloned() {
+                    latency.remove(&oldest);
+                }
+            }
             latency.insert(agent.to_string(), stats);
         }
 
@@ -295,6 +304,12 @@ impl ObservabilityBus {
                 self.agent_error_rates.as_ref(),
                 "ObservabilityBus agent_error_rates",
             );
+            // Evict oldest agent error rate when at capacity for a new agent.
+            if !error_rates.contains_key(agent) && error_rates.len() >= self.max_agents {
+                if let Some(oldest) = error_rates.keys().next().cloned() {
+                    error_rates.remove(&oldest);
+                }
+            }
             let ers = error_rates
                 .entry(agent.to_string())
                 .or_insert(ErrorRateStats {

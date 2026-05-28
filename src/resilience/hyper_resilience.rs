@@ -137,6 +137,12 @@ pub struct ResilienceConfig {
     pub max_failover_attempts: u32,
     #[serde(default = "default_self_healing_enabled")]
     pub self_healing_enabled: bool,
+    /// Interval (in ms) after which an open circuit breaker automatically
+    /// transitions to HalfOpen during `is_available()` checks, enabling the
+    /// self-healing / auto-recovery pattern without requiring an explicit
+    /// `probe()` call.
+    #[serde(default = "default_half_open_probe_interval_ms")]
+    pub half_open_probe_interval_ms: u64,
 }
 
 fn default_circuit_breaker_threshold() -> u64 {
@@ -155,6 +161,10 @@ fn default_self_healing_enabled() -> bool {
     true
 }
 
+fn default_half_open_probe_interval_ms() -> u64 {
+    5000
+}
+
 impl Default for ResilienceConfig {
     fn default() -> Self {
         Self {
@@ -163,6 +173,7 @@ impl Default for ResilienceConfig {
             health_check_interval_ms: 5_000,
             max_failover_attempts: 3,
             self_healing_enabled: true,
+            half_open_probe_interval_ms: 5000,
         }
     }
 }
@@ -349,17 +360,30 @@ impl HyperResilienceEngine {
     /// Check whether the named circuit breaker is currently available
     /// (closed or half-open).
     ///
-    /// This method also evaluates whether an open breaker should transition
-    /// to half-open based on the recovery timeout.
-    /// Check whether a circuit breaker is currently accepting requests (read-only).
-    ///
-    /// Does not mutate state. Use `probe()` if you also want automatic
-    /// open→half-open recovery transitions.
+    /// If the breaker is **Open** and the time since the last failure exceeds
+    /// `half_open_probe_interval_ms`, this method automatically transitions
+    /// it to **HalfOpen**, enabling the self-healing / auto-recovery pattern
+    /// without requiring an explicit `probe()` call.
     pub fn is_available(&self, breaker_name: &str) -> bool {
-        let inner = lock_guard(&self.inner);
-        match inner.circuit_breakers.get(breaker_name) {
-            Some(cb) => matches!(cb.state, CircuitState::Closed | CircuitState::HalfOpen),
-            None => false,
+        let mut inner = lock_guard(&self.inner);
+        let probe_interval = inner.config.half_open_probe_interval_ms;
+        let cb = match inner.circuit_breakers.get_mut(breaker_name) {
+            Some(cb) => cb,
+            None => return false,
+        };
+
+        match cb.state {
+            CircuitState::Closed | CircuitState::HalfOpen => true,
+            CircuitState::Open => {
+                let now = now_millis();
+                if now >= cb.last_failure_ms + probe_interval {
+                    cb.state = CircuitState::HalfOpen;
+                    cb.half_open_attempts = 0;
+                    true
+                } else {
+                    false
+                }
+            }
         }
     }
 

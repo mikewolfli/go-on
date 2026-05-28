@@ -1,6 +1,0 @@
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"client":{"name":"breaker-recovery-benchmark","version":"1.0.0"},"capabilities":{},"protocolVersion":"2025-03-26"}}
-{"jsonrpc":"2.0","id":2,"method":"breaker.status","params":{}}
-{"jsonrpc":"2.0","id":3,"method":"breaker.recovery","params":{"dry_run":true}}
-{"jsonrpc":"2.0","id":4,"method":"breaker.recovery","params":{"dry_run":false}}
-{"jsonrpc":"2.0","id":5,"method":"breaker.status","params":{}}
-{"jsonrpc":"2.0","id":6,"method":"shutdown","params":{}}

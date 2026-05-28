@@ -1,6 +1,0 @@
-{"jsonrpc":"2.0","id":1,"method":"initialize"}
-{"jsonrpc":"2.0","id":2,"method":"runtime.stability"}
-{"jsonrpc":"2.0","id":3,"method":"security.baseline"}
-{"jsonrpc":"2.0","id":4,"method":"observability.alerts","params":{"limit":100}}
-{"jsonrpc":"2.0","id":5,"method":"optimization.peak"}
-{"jsonrpc":"2.0","id":6,"method":"shutdown"}

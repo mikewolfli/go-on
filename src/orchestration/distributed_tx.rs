@@ -25,7 +25,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
-use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
 // Transaction status

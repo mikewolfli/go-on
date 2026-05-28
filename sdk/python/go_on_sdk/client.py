@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class GoOnClientError(Exception):
@@ -14,6 +18,9 @@ class GoOnClientError(Exception):
 
 class GoOnJsonRpcError(GoOnClientError):
     """JSON-RPC protocol-level error."""
+
+    code: int
+    message: str
 
     def __init__(self, code: int, message: str) -> None:
         self.code = code
@@ -32,11 +39,11 @@ class ChatMessage:
 
 @dataclass
 class ChatRequest:
-    messages: List[ChatMessage]
-    model: Optional[str] = None
-    temperature: Optional[float] = None
-    max_tokens: Optional[int] = None
-    stream: Optional[bool] = None
+    messages: list[ChatMessage]
+    model: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    stream: bool | None = None
 
 
 # ── Response types ──────────────────────────────────────────────────
@@ -47,63 +54,63 @@ class HealthResponse:
     status: str
     version: str
     uptime_seconds: int
-    modules: Dict[str, Any] = field(default_factory=dict)
+    modules: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class GovernanceStatusResponse:
     ok: bool
-    governance: Dict[str, Any]
+    governance: dict[str, Any]
 
 
 @dataclass
 class HealthProbesResponse:
-    modules: Dict[str, Any]
+    modules: dict[str, Any]
 
 
 @dataclass
 class MetricsResponse:
-    metrics: Dict[str, Any]
+    metrics: dict[str, Any]
 
 
 @dataclass
 class BreakerStatusResponse:
-    breakers: Dict[str, Any]
+    breakers: dict[str, Any]
 
 
 @dataclass
 class CheckpointListResponse:
-    checkpoints: List[Dict[str, Any]]
+    checkpoints: list[dict[str, Any]]
 
 
 @dataclass
 class TaskPlanResponse:
-    plan: Dict[str, Any]
+    plan: dict[str, Any]
 
 
 @dataclass
 class LearningSummaryResponse:
-    summary: Dict[str, Any]
+    summary: dict[str, Any]
 
 
 @dataclass
 class SelectorStatusResponse:
-    selector: Dict[str, Any]
+    selector: dict[str, Any]
 
 
 @dataclass
 class CostStatusResponse:
-    cost: Dict[str, Any]
+    cost: dict[str, Any]
 
 
 @dataclass
 class ConfigBaselineResponse:
-    baseline: Dict[str, Any]
+    baseline: dict[str, Any]
 
 
 @dataclass
 class HarnessStatusResponse:
-    harness: Dict[str, Any]
+    harness: dict[str, Any]
 
 
 # ── Client ──────────────────────────────────────────────────────────
@@ -141,31 +148,31 @@ class GoOnClient:
         self.timeout = timeout
         self.max_retries = max_retries
         self.retry_delay = retry_delay
-        self._client = httpx.AsyncClient(timeout=httpx.Timeout(timeout))
+        self._client: httpx.AsyncClient = httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout)
+        )
 
     async def aclose(self) -> None:
         await self._client.aclose()
 
     # ── Internal helpers ──────────────────────────────────────────────
 
-    async def _json_rpc(
-        self, method: str, params: Optional[Dict[str, Any]] = None
-    ) -> Any:
-        payload: Dict[str, Any] = {
+    async def _json_rpc(self, method: str, params: dict[str, Any] | None = None) -> Any:
+        payload: dict[str, Any] = {
             "jsonrpc": "2.0",
             "id": 1,
             "method": method,
             "params": params or {},
         }
 
-        last_error: Optional[Exception] = None
+        last_error: Exception | None = None
 
         for attempt in range(self.max_retries + 1):
             try:
                 resp = await self._client.post(
                     f"{self.base_url}/v1/responses", json=payload
                 )
-                resp.raise_for_status()
+                _ = resp.raise_for_status()
                 try:
                     data = resp.json()
                 except json.JSONDecodeError:
@@ -202,7 +209,9 @@ class GoOnClient:
 
     # ── Streaming chat ────────────────────────────────────────────────
 
-    async def chat_stream(self, request: ChatRequest) -> AsyncGenerator[dict, None]:
+    async def chat_stream(
+        self, request: ChatRequest
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """Send a chat request and yield SSE events as they arrive.
 
         Each yielded value is a parsed JSON object from a ``data:`` line
@@ -213,7 +222,7 @@ class GoOnClient:
         dict
             A JSON chunk from the stream.
         """
-        request_dict: Dict[str, Any] = {
+        request_dict: dict[str, Any] = {
             "messages": [
                 {"role": m.role, "content": m.content} for m in request.messages
             ],
@@ -234,14 +243,24 @@ class GoOnClient:
         ) as response:
             async for line in response.aiter_lines():
                 if line.startswith("data: "):
-                    yield json.loads(line[6:])
+                    payload = line[6:]
+                    # Handle the [DONE] SSE terminator — break instead of trying to parse it as JSON
+                    if payload.strip() == "[DONE]":
+                        break
+                    try:
+                        yield json.loads(payload)
+                    except json.JSONDecodeError as e:
+                        if payload.strip() == "[DONE]":
+                            break
+                        logger.warning(f"SSE parse error on payload: {payload[:100]}")
+                        continue
 
     # ── Core Runtime ──────────────────────────────────────────────────
 
     async def health(self) -> HealthResponse:
         """GET /health — quick health check."""
         resp = await self._client.get(f"{self.base_url}/health")
-        resp.raise_for_status()
+        _ = resp.raise_for_status()
         data = resp.json()
         return HealthResponse(
             status=data.get("status", "unknown"),
@@ -260,15 +279,15 @@ class GoOnClient:
             modules=result.get("modules", {}),
         )
 
-    async def runtime_stability(self) -> Dict[str, Any]:
+    async def runtime_stability(self) -> dict[str, Any]:
         """runtime.stability — runtime stability snapshot."""
         return await self._json_rpc("runtime.stability")
 
-    async def initialize(self, setup_level: str = "standard") -> Dict[str, Any]:
+    async def initialize(self, setup_level: str = "standard") -> dict[str, Any]:
         """initialize — initialize the runtime."""
         return await self._json_rpc("initialize", {"setup_level": setup_level})
 
-    async def shutdown(self) -> Dict[str, Any]:
+    async def shutdown(self) -> dict[str, Any]:
         """shutdown — gracefully shut down the runtime."""
         return await self._json_rpc("shutdown")
 
@@ -282,11 +301,11 @@ class GoOnClient:
             governance=result.get("governance", {}),
         )
 
-    async def governance_plan_get(self) -> Dict[str, Any]:
+    async def governance_plan_get(self) -> dict[str, Any]:
         """governance.plan.get — get active governance plan."""
         return await self._json_rpc("governance.plan.get")
 
-    async def governance_audit_recent(self, limit: int = 20) -> Dict[str, Any]:
+    async def governance_audit_recent(self, limit: int = 20) -> dict[str, Any]:
         """governance.audit.recent — view recent audit entries."""
         return await self._json_rpc("governance.audit.recent", {"limit": limit})
 
@@ -307,7 +326,7 @@ class GoOnClient:
         result = await self._json_rpc("metrics.prometheus")
         return str(result) if result else ""
 
-    async def trace_get(self, limit: int = 20) -> Dict[str, Any]:
+    async def trace_get(self, limit: int = 20) -> dict[str, Any]:
         """trace.get — get trace entries."""
         return await self._json_rpc("trace.get", {"limit": limit})
 
@@ -318,17 +337,17 @@ class GoOnClient:
         result = await self._json_rpc("breaker.status")
         return BreakerStatusResponse(breakers=result.get("breakers", {}))
 
-    async def breaker_reset(self, name: str) -> Dict[str, Any]:
+    async def breaker_reset(self, name: str) -> dict[str, Any]:
         """breaker.reset — reset a circuit breaker."""
         return await self._json_rpc("breaker.reset", {"name": name})
 
-    async def maintenance_gc(self) -> Dict[str, Any]:
+    async def maintenance_gc(self) -> dict[str, Any]:
         """maintenance.gc — run garbage collection."""
         return await self._json_rpc("maintenance.gc")
 
     # ── Checkpoint (Phase 4) ──────────────────────────────────────────
 
-    async def checkpoint_create(self, branch: str) -> Dict[str, Any]:
+    async def checkpoint_create(self, branch: str) -> dict[str, Any]:
         """checkpoint.create — create a runtime checkpoint."""
         return await self._json_rpc("checkpoint.create", {"branch": branch})
 
@@ -337,7 +356,7 @@ class GoOnClient:
         result = await self._json_rpc("checkpoint.list")
         return CheckpointListResponse(checkpoints=result.get("checkpoints", []))
 
-    async def conversation_rollback(self, checkpoint_id: str) -> Dict[str, Any]:
+    async def conversation_rollback(self, checkpoint_id: str) -> dict[str, Any]:
         """conversation.rollback — roll back to a checkpoint."""
         return await self._json_rpc(
             "conversation.rollback", {"checkpoint_id": checkpoint_id}
@@ -345,7 +364,7 @@ class GoOnClient:
 
     # ── Workflow / Task ───────────────────────────────────────────────
 
-    async def workflow_execute(self) -> Dict[str, Any]:
+    async def workflow_execute(self) -> dict[str, Any]:
         """workflow.execute — execute the current workflow."""
         return await self._json_rpc("workflow.execute")
 
@@ -354,7 +373,7 @@ class GoOnClient:
         result = await self._json_rpc("task.plan", {"description": description})
         return TaskPlanResponse(plan=result.get("plan", {}))
 
-    async def task_execute(self, plan_id: str) -> Dict[str, Any]:
+    async def task_execute(self, plan_id: str) -> dict[str, Any]:
         """task.execute — execute a planned task."""
         return await self._json_rpc("task.execute", {"plan_id": plan_id})
 
@@ -370,11 +389,11 @@ class GoOnClient:
         result = await self._json_rpc("selector.status")
         return SelectorStatusResponse(selector=result.get("selector", {}))
 
-    async def knowledge_distill(self, source: str) -> Dict[str, Any]:
+    async def knowledge_distill(self, source: str) -> dict[str, Any]:
         """knowledge.distill — run knowledge distillation."""
         return await self._json_rpc("knowledge.distill", {"source": source})
 
-    async def rl_alignment_offline_eval(self) -> Dict[str, Any]:
+    async def rl_alignment_offline_eval(self) -> dict[str, Any]:
         """rl.alignment.offline_eval — run RL alignment offline evaluation."""
         return await self._json_rpc("rl.alignment.offline_eval")
 
@@ -390,7 +409,7 @@ class GoOnClient:
         result = await self._json_rpc("config.baseline")
         return ConfigBaselineResponse(baseline=result.get("baseline", {}))
 
-    async def config_reload(self) -> Dict[str, Any]:
+    async def config_reload(self) -> dict[str, Any]:
         """config.reload — reload runtime config."""
         return await self._json_rpc("config.reload")
 

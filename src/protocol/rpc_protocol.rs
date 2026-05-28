@@ -10,7 +10,7 @@ use serde_json::Value;
 const MAX_TRACE_REQUEST_ID_LEN: usize = 128;
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct JsonRpcRequest {
+pub struct JsonRpcRequest {
     pub(crate) jsonrpc: String,
     pub(crate) id: Option<Value>,
     pub(crate) method: String,
@@ -18,7 +18,7 @@ pub(crate) struct JsonRpcRequest {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct RequestTraceContext {
+pub struct RequestTraceContext {
     pub(crate) trace_id: String,
     pub(crate) span_id: String,
     pub(crate) method: String,
@@ -26,7 +26,7 @@ pub(crate) struct RequestTraceContext {
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct JsonRpcResponse {
+pub struct JsonRpcResponse {
     pub(crate) jsonrpc: &'static str,
     pub(crate) id: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]

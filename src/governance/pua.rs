@@ -450,9 +450,10 @@ impl PuaRuleEngine {
 
     pub fn escalate(&self, _reason: &str) -> u8 {
         tracing::debug!("Escalation triggered: {}", _reason);
-        let Ok(mut plan) = self.plan.lock() else {
-            return 0;
-        };
+        let mut plan = self.plan.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("PUA plan lock poisoned: recovering");
+            poisoned.into_inner()
+        });
 
         let current = parse_escalation_level(&plan.escalation_level);
         let next = current.saturating_add(1).min(5);
@@ -467,9 +468,10 @@ impl PuaRuleEngine {
     /// The level is floored at L0 (no escalation).
     pub fn de_escalate(&self, _reason: &str) -> u8 {
         tracing::debug!("De-escalation triggered: {}", _reason);
-        let Ok(mut plan) = self.plan.lock() else {
-            return 0;
-        };
+        let mut plan = self.plan.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("PUA plan lock poisoned: recovering");
+            poisoned.into_inner()
+        });
 
         let current = parse_escalation_level(&plan.escalation_level);
         let next = current.saturating_sub(1);
@@ -1027,6 +1029,54 @@ mod tests {
             .escalation_level
             .clone();
         assert_eq!(level, "L5");
+    }
+
+    #[test]
+    fn pua_rule_engine_de_escalate_decreases_level_by_one() {
+        let plan = PuaEnforcementPlan {
+            escalation_level: "L3".to_string(),
+            mandatory_roles: vec![],
+            red_lines: vec![],
+            quality_compass: vec![],
+            mandatory_safeguards: vec![],
+            mandatory_evidence: vec![],
+            stage_requirements: vec![],
+        };
+        let shared = Arc::new(StdMutex::new(plan));
+        let engine = PuaRuleEngine::new(shared.clone());
+
+        let next = engine.de_escalate("incident resolved");
+        assert_eq!(next, 2);
+        let level = shared
+            .lock()
+            .expect("plan lock should succeed")
+            .escalation_level
+            .clone();
+        assert_eq!(level, "L2");
+    }
+
+    #[test]
+    fn pua_rule_engine_de_escalate_floors_at_l0() {
+        let plan = PuaEnforcementPlan {
+            escalation_level: "L0".to_string(),
+            mandatory_roles: vec![],
+            red_lines: vec![],
+            quality_compass: vec![],
+            mandatory_safeguards: vec![],
+            mandatory_evidence: vec![],
+            stage_requirements: vec![],
+        };
+        let shared = Arc::new(StdMutex::new(plan));
+        let engine = PuaRuleEngine::new(shared.clone());
+
+        let next = engine.de_escalate("already baseline");
+        assert_eq!(next, 0, "de-escalate should floor at L0");
+        let level = shared
+            .lock()
+            .expect("plan lock should succeed")
+            .escalation_level
+            .clone();
+        assert_eq!(level, "L0", "should stay at L0");
     }
 
     #[test]

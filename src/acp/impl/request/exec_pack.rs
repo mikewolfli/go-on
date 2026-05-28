@@ -1,5 +1,6 @@
 /// Auto-Repair Loop Support for Step 2 of BLUE22
 /// Implements autonomous iterative repair capabilities for failed subtasks
+use tracing::warn;
 
 #[derive(Debug, Clone)]
 struct RepairContext {
@@ -126,12 +127,15 @@ pub(super) fn start_workflow_run(
         effective_options: effective_options_value(params),
     };
 
-    if let Ok(mut guard) = workflow_runs().lock() {
-        guard.push(record.clone());
-        if guard.len() > 2000 {
-            let overflow = guard.len() - 2000;
-            guard.drain(0..overflow);
-        }
+    let mut guard = workflow_runs().lock().unwrap_or_else(|poisoned| {
+        warn!("Workflow runs lock poisoned in start_workflow_run, recovering");
+        poisoned.into_inner()
+    });
+    guard.push(record.clone());
+    const MAX_ENTRIES: usize = 10000;
+    if guard.len() > MAX_ENTRIES {
+        let overflow = guard.len() - MAX_ENTRIES;
+        guard.drain(0..overflow);
     }
 
     record
@@ -143,13 +147,15 @@ pub(super) fn complete_workflow_run(
     error: Option<String>,
     artifacts: Vec<String>,
 ) {
-    if let Ok(mut guard) = workflow_runs().lock() {
-        if let Some(item) = guard.iter_mut().find(|record| record.run_id == run_id) {
-            item.status = status.to_string();
-            item.error = error;
-            item.artifacts = artifacts;
-            item.ended_at = Some(crate::acp::prelude::now_ts());
-        }
+    let mut guard = workflow_runs().lock().unwrap_or_else(|poisoned| {
+        warn!("Workflow runs lock poisoned in complete_workflow_run, recovering");
+        poisoned.into_inner()
+    });
+    if let Some(item) = guard.iter_mut().find(|record| record.run_id == run_id) {
+        item.status = status.to_string();
+        item.error = error;
+        item.artifacts = artifacts;
+        item.ended_at = Some(crate::acp::prelude::now_ts());
     }
 }
 
@@ -2945,7 +2951,11 @@ async fn execute_runtime_subtasks(
     let mut memory_entries_retained = 0_usize;
     let mut memory_artifact_path = None;
     if context.lazy_policy.enable_memory_policy {
-        let promotion = if let Ok(mut store) = context.memory_store.lock() {
+        let promotion = {
+            let mut store = context.memory_store.lock().unwrap_or_else(|poisoned| {
+                warn!("Memory store lock poisoned in execute_runtime_subtasks, recovering");
+                poisoned.into_inner()
+            });
             for (index, content) in memory_snapshots.iter().enumerate() {
                 let class = if content.contains("tool:") {
                     MemoryClass::Observation
@@ -2967,8 +2977,6 @@ async fn execute_runtime_subtasks(
             memory_entries_retained = store.retrieve(MemoryClass::Observation, 128).len()
                 + store.retrieve(MemoryClass::Episodic, 128).len();
             promotion
-        } else {
-            MemoryPromotionReport::default()
         };
 
         let memory_artifact = MemoryPolicyExecutionArtifact {
@@ -3149,7 +3157,11 @@ async fn execute_single_subtask(
         .collect::<Vec<_>>();
 
     // Sort candidates by adaptive selector score at model granularity (exploration-exploitation).
-    if let Ok(sel) = context.adaptive_selector.lock() {
+    {
+        let sel = context.adaptive_selector.lock().unwrap_or_else(|poisoned| {
+            warn!("Adaptive selector lock poisoned in execute_single_subtask, recovering");
+            poisoned.into_inner()
+        });
         let ranked_agents = sel.rank_candidates(&ranking_inputs);
         if !ranked_agents.is_empty() {
             let order = ranked_agents
@@ -3219,10 +3231,18 @@ async fn execute_single_subtask(
         }
         // Record per-agent outcome to online controller for adaptive ranking
         let duration_ms = started.elapsed().as_millis() as u64;
-        if let Ok(mut ctrl) = context.online_controller.lock() {
+        {
+            let mut ctrl = context.online_controller.lock().unwrap_or_else(|poisoned| {
+                warn!("Online controller lock poisoned in execute_single_subtask, recovering");
+                poisoned.into_inner()
+            });
             ctrl.record_agent_outcome(&phase_name, agent_name, run_result.is_ok(), duration_ms);
         }
-        if let Ok(mut fp) = context.failure_prevention.lock() {
+        {
+            let mut fp = context.failure_prevention.lock().unwrap_or_else(|poisoned| {
+                warn!("Failure prevention lock poisoned in execute_single_subtask, recovering");
+                poisoned.into_inner()
+            });
             fp.record_outcome(agent_name, run_result.is_ok(), duration_ms);
         }
 

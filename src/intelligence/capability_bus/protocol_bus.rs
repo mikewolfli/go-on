@@ -125,6 +125,8 @@ pub struct ProtocolBus {
     protocol_latency: Arc<RwLock<HashMap<String, LatencyStats>>>,
     /// Profile metrics.
     profile: Arc<Mutex<ProtocolBusProfile>>,
+    /// Maximum number of tracked protocols before FIFO eviction
+    max_protocols: usize,
 }
 
 impl ProtocolBus {
@@ -162,6 +164,7 @@ impl ProtocolBus {
                 healthy_protocols: 5,
                 total_protocol_switches: 0,
             })),
+            max_protocols: 50,
         }
     }
 
@@ -274,6 +277,12 @@ impl ProtocolBus {
     /// created automatically.
     pub fn record_protocol_latency(&self, protocol: &str, duration_ms: u64) {
         let mut latency = write_lock_recover(self.protocol_latency.as_ref(), "protocol_latency");
+        // Evict oldest when at capacity for a new protocol.
+        if !latency.contains_key(protocol) && latency.len() >= self.max_protocols {
+            if let Some(oldest) = latency.keys().next().cloned() {
+                latency.remove(&oldest);
+            }
+        }
         let stats = latency
             .entry(protocol.to_string())
             .or_insert_with(LatencyStats::new);
@@ -281,6 +290,12 @@ impl ProtocolBus {
 
         // If the protocol is not already in the health map, add it as healthy.
         let mut health = write_lock_recover(self.protocol_health.as_ref(), "protocol_health");
+        // Evict oldest from health map in sync.
+        if !health.contains_key(protocol) && health.len() >= self.max_protocols {
+            if let Some(oldest) = health.keys().next().cloned() {
+                health.remove(&oldest);
+            }
+        }
         health.entry(protocol.to_string()).or_insert(true);
     }
 

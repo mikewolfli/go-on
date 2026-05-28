@@ -96,6 +96,10 @@ pub struct EvolutionGraph {
     records: HashMap<(String, String), EvolutionRecord>,
     /// Monotonically increasing version counter.
     version_counter: u64,
+    /// Max total records before evicting the oldest.
+    max_records: usize,
+    /// Max versions to retain per record before evicting the oldest.
+    max_versions_per_record: usize,
 }
 
 impl EvolutionGraph {
@@ -104,6 +108,8 @@ impl EvolutionGraph {
         Self {
             records: HashMap::new(),
             version_counter: 0,
+            max_records: 5000,
+            max_versions_per_record: 100,
         }
     }
 
@@ -122,6 +128,20 @@ impl EvolutionGraph {
                 agent
             ));
         }
+        // Evict the oldest record when at capacity.
+        if self.records.len() >= self.max_records {
+            if let Some(oldest_key) = self
+                .records
+                .iter()
+                .min_by_key(|(_, rec)| {
+                    rec.versions.last().map(|v| v.created_ms).unwrap_or(0)
+                })
+                .map(|(k, _)| k.clone())
+            {
+                self.records.remove(&oldest_key);
+            }
+        }
+
         self.records.insert(
             key,
             EvolutionRecord {
@@ -165,6 +185,11 @@ impl EvolutionGraph {
             success_rate,
             avg_latency_ms,
         };
+
+        // Evict oldest version when per-record limit is reached.
+        if record.versions.len() >= self.max_versions_per_record {
+            record.versions.remove(0);
+        }
 
         record.versions.push(version.clone());
         record.trend = calculate_trend(&record.versions);

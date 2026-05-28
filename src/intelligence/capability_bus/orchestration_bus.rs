@@ -104,6 +104,7 @@ impl OrchestrationMode {
     }
 
     /// Parse an `OrchestrationMode` from its string representation.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "ask" => Some(OrchestrationMode::Ask),
@@ -112,6 +113,17 @@ impl OrchestrationMode {
             "full_auto" => Some(OrchestrationMode::FullAuto),
             "safe_guard" => Some(OrchestrationMode::SafeGuard),
             _ => None,
+        }
+    }
+}
+
+impl std::str::FromStr for OrchestrationMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match <Self>::from_str(s) {
+            Some(mode) => Ok(mode),
+            None => Err(format!("unknown OrchestrationMode: {s}")),
         }
     }
 }
@@ -148,6 +160,8 @@ pub struct OrchestrationBus {
     active_flow_map: Arc<Mutex<HashMap<String, FlowEntry>>>,
     /// Total routes counter (persisted across resets)
     total_routes: Arc<Mutex<u64>>,
+    /// Maximum number of tracked flows before FIFO eviction
+    max_flows: usize,
 }
 
 impl OrchestrationBus {
@@ -175,6 +189,7 @@ impl OrchestrationBus {
             })),
             active_flow_map: Arc::new(Mutex::new(HashMap::new())),
             total_routes: Arc::new(Mutex::new(0)),
+            max_flows: 500,
         }
     }
 
@@ -292,6 +307,13 @@ impl OrchestrationBus {
                     .map(|e| e.task_id.as_str())
                     .unwrap_or("unknown")
             ));
+        }
+
+        // Evict oldest flow when at capacity.
+        if flow_map.len() >= self.max_flows {
+            if let Some(oldest) = flow_map.keys().next().cloned() {
+                flow_map.remove(&oldest);
+            }
         }
 
         let phase = self

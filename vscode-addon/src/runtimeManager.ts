@@ -59,9 +59,11 @@ export class GoOnManager {
   private lastWizardPromptAt = 0;
   private _outputChannel?: vscode.OutputChannel;
   private stdoutBuffer = "";
+  private lineBuffer = "";
   private _reconnectAttempts = 0;
   private readonly maxReconnectAttempts = 3;
   private _shutdownInProgress = false;
+  private _isOperating = false;
   private _closeListener: (() => void) | null = null;
   private _reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private _startupConfig?: {
@@ -125,6 +127,8 @@ export class GoOnManager {
     if (this._shutdownInProgress) {
       throw new Error("Go-On is shutting down. Please wait and try again.");
     }
+    if (this._isOperating) return;
+    this._isOperating = true;
     if (this.process) {
       throw new Error("Go-On is already running");
     }
@@ -132,7 +136,7 @@ export class GoOnManager {
     // Store config for potential reconnection
     this._startupConfig = { configPath, executablePath, cwd, protocolMode };
 
-    return new Promise((resolve, reject) => {
+    const startPromise = new Promise<void>((resolve, reject) => {
       let settled = false;
       let resolved = false;
       let stderrBuffer = "";
@@ -187,8 +191,15 @@ export class GoOnManager {
           if (!trimmed) {
             continue;
           }
+
+          // Prepend any previously buffered incomplete line fragment
+          const combined = this.lineBuffer
+            ? this.lineBuffer + trimmed
+            : trimmed;
+          this.lineBuffer = "";
+
           try {
-            const response: JsonRpcResponse = JSON.parse(trimmed);
+            const response: JsonRpcResponse = JSON.parse(combined);
             const pending = this.pendingRequests.get(response.id);
             if (pending) {
               this.pendingRequests.delete(response.id);
@@ -199,7 +210,14 @@ export class GoOnManager {
               }
             }
           } catch {
-            // Not a complete JSON-RPC response yet, wait for more data.
+            // JSON.parse failed — buffer the fragment and prepend to the next
+            // chunk. This handles fragmented JSON responses that are split
+            // across two (or more) newline-delimited chunks.
+            this.lineBuffer = combined;
+            // Cap lineBuffer at 1MB to prevent memory leak
+            if (this.lineBuffer.length > 1024 * 1024) {
+              this.lineBuffer = "";
+            }
           }
         }
       });
@@ -315,6 +333,10 @@ export class GoOnManager {
         reject(error);
       });
     });
+
+    return startPromise.finally(() => {
+      this._isOperating = false;
+    });
   }
 
   private async forceKillProcess(proc: ChildProcess): Promise<void> {
@@ -344,6 +366,8 @@ export class GoOnManager {
   }
 
   stop(): void {
+    if (this._isOperating) return;
+    this._isOperating = true;
     this._shutdownInProgress = true;
     this._reconnectAttempts = 0;
     // Save startupConfig before clearing, so we can restore it
@@ -379,24 +403,25 @@ export class GoOnManager {
       // Remove previous close listener if any (shouldn't happen, but be safe)
       this._closeListener?.();
 
-      // Bug 2: Check if process already exited before attaching new listener.
-      // If the process exited already, `exitCode` is non-null. In that case,
-      // clean up immediately instead of waiting for a close event that will
-      // never fire for the new listener.
+      // Register close handler FIRST (avoids TOCTOU race: process could exit
+      // between checking exitCode and attaching the listener)
+      const closeHandler = () => {
+        clearTimeout(forceKillTimer);
+        this._shutdownInProgress = false;
+        this._isOperating = false;
+      };
+      proc.on("close", closeHandler);
+      // Store cleanup so it can be removed if stop() is called again
+      this._closeListener = () => {
+        proc.off("close", closeHandler);
+        this._closeListener = null;
+      };
+
+      // Then check if process already exited (close event already fired)
       if (proc.exitCode !== null && proc.exitCode !== undefined) {
         clearTimeout(forceKillTimer);
         this._shutdownInProgress = false;
-      } else {
-        const closeHandler = () => {
-          clearTimeout(forceKillTimer);
-          this._shutdownInProgress = false;
-        };
-        proc.on("close", closeHandler);
-        // Store cleanup so it can be removed if stop() is called again
-        this._closeListener = () => {
-          proc.off("close", closeHandler);
-          this._closeListener = null;
-        };
+        this._isOperating = false;
       }
     }
 
@@ -405,6 +430,10 @@ export class GoOnManager {
     // restore it so potential reconnect or re-initialization can use it.
     if (!this.process) {
       this._startupConfig = savedConfig;
+    }
+
+    if (!proc) {
+      this._isOperating = false;
     }
 
     this.updateStatus();

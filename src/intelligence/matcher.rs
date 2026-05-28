@@ -121,6 +121,9 @@ pub struct MatchResult {
 
 /// Matches incoming tasks against known scenarios to provide pre-configured
 /// routing decisions, tool selections, and execution strategies.
+/// Maximum number of registered scenarios before evicting the oldest.
+const MAX_SCENARIOS: usize = 1000;
+
 pub struct ScenarioMatcher {
     /// Registered scenarios.
     scenarios: Arc<RwLock<Vec<Scenario>>>,
@@ -165,6 +168,16 @@ impl ScenarioMatcher {
         if let Some(pos) = scenarios.iter().position(|s| s.id == scenario.id) {
             scenarios[pos] = scenario;
         } else {
+            // Enforce max_scenarios cap: evict the oldest (front of the vec)
+            // when at capacity to prevent unbounded memory growth.
+            if scenarios.len() >= MAX_SCENARIOS {
+                let evicted = scenarios.remove(0);
+                tracing::warn!(
+                    "scenario cap reached ({}): evicting oldest scenario '{}'",
+                    MAX_SCENARIOS,
+                    evicted.name,
+                );
+            }
             scenarios.push(scenario);
         }
 

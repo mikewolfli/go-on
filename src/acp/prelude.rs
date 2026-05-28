@@ -811,6 +811,12 @@ pub struct LifecycleState {
     last_health_check: i64,
 }
 
+impl Default for LifecycleState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LifecycleState {
     /// Create a new lifecycle state
     pub fn new() -> Self {
@@ -888,6 +894,12 @@ impl LifecycleState {
 #[derive(Debug)]
 pub struct MaintenanceTracker {
     inner: StdMutex<MaintenanceSnapshot>,
+}
+
+impl Default for MaintenanceTracker {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MaintenanceTracker {

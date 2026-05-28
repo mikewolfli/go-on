@@ -1000,6 +1000,10 @@ fn controller_recommended_phase(
     }
 }
 
+// ============================================================================
+// Section: Chat Request Lifecycle
+// ============================================================================
+
 /// Process chat request
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) async fn process_chat_request(
@@ -1012,6 +1016,8 @@ pub(crate) async fn process_chat_request(
 ) -> Result<serde_json::Value> {
     let started = std::time::Instant::now();
     let ctx = ctx.unwrap_or_else(|| ChatRequestContext::new(None));
+    // Clear per-request cache to ensure fresh task description computation
+    clear_task_description_cache();
     let (flow, registry) = routing_handles(server)?;
     let tenant_id = &ctx.tenant_id;
 
@@ -1673,15 +1679,19 @@ struct PhaseResolution {
     _unavailable_agents: Vec<String>,
 }
 
-/// Resolve the request phase from parameters, adaptive inference, and controller recommendation.
-///
-/// Determines the phase to use for this chat request by considering (in order):
-/// 1. The explicitly requested phase in `params.phase`
-/// 2. The controller-recommended phase (based on live outcome data)
-/// 3. The adaptively inferred phase (based on message content)
-/// 4. The flow default
-///
-/// Also performs schema registry validation and initial agent reordering.
+// Resolve the request phase from parameters, adaptive inference, and controller recommendation.
+//
+// Determines the phase to use for this chat request by considering (in order):
+// 1. The explicitly requested phase in `params.phase`
+// 2. The controller-recommended phase (based on live outcome data)
+// 3. The adaptively inferred phase (based on message content)
+// 4. The flow default
+//
+// Also performs schema registry validation and initial agent reordering.
+// ============================================================================
+// Section: Request Phase Resolution
+// ============================================================================
+
 async fn resolve_request_phase(
     server: &AcpServer,
     params: &ChatParams,
@@ -1879,15 +1889,19 @@ struct AgentSelectionOutcome {
     vector_context: VectorContext,
 }
 
-/// Select and score agents using CapabilityBus, agent preferences, and model routing.
-///
-/// This function performs all agent selection logic including:
-/// - CapabilityBus sense/decide pipeline
-/// - Agent Switch State & Preferred Agent Resolution
-/// - PromptLayers assembly
-/// - Vector context loading
-/// - Model-based filtering and risk assessment
-/// - Council deliberation for unhealthy fallback
+// Select and score agents using CapabilityBus, agent preferences, and model routing.
+//
+// This function performs all agent selection logic including:
+// - CapabilityBus sense/decide pipeline
+// - Agent Switch State & Preferred Agent Resolution
+// - PromptLayers assembly
+// - Vector context loading
+// - Model-based filtering and risk assessment
+// - Council deliberation for unhealthy fallback
+// ============================================================================
+// Section: Agent Selection & Scoring
+// ============================================================================
+
 #[allow(clippy::too_many_arguments)]
 async fn select_and_score_agents(
     server: &AcpServer,
@@ -2070,7 +2084,7 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         capability_selection_reason,
         capability_optimization_hint,
         configured_primary_agent,
-        preferred_agent_from_request: preferred_agent_from_request,
+        preferred_agent_from_request,
         conversation_id,
         branch_id,
         agent_messages,
@@ -2105,10 +2119,14 @@ struct AutonomyOutcome {
     agent_attempts: Vec<Value>,
 }
 
-/// Execute the multi-round autonomy loop for full_auto / execution-like requests.
-///
-/// Runs think → act → observe → replan cycles with agent rerouting support.
-/// Returns whether the loop was executed, and if successful, the response.
+// Execute the multi-round autonomy loop for full_auto / execution-like requests.
+//
+// Runs think → act → observe → replan cycles with agent rerouting support.
+// Returns whether the loop was executed, and if successful, the response.
+// ============================================================================
+// Section: Autonomy Loop & Fallback
+// ============================================================================
+
 #[allow(clippy::too_many_arguments)]
 async fn execute_autonomy_round(
     _server: &AcpServer,
@@ -2230,6 +2248,14 @@ async fn execute_autonomy_round(
     }
 }
 
+/// A job representing a high-risk multi-agent vote task.
+type HighRiskVoteJob = (
+    String,
+    Arc<dyn crate::agent::Agent>,
+    HashMap<String, Value>,
+    Option<String>,
+);
+
 /// Result of executing fallback agents.
 struct FallbackExecutionResult {
     selected_agent: String,
@@ -2240,12 +2266,7 @@ struct FallbackExecutionResult {
     agent_attempts: Vec<Value>,
     quota_failed_agents: Vec<String>,
     _cache_hit: bool,
-    high_risk_vote_jobs: Vec<(
-        String,
-        Arc<dyn crate::agent::Agent>,
-        HashMap<String, Value>,
-        Option<String>,
-    )>,
+    high_risk_vote_jobs: Vec<HighRiskVoteJob>,
 }
 
 /// Execute fallback agents using parallel execution with a concurrency limit.
@@ -2274,12 +2295,7 @@ async fn execute_fallback_agents(
     let mut last_err: Option<anyhow::Error> = None;
     let mut agent_attempts: Vec<Value> = Vec::with_capacity(agent_list.len() + 2);
     let mut quota_failed_agents: Vec<String> = Vec::with_capacity(agent_list.len());
-    let mut high_risk_vote_jobs: Vec<(
-        String,
-        Arc<dyn crate::agent::Agent>,
-        HashMap<String, Value>,
-        Option<String>,
-    )> = Vec::with_capacity(max_vote_agents);
+    let mut high_risk_vote_jobs: Vec<HighRiskVoteJob> = Vec::with_capacity(max_vote_agents);
 
     use futures_util::future::join_all;
     let semaphore = Arc::new(tokio::sync::Semaphore::new(5));
@@ -2309,7 +2325,7 @@ async fn execute_fallback_agents(
             continue;
         }
 
-        let is_unhealthy = server.capability_bus.as_ref().map_or(false, |cb| {
+        let is_unhealthy = server.capability_bus.as_ref().is_some_and(|cb| {
             let unhealthy = !cb.is_agent_healthy(&agent_name);
             if unhealthy && unhealthy_fallback_agent.as_deref() != Some(agent_name.as_str()) {
                 warn!(
@@ -2499,11 +2515,15 @@ struct FullAutoExecutionResult {
     tool_execution_results: Vec<Value>,
 }
 
-/// Execute the FullAuto review gate and TAO loop.
-///
-/// Runs the review gate for full_auto mode, then conditionally executes
-/// the Think-Act-Observe (TAO) loop when the autonomy loop did not handle
-/// tool execution. Uses a cached task description to avoid redundant calls.
+// Execute the FullAuto review gate and TAO loop.
+//
+// Runs the review gate for full_auto mode, then conditionally executes
+// the Think-Act-Observe (TAO) loop when the autonomy loop did not handle
+// tool execution. Uses a cached task description to avoid redundant calls.
+// ============================================================================
+// Section: Full Auto Execution
+// ============================================================================
+
 #[allow(clippy::too_many_arguments)]
 async fn run_full_auto_execution(
     server: &AcpServer,
@@ -2719,12 +2739,16 @@ async fn run_full_auto_execution(
     }
 }
 
-/// Apply the review gate logic and assemble the final chat response.
-///
-/// Computes the final response value including memory policy execution,
-/// task graph checkpoint, role routing, verification, and the final
-/// response assembly via `response_finalizer::finalize_chat_response`.
-/// Also handles fire-and-forget background tasks (skill creation, workflow generation).
+// Apply the review gate logic and assemble the final chat response.
+//
+// Computes the final response value including memory policy execution,
+// task graph checkpoint, role routing, verification, and the final
+// response assembly via `response_finalizer::finalize_chat_response`.
+// Also handles fire-and-forget background tasks (skill creation, workflow generation).
+// ============================================================================
+// Section: Review Gate & Response Assembly
+// ============================================================================
+
 #[allow(clippy::too_many_arguments)]
 async fn apply_review_gate_assemble(
     server: &AcpServer,
@@ -3491,15 +3515,44 @@ async fn check_phase_escalation_rules(
     }
 }
 
-/// Extract task description from messages
+// Thread-local cache for task description to avoid recomputing it
+// 5+ times per request (O(N²) → O(1) optimization).
+thread_local! {
+    static TASK_DESCRIPTION_CACHE: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Clear the task description cache (call at the start of each request).
+pub(crate) fn clear_task_description_cache() {
+    TASK_DESCRIPTION_CACHE.with(|cache| {
+        *cache.borrow_mut() = None;
+    });
+}
+
+/// Extract task description from messages, caching the result per request.
+///
+/// Uses a thread-local cache so that calling this 5+ times in a single
+/// request (e.g. from infer_adaptive_phase, persist_chat_knowledge,
+/// persist_session_distillation) costs only one iteration over messages.
 pub(crate) fn extract_task_description(messages: &[Message]) -> String {
-    messages
+    // Return cached value if available (computed earlier in this request)
+    if let Some(cached) = TASK_DESCRIPTION_CACHE.with(|cache| cache.borrow().clone()) {
+        return cached;
+    }
+
+    // Compute and cache
+    let result = messages
         .iter()
         .rev()
         .find(|message| message.role.eq_ignore_ascii_case("user"))
         .map(|message| message.content.clone())
         .or_else(|| messages.last().map(|message| message.content.clone()))
-        .unwrap_or_default()
+        .unwrap_or_default();
+
+    TASK_DESCRIPTION_CACHE.with(|cache| {
+        *cache.borrow_mut() = Some(result.clone());
+    });
+    result
 }
 
 /// Create default requirement contract
@@ -4455,8 +4508,6 @@ async fn persist_chat_knowledge(
     })
     .to_string();
 
-    let mut retained_entries = 0usize;
-    let mut promoted_count = 0usize;
     let mut store = server.memory_store.lock().unwrap_or_else(|poisoned| {
         warn!("persist_chat_knowledge: memory_store poisoned, recovering");
         poisoned.into_inner()
@@ -4475,8 +4526,8 @@ async fn persist_chat_knowledge(
     });
     store.gc();
     let promotion = store.promote();
-    promoted_count = promotion.promoted_count;
-    retained_entries = store
+    let promoted_count = promotion.promoted_count;
+    let retained_entries = store
         .retrieve(crate::memory_module::MemoryClass::Observation, 256)
         .len()
         + store
@@ -4768,6 +4819,10 @@ async fn persist_session_distillation(
         "knowledge_refinement": artifact["knowledge_refinement"].clone(),
     })
 }
+
+// ============================================================================
+// Section: Supporting Utilities
+// ============================================================================
 
 /// Get routing handles
 fn routing_handles(

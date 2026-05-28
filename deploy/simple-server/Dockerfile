@@ -33,8 +33,8 @@ WORKDIR /opt/go-on
 
 EXPOSE 8090
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD go-on -c /opt/go-on/config.toml --status || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8090/health || exit 1
 
 ENTRYPOINT ["go-on"]
 CMD ["-c", "/opt/go-on/config.toml", "--mode", "acp_http", "--bind", "0.0.0.0:8090"]

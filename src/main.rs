@@ -378,10 +378,6 @@ fn emit_config_warnings(warnings: &[ConfigWarning], mirror_stderr: bool) {
             crate::config::ConfigWarningSeverity::Warn => "warn",
             crate::config::ConfigWarningSeverity::Info => "info",
         };
-        warn!(
-            "config warning [{}:{}] {}",
-            severity, warning.code, warning.message
-        );
         if mirror_stderr {
             tracing::warn!(
                 "config warning [{}:{}] {}",

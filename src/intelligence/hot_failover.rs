@@ -38,6 +38,9 @@ impl Default for HotFailoverConfig {
     }
 }
 
+/// Default maximum number of blacklisted models kept in the failed_models map.
+const DEFAULT_MAX_FAILED_MODELS: usize = 1000;
+
 // ---------------------------------------------------------------------------
 // Failover metrics
 // ---------------------------------------------------------------------------
@@ -62,6 +65,8 @@ pub struct HotFailover {
     config: HotFailoverConfig,
     /// Maps model ID to the Instant when its cooldown expires.
     failed_models: Mutex<HashMap<String, Instant>>,
+    /// Maximum number of entries in the failed_models map before evicting oldest.
+    max_failed_models: usize,
     /// Cumulative failover metrics.
     metrics: Mutex<FailoverMetrics>,
 }
@@ -72,12 +77,14 @@ impl HotFailover {
         Self {
             config,
             failed_models: Mutex::new(HashMap::new()),
+            max_failed_models: DEFAULT_MAX_FAILED_MODELS,
             metrics: Mutex::new(FailoverMetrics::default()),
         }
     }
 
     /// Whether the given model is currently blacklisted (in cooldown).
     pub fn is_blacklisted(&self, model_id: &str) -> bool {
+        self.evict_expired_entries();
         let guard = crate::intelligence::lock_guard(&self.failed_models);
         match guard.get(model_id) {
             Some(expiry) => Instant::now() < *expiry,
@@ -87,15 +94,35 @@ impl HotFailover {
 
     /// Mark a model as failed, placing it into cooldown.
     pub fn record_failure(&self, model_id: &str) {
+        self.evict_expired_entries();
         let cooldown = Duration::from_millis(self.config.cooldown_ms);
         let expiry = Instant::now() + cooldown;
         let mut guard = crate::intelligence::lock_guard(&self.failed_models);
+
+        // Evict the oldest entry if at capacity to prevent unbounded growth.
+        if guard.len() >= self.max_failed_models && !guard.contains_key(model_id) {
+            if let Some(oldest_key) = guard.keys().next().cloned() {
+                guard.remove(&oldest_key);
+                tracing::warn!(
+                    "failed_models cap reached ({}): evicted oldest entry",
+                    self.max_failed_models,
+                );
+            }
+        }
+
         guard.insert(model_id.to_string(), expiry);
         warn!(
             model = %model_id,
             cooldown_ms = self.config.cooldown_ms,
             "HotFailover: model blacklisted for cooldown"
         );
+    }
+
+    /// Remove entries whose cooldown has already expired.
+    fn evict_expired_entries(&self) {
+        let mut guard = crate::intelligence::lock_guard(&self.failed_models);
+        let now = Instant::now();
+        guard.retain(|_, expiry| now < *expiry);
     }
 
     /// Execute a task with failover across a sequence of model functions.

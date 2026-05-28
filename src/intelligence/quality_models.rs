@@ -172,16 +172,32 @@ impl KnowledgeDistiller {
     }
 }
 
-fn similarity(left: &str, right: &str) -> f64 {
-    if left.is_empty() || right.is_empty() {
+/// Compute Jaccard similarity on character bigrams.
+///
+/// Returns a value in [0.0, 1.0] where 1.0 indicates identical bigram sets.
+/// This is a proper string similarity metric (unlike the previous
+/// character-set overlap approach).
+pub fn similarity(a: &str, b: &str) -> f64 {
+    if a.is_empty() || b.is_empty() {
         return 0.0;
     }
-    if left == right {
+    if a == b {
         return 1.0;
     }
 
-    let overlap = left.chars().filter(|ch| right.contains(*ch)).count() as f64;
-    overlap / left.len().max(right.len()) as f64
+    let a_bigrams: std::collections::HashSet<(char, char)> =
+        a.chars().zip(a.chars().skip(1)).collect();
+    let b_bigrams: std::collections::HashSet<(char, char)> =
+        b.chars().zip(b.chars().skip(1)).collect();
+
+    let intersection = a_bigrams.intersection(&b_bigrams).count();
+    let union = a_bigrams.union(&b_bigrams).count();
+
+    if union == 0 {
+        0.0
+    } else {
+        intersection as f64 / union as f64
+    }
 }
 
 #[cfg(test)]

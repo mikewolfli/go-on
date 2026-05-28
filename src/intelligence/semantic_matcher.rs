@@ -243,40 +243,71 @@ impl SemanticCapabilityMatcher {
         (0.5 * jaccard + 0.3 * tf_weight + 0.2 * tag_signal).min(1.0)
     }
 
-    /// Compute a signal (0.0–1.0) from capability tags indicating how
-    /// "specific" the capability is.  Concrete tags (vision, code, etc.)
-    /// score higher than generic ones.
+    /// Compute a signal (0.0–1.0) from capability tags with nuanced
+    /// boost categories. Concrete, well-known tags (vision, code, etc.)
+    /// score higher than generic or unrecognised ones.
     fn tag_signal(tags: &[String]) -> f64 {
-        let known_tags: HashSet<&str> = [
-            "vision",
-            "code",
-            "chat",
-            "function_calling",
-            "tool_use",
-            "reasoning",
-            "agent",
-            "multimodal",
-            "generation",
-            "analysis",
-            "language",
-            "image",
-            "programming",
-            "chain_of_thought",
-        ]
-        .iter()
-        .copied()
-        .collect();
+        // Tier 1: highly specific technology or domain tags
+        const HIGH_SPECIFICITY: &[&str] = &[
+            "vision", "image", "multimodal", "function_calling", "tool_use",
+            "agent", "chain_of_thought", "reasoning",
+        ];
+        // Tier 2: broad capability area tags
+        const MEDIUM_SPECIFICITY: &[&str] = &[
+            "code", "programming", "generation", "analysis", "language",
+        ];
+        // Tier 3: generic interaction-mode tags
+        const LOW_SPECIFICITY: &[&str] = &[
+            "chat", "conversation", "general",
+        ];
 
-        let matched = tags
+        let known_tags: HashSet<&str> = HIGH_SPECIFICITY
             .iter()
-            .filter(|t| known_tags.contains(t.as_str()))
-            .count();
+            .chain(MEDIUM_SPECIFICITY.iter())
+            .chain(LOW_SPECIFICITY.iter())
+            .copied()
+            .collect();
 
-        if matched == 0 {
-            0.1 // low signal for unrecognised tags
-        } else {
-            (matched as f64 / tags.len().max(1) as f64).min(1.0)
+        if tags.is_empty() {
+            return 0.1;
         }
+
+        let total = tags.len();
+        let mut high_count = 0_usize;
+        let mut med_count = 0_usize;
+        let mut low_count = 0_usize;
+        let mut unknown_count = 0_usize;
+
+        for t in tags {
+            let t = t.as_str();
+            if HIGH_SPECIFICITY.contains(&t) {
+                high_count += 1;
+            } else if MEDIUM_SPECIFICITY.contains(&t) {
+                med_count += 1;
+            } else if LOW_SPECIFICITY.contains(&t) {
+                low_count += 1;
+            } else if known_tags.contains(t) {
+                // Should not happen given the contains checks above,
+                // but kept as a safety net
+                low_count += 1;
+            } else {
+                unknown_count += 1;
+            }
+        }
+
+        if total == 0 {
+            return 0.1;
+        }
+
+        // Weighted average: high-specificity tags contribute 1.0,
+        // medium-specificity 0.6, low-specificity 0.3, unknown 0.1.
+        let weighted = (high_count as f64 * 1.0
+            + med_count as f64 * 0.6
+            + low_count as f64 * 0.3
+            + unknown_count as f64 * 0.1)
+            / total as f64;
+
+        weighted.min(1.0)
     }
 
     /// Compute a capability-domain boost multiplier based on task keywords.
@@ -410,10 +441,15 @@ mod tests {
     }
 
     #[test]
-    fn tag_signal_returns_known_tags() {
-        // All tags are known → high signal.
-        let tags: Vec<String> = vec!["vision".to_string(), "code".to_string()];
-        assert!((SemanticCapabilityMatcher::tag_signal(&tags) - 1.0).abs() < 0.01);
+    fn tag_signal_returns_nuanced_boost() {
+        // Two high-specificity tags → weighted avg = (1.0 + 1.0) / 2 = 1.0
+        let high: Vec<String> = vec!["vision".to_string(), "reasoning".to_string()];
+        assert!((SemanticCapabilityMatcher::tag_signal(&high) - 1.0).abs() < 0.01);
+
+        // One high (1.0) + one medium (0.6) → weighted avg = 0.8
+        let mixed: Vec<String> = vec!["vision".to_string(), "code".to_string()];
+        let signal = SemanticCapabilityMatcher::tag_signal(&mixed);
+        assert!((signal - 0.8).abs() < 0.01, "expected 0.8, got {signal}");
 
         // No known tags → low signal.
         let unknown: Vec<String> = vec!["foo".to_string(), "bar".to_string()];

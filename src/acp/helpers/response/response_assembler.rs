@@ -14,7 +14,7 @@ use crate::orchestration::task_graph::{TaskGraph, TaskNode};
 /// Created by callers to replace the previous 30-parameter function signature.
 /// All fields are owned values; the struct is consumed by `build_chat_response`.
 #[derive(Debug, Clone)]
-pub(crate) struct ChatResponseContext {
+pub struct ChatResponseContext {
     // Session identifiers
     pub mode: String,
     pub conversation_id: String,

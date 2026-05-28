@@ -98,7 +98,9 @@ export class StatusMonitor {
 
         // Check provider readiness when runtime is healthy
         if (health) {
-          await this._checkProviderReadiness();
+          this._checkProviderReadiness().catch((err) => {
+            console.error("Provider readiness check failed:", err);
+          });
         }
       } catch {
         this.consecutiveFailures++;

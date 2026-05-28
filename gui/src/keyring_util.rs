@@ -211,6 +211,9 @@ pub fn delete_api_key(provider: &str) -> Result<()> {
 }
 
 /// Delete a provider secret key from the system keyring (silent if missing).
+/// DEPRECATED: Unused. Secret key deletion is handled via platform::delete_secret_key
+/// internally when providers are removed through the GUI. Retained for reference;
+/// remove in a future cleanup round.
 #[allow(dead_code)]
 pub fn delete_secret_key(provider: &str) -> Result<()> {
     platform::delete_secret_key(provider)

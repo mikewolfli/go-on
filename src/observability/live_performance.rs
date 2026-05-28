@@ -9,14 +9,20 @@ use std::sync::Mutex;
 
 use tracing::debug;
 
+/// Inner state wrapped in a single Mutex.
+struct LivePerformanceInner {
+    /// EMA-smoothed latency per model (ms).
+    model_latency: HashMap<String, f64>,
+    /// EMA-smoothed success rate per model (0.0–1.0).
+    model_success_rate: HashMap<String, f64>,
+    /// Total request count per model.
+    model_requests: HashMap<String, u64>,
+}
+
 /// EMA-smoothed live performance feed for model monitoring.
 pub struct LivePerformanceFeed {
-    /// EMA-smoothed latency per model (ms).
-    pub model_latency: Mutex<HashMap<String, f64>>,
-    /// EMA-smoothed success rate per model (0.0–1.0).
-    pub model_success_rate: Mutex<HashMap<String, f64>>,
-    /// Total request count per model.
-    pub model_requests: Mutex<HashMap<String, u64>>,
+    /// Inner state protected by a single mutex.
+    inner: Mutex<LivePerformanceInner>,
     /// Exponential smoothing factor α (higher = more weight on recent).
     pub ema_alpha: f64,
 }
@@ -27,9 +33,11 @@ impl LivePerformanceFeed {
     /// Typical values: 0.1 (slow-moving), 0.3 (moderate), 0.5 (responsive).
     pub fn new(ema_alpha: f64) -> Self {
         Self {
-            model_latency: Mutex::new(HashMap::new()),
-            model_success_rate: Mutex::new(HashMap::new()),
-            model_requests: Mutex::new(HashMap::new()),
+            inner: Mutex::new(LivePerformanceInner {
+                model_latency: HashMap::new(),
+                model_success_rate: HashMap::new(),
+                model_requests: HashMap::new(),
+            }),
             ema_alpha,
         }
     }
@@ -37,26 +45,27 @@ impl LivePerformanceFeed {
     /// Record a successful request for `model` with observed latency.
     pub fn record_success(&self, model: &str, latency_ms: u64) {
         let alpha = self.ema_alpha;
+        let mut inner = crate::observability::lock_mutex(&self.inner);
 
         // Update latency EMA.
-        {
-            let mut lat = crate::observability::lock_mutex(&self.model_latency);
-            let entry = lat.entry(model.to_string()).or_insert(latency_ms as f64);
-            *entry = alpha * (latency_ms as f64) + (1.0 - alpha) * *entry;
-        }
+        let entry = inner
+            .model_latency
+            .entry(model.to_string())
+            .or_insert(latency_ms as f64);
+        *entry = alpha * (latency_ms as f64) + (1.0 - alpha) * *entry;
 
         // Update success-rate EMA.
-        {
-            let mut sr = crate::observability::lock_mutex(&self.model_success_rate);
-            let entry = sr.entry(model.to_string()).or_insert(1.0);
-            *entry = alpha * 1.0 + (1.0 - alpha) * *entry;
-        }
+        let entry = inner
+            .model_success_rate
+            .entry(model.to_string())
+            .or_insert(1.0);
+        *entry = alpha * 1.0 + (1.0 - alpha) * *entry;
 
         // Bump request count.
-        {
-            let mut req = crate::observability::lock_mutex(&self.model_requests);
-            *req.entry(model.to_string()).or_insert(0) += 1;
-        }
+        *inner
+            .model_requests
+            .entry(model.to_string())
+            .or_insert(0) += 1;
 
         debug!(
             model = %model,
@@ -68,26 +77,27 @@ impl LivePerformanceFeed {
     /// Record a failed request for `model` with observed latency.
     pub fn record_failure(&self, model: &str, latency_ms: u64) {
         let alpha = self.ema_alpha;
+        let mut inner = crate::observability::lock_mutex(&self.inner);
 
         // Update latency EMA (still useful for detecting slow-failing models).
-        {
-            let mut lat = crate::observability::lock_mutex(&self.model_latency);
-            let entry = lat.entry(model.to_string()).or_insert(latency_ms as f64);
-            *entry = alpha * (latency_ms as f64) + (1.0 - alpha) * *entry;
-        }
+        let entry = inner
+            .model_latency
+            .entry(model.to_string())
+            .or_insert(latency_ms as f64);
+        *entry = alpha * (latency_ms as f64) + (1.0 - alpha) * *entry;
 
         // Update success-rate EMA (penalise).
-        {
-            let mut sr = crate::observability::lock_mutex(&self.model_success_rate);
-            let entry = sr.entry(model.to_string()).or_insert(1.0);
-            *entry = alpha * 0.0 + (1.0 - alpha) * *entry;
-        }
+        let entry = inner
+            .model_success_rate
+            .entry(model.to_string())
+            .or_insert(1.0);
+        *entry = alpha * 0.0 + (1.0 - alpha) * *entry;
 
         // Bump request count.
-        {
-            let mut req = crate::observability::lock_mutex(&self.model_requests);
-            *req.entry(model.to_string()).or_insert(0) += 1;
-        }
+        *inner
+            .model_requests
+            .entry(model.to_string())
+            .or_insert(0) += 1;
 
         debug!(
             model = %model,
@@ -99,11 +109,14 @@ impl LivePerformanceFeed {
     /// Estimate cost-per-request in cents based on observed latency and
     /// success rate.  Cheaper if the model is fast AND reliable.
     pub fn get_cost_estimate(&self, model: &str) -> Option<f64> {
-        let lat = crate::observability::lock_mutex(&self.model_latency);
-        let sr = crate::observability::lock_mutex(&self.model_success_rate);
+        let inner = crate::observability::lock_mutex(&self.inner);
 
-        let latency = lat.get(model)?;
-        let success = sr.get(model).copied().unwrap_or(1.0);
+        let latency = inner.model_latency.get(model)?;
+        let success = inner
+            .model_success_rate
+            .get(model)
+            .copied()
+            .unwrap_or(1.0);
 
         // Cost ∝ latency / success_rate: faster + reliable → cheaper.
         Some(*latency / success.max(0.01))
@@ -111,20 +124,20 @@ impl LivePerformanceFeed {
 
     /// Get the EMA-smoothed latency estimate (ms) for a model.
     pub fn get_latency_estimate(&self, model: &str) -> Option<f64> {
-        let lat = crate::observability::lock_mutex(&self.model_latency);
-        lat.get(model).copied()
+        let inner = crate::observability::lock_mutex(&self.inner);
+        inner.model_latency.get(model).copied()
     }
 
     /// Get the EMA-smoothed success rate (0.0–1.0) for a model.
     pub fn get_success_rate(&self, model: &str) -> Option<f64> {
-        let sr = crate::observability::lock_mutex(&self.model_success_rate);
-        sr.get(model).copied()
+        let inner = crate::observability::lock_mutex(&self.inner);
+        inner.model_success_rate.get(model).copied()
     }
 
     /// Get the total request count for a model.
     pub fn get_request_count(&self, model: &str) -> u64 {
-        let req = crate::observability::lock_mutex(&self.model_requests);
-        req.get(model).copied().unwrap_or(0)
+        let inner = crate::observability::lock_mutex(&self.inner);
+        inner.model_requests.get(model).copied().unwrap_or(0)
     }
 }
 

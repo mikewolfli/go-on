@@ -59,6 +59,7 @@ pub(crate) async fn run_acp_autonomy_loop(
         enable_agent_reroute: option_bool("enable_agent_reroute", true),
         enable_execution_intelligence: option_bool("enable_metacognitive_feedback", true),
         recovery_orchestrator: Some(crate::orchestration::recovery::RecoveryOrchestrator::new()),
+        max_messages: 200,
     };
 
     let result = run_autonomy_loop(

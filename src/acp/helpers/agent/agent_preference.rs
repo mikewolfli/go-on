@@ -165,14 +165,16 @@ pub fn resolve_agent_preferences(
 
     // ── 3. Update primary agent by phase in global state ─────────────────
     if let Some(primary) = configured_primary_agent.as_ref() {
-        if let Ok(mut state) = agent_switch_state().lock() {
-            map_insert_with_capacity(
-                &mut state.primary_agent_by_phase,
-                phase_name.clone(),
-                primary.clone(),
-                AGENT_SWITCH_STATE_CAPACITY,
-            );
-        }
+        let mut state = agent_switch_state().lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("agent_switch_state lock poisoned — primary_agent_by_phase");
+            poisoned.into_inner()
+        });
+        map_insert_with_capacity(
+            &mut state.primary_agent_by_phase,
+            phase_name.clone(),
+            primary.clone(),
+            AGENT_SWITCH_STATE_CAPACITY,
+        );
     }
 
     // ── 4. Priority logic ────────────────────────────────────────────────
@@ -182,16 +184,22 @@ pub fn resolve_agent_preferences(
     //    primary agent first and then the forced agent (auto-recover strategy).
     if let Some(preferred) = preferred_agent_from_request.as_deref() {
         if reorder_agents_with_priority(&mut resolved.agents, preferred) {
-            if let Ok(mut state) = agent_switch_state().lock() {
-                map_insert_with_capacity(
-                    &mut state.forced_agent_by_phase,
-                    phase_name.clone(),
-                    preferred.to_string(),
-                    AGENT_SWITCH_STATE_CAPACITY,
-                );
-            }
+            let mut state = agent_switch_state().lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("agent_switch_state lock poisoned — forced_agent_by_phase");
+                poisoned.into_inner()
+            });
+            map_insert_with_capacity(
+                &mut state.forced_agent_by_phase,
+                phase_name.clone(),
+                preferred.to_string(),
+                AGENT_SWITCH_STATE_CAPACITY,
+            );
         }
-    } else if let Ok(state) = agent_switch_state().lock() {
+    } else {
+        let state = agent_switch_state().lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("agent_switch_state lock poisoned — forced agent lookup");
+            poisoned.into_inner()
+        });
         if let Some(forced) = state.forced_agent_by_phase.get(phase_name) {
             let primary = state.primary_agent_by_phase.get(phase_name);
             if let Some(primary_name) = primary {

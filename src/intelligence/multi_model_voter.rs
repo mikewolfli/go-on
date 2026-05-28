@@ -84,18 +84,23 @@ pub struct MultiModelVoter {
     pub per_model_timeout_ms: u64,
     /// Weight configuration keyed by model name (used by [`VotingStrategy::Weighted`]).
     pub model_weights: HashMap<String, f64>,
+    /// Max models to retain in model_weights before evicting the oldest.
+    pub max_models: usize,
 }
 
 impl MultiModelVoter {
     /// Create a new voter with default configuration.
     ///
     /// Defaults: 3 minimum voters, majority strategy, 30-second per-model timeout.
+    const DEFAULT_MAX_MODELS: usize = 100;
+
     pub fn new() -> Self {
         Self {
             min_voters: 3,
             strategy: VotingStrategy::Majority,
             per_model_timeout_ms: 30_000,
             model_weights: HashMap::new(),
+            max_models: Self::DEFAULT_MAX_MODELS,
         }
     }
 
@@ -119,6 +124,14 @@ impl MultiModelVoter {
 
     /// Add or update a weight for a specific model.
     pub fn with_weight(mut self, model_name: &str, weight: f64) -> Self {
+        // Evict the oldest entry when at capacity (model not already tracked).
+        if !self.model_weights.contains_key(model_name) && self.model_weights.len() >= self.max_models
+        {
+            // Remove an arbitrary entry since HashMap is unordered.
+            if let Some(key) = self.model_weights.keys().next().cloned() {
+                self.model_weights.remove(&key);
+            }
+        }
         self.model_weights.insert(model_name.to_string(), weight);
         self
     }

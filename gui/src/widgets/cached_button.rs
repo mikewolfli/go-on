@@ -1,3 +1,7 @@
+// DEPRECATED: This widget is retained for reference but is NOT currently used.
+// The caching approach doesn't work with immediate-mode rendering.
+// Remove in a future cleanup round.
+
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use crate::widgets::cache::Section;

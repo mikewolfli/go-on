@@ -4,6 +4,9 @@ use std::time::Duration;
 
 use futures::Stream;
 use serde_json::Value;
+use tokio::sync::mpsc;
+use tokio_stream::StreamExt;
+use tokio_stream::wrappers::ReceiverStream;
 
 use crate::error::SdkError;
 use crate::types::*;
@@ -110,7 +113,7 @@ impl GoOnClient {
         Self {
             base_url: base_url.into(),
             http: reqwest::Client::new(),
-            timeout: None,
+            timeout: Some(Duration::from_secs(30)),
             max_retries: 0,
             retry_delay: Duration::from_millis(500),
         }
@@ -123,8 +126,9 @@ impl GoOnClient {
 
     // ── Streaming chat ────────────────────────────────────────────────
 
-    /// Send a chat request and receive the response as a stream of JSON chunks
-    /// (SSE events from `POST /acp/chat`).
+    /// Send a chat request and receive the response as a real-time SSE stream
+    /// of JSON chunks, using `reqwest::Response::bytes_stream()` under the hood
+    /// with `tokio::sync::mpsc` channel for lock-free chunk delivery.
     ///
     /// Each item in the returned stream is a `Result<Value, SdkError>`.
     /// The outer `Result` covers the initial HTTP handshake; the inner ones
@@ -132,6 +136,7 @@ impl GoOnClient {
     ///
     /// ```ignore
     /// use go_on_sdk::{ChatMessage, ChatRequest};
+    /// use tokio_stream::StreamExt;
     ///
     /// let request = ChatRequest {
     ///     messages: vec![ChatMessage {
@@ -151,6 +156,7 @@ impl GoOnClient {
     ///         Err(e) => eprintln!("error: {e}"),
     ///     }
     /// }
+    /// # Ok::<_, go_on_sdk::SdkError>(())
     /// ```
     pub async fn chat_stream(
         &self,
@@ -164,29 +170,64 @@ impl GoOnClient {
 
         let response = req.json(&request).send().await.map_err(SdkError::Http)?;
 
-        // BLUE48 Step 2.5: Proper SSE parsing — read lines and extract "data:" prefix.
-        // Collects all SSE events into a Vec and returns as a stream.
-        let full_body = response
-            .text()
-            .await
-            .map_err(|e| SdkError::Stream(format!("http body: {e}")))?;
+        let (tx, rx) = mpsc::channel::<Result<Value, SdkError>>(256);
 
-        let events: Vec<Result<Value, SdkError>> = full_body
-            .lines()
-            .filter_map(|line| {
-                let line = line.trim();
-                line.strip_prefix("data: ").map(|data| {
-                    if data == "[DONE]" {
-                        Ok(serde_json::Value::String("[DONE]".into()))
-                    } else {
-                        serde_json::from_str::<Value>(data)
-                            .map_err(|e| SdkError::Stream(format!("json parse: {e}")))
+        // Spawn a background task that reads the byte stream, parses SSE
+        // frames delimited by \n\n, and sends parsed events through the channel.
+        tokio::spawn(async move {
+            let mut byte_stream = response.bytes_stream();
+            let mut sse_buf = String::with_capacity(4096);
+
+            while let Some(chunk_result) = byte_stream.next().await {
+                let chunk = match chunk_result {
+                    Ok(c) => c,
+                    Err(e) => {
+                        let _ = tx
+                            .send(Err(SdkError::Stream(format!("http stream: {e}"))))
+                            .await;
+                        return;
                     }
-                })
-            })
-            .collect();
+                };
 
-        Ok(futures::stream::iter(events))
+                // Normalize CRLF -> LF for consistent frame splitting
+                let part = String::from_utf8_lossy(&chunk);
+                sse_buf.push_str(&part.replace("\r", ""));
+
+                // Process complete SSE frames (delimited by \n\n)
+                while let Some(split_at) = sse_buf.find("\n\n") {
+                    let frame = sse_buf[..split_at].to_string();
+                    sse_buf.drain(..split_at + 2);
+
+                    for line in frame.lines() {
+                        let trimmed = line.trim();
+                        if let Some(data) = trimmed.strip_prefix("data: ") {
+                            let data = data.trim();
+                            if data == "[DONE]" {
+                                continue;
+                            }
+                            match serde_json::from_str::<Value>(data) {
+                                Ok(val) => {
+                                    if tx.send(Ok(val)).await.is_err() {
+                                        // Receiver dropped; stop processing
+                                        return;
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = tx
+                                        .send(Err(SdkError::Stream(format!(
+                                            "json parse: {e}"
+                                        ))))
+                                        .await;
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        Ok(ReceiverStream::new(rx))
     }
 
     // ── Internal helpers ──────────────────────────────────────────────

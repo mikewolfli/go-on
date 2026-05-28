@@ -42,6 +42,10 @@ use crate::backend::{HealthStatus, ProviderStatus};
 use std::collections::hash_map::DefaultHasher;
 use std::net::{TcpStream, ToSocketAddrs};
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Section 1: Backend binary path discovery
+// ═══════════════════════════════════════════════════════════════════════════
+
 /// Find the go-on backend binary path relative to the GUI executable.
 fn find_backend_binary() -> Option<std::path::PathBuf> {
     let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
@@ -106,6 +110,10 @@ fn is_addr_listening(addr: &str) -> bool {
         .any(|sock| TcpStream::connect_timeout(&sock, Duration::from_millis(150)).is_ok())
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Section 2: GoOnApp struct — the main application state
+// ═══════════════════════════════════════════════════════════════════════════
+
 pub struct GoOnApp {
     pub config: AppConfig,
     config_shared: Arc<AppConfig>,
@@ -165,6 +173,10 @@ pub struct GoOnApp {
     backend_crash_count: u8,
     /// Consecutive backend health poll failures for progressive backoff
     consecutive_poll_failures: u8,
+    /// Non-blocking restart cooldown timestamp.
+    /// Set after killing the old backend; when elapsed, the new backend is spawned.
+    /// Replaces the old thread::sleep(300ms) on the UI thread.
+    restart_cooldown_until: Option<Instant>,
 }
 
 /// Detect system locale from environment variables.
@@ -194,6 +206,10 @@ fn detect_system_language() -> Lang {
     }
     Lang::En
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Section 3: GoOnApp impl — backend lifecycle management
+// ═══════════════════════════════════════════════════════════════════════════
 
 impl GoOnApp {
     fn config_fingerprint(config: &AppConfig) -> u64 {
@@ -460,8 +476,13 @@ impl GoOnApp {
     fn generate_backend_config(path: &std::path::Path, config: &AppConfig) {
         // Canonical provider metadata — maps provider name to (agent_type, url, default_model, supports_system).
         // This is the GUI-side hardcoded duplicate of the backend's built_in_provider_specs().
-        // Keep in sync with `src/core/config.rs` and `src/core/setup.rs`.
+        // ⚠️ IMPORTANT: This function MUST be kept in sync with the backend's `built_in_provider_specs()`.
+        // If you add/remove a provider here, you MUST also update:
+        //   1. Backend: src/core/config/defaults.rs built_in_provider_specs()
+        //   2. GUI: gui/src/views/providers.rs PROVIDER_NAMES
+        //   3. VSCode: vscode-addon/src/configManager.ts createDefaultConfig()
         // NOTE: `built_in_provider_specs()` in the backend is the authoritative source.
+        // ===== Section: Provider Metadata =====
         fn provider_meta(name: &str) -> (&'static str, Option<&'static str>, &'static str, bool) {
             match name {
                 "openai" => (
@@ -665,6 +686,7 @@ impl GoOnApp {
             }
         }
 
+        // ===== Section: TOML Generation =====
         // Single pass: collect provider TOML blocks (agent names are no longer needed
         // in the config output since phases use empty agent lists for capability-bus routing).
         let (provider_lines, _agent_names): (Vec<String>, Vec<String>) = config
@@ -897,6 +919,7 @@ state_path = "acp_autotune_state.json"
             Err(e) => eprintln!("backend: failed to write config.toml: {}", e),
         }
 
+        // ===== Section: Zed Config =====
         // Also generate/update zed-config.toml (ZED IDE integration)
         // Uses STDIO mode and the same agent configs.
         let zed_path = path.parent().map(|p| p.join("zed-config.toml"));
@@ -940,9 +963,11 @@ top_k = 2
         }
     }
 
-    /// Kill the current backend child and start a new one with fresh env vars.
+    /// Kill the current backend child and schedule a restart after a brief cooldown.
     /// Called after adding/updating API keys so the new keys take effect immediately.
-    fn restart_backend(&mut self) {
+    /// Uses a non-blocking cooldown (via request_repaint_after) instead of
+    /// thread::sleep(300ms) on the UI thread to avoid freezing the GUI.
+    fn restart_backend(&mut self, ctx: &egui::Context) {
         // Increment crash counter unconditionally — this is called either from
         // the crash-auto-restart path (where backend_child is already None) or
         // from the manual restart path (provider add, URL change, etc.).
@@ -953,11 +978,6 @@ top_k = 2
         if let Some(mut child) = self.backend_child.take() {
             eprintln!("Restarting backend (old PID: {})...", child.id());
             let _ = child.kill();
-            // Wait briefly for the old process to release port 8090 before
-            // spawning the new one, preventing EADDRINUSE.
-            // Uses thread::sleep which blocks the UI thread briefly (~300ms)
-            // but is the simplest reliable approach across all platforms.
-            std::thread::sleep(std::time::Duration::from_millis(300));
             // Don't block UI thread waiting for backend to exit.
             // Spawn a background thread to reap the zombie.
             let pid = child.id();
@@ -966,12 +986,12 @@ top_k = 2
                 eprintln!("go-on backend (PID: {}) fully stopped", pid);
             });
         }
-        // Start new
-        let (backend, child, reused_external) = Self::spawn_backend(self.config_shared.as_ref());
-        self.backend = backend;
-        self.backend_child = child;
-        self.backend_reused_external = reused_external;
-        // Force immediate refresh on next update() cycle
+        // Schedule non-blocking cooldown so the old process can release the port
+        // before we spawn the new one (prevents EADDRINUSE).
+        self.restart_cooldown_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(300));
+        ctx.request_repaint_after(std::time::Duration::from_millis(300));
+
+        // Reset state for the new backend (will be spawned once cooldown elapses)
         self.pending_refresh = false;
         self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
         self.staged_health = None;
@@ -985,11 +1005,24 @@ top_k = 2
         self.chat_view.reset_loaded_state();
         // Reset providers loaded state so models are re-fetched
         self.providers_view.reset_loaded_state();
-        eprintln!("Backend restarted");
+        eprintln!("Backend restart scheduled (cooldown 300ms)...");
+    }
+
+    /// Spawn the new backend process after the restart cooldown has elapsed.
+    /// Called from update() when restart_cooldown_until is set and expired.
+    fn finish_restart_backend(&mut self) {
+        let (backend, child, reused_external) = Self::spawn_backend(self.config_shared.as_ref());
+        self.backend = backend;
+        self.backend_child = child;
+        self.backend_reused_external = reused_external;
+        self.restart_cooldown_until = None;
+        eprintln!("Backend restarted after cooldown");
     }
 
     /// Detect the localized window title based on the saved config language.
     /// Called once at startup before the I18n instance is created.
+    /// NOTE: Currently unused — the window title is set via egui context directly.
+    /// Retained for reference in case programmatic title setting is re-enabled.
     #[allow(dead_code)]
     pub fn detect_initial_window_title(config: &AppConfig) -> String {
         if config.language == "zh-CN" {
@@ -1069,6 +1102,7 @@ top_k = 2
             health_disconnect_streak: 0,
             backend_crash_count: 0,
             consecutive_poll_failures: 0,
+            restart_cooldown_until: None,
             blocked_tab_toast_shown: None,
             last_prompts_command_version: 0,
             last_prompts_lang: lang,
@@ -1136,8 +1170,22 @@ top_k = 2
                     "poll_backend_updates: discarding {} queued updates (processing limit)",
                     processed
                 );
-                // Drain remaining to prevent channel growth
-                while self.backend_updates.try_recv().is_ok() {}
+                // Drain remaining to prevent channel growth.
+                // Process remaining updates (up to 128) instead of silently discarding them.
+                let mut drained = 0;
+                while drained < 128 {
+                    match self.backend_updates.try_recv() {
+                        Ok(update) => {
+                            match update {
+                                BackendUpdate::Health(h) => self.staged_health = Some(h),
+                                BackendUpdate::Providers(p) => self.staged_providers = Some(p),
+                                BackendUpdate::RefreshDone => self.staged_refresh_done = true,
+                            }
+                            drained += 1;
+                        }
+                        Err(_) => break,
+                    }
+                }
                 break;
             }
             match update {
@@ -1267,6 +1315,10 @@ top_k = 2
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Section 4: eframe::App impl — main UI update loop
+// ═══════════════════════════════════════════════════════════════════════════
+
 impl eframe::App for GoOnApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let _frame_start = std::time::Instant::now();
@@ -1369,12 +1421,22 @@ impl eframe::App for GoOnApp {
                 save_app_config(&self.config);
                 self.sync_shared_config_if_needed();
                 // Restart backend so it picks up the new API key from env
-                self.restart_backend();
+                self.restart_backend(ctx);
             }
             // Only request repaint if the setup view has something pending.
             // The setup_view.show() method already calls ctx.request_repaint() on user interaction,
             // so we don't need a per-frame repaint here.
             return;
+        }
+
+        // Check pending restart cooldown: if elapsed, spawn the new backend now.
+        if let Some(cooldown_until) = self.restart_cooldown_until {
+            if cooldown_until <= Instant::now() {
+                self.finish_restart_backend();
+            } else {
+                // Not elapsed yet; schedule another repaint to re-check.
+                ctx.request_repaint_after(cooldown_until - Instant::now());
+            }
         }
 
         self.sync_backend_url();
@@ -1412,7 +1474,7 @@ impl eframe::App for GoOnApp {
                             "Auto-restarting backend after crash (count={})...",
                             self.backend_crash_count
                         );
-                        self.restart_backend();
+                        self.restart_backend(ctx);
                     }
                 }
             }
@@ -1705,7 +1767,7 @@ impl eframe::App for GoOnApp {
                                         .clicked()
                                     {
                                         self.backend_url_original = self.config.backend_url.clone();
-                                        self.restart_backend();
+                                        self.restart_backend(ctx);
                                     }
                                     ui.label(
                                         egui::RichText::new(self.i18n.t("settings.backendUrlHint"))
@@ -1768,7 +1830,7 @@ impl eframe::App for GoOnApp {
                                 if self.config_editor_view.applied {
                                     self.config_editor_view.applied = false;
                                     self.chat_view.reset_loaded_state();
-                                    self.restart_backend();
+                                    self.restart_backend(ctx);
                                 }
                             }
                             "providers" => {
@@ -1786,7 +1848,7 @@ impl eframe::App for GoOnApp {
                                     // Sync shared config BEFORE restart so spawn_backend
                                     // uses the updated provider list, not the stale snapshot.
                                     self.sync_shared_config_if_needed();
-                                    self.restart_backend();
+                                    self.restart_backend(ctx);
                                 }
                             }
                             "about" => {
@@ -1828,6 +1890,10 @@ impl eframe::App for GoOnApp {
         }
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Section 5: Tab state persistence
+// ═══════════════════════════════════════════════════════════════════════════
 
 impl GoOnApp {
     /// Save the given tab's transient UI state into `self.ui_state`.
@@ -1990,6 +2056,10 @@ impl Drop for GoOnApp {
         self.backend_crash_count = 0;
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Section 6: Tab configuration helpers
+// ═══════════════════════════════════════════════════════════════════════════
 
 impl GoOnApp {
     fn active_tabs_precomputed(&self) -> Vec<String> {

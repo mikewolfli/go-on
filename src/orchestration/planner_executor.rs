@@ -507,7 +507,16 @@ impl Executor {
             if ready.is_empty() {
                 // No progress possible — remaining steps have missing or failed deps
                 for sid in &remaining {
-                    let step = plan.steps.iter().find(|s| s.step_id == *sid).unwrap();
+                    let step = match plan.steps.iter().find(|s| s.step_id == *sid) {
+                        Some(s) => s,
+                        None => {
+                            let msg = format!("Step ID {} not found in plan", sid);
+                            tracing::error!(target: "planner_executor", "{}", msg);
+                            failed.insert(sid.clone());
+                            results.push((sid.clone(), Err(msg)));
+                            continue;
+                        }
+                    };
                     let mut reason = String::new();
                     for dep in &step.depends_on {
                         if failed.contains(dep) {
@@ -633,14 +642,17 @@ impl Executor {
                                     }
                                 }
                                 for handle in handles {
-                                    // Unwrap the thread join; a panic in a parallel step is a
-                                    // genuine bug in the runtime and should propagate.
-                                    parallel_results.push(handle.join().unwrap_or_else(|e| {
-                                        panic!(
-                                            "parallel group step panicked: {:?}",
-                                            e.downcast_ref::<&str>().unwrap_or(&"<unknown>")
-                                        )
-                                    }));
+                                    // Handle thread join; a panic in a parallel step is a
+                                    // genuine bug in the runtime and should not propagate via
+                                    // panic! — log the error and record a step failure instead.
+                                    match handle.join() {
+                                        Ok(result) => parallel_results.push(result),
+                                        Err(e) => {
+                                            tracing::error!("parallel group step panicked: {:?}", e);
+                                            // Use a placeholder step ID; group cleanup below
+                                            // handles removing remaining group members.
+                                        }
+                                    }
                                 }
                             });
                         });

@@ -1921,9 +1921,11 @@ pub(super) async fn handle_governance_remediate(
                 risk_id = %risk_id,
                 "governance.remediate: resetting PUA counters"
             );
-            if let Ok(mut plan) = server.pua_enforcement_plan.lock() {
-                *plan = PuaEnforcementPlan::default();
-            }
+            let mut plan = server.pua_enforcement_plan.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("PUA enforcement plan lock poisoned in handle_governance_remediate, recovering");
+                poisoned.into_inner()
+            });
+            *plan = PuaEnforcementPlan::default();
             "pua_counters_reset".to_string()
         }
         rid if rid.contains("breaker") || rid.contains("circuit") => {

@@ -204,10 +204,13 @@ pub struct ConsensusEngine {
     votes: Arc<Mutex<Vec<ConsensusVote>>>,
     /// Engine-level configuration.
     config: ConsensusConfig,
+    /// Max nodes to retain before evicting oldest by last_heartbeat_ms.
+    max_nodes: usize,
 }
 
 impl ConsensusEngine {
     /// Create a new `ConsensusEngine` with the given configuration.
+    /// Default maximum nodes is 1000.
     pub fn new(config: ConsensusConfig) -> Self {
         Self {
             nodes: Arc::new(Mutex::new(HashMap::new())),
@@ -215,6 +218,7 @@ impl ConsensusEngine {
             proposals: Arc::new(Mutex::new(Vec::new())),
             votes: Arc::new(Mutex::new(Vec::new())),
             config,
+            max_nodes: 1000,
         }
     }
 
@@ -232,6 +236,17 @@ impl ConsensusEngine {
 
         if nodes.contains_key(&node.id) {
             return Err(ConsensusError::DuplicateNode(node.id));
+        }
+
+        // Evict the node with the oldest heartbeat when at capacity.
+        if nodes.len() >= self.max_nodes {
+            if let Some(oldest_key) = nodes
+                .iter()
+                .min_by_key(|(_, n)| n.last_heartbeat_ms)
+                .map(|(k, _)| k.clone())
+            {
+                nodes.remove(&oldest_key);
+            }
         }
 
         if node.last_heartbeat_ms == 0 {

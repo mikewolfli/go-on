@@ -287,10 +287,12 @@ mod tests {
 
     #[test]
     fn test_build_augmented_context() {
-        let mut ctx = IntelligenceContext::default();
-        ctx.intelligence_active = true;
-        ctx.recommended_agents = vec!["agent1:coding (Stable)".to_string()];
-        ctx.recent_insights = vec!["Test insight".to_string()];
+        let ctx = IntelligenceContext {
+            intelligence_active: true,
+            recommended_agents: vec!["agent1:coding (Stable)".to_string()],
+            recent_insights: vec!["Test insight".to_string()],
+            ..Default::default()
+        };
 
         let augmented = build_intelligence_augmented_context(&ctx);
         assert!(augmented.is_some());

@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
+use std::sync::Mutex;
 
 use ordered_float::OrderedFloat;
 
@@ -30,26 +31,71 @@ pub struct CapabilityEdge {
     pub weight: f32,
 }
 
+/// Cached forward and reverse adjacency lists for pathfinding.
+#[derive(Debug)]
+struct AdjacencyCache {
+    /// Snapshot of `modification_count` when this cache was built.
+    version: u64,
+    fwd_adj: HashMap<String, Vec<String>>,
+    rev_adj: HashMap<String, Vec<String>>,
+}
+
 /// In-memory capability graph
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct CapabilityGraph {
     /// agent_name → list of declared capabilities
     capabilities: HashMap<String, Vec<CapabilityDecl>>,
     /// directed edges for handoff routing
     edges: Vec<CapabilityEdge>,
+    /// Max capabilities to retain per agent
+    max_capabilities_per_agent: usize,
+    /// Max edges to retain before evicting oldest
+    max_edges: usize,
+    /// Monotonically increasing counter incremented on every edge mutation.
+    modification_count: u64,
+    /// Cached adjacency lists, rebuilt lazily on `find_path` / `find_path_bidirectional`.
+    cached_adjacency: Mutex<Option<AdjacencyCache>>,
+}
+
+impl Default for CapabilityGraph {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CapabilityGraph {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            capabilities: HashMap::new(),
+            edges: Vec::new(),
+            max_capabilities_per_agent: 100,
+            max_edges: 10_000,
+            modification_count: 0,
+            cached_adjacency: Mutex::new(None),
+        }
     }
 
     pub fn register_agent(&mut self, agent: &str, decls: Vec<CapabilityDecl>) {
+        let mut decls = decls;
+        // Evict oldest capabilities if over per-agent limit.
+        while decls.len() > self.max_capabilities_per_agent {
+            decls.remove(0);
+        }
         self.capabilities.insert(agent.to_string(), decls);
     }
 
     pub fn add_edge(&mut self, edge: CapabilityEdge) {
+        // Evict the oldest edge when at capacity.
+        if self.edges.len() >= self.max_edges {
+            self.edges.remove(0);
+        }
         self.edges.push(edge);
+        // Invalidate the adjacency cache on every edge mutation.
+        self.modification_count = self.modification_count.wrapping_add(1);
+        *self.cached_adjacency.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("capability_graph adjacency cache lock poisoned: recovering");
+            poisoned.into_inner()
+        }) = None;
     }
 
     /// Find the best handoff target from `from_agent` that supports `capability`.
@@ -121,6 +167,71 @@ impl CapabilityGraph {
             .collect()
     }
 
+    /// Return cached or freshly-built forward adjacency (as owned types).
+    ///
+    /// This avoids rebuilding the adjacency map on every pathfinding call
+    /// when the edge set has not changed.
+    fn adjacency(&self) -> (HashMap<String, Vec<String>>, HashMap<String, Vec<String>>) {
+        let version = self.modification_count;
+        // Fast path: check the cache first (extract result, drop lock, then return).
+        let cached_hit = self.cached_adjacency.lock().ok().and_then(|cache| {
+            cache.as_ref().and_then(|cached| {
+                if cached.version == version {
+                    let fwd: HashMap<String, Vec<String>> = cached
+                        .fwd_adj
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
+                    let rev: HashMap<String, Vec<String>> = cached
+                        .rev_adj
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
+                    Some((fwd, rev))
+                } else {
+                    None
+                }
+            })
+        });
+        if let Some(result) = cached_hit {
+            return result;
+        }
+
+        // Cache miss or poisoned: rebuild from scratch.
+        let mut fwd_adj: HashMap<String, Vec<String>> = HashMap::new();
+        let mut rev_adj: HashMap<String, Vec<String>> = HashMap::new();
+        for edge in &self.edges {
+            fwd_adj
+                .entry(edge.from_agent.clone())
+                .or_default()
+                .push(edge.to_agent.clone());
+            rev_adj
+                .entry(edge.to_agent.clone())
+                .or_default()
+                .push(edge.from_agent.clone());
+        }
+
+        // Store into cache for subsequent calls.
+        if let Ok(mut cache) = self.cached_adjacency.lock() {
+            *cache = Some(AdjacencyCache {
+                version,
+                fwd_adj: fwd_adj.clone(),
+                rev_adj: rev_adj.clone(),
+            });
+        }
+
+        // Return as owned types for compatibility with existing callers.
+        let fwd: HashMap<String, Vec<String>> = fwd_adj
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let rev: HashMap<String, Vec<String>> = rev_adj
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        (fwd, rev)
+    }
+
     /// Find the shortest path (by hop count) from `from_agent` to any agent
     /// that can perform `capability`, with at most `max_hops` steps.
     pub fn find_path(
@@ -129,13 +240,9 @@ impl CapabilityGraph {
         capability: &str,
         max_hops: usize,
     ) -> Option<Vec<String>> {
-        let mut adjacency: HashMap<&str, Vec<&str>> = HashMap::new();
-        for edge in &self.edges {
-            adjacency
-                .entry(edge.from_agent.as_str())
-                .or_default()
-                .push(edge.to_agent.as_str());
-        }
+        let (adjacency, _rev) = self.adjacency();
+        // Convert to borrowed references for iteration within this scope.
+        let adj: HashMap<&str, &[String]> = adjacency.iter().map(|(k, v)| (k.as_str(), v.as_slice())).collect();
 
         let mut visited: HashSet<&str> = HashSet::new();
         let mut parent: HashMap<&str, &str> = HashMap::new();
@@ -171,12 +278,13 @@ impl CapabilityGraph {
                 continue;
             }
 
-            if let Some(neighbors) = adjacency.get(current) {
-                for &next in neighbors {
-                    if visited.insert(next) {
-                        parent.insert(next, current);
-                        depth.insert(next, current_depth + 1);
-                        queue.push_back(next);
+            if let Some(neighbors) = adj.get(current) {
+                for next in *neighbors {
+                    if !visited.contains(next.as_str()) {
+                        visited.insert(next.as_str());
+                        parent.insert(next.as_str(), current);
+                        depth.insert(next.as_str(), current_depth + 1);
+                        queue.push_back(next.as_str());
                     }
                 }
             }
@@ -198,22 +306,9 @@ impl CapabilityGraph {
         capability: &str,
         max_hops: usize,
     ) -> Option<Vec<String>> {
-        // Build forward and reverse adjacency lists
-        let mut fwd_adj: HashMap<&str, Vec<&str>> = HashMap::new();
-        let mut rev_adj: HashMap<&str, Vec<&str>> = HashMap::new();
-        for edge in &self.edges {
-            fwd_adj
-                .entry(edge.from_agent.as_str())
-                .or_default()
-                .push(edge.to_agent.as_str());
-            rev_adj
-                .entry(edge.to_agent.as_str())
-                .or_default()
-                .push(edge.from_agent.as_str());
-        }
-
+        let (fwd_adj, rev_adj) = self.adjacency();
         // Find all target agents that have the capability
-        let targets: HashSet<&str> = self
+        let targets: HashSet<String> = self
             .capabilities
             .iter()
             .filter(|(agent, decls)| {
@@ -223,7 +318,7 @@ impl CapabilityGraph {
                         .iter()
                         .any(|d| d.name == capability || d.tags.iter().any(|t| t == capability))
             })
-            .map(|(agent, _)| agent.as_str())
+            .map(|(agent, _)| agent.clone())
             .collect();
 
         if targets.is_empty() {
@@ -231,25 +326,25 @@ impl CapabilityGraph {
         }
 
         // Forward search: from source
-        let mut fwd_visited: HashSet<&str> = HashSet::new();
-        let mut fwd_parent: HashMap<&str, &str> = HashMap::new();
-        let mut fwd_depth: HashMap<&str, usize> = HashMap::new();
-        let mut fwd_queue: VecDeque<&str> = VecDeque::new();
+        let mut fwd_visited: HashSet<String> = HashSet::new();
+        let mut fwd_parent: HashMap<String, String> = HashMap::new();
+        let mut fwd_depth: HashMap<String, usize> = HashMap::new();
+        let mut fwd_queue: VecDeque<String> = VecDeque::new();
 
-        fwd_visited.insert(from_agent);
-        fwd_depth.insert(from_agent, 0);
-        fwd_queue.push_back(from_agent);
+        fwd_visited.insert(from_agent.to_string());
+        fwd_depth.insert(from_agent.to_string(), 0);
+        fwd_queue.push_back(from_agent.to_string());
 
         // Backward search: from all targets
-        let mut bwd_visited: HashSet<&str> = HashSet::new();
-        let mut bwd_parent: HashMap<&str, &str> = HashMap::new();
-        let mut bwd_depth: HashMap<&str, usize> = HashMap::new();
-        let mut bwd_queue: VecDeque<&str> = VecDeque::new();
+        let mut bwd_visited: HashSet<String> = HashSet::new();
+        let mut bwd_parent: HashMap<String, String> = HashMap::new();
+        let mut bwd_depth: HashMap<String, usize> = HashMap::new();
+        let mut bwd_queue: VecDeque<String> = VecDeque::new();
 
-        for &target in &targets {
-            bwd_visited.insert(target);
-            bwd_depth.insert(target, 0);
-            bwd_queue.push_back(target);
+        for target in &targets {
+            bwd_visited.insert(target.clone());
+            bwd_depth.insert(target.clone(), 0);
+            bwd_queue.push_back(target.clone());
         }
 
         // Alternate expanding one level from each side
@@ -258,12 +353,12 @@ impl CapabilityGraph {
             let fwd_level_size = fwd_queue.len();
             for _ in 0..fwd_level_size {
                 let current = fwd_queue.pop_front()?;
-                let cur_depth = *fwd_depth.get(current).unwrap_or(&0);
+                let cur_depth = *fwd_depth.get(&current).unwrap_or(&0);
 
                 // Check if this node is in the backward visited set
-                if bwd_visited.contains(current) && current != from_agent {
+                if bwd_visited.contains(&current) && current != from_agent {
                     return Some(Self::reconstruct_bidi_path(
-                        current,
+                        &current,
                         &fwd_parent,
                         &bwd_parent,
                         from_agent,
@@ -274,12 +369,12 @@ impl CapabilityGraph {
                     continue;
                 }
 
-                if let Some(neighbors) = fwd_adj.get(current) {
-                    for &next in neighbors {
-                        if fwd_visited.insert(next) {
-                            fwd_parent.insert(next, current);
-                            fwd_depth.insert(next, cur_depth + 1);
-                            fwd_queue.push_back(next);
+                if let Some(neighbors) = fwd_adj.get(&current) {
+                    for next in neighbors {
+                        if fwd_visited.insert(next.clone()) {
+                            fwd_parent.insert(next.clone(), current.clone());
+                            fwd_depth.insert(next.clone(), cur_depth + 1);
+                            fwd_queue.push_back(next.clone());
                         }
                     }
                 }
@@ -289,12 +384,12 @@ impl CapabilityGraph {
             let bwd_level_size = bwd_queue.len();
             for _ in 0..bwd_level_size {
                 let current = bwd_queue.pop_front()?;
-                let cur_depth = *bwd_depth.get(current).unwrap_or(&0);
+                let cur_depth = *bwd_depth.get(&current).unwrap_or(&0);
 
                 // Check if this node is in the forward visited set
-                if fwd_visited.contains(current) && !targets.contains(current) {
+                if fwd_visited.contains(&current) && !targets.contains(&current) {
                     return Some(Self::reconstruct_bidi_path(
-                        current,
+                        &current,
                         &fwd_parent,
                         &bwd_parent,
                         from_agent,
@@ -305,12 +400,12 @@ impl CapabilityGraph {
                     continue;
                 }
 
-                if let Some(neighbors) = rev_adj.get(current) {
-                    for &prev in neighbors {
-                        if bwd_visited.insert(prev) {
-                            bwd_parent.insert(prev, current);
-                            bwd_depth.insert(prev, cur_depth + 1);
-                            bwd_queue.push_back(prev);
+                if let Some(neighbors) = rev_adj.get(&current) {
+                    for prev in neighbors {
+                        if bwd_visited.insert(prev.clone()) {
+                            bwd_parent.insert(prev.clone(), current.clone());
+                            bwd_depth.insert(prev.clone(), cur_depth + 1);
+                            bwd_queue.push_back(prev.clone());
                         }
                     }
                 }
@@ -324,18 +419,18 @@ impl CapabilityGraph {
     /// BFS frontiers converge.
     fn reconstruct_bidi_path(
         meeting: &str,
-        fwd_parent: &HashMap<&str, &str>,
-        bwd_parent: &HashMap<&str, &str>,
+        fwd_parent: &HashMap<String, String>,
+        bwd_parent: &HashMap<String, String>,
         from_agent: &str,
     ) -> Vec<String> {
         // Build forward path: from source → meeting
         let mut fwd_path: Vec<String> = Vec::new();
-        let mut cursor = meeting;
-        fwd_path.push(cursor.to_string());
+        let mut cursor = meeting.to_string();
+        fwd_path.push(cursor.clone());
         while cursor != from_agent {
-            if let Some(&prev) = fwd_parent.get(cursor) {
-                fwd_path.push(prev.to_string());
-                cursor = prev;
+            if let Some(prev) = fwd_parent.get(&cursor) {
+                fwd_path.push(prev.clone());
+                cursor = prev.clone();
             } else {
                 break;
             }
@@ -345,10 +440,10 @@ impl CapabilityGraph {
         // Build backward path: from meeting → target
         // (skip meeting point as it is already in fwd_path)
         let mut bwd_path: Vec<String> = Vec::new();
-        let mut cursor = meeting;
-        while let Some(&next) = bwd_parent.get(cursor) {
-            bwd_path.push(next.to_string());
-            cursor = next;
+        let mut cursor = meeting.to_string();
+        while let Some(next) = bwd_parent.get(&cursor) {
+            bwd_path.push(next.clone());
+            cursor = next.clone();
         }
 
         fwd_path.extend(bwd_path);

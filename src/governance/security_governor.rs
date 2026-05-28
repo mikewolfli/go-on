@@ -444,9 +444,91 @@ impl SecurityGovernor {
             total_reviews: 0,
             active_escalations: 0,
         };
-        Self {
+        let governor = Self {
             inner: Arc::new(Mutex::new(inner)),
-        }
+        };
+        governor.register_default_policies();
+        governor
+    }
+
+    /// Register default security policies.
+    ///
+    /// Registers the built-in set of policies that provide baseline protection:
+    ///
+    /// - `deny-unknown-resource` — catch-all deny when no other policy matches.
+    /// - `deny-sensitive-data` — blocks resources containing secrets/passwords.
+    /// - `require-review-admin-actions` — requires review for admin/delete actions.
+    pub fn register_default_policies(&self) {
+        // Catch-all: registered with empty conditions so it never matches via
+        // normal first-match iteration. Instead, `evaluate()` treats it as a
+        // fallback when no policy matches and the default action is Allow,
+        // ensuring unknown resources are denied rather than allowed by default.
+        self.register_policy(SecurityPolicy {
+            id: "deny-unknown-resource".into(),
+            name: "Deny Unknown Resource".into(),
+            description: "Denies access when no specific policy matches".into(),
+            severity: PolicySeverity::High,
+            action: PolicyAction::Deny,
+            conditions: vec![],
+            composition: PolicyComposition::And,
+            escalation_level: None,
+        });
+
+        // Deny access to resources containing sensitive keywords.
+        self.register_policy(SecurityPolicy {
+            id: "deny-sensitive-data".into(),
+            name: "Deny Sensitive Data".into(),
+            description: "Blocks access to resources containing secret, password, credential, or token".into(),
+            severity: PolicySeverity::High,
+            action: PolicyAction::Deny,
+            conditions: vec![
+                PolicyCondition {
+                    field: "resource".into(),
+                    operator: ConditionOperator::Contains,
+                    value: "secret".into(),
+                },
+                PolicyCondition {
+                    field: "resource".into(),
+                    operator: ConditionOperator::Contains,
+                    value: "password".into(),
+                },
+                PolicyCondition {
+                    field: "resource".into(),
+                    operator: ConditionOperator::Contains,
+                    value: "credential".into(),
+                },
+                PolicyCondition {
+                    field: "resource".into(),
+                    operator: ConditionOperator::Contains,
+                    value: "token".into(),
+                },
+            ],
+            composition: PolicyComposition::Or,
+            escalation_level: None,
+        });
+
+        // Require review for admin or delete actions.
+        self.register_policy(SecurityPolicy {
+            id: "require-review-admin-actions".into(),
+            name: "Require Review for Admin Actions".into(),
+            description: "Requires review for actions containing admin or delete".into(),
+            severity: PolicySeverity::Medium,
+            action: PolicyAction::RequireReview,
+            conditions: vec![
+                PolicyCondition {
+                    field: "action".into(),
+                    operator: ConditionOperator::Contains,
+                    value: "admin".into(),
+                },
+                PolicyCondition {
+                    field: "action".into(),
+                    operator: ConditionOperator::Contains,
+                    value: "delete".into(),
+                },
+            ],
+            composition: PolicyComposition::Or,
+            escalation_level: None,
+        });
     }
 
     /// Register a new security policy.
@@ -569,7 +651,22 @@ impl SecurityGovernor {
         }
 
         // No policy matched — apply default action.
+        // If the catch-all "deny-unknown-resource" policy is registered and the
+        // configured default is Allow, override to Deny as a safety net.
+        let use_catch_all = inner.policies.contains_key("deny-unknown-resource")
+            && inner.config.default_action == PolicyAction::Allow;
+
         Ok(match inner.config.default_action {
+            PolicyAction::Allow if use_catch_all => {
+                inner.total_denials += 1;
+                PolicyVerdict {
+                    allowed: false,
+                    required_review: false,
+                    escalation_level: "normal".into(),
+                    matched_policy: Some("deny-unknown-resource".into()),
+                    reasons: vec![t("error.security_governor.no_match_denied")],
+                }
+            }
             PolicyAction::Allow => PolicyVerdict {
                 allowed: true,
                 required_review: false,
@@ -745,17 +842,21 @@ mod tests {
     // Tests
     // -----------------------------------------------------------------------
 
-    /// 1. A new governor with default config uses `Allow` as its default action.
+    /// 1. A new governor with default config uses the deny-all catch-all policy
+    ///    when no policy matches, denying unknown resources.
     #[test]
     fn test_new_governor_default_action() {
         let governor = SecurityGovernor::new(SecurityGovernorConfig::default());
         let verdict = governor
             .evaluate("resource:x", "actor:y", &HashMap::new())
             .expect("evaluate should succeed");
-        assert!(verdict.allowed, "default action should be allow");
+        assert!(!verdict.allowed, "catch-all should deny unknown resources");
         assert!(!verdict.required_review);
         assert_eq!(verdict.escalation_level, "normal");
-        assert!(verdict.matched_policy.is_none());
+        assert_eq!(
+            verdict.matched_policy,
+            Some("deny-unknown-resource".into())
+        );
         assert_eq!(verdict.reasons.len(), 1);
     }
 
@@ -912,12 +1013,15 @@ mod tests {
         let removed = governor.remove_policy("removable");
         assert!(removed, "policy should have been removed");
 
-        // Now it should fall through to default.
+        // Now it should fall through to the catch-all.
         let post = governor
             .evaluate("anything", "x", &HashMap::new())
             .expect("evaluate");
-        assert!(post.allowed);
-        assert!(post.matched_policy.is_none(), "no policy should match");
+        assert!(!post.allowed, "catch-all should deny unknown resources");
+        assert_eq!(
+            post.matched_policy,
+            Some("deny-unknown-resource".into())
+        );
     }
 
     /// 10. Profile reflects internal state.
@@ -931,7 +1035,7 @@ mod tests {
 
         let profile = governor.profile();
         assert!(profile.enabled);
-        assert_eq!(profile.policies_count, 2);
+        assert_eq!(profile.policies_count, 5);
         assert_eq!(profile.total_evaluations, 0);
         assert_eq!(profile.total_denials, 0);
         assert_eq!(profile.total_reviews, 0);
@@ -943,12 +1047,14 @@ mod tests {
         let profile = governor.profile();
         assert_eq!(profile.total_evaluations, 2);
         assert_eq!(profile.total_denials, 1);
+        // Note: the evaluations match user-registered policies first, not the
+        // catch-all, so the catch-all does not increment denials here.
         assert_eq!(profile.total_reviews, 0);
 
-        // Remove a policy.
+        // Remove a policy (3 defaults + 2 registered - 1 removed = 4 remaining).
         governor.remove_policy("a1");
         let profile = governor.profile();
-        assert_eq!(profile.policies_count, 1);
+        assert_eq!(profile.policies_count, 4);
     }
 
     // -----------------------------------------------------------------------
@@ -1021,8 +1127,12 @@ mod tests {
             .evaluate("public-file", "u", &HashMap::new())
             .expect("evaluate");
         assert!(
-            verdict.allowed,
-            "should allow because resource does not contain 'secret'"
+            !verdict.allowed,
+            "should deny because catch-all matches when no other policy matches"
+        );
+        assert_eq!(
+            verdict.matched_policy,
+            Some("deny-unknown-resource".into())
         );
     }
 

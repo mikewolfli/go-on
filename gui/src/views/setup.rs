@@ -163,7 +163,7 @@ impl SetupView {
                     .iter()
                     .any(|name| name.eq_ignore_ascii_case(&self.selected_provider))
                 {
-                    self.selected_provider = self.provider_names[0].clone();
+                    self.selected_provider = self.provider_names.first().cloned().unwrap_or_default();
                 }
             }
         }

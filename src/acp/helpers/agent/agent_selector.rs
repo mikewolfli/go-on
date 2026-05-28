@@ -50,6 +50,7 @@ impl Default for AgentSelectorConfig {
     }
 }
 
+#[derive(Default)]
 pub struct AgentSelector {
     config: AgentSelectorConfig,
 }
@@ -59,12 +60,9 @@ impl AgentSelector {
     pub fn new(config: AgentSelectorConfig) -> Self {
         Self { config }
     }
-    pub fn default() -> Self {
-        Self {
-            config: AgentSelectorConfig::default(),
-        }
-    }
+}
 
+impl AgentSelector {
     pub fn score_candidates(
         &self,
         agents: &[(String, Arc<dyn Agent>)],

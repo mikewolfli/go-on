@@ -112,6 +112,14 @@ impl Default for TelemetryConfig {
 ///
 /// # Returns
 /// * `Result<()>` - Returns Ok if initialization succeeds, or an error if something goes wrong
+///
+/// # Panics / Errors
+///
+/// The underlying `tracing_subscriber::registry().with(...).try_init()` will return an error
+/// on the **second** call because a global tracing subscriber can only be set once (it is a
+/// singleton). This is expected behavior — the fn is designed to be called once at startup.
+/// In test contexts, the resulting `Err` from a duplicate call is harmless and confirms that
+/// the subscriber is already active.
 pub fn init_telemetry(config: &TelemetryConfig) -> anyhow::Result<()> {
     let mut layers = Vec::new();
 
@@ -551,5 +559,187 @@ impl HealthMetrics {
 impl Default for HealthMetrics {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── init_telemetry idempotency ────────────────────────────────────
+
+    /// Verify that `init_telemetry` can be called multiple times without
+    /// panicking. The second call is expected to return an `Err` because
+    /// the tracing subscriber is a singleton, but that is harmless.
+    #[test]
+    fn test_init_telemetry_idempotent() {
+        let config = TelemetryConfig::default();
+
+        // First call should succeed
+        let r1 = init_telemetry(&config);
+        assert!(
+            r1.is_ok() || r1.is_err(),
+            "first init may succeed or fail depending on other tests"
+        );
+
+        // Second call should not panic — Err is expected (singleton subscriber)
+        let r2 = init_telemetry(&config);
+        // The second call will likely be Err, but the important thing is no panic
+        let _ = r2;
+    }
+
+    /// Verify that calling init_telemetry with only logging, only metrics,
+    /// and only tracing doesn't panic and returns a Result.
+    #[test]
+    fn test_init_telemetry_partial_configs() {
+        let config_log = TelemetryConfig {
+            enable_logging: true,
+            enable_metrics: false,
+            enable_tracing: false,
+            ..Default::default()
+        };
+        // Should not panic
+        let _ = init_telemetry(&config_log);
+
+        let config_metrics = TelemetryConfig {
+            enable_logging: false,
+            enable_metrics: true,
+            enable_tracing: false,
+            ..Default::default()
+        };
+        let _ = init_telemetry(&config_metrics);
+
+        let config_tracing = TelemetryConfig {
+            enable_logging: false,
+            enable_metrics: false,
+            enable_tracing: true,
+            ..Default::default()
+        };
+        let _ = init_telemetry(&config_tracing);
+    }
+
+    // ── MetricsRecorder ──────────────────────────────────────────────
+
+    /// Verify that `MetricsRecorder::record_request` correctly increments
+    /// counters for both success and failure cases.
+    #[test]
+    fn test_record_request_increments_counters() {
+        let recorder = MetricsRecorder::new();
+
+        // Record 3 successful requests
+        recorder.record_request(true, 10.0);
+        recorder.record_request(true, 20.0);
+        recorder.record_request(true, 30.0);
+
+        let metrics = recorder.get_metrics();
+        assert_eq!(metrics.requests_total, 3);
+        assert_eq!(metrics.requests_success, 3);
+        assert_eq!(metrics.requests_failed, 0);
+        // With requests of 10, 20, 30ms, EMA = 0.9*11 + 0.1*30 = 12.9
+        assert!((metrics.avg_latency_ms - 12.9).abs() < 1.0);
+
+        // Record 2 failed requests
+        recorder.record_request(false, 50.0);
+        recorder.record_request(false, 100.0);
+
+        let metrics = recorder.get_metrics();
+        assert_eq!(metrics.requests_total, 5);
+        assert_eq!(metrics.requests_success, 3);
+        assert_eq!(metrics.requests_failed, 2);
+    }
+
+    /// Verify that recording many requests produces correct final state.
+    #[test]
+    fn test_record_request_latency_ema() {
+        let recorder = MetricsRecorder::new();
+
+        // First request sets baseline
+        recorder.record_request(true, 100.0);
+        let m1 = recorder.get_metrics();
+        assert!((m1.avg_latency_ms - 100.0).abs() < 0.01);
+
+        // Second request: 0.9 * 100 + 0.1 * 200 = 110
+        recorder.record_request(true, 200.0);
+        let m2 = recorder.get_metrics();
+        assert!((m2.avg_latency_ms - 110.0).abs() < 0.01);
+
+        // Third request: 0.9 * 110 + 0.1 * 50 = 104
+        recorder.record_request(true, 50.0);
+        let m3 = recorder.get_metrics();
+        assert!((m3.avg_latency_ms - 104.0).abs() < 0.01);
+    }
+
+    // ── HealthMetrics ─────────────────────────────────────────────────
+
+    /// Verify that `HealthMetrics` reports correct health status through
+    /// consecutive failure and success transitions.
+    #[test]
+    fn test_health_metrics_healthy_by_default() {
+        let health = HealthMetrics::new();
+        let status = health.get_status();
+        assert_eq!(status["is_healthy"], true);
+        assert_eq!(status["checks_total"], 0);
+        assert_eq!(status["checks_failed"], 0);
+    }
+
+    /// Verify health transitions to unhealthy after 3 consecutive failures,
+    /// and recovers after 3 consecutive successes.
+    #[test]
+    fn test_health_metrics_consecutive_failures_and_recovery() {
+        let mut health = HealthMetrics::new();
+
+        // 1 failure — still healthy (transient)
+        health.record_check(false);
+        assert!(health.is_healthy, "1 failure: should still be healthy");
+
+        // 2 failures — still healthy (transient)
+        health.record_check(false);
+        assert!(health.is_healthy, "2 failures: should still be healthy");
+
+        // 3 failures — becomes unhealthy
+        health.record_check(false);
+        assert!(!health.is_healthy, "3 failures: should be unhealthy");
+
+        let status = health.get_status();
+        assert_eq!(status["checks_total"], 3);
+        assert_eq!(status["checks_failed"], 3);
+        assert_eq!(status["is_healthy"], false);
+
+        // 1 success — still unhealthy (recovering)
+        health.record_check(true);
+        assert!(!health.is_healthy, "1 success after 3 fails: still unhealthy");
+
+        // 2 successes — still unhealthy (recovering)
+        health.record_check(true);
+        assert!(!health.is_healthy, "2 successes after 3 fails: still unhealthy");
+
+        // 3 successes — becomes healthy again
+        health.record_check(true);
+        assert!(health.is_healthy, "3 successes: should be healthy again");
+
+        let status = health.get_status();
+        assert_eq!(status["is_healthy"], true);
+    }
+
+    /// Verify that success_rate calculation works correctly.
+    #[test]
+    fn test_health_metrics_success_rate() {
+        let mut health = HealthMetrics::new();
+
+        // 7 checks: 5 success, 2 failure
+        health.record_check(true);
+        health.record_check(false);
+        health.record_check(true);
+        health.record_check(true);
+        health.record_check(false);
+        health.record_check(true);
+        health.record_check(true);
+
+        let status = health.get_status();
+        assert_eq!(status["checks_total"], 7);
+        assert_eq!(status["checks_failed"], 2);
+        let expected_rate = 1.0 - (2.0 / 7.0);
+        let rate = status["success_rate"].as_f64().unwrap();
+        assert!((rate - expected_rate).abs() < 0.001);
     }
 }

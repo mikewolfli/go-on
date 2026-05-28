@@ -102,15 +102,35 @@ struct CostEstimator {
 impl CostEstimator {
     fn new() -> Self {
         let mut base_costs = HashMap::new();
-        base_costs.insert("claude-sonnet-4".to_string(), 3.00);
-        base_costs.insert("claude-haiku".to_string(), 0.80);
-        base_costs.insert("gpt-4o".to_string(), 2.50);
-        base_costs.insert("gpt-4o-mini".to_string(), 0.60);
+        Self::insert_bounded(&mut base_costs, "claude-sonnet-4".to_string(), 3.00, 500);
+        Self::insert_bounded(&mut base_costs, "claude-haiku".to_string(), 0.80, 500);
+        Self::insert_bounded(&mut base_costs, "gpt-4o".to_string(), 2.50, 500);
+        Self::insert_bounded(&mut base_costs, "gpt-4o-mini".to_string(), 0.60, 500);
 
         Self {
             inner: WfCostOptimizer::default(),
             base_costs,
         }
+    }
+
+    #[inline]
+    fn insert_bounded(map: &mut HashMap<String, f64>, key: String, value: f64, max: usize) {
+        if map.len() >= max {
+            if let Some(oldest) = map.keys().next().cloned() {
+                map.remove(&oldest);
+            }
+        }
+        map.insert(key, value);
+    }
+
+    #[inline]
+    fn insert_bounded_u64(map: &mut HashMap<String, u64>, key: String, value: u64, max: usize) {
+        if map.len() >= max {
+            if let Some(oldest) = map.keys().next().cloned() {
+                map.remove(&oldest);
+            }
+        }
+        map.insert(key, value);
     }
 
     /// Estimate the cost (in arbitrary units) for a given agent and token count.
@@ -145,12 +165,14 @@ struct SpeedEstimator {
 impl SpeedEstimator {
     fn new() -> Self {
         let mut base_latencies = HashMap::new();
-        base_latencies.insert("claude-sonnet-4".to_string(), 1200);
-        base_latencies.insert("claude-haiku".to_string(), 400);
-        base_latencies.insert("gpt-4o".to_string(), 800);
-        base_latencies.insert("gpt-4o-mini".to_string(), 350);
+        CostEstimator::insert_bounded_u64(&mut base_latencies, "claude-sonnet-4".to_string(), 1200, 500);
+        CostEstimator::insert_bounded_u64(&mut base_latencies, "claude-haiku".to_string(), 400, 500);
+        CostEstimator::insert_bounded_u64(&mut base_latencies, "gpt-4o".to_string(), 800, 500);
+        CostEstimator::insert_bounded_u64(&mut base_latencies, "gpt-4o-mini".to_string(), 350, 500);
 
-        Self { base_latencies }
+        Self {
+            base_latencies,
+        }
     }
 
     /// Estimate the latency (ms) for a given agent and token count.
@@ -222,10 +244,10 @@ struct ReliabilityOptimizer {
 impl ReliabilityOptimizer {
     fn new() -> Self {
         let mut scores = HashMap::new();
-        scores.insert("claude-sonnet-4".to_string(), 0.98);
-        scores.insert("claude-haiku".to_string(), 0.92);
-        scores.insert("gpt-4o".to_string(), 0.95);
-        scores.insert("gpt-4o-mini".to_string(), 0.88);
+        CostEstimator::insert_bounded(&mut scores, "claude-sonnet-4".to_string(), 0.98, 500);
+        CostEstimator::insert_bounded(&mut scores, "claude-haiku".to_string(), 0.92, 500);
+        CostEstimator::insert_bounded(&mut scores, "gpt-4o".to_string(), 0.95, 500);
+        CostEstimator::insert_bounded(&mut scores, "gpt-4o-mini".to_string(), 0.88, 500);
 
         Self {
             reliability_scores: scores,

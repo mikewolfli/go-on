@@ -70,6 +70,14 @@ pub use crate::orchestration::tool;
 pub use crate::protocol::mcp_server;
 pub use crate::protocol::rpc_protocol;
 
+// ── Backend mutual exclusion ──────────────────────────────────────────────
+// Exactly one backend feature must be selected.
+#[cfg(all(feature = "backend-sqlite", feature = "backend-postgres"))]
+compile_error!(
+    "Exactly one backend feature must be enabled. \
+     Choose one of: backend-sqlite, backend-postgres"
+);
+
 // ── Profile mutual exclusion ──────────────────────────────────────────────
 // Exactly ONE profile must be selected. The Cargo feature system does not
 // enforce mutual exclusion at the dependency level, so we check explicitly.

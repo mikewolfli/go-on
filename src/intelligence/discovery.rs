@@ -129,6 +129,12 @@ pub struct DiscoveryCenter {
     max_entries: usize,
     /// Profile metrics
     profile: Arc<Mutex<DiscoveryProfile>>,
+    /// Cached abstract knowledge results, recomputed only when patterns change.
+    /// Stores (pattern_version, cached_insights) tuple.
+    abstract_cache: Arc<Mutex<(u64, Vec<String>)>>,
+    /// Monotonically increasing version counter bumped every time a pattern
+    /// is registered or removed, so the cache knows when to invalidate.
+    pattern_version: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl DiscoveryCenter {
@@ -148,6 +154,8 @@ impl DiscoveryCenter {
                 avg_success_rate: 0.0,
                 top_pattern: String::new(),
             })),
+            abstract_cache: Arc::new(Mutex::new((0, Vec::new()))),
+            pattern_version: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
@@ -170,6 +178,8 @@ impl DiscoveryCenter {
 
         patterns.insert(pattern.name.clone(), pattern);
         drop(patterns); // release write lock before refresh_profile
+        // Bump pattern version so abstract_knowledge cache is invalidated.
+        self.pattern_version.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.refresh_profile();
         Ok(())
     }
@@ -453,9 +463,30 @@ impl DiscoveryCenter {
     ///
     /// Returns a human-readable summary of discovered cross-domain insights.
     ///
+    /// Results are cached internally and only recomputed when the underlying
+    /// pattern registry changes (tracked via `pattern_version`). This turns
+    /// repeated O(N²) calls into O(1) cache lookups.
+    ///
     /// Cross-category insight mining — reserved for cross-session knowledge extraction.
     /// Currently serves as an extension point for F-GAP-13.
     pub fn abstract_knowledge(&self) -> Vec<String> {
+        let current_version = self.pattern_version.load(std::sync::atomic::Ordering::Relaxed);
+
+        // Fast path: return cached results if patterns haven't changed.
+        {
+            let cache = match self.abstract_cache.lock() {
+                Ok(c) => c,
+                Err(poisoned) => {
+                    tracing::warn!(target: "discovery", "abstract_cache Mutex poisoned – recovering");
+                    poisoned.into_inner()
+                }
+            };
+            if cache.0 == current_version && !cache.1.is_empty() {
+                return cache.1.clone();
+            }
+        }
+
+        // Cache miss: recompute from live pattern data.
         let patterns = match self.patterns.read() {
             Ok(p) => p.clone(),
             Err(poisoned) => {
@@ -504,6 +535,18 @@ impl DiscoveryCenter {
                     avg_complexity
                 ));
             }
+        }
+
+        // Store in cache with current version
+        {
+            let mut cache = match self.abstract_cache.lock() {
+                Ok(c) => c,
+                Err(poisoned) => {
+                    tracing::warn!(target: "discovery", "abstract_cache Mutex poisoned – recovering on write");
+                    poisoned.into_inner()
+                }
+            };
+            *cache = (current_version, insights.clone());
         }
 
         insights

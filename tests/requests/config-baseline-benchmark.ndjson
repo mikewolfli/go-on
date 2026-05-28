@@ -1,4 +1,0 @@
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"client":"blue15-x7-config-baseline","version":"1.0.0"}}
-{"jsonrpc":"2.0","id":2,"method":"config.baseline","params":{}}
-{"jsonrpc":"2.0","id":3,"method":"config.reload","params":{}}
-{"jsonrpc":"2.0","id":4,"method":"shutdown","params":{}}

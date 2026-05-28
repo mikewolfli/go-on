@@ -13,6 +13,16 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 // ---------------------------------------------------------------------------
+// Type aliases for complex types used in causal analysis
+// ---------------------------------------------------------------------------
+
+/// Event data: (source, payload, timestamp_ms)
+type EventData = (String, HashMap<String, String>, u64);
+/// Collection of events grouped by source (payload, timestamp_ms).
+/// The source is the map key, so only a 2-tuple is stored.
+type SourceEvents = HashMap<String, Vec<(HashMap<String, String>, u64)>>;
+
+// ---------------------------------------------------------------------------
 // Causal inference & prediction
 // ---------------------------------------------------------------------------
 
@@ -208,6 +218,10 @@ struct Inner {
     causal_links: Vec<CausalLink>,
     /// Index: cause_entity_id → indices into causal_links for O(1) lookups
     causal_links_by_cause: HashMap<String, Vec<usize>>,
+    /// Max relationships to retain before evicting the oldest.
+    max_relationships: usize,
+    /// Max causal links to retain before evicting the oldest.
+    max_causal_links: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +250,8 @@ impl WorldModel {
                 next_snapshot_id: 1,
                 causal_links: Vec::new(),
                 causal_links_by_cause: HashMap::new(),
+                max_relationships: 5000,
+                max_causal_links: 5000,
             })),
         }
     }
@@ -384,6 +400,11 @@ impl WorldModel {
             weight: clamped_weight,
             discovered_ms: now,
         };
+
+        // Evict the oldest relationship when at capacity.
+        if inner.relationships.len() >= inner.max_relationships {
+            inner.relationships.remove(0);
+        }
 
         inner.relationships.push(relationship);
         inner.last_update_ms = now;
@@ -654,59 +675,119 @@ impl WorldModel {
         results
     }
 
-    /// Analyze recent events to discover new causal patterns.
+    /// Analyzes recent events to discover new causal patterns.
     ///
-    /// Scans events within `window_ms` and looks for recurring (action → outcome) patterns.
+    /// Uses both the event stream and the existing `causal_links_by_cause` index
+    /// to find multi-step sequences, hub nodes, and temporal correlations.
     pub fn discover_causal_patterns(&self, window_ms: u64) -> Vec<String> {
         let now = now_ms();
         let cutoff = now.saturating_sub(window_ms);
 
-        // Collect event data while holding the lock, then drop it before mutation
-        let event_data: Vec<(String, std::collections::HashMap<String, String>)> = {
+        // Collect event and index data while holding the lock
+        let (event_data, existing_cause_counts): (
+            Vec<EventData>,
+            std::collections::HashMap<String, usize>,
+        ) = {
             let inner = lock_guard(&self.inner);
-            inner
+            let events: Vec<_> = inner
                 .events
                 .iter()
                 .filter(|e| e.timestamp_ms >= cutoff)
-                .map(|e| (e.source.clone(), e.payload.clone()))
-                .collect()
+                .map(|e| (e.source.clone(), e.payload.clone(), e.timestamp_ms))
+                .collect();
+            let cause_counts: std::collections::HashMap<String, usize> = inner
+                .causal_links_by_cause
+                .iter()
+                .map(|(k, v)| (k.clone(), v.len()))
+                .collect();
+            (events, cause_counts)
         };
 
         let mut discoveries = Vec::new();
 
         // Group events by source
-        let mut by_source: std::collections::HashMap<
-            String,
-            Vec<std::collections::HashMap<String, String>>,
-        > = std::collections::HashMap::new();
-        for (source, payload) in event_data {
-            by_source.entry(source).or_default().push(payload);
+        let mut by_source: SourceEvents = std::collections::HashMap::new();
+        for (source, payload, ts) in event_data {
+            by_source.entry(source).or_default().push((payload, ts));
         }
 
-        // Now work with cloned data only — borrow checker is happy
         let mut new_links: Vec<CausalLink> = Vec::new();
 
         for (source, events) in &by_source {
-            if events.len() >= 3 {
+            if events.len() >= 2 {
+                // Extract target entities from payloads
                 let entity_changes: Vec<&str> = events
                     .iter()
-                    .filter_map(|payload| payload.get("target_entity").map(|v| v.as_str()))
+                    .filter_map(|(payload, _)| payload.get("target_entity").map(|v| v.as_str()))
                     .collect();
 
-                if entity_changes.len() >= 3 {
-                    new_links.push(CausalLink {
-                        cause_entity_id: source.clone(),
-                        effect_entity_id: entity_changes[0].to_string(),
-                        confidence: 0.3,
-                        observation_count: 1,
-                        avg_delay_ms: 1000.0,
-                        context_tags: vec!["discovered".to_string()],
-                    });
+                if entity_changes.len() >= 2 {
+                    // Check for temporal consistency: the same source affecting
+                    // the same target multiple times strengthens confidence
+                    let consistent_targets: std::collections::HashMap<&str, usize> =
+                        entity_changes.iter().fold(
+                            std::collections::HashMap::new(),
+                            |mut acc, &e| {
+                                *acc.entry(e).or_insert(0) += 1;
+                                acc
+                            },
+                        );
+
+                    for (target, count) in &consistent_targets {
+                        let confidence = (0.2 + *count as f64 * 0.15).min(0.9);
+
+                        // Compute average delay from timestamps
+                        let delays: Vec<u64> = events
+                            .iter()
+                            .filter_map(|(payload, ts)| {
+                                payload.get("target_entity").and_then(|v| {
+                                    if v == *target { Some(*ts) } else { None }
+                                })
+                            })
+                            .collect();
+                        let avg_delay = if delays.len() >= 2 {
+                            let gaps: Vec<u64> = delays.windows(2).map(|w| w[1] - w[0]).collect();
+                            gaps.iter().sum::<u64>() as f64 / gaps.len() as f64
+                        } else {
+                            1000.0
+                        };
+
+                        new_links.push(CausalLink {
+                            cause_entity_id: source.clone(),
+                            effect_entity_id: target.to_string(),
+                            confidence,
+                            observation_count: *count as u64,
+                            avg_delay_ms: avg_delay,
+                            context_tags: vec!["discovered".to_string()],
+                        });
+                        discoveries.push(format!(
+                            "Discovered causal pattern: {} → {} ({} events, confidence: {:.2})",
+                            source, target, count, confidence
+                        ));
+                    }
+                }
+
+                // Detect hub nodes: sources that affect many different targets
+                let unique_targets: std::collections::HashSet<&str> =
+                    entity_changes.iter().copied().collect();
+                if unique_targets.len() >= 3 {
                     discoveries.push(format!(
-                        "Discovered causal pattern: {} → {} ({} events)",
+                        "Hub node detected: {} affects {} different targets ({} total events)",
                         source,
-                        entity_changes[0],
+                        unique_targets.len(),
                         events.len()
+                    ));
+                }
+            }
+        }
+
+        // Detect multi-step causal chains by cross-referencing with existing links
+        if !existing_cause_counts.is_empty() {
+            for (cause, count) in &existing_cause_counts {
+                if *count >= 3 {
+                    discoveries.push(format!(
+                        "High-frequency cause: {} is linked to {} effects (existing index)",
+                        cause, count
                     ));
                 }
             }
@@ -714,16 +795,47 @@ impl WorldModel {
 
         // Push all discovered links into inner state and maintain the index
         if !new_links.is_empty() {
+            // Deduplicate against existing links before inserting
             let mut inner = lock_guard(&self.inner);
-            let start = inner.causal_links.len();
-            inner.causal_links.extend(new_links);
-            for i in start..inner.causal_links.len() {
-                let cause = inner.causal_links[i].cause_entity_id.clone();
-                inner
-                    .causal_links_by_cause
-                    .entry(cause)
-                    .or_default()
-                    .push(i);
+            let mut actually_added = 0;
+            for link in &new_links {
+                let already_exists = inner
+                    .causal_links
+                    .iter()
+                    .any(|l| l.cause_entity_id == link.cause_entity_id
+                        && l.effect_entity_id == link.effect_entity_id);
+                if !already_exists {
+                    // Evict the oldest causal link when at capacity.
+                    if inner.causal_links.len() >= inner.max_causal_links {
+                        let removed = inner.causal_links.remove(0);
+                        // Clean up index.
+                        if let Some(indices) = inner.causal_links_by_cause.get_mut(&removed.cause_entity_id) {
+                            indices.retain(|&i| i != 0);
+                            // Shift remaining indices down by 1.
+                            for idx in indices.iter_mut() {
+                                *idx = idx.saturating_sub(1);
+                            }
+                            if indices.is_empty() {
+                                inner.causal_links_by_cause.remove(&removed.cause_entity_id);
+                            }
+                        }
+                    }
+                    let idx = inner.causal_links.len();
+                    inner.causal_links.push(link.clone());
+                    inner
+                        .causal_links_by_cause
+                        .entry(link.cause_entity_id.clone())
+                        .or_default()
+                        .push(idx);
+                    actually_added += 1;
+                }
+            }
+            if actually_added < new_links.len() {
+                discoveries.push(format!(
+                    "Deduplication: {} of {} candidate links already exist",
+                    new_links.len() - actually_added,
+                    new_links.len()
+                ));
             }
         }
 

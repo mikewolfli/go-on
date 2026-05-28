@@ -1,4 +1,0 @@
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"client":{"name":"learning-replay-benchmark","version":"1.0.0"},"capabilities":{},"protocolVersion":"2025-03-26"}}
-{"jsonrpc":"2.0","id":2,"method":"learning.replay","params":{"limit":10}}
-{"jsonrpc":"2.0","id":3,"method":"learning.summary","params":{"limit":10}}
-{"jsonrpc":"2.0","id":4,"method":"shutdown","params":{}}

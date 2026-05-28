@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 const DEFAULT_EXPLORATION_BIAS: f32 = 0.8;
+const DEFAULT_MAX_MODELS: usize = 1000;
 
 /// Performance metrics for a model
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -12,6 +13,7 @@ pub struct ModelMetrics {
     pub total_requests: u64,
     pub successful_requests: u64,
     pub success_rate: f32,
+    pub last_updated_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -35,6 +37,7 @@ pub struct AdaptiveSelectorSnapshot {
 pub struct AdaptiveModelSelector {
     metrics: HashMap<String, ModelMetrics>,
     exploration_bias: f32,
+    max_models: usize,
 }
 
 impl AdaptiveModelSelector {
@@ -42,6 +45,7 @@ impl AdaptiveModelSelector {
         Self {
             metrics: HashMap::new(),
             exploration_bias: DEFAULT_EXPLORATION_BIAS,
+            max_models: DEFAULT_MAX_MODELS,
         }
     }
 
@@ -54,6 +58,19 @@ impl AdaptiveModelSelector {
     }
 
     pub fn record_result(&mut self, model_id: &str, success: bool) {
+        // Evict the oldest entry when at capacity (model not already tracked).
+        if !self.metrics.contains_key(model_id) && self.metrics.len() >= self.max_models {
+            if let Some(oldest_key) = self
+                .metrics
+                .iter()
+                .min_by_key(|(_, m)| m.last_updated_ms)
+                .map(|(k, _)| k.clone())
+            {
+                self.metrics.remove(&oldest_key);
+            }
+        }
+
+        let now = crate::intelligence::now_ms();
         let entry = self
             .metrics
             .entry(model_id.to_string())
@@ -62,6 +79,7 @@ impl AdaptiveModelSelector {
                 total_requests: 0,
                 successful_requests: 0,
                 success_rate: 0.5,
+                last_updated_ms: now,
             });
 
         entry.total_requests += 1;
@@ -69,6 +87,7 @@ impl AdaptiveModelSelector {
             entry.successful_requests += 1;
         }
         entry.success_rate = entry.successful_requests as f32 / entry.total_requests as f32;
+        entry.last_updated_ms = now;
     }
 
     pub fn get_best_model(&self, candidates: &[String]) -> Option<String> {

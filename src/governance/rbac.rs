@@ -380,7 +380,9 @@ impl RbacEnforcer {
         &self,
         principal: &Principal,
         required_perm: &Permission,
-        budget_enforcer: Option<&crate::governance::hardening::TenantBudgetEnforcer>,
+        budget_enforcer: Option<
+            &std::sync::Mutex<crate::governance::hardening::TenantBudgetEnforcer>,
+        >,
     ) -> Result<(), String> {
         // 1. RBAC access check
         match self.check_access(principal, required_perm) {
@@ -395,8 +397,16 @@ impl RbacEnforcer {
         }
 
         // 2. Tenant budget check (when a budget enforcer is available and principal has a tenant)
-        if let (Some(enforcer), Some(tenant_id)) = (budget_enforcer, principal.tenant_id.as_deref())
-        {
+        if let (Some(mutex), Some(tenant_id)) = (budget_enforcer, principal.tenant_id.as_deref()) {
+            let enforcer = match mutex.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    tracing::warn!(
+                        "tenant budget enforcer mutex poisoned in check_access_with_budget"
+                    );
+                    poisoned.into_inner()
+                }
+            };
             // If the tenant is not registered in the budget enforcer yet, auto-provision is expected
             // to have happened at startup; if it's still missing, let it through.
             if enforcer.quotas().contains_key(tenant_id) {
@@ -722,13 +732,16 @@ mod tests {
         let mut enforcer = RbacEnforcer::new();
         enforcer.add_tenant("tenant-a");
 
-        let mut budget = TenantBudgetEnforcer::new();
-        budget.set_quota(TenantResourceQuota {
-            tenant_id: "tenant-a".to_string(),
-            daily_token_limit: 1_000_000,
-            concurrent_tasks_limit: 5,
-            daily_api_call_limit: 10_000,
-        });
+        let budget = std::sync::Mutex::new(TenantBudgetEnforcer::new());
+        {
+            let mut b = budget.lock().unwrap();
+            b.set_quota(TenantResourceQuota {
+                tenant_id: "tenant-a".to_string(),
+                daily_token_limit: 1_000_000,
+                concurrent_tasks_limit: 5,
+                daily_api_call_limit: 10_000,
+            });
+        }
 
         let principal = Principal::new("user-a", vec!["user"], Some("tenant-a"));
         let result =
@@ -745,15 +758,18 @@ mod tests {
         let mut enforcer = RbacEnforcer::new();
         enforcer.add_tenant("tenant-b");
 
-        let mut budget = TenantBudgetEnforcer::new();
-        budget.set_quota(TenantResourceQuota {
-            tenant_id: "tenant-b".to_string(),
-            daily_token_limit: 1_000_000,
-            concurrent_tasks_limit: 1,
-            daily_api_call_limit: 10_000,
-        });
-        // Fill the concurrent slot
-        budget.start_task("tenant-b");
+        let budget = std::sync::Mutex::new(TenantBudgetEnforcer::new());
+        {
+            let mut b = budget.lock().unwrap();
+            b.set_quota(TenantResourceQuota {
+                tenant_id: "tenant-b".to_string(),
+                daily_token_limit: 1_000_000,
+                concurrent_tasks_limit: 1,
+                daily_api_call_limit: 10_000,
+            });
+            // Fill the concurrent slot
+            b.start_task("tenant-b");
+        }
 
         let principal = Principal::new("user-b", vec!["user"], Some("tenant-b"));
         let result =
@@ -778,13 +794,16 @@ mod tests {
         enforcer.add_tenant("acme");
         enforcer.add_tenant("globex");
 
-        let mut budget = TenantBudgetEnforcer::new();
-        budget.set_quota(TenantResourceQuota {
-            tenant_id: "acme".to_string(),
-            daily_token_limit: 500_000,
-            concurrent_tasks_limit: 2,
-            daily_api_call_limit: 5_000,
-        });
+        let budget = std::sync::Mutex::new(TenantBudgetEnforcer::new());
+        {
+            let mut b = budget.lock().unwrap();
+            b.set_quota(TenantResourceQuota {
+                tenant_id: "acme".to_string(),
+                daily_token_limit: 500_000,
+                concurrent_tasks_limit: 2,
+                daily_api_call_limit: 5_000,
+            });
+        }
 
         // Cross-tenant: globex principal tries to access acme budget
         let principal = Principal::new("globex-user", vec!["user"], Some("globex"));

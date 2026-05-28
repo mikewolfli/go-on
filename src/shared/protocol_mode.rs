@@ -18,6 +18,7 @@ impl ProtocolMode {
     pub const CANONICAL_MODES: [&'static str; 5] =
         ["adaptive", "acp_stdio", "acp_http", "mcp_stdio", "mcp_http"];
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(value: &str) -> Result<Self, ProtocolModeError> {
         match value.trim().to_ascii_lowercase().as_str() {
             "adaptive" => Ok(Self::Adaptive),
@@ -32,7 +33,17 @@ impl ProtocolMode {
             other => Err(ProtocolModeError::InvalidValue(other.to_string())),
         }
     }
+}
 
+impl std::str::FromStr for ProtocolMode {
+    type Err = ProtocolModeError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        <Self>::from_str(s)
+    }
+}
+
+impl ProtocolMode {
     pub fn from_fuzzy(value: &str) -> Result<Self, ProtocolModeError> {
         let trimmed = value.trim().to_ascii_lowercase();
         if trimmed.is_empty() {

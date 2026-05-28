@@ -262,9 +262,11 @@ pub fn new_acp_server(
             // the budget enforcer does not reject every request with "no quota
             // configured for tenant 'default-tenant'" (F-GAP-08).
             if server.runtime_config.user_auth_enabled {
-                if let Ok(mut budget) = server.tenant_budget.lock() {
-                    budget.auto_provision_default(&server.runtime_config);
-                }
+                let mut budget = server.tenant_budget.lock().unwrap_or_else(|poisoned| {
+                    tracing::warn!("tenant_budget lock poisoned in new_acp_server");
+                    poisoned.into_inner()
+                });
+                budget.auto_provision_default(&server.runtime_config);
             }
 
             server.optimizer_registry = Arc::clone(
@@ -494,9 +496,11 @@ pub fn new_acp_server(
             // the budget enforcer does not reject every request with "no quota
             // configured for tenant 'default-tenant'" (F-GAP-08).
             if fallback_server.runtime_config.user_auth_enabled {
-                if let Ok(mut budget) = fallback_server.tenant_budget.lock() {
-                    budget.auto_provision_default(&fallback_server.runtime_config);
-                }
+                let mut budget = fallback_server.tenant_budget.lock().unwrap_or_else(|poisoned| {
+                    tracing::warn!("tenant_budget lock poisoned in new_acp_server (fallback)");
+                    poisoned.into_inner()
+                });
+                budget.auto_provision_default(&fallback_server.runtime_config);
             }
 
             fallback_server.optimizer_registry = Arc::clone(
@@ -1228,20 +1232,22 @@ fn store_responses_api_payload(server: &AcpServer, payload: &serde_json::Value) 
     let Some(id) = payload.get("id").and_then(|value| value.as_str()) else {
         return;
     };
-    if let Ok(mut store) = server.responses_api_store.lock() {
-        // Evict oldest entries when store exceeds 1000 items
-        if store.len() >= 1000 {
-            // Remove 200 oldest entries
-            let keys: Vec<String> = store.keys().take(200).cloned().collect();
-            for key in keys {
-                store.remove(&key);
-            }
+    let mut store = server.responses_api_store.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("responses_api_store lock poisoned in store_responses_api_payload");
+        poisoned.into_inner()
+    });
+    // Evict oldest entries when store exceeds 1000 items
+    if store.len() >= 1000 {
+        // Remove 200 oldest entries
+        let keys: Vec<String> = store.keys().take(200).cloned().collect();
+        for key in keys {
+            store.remove(&key);
         }
-        let previous = store.get(id).cloned();
-        let mut next = payload.clone();
-        merge_responses_status_history(previous.as_ref(), &mut next);
-        store.insert(id.to_string(), next);
     }
+    let previous = store.get(id).cloned();
+    let mut next = payload.clone();
+    merge_responses_status_history(previous.as_ref(), &mut next);
+    store.insert(id.to_string(), next);
 }
 
 fn load_responses_api_payload(server: &AcpServer, response_id: &str) -> Option<serde_json::Value> {

@@ -1,8 +1,11 @@
+use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 
 const QUICK_RPC_ATTEMPTS: usize = 2;
 const FULL_RPC_ATTEMPTS: usize = 3;
@@ -721,6 +724,162 @@ impl BackendClient {
         }
     }
 
+    /// Send a streaming chat request via SSE and return a [`Stream`] of events.
+    ///
+    /// Uses the `/acp/chat` endpoint with `"stream": true` in the request body.
+    /// Each SSE `data:` line is parsed as a JSON value and yielded via the stream.
+    pub async fn chat_stream(
+        &self,
+        message: &str,
+        mode: &str,
+        phase: &str,
+        model: Option<&str>,
+        options_extra: Option<Value>,
+        history: Option<Vec<Value>>,
+    ) -> Result<impl Stream<Item = Result<Value, String>>, String> {
+        use futures_util::StreamExt;
+
+        let phase_val = if phase.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String(phase.to_string())
+        };
+
+        let messages = if let Some(hist) = history {
+            let mut msgs = hist;
+            msgs.push(serde_json::json!({ "role": "user", "content": message }));
+            msgs
+        } else {
+            vec![serde_json::json!({ "role": "user", "content": message })]
+        };
+
+        let mut body = serde_json::json!({
+            "messages": messages,
+            "mode": mode,
+            "phase": phase_val,
+            "stream": true,
+        });
+
+        if let Some(selected_model) = model.filter(|m| !m.trim().is_empty() && *m != "auto") {
+            body["options"] = serde_json::json!({
+                "model": selected_model,
+            });
+        }
+
+        if let Some(ref extra) = options_extra {
+            if body.get("options").is_none() {
+                body["options"] = serde_json::json!({});
+            }
+            if let Some(obj) = extra.as_object() {
+                for (k, v) in obj {
+                    body["options"][k] = v.clone();
+                }
+            }
+            if let Some(cid) = extra.get("conversation_id").and_then(|v| v.as_str()) {
+                body["conversation_id"] = serde_json::json!(cid);
+            }
+            if let Some(bid) = extra.get("branch_id").and_then(|v| v.as_str()) {
+                body["branch_id"] = serde_json::json!(bid);
+            }
+        }
+
+        let response = self
+            .long_client
+            .post(format!("{}/acp/chat", self.base_url))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("HTTP error: {}", e))?;
+
+        let response = response
+            .error_for_status()
+            .map_err(|e| format!("HTTP error: {}", e))?;
+
+        let (tx, rx) = mpsc::channel::<Result<Value, String>>(64);
+        let mut byte_stream = response.bytes_stream();
+
+        tokio::spawn(async move {
+            const MAX_LINE_LENGTH: usize = 1024 * 1024; // 1MB guard
+            let mut buf = String::new();
+            while let Some(chunk_result) = byte_stream.next().await {
+                match chunk_result {
+                    Ok(chunk) => {
+                        buf.push_str(&String::from_utf8_lossy(&chunk));
+
+                        // Consume complete SSE events from the buffer.
+                        // Prefer \n\n (SSE spec) delimiter, then fall back to \n.
+                        loop {
+                            // Check for \n\n first, then \n
+                            let (delim, delim_len) = if buf.contains("\n\n") {
+                                ("\n\n", 2usize)
+                            } else {
+                                ("\n", 1usize)
+                            };
+
+                            let pos = match buf.find(delim) {
+                                Some(p) => p,
+                                None => break,
+                            };
+
+                            let segment = buf[..pos].to_string();
+                            buf = buf[pos + delim_len..].to_string();
+
+                            // Max line length check — prevent OOM on malformed responses
+                            if segment.len() > MAX_LINE_LENGTH {
+                                let _ = tx
+                                    .send(Err(
+                                        "SSE line exceeds maximum length (1MB)".to_string(),
+                                    ))
+                                    .await;
+                                return;
+                            }
+
+                            // Collect lines from the segment.
+                            // When using \n\n delimiter the segment may contain embedded \n
+                            // (multi-line SSE data), so split further on single \n.
+                            let sub_lines: Vec<&str> = if delim_len == 2 {
+                                segment.split('\n').collect()
+                            } else {
+                                vec![&segment]
+                            };
+
+                            for line in sub_lines {
+                                if let Some(data) = line.strip_prefix("data: ") {
+                                    let trimmed = data.trim();
+                                    if trimmed == "[DONE]" {
+                                        return;
+                                    }
+                                    match serde_json::from_str::<Value>(trimmed) {
+                                        Ok(val) => {
+                                            if tx.send(Ok(val)).await.is_err() {
+                                                return;
+                                            }
+                                        }
+                                        Err(e) => {
+                                            let _ = tx
+                                                .send(Err(format!(
+                                                    "JSON parse error: {}",
+                                                    e
+                                                )))
+                                                .await;
+                                            return;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Err(format!("Stream error: {}", e))).await;
+                        return;
+                    }
+                }
+            }
+        });
+
+        Ok(ReceiverStream::new(rx))
+    }
+
     pub async fn configure_provider(
         &self,
         name: &str,
@@ -756,15 +915,15 @@ impl BackendClient {
         self.rpc_call("runtime.restart", None).await
     }
 
+    /// DEPRECATED: Unused. Config reload is handled by backend restart + config.toml rewrite.
+    /// Retained for reference; remove in a future cleanup round.
     #[allow(dead_code)]
     pub async fn reload_config(&self) -> Result<Value, String> {
         self.rpc_call("config.reload", None).await
     }
 
-    /// Unused — Copilot OAuth is handled via direct HTTP polling in providers.rs
-    /// Initiate GitHub Copilot OAuth Device Code flow.
-    /// Returns `device_code`, `user_code`, `verification_uri`, and `interval`.
-    /// `client_id` is your GitHub OAuth App client_id (optional, falls back to a built-in default).
+    /// DEPRECATED: Copilot OAuth is handled via direct HTTP polling in providers.rs, not this RPC.
+    /// Retained for reference; remove in a future cleanup round.
     #[allow(dead_code)]
     pub async fn copilot_device_code_request(&self, client_id: &str) -> Result<Value, String> {
         self.rpc_call(
@@ -774,9 +933,8 @@ impl BackendClient {
         .await
     }
 
-    /// Unused — Copilot OAuth is handled via direct HTTP polling in providers.rs
-    /// Poll GitHub for access token after user authorizes via device code.
-    /// Pass the `device_code` from the initial request.
+    /// DEPRECATED: Copilot OAuth is handled via direct HTTP polling in providers.rs, not this RPC.
+    /// Retained for reference; remove in a future cleanup round.
     #[allow(dead_code)]
     pub async fn copilot_device_code_poll(
         &self,
@@ -1028,13 +1186,9 @@ impl BackendClient {
             .await
     }
 
-    /// Fetch the full provider catalog from backend `provider.catalog` RPC.
-    /// Returns the complete list of all built-in provider specs with metadata
-    /// (URLs, models, API key env vars, capabilities, etc.).
-    ///
-    /// This is the authoritative source for provider metadata — GUI-side
-    /// hardcoded tables (`provider_meta()` in app.rs) should be removed
-    /// in favor of this RPC.
+    /// DEPRECATED: Unused. Provider metadata is currently hardcoded in app.rs `provider_meta()`.
+    /// This RPC exists on the backend but the GUI does not call it.
+    /// Retained for reference; remove in a future cleanup round.
     #[allow(dead_code)]
     pub async fn provider_catalog(&self) -> Result<Value, String> {
         self.rpc_call_quick("provider.catalog", None)

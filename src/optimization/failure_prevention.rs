@@ -79,6 +79,8 @@ pub struct FailurePrevention {
     successful_requests: HashMap<String, u64>,
     anomaly_thresholds: AnomalyThresholds,
     max_failure_threshold: u32,
+    /// Maximum number of tracked services before FIFO eviction
+    max_services: usize,
 }
 
 /// Anomaly detection thresholds
@@ -103,6 +105,7 @@ impl FailurePrevention {
                 success_rate_threshold: 0.8,
             },
             max_failure_threshold: 5,
+            max_services: 1000,
         }
     }
 
@@ -224,6 +227,18 @@ impl FailurePrevention {
 
     /// Register service for health monitoring
     pub fn register_service(&mut self, name: &str) {
+        // Evict oldest service when at capacity.
+        if self.health_monitors.len() >= self.max_services
+            && !self.health_monitors.contains_key(name)
+        {
+            if let Some(oldest) = self.health_monitors.keys().next().cloned() {
+                self.health_monitors.remove(&oldest);
+                self.circuit_breakers.remove(&oldest);
+                self.failure_counts.remove(&oldest);
+                self.total_requests.remove(&oldest);
+                self.successful_requests.remove(&oldest);
+            }
+        }
         let health = ServiceHealth {
             service_name: name.to_string(),
             status: HealthStatus::Healthy,

@@ -62,6 +62,9 @@ impl AutoTuneView {
         })
     }
 
+    /// DEPRECATED: Unused. Autotune state is currently not persisted during GUI operation.
+    /// The `save_state` method exists but is never called. Retained for reference;
+    /// remove in a future cleanup round if autotune state persistence is not needed.
     #[allow(dead_code)]
     fn save_state(&self) {
         let path = Self::state_path();

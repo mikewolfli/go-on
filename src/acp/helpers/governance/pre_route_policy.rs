@@ -34,9 +34,11 @@ pub(crate) async fn evaluate_pre_route_policies(
     // ── HarnessBus pre-route policy evaluation ─────────────────────────
     // Reset budget clock so long-running backends don't exceed wall clock budget.
     if let Some(ref harness) = server.harness_bus {
-        if let Ok(mut budget) = harness.evaluator.budget.lock() {
-            budget.reset();
-        }
+        let mut budget = harness.evaluator.budget.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("budget lock poisoned in pre_route_policy");
+            poisoned.into_inner()
+        });
+        budget.reset();
         let task_ctx = crate::governance::pua::TaskContext {
             task_type: crate::governance::pua::TaskType::Other,
             file_count: params.messages.len(),

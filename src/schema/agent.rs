@@ -44,6 +44,12 @@ pub struct AuthenticateResponse {
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
 }
+impl Default for AuthenticateResponse {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AuthenticateResponse {
     pub fn new() -> Self {
         Self { meta: None }

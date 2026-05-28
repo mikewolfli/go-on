@@ -192,8 +192,6 @@ impl AuditTrail {
     }
 
     /// Whether the trail has no entries.
-    /// Used in integration tests to verify trail state.
-    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

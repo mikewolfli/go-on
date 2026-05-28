@@ -773,3 +773,9 @@ fn benchmark_report_includes_all_dimensions() {
     eprintln!("leading: {:?}", report.leading_dimensions);
     eprintln!("trailing: {:?}", report.trailing_dimensions);
 }
+
+#[test]
+fn regression_gate_validates_all_dimensions() {
+    let report = run_external_benchmarks();
+    assert_regression_gate(&report);
+}

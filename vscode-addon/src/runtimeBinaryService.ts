@@ -94,19 +94,7 @@ function attachDownloadTimeout(request: ClientRequest, url: string) {
   });
 }
 
-/**
- * TLS on github.com provides authenticity of the downloaded archive.
- * Offline checksum verification is available by setting go-on.offlineChecksum
- * in VS Code settings. The checksum downloaded from the same server as the
- * archive adds no additional security against MITM attacks.
- */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars,no-unused-vars
-async function _verifyArchiveChecksum(
-  _archivePath: string,
-  _checksumUrl: string,
-): Promise<void> {
-  return;
-}
+// TODO: Re-enable archive integrity verification when trusted SHA256 is available
 
 async function downloadFile(
   url: string,

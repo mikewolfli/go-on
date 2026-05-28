@@ -3,12 +3,25 @@
 //! Simulates various failure modes (network timeouts, file I/O errors,
 //! process crashes, resource exhaustion) and verifies that the
 //! RecoveryAction chain and fault tolerance mechanisms handle them correctly.
+//!
+//! # Randomness & Determinism
+//!
+//! This module uses the [`fastrand`] crate, which implements the **splitmix64**
+//! pseudo-random number generator. splitmix64 is fast and suitable for
+//! non-cryptographic use. It uses a deterministic seed by default, which means
+//! that test runs are reproducible across executions. To get different behavior
+//! across runs, seed `fastrand::seed()` with a unique value (e.g. the current
+//! system time) at the start of each run.
+
+/// Default probability of a simulated recovery failure during drills.
+/// Set to 0.1 (10%) to model real-world chaos where not all recoveries succeed.
+pub const RECOVERY_FAILURE_RATE: f64 = 0.1;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+
 use tracing::{info, warn};
 
 // ---------------------------------------------------------------------------
@@ -210,16 +223,9 @@ impl ChaosEngine {
                 continue;
             }
 
-            // Check probability
-            if injection.probability < 1.0 {
-                let seed = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .subsec_nanos() as f64
-                    / 1_000_000_000.0;
-                if seed > injection.probability {
-                    continue;
-                }
+            // Check probability using fastrand for deterministic randomness
+            if injection.probability < 1.0 && fastrand::f64() > injection.probability {
+                continue;
             }
 
             // Check max injections
@@ -258,35 +264,40 @@ impl ChaosEngine {
             let injected = self.check_fault(&injection.target_tool);
 
             // Simulate what the recovery system would do
+            // Introduce RECOVERY_FAILURE_RATE random recovery failure to model real-world
+            // chaos where not all recoveries succeed.
+            let fail_bound = (RECOVERY_FAILURE_RATE * 100.0) as u8;
+            let recovery_simulation_fails = fastrand::u8(0..100) < fail_bound;
+
             let (recovery_action, recovery_success) = match injection.fault_type {
                 FaultType::NetworkTimeout => {
                     // Should trigger Retry then Escalate
-                    ("retry".to_string(), true)
+                    ("retry".to_string(), !recovery_simulation_fails)
                 }
                 FaultType::NetworkPartition => {
                     // Should trigger Reroute
-                    ("reroute".to_string(), true)
+                    ("reroute".to_string(), !recovery_simulation_fails)
                 }
                 FaultType::FileIOError => {
                     // Should trigger Degrade to alternate tool
-                    ("degrade".to_string(), true)
+                    ("degrade".to_string(), !recovery_simulation_fails)
                 }
                 FaultType::ProcessCrash => {
                     // Should trigger Replan
-                    ("replan".to_string(), true)
+                    ("replan".to_string(), !recovery_simulation_fails)
                 }
                 FaultType::ResourceExhaustion => {
                     // Should trigger Degrade
-                    ("degrade".to_string(), true)
+                    ("degrade".to_string(), !recovery_simulation_fails)
                 }
                 FaultType::DataCorruption => {
                     // Should trigger Repair, then Retry
-                    ("repair".to_string(), true)
+                    ("repair".to_string(), !recovery_simulation_fails)
                 }
-                FaultType::RateLimit => ("retry".to_string(), true),
-                FaultType::AuthFailure => ("reroute".to_string(), true),
-                FaultType::LatencySpike { .. } => ("retry".to_string(), true),
-                FaultType::PartialWrite => ("repair".to_string(), true),
+                FaultType::RateLimit => ("retry".to_string(), !recovery_simulation_fails),
+                FaultType::AuthFailure => ("reroute".to_string(), !recovery_simulation_fails),
+                FaultType::LatencySpike { .. } => ("retry".to_string(), !recovery_simulation_fails),
+                FaultType::PartialWrite => ("repair".to_string(), !recovery_simulation_fails),
             };
 
             let duration = inj_start.elapsed().as_millis() as u64;

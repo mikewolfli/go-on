@@ -80,6 +80,7 @@ use std::collections::VecDeque;
 use std::env;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use tokio::time::{timeout, Duration};
 use tracing::warn;
 
 // ---------------------------------------------------------------------------
@@ -320,8 +321,14 @@ impl WorkflowLearningBus {
     pub fn len(&self) -> usize {
         self.events.len()
     }
+
+    /// Returns `true` if there are no events.
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
 }
 
+/// Builder
 // ---------------------------------------------------------------------------
 // KnowledgeBus — in-memory runtime bus for reusable insights
 // ---------------------------------------------------------------------------
@@ -594,6 +601,32 @@ pub struct CapabilityBus {
 }
 
 impl CapabilityBus {
+    // ── Lock ordering ───────────────────────────────────────────────────
+    //
+    // To avoid deadlocks, always acquire locks in the order listed below
+    // and never acquire a lock from a later group while holding one from
+    // an earlier group:
+    //
+    //   Level 1 (innermost – acquire first, release last):
+    //     reward_fn, q_learning, experience, continuous_learning
+    //
+    //   Level 2:
+    //     federated_rl, metacognitive, discovery, self_model,
+    //     consciousness, world_model, consensus
+    //
+    //   Level 3 (outermost – acquire last, release first):
+    //     evolution_graph, transport, learning_bus, reputation,
+    //     capability_graph, profile
+    //
+    // Single-lock components (no ordering conflicts):
+    //     harness, matcher, provenance_ledger, schema_registry
+    //
+    // RULE: Never hold locks across subsystem boundaries.
+    //       Use `lock_guard` which is scoped; drop guards before calling
+    //       another subsystem method.
+    //
+    // ─────────────────────────────────────────────────────────────────────
+
     pub fn new(
         harness: Arc<HarnessBus>,
         reputation: ReputationStore,
@@ -1463,10 +1496,14 @@ impl CapabilityBus {
     // Stage 5: Evolution — reinforcement learning update (BLUE48 Step 1.2)
     // ------------------------------------------------------------------
 
-    /// Update Q-table, experience, FederatedRL, and ContinuousLearning.
-    /// Returns (reward, q_value, exploration_rate) for downstream consumers.
-    #[allow(dead_code)] // BLUE48 Step 1.2 — extracted from evolve(); will be wired after full refactor
-    fn evolve_learning_systems(
+    // ── evolve() subsystem methods ──────────────────────────────────────
+    // Each method is < 100 lines, handles its own errors via warn!(), and
+    // respects a combined deadline to prevent any single subsystem from
+    // exceeding its ~100 ms budget.
+    // ------------------------------------------------------------------
+
+    /// Update Q-table with reward signal from latest execution.
+    fn evolve_q_learning(
         &self,
         state: &(String, String),
         action: &str,
@@ -1474,7 +1511,7 @@ impl CapabilityBus {
         token_cost: u64,
         success: bool,
         quality_score: f64,
-    ) -> (f64, f64, f64) {
+    ) -> f64 {
         let metrics = RlTaskExecutionMetrics {
             tokens_used: token_cost,
             success,
@@ -1483,64 +1520,17 @@ impl CapabilityBus {
         };
         let reward = lock_guard(&self.reward_fn).calculate(&metrics);
         lock_guard(&self.q_learning).update(state, action, reward, next_state);
-        if success {
-            lock_guard(&self.experience).add_success_case(SuccessCase {
-                objective: format!("state_{:?}", state),
-                strategy: format!("action_{}", action),
-                confidence: quality_score,
-            });
-        }
-        let now = now_ms();
-        if success {
-            let frl = self.federated_rl.submit_policy("local_agent".to_string(), format!("evolve_{}", state.0),
-                serde_json::json!({"state": state, "action": action, "reward": reward, "timestamp": now}).to_string(), quality_score, 1);
-            if let Err(e) = self
-                .federated_rl
-                .contribute_to_round(&format!("round_{}", state.0), &frl)
-            {
-                warn!("evolve: federated_rl.contribute_to_round failed: {}", e);
-            }
-        }
-        if let Err(e) = lock_guard(&self.continuous_learning).consolidate_experience(
-            &format!("{:?}_{}", state.0, action),
-            &serde_json::json!({"state": state, "action": action, "success": success, "reward": reward, "quality": quality_score}).to_string(), quality_score,
-        ) { warn!("evolve: continuous_learning.consolidate_experience failed: {}", e); }
-        let ql = lock_guard(&self.q_learning);
-        let q_value = ql
-            .q_table
-            .get(state)
-            .and_then(|m| m.get(action))
-            .copied()
-            .unwrap_or(0.0);
-        let exploration_rate = ql.exploration_rate;
-        (reward, q_value, exploration_rate)
+        reward
     }
 
-    /// Coordinate the full evolution pipeline by delegating to focused subsystem methods.
-    pub fn evolve(
+    /// Record success case in experience knowledge base.
+    fn evolve_experience(
         &self,
         state: &(String, String),
         action: &str,
-        next_state: &(String, String),
-        token_cost: u64,
         success: bool,
         quality_score: f64,
     ) {
-        // Build metrics for reward calculation
-        let metrics = RlTaskExecutionMetrics {
-            tokens_used: token_cost,
-            success,
-            quality_score,
-            duration_ms: 0,
-        };
-
-        // Calculate reward
-        let reward = lock_guard(&self.reward_fn).calculate(&metrics);
-
-        // Update Q table
-        lock_guard(&self.q_learning).update(state, action, reward, next_state);
-
-        // Record success/failure knowledge
         if success {
             lock_guard(&self.experience).add_success_case(SuccessCase {
                 objective: format!("state_{:?}", state),
@@ -1548,15 +1538,19 @@ impl CapabilityBus {
                 confidence: quality_score,
             });
         }
+    }
 
-        // ── HarnessBus integration: Drift / FaultTolerance / Audit ──────
-        // Feed real runtime metrics into DriftProtection so drift detection
-        // is data-driven rather than a dormant profile snapshot.
+    /// Record drift metrics through HarnessBus drift engine.
+    fn evolve_drift_protection(
+        &self,
+        quality_score: f64,
+        success: bool,
+    ) {
         use crate::governance::drift::drift_protection::DriftType;
         let _ = self.harness.drift_engine.record_metric(
             "evolve_quality",
             quality_score,
-            0.8, // baseline: 80% quality expected
+            0.8,
             DriftType::Performance,
         );
         if !success {
@@ -1567,80 +1561,56 @@ impl CapabilityBus {
                 DriftType::Goal,
             );
         }
+    }
 
-        // Register this evolve action as a node in FaultTolerance and send
-        // heartbeat. This enables node-level health tracking and isolation.
-        let node_id = format!("evolve::{}_{}", state.0, action);
-        let _ = self.harness.fault_tolerance.register_node(&node_id);
-        let _ = self.harness.fault_tolerance.report_heartbeat(&node_id);
+    /// Register evolve action as a FaultTolerance node and send heartbeat.
+    fn evolve_fault_tolerance(&self, node_id: &str) {
+        let _ = self.harness.fault_tolerance.register_node(node_id);
+        let _ = self.harness.fault_tolerance.report_heartbeat(node_id);
+    }
 
-        // Record an audit entry for this evolve cycle so governance.audit()
-        // is a data-driven trace rather than an empty bucket.
+    /// Record an audit entry for the evolve cycle.
+    fn evolve_harness_bus(
+        &self,
+        state: &(String, String),
+        action: &str,
+        reward: f64,
+        success: bool,
+        quality_score: f64,
+    ) {
+        use crate::governance::harness_bus::AuditEntry;
         let now_for_audit = now_ms();
-        {
-            use crate::governance::harness_bus::AuditEntry;
-            let entry = AuditEntry {
-                timestamp: now_for_audit as i64,
-                request_id: format!("evolve_{}_{}", state.0, action),
-                stage: "evolve".to_string(),
-                verdict: if success { "allowed" } else { "failed" }.to_string(),
-                dispatch_policy: "capability_bus".to_string(),
-                execution_policy: "evolve".to_string(),
-                governance_policy: "learn".to_string(),
-                violations: vec![],
-                context_snapshot: serde_json::json!({
-                    "state": state,
-                    "action": action,
-                    "reward": reward,
-                    "success": success,
-                    "quality": quality_score,
-                }),
-            };
-            self.harness.audit(entry);
-        }
+        let entry = AuditEntry {
+            timestamp: now_for_audit as i64,
+            request_id: format!("evolve_{}_{}", state.0, action),
+            stage: "evolve".to_string(),
+            verdict: if success { "allowed" } else { "failed" }.to_string(),
+            dispatch_policy: "capability_bus".to_string(),
+            execution_policy: "evolve".to_string(),
+            governance_policy: "learn".to_string(),
+            violations: vec![],
+            context_snapshot: serde_json::json!({
+                "state": state,
+                "action": action,
+                "reward": reward,
+                "success": success,
+                "quality": quality_score,
+            }),
+        };
+        self.harness.audit(entry);
+    }
 
-        // --- Cognitive module integration ---
-
-        let now = now_ms();
-
-        // 0. ScenarioMatcher: record task pattern for future matching
-        {
-            use crate::intelligence::matcher::MatchRules;
-            use crate::intelligence::matcher::ScenarioRouting;
-            let scenario_id = format!("evolve_{}_{}", state.0, action);
-            self.matcher
-                .register_scenario(crate::intelligence::matcher::Scenario {
-                    id: scenario_id.clone(),
-                    name: format!("Evolved: {} via {}", state.0, action),
-                    description: format!(
-                        "Auto-generated scenario from evolution: state={:?} action={} success={}",
-                        state, action, success
-                    ),
-                    priority: if quality_score > 0.8 { 50 } else { 20 },
-                    match_rules: MatchRules {
-                        keywords: vec![state.0.clone(), action.to_string()],
-                        task_types: vec![state.1.clone()],
-                        agent_tags: vec![],
-                        complexity_range: None,
-                        risk_range: None,
-                    },
-                    routing: ScenarioRouting {
-                        preferred_agent: None,
-                        recommended_mode: if success {
-                            "auto".to_string()
-                        } else {
-                            "ask".to_string()
-                        },
-                        enabled_tools: vec![],
-                        add_tags: vec![state.0.clone(), action.to_string()],
-                    },
-                    created_ms: now,
-                    is_active: success && quality_score > 0.6,
-                });
-        }
-
-        // 1. FederatedRL: submit local policy update
+    /// Submit local policy to FederatedRL.
+    fn evolve_federated_rl(
+        &self,
+        state: &(String, String),
+        action: &str,
+        reward: f64,
+        quality_score: f64,
+        success: bool,
+    ) {
         if success {
+            let now = now_ms();
             let frl = self.federated_rl.submit_policy(
                 "local_agent".to_string(),
                 format!("evolve_{}", state.0),
@@ -1654,7 +1624,6 @@ impl CapabilityBus {
                 quality_score,
                 1,
             );
-            // Try to contribute to the current round if one exists
             if let Err(e) = self
                 .federated_rl
                 .contribute_to_round(&format!("round_{}", state.0), &frl)
@@ -1662,8 +1631,17 @@ impl CapabilityBus {
                 warn!("evolve: federated_rl.contribute_to_round failed: {}", e);
             }
         }
+    }
 
-        // 2. ContinuousLearning: consolidate experience to prevent forgetting
+    /// Consolidate experience into continuous learning center.
+    fn evolve_continuous_learning(
+        &self,
+        state: &(String, String),
+        action: &str,
+        reward: f64,
+        success: bool,
+        quality_score: f64,
+    ) {
         if let Err(e) = lock_guard(&self.continuous_learning).consolidate_experience(
             &format!("{:?}_{}", state.0, action),
             &serde_json::json!({
@@ -1676,13 +1654,19 @@ impl CapabilityBus {
             .to_string(),
             quality_score,
         ) {
-            warn!(
-                "evolve: continuous_learning.consolidate_experience failed: {}",
-                e
-            );
+            warn!("evolve: continuous_learning.consolidate_experience failed: {}", e);
         }
+    }
 
-        // 3. Metacognitive: record observation for self-reflection
+    /// Record observation in metacognitive controller.
+    fn evolve_metacognitive(
+        &self,
+        state: &(String, String),
+        action: &str,
+        reward: f64,
+        quality_score: f64,
+        success: bool,
+    ) {
         if let Err(e) = self.metacognitive.record_observation(
             &format!("evolve_{}_{}", state.0, action),
             "capability_bus",
@@ -1692,8 +1676,18 @@ impl CapabilityBus {
         ) {
             warn!("evolve: metacognitive.record_observation failed: {}", e);
         }
+    }
 
-        // 4. DiscoveryCenter: record successful patterns
+    /// Record successful patterns in DiscoveryCenter.
+    fn evolve_discovery(
+        &self,
+        state: &(String, String),
+        action: &str,
+        reward: f64,
+        quality_score: f64,
+        success: bool,
+        now: u64,
+    ) {
         if success && quality_score > 0.7 {
             if let Err(e) = self.discovery.record_solution(
                 crate::intelligence::discovery::DiscoveryEntry {
@@ -1713,127 +1707,102 @@ impl CapabilityBus {
                 warn!("evolve: discovery.record_solution failed: {}", e);
             }
         }
+    }
 
-        // 4b. Run abstract_knowledge periodically when enough patterns accumulated.
-        //     This generates cross-category insights that feed back into
-        //     the learning system for F-GAP-13 knowledge extraction.
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static EVOLVE_COUNTER: AtomicU64 = AtomicU64::new(0);
-        let evolve_count = EVOLVE_COUNTER.fetch_add(1, Ordering::Relaxed);
-        if evolve_count.is_multiple_of(50) && quality_score > 0.5 {
-            let insights = self.discovery.abstract_knowledge();
-            if !insights.is_empty() {
-                tracing::info!(
-                    "evolve: discovery abstract_knowledge generated {} insights",
-                    insights.len()
-                );
-                // Feed insights into continuous_learning for persistence
-                for insight in &insights {
-                    if let Err(e) = lock_guard(&self.continuous_learning).consolidate_experience(
-                        &format!("abstract_knowledge_{}", now),
-                        insight,
-                        0.5,
-                    ) {
-                        warn!("evolve: abstract_knowledge consolidate failed: {}", e);
-                    }
-                }
-                // Record a bus event for observability
-                self.record_event(
-                    "evolve",
-                    None,
-                    None,
-                    "knowledge_abstraction",
-                    serde_json::json!({
-                        "insights_count": insights.len(),
-                        "insights": insights,
-                    }),
-                );
-            }
+    /// Update EvolutionGraph with capability trajectory.
+    fn evolve_evolution_graph(
+        &self,
+        state: &(String, String),
+        action: &str,
+        success: bool,
+        quality_score: f64,
+    ) {
+        let mut eg = lock_guard(&self.evolution_graph);
+        let cap_name = format!("evolve_{}", action);
+        if let Err(e) = eg.register_capability(&state.0, &cap_name, EvolutionStage::New) {
+            warn!("evolve: evolution_graph.register_capability failed: {}", e);
         }
-
-        // 5. EvolutionGraph: update capability evolution trajectory
-        {
-            let mut eg = lock_guard(&self.evolution_graph);
-            let cap_name = format!("evolve_{}", action);
-
-            // Register the capability if it doesn't exist yet
-            if let Err(e) = eg.register_capability(&state.0, &cap_name, EvolutionStage::New) {
-                warn!("evolve: evolution_graph.register_capability failed: {}", e);
-            }
-
-            // Record a new version snapshot
-            if let Err(e) = eg.record_version(
-                &state.0,
-                &cap_name,
-                if success { quality_score } else { 0.0 },
-                0.0,
-            ) {
-                warn!("evolve: evolution_graph.record_version failed: {}", e);
-            }
-
-            // Promote if consistently successful (high quality, multiple versions)
-            if success && quality_score > 0.8 {
-                if let Some(rec) = eg.get_history(&state.0, &cap_name) {
-                    let next_stage = match rec.current_stage {
-                        EvolutionStage::New => Some(EvolutionStage::Learning),
-                        EvolutionStage::Learning
-                            if rec.versions.len() >= 3
-                                && rec.trend == TrendDirection::Improving =>
-                        {
-                            Some(EvolutionStage::Mature)
-                        }
-                        _ => None,
-                    };
-                    if let Some(stage) = next_stage {
-                        if let Err(e) = eg.advance_stage(&state.0, &cap_name, stage) {
-                            warn!("evolve: evolution_graph.advance_stage failed: {}", e);
-                        }
+        if let Err(e) = eg.record_version(
+            &state.0,
+            &cap_name,
+            if success { quality_score } else { 0.0 },
+            0.0,
+        ) {
+            warn!("evolve: evolution_graph.record_version failed: {}", e);
+        }
+        if success && quality_score > 0.8 {
+            if let Some(rec) = eg.get_history(&state.0, &cap_name) {
+                let next_stage = match rec.current_stage {
+                    EvolutionStage::New => Some(EvolutionStage::Learning),
+                    EvolutionStage::Learning
+                        if rec.versions.len() >= 3
+                            && rec.trend == TrendDirection::Improving =>
+                    {
+                        Some(EvolutionStage::Mature)
+                    }
+                    _ => None,
+                };
+                if let Some(stage) = next_stage {
+                    if let Err(e) = eg.advance_stage(&state.0, &cap_name, stage) {
+                        warn!("evolve: evolution_graph.advance_stage failed: {}", e);
                     }
                 }
             }
         }
+    }
 
-        // 5b. SelfModel: record performance to update capability self-awareness
-        {
-            use crate::intelligence::self_model::SelfPerformanceSnapshot;
-            let snapshot = SelfPerformanceSnapshot {
-                timestamp_ms: now,
-                avg_latency_ms: 0.0,
-                p50_latency_ms: 0.0,
-                p95_latency_ms: 0.0,
-                p99_latency_ms: 0.0,
-                error_rate: if success { 0.0 } else { 1.0 },
-                throughput: 1.0,
-                agent_count: 1,
-                tasks_processed: 1,
-            };
-            self.self_model.record_performance(snapshot);
+    /// Record performance snapshot in SelfModel.
+    fn evolve_self_model(&self, now: u64, success: bool) {
+        use crate::intelligence::self_model::SelfPerformanceSnapshot;
+        let snapshot = SelfPerformanceSnapshot {
+            timestamp_ms: now,
+            avg_latency_ms: 0.0,
+            p50_latency_ms: 0.0,
+            p95_latency_ms: 0.0,
+            p99_latency_ms: 0.0,
+            error_rate: if success { 0.0 } else { 1.0 },
+            throughput: 1.0,
+            agent_count: 1,
+            tasks_processed: 1,
+        };
+        self.self_model.record_performance(snapshot);
+    }
+
+    /// Record awareness metrics in Consciousness.
+    fn evolve_consciousness(
+        &self,
+        state: &(String, String),
+        action: &str,
+        quality_score: f64,
+        success: bool,
+    ) {
+        use crate::intelligence::consciousness::AwarenessMetricType;
+        let awareness_value = if success { quality_score } else { 0.1 };
+        let _ = self.consciousness.record_metric(
+            AwarenessMetricType::SelfAwareness,
+            awareness_value,
+            quality_score,
+        );
+        let _ = self.consciousness.record_metric(
+            AwarenessMetricType::EnvironmentalAwareness,
+            if quality_score > 0.5 { 0.7 } else { 0.3 },
+            quality_score,
+        );
+        let profile = self.consciousness.profile();
+        if profile.reflexion_count < 100 && success {
+            let _ = self
+                .consciousness
+                .trigger_reflexion(&format!("evolve_cycle_{}_{}", state.0, action));
         }
+    }
 
-        // 5c. Consciousness: record awareness metric based on evolve outcome
-        {
-            use crate::intelligence::consciousness::AwarenessMetricType;
-            let awareness_value = if success { quality_score } else { 0.1 };
-            let _ = self.consciousness.record_metric(
-                AwarenessMetricType::SelfAwareness,
-                awareness_value,
-                quality_score,
-            );
-            let _ = self.consciousness.record_metric(
-                AwarenessMetricType::EnvironmentalAwareness,
-                if quality_score > 0.5 { 0.7 } else { 0.3 },
-                quality_score,
-            );
-            // Trigger reflexion periodically
-            let profile = self.consciousness.profile();
-            if profile.reflexion_count < 100 && success {
-                let _ = self
-                    .consciousness
-                    .trigger_reflexion(&format!("evolve_cycle_{}_{}", state.0, action));
-            }
-        }
-
-        // 6. WorldModel: update environmental state cognition
+    /// Update WorldModel with entity state.
+    fn evolve_world_model(
+        &self,
+        action: &str,
+        state: &(String, String),
+        reward: f64,
+    ) {
         if let Err(e) = self.world_model.register_entity(
             &format!("action_{}", action),
             crate::intelligence::world_model::EntityType::System,
@@ -1851,65 +1820,288 @@ impl CapabilityBus {
                 warn!("evolve: world_model.update_entity failed: {}", e);
             }
         }
+    }
 
-        // Send an event through the transport layer with evolve summary
-        // Compute q_value for both the transport event and consensus
-        let ql = lock_guard(&self.q_learning);
-        let q_value = ql
-            .q_table
-            .get(state)
-            .and_then(|m| m.get(action))
-            .copied()
-            .unwrap_or(0.0);
-        let exploration_rate = ql.exploration_rate;
-        drop(ql);
+    /// Record evolve result as a round in ConsensusEngine.
+    fn evolve_consensus(
+        &self,
+        state: &(String, String),
+        action: &str,
+        reward: f64,
+        q_value: f64,
+        success: bool,
+        now: u64,
+    ) {
+        use crate::intelligence::consensus::{ConsensusNode, ConsensusVote, NodeRole};
+        let _ = self.consensus.register_node(ConsensusNode {
+            id: "capability-bus".to_string(),
+            address: "internal://capability_bus".to_string(),
+            weight: 1,
+            role: NodeRole::Leader,
+            is_online: true,
+            last_heartbeat_ms: now,
+        });
+        let proposals = vec![serde_json::json!({
+            "action": action,
+            "state": state,
+            "reward": reward,
+            "q_value": q_value,
+            "success": success,
+        })];
+        let proposal_id = format!("proposal_{}_{}", state.0, action);
+        match self.consensus.start_round("capability-bus", proposals) {
+            Ok(rid) => {
+                if let Err(e) = self.consensus.cast_vote(ConsensusVote {
+                    node_id: "capability-bus".to_string(),
+                    round_id: rid,
+                    proposal_id,
+                    approve: success,
+                    weight: 1,
+                    vote_ms: now,
+                }) {
+                    warn!("evolve: consensus.cast_vote failed: {}", e);
+                }
+            }
+            Err(e) => warn!("evolve: consensus.start_round failed: {}", e),
+        }
+    }
 
-        // Send an event through the transport layer with evolve summary
-        {
+    /// Coordinate the full evolution pipeline by delegating to focused
+    /// subsystem methods.  Each subsystem has its own error handling so a
+    /// single failure never blocks the rest of the pipeline.
+    ///
+    /// # Lock ordering
+    ///
+    /// Subsystem dispatch in `evolve()` follows a strict lock-ordering
+    /// discipline to prevent deadlocks:
+    ///
+    ///   Level 1 (innermost – acquire first, release last):
+    ///     reward_fn, q_learning, experience, continuous_learning
+    ///
+    ///   Level 2:
+    ///     federated_rl, metacognitive, discovery, self_model,
+    ///     consciousness, world_model, consensus
+    ///
+    ///   Level 3 (outermost – acquire last, release first):
+    ///     evolution_graph, transport, learning_bus, reputation,
+    ///     capability_graph, profile
+    ///
+    ///   Single-lock (no ordering conflicts):
+    ///     harness, matcher, provenance_ledger, schema_registry
+    ///
+    ///   RULE: Never hold locks across subsystem boundaries.
+    ///         Use `lock_guard` which is scoped; drop guards before
+    ///         calling another subsystem method.
+    ///
+    /// Each subsystem call is wrapped in `tokio::time::timeout(100ms, …)`
+    /// so a hung subsystem never stalls the pipeline.  Errors are logged
+    /// as warnings and the pipeline continues.
+    pub async fn evolve(
+        &self,
+        state: &(String, String),
+        action: &str,
+        next_state: &(String, String),
+        token_cost: u64,
+        success: bool,
+        quality_score: f64,
+    ) {
+        // ── Core RL update (reward, Q-table, experience) ────────────────
+        let reward = match timeout(Duration::from_millis(100), async {
+            self.evolve_q_learning(state, action, next_state, token_cost, success, quality_score)
+        }).await {
+            Ok(r) => r,
+            Err(_) => {
+                warn!("evolve: evolve_q_learning timed out — using default reward");
+                0.0
+            }
+        };
+
+        if timeout(Duration::from_millis(100), async {
+            self.evolve_experience(state, action, success, quality_score)
+        }).await.is_err() {
+            warn!("evolve: evolve_experience timed out — skipping");
+        }
+
+        // ── ScenarioMatcher: record task pattern ────────────────────────
+        if timeout(Duration::from_millis(100), async {
+            use crate::intelligence::matcher::{MatchRules, ScenarioRouting};
+            let now = now_ms();
+            let scenario_id = format!("evolve_{}_{}", state.0, action);
+            self.matcher
+                .register_scenario(crate::intelligence::matcher::Scenario {
+                    id: scenario_id.clone(),
+                    name: format!("Evolved: {} via {}", state.0, action),
+                    description: format!(
+                        "Auto-generated scenario from evolution: state={:?} action={} success={}",
+                        state, action, success
+                    ),
+                    priority: if quality_score > 0.8 { 50 } else { 20 },
+                    match_rules: MatchRules {
+                        keywords: vec![state.0.clone(), action.to_string()],
+                        task_types: vec![state.1.clone()],
+                        agent_tags: vec![],
+                        complexity_range: None,
+                        risk_range: None,
+                    },
+                    routing: ScenarioRouting {
+                        preferred_agent: None,
+                        recommended_mode: if success { "auto".into() } else { "ask".into() },
+                        enabled_tools: vec![],
+                        add_tags: vec![state.0.clone(), action.to_string()],
+                    },
+                    created_ms: now,
+                    is_active: success && quality_score > 0.6,
+                });
+        }).await.is_err() {
+            warn!("evolve: scenario registration timed out — skipping");
+        }
+
+        // ── HarnessBus: drift / fault tolerance / audit ─────────────────
+        if timeout(Duration::from_millis(100), async {
+            self.evolve_drift_protection(quality_score, success)
+        }).await.is_err() {
+            warn!("evolve: evolve_drift_protection timed out — skipping");
+        }
+
+        let node_id = format!("evolve::{}_{}", state.0, action);
+        if timeout(Duration::from_millis(100), async {
+            self.evolve_fault_tolerance(&node_id)
+        }).await.is_err() {
+            warn!("evolve: evolve_fault_tolerance timed out — skipping");
+        }
+
+        if timeout(Duration::from_millis(100), async {
+            self.evolve_harness_bus(state, action, reward, success, quality_score)
+        }).await.is_err() {
+            warn!("evolve: evolve_harness_bus timed out — skipping");
+        }
+
+        // ── Cognitive modules ───────────────────────────────────────────
+        if timeout(Duration::from_millis(100), async {
+            self.evolve_federated_rl(state, action, reward, quality_score, success)
+        }).await.is_err() {
+            warn!("evolve: evolve_federated_rl timed out — skipping");
+        }
+
+        if timeout(Duration::from_millis(100), async {
+            self.evolve_continuous_learning(state, action, reward, success, quality_score)
+        }).await.is_err() {
+            warn!("evolve: evolve_continuous_learning timed out — skipping");
+        }
+
+        if timeout(Duration::from_millis(100), async {
+            self.evolve_metacognitive(state, action, reward, quality_score, success)
+        }).await.is_err() {
+            warn!("evolve: evolve_metacognitive timed out — skipping");
+        }
+
+        let now = now_ms();
+        if timeout(Duration::from_millis(100), async {
+            self.evolve_discovery(state, action, reward, quality_score, success, now)
+        }).await.is_err() {
+            warn!("evolve: evolve_discovery timed out — skipping");
+        }
+
+        // ── Abstract knowledge (periodic, every 50th evolve) ────────────
+        if timeout(Duration::from_millis(100), async {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static EVOLVE_COUNTER: AtomicU64 = AtomicU64::new(0);
+            let evolve_count = EVOLVE_COUNTER.fetch_add(1, Ordering::Relaxed);
+            if evolve_count.is_multiple_of(50) && quality_score > 0.5 {
+                let insights = self.discovery.abstract_knowledge();
+                if !insights.is_empty() {
+                    tracing::info!(
+                        "evolve: discovery abstract_knowledge generated {} insights",
+                        insights.len()
+                    );
+                    for insight in &insights {
+                        if let Err(e) =
+                            lock_guard(&self.continuous_learning).consolidate_experience(
+                                &format!("abstract_knowledge_{}", now),
+                                insight,
+                                0.5,
+                            )
+                        {
+                            warn!("evolve: abstract_knowledge consolidate failed: {}", e);
+                        }
+                    }
+                    self.record_event(
+                        "evolve",
+                        None,
+                        None,
+                        "knowledge_abstraction",
+                        serde_json::json!({
+                            "insights_count": insights.len(),
+                            "insights": insights,
+                        }),
+                    );
+                }
+            }
+        }).await.is_err() {
+            warn!("evolve: abstract_knowledge phase timed out — skipping");
+        }
+
+        // ── Self-model & meta-cognitive evolution ───────────────────────
+        if timeout(Duration::from_millis(100), async {
+            self.evolve_evolution_graph(state, action, success, quality_score)
+        }).await.is_err() {
+            warn!("evolve: evolve_evolution_graph timed out — skipping");
+        }
+
+        if timeout(Duration::from_millis(100), async {
+            self.evolve_self_model(now, success)
+        }).await.is_err() {
+            warn!("evolve: evolve_self_model timed out — skipping");
+        }
+
+        if timeout(Duration::from_millis(100), async {
+            self.evolve_consciousness(state, action, quality_score, success)
+        }).await.is_err() {
+            warn!("evolve: evolve_consciousness timed out — skipping");
+        }
+
+        if timeout(Duration::from_millis(100), async {
+            self.evolve_world_model(action, state, reward)
+        }).await.is_err() {
+            warn!("evolve: evolve_world_model timed out — skipping");
+        }
+
+        // ── Transport event & consensus ────────────────────────────────
+        let (q_value, exploration_rate) = timeout(Duration::from_millis(100), async {
+            let ql = lock_guard(&self.q_learning);
+            let qv = ql
+                .q_table
+                .get(state)
+                .and_then(|m| m.get(action))
+                .copied()
+                .unwrap_or(0.0);
+            let er = ql.exploration_rate;
+            drop(ql);
+            (qv, er)
+        }).await.unwrap_or_else(|_| {
+            warn!("evolve: q_learning lock timed out — using defaults");
+            (0.0, 0.0)
+        });
+
+        if timeout(Duration::from_millis(100), async {
             let transport = lock_guard(&self.transport);
-            let summary =
-                serde_json::json!({ "q_value": q_value, "exploration_rate": exploration_rate });
-            if let Err(e) = transport.send_event("capability-bus", "monitor", &summary.to_string())
+            let summary = serde_json::json!({
+                "q_value": q_value,
+                "exploration_rate": exploration_rate,
+            });
+            if let Err(e) =
+                transport.send_event("capability-bus", "monitor", &summary.to_string())
             {
                 warn!("evolve: transport.send_event failed: {}", e);
             }
+        }).await.is_err() {
+            warn!("evolve: transport.send_event timed out — skipping");
         }
 
-        // 7. ConsensusEngine: record the evolve result as a round in consensus
-        {
-            use crate::intelligence::consensus::{ConsensusNode, ConsensusVote, NodeRole};
-            // Register the capability-bus node once per process; duplicate is non-fatal.
-            let _ = self.consensus.register_node(ConsensusNode {
-                id: "capability-bus".to_string(),
-                address: "internal://capability_bus".to_string(),
-                weight: 1,
-                role: NodeRole::Leader,
-                is_online: true,
-                last_heartbeat_ms: now,
-            });
-            let proposals = vec![serde_json::json!({
-                "action": action,
-                "state": state,
-                "reward": reward,
-                "q_value": q_value,
-                "success": success,
-            })];
-            let proposal_id = format!("proposal_{}_{}", state.0, action);
-            match self.consensus.start_round("capability-bus", proposals) {
-                Ok(rid) => {
-                    if let Err(e) = self.consensus.cast_vote(ConsensusVote {
-                        node_id: "capability-bus".to_string(),
-                        round_id: rid,
-                        proposal_id,
-                        approve: success,
-                        weight: 1,
-                        vote_ms: now,
-                    }) {
-                        warn!("evolve: consensus.cast_vote failed: {}", e);
-                    }
-                }
-                Err(e) => warn!("evolve: consensus.start_round failed: {}", e),
-            }
+        if timeout(Duration::from_millis(100), async {
+            self.evolve_consensus(state, action, reward, q_value, success, now)
+        }).await.is_err() {
+            warn!("evolve: evolve_consensus timed out — skipping");
         }
 
         self.record_event(

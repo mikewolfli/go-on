@@ -140,11 +140,41 @@ function upsertTopLevelString(
   return `${replacement}\n${content}`;
 }
 
+/**
+ * Maximum TOML file size to process (1MB).
+ * Larger files are rejected to prevent OOM on malformed responses.
+ */
+const MAX_TOML_SIZE = 1024 * 1024;
+
+/**
+ * Upserts the `phases` list in the `[flow]` section of a TOML config.
+ *
+ * NOTE: This uses regex-based TOML manipulation which has known limitations:
+ * - Inline table values inside `[...]` brackets can confuse section detection
+ * - Multi-line strings with embedded `[` characters may cause false positives
+ * - Nested table arrays (`[[...]]`) are not well-supported
+ * For production use, consider a proper TOML parser library.
+ */
 function upsertFlowPhases(content: string, phases: string[]): string {
+  // Guard: reject content that exceeds MAX_TOML_SIZE
+  if (content.length > MAX_TOML_SIZE) {
+    throw new Error(
+      `TOML content exceeds maximum size of ${MAX_TOML_SIZE} bytes`,
+    );
+  }
+
+  // Strip TOML comments (lines starting with #) to avoid inline [`] bracket confusion
+  // in the regex. Commented-out `[` characters could otherwise be misinterpreted as
+  // section headers, breaking the flowSectionRegex lookahead.
+  const cleaned = content
+    .split("\n")
+    .map((line) => (line.trimStart().startsWith("#") ? "" : line))
+    .join("\n");
+
   const flowSectionRegex = /\[flow\][\s\S]*?(?=\n\[[^\]]+\]|$)/;
   const phasesLine = `phases = ${formatTomlStringList(phases)}`;
-  if (flowSectionRegex.test(content)) {
-    return content.replace(flowSectionRegex, (section) => {
+  if (flowSectionRegex.test(cleaned)) {
+    return cleaned.replace(flowSectionRegex, (section) => {
       const phasesRegex = /^phases\s*=\s*\[[^\]]*\]\s*$/m;
       if (phasesRegex.test(section)) {
         return section.replace(phasesRegex, phasesLine);
@@ -154,7 +184,7 @@ function upsertFlowPhases(content: string, phases: string[]): string {
     });
   }
 
-  return `${content.trimEnd()}\n\n[flow]\nname = "Configured Flow"\n${phasesLine}\n`;
+  return `${cleaned.trimEnd()}\n\n[flow]\nname = "Configured Flow"\n${phasesLine}\n`;
 }
 
 function upsertPhaseAgents(

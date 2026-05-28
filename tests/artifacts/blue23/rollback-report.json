@@ -1,8 +1,0 @@
-{
-  "ok": true,
-  "action": "blue23-rollback-phase-compat",
-  "platform_mode": "phase_compat",
-  "contract": "contracts/editor-capability-matrix.json",
-  "generated_at": "2026-04-19T07:05:58Z",
-  "notes": "Rollback script staged phase compatibility mode metadata and audit report."
-}

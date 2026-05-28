@@ -1,4 +1,0 @@
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"client":{"name":"token-cost-governance-benchmark","version":"1.0.0"},"capabilities":{},"protocolVersion":"2025-03-26"}}
-{"jsonrpc":"2.0","id":2,"method":"cost.status","params":{"task":"Optimize token budget and cost-aware model routing for multi-file refactor workflow","phase":"execute","changed_files":["src/acp/impl/request.rs","vscode-addon/src/extension.ts","GUI/src/views/BackendOpsView.vue"],"tool_dependencies":["search_files","read_file","write_file"],"retry_count":1,"requires_failover":false,"max_output_tokens":1800}}
-{"jsonrpc":"2.0","id":3,"method":"task.execute","params":{"task":"Apply cost-governance aware execution defaults on main chain","requirement_confirmed":true,"changed_files":["src/acp/impl/request.rs","tests/acp_runtime_rpc_integration.rs"],"tool_dependencies":["search_files","read_file"],"max_output_tokens":1600}}
-{"jsonrpc":"2.0","id":4,"method":"shutdown","params":{}}

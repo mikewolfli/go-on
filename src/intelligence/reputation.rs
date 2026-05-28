@@ -75,11 +75,15 @@ impl Default for ReputationConfig {
     }
 }
 
+/// Default maximum records to retain before evicting the oldest.
+const DEFAULT_MAX_RECORDS: usize = 10_000;
+
 /// Central reputation store
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ReputationStore {
     config: ReputationConfig,
     records: HashMap<String, ReputationRecord>,
+    max_records: usize,
 }
 
 impl ReputationStore {
@@ -87,10 +91,23 @@ impl ReputationStore {
         Self {
             config,
             records: HashMap::new(),
+            max_records: DEFAULT_MAX_RECORDS,
         }
     }
 
     fn record(&mut self, agent: &str) -> &mut ReputationRecord {
+        // Evict the oldest entry when at capacity (agent not already tracked).
+        if !self.records.contains_key(agent) && self.records.len() >= self.max_records {
+            if let Some(oldest_key) = self
+                .records
+                .iter()
+                .min_by_key(|(_, r)| r.last_updated_ms)
+                .map(|(k, _)| k.clone())
+            {
+                self.records.remove(&oldest_key);
+            }
+        }
+
         self.records
             .entry(agent.to_string())
             .or_insert_with(|| ReputationRecord::new(agent))

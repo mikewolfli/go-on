@@ -384,6 +384,10 @@ pub struct AutonomyLoopConfig {
     pub enable_execution_intelligence: bool,
     /// BLUE43 Step 16: Automatic recovery orchestrator for failure recovery
     pub recovery_orchestrator: Option<RecoveryOrchestrator>,
+    /// BLUE48-06: Maximum messages retained in the conversation window.
+    /// When exceeded, the oldest messages are evicted (FIFO).
+    #[allow(dead_code)]
+    pub max_messages: usize,
 }
 
 impl Default for AutonomyLoopConfig {
@@ -402,6 +406,7 @@ impl Default for AutonomyLoopConfig {
             enable_agent_reroute: false,
             enable_execution_intelligence: true,
             recovery_orchestrator: None,
+            max_messages: 200,
         }
     }
 }

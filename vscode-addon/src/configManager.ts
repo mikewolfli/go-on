@@ -10,6 +10,7 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
+import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 
 export interface CacheConfig {
   enabled: boolean;
@@ -168,147 +169,34 @@ class ConfigManager {
   }
 
   /**
-   * Parse TOML content (simplified parser)
+   * Parse TOML content using the smol-toml library.
+   * Handles inline tables, arrays of tables, multi-line strings, etc.
    */
   private parseTOML(content: string): GoOnConfig {
-    // This is a simplified TOML parser
-    // For production, consider using a proper TOML library
-    const config: {
-      [key: string]: unknown;
-      agents: Record<string, Record<string, unknown>>;
-      phases: Record<string, Record<string, unknown>>;
-    } = {
-      agents: {},
-      phases: {},
+    const parsed = parseToml(content) as Record<string, unknown>;
+
+    // Ensure sub-objects exist for expected sections
+    const config: Record<string, unknown> = {
+      agents: (parsed.agents as Record<string, unknown>) || {},
+      phases: (parsed.phases as Record<string, unknown>) || {},
+      ...parsed,
     };
 
-    let currentSection = "";
-    const lines = content.split("\n");
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-
-      // Skip comments and empty lines
-      if (!trimmed || trimmed.startsWith("#")) continue;
-
-      // Section header
-      if (trimmed.startsWith("[")) {
-        currentSection = trimmed.slice(1, -1);
-        const parts = currentSection.split(".");
-
-        if (parts[0] === "agents") {
-          config.agents[parts[1]] = {};
-        } else if (parts[0] === "phases") {
-          config.phases[parts[1]] = {};
-        } else {
-          if (!config[parts[0]]) {
-            config[parts[0]] = {};
-          }
-        }
-        continue;
-      }
-
-      // Key-value pair
-      const match = trimmed.match(/^([^=]+)=(.+)$/);
-      if (match) {
-        const key = match[1].trim();
-        const rawValue = match[2].trim();
-        let value: unknown = rawValue;
-
-        // Parse value type
-        if (rawValue.startsWith('"') && rawValue.endsWith('"')) {
-          value = rawValue.slice(1, -1);
-          // Handle escape sequences in TOML strings
-          value = (value as string)
-            .replace(/\\n/g, "\n")
-            .replace(/\\t/g, "\t")
-            .replace(/\\\\/g, "\\");
-        } else if (rawValue === "true") {
-          value = true;
-        } else if (rawValue === "false") {
-          value = false;
-        } else if (!isNaN(Number(rawValue))) {
-          value = Number(rawValue);
-        } else if (rawValue.startsWith("[")) {
-          // Array parsing: TOML arrays use single quotes, but JSON requires
-          // double quotes. Try a more precise conversion:
-          // 1. Try JSON.parse as-is (in case it's already valid JSON with double quotes)
-          // 2. Replace single-quoted strings with double-quoted ones
-          // 3. Fall back to raw string if all parsing fails
-          try {
-            value = JSON.parse(rawValue);
-          } catch {
-            // Try converting TOML-style single-quoted arrays to JSON
-            try {
-              const jsonArrayStr = rawValue.replace(/'/g, '"');
-              value = JSON.parse(jsonArrayStr);
-            } catch {
-              // If all parsing fails, keep the raw array as a string
-              value = rawValue;
-            }
-          }
-        }
-
-        const parts = currentSection.split(".");
-        if (parts[0] === "agents" && parts[1]) {
-          // Handle sub-sections within agents, e.g. [agents.copilot.options]
-          let target = config.agents[parts[1]];
-          for (let i = 2; i < parts.length; i++) {
-            if (!target[parts[i]] || typeof target[parts[i]] !== "object") {
-              target[parts[i]] = {};
-            }
-            target = target[parts[i]] as Record<string, unknown>;
-          }
-          target[key] = value;
-        } else if (parts[0] === "phases" && parts[1]) {
-          // Handle sub-sections within phases, e.g. [phases.coding.options]
-          let target = config.phases[parts[1]];
-          for (let i = 2; i < parts.length; i++) {
-            if (!target[parts[i]] || typeof target[parts[i]] !== "object") {
-              target[parts[i]] = {};
-            }
-            target = target[parts[i]] as Record<string, unknown>;
-          }
-          target[key] = value;
-        } else if (parts[0]) {
-          if (!config[parts[0]]) {
-            config[parts[0]] = {};
-          }
-          const section = config[parts[0]] as Record<string, unknown>;
-          if (parts.length > 1) {
-            if (!section[parts[1]] || typeof section[parts[1]] !== "object") {
-              section[parts[1]] = {};
-            }
-            (section[parts[1]] as Record<string, unknown>)[key] = value;
-          } else {
-            section[key] = value;
-          }
-        } else {
-          config[key] = value;
-        }
-      }
-    }
-
     // Check that the parsed config has actual content
+    const agents = config.agents as Record<string, unknown>;
+    const phases = config.phases as Record<string, unknown>;
+    const sectionKeys = Object.keys(config).filter(
+      (k) => k !== "agents" && k !== "phases",
+    );
     if (
-      Object.keys(config).length === 0 ||
-      (Object.keys(config).length === 1 &&
-        Object.keys(config.agents).length === 0 &&
-        Object.keys(config.phases).length === 0)
+      sectionKeys.length === 0 &&
+      Object.keys(agents).length === 0 &&
+      Object.keys(phases).length === 0
     ) {
-      const sectionKeys = Object.keys(config).filter(
-        (k) => k !== "agents" && k !== "phases",
+      // eslint-disable-next-line no-console
+      console.warn(
+        "configManager: TOML file appears empty or malformed, using defaults",
       );
-      if (
-        sectionKeys.length === 0 &&
-        Object.keys(config.agents).length === 0 &&
-        Object.keys(config.phases).length === 0
-      ) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          "configManager: TOML file appears empty or malformed, using defaults",
-        );
-      }
     }
 
     return config as unknown as GoOnConfig;
@@ -497,108 +385,11 @@ class ConfigManager {
   }
 
   /**
-   * Convert configuration to TOML format
+   * Convert configuration to TOML format using the smol-toml library.
+   * Properly handles inline tables, arrays, multi-line strings, etc.
    */
   private toTOML(config: GoOnConfig): string {
-    let result = "";
-
-    // Root level properties
-    if (config.default_phase) {
-      result += `default_phase = "${config.default_phase}"\n\n`;
-    }
-
-    // Cache section
-    if (config.cache) {
-      result += "[cache]\n";
-      result += `enabled = ${config.cache.enabled}\n`;
-      result += `path = "${config.cache.path}"\n`;
-      result += `default_ttl_seconds = ${config.cache.default_ttl_seconds}\n`;
-      result += `max_entries = ${config.cache.max_entries}\n\n`;
-    }
-
-    // Vector section
-    if (config.vector) {
-      result += "[vector]\n";
-      result += `enabled = ${config.vector.enabled}\n`;
-      result += `auto_mode = ${config.vector.auto_mode}\n`;
-      result += `path = "${config.vector.path}"\n`;
-      result += `dimensions = ${config.vector.dimensions}\n`;
-      result += `min_query_chars = ${config.vector.min_query_chars}\n`;
-      result += `top_k = ${config.vector.top_k}\n`;
-      result += `min_similarity = ${config.vector.min_similarity}\n`;
-      result += `max_snippet_chars = ${config.vector.max_snippet_chars}\n`;
-      result += `max_entries = ${config.vector.max_entries}\n`;
-      result += `summary_enabled = ${config.vector.summary_enabled}\n`;
-      result += `summary_trigger_messages = ${config.vector.summary_trigger_messages}\n`;
-      result += `summary_max_chars = ${config.vector.summary_max_chars}\n\n`;
-    }
-
-    // Agents section
-    if (config.agents) {
-      for (const [agentName, agentConfig] of Object.entries(config.agents)) {
-        result += `[agents.${agentName}]\n`;
-        for (const [key, value] of Object.entries(agentConfig)) {
-          if (typeof value === "string") {
-            result += `${key} = "${value}"\n`;
-          } else {
-            result += `${key} = ${JSON.stringify(value)}\n`;
-          }
-        }
-        result += "\n";
-      }
-    }
-
-    // Autotune section
-    if (config.autotune) {
-      result += "[autotune]\n";
-      result += `enabled = ${config.autotune.enabled}\n`;
-      result += `evaluate_interval = ${config.autotune.evaluate_interval}\n`;
-      result += `min_query_chars_step = ${config.autotune.min_query_chars_step}\n`;
-      result += `min_query_chars_min = ${config.autotune.min_query_chars_min}\n`;
-      result += `min_query_chars_max = ${config.autotune.min_query_chars_max}\n`;
-      result += `max_top_k = ${config.autotune.max_top_k}\n`;
-      result += `low_precision_threshold = ${config.autotune.low_precision_threshold}\n`;
-      result += `high_precision_threshold = ${config.autotune.high_precision_threshold}\n`;
-      result += `state_path = "${config.autotune.state_path}"\n`;
-      result += `cooldown_windows = ${config.autotune.cooldown_windows}\n`;
-      result += `min_vector_searches = ${config.autotune.min_vector_searches}\n`;
-      result += `summary_trigger_min = ${config.autotune.summary_trigger_min}\n`;
-      result += `summary_trigger_max = ${config.autotune.summary_trigger_max}\n\n`;
-    }
-
-    // Runtime section
-    if (config.runtime) {
-      result += "[runtime]\n";
-      result += `maintenance_interval_seconds = ${config.runtime.maintenance_interval_seconds}\n`;
-      result += `health_interval_seconds = ${config.runtime.health_interval_seconds}\n`;
-      result += `shutdown_drain_seconds = ${config.runtime.shutdown_drain_seconds}\n\n`;
-    }
-
-    // Flow section
-    if (config.flow) {
-      result += "[flow]\n";
-      result += `name = "${config.flow.name}"\n`;
-      result += `phases = ${JSON.stringify(config.flow.phases)}\n\n`;
-    }
-
-    // Phases section
-    if (config.phases) {
-      for (const [phaseName, phaseConfig] of Object.entries(config.phases)) {
-        result += `[phases.${phaseName}]\n`;
-        for (const [key, value] of Object.entries(phaseConfig)) {
-          if (Array.isArray(value)) {
-            result += `${key} = ${JSON.stringify(value)}\n`;
-          } else if (typeof value === "string") {
-            result += `${key} = "${value}"\n`;
-          } else {
-            result += `${key} = ${JSON.stringify(value)}\n`;
-          }
-        }
-        result += "\n";
-      }
-    }
-
-    return result;
+    return stringifyToml(config as Record<string, unknown>);
   }
 }
 

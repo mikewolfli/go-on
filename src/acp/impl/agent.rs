@@ -24,6 +24,14 @@ use crate::i18n::runtime::tf;
 use crate::rpc_protocol::RequestTraceContext;
 use crate::verification::DeterministicVerifier;
 
+/// Pre-computed context for a dual review gate run.
+struct DualReviewContext {
+    reviewers: Vec<String>,
+    timeout_policy: ReviewTimeoutPolicy,
+    gate_deadline: Option<Instant>,
+    reviewer_deadline: Option<Instant>,
+}
+
 /// Review timeout policy
 #[derive(Debug, Clone)]
 pub struct ReviewTimeoutPolicy {
@@ -69,7 +77,10 @@ pub struct ReviewGateOutcome {
 
 /// Run dual review gate
 ///
-/// This function replaces the `AcpServer::run_dual_review_gate` method.
+/// Orchestrates a dual-review pipeline by:
+///   1. Building the review context (routing, scoring, sorting reviewers)
+///   2. Executing both reviewers in parallel
+///   3. Aggregating results and recording metrics
 pub async fn run_dual_review_gate(
     server: &AcpServer,
     id: Option<Value>,
@@ -96,145 +107,215 @@ pub async fn run_dual_review_gate(
             })
     });
 
+    let ctx = build_review_context(server, phase_options)?;
+
+    // ── Phase 2: Execute both reviewers in parallel ───────────────────
+    let review_futures: Vec<_> = ctx
+        .reviewers
+        .iter()
+        .map(|reviewer| {
+            execute_reviewer(
+                server,
+                id.clone(),
+                messages,
+                reviewer,
+                phase_options,
+                review_span.as_ref(),
+                pipeline_trace,
+                ctx.reviewer_deadline,
+            )
+        })
+        .collect();
+
+    let results = future::join_all(review_futures).await;
+
+    // ── Phase 3: Aggregate results and apply gate timeout handling ────
+    let result = aggregate_review_results(
+        &ctx,
+        &results,
+        started,
+        &ctx.reviewers,
+    );
+
+    record_and_finalize(
+        server,
+        started,
+        &ctx,
+        result,
+    )
+    .await
+}
+
+/// Prepare data for dual review: resolve routing, score reviewers, and
+/// select the top 2 candidates.
+fn build_review_context(
+    server: &AcpServer,
+    phase_options: Option<&PhaseOptions>,
+) -> Result<DualReviewContext> {
     let timeout_policy = ReviewTimeoutPolicy::from_options(phase_options);
     let gate_timeout = extra_u64(phase_options, "review_gate_timeout_seconds")
         .or_else(|| phase_options.and_then(|opts| opts.review_timeout_seconds))
         .or_else(|| phase_options.and_then(|opts| opts.request_timeout_seconds))
         .map(Duration::from_secs);
     let gate_deadline = gate_timeout.map(|limit| Instant::now() + limit);
+    let reviewer_deadline = review_timeout(phase_options).map(|limit| Instant::now() + limit);
 
-    let result = async {
-        let (flow, registry) = routing_handles(server)?;
+    let (flow, registry) = routing_handles(server)?;
 
-        let review_routing = flow
-            .resolve(Some("review".to_string()), registry.as_ref())
-            .map_err(|err| {
-                anyhow::anyhow!(
-                    "{}",
-                    tf(
-                        "error.review_phase_required",
-                        &[("error", &format!("{err}"))]
-                    )
-                )
-            })?;
-
-        let mut reviewer_names = phase_options
-            .and_then(|options| options.full_auto_review_agents.clone())
-            .unwrap_or_else(|| review_routing.phase.agent_names.clone());
-
-        // Path B: agent_names is empty (auto-map). Fall back to runtime-resolved agents.
-        if reviewer_names.is_empty() {
-            reviewer_names = review_routing
-                .agents
-                .iter()
-                .map(|(name, _)| name.clone())
-                .collect();
-        }
-
-        let review_phase_name = review_routing.phase.phase_name.clone();
-        let _original_reviewer_order = reviewer_names.clone();
-        let mut reviewer_scores: Vec<(String, f64)> = Vec::new();
-
-        if let Ok(state) = server.online_controller.lock() {
-            let ranked = state.rank_agent_names_for_phase(&review_phase_name, &reviewer_names);
-            reviewer_scores = ranked;
-        }
-
-        // Sort reviewers by score (highest first)
-        reviewer_names.sort_by(|a, b| {
-            let score_a = reviewer_scores
-                .iter()
-                .find(|(name, _)| name == a)
-                .map(|(_, score)| *score)
-                .unwrap_or(0.0);
-            let score_b = reviewer_scores
-                .iter()
-                .find(|(name, _)| name == b)
-                .map(|(_, score)| *score)
-                .unwrap_or(0.0);
-            score_b
-                .partial_cmp(&score_a)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        // Take top 2 reviewers for dual review
-        let reviewers: Vec<String> = reviewer_names.into_iter().take(2).collect();
-
-        if reviewers.is_empty() {
-            return Err(anyhow::anyhow!(
+    let review_routing = flow
+        .resolve(Some("review".to_string()), registry.as_ref())
+        .map_err(|err| {
+            anyhow::anyhow!(
                 "{}",
-                tf("error.no_reviewers_available", &[])
-            ));
-        }
-
-        let reviewer_timeout = review_timeout(phase_options);
-        let reviewer_deadline = reviewer_timeout.map(|limit| Instant::now() + limit);
-
-        // Run reviews in parallel
-        let review_futures: Vec<_> = reviewers
-            .iter()
-            .map(|reviewer| {
-                run_single_review(
-                    server,
-                    id.clone(),
-                    messages,
-                    reviewer,
-                    phase_options,
-                    review_span.as_ref(),
-                    pipeline_trace,
-                    reviewer_deadline,
+                tf(
+                    "error.review_phase_required",
+                    &[("error", &format!("{err}"))]
                 )
-            })
+            )
+        })?;
+
+    let mut reviewer_names = phase_options
+        .and_then(|options| options.full_auto_review_agents.clone())
+        .unwrap_or_else(|| review_routing.phase.agent_names.clone());
+
+    // Path B: agent_names is empty (auto-map). Fall back to runtime-resolved agents.
+    if reviewer_names.is_empty() {
+        reviewer_names = review_routing
+            .agents
+            .iter()
+            .map(|(name, _)| name.clone())
             .collect();
+    }
 
-        let results = future::join_all(review_futures).await;
+    let review_phase_name = review_routing.phase.phase_name.clone();
+    let _original_reviewer_order = reviewer_names.clone();
 
-        // Process results
-        let mut passed_count = 0;
-        let mut all_comments = Vec::new();
-        let mut final_reviewer = String::new();
-        let mut timeout_detected = false;
+    let reviewer_scores = {
+        let state = server.online_controller.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("Agent online_controller lock poisoned in run_dual_review_gate, recovering");
+            poisoned.into_inner()
+        });
+        state.rank_agent_names_for_phase(&review_phase_name, &reviewer_names)
+    };
 
-        for (i, result) in results.into_iter().enumerate() {
-            match result {
-                Ok(outcome) => {
-                    if outcome.passed {
-                        passed_count += 1;
-                    }
-                    all_comments.extend(outcome.comments);
-                    if i == 0 {
-                        final_reviewer = outcome.reviewer;
-                    }
+    // Sort reviewers by score (highest first)
+    reviewer_names.sort_by(|a, b| {
+        let score_a = reviewer_scores
+            .iter()
+            .find(|(name, _)| name == a)
+            .map(|(_, score)| *score)
+            .unwrap_or(0.0);
+        let score_b = reviewer_scores
+            .iter()
+            .find(|(name, _)| name == b)
+            .map(|(_, score)| *score)
+            .unwrap_or(0.0);
+        score_b
+            .partial_cmp(&score_a)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Take top 2 reviewers for dual review
+    let reviewers: Vec<String> = reviewer_names.into_iter().take(2).collect();
+
+    if reviewers.is_empty() {
+        return Err(anyhow::anyhow!(
+            "{}",
+            tf("error.no_reviewers_available", &[])
+        ));
+    }
+
+    Ok(DualReviewContext {
+        reviewers,
+        timeout_policy,
+        gate_deadline,
+        reviewer_deadline,
+    })
+}
+
+/// Execute a single reviewer agent call.
+#[allow(clippy::too_many_arguments)]
+async fn execute_reviewer(
+    server: &AcpServer,
+    id: Option<Value>,
+    messages: &[Message],
+    reviewer: &str,
+    phase_options: Option<&PhaseOptions>,
+    review_span: Option<&OtelContext>,
+    pipeline_trace: &RequestTraceContext,
+    reviewer_deadline: Option<Instant>,
+) -> Result<ReviewGateOutcome> {
+    run_single_review(
+        server,
+        id,
+        messages,
+        reviewer,
+        phase_options,
+        review_span,
+        pipeline_trace,
+        reviewer_deadline,
+    )
+    .await
+}
+
+/// Combine results from both reviewers and decide the final outcome.
+/// Returns `(outcome, timeout_detected)`.
+fn aggregate_review_results(
+    ctx: &DualReviewContext,
+    results: &[Result<ReviewGateOutcome>],
+    started: Instant,
+    reviewers: &[String],
+) -> (ReviewGateOutcome, bool) {
+    let mut passed_count = 0;
+    let mut all_comments = Vec::new();
+    let mut final_reviewer = String::new();
+    let mut timeout_detected = false;
+
+    for (i, result) in results.iter().enumerate() {
+        match result {
+            Ok(outcome) => {
+                if outcome.passed {
+                    passed_count += 1;
                 }
-                Err(err) => {
-                    let err_message = err.to_string();
-                    if err_message.to_ascii_lowercase().contains("timeout")
-                        || !timeout_policy.fail_on_timeout
-                    {
-                        timeout_detected = true;
-                    }
-                    info!("Reviewer {} failed: {}", reviewers[i], err_message);
+                all_comments.extend(outcome.comments.clone());
+                if i == 0 {
+                    final_reviewer = outcome.reviewer.clone();
                 }
             }
+            Err(err) => {
+                let err_message = err.to_string();
+                if err_message.to_ascii_lowercase().contains("timeout")
+                    || !ctx.timeout_policy.fail_on_timeout
+                {
+                    timeout_detected = true;
+                }
+                info!("Reviewer {} failed: {}", reviewers[i], err_message);
+            }
         }
-
-        // Determine final outcome
-        let passed = passed_count >= 1; // At least one reviewer must pass
-
-        Ok((
-            ReviewGateOutcome {
-                passed,
-                comments: all_comments,
-                reviewer: final_reviewer,
-                duration_ms: started.elapsed().as_millis() as u64,
-            },
-            timeout_detected,
-        ))
     }
-    .await;
 
-    // Handle timeout
-    if let Some(deadline) = gate_deadline {
+    let passed = passed_count >= 1; // At least one reviewer must pass
+
+    (
+        ReviewGateOutcome {
+            passed,
+            comments: all_comments,
+            reviewer: final_reviewer,
+            duration_ms: started.elapsed().as_millis() as u64,
+        },
+        timeout_detected,
+    )
+}
+
+/// Record observability metrics and apply gate-level timeout handling.
+async fn record_and_finalize(
+    server: &AcpServer,
+    started: Instant,
+    ctx: &DualReviewContext,
+    result: (ReviewGateOutcome, bool),
+) -> Result<ReviewGateOutcome> {
+    // ── Gate-level timeout handling ────────────────────────────────────
+    if let Some(deadline) = ctx.gate_deadline {
         if Instant::now() > deadline {
             let timeout_duration_ms = started.elapsed().as_millis() as u64;
             server.observability.metrics.inc_review_gate_timeout();
@@ -242,68 +323,43 @@ pub async fn run_dual_review_gate(
                 .observability
                 .metrics
                 .record_review_latency(timeout_duration_ms as f64);
-            if timeout_policy.fail_on_timeout {
+            if ctx.timeout_policy.fail_on_timeout {
                 server.observability.metrics.inc_review_gate_rejected();
                 return Err(anyhow::anyhow!("{}", tf("error.review_gate_timeout", &[])));
             } else {
                 server.observability.metrics.inc_review_gate_degraded();
-                match result {
-                    Ok((mut outcome, _timeout_detected)) => {
-                        outcome
-                            .comments
-                            .push(tf("warning.review_timeout_continue", &[]));
-                        if outcome.passed {
-                            server.observability.metrics.inc_review_gate_approved();
-                        } else {
-                            server.observability.metrics.inc_review_gate_rejected();
-                        }
-                        return Ok(outcome);
-                    }
-                    Err(_err) => {
-                        server
-                            .observability
-                            .metrics
-                            .inc_review_gate_invalid_response();
-                        return Ok(ReviewGateOutcome {
-                            passed: true,
-                            comments: vec![tf("warning.review_timeout_continue", &[])],
-                            reviewer: "timeout".to_string(),
-                            duration_ms: timeout_duration_ms,
-                        });
-                    }
+                let (mut outcome, _timeout_detected) = result;
+                outcome
+                    .comments
+                    .push(tf("warning.review_timeout_continue", &[]));
+                if outcome.passed {
+                    server.observability.metrics.inc_review_gate_approved();
+                } else {
+                    server.observability.metrics.inc_review_gate_rejected();
                 }
+                return Ok(outcome);
             }
         }
     }
 
-    match result {
-        Ok((outcome, timeout_detected)) => {
-            if timeout_detected {
-                server.observability.metrics.inc_review_gate_timeout();
-                if !timeout_policy.fail_on_timeout {
-                    server.observability.metrics.inc_review_gate_degraded();
-                }
-            }
-            server
-                .observability
-                .metrics
-                .record_review_latency(outcome.duration_ms as f64);
-            if outcome.passed {
-                server.observability.metrics.inc_review_gate_approved();
-            } else {
-                server.observability.metrics.inc_review_gate_rejected();
-            }
-            Ok(outcome)
-        }
-        Err(err) => {
-            server
-                .observability
-                .metrics
-                .inc_review_gate_invalid_response();
-            server.observability.metrics.inc_review_gate_rejected();
-            Err(err)
+    // ── Normal result processing with metrics ──────────────────────────
+    let (outcome, timeout_detected) = result;
+    if timeout_detected {
+        server.observability.metrics.inc_review_gate_timeout();
+        if !ctx.timeout_policy.fail_on_timeout {
+            server.observability.metrics.inc_review_gate_degraded();
         }
     }
+    server
+        .observability
+        .metrics
+        .record_review_latency(outcome.duration_ms as f64);
+    if outcome.passed {
+        server.observability.metrics.inc_review_gate_approved();
+    } else {
+        server.observability.metrics.inc_review_gate_rejected();
+    }
+    Ok(outcome)
 }
 
 /// Run single review by calling the reviewer agent and parsing its APPROVE/REJECT response.
@@ -407,9 +463,11 @@ async fn run_single_review(
     // Run deterministic signals and summarize into comments (BLUE8-M6/M7)
     // M3: record reviewer outcome into online controller (learning loop)
     let elapsed_ms = started.elapsed().as_millis() as u64;
-    if let Ok(mut ctrl) = server.online_controller.lock() {
-        ctrl.record_agent_outcome("review", reviewer, passed, elapsed_ms);
-    }
+    let mut ctrl = server.online_controller.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("Agent online_controller lock poisoned in run_single_review, recovering");
+        poisoned.into_inner()
+    });
+    ctrl.record_agent_outcome("review", reviewer, passed, elapsed_ms);
 
     let syntax_signal = DeterministicVerifier::run_syntax_check("");
     let compass_signals = DeterministicVerifier::run_quality_compass_checks(&response);

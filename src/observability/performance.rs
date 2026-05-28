@@ -3,7 +3,7 @@
 //! This module provides performance optimization tools including caching strategies,
 //! memory management, and performance profiling.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -57,7 +57,7 @@ impl Default for PerformanceMetrics {
 /// Performance monitor
 pub struct PerformanceMonitor {
     /// Operation latencies for percentile calculation
-    latencies: Vec<f64>,
+    latencies: VecDeque<f64>,
     /// Maximum latencies to keep for percentile calculation
     max_latencies: usize,
     /// Total operations counter
@@ -76,7 +76,7 @@ impl PerformanceMonitor {
     /// Create a new performance monitor
     pub fn new(max_latencies: usize) -> Self {
         Self {
-            latencies: Vec::with_capacity(max_latencies),
+            latencies: VecDeque::with_capacity(max_latencies),
             max_latencies,
             total_ops: AtomicU64::new(0),
             successful_ops: AtomicU64::new(0),
@@ -98,9 +98,9 @@ impl PerformanceMonitor {
 
         // Record latency for percentile calculation
         if self.latencies.len() >= self.max_latencies {
-            self.latencies.remove(0);
+            self.latencies.pop_front();
         }
-        self.latencies.push(latency_ms);
+        self.latencies.push_back(latency_ms);
     }
 
     /// Record a cache hit
@@ -129,7 +129,7 @@ impl PerformanceMonitor {
         };
 
         // Calculate percentiles
-        let mut sorted_latencies = self.latencies.clone();
+        let mut sorted_latencies: Vec<f64> = self.latencies.iter().copied().collect();
         sorted_latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
         let p95_latency = if !sorted_latencies.is_empty() {

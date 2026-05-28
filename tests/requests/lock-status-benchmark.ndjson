@@ -1,5 +1,0 @@
-{"jsonrpc":"2.0","id":1,"method":"initialize"}
-{"jsonrpc":"2.0","id":2,"method":"health.probes"}
-{"jsonrpc":"2.0","id":3,"method":"lock.status","params":{"top_n":5}}
-{"jsonrpc":"2.0","id":4,"method":"observability.alerts","params":{"limit":10}}
-{"jsonrpc":"2.0","id":5,"method":"shutdown"}

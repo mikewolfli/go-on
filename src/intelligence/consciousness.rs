@@ -143,6 +143,19 @@ pub struct ConsciousnessProfile {
     pub reflexion_count: u64,
 }
 
+/// Trend direction derived from a moving-average comparison of recent metrics.
+///
+/// Used by `ConsciousnessMetrics::current_state()` to adjust the conscious
+/// state based on whether awareness is improving or declining.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum TrendDirection {
+StrongUp,
+WeakUp,
+Stable,
+WeakDown,
+StrongDown,
+}
+
 // ── Internal state ──────────────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -217,18 +230,25 @@ impl ConsciousnessMetrics {
 
     // ── State query ──────────────────────────────────────────────────────
 
-    /// Determine the current consciousness state based on average awareness.
+    /// Determine the current consciousness state based on average awareness
+    /// with trend analysis.
     ///
     /// State transitions are driven by the average awareness value across
-    /// all metric types:
+    /// all metric types and the short-term trend direction:
     /// - `< 0.2`  → `Unconscious`
     /// - `0.2-0.4` → `Minimal`
     /// - `0.4-0.6` → `Reflexive`
     /// - `0.6-0.8` → `SelfAware`
     /// - `>= 0.8`  → `MetaCognitive`
+    ///
+    /// When a strong upward trend is detected, the state is promoted by
+    /// one level (early recognition of improvement). When a strong downward
+    /// trend is detected, the state is demoted by one level (early warning
+    /// of degradation).
     pub fn current_state(&self) -> ConsciousnessState {
         let avg = self.average_awareness();
-        if avg >= 0.8 {
+        // Determine the base state from the average awareness value.
+        let base = if avg >= 0.8 {
             ConsciousnessState::MetaCognitive
         } else if avg >= 0.6 {
             ConsciousnessState::SelfAware
@@ -238,6 +258,16 @@ impl ConsciousnessMetrics {
             ConsciousnessState::Minimal
         } else {
             ConsciousnessState::Unconscious
+        };
+
+        // Apply trend adjustment using simple linear regression over recent
+        // metrics. A strong upward trend promotes the state by one level;
+        // a strong downward trend demotes it by one level.
+        let trend = self.compute_trend();
+        match trend {
+            TrendDirection::StrongUp => Self::promote_state(base),
+            TrendDirection::StrongDown => Self::demote_state(base),
+            TrendDirection::Stable | TrendDirection::WeakUp | TrendDirection::WeakDown => base,
         }
     }
 
@@ -400,6 +430,80 @@ impl ConsciousnessMetrics {
             0.0
         } else {
             sum / count as f64
+        }
+    }
+
+    /// Compute trend direction using a moving-average comparison over the
+    /// N most recent metrics.
+    ///
+    /// Splits the recent metric window into two halves (older vs newer)
+    /// and compares their averages. A minimum of 10 data points is required
+    /// before any trend adjustment is applied, preventing noise from small
+    /// sample sizes.
+    fn compute_trend(&self) -> TrendDirection {
+        let inner = lock_guard(&self.inner);
+        let window = inner.config.tracking_window;
+        let metrics: Vec<&AwarenessMetric> = inner
+            .metrics
+            .iter()
+            .rev()
+            .take(window)
+            .collect::<Vec<_>>();
+
+        // Require at least 10 data points before attempting trend analysis
+        // to avoid overreacting to noise in small samples.
+        if metrics.len() < 10 {
+            return TrendDirection::Stable;
+        }
+
+        // Also collect the earlier half of the window for moving average
+        let half = metrics.len() / 2;
+        if half < 2 {
+            return TrendDirection::Stable;
+        }
+
+        // Split into two halves: early (newer) and late (older).
+        // Since metrics are reversed (newest first), early = newer half.
+        let (early, late) = metrics.split_at(half);
+
+        let early_avg: f64 = early.iter().map(|m| m.value).sum::<f64>() / early.len() as f64;
+        let late_avg: f64 = late.iter().map(|m| m.value).sum::<f64>() / late.len() as f64;
+
+        let diff = early_avg - late_avg;
+        let threshold = 0.05; // 5% absolute change threshold
+
+        if diff > threshold {
+            TrendDirection::StrongUp
+        } else if diff > threshold * 0.5 {
+            TrendDirection::WeakUp
+        } else if diff < -threshold {
+            TrendDirection::StrongDown
+        } else if diff < -threshold * 0.5 {
+            TrendDirection::WeakDown
+        } else {
+            TrendDirection::Stable
+        }
+    }
+
+    /// Promote a consciousness state by one level.
+    fn promote_state(state: ConsciousnessState) -> ConsciousnessState {
+        match state {
+            ConsciousnessState::Unconscious => ConsciousnessState::Minimal,
+            ConsciousnessState::Minimal => ConsciousnessState::Reflexive,
+            ConsciousnessState::Reflexive => ConsciousnessState::SelfAware,
+            ConsciousnessState::SelfAware => ConsciousnessState::MetaCognitive,
+            ConsciousnessState::MetaCognitive => ConsciousnessState::MetaCognitive,
+        }
+    }
+
+    /// Demote a consciousness state by one level.
+    fn demote_state(state: ConsciousnessState) -> ConsciousnessState {
+        match state {
+            ConsciousnessState::Unconscious => ConsciousnessState::Unconscious,
+            ConsciousnessState::Minimal => ConsciousnessState::Unconscious,
+            ConsciousnessState::Reflexive => ConsciousnessState::Minimal,
+            ConsciousnessState::SelfAware => ConsciousnessState::Reflexive,
+            ConsciousnessState::MetaCognitive => ConsciousnessState::SelfAware,
         }
     }
 

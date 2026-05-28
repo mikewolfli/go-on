@@ -503,3 +503,146 @@ async fn execute_simple_tool(name: &str, args: &Value) -> Result<String> {
         _ => Err(anyhow::anyhow!("Unknown tool: {name}")),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── resolve_safe_path tests ──────────────────────────────────────
+
+    /// Verify that `resolve_safe_path` rejects paths with ".." that escape
+    /// the current working directory.
+    #[test]
+    fn test_resolve_safe_path_rejects_traversal() {
+        // Path traversal that escapes cwd
+        let result = resolve_safe_path("../../../etc/passwd", false);
+        assert!(
+            result.is_err(),
+            "path traversal should be rejected, got: {:?}",
+            result
+        );
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("outside the workspace") || msg.contains("does not exist"),
+            "error should mention outside workspace or does not exist, got: {}",
+            msg
+        );
+
+        // Absolute path outside cwd
+        let result = resolve_safe_path("/etc/passwd", false);
+        assert!(
+            result.is_err(),
+            "absolute path outside cwd should be rejected"
+        );
+    }
+
+    /// Verify that `resolve_safe_path` allows paths within the workspace.
+    #[test]
+    fn test_resolve_safe_path_allows_relative_paths() {
+        // A relative path to a file that exists (Cargo.toml should be in cwd)
+        let result = resolve_safe_path("Cargo.toml", false);
+        assert!(
+            result.is_ok(),
+            "Cargo.toml in cwd should be resolvable, got: {:?}",
+            result
+        );
+
+        // A relative path to a new file (with allow_new_file = true)
+        let result = resolve_safe_path("test_temp_new_file.txt", true);
+        assert!(
+            result.is_ok(),
+            "new file in cwd should be resolvable with allow_new_file=true, got: {:?}",
+            result
+        );
+    }
+
+    /// Verify that allowing a new file checks the parent directory exists.
+    #[test]
+    fn test_resolve_safe_path_new_file_in_nonexistent_dir() {
+        let result = resolve_safe_path("nonexistent_dir/some_file.txt", true);
+        assert!(
+            result.is_err(),
+            "new file in nonexistent parent dir should fail"
+        );
+    }
+
+    // ── execute_simple_tool security ──────────────────────────────────
+
+    /// Verify that `execute_simple_tool` rejects path traversal via the
+    /// `name` field (read_file with traversal path).
+    #[tokio::test]
+    async fn test_execute_simple_tool_rejects_traversal() {
+        // Attempt to read a file outside workspace via path traversal
+        let result = execute_simple_tool(
+            "read_file",
+            &json!({"path": "../../../etc/passwd"}),
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "read_file with traversal path should be rejected"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("outside the workspace") || err.contains("does not exist"),
+            "error should mention security, got: {}",
+            err
+        );
+    }
+
+    /// Verify that executing a simple tool with missing arguments returns
+    /// a descriptive error.
+    #[tokio::test]
+    async fn test_execute_simple_tool_missing_arguments() {
+        let result = execute_simple_tool("read_file", &json!({})).await;
+        assert!(
+            result.is_err(),
+            "read_file without path should fail"
+        );
+        assert!(
+            result.unwrap_err().to_string().contains("missing path argument"),
+            "error should mention missing path"
+        );
+
+        let result = execute_simple_tool("write_file", &json!({"path": "test.txt"})).await;
+        assert!(
+            result.is_err(),
+            "write_file without content should fail"
+        );
+        assert!(
+            result.unwrap_err().to_string().contains("missing content argument"),
+            "error should mention missing content"
+        );
+    }
+
+    /// Verify that unknown tool names produce a descriptive error.
+    #[tokio::test]
+    async fn test_execute_simple_tool_unknown_tool() {
+        let result = execute_simple_tool("nonexistent_tool", &json!({})).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Unknown tool"));
+    }
+
+    // ── Safety edge cases ────────────────────────────────────────────
+
+    /// Verify that resolve_safe_path with relative path that stays within
+    /// workspace works even when file doesn't exist (allow_new_file=true).
+    #[test]
+    fn test_resolve_safe_path_new_file_allowed() {
+        // This should work: path is relative and parent (cwd) exists
+        let result = resolve_safe_path("_test_write_cleanup.txt", true);
+        assert!(result.is_ok(), "new file in cwd should be OK");
+    }
+
+    /// Verify that resolve_safe_path with file that exists works.
+    #[test]
+    fn test_resolve_safe_path_existing_file() {
+        let cwd = std::env::current_dir().unwrap();
+        // Try to resolve the src dir which definitely exists
+        let result = resolve_safe_path("src", false);
+        assert!(result.is_ok(), "src dir should be resolvable");
+        let path = result.unwrap();
+        assert!(path.starts_with(&cwd), "resolved path should start with cwd");
+    }
+}

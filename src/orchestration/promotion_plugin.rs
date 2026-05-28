@@ -206,7 +206,7 @@ pub struct EvidenceWeightedPromotion {
 
 #[cfg(test)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct PromotionHistoryEntry {
+pub struct PromotionHistoryEntry {
     timestamp: String,
     evidence_quality: f64,
     multiplier: f64,

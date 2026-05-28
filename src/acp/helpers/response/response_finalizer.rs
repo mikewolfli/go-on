@@ -24,6 +24,25 @@ use crate::orchestration::planner_executor::Planner;
 use crate::orchestration::workflow_optimizer::OptimizationContext;
 use crate::rpc_protocol::RequestTraceContext;
 
+/// Execution metrics extracted from the agent result for downstream use.
+struct AgentExecutionMetrics {
+    elapsed_ms: u64,
+    used_tokens: u64,
+    #[allow(dead_code)]
+    request_succeeded: bool,
+}
+
+/// Metadata computed during finalization, ready for injection into the response.
+struct ResponseMetadata {
+    promotion_decisions: Vec<String>,
+    optimizer_recommendations: Vec<Value>,
+    execution_plan: Value,
+    orchestration_alignment: Value,
+    orchestration_node_decisions: Value,
+    fork_id: Option<String>,
+    evaluation_results: Vec<Value>,
+}
+
 /// Run the full final response post-processing pipeline.
 ///
 /// This function encapsulates all post-agent-execution steps:
@@ -65,9 +84,51 @@ pub fn finalize_chat_response(
     // Planner input
     first_message_content: &str,
 ) -> Value {
+    // ── Step 1: Collect agent outputs & record side-effects ────────────
+    let metrics = collect_agent_outputs(
+        server, trace, mode, phase_name, selected_agent,
+        selected_model_name, response_text, tenant_id, started, &result,
+        conversation_id, sched_task_id, candidate_agents,
+    );
+
+    // ── Step 2: Build response metadata ───────────────────────────────
+    let metadata = build_response_metadata(
+        server, &result, mode, phase_name,
+        selected_agent, conversation_id, first_message_content,
+        tool_execution_results, response_text, &metrics,
+    );
+
+    // ── Step 3: Format the final response body ────────────────────────
+    format_response_body(
+        &mut result, reasoning_text, schema_warnings, schema_error,
+        layered_prompt_segments_len, tenant_id, &metadata,
+    );
+
+    result
+}
+
+/// Gather all agent execution outputs and record side-effects.
+///
+/// Performs provenance logging, scheduler completion, capability bus
+/// feedback, agent outcome recording, and tenant budget tracking.
+/// Returns execution metrics for downstream metadata construction.
+#[allow(clippy::too_many_arguments)]
+fn collect_agent_outputs(
+    server: &AcpServer,
+    trace: &RequestTraceContext,
+    mode: &str,
+    phase_name: &str,
+    selected_agent: &str,
+    selected_model_name: &Option<String>,
+    response_text: &str,
+    tenant_id: &str,
+    started: Instant,
+    result: &Value,
+    conversation_id: &str,
+    sched_task_id: &str,
+    candidate_agents: &[String],
+) -> AgentExecutionMetrics {
     // ── Request-level routing provenance (BLUE41 Step 7) ──────────────
-    // Persist route decisions and diagnostics so future learning and audits
-    // can explain why this request selected a specific execution path.
     if let Some(ref ledger) = server.provenance_ledger {
         let route_input = json!({
             "request_id": trace.request_id.clone(),
@@ -107,26 +168,22 @@ pub fn finalize_chat_response(
     }
 
     // ── Scheduler task completion (ARCH-02) ────────────────────────────
-    // Mark the scheduled task as completed so the active-worker counter
-    // decrements and queue depth reflects the true in-flight load.
     if let Some(ref sched) = server.scheduler {
         if let Err(e) = sched.level1.complete(sched_task_id) {
             tracing::warn!("scheduler complete failed: {}", e);
         }
     }
 
+    let elapsed = started.elapsed().as_millis() as u64;
+    let used_tokens = result
+        .get("token_economy")
+        .and_then(|v| v.get("total_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let request_succeeded = !response_text.trim().is_empty();
+
     // ── CapabilityBus feedback on execution outcome ────────────────────
-    // Record the execution result back into the sub-buses (learning,
-    // reputation, etc.) so that subsequent routes benefit from this
-    // experience.
     if let Some(ref cb) = server.capability_bus {
-        let elapsed = started.elapsed().as_millis() as u64;
-        let used_tokens = result
-            .get("token_economy")
-            .and_then(|v| v.get("total_tokens"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-        let request_succeeded = !response_text.trim().is_empty();
         cb.feedback(
             selected_agent,
             phase_name,
@@ -137,56 +194,70 @@ pub fn finalize_chat_response(
             1.0,
         );
         // Also update the reinforcement learning loop with the outcome
-        cb.evolve(
-            &(phase_name.to_string(), selected_agent.to_string()),
-            "execute",
-            &(phase_name.to_string(), selected_agent.to_string()),
-            used_tokens,
-            request_succeeded,
-            1.0,
-        );
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.block_on(cb.evolve(
+                &(phase_name.to_string(), selected_agent.to_string()),
+                "execute",
+                &(phase_name.to_string(), selected_agent.to_string()),
+                used_tokens,
+                request_succeeded,
+                1.0,
+            ));
+        }
     }
 
-    record_task_agent_outcome(phase_name, selected_agent, !response_text.trim().is_empty());
+    record_task_agent_outcome(phase_name, selected_agent, request_succeeded);
 
     // ── TenantBudgetEnforcer record usage (F-GAP-08) ───────────────────
-    // Record resource consumption after task completion so subsequent
-    // pre-route checks can enforce per-tenant quotas.
-    if let Ok(mut budget) = server.tenant_budget.lock() {
-        let used_tokens = result
-            .get("token_economy")
-            .and_then(|v| v.get("total_tokens"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as usize;
-        budget.record_usage(tenant_id, used_tokens, 1);
+    {
+        let mut budget = server.tenant_budget.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("tenant_budget lock poisoned in collect_agent_outputs");
+            poisoned.into_inner()
+        });
+        budget.record_usage(tenant_id, used_tokens as usize, 1);
     }
 
+    AgentExecutionMetrics {
+        elapsed_ms: elapsed,
+        used_tokens,
+        request_succeeded,
+    }
+}
+
+/// Construct response metadata from agent execution results.
+///
+/// Computes promotion evaluations, optimizer recommendations,
+/// execution plans, orchestration alignment, fork registry entries,
+/// and evaluation suite scores.
+#[allow(clippy::too_many_arguments)]
+fn build_response_metadata(
+    server: &AcpServer,
+    _result: &Value,
+    mode: &str,
+    phase_name: &str,
+    selected_agent: &str,
+    conversation_id: &str,
+    first_message_content: &str,
+    tool_execution_results: &[Value],
+    response_text: &str,
+    metrics: &AgentExecutionMetrics,
+) -> ResponseMetadata {
+    let elapsed = metrics.elapsed_ms;
+    let used_tokens = metrics.used_tokens;
+
     // ── PromotionPlugin evaluation (ARCH-10) ──────────────────────────
-    // Evaluate promotion/demotion decisions for the selected agent based
-    // on execution outcome.  Results are logged and could feed back into
-    // routing weights in a future iteration.
     let promotion_decisions: Vec<String> = {
-        let elapsed = started.elapsed().as_millis() as u64;
-        let used_tokens = result
-            .get("token_economy")
-            .and_then(|v| v.get("total_tokens"))
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as f64;
-        let success_rate = if response_text.trim().is_empty() {
-            0.0
-        } else {
-            1.0
-        };
+        let success_rate = if response_text.trim().is_empty() { 0.0 } else { 1.0 };
         let latency_ms = elapsed as f64;
-        let cost_score = (used_tokens / 100_000.0).min(1.0);
-        if let Ok(reg) = server.promotion_registry.lock() {
-            reg.evaluate_all(selected_agent, success_rate, latency_ms, cost_score)
-                .into_iter()
-                .map(|d| format!("{:?}", d))
-                .collect()
-        } else {
-            vec![]
-        }
+        let cost_score = (used_tokens as f64 / 100_000.0).min(1.0);
+        let reg = server.promotion_registry.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("promotion_registry lock poisoned in build_response_metadata");
+            poisoned.into_inner()
+        });
+        reg.evaluate_all(selected_agent, success_rate, latency_ms, cost_score)
+            .into_iter()
+            .map(|d| format!("{:?}", d))
+            .collect()
     };
     info!(
         agent = %selected_agent,
@@ -195,48 +266,40 @@ pub fn finalize_chat_response(
     );
 
     // ── OptimizerRegistry recommendations (ARCH-11) ────────────────────
-    // Collect optimization recommendations based on execution metrics.
-    // These can be applied in future routing decisions.
-    let optimizer_recommendations: Vec<serde_json::Value> = {
-        let elapsed = started.elapsed().as_millis() as u64;
-        if let Ok(reg) = server.optimizer_registry.lock() {
-            // Use a rolling success rate from the capability bus if available,
-            // otherwise default to 1.0 for the current request.
-            let _historical_success_rate = server
-                .capability_bus
-                .as_ref()
-                .and_then(|cb| {
-                    cb.learning_bus
-                        .lock()
-                        .ok()
-                        .and_then(|lb| lb.agent_success_rate(selected_agent))
-                })
-                .unwrap_or(1.0);
-            reg.optimize_all(&OptimizationContext {
-                workflow_type: phase_name.to_string(),
-                phases: vec![phase_name.to_string()],
-                history: vec![],
-                token_usage: 0,
-                latency_ms: elapsed,
+    let optimizer_recommendations: Vec<Value> = {
+        let reg = server.optimizer_registry.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("optimizer_registry lock poisoned in build_response_metadata");
+            poisoned.into_inner()
+        });
+        let _historical_success_rate = server
+            .capability_bus
+            .as_ref()
+            .and_then(|cb| {
+                cb.learning_bus
+                    .lock()
+                    .ok()
+                    .and_then(|lb| lb.agent_success_rate(selected_agent))
             })
-            .into_iter()
-            .map(|r| {
-                serde_json::json!({
-                    "strategy": r.suggestion_type,
-                    "expected_improvement": r.estimated_improvement,
-                    "description": r.description,
-                })
+            .unwrap_or(1.0);
+        reg.optimize_all(&OptimizationContext {
+            workflow_type: phase_name.to_string(),
+            phases: vec![phase_name.to_string()],
+            history: vec![],
+            token_usage: 0,
+            latency_ms: elapsed,
+        })
+        .into_iter()
+        .map(|r| {
+            json!({
+                "strategy": r.suggestion_type,
+                "expected_improvement": r.estimated_improvement,
+                "description": r.description,
             })
-            .collect()
-        } else {
-            vec![]
-        }
+        })
+        .collect()
     };
 
     // ── Planner/Executor integration (F-GAP-05) ────────────────────────
-    // Build a lightweight execution plan for observability/debugging.
-    // The plan shows the 3-phase decomposition (plan → execute → review)
-    // that was implicitly followed by the mode runtime.
     let execution_plan = {
         let envelope = crate::agent::AgentTaskEnvelope {
             task_id: conversation_id.to_string(),
@@ -245,15 +308,15 @@ pub fn finalize_chat_response(
             objective: first_message_content.to_string(),
             constraints: Some("600".to_string()),
             evidence: None,
-            input: serde_json::json!({
+            input: json!({
                 "mode": mode,
                 "message_count": 1,
             }),
         };
         let plan = Planner::plan(&envelope);
-        serde_json::json!({
+        json!({
             "plan_id": plan.plan_id,
-            "steps": plan.steps.iter().map(|s| serde_json::json!({
+            "steps": plan.steps.iter().map(|s| json!({
                 "step_id": s.step_id,
                 "description": s.description,
                 "depends_on": s.depends_on,
@@ -265,7 +328,7 @@ pub fn finalize_chat_response(
         derive_plan_trace_alignment(&execution_plan, tool_execution_results);
     let alignment_coverage = orchestration_alignment
         .get("coverage_ratio")
-        .and_then(serde_json::Value::as_f64)
+        .and_then(Value::as_f64)
         .unwrap_or(0.0);
     record_orchestration_alignment(alignment_coverage);
 
@@ -273,103 +336,95 @@ pub fn finalize_chat_response(
         derive_response_orchestration(&execution_plan, tool_execution_results);
     let mapped_nodes = orchestration_node_decisions
         .get("mapped_nodes")
-        .and_then(serde_json::Value::as_u64)
+        .and_then(Value::as_u64)
         .unwrap_or(0);
     let unmapped_nodes = orchestration_node_decisions
         .get("unmapped_nodes")
-        .and_then(serde_json::Value::as_u64)
+        .and_then(Value::as_u64)
         .unwrap_or(0);
     record_orchestration_node_mapping(mapped_nodes, unmapped_nodes);
 
     // ── ForkRegistry cleanup (ARCH-05) ─────────────────────────────────
-    // Register a fork entry for this execution to track sub-agent
-    // isolation boundaries.  Completed forks are cleaned up immediately
-    // so the registry stays within its capacity.
     let fork_id = {
-        if let Ok(fr) = server.fork_registry.lock() {
-            match fr.register(conversation_id) {
-                Ok(Some(fid)) => {
-                    if let Err(e) = fr.complete(&fid) {
-                        tracing::warn!(%conversation_id, fork_id = %fid, error = %e, "response_finalizer: failed to complete fork entry");
-                    }
-                    Some(fid)
+        let fr = server.fork_registry.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("fork_registry lock poisoned in build_response_metadata");
+            poisoned.into_inner()
+        });
+        match fr.register(conversation_id) {
+            Ok(Some(fid)) => {
+                if let Err(e) = fr.complete(&fid) {
+                    tracing::warn!(%conversation_id, fork_id = %fid, error = %e, "response_finalizer: failed to complete fork entry");
                 }
-                Ok(None) => None,
-                Err(e) => {
-                    warn!("ForkRegistry lock poisoned: {e}");
-                    None
-                }
+                Some(fid)
             }
-        } else {
-            None
+            Ok(None) => None,
+            Err(e) => {
+                warn!("ForkRegistry error: {e}");
+                None
+            }
         }
     };
 
     // ── Evaluation Suite scoring (F-GAP-06) ────────────────────────────
-    // Run benchmark evaluations against the response text for quality
-    // measurement.  Results are embedded in the response for observability.
-    let evaluation_results: Vec<serde_json::Value> = {
-        if let Ok(suite) = server.evaluation_suite.lock() {
-            let mut agent_outputs = std::collections::HashMap::new();
-            for case in suite.all() {
-                agent_outputs.insert(case.id.clone(), response_text.to_string());
-            }
-            crate::intelligence::evaluation::ReplayEngine::run_suite(&suite, &agent_outputs)
-                .into_iter()
-                .map(|run| {
-                    serde_json::json!({
-                        "case_id": run.case_id,
-                        "passed": run.passed,
-                        "overall_score": run.score.overall(),
-                        "details": run.details,
-                    })
-                })
-                .collect()
-        } else {
-            vec![]
+    let evaluation_results: Vec<Value> = {
+        let suite = server.evaluation_suite.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("evaluation_suite lock poisoned in build_response_metadata");
+            poisoned.into_inner()
+        });
+        let mut agent_outputs = HashMap::new();
+        for case in suite.all() {
+            agent_outputs.insert(case.id.clone(), response_text.to_string());
         }
+        crate::intelligence::evaluation::ReplayEngine::run_suite(&suite, &agent_outputs)
+            .into_iter()
+            .map(|run| {
+                json!({
+                    "case_id": run.case_id,
+                    "passed": run.passed,
+                    "overall_score": run.score.overall(),
+                    "details": run.details,
+                })
+            })
+            .collect()
     };
 
-    // ── Augment result with new wiring fields ──────────────────────────
+    ResponseMetadata {
+        promotion_decisions,
+        optimizer_recommendations,
+        execution_plan,
+        orchestration_alignment,
+        orchestration_node_decisions,
+        fork_id,
+        evaluation_results,
+    }
+}
+
+/// Inject all computed metadata into the final response object.
+fn format_response_body(
+    result: &mut Value,
+    reasoning_text: &str,
+    schema_warnings: Vec<String>,
+    schema_error: Option<String>,
+    layered_prompt_segments_len: usize,
+    tenant_id: &str,
+    metadata: &ResponseMetadata,
+) {
     if let Some(obj) = result.as_object_mut() {
-        obj.insert(
-            "schema_warnings".to_string(),
-            serde_json::json!(schema_warnings),
-        );
-        obj.insert("schema_error".to_string(), serde_json::json!(schema_error));
-        obj.insert(
-            "layered_prompt_segments".to_string(),
-            serde_json::json!(layered_prompt_segments_len),
-        );
-        obj.insert(
-            "promotion_decisions".to_string(),
-            serde_json::json!(promotion_decisions),
-        );
-        obj.insert(
-            "optimizer_recommendations".to_string(),
-            serde_json::json!(optimizer_recommendations),
-        );
-        obj.insert("execution_plan".to_string(), execution_plan);
-        obj.insert(
-            "orchestration_alignment".to_string(),
-            orchestration_alignment,
-        );
-        obj.insert(
-            "orchestration_node_decisions".to_string(),
-            orchestration_node_decisions,
-        );
-        obj.insert("fork_id".to_string(), serde_json::json!(fork_id));
-        obj.insert(
-            "evaluation_results".to_string(),
-            serde_json::json!(evaluation_results),
-        );
-        obj.insert("tenant_id".to_string(), serde_json::json!(tenant_id));
+        obj.insert("schema_warnings".to_string(), json!(schema_warnings));
+        obj.insert("schema_error".to_string(), json!(schema_error));
+        obj.insert("layered_prompt_segments".to_string(), json!(layered_prompt_segments_len));
+        obj.insert("promotion_decisions".to_string(), json!(metadata.promotion_decisions));
+        obj.insert("optimizer_recommendations".to_string(), json!(metadata.optimizer_recommendations));
+        obj.insert("execution_plan".to_string(), metadata.execution_plan.clone());
+        obj.insert("orchestration_alignment".to_string(), metadata.orchestration_alignment.clone());
+        obj.insert("orchestration_node_decisions".to_string(), metadata.orchestration_node_decisions.clone());
+        obj.insert("fork_id".to_string(), json!(metadata.fork_id));
+        obj.insert("evaluation_results".to_string(), json!(metadata.evaluation_results));
+        obj.insert("tenant_id".to_string(), json!(tenant_id));
         if !reasoning_text.is_empty() {
-            obj.insert("thinking".to_string(), serde_json::json!(reasoning_text));
+            obj.insert("thinking".to_string(), json!(reasoning_text));
         }
     }
-
-    result
 }
 
 #[cfg(test)]

@@ -1,5 +1,0 @@
-{"jsonrpc":"2.0","method":"initialize","params":{"protocol":"acp","version":"1.0"},"id":1}
-{"jsonrpc":"2.0","method":"health.probes","params":{},"id":2}
-{"jsonrpc":"2.0","method":"maintenance.gc","params":{},"id":3}
-{"jsonrpc":"2.0","method":"runtime.health","params":{},"id":4}
-{"jsonrpc":"2.0","method":"shutdown","params":{},"id":5}

@@ -104,6 +104,10 @@ pub struct FederatedLearning {
     global_weights: Option<ModelWeights>,
     round_counter: u64,
     total_improvement_sum: f64,
+    /// Maximum number of registered clients before FIFO eviction
+    max_clients: usize,
+    /// Maximum number of pending weight submissions before FIFO eviction
+    max_pending: usize,
 }
 
 impl FederatedLearning {
@@ -116,6 +120,8 @@ impl FederatedLearning {
             global_weights: None,
             round_counter: 0,
             total_improvement_sum: 0.0,
+            max_clients: 100,
+            max_pending: 100,
         }
     }
 
@@ -125,6 +131,13 @@ impl FederatedLearning {
     pub fn register_client(&mut self, client_id: &str, weight: f64) -> Result<()> {
         if self.clients.contains_key(client_id) {
             bail!("client '{}' is already registered", client_id);
+        }
+        // Evict oldest client when at capacity.
+        if self.clients.len() >= self.max_clients {
+            if let Some(oldest) = self.clients.keys().next().cloned() {
+                self.clients.remove(&oldest);
+                self.pending_weights.remove(&oldest);
+            }
         }
         self.clients.insert(
             client_id.to_string(),
@@ -169,6 +182,13 @@ impl FederatedLearning {
         // Update running average of improvement.
         let n = state.contribution_count as f64;
         state.avg_improvement = state.avg_improvement * ((n - 1.0) / n) + improvement / n;
+
+        // Evict the oldest pending weight entry when at capacity.
+        if self.pending_weights.len() >= self.max_pending {
+            if let Some(oldest) = self.pending_weights.keys().next().cloned() {
+                self.pending_weights.remove(&oldest);
+            }
+        }
 
         self.pending_weights
             .insert(client_id.to_string(), (weights, improvement));

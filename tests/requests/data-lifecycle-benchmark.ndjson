@@ -1,4 +1,0 @@
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"client":"blue15-x10-data-lifecycle","version":"1.0.0"}}
-{"jsonrpc":"2.0","id":2,"method":"data.lifecycle","params":{"execute_gc":false}}
-{"jsonrpc":"2.0","id":3,"method":"runtime.health","params":{}}
-{"jsonrpc":"2.0","id":4,"method":"shutdown","params":{}}

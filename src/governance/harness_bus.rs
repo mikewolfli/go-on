@@ -76,6 +76,7 @@ use crate::resilience::hyper_resilience::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -607,9 +608,10 @@ impl PolicyEvaluator {
             runtime_control,
             guard,
             security_governor: Arc::new({
-                let mut sg_config = SecurityGovernorConfig::default();
-                sg_config.default_action = PolicyAction::Deny;
-                let gov = SecurityGovernor::new(sg_config);
+                let gov = SecurityGovernor::new(SecurityGovernorConfig {
+                    default_action: PolicyAction::Deny,
+                    ..Default::default()
+                });
 
                 // 1. read_allow — allow low-risk, read-only tasks
                 gov.register_policy(SecurityPolicy {
@@ -863,8 +865,6 @@ impl PolicyEvaluator {
         let allowed = match tool {
             // Read-only file operations
             "read_file" | "search_files" | "inspect_git_diff"
-            // Read-only search/diagnostic operations
-            | "grep" | "find_path" | "semantic_search"
             // MCP diagnostic/read-only tools — treated as read operations
             // since they query internal state without side effects
             | "acp_trace_get"
@@ -877,6 +877,9 @@ impl PolicyEvaluator {
             | "prompts_list"
             | "prompts_get"
             | "skill-finder" => SandboxPolicy::can_execute_read_file(&level),
+            // Read-only search operations — separately governed by can_execute_search
+            // to allow finer-grained control over content discovery vs file reads.
+            "grep" | "find_path" | "semantic_search" => SandboxPolicy::can_execute_search(&level),
             // Write operations
             "write_file" | "apply_patch" | "create_directory" | "delete_path" | "move_path" | "copy_path" => {
                 SandboxPolicy::can_execute_write(&level)
@@ -988,9 +991,13 @@ impl PolicyEvaluator {
                 GovernanceAction::Shell => Permission::Execute,
                 GovernanceAction::Read | GovernanceAction::Search => Permission::Read,
             };
+            // Resolve tenant_id from the RBAC enforcer when multi-tenancy is configured.
+            // Propagating tenant_id is essential for tenant isolation — without it,
+            // the enforcer would deny all requests with "missing_tenant".
+            let tenant_id = rbac.tenant_ids().into_iter().next();
             // Build a principal from whatever context we have — for now use a default
             // "harness" principal with the "user" role (least-privilege for tool calls).
-            let mut principal = Principal::new("harness", vec!["user"], None);
+            let mut principal = Principal::new("harness", vec!["user"], tenant_id.as_deref());
             rbac.resolve_permissions(&mut principal);
             match rbac.check_access(&principal, &required_perm) {
                 AccessDecision::Allow => {
@@ -1079,6 +1086,12 @@ pub struct HarnessBus {
     pub resilience_engine: Arc<HyperResilienceEngine>,
     /// Fault tolerance engine — node isolation, heartbeat detection (F-GAP-28)
     pub fault_tolerance: Arc<FaultToleranceEngine>,
+    /// Structured audit trail for replay and evidence export (dual system integration).
+    pub structured_audit_trail: Arc<std::sync::Mutex<crate::orchestration::audit::AuditTrail>>,
+    /// Consecutive allow-count for PUA de-escalation.
+    /// When this reaches 3, `de_escalate` is called on the PUA rule engine
+    /// to allow recovery from escalated states after sustained clean evaluations.
+    consecutive_allows: AtomicU32,
 }
 
 impl HarnessBus {
@@ -1115,6 +1128,10 @@ impl HarnessBus {
             brain_runner: Arc::new(BrainLoop::new(BrainLoopConfig::default())),
             resilience_engine: Arc::new(HyperResilienceEngine::new(ResilienceConfig::default())),
             fault_tolerance: Arc::new(FaultToleranceEngine::new(FaultToleranceConfig::default())),
+            structured_audit_trail: Arc::new(std::sync::Mutex::new(
+                crate::orchestration::audit::AuditTrail::new("harness-bus", 1000),
+            )),
+            consecutive_allows: AtomicU32::new(0),
         };
 
         // Start background health checks for the resilience engine.
@@ -1178,6 +1195,34 @@ impl HarnessBus {
         self.resilience_engine
             .record_execution("harness-main", success);
 
+        // PUA de-escalation: after 3 consecutive clean evaluations (no red lines,
+        // no denials, no escalations), de-escalate the PUA level by 1 to allow
+        // recovery from escalated states when threat conditions have resolved.
+        match &verdict {
+            PolicyVerdict::Allow | PolicyVerdict::AllowWithConstraints(_) => {
+                let prev = self.consecutive_allows.fetch_add(1, Ordering::SeqCst);
+                if prev >= 2 {
+                    // 3rd consecutive allow (prev is 0-indexed: 0→1, 1→2, 2→3)
+                    self.consecutive_allows.store(0, Ordering::SeqCst);
+                    let engine = self.evaluator.rule_engine.lock().unwrap_or_else(|poisoned| {
+                        tracing::warn!("rule_engine lock poisoned in evaluate — de-escalation");
+                        poisoned.into_inner()
+                    });
+                    let level = engine.de_escalate(
+                        "No violations detected for 3 consecutive evaluations",
+                    );
+                    tracing::info!(
+                        new_level = level,
+                        "PUA de-escalated after 3 consecutive clean evaluations"
+                    );
+                }
+            }
+            _ => {
+                // Any non-allow verdict resets the counter
+                self.consecutive_allows.store(0, Ordering::SeqCst);
+            }
+        }
+
         verdict
     }
 
@@ -1185,24 +1230,66 @@ impl HarnessBus {
     pub fn validate_action(&self, tool: &str, args: &Value) -> ToolVerdict {
         let verdict = self.evaluator.check_tool_call(tool, args);
         // Track sandbox denials and idempotency hits from real tool-call data
-        if let Ok(mut p) = self.profile.lock() {
-            if !verdict.allowed {
-                p.sandbox_denials = p.sandbox_denials.saturating_add(1);
-            }
-            if verdict.idempotent {
-                p.idempotency_hits = p.idempotency_hits.saturating_add(1);
-            }
+        let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("profile lock poisoned in validate_action");
+            poisoned.into_inner()
+        });
+        if !verdict.allowed {
+            p.sandbox_denials = p.sandbox_denials.saturating_add(1);
+        }
+        if verdict.idempotent {
+            p.idempotency_hits = p.idempotency_hits.saturating_add(1);
         }
         verdict
     }
 
-    /// Post-execution output verification.
+    /// Post-execution output verification with audit recording.
+    ///
+    /// Delegates to the policy evaluator and records an audit entry via
+    /// the unified `HarnessBus::audit()` entry point, ensuring every
+    /// output verification decision is captured for compliance.
     pub fn verify_output(&self, output: &Value) -> OutputVerdict {
-        self.evaluator.verify_output(output)
+        let verdict = self.evaluator.verify_output(output);
+
+        // Record audit entry via the unified audit entry point.
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        let audit_entry = AuditEntry {
+            timestamp: now_ms,
+            request_id: String::new(),
+            stage: "verify_output".to_string(),
+            verdict: if verdict.quality {
+                "allow".to_string()
+            } else {
+                "deny".to_string()
+            },
+            dispatch_policy: String::new(),
+            execution_policy: String::new(),
+            governance_policy: String::new(),
+            violations: if verdict.quality {
+                vec![]
+            } else {
+                vec!["output_verification_failed".to_string()]
+            },
+            context_snapshot: serde_json::json!({
+                "risk_score": verdict.risk_score,
+                "evidence_count": verdict.evidence.len(),
+            }),
+        };
+        self.audit(audit_entry);
+
+        verdict
     }
 
     /// Record an audit entry.
+    ///
+    /// Writes to both the local HarnessAuditTrail (for governance-specific
+    /// queries) and the unified structured_audit_trail (for replay/evidence
+    /// export via the orchestration audit trail).
     pub fn audit(&self, entry: AuditEntry) {
+        // Write to local governance audit trail.
         match self.audit_trail.lock() {
             Ok(mut trail) => trail.entries.push(entry.clone()),
             Err(poisoned) => {
@@ -1211,9 +1298,37 @@ impl HarnessBus {
                 trail.entries.push(entry.clone());
             }
         }
-        if let Ok(mut p) = self.profile.lock() {
-            p.audit_entries_total = p.audit_entries_total.saturating_add(1);
+
+        // Also write to the structured (orchestration) audit trail for
+        // unified access, replay, and evidence export.
+        let mut structured = self.structured_audit_trail.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("structured_audit_trail lock poisoned in audit");
+            poisoned.into_inner()
+        });
+        {
+            use crate::orchestration::audit::AuditEntry as OrchestrationAuditEntry;
+            structured.append_entry(OrchestrationAuditEntry::new(
+                "harness_audit",
+                &entry.request_id,
+                &entry.stage,
+                serde_json::json!({
+                    "verdict": &entry.verdict,
+                    "dispatch_policy": &entry.dispatch_policy,
+                    "execution_policy": &entry.execution_policy,
+                    "governance_policy": &entry.governance_policy,
+                    "violations": &entry.violations,
+                }),
+                serde_json::json!({
+                    "context_snapshot": &entry.context_snapshot,
+                }),
+            ));
         }
+
+        let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("profile lock poisoned in audit");
+            poisoned.into_inner()
+        });
+        p.audit_entries_total = p.audit_entries_total.saturating_add(1);
     }
 
     /// Build a per-agent execution policy from the three base policies.
@@ -1252,15 +1367,11 @@ impl HarnessBus {
 
     /// Check a red-line violation directly.
     pub fn check_red_line(&self, action: &str) -> bool {
-        if let Ok(engine) = self.evaluator.rule_engine.lock() {
-            engine.check_red_lines(action).is_err()
-        } else {
-            self.evaluator
-                .governance
-                .red_lines
-                .iter()
-                .any(|rl| action.contains(rl.as_str()))
-        }
+        let engine = self.evaluator.rule_engine.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("rule_engine lock poisoned in check_red_line");
+            poisoned.into_inner()
+        });
+        engine.check_red_lines(action).is_err()
     }
 
     /// SelfRationalizationGuard governance profile snapshot.
@@ -1282,14 +1393,32 @@ impl HarnessBus {
     /// PolicyBundle compliance check for a GovernanceAction.
     pub fn enforce_action(&self, action: &GovernanceAction, policy_bundle: &PolicyBundle) -> bool {
         match action {
-            GovernanceAction::Read | GovernanceAction::Search => {
-                // Check sandbox level: Isolated mode requires explicit permission
-                // even for read/search operations to prevent data exfiltration
-                // in high-security environments.
-                if let Ok(level) = self.evaluator.sandbox_level.lock() {
-                    if level.eq_ignore_ascii_case("isolated") {
-                        return false;
-                    }
+            GovernanceAction::Read => {
+                // Sandbox level check for Read:
+                // - None/Basic: allow
+                // - Strict: allow (read is generally safe)
+                // - Isolated: deny (prevent data exfiltration)
+                let level = self.evaluator.sandbox_level.lock().unwrap_or_else(|poisoned| {
+                    tracing::warn!("sandbox_level lock poisoned in enforce_action(Read)");
+                    poisoned.into_inner()
+                });
+                if level.eq_ignore_ascii_case("isolated") {
+                    return false;
+                }
+                true
+            }
+            GovernanceAction::Search => {
+                // Sandbox level check for Search:
+                // - None/Basic: allow
+                // - Strict: deny (search can leak context)
+                // - Isolated: deny
+                let level = self.evaluator.sandbox_level.lock().unwrap_or_else(|poisoned| {
+                    tracing::warn!("sandbox_level lock poisoned in enforce_action(Search)");
+                    poisoned.into_inner()
+                });
+                let l = level.to_lowercase();
+                if l == "strict" || l == "isolated" {
+                    return false;
                 }
                 true
             }

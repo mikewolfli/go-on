@@ -494,6 +494,10 @@ pub struct QLearningAgent {
     /// Experience replay buffer
     #[serde(skip)]
     pub replay_buffer: ReplayBuffer,
+    /// Maximum number of state entries across both Q-tables
+    pub max_entries: usize,
+    /// Insertion-order tracking for FIFO eviction
+    state_order: VecDeque<(String, String)>,
 }
 
 impl Default for QLearningAgent {
@@ -505,6 +509,8 @@ impl Default for QLearningAgent {
             discount_factor: 0.9,
             exploration_rate: 1.0,
             replay_buffer: ReplayBuffer::new(10000),
+            max_entries: 50000,
+            state_order: VecDeque::new(),
         }
     }
 }
@@ -536,6 +542,9 @@ impl QLearningAgent {
         reward: f64,
         next_state: &(String, String),
     ) {
+        let is_new = !self.q_table.contains_key(state)
+            && !self.q_table_2.contains_key(state);
+
         let current_q = self
             .q_table
             .entry(state.clone())
@@ -561,6 +570,11 @@ impl QLearningAgent {
             .entry(state.clone())
             .or_default()
             .insert(action.to_string(), new_q);
+
+        if is_new {
+            self.state_order.push_back(state.clone());
+        }
+        self.prune_q_table(self.max_entries);
     }
 
     /// Perform a Double Q-Learning update to reduce overestimation bias.
@@ -574,6 +588,9 @@ impl QLearningAgent {
     ) {
         let alpha = self.learning_rate;
         let gamma = self.discount_factor;
+
+        let is_new = !self.q_table.contains_key(state)
+            && !self.q_table_2.contains_key(state);
 
         // Use fastrand for a true random coin flip
         let coin = fastrand::bool();
@@ -623,6 +640,11 @@ impl QLearningAgent {
                 .or_default()
                 .insert(action.to_string(), new_q);
         }
+
+        if is_new {
+            self.state_order.push_back(state.clone());
+        }
+        self.prune_q_table(self.max_entries);
     }
 
     /// Select the best action using the average of both Q-tables (Double Q-Learning).
@@ -649,6 +671,19 @@ impl QLearningAgent {
                 (a.clone(), avg)
             })
             .max_by(|(_, v1), (_, v2)| v1.partial_cmp(v2).unwrap_or(std::cmp::Ordering::Equal))
+    }
+
+    /// Evict oldest state entries from both Q-tables when capacity is exceeded.
+    /// Uses FIFO eviction based on insertion order.
+    pub fn prune_q_table(&mut self, max: usize) {
+        while self.q_table.len() > max || self.q_table_2.len() > max {
+            if let Some(state) = self.state_order.pop_front() {
+                self.q_table.remove(&state);
+                self.q_table_2.remove(&state);
+            } else {
+                break;
+            }
+        }
     }
 
     pub fn decay_exploration(&mut self, decay_rate: f64) {

@@ -369,7 +369,11 @@ pub(super) async fn handle_session_new(
     let mut modes = modes;
     modes.current_mode_id = crate::schema::SessionModeId::new(current_mode.clone());
 
-    if let Ok(mut state) = acp_session_state().lock() {
+    {
+        let mut state = acp_session_state().lock().unwrap_or_else(|poisoned| {
+            warn!("ACP session state lock poisoned in handle_session_new, recovering");
+            poisoned.into_inner()
+        });
         state.insert(
             session_id.clone(),
             AcpSessionState {
@@ -391,7 +395,7 @@ pub(super) async fn handle_session_new(
                 .modes(modes)
                 .config_options(config_options),
         )
-        .unwrap(),
+        .expect("NewSessionResponse serialization should never fail"),
     )
     .await
 }
@@ -428,7 +432,7 @@ pub(super) async fn handle_session_load(
             config_options: Some(config_options),
             meta: None,
         })
-        .unwrap(),
+        .expect("LoadSessionResponse serialization should never fail"),
     )
     .await
 }
@@ -546,13 +550,17 @@ pub(super) async fn handle_session_prompt(
                 // sent as agent_thought_chunk, everything else as agent_message_chunk.
                 // This lets Zed render thinking in a collapsible box rather than
                 // as raw text.
-                let re = regex::Regex::new(r"<thinking>(.*?)</thinking>").unwrap();
+                let re = regex::Regex::new(r"<thinking>(.*?)</thinking>")
+                    .expect("hardcoded thinking regex is valid");
                 let mut last_end = 0;
                 let sid = sid.as_str();
 
                 for cap in re.captures_iter(response_text) {
-                    let m = cap.get(0).unwrap();
-                    let thought_content = cap.get(1).unwrap().as_str();
+                    let m = cap.get(0)
+                        .expect("regex capture group 0 (full match) is always present");
+                    let thought_content = cap.get(1)
+                        .expect("regex capture group 1 (thinking content) is always present")
+                        .as_str();
 
                     // Send text before this thinking block as a regular message chunk
                     let before = &response_text[last_end..m.start()];
@@ -613,7 +621,7 @@ pub(super) async fn handle_session_prompt(
             let prompt_response = serde_json::to_value(crate::schema::PromptResponse::new(
                 crate::schema::StopReason::EndTurn,
             ))
-            .unwrap();
+            .expect("PromptResponse serialization should never fail");
 
             // Use io::send_result directly to bypass inject_platform_profiles_if_absent.
             // The chat_pack::send_result adds a "platform_context" field that Zed's
@@ -693,7 +701,7 @@ pub(super) async fn handle_session_list(
             next_cursor: None,
             meta: None,
         })
-        .unwrap(),
+        .expect("ListSessionsResponse serialization should never fail"),
     )
     .await
 }
@@ -716,7 +724,11 @@ pub(super) async fn handle_session_set_mode(
         .unwrap_or_default();
     let mode_id = normalize_acp_mode(params.get("modeId").and_then(Value::as_str));
     if !session_id.is_empty() {
-        if let Ok(mut state) = acp_session_state().lock() {
+        {
+            let mut state = acp_session_state().lock().unwrap_or_else(|poisoned| {
+                warn!("ACP session state lock poisoned in handle_session_set_mode, recovering");
+                poisoned.into_inner()
+            });
             state.entry(session_id.to_string()).or_default().mode = mode_id.clone();
         }
         // Send session/update notification with CurrentModeUpdate so the
@@ -760,15 +772,15 @@ pub(super) async fn handle_session_resume(
         .map(ToString::to_string);
 
     let (current_mode, _additional_dirs) = if !session_id.is_empty() {
-        if let Ok(mut state) = acp_session_state().lock() {
-            let entry = state.entry(session_id.to_string()).or_default();
-            if let Some(ref new_cwd) = cwd {
-                entry.cwd = Some(new_cwd.clone());
-            }
-            (entry.mode.clone(), entry.additional_directories.clone())
-        } else {
-            ("ask".to_string(), vec![])
+        let mut state = acp_session_state().lock().unwrap_or_else(|poisoned| {
+            warn!("ACP session state lock poisoned in handle_session_resume, recovering");
+            poisoned.into_inner()
+        });
+        let entry = state.entry(session_id.to_string()).or_default();
+        if let Some(ref new_cwd) = cwd {
+            entry.cwd = Some(new_cwd.clone());
         }
+        (entry.mode.clone(), entry.additional_directories.clone())
     } else {
         ("ask".to_string(), vec![])
     };
@@ -800,9 +812,11 @@ pub(super) async fn handle_session_close(
         .and_then(Value::as_str)
         .unwrap_or_default();
     if !session_id.is_empty() {
-        if let Ok(mut state) = acp_session_state().lock() {
-            state.remove(session_id);
-        }
+        let mut state = acp_session_state().lock().unwrap_or_else(|poisoned| {
+            warn!("ACP session state lock poisoned in handle_session_close, recovering");
+            poisoned.into_inner()
+        });
+        state.remove(session_id);
     }
     crate::acp::r#impl::io::send_typed(
         server,
@@ -835,12 +849,14 @@ pub(super) async fn handle_session_request_permission(
 
     if !session_id.is_empty() && !option_id.is_empty() {
         // Store the permission decision so the waiting tool execution can pick it up.
-        if let Ok(mut permissions) = acp_permission_state().lock() {
-            permissions.insert(
-                session_id.to_string(),
-                PermissionOptionId::new(option_id.to_string()),
-            );
-        }
+        let mut permissions = acp_permission_state().lock().unwrap_or_else(|poisoned| {
+            warn!("ACP permission state lock poisoned in handle_session_request_permission, recovering");
+            poisoned.into_inner()
+        });
+        permissions.insert(
+            session_id.to_string(),
+            PermissionOptionId::new(option_id.to_string()),
+        );
     }
 
     // Return empty success — the client just needs acknowledgement.
@@ -867,14 +883,16 @@ pub(super) async fn handle_session_set_config_option(
     let value = params.get("value").cloned().unwrap_or(Value::Null);
 
     if !session_id.is_empty() && !config_id.is_empty() {
-        if let Ok(mut state) = acp_session_state().lock() {
-            let session = state.entry(session_id.to_string()).or_default();
-            session
-                .config_options
-                .insert(config_id.to_string(), value.clone());
-            if config_id == "mode" {
-                session.mode = normalize_acp_mode(value.as_str());
-            }
+        let mut state = acp_session_state().lock().unwrap_or_else(|poisoned| {
+            warn!("ACP session state lock poisoned in handle_session_set_config_option, recovering");
+            poisoned.into_inner()
+        });
+        let session = state.entry(session_id.to_string()).or_default();
+        session
+            .config_options
+            .insert(config_id.to_string(), value.clone());
+        if config_id == "mode" {
+            session.mode = normalize_acp_mode(value.as_str());
         }
     }
 
@@ -885,7 +903,7 @@ pub(super) async fn handle_session_set_config_option(
             config_options: vec![],
             meta: None,
         })
-        .unwrap(),
+        .expect("SetSessionConfigOptionResponse serialization should never fail"),
     )
     .await
 }
@@ -1319,13 +1337,15 @@ fn build_skill_version_snapshot(
 }
 
 fn push_skill_version_snapshot(name: &str, snapshot: Value) {
-    if let Ok(mut history) = skill_version_history().lock() {
-        let entries = history.entry(name.to_string()).or_default();
-        entries.push(snapshot);
-        if entries.len() > 100 {
-            let overflow = entries.len() - 100;
-            entries.drain(0..overflow);
-        }
+    let mut history = skill_version_history().lock().unwrap_or_else(|poisoned| {
+        warn!("Skill version history lock poisoned in push_skill_version_snapshot, recovering");
+        poisoned.into_inner()
+    });
+    let entries = history.entry(name.to_string()).or_default();
+    entries.push(snapshot);
+    if entries.len() > 100 {
+        let overflow = entries.len() - 100;
+        entries.drain(0..overflow);
     }
 }
 
@@ -2130,7 +2150,11 @@ pub(super) async fn handle_terminal_create(
         .spawn()
         .map_err(|e| anyhow::anyhow!("failed to spawn terminal process '{}': {}", command, e))?;
 
-    if let Ok(mut state) = acp_terminal_state().lock() {
+    {
+        let mut state = acp_terminal_state().lock().unwrap_or_else(|poisoned| {
+            warn!("ACP terminal state lock poisoned in handle_terminal_create, recovering");
+            poisoned.into_inner()
+        });
         state.insert(
             terminal_id.clone(),
             TerminalProcess {
@@ -2164,7 +2188,11 @@ pub(super) async fn handle_terminal_output(
         .and_then(Value::as_str)
         .unwrap_or_default();
 
-    let (output, truncated, exit_status) = if let Ok(mut state) = acp_terminal_state().lock() {
+    let (output, truncated, exit_status) = {
+        let mut state = acp_terminal_state().lock().unwrap_or_else(|poisoned| {
+            warn!("ACP terminal state lock poisoned in handle_terminal_output, recovering");
+            poisoned.into_inner()
+        });
         if let Some(proc) = state.get_mut(terminal_id) {
             // Try to read any available stdout/stderr
             if let Some(ref mut stdout) = proc.child.stdout {
@@ -2215,8 +2243,6 @@ pub(super) async fn handle_terminal_output(
         } else {
             (String::new(), false, None)
         }
-    } else {
-        (String::new(), false, None)
     };
 
     crate::acp::r#impl::io::send_result(
@@ -2244,12 +2270,14 @@ pub(super) async fn handle_terminal_release(
         .unwrap_or_default();
 
     if !terminal_id.is_empty() {
-        if let Ok(mut state) = acp_terminal_state().lock() {
-            if let Some(mut proc) = state.remove(terminal_id) {
-                // Kill the process if still running
-                let _ = proc.child.kill();
-                let _ = proc.child.wait();
-            }
+        let mut state = acp_terminal_state().lock().unwrap_or_else(|poisoned| {
+            warn!("ACP terminal state lock poisoned in handle_terminal_release, recovering");
+            poisoned.into_inner()
+        });
+        if let Some(mut proc) = state.remove(terminal_id) {
+            // Kill the process if still running
+            let _ = proc.child.kill();
+            let _ = proc.child.wait();
         }
     }
 
@@ -2268,10 +2296,12 @@ pub(super) async fn handle_terminal_kill(
         .unwrap_or_default();
 
     if !terminal_id.is_empty() {
-        if let Ok(mut state) = acp_terminal_state().lock() {
-            if let Some(proc) = state.get_mut(terminal_id) {
-                let _ = proc.child.kill();
-            }
+        let mut state = acp_terminal_state().lock().unwrap_or_else(|poisoned| {
+            warn!("ACP terminal state lock poisoned in handle_terminal_kill, recovering");
+            poisoned.into_inner()
+        });
+        if let Some(proc) = state.get_mut(terminal_id) {
+            let _ = proc.child.kill();
         }
     }
 
@@ -2294,14 +2324,16 @@ pub(super) async fn handle_terminal_wait_for_exit(
         // Spawn a blocking task to wait for the process
         let tid = terminal_id.clone();
         tokio::task::spawn_blocking(move || -> Option<i32> {
-            if let Ok(mut state) = acp_terminal_state().lock() {
-                if let Some(proc) = state.get_mut(&tid) {
-                    let status = proc.child.wait().ok()?;
-                    proc.exited = true;
-                    let code = status.code();
-                    proc.exit_code = code;
-                    return code;
-                }
+            let mut state = acp_terminal_state().lock().unwrap_or_else(|poisoned| {
+                warn!("ACP terminal state lock poisoned in handle_terminal_wait_for_exit, recovering");
+                poisoned.into_inner()
+            });
+            if let Some(proc) = state.get_mut(&tid) {
+                let status = proc.child.wait().ok()?;
+                proc.exited = true;
+                let code = status.code();
+                proc.exit_code = code;
+                return code;
             }
             None
         })
