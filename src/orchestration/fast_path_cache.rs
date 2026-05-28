@@ -62,7 +62,7 @@ impl<T: Clone> CacheEntry<T> {
 
 /// Cached value for parsed task intents.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct IntentCacheValue {
+pub struct IntentCacheValue {
     pub goals: Vec<String>,
     pub constraints: Vec<String>,
     pub prerequisites: Vec<String>,
@@ -94,14 +94,14 @@ impl IntentCacheValue {
 
 /// Cached value for matched skills.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct SkillCacheValue {
+pub struct SkillCacheValue {
     pub skill_names: Vec<String>,
     pub scores: Vec<f64>,
 }
 
 /// Cached value for environment checks.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct EnvCacheValue {
+pub struct EnvCacheValue {
     pub dependencies_checked: bool,
     pub runtime_ready: bool,
 }
@@ -116,7 +116,7 @@ pub(crate) struct EnvCacheValue {
 /// `FullAutoFlow` can bypass full parsing and skill discovery and use
 /// the pre-configured defaults instead.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct RouteTemplate {
+pub struct RouteTemplate {
     pub task_type: String,
     pub keywords: Vec<String>,
     pub default_goals: Vec<String>,
@@ -138,7 +138,7 @@ pub(crate) struct RouteTemplate {
 ///
 /// Each sub-cache has configurable TTL and max-entries limits.  When the
 /// entry count exceeds `max_entries`, the oldest 25 % of entries are evicted.
-pub(crate) struct FastPathCache {
+pub struct FastPathCache {
     /// Cache task text → parsed `IntentCacheValue`.
     intent_cache: Mutex<HashMap<u64, CacheEntry<IntentCacheValue>>>,
     /// Cache task fingerprint → matched `SkillCacheValue`.

@@ -14,8 +14,15 @@ use crate::intelligence::now_ms;
 
 // ── ID generation ────────────────────────────────────────────────────────────
 
-static ROUND_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
-static PROPOSAL_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+static ROUND_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+static PROPOSAL_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Maximum number of rounds retained in history before evicting the oldest.
+const MAX_ROUNDS: usize = 1000;
+/// Maximum number of proposals retained before evicting the oldest.
+const MAX_PROPOSALS: usize = 5000;
+/// Maximum number of votes retained before evicting the oldest.
+const MAX_VOTES: usize = 10_000;
 
 fn generate_round_id() -> String {
     let n = ROUND_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -314,13 +321,18 @@ impl ConsensusEngine {
             .lock()
             .map_err(|_| ConsensusError::RoundNotFound(round_id.clone()))?;
 
-        // Enforce max_rounds cap: remove oldest completed/failed rounds.
-        while rounds.len() >= self.config.max_rounds {
+        // Enforce max rounds cap: remove oldest completed/failed rounds.
+        while rounds.len() >= MAX_ROUNDS {
             rounds.remove(0);
         }
 
         rounds.push(round);
         all_proposals.extend(proposal_list);
+
+        // Enforce max proposals cap: evict oldest proposals.
+        while all_proposals.len() > MAX_PROPOSALS {
+            all_proposals.remove(0);
+        }
 
         Ok(round_id)
     }
@@ -369,6 +381,11 @@ impl ConsensusEngine {
             ..vote
         };
         votes.push(recorded);
+
+        // Enforce max votes cap: evict oldest votes.
+        while votes.len() > MAX_VOTES {
+            votes.remove(0);
+        }
 
         // Bump votes_collected on the round.
         let mut rounds = self

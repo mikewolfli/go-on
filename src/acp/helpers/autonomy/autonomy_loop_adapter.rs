@@ -58,7 +58,7 @@ pub(crate) async fn run_acp_autonomy_loop(
         use_dag_execution: option_bool("enable_dag_execution", true), // DAG on by default for autonomy loop
         enable_agent_reroute: option_bool("enable_agent_reroute", true),
         enable_execution_intelligence: option_bool("enable_metacognitive_feedback", true),
-        recovery_orchestrator: None,
+        recovery_orchestrator: Some(crate::orchestration::recovery::RecoveryOrchestrator::new()),
     };
 
     let result = run_autonomy_loop(

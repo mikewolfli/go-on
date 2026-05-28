@@ -280,6 +280,18 @@ pub fn new_acp_server(
             // with CachedAgentWrapper.
             registry.set_token_cache(Some(Arc::clone(&server.cache.token_cache)));
 
+            // BLUE48 Step 2: Pre-initialize SSE buffer pool at startup to
+            // avoid first-request latency penalty from lazy initialization.
+            crate::acp::r#impl::chat::pre_init_sse_buffer_pool();
+
+            // BLUE48 Step 1: Initialize global embedding vector store for
+            // semantic task classification in the Planner.
+            if let Some(ref vs) = server.cache.vector_store {
+                crate::orchestration::planner_embedding::init_global_task_vector_store(Arc::clone(
+                    vs,
+                ));
+            }
+
             server
         }
         Err(err) => {

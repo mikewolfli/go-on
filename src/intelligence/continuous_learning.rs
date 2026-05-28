@@ -274,14 +274,16 @@ impl ContinuousLearningCenter {
             );
         }
         let mut state = lock_guard(&self.state);
+        // Evict the oldest (lowest priority) task when at capacity.
         if state.tasks.len() >= self.config.max_tasks {
-            bail!(
-                "{}",
-                tf(
-                    "error.continuous_learning.task_limit",
-                    &[("max", &self.config.max_tasks.to_string())]
-                )
-            );
+            if let Some(oldest_id) = state
+                .tasks
+                .iter()
+                .min_by_key(|(_, t)| (t.priority, t.created_ms))
+                .map(|(id, _)| id.clone())
+            {
+                state.tasks.remove(&oldest_id);
+            }
         }
 
         let id = format!("task-{}", state.next_task_id);
@@ -333,14 +335,27 @@ impl ContinuousLearningCenter {
     ) -> Result<String> {
         let importance = importance.clamp(0.0, 1.0);
         let mut state = lock_guard(&self.state);
+        // Evict the least-important memory when at capacity.
         if state.memories.len() >= self.config.max_memories {
-            bail!(
-                "{}",
-                tf(
-                    "error.continuous_learning.memory_limit",
-                    &[("max", &self.config.max_memories.to_string())]
-                )
-            );
+            if let Some(oldest_id) = state
+                .memories
+                .iter()
+                .min_by(|(_, a), (_, b)| {
+                    let importance_cmp = a
+                        .importance
+                        .partial_cmp(&b.importance)
+                        .unwrap_or(std::cmp::Ordering::Equal);
+                    if importance_cmp != std::cmp::Ordering::Equal {
+                        importance_cmp
+                    } else {
+                        a.consolidated_ms.cmp(&b.consolidated_ms)
+                    }
+                })
+                .map(|(id, _)| id.clone())
+            {
+                state.memories.remove(&oldest_id);
+                state.forgetting_curves.remove(&oldest_id);
+            }
         }
 
         let id = format!("mem-{}", state.next_memory_id);

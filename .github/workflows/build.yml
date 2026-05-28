@@ -63,8 +63,8 @@ jobs:
       - name: All integration tests
         timeout-minutes: 30
         run: |
-          cargo test --no-default-features -F profile-local --test e2e_integration -- --test-threads=1 --nocapture || true
-          cargo test --no-default-features -F profile-local --test chaod_drill -- --test-threads=1 --nocapture || true
+          cargo test --no-default-features -F profile-local --test e2e_integration -- --test-threads=1 --nocapture || echo "WARNING: e2e_integration tests had failures"
+          cargo test --no-default-features -F profile-local --test chaos_drill -- --test-threads=1 --nocapture || echo "WARNING: chaos_drill tests had failures"
         env:
           GO_ON_ENABLE_LOCAL_TEST_AGENTS: "1"
 

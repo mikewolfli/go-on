@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use futures::Stream;
 use serde_json::Value;
-use tokio_stream::StreamExt;
 
 use crate::error::SdkError;
 use crate::types::*;
@@ -165,18 +164,29 @@ impl GoOnClient {
 
         let response = req.json(&request).send().await.map_err(SdkError::Http)?;
 
-        let stream = response
-            .bytes_stream()
-            .map(|chunk| {
-                chunk
-                    .map_err(|e| SdkError::Stream(format!("http stream: {e}")))
-                    .and_then(|bytes| {
-                        serde_json::from_slice::<Value>(&bytes)
-                            .map_err(|e| SdkError::Stream(format!("json parse: {e}")))
-                    })
-            });
+        // BLUE48 Step 2.5: Proper SSE parsing — read lines and extract "data:" prefix.
+        // Collects all SSE events into a Vec and returns as a stream.
+        let full_body = response
+            .text()
+            .await
+            .map_err(|e| SdkError::Stream(format!("http body: {e}")))?;
 
-        Ok(stream)
+        let events: Vec<Result<Value, SdkError>> = full_body
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                line.strip_prefix("data: ").map(|data| {
+                    if data == "[DONE]" {
+                        Ok(serde_json::Value::String("[DONE]".into()))
+                    } else {
+                        serde_json::from_str::<Value>(data)
+                            .map_err(|e| SdkError::Stream(format!("json parse: {e}")))
+                    }
+                })
+            })
+            .collect();
+
+        Ok(futures::stream::iter(events))
     }
 
     // ── Internal helpers ──────────────────────────────────────────────
@@ -227,9 +237,7 @@ impl GoOnClient {
             }
         }
 
-        Err(last_error.unwrap_or(SdkError::UnexpectedShape(
-            "retries exhausted".to_string(),
-        )))
+        Err(last_error.unwrap_or(SdkError::UnexpectedShape("retries exhausted".to_string())))
     }
 
     fn extract<T>(&self, result: Value) -> Result<T, SdkError>
@@ -255,7 +263,9 @@ impl GoOnClient {
 
     /// runtime.health — full runtime health via JSON-RPC.
     pub async fn runtime_health(&self) -> Result<HealthResponse, SdkError> {
-        let result = self.json_rpc("runtime.health", serde_json::json!({})).await?;
+        let result = self
+            .json_rpc("runtime.health", serde_json::json!({}))
+            .await?;
         self.extract(result)
     }
 
@@ -283,7 +293,9 @@ impl GoOnClient {
 
     /// governance.status — full governance status (~120+ capability profiles).
     pub async fn governance_status(&self) -> Result<GovernanceStatusResponse, SdkError> {
-        let result = self.json_rpc("governance.status", serde_json::json!({})).await?;
+        let result = self
+            .json_rpc("governance.status", serde_json::json!({}))
+            .await?;
         self.extract(result)
     }
 
@@ -306,7 +318,9 @@ impl GoOnClient {
 
     /// health.probes — module-level health probes (Phase 4: harness_bus + capability_bus).
     pub async fn health_probes(&self) -> Result<HealthProbesResponse, SdkError> {
-        let result = self.json_rpc("health.probes", serde_json::json!({})).await?;
+        let result = self
+            .json_rpc("health.probes", serde_json::json!({}))
+            .await?;
         self.extract(result)
     }
 
@@ -318,7 +332,9 @@ impl GoOnClient {
 
     /// metrics.prometheus — get Prometheus-formatted metrics.
     pub async fn metrics_prometheus(&self) -> Result<String, SdkError> {
-        let result = self.json_rpc("metrics.prometheus", serde_json::json!({})).await?;
+        let result = self
+            .json_rpc("metrics.prometheus", serde_json::json!({}))
+            .await?;
         Ok(result.as_str().unwrap_or("").to_string())
     }
 
@@ -332,7 +348,9 @@ impl GoOnClient {
 
     /// breaker.status — get circuit breaker status.
     pub async fn breaker_status(&self) -> Result<BreakerStatusResponse, SdkError> {
-        let result = self.json_rpc("breaker.status", serde_json::json!({})).await?;
+        let result = self
+            .json_rpc("breaker.status", serde_json::json!({}))
+            .await?;
         self.extract(result)
     }
 
@@ -357,7 +375,9 @@ impl GoOnClient {
 
     /// checkpoint.list — list available checkpoints.
     pub async fn checkpoint_list(&self) -> Result<CheckpointListResponse, SdkError> {
-        let result = self.json_rpc("checkpoint.list", serde_json::json!({})).await?;
+        let result = self
+            .json_rpc("checkpoint.list", serde_json::json!({}))
+            .await?;
         self.extract(result)
     }
 
@@ -399,13 +419,17 @@ impl GoOnClient {
 
     /// learning.summary — get learning loop summary.
     pub async fn learning_summary(&self) -> Result<LearningSummaryResponse, SdkError> {
-        let result = self.json_rpc("learning.summary", serde_json::json!({})).await?;
+        let result = self
+            .json_rpc("learning.summary", serde_json::json!({}))
+            .await?;
         self.extract(result)
     }
 
     /// selector.status — get model selector status.
     pub async fn selector_status(&self) -> Result<SelectorStatusResponse, SdkError> {
-        let result = self.json_rpc("selector.status", serde_json::json!({})).await?;
+        let result = self
+            .json_rpc("selector.status", serde_json::json!({}))
+            .await?;
         self.extract(result)
     }
 
@@ -431,7 +455,9 @@ impl GoOnClient {
 
     /// config.baseline — get config baseline snapshot.
     pub async fn config_baseline(&self) -> Result<ConfigBaselineResponse, SdkError> {
-        let result = self.json_rpc("config.baseline", serde_json::json!({})).await?;
+        let result = self
+            .json_rpc("config.baseline", serde_json::json!({}))
+            .await?;
         self.extract(result)
     }
 
@@ -442,7 +468,9 @@ impl GoOnClient {
 
     /// harness.status — get test harness status.
     pub async fn harness_status(&self) -> Result<HarnessStatusResponse, SdkError> {
-        let result = self.json_rpc("harness.status", serde_json::json!({})).await?;
+        let result = self
+            .json_rpc("harness.status", serde_json::json!({}))
+            .await?;
         self.extract(result)
     }
 }

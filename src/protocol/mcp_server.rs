@@ -407,7 +407,7 @@ async fn handle_http_connection(
                     .map(|value| value.trim().to_string())
                     .filter(|value| !value.is_empty());
 
-                if provided != Some(expected.clone()) {
+                if !provided.is_some_and(|ref p| constant_time_eq(p, expected)) {
                     write_http_json_response(
                         socket,
                         401,
@@ -667,6 +667,28 @@ async fn write_http_json_response(
 /// Extract a Bearer token from MCP HTTP request headers.
 /// Checks `Authorization: Bearer <token>` first, then falls back to
 /// `X-Api-Key` and `X-Go-On-Key` headers.
+/// Constant-time string comparison to prevent timing side-channel attacks.
+///
+/// Compares two string slices in a way that takes the same amount of time
+/// regardless of how many characters match, protecting against attackers
+/// who measure response latency to guess tokens character-by-character.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let a_bytes = a.as_bytes();
+    let b_bytes = b.as_bytes();
+
+    if a_bytes.len() != b_bytes.len() {
+        return false;
+    }
+
+    // XOR each byte and OR the results together so that every byte is
+    // compared regardless of whether an earlier byte already mismatched.
+    let mut result: u8 = 0;
+    for i in 0..a_bytes.len() {
+        result |= a_bytes[i] ^ b_bytes[i];
+    }
+    result == 0
+}
+
 fn extract_mcp_entry_token(headers: &str) -> Option<String> {
     if let Some(auth) = extract_mcp_header_value(headers, "authorization") {
         let lower = auth.to_ascii_lowercase();

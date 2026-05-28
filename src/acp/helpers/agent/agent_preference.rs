@@ -57,9 +57,9 @@ pub struct AgentPreferenceResult {
     /// Resolved branch ID (defaults to `"main"` when absent).
     pub branch_id: String,
     /// Requirement contract (from `params.requirement_contract` or a newly-created default).
-    pub requirement_contract: RequirementContractArtifact,
+    pub _requirement_contract: RequirementContractArtifact,
     /// Task plan artifact (from `params.plan` or a newly-created default).
-    pub plan: TaskPlanArtifact,
+    pub _plan: TaskPlanArtifact,
 }
 
 // ── Agent Switch State (global, process-wide) ────────────────────────────
@@ -317,7 +317,7 @@ pub fn resolve_agent_preferences(
         preferred_agent_from_request,
         conversation_id,
         branch_id,
-        requirement_contract,
-        plan,
+        _requirement_contract: requirement_contract,
+        _plan: plan,
     })
 }

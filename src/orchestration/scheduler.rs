@@ -637,14 +637,13 @@ impl TaskScheduler {
         Ok(())
     }
 
-    /// Apply aging to all waiting tasks. Iterates task_map, increments aging_bonus
-    /// by aging_rate * elapsed_seconds, capped at max_aging_bonus. Rebuilds per-role
-    /// BinaryHeaps. Tracks starvation_events_prevented when aging bonus crosses a
-    /// threshold.
+    /// Public aging method — called from dequeue() with throttling or from a
+    /// background timer. Increments aging_bonus for all waiting tasks to prevent
+    /// starvation of low-priority items.
     ///
-    /// This should be called periodically by a background timer, not synchronously
-    /// on every `dequeue()` call.
-    #[allow(dead_code)] // F-GAP-12 — reserved for task scheduling integration
+    /// Should be called periodically (e.g. every 1-2 seconds) by a background
+    /// timer task, not synchronously on every dequeue call.
+    #[allow(dead_code)] // BLUE48 — public API for external background timer
     pub fn apply_aging(&self) {
         let now = Instant::now();
         let elapsed = {

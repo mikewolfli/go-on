@@ -211,6 +211,24 @@ impl EvolutionGraph {
             .get(&(agent.to_string(), capability.to_string()))
     }
 
+    /// Get a reference to the evolution record (BLUE48 Step 3).
+    pub fn get_record(&self, agent: &str, capability: &str) -> Result<&EvolutionRecord> {
+        self.records
+            .get(&(agent.to_string(), capability.to_string()))
+            .ok_or_else(|| {
+                anyhow!(
+                    "Capability '{}' not found for agent '{}'",
+                    capability,
+                    agent
+                )
+            })
+    }
+
+    /// Return all (agent, capability) keys currently tracked (BLUE48 Step 3).
+    pub fn all_keys(&self) -> Vec<(String, String)> {
+        self.records.keys().cloned().collect()
+    }
+
     /// Find all capabilities with a Degrading trend.
     ///
     /// Returns a vector of `(agent, capability, trend_slope)` where trend_slope

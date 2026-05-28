@@ -4,6 +4,7 @@
 //! data lineage chain: input → tool → output → consumer.
 
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 /// A single provenance entry
@@ -30,7 +31,7 @@ pub struct ProvenanceLedger {
 
 #[derive(Debug)]
 struct ProvenanceLedgerInner {
-    entries: Vec<ProvenanceEntry>,
+    entries: VecDeque<ProvenanceEntry>,
     max_entries: usize,
 }
 
@@ -44,7 +45,7 @@ impl ProvenanceLedger {
     pub fn new(max_entries: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(ProvenanceLedgerInner {
-                entries: Vec::new(),
+                entries: VecDeque::new(),
                 max_entries,
             })),
         }
@@ -52,27 +53,28 @@ impl ProvenanceLedger {
 
     /// Append a new entry; oldest entries are evicted when at capacity.
     pub fn append(&self, entry: ProvenanceEntry) {
-        if let Ok(mut inner) = self.inner.lock() {
-            if inner.entries.len() >= inner.max_entries {
-                inner.entries.remove(0);
-            }
-            inner.entries.push(entry);
+        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "provenance", "Mutex poisoned – recovering in append");
+            poisoned.into_inner()
+        });
+        if inner.entries.len() >= inner.max_entries {
+            inner.entries.pop_front();
         }
+        inner.entries.push_back(entry);
     }
 
     /// Get all entries for a given task_id
     pub fn entries_for_task(&self, task_id: &str) -> Vec<ProvenanceEntry> {
-        self.inner
-            .lock()
-            .map(|inner| {
-                inner
-                    .entries
-                    .iter()
-                    .filter(|e| e.task_id == task_id)
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default()
+        let inner = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "provenance", "Mutex poisoned – recovering");
+            poisoned.into_inner()
+        });
+        inner
+            .entries
+            .iter()
+            .filter(|e| e.task_id == task_id)
+            .cloned()
+            .collect()
     }
 
     /// Build a digest of the input value (SHA-256 hex).
@@ -91,7 +93,10 @@ impl ProvenanceLedger {
         self.inner
             .lock()
             .map(|inner| inner.entries.len())
-            .unwrap_or(0)
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!(target: "provenance", "Mutex poisoned – recovering in len");
+                poisoned.into_inner().entries.len()
+            })
     }
 
     pub fn is_empty(&self) -> bool {
@@ -101,23 +106,23 @@ impl ProvenanceLedger {
     /// Compute a content-digest of the entire ledger (SHA-256 hex).
     pub fn ledger_digest(&self) -> String {
         use sha2::{Digest, Sha256};
-        let combined: String = self
-            .inner
-            .lock()
-            .map(|inner| {
-                inner
-                    .entries
-                    .iter()
-                    .map(|e| {
-                        format!(
-                            "{}|{}|{}|{}|{}",
-                            e.id, e.task_id, e.phase, e.tool, e.timestamp_ms
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("::")
-            })
-            .unwrap_or_default();
+        let combined: String = {
+            let inner = self.inner.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!(target: "provenance", "Mutex poisoned – recovering in ledger_digest");
+                poisoned.into_inner()
+            });
+            inner
+                .entries
+                .iter()
+                .map(|e| {
+                    format!(
+                        "{}|{}|{}|{}|{}",
+                        e.id, e.task_id, e.phase, e.tool, e.timestamp_ms
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("::")
+        };
         let hash = Sha256::digest(combined.as_bytes());
         hash.iter()
             .map(|b| format!("{:02x}", b))
@@ -127,54 +132,53 @@ impl ProvenanceLedger {
 
     /// Query entries by phase (action type).
     pub fn entries_by_phase(&self, phase: &str) -> Vec<ProvenanceEntry> {
-        self.inner
-            .lock()
-            .map(|inner| {
-                inner
-                    .entries
-                    .iter()
-                    .filter(|e| e.phase == phase)
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default()
+        let inner = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "provenance", "Mutex poisoned – recovering");
+            poisoned.into_inner()
+        });
+        inner
+            .entries
+            .iter()
+            .filter(|e| e.phase == phase)
+            .cloned()
+            .collect()
     }
 
     /// Query entries by tool (component).
     pub fn entries_by_tool(&self, tool: &str) -> Vec<ProvenanceEntry> {
-        self.inner
-            .lock()
-            .map(|inner| {
-                inner
-                    .entries
-                    .iter()
-                    .filter(|e| e.tool == tool)
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default()
+        let inner = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "provenance", "Mutex poisoned – recovering");
+            poisoned.into_inner()
+        });
+        inner
+            .entries
+            .iter()
+            .filter(|e| e.tool == tool)
+            .cloned()
+            .collect()
     }
 
     /// Query entries within a time window (inclusive, in milliseconds since Unix epoch).
     pub fn entries_between(&self, start_ms: u64, end_ms: u64) -> Vec<ProvenanceEntry> {
-        self.inner
-            .lock()
-            .map(|inner| {
-                inner
-                    .entries
-                    .iter()
-                    .filter(|e| e.timestamp_ms >= start_ms && e.timestamp_ms <= end_ms)
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default()
+        let inner = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "provenance", "Mutex poisoned – recovering");
+            poisoned.into_inner()
+        });
+        inner
+            .entries
+            .iter()
+            .filter(|e| e.timestamp_ms >= start_ms && e.timestamp_ms <= end_ms)
+            .cloned()
+            .collect()
     }
 
     /// Clear all entries (for testing / reset).
     pub fn clear(&self) {
-        if let Ok(mut inner) = self.inner.lock() {
-            inner.entries.clear();
-        }
+        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "provenance", "Mutex poisoned – recovering in clear");
+            poisoned.into_inner()
+        });
+        inner.entries.clear();
     }
 }
 

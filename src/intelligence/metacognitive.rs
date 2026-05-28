@@ -596,6 +596,13 @@ impl MetacognitiveController {
         };
 
         inner.reports.push(report);
+
+        // Evict oldest reports beyond max_observations cap.
+        let max_reports = inner.config.max_observations;
+        while inner.reports.len() > max_reports {
+            inner.reports.remove(0);
+        }
+
         Ok(report_id)
     }
 

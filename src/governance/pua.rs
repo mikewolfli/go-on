@@ -459,6 +459,23 @@ impl PuaRuleEngine {
         plan.escalation_level = format!("L{}", next);
         next
     }
+
+    /// De-escalate the security level by one step.
+    ///
+    /// Decreases the escalation level when threat conditions are resolved
+    /// (e.g., after successful recovery from a security incident).
+    /// The level is floored at L0 (no escalation).
+    pub fn de_escalate(&self, _reason: &str) -> u8 {
+        tracing::debug!("De-escalation triggered: {}", _reason);
+        let Ok(mut plan) = self.plan.lock() else {
+            return 0;
+        };
+
+        let current = parse_escalation_level(&plan.escalation_level);
+        let next = current.saturating_sub(1);
+        plan.escalation_level = format!("L{}", next);
+        next
+    }
 }
 
 pub fn quality_compass() -> Vec<String> {

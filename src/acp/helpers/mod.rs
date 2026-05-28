@@ -48,6 +48,8 @@ pub mod autonomy_metrics;
 pub mod execution_intelligence;
 #[path = "autonomy/full_auto_executor.rs"]
 pub mod full_auto_executor;
+#[path = "autonomy/intelligence_bridge.rs"]
+pub mod intelligence_bridge;
 
 // ── Governance & policy ────────────────────────────────────────────────────
 #[path = "governance/policy.rs"]

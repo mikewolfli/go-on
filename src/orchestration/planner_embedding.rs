@@ -1,26 +1,53 @@
-//! BLUE47 Step 7: Embedding-based task classification (optional, feature-gated)
+//! BLUE48 Step 1: Embedding-based task classification with global vector store.
 //!
 //! Provides an `EmbeddingTaskClassifier` that uses cosine similarity via
-//! `crate::memory::vector::VectorStore` to classify task complexity.
+//! a global `VectorStore` to classify task complexity and detect task types.
 //! Falls back to keyword matching when the vector store is unavailable.
 
 use crate::orchestration::planner_executor::TaskComplexity;
+use std::sync::{Arc, OnceLock};
 
-/// Embedding-based task classifier that optionally uses a `VectorStore`
+/// Global vector store reference for embedding-based task classification.
+/// Set once during server startup; used by all `EmbeddingTaskClassifier` instances.
+static GLOBAL_TASK_VECTOR_STORE: OnceLock<Arc<crate::memory::vector::VectorStore>> =
+    OnceLock::new();
+
+/// Initialize the global task vector store for embedding-based classification.
+/// Call once during server startup after the vector store is created.
+pub fn init_global_task_vector_store(store: Arc<crate::memory::vector::VectorStore>) {
+    let _ = GLOBAL_TASK_VECTOR_STORE.set(store);
+}
+
+/// Check if the global task vector store is available.
+#[allow(dead_code)]
+pub fn has_global_task_vector_store() -> bool {
+    GLOBAL_TASK_VECTOR_STORE.get().is_some()
+}
+
+/// Embedding-based task classifier that uses a global `VectorStore`
 /// for cosine similarity matching.
 ///
-/// When no vector store is configured, classification degrades gracefully
+/// When no global vector store is configured, classification degrades gracefully
 /// to heuristic keyword matching (the same logic used by `Planner::analyze_task`).
 #[derive(Default)]
 pub struct EmbeddingTaskClassifier {
-    vector_store: Option<std::sync::Arc<crate::memory::vector::VectorStore>>,
+    /// Per-instance override vector store (takes precedence over global).
+    vector_store: Option<Arc<crate::memory::vector::VectorStore>>,
 }
 
 impl EmbeddingTaskClassifier {
-    /// Create a new classifier with an optional vector store reference.
-    #[allow(dead_code)] // alternative constructor reserved for callers with vector store
-    pub fn new(vector_store: Option<std::sync::Arc<crate::memory::vector::VectorStore>>) -> Self {
+    /// Create a new classifier with an optional per-instance vector store reference.
+    /// When `None`, the global vector store (if set via `init_global_task_vector_store`) is used.
+    #[allow(dead_code)]
+    pub fn new(vector_store: Option<Arc<crate::memory::vector::VectorStore>>) -> Self {
         Self { vector_store }
+    }
+
+    /// Resolve the active vector store: per-instance > global > None.
+    fn resolve_store(&self) -> Option<&crate::memory::vector::VectorStore> {
+        self.vector_store
+            .as_deref()
+            .or_else(|| GLOBAL_TASK_VECTOR_STORE.get().map(|arc| arc.as_ref()))
     }
 
     /// Classify a task objective into a `TaskComplexity` level.
@@ -28,7 +55,7 @@ impl EmbeddingTaskClassifier {
     /// Uses embedding-based similarity when a vector store is available,
     /// otherwise falls back to keyword heuristics.
     pub fn classify_task(&self, objective: &str) -> TaskComplexity {
-        if let Some(store) = &self.vector_store {
+        if let Some(store) = self.resolve_store() {
             if let Some(complexity) = self.classify_with_embedding(store, objective) {
                 return complexity;
             }

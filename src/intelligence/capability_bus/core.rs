@@ -1460,10 +1460,63 @@ impl CapabilityBus {
     }
 
     // ------------------------------------------------------------------
-    // Stage 5: Evolution — reinforcement learning update
+    // Stage 5: Evolution — reinforcement learning update (BLUE48 Step 1.2)
     // ------------------------------------------------------------------
 
-    #[allow(clippy::too_many_arguments)]
+    /// Update Q-table, experience, FederatedRL, and ContinuousLearning.
+    /// Returns (reward, q_value, exploration_rate) for downstream consumers.
+    #[allow(dead_code)] // BLUE48 Step 1.2 — extracted from evolve(); will be wired after full refactor
+    fn evolve_learning_systems(
+        &self,
+        state: &(String, String),
+        action: &str,
+        next_state: &(String, String),
+        token_cost: u64,
+        success: bool,
+        quality_score: f64,
+    ) -> (f64, f64, f64) {
+        let metrics = RlTaskExecutionMetrics {
+            tokens_used: token_cost,
+            success,
+            quality_score,
+            duration_ms: 0,
+        };
+        let reward = lock_guard(&self.reward_fn).calculate(&metrics);
+        lock_guard(&self.q_learning).update(state, action, reward, next_state);
+        if success {
+            lock_guard(&self.experience).add_success_case(SuccessCase {
+                objective: format!("state_{:?}", state),
+                strategy: format!("action_{}", action),
+                confidence: quality_score,
+            });
+        }
+        let now = now_ms();
+        if success {
+            let frl = self.federated_rl.submit_policy("local_agent".to_string(), format!("evolve_{}", state.0),
+                serde_json::json!({"state": state, "action": action, "reward": reward, "timestamp": now}).to_string(), quality_score, 1);
+            if let Err(e) = self
+                .federated_rl
+                .contribute_to_round(&format!("round_{}", state.0), &frl)
+            {
+                warn!("evolve: federated_rl.contribute_to_round failed: {}", e);
+            }
+        }
+        if let Err(e) = lock_guard(&self.continuous_learning).consolidate_experience(
+            &format!("{:?}_{}", state.0, action),
+            &serde_json::json!({"state": state, "action": action, "success": success, "reward": reward, "quality": quality_score}).to_string(), quality_score,
+        ) { warn!("evolve: continuous_learning.consolidate_experience failed: {}", e); }
+        let ql = lock_guard(&self.q_learning);
+        let q_value = ql
+            .q_table
+            .get(state)
+            .and_then(|m| m.get(action))
+            .copied()
+            .unwrap_or(0.0);
+        let exploration_rate = ql.exploration_rate;
+        (reward, q_value, exploration_rate)
+    }
+
+    /// Coordinate the full evolution pipeline by delegating to focused subsystem methods.
     pub fn evolve(
         &self,
         state: &(String, String),

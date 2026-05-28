@@ -89,7 +89,7 @@ impl AuditLog {
 /// When a `log_path` is configured, every recorded entry is appended as a JSON
 /// line to the file. Buffer overflow warnings are emitted via `tracing::warn!`.
 #[allow(dead_code)] // F-GAP-03 — reserved for Phase 2 audit pipeline integration
-pub(crate) struct ThreadSafeAuditLog {
+pub struct ThreadSafeAuditLog {
     inner: Arc<Mutex<AuditLogInner>>,
 }
 

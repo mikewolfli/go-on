@@ -206,6 +206,8 @@ struct Inner {
     next_event_id: u64,
     next_snapshot_id: u64,
     causal_links: Vec<CausalLink>,
+    /// Index: cause_entity_id → indices into causal_links for O(1) lookups
+    causal_links_by_cause: HashMap<String, Vec<usize>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -233,6 +235,7 @@ impl WorldModel {
                 next_event_id: 1,
                 next_snapshot_id: 1,
                 causal_links: Vec::new(),
+                causal_links_by_cause: HashMap::new(),
             })),
         }
     }
@@ -265,13 +268,21 @@ impl WorldModel {
             );
         }
 
-        // Enforce max entities limit.
-        if inner.entities.len() >= inner.config.max_entities {
-            bail!(
-                "max entities ({}) reached — cannot register '{}'",
-                inner.config.max_entities,
-                name
-            );
+        // Enforce max entities limit — evict the oldest entity if at capacity.
+        while inner.entities.len() >= inner.config.max_entities {
+            if let Some(pos) = inner
+                .entities
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, e)| e.last_seen_ms)
+                .map(|(i, _)| i)
+            {
+                let removed = inner.entities.swap_remove(pos);
+                // Clean up relationships referencing the evicted entity.
+                inner
+                    .relationships
+                    .retain(|r| r.source_id != removed.id && r.target_id != removed.id);
+            }
         }
 
         let id = format!("ent_{}", inner.next_entity_id);
@@ -534,11 +545,13 @@ impl WorldModel {
         context_tags: Vec<String>,
     ) {
         let mut inner = lock_guard(&self.inner);
-        if let Some(existing) = inner
+        let existing_pos = inner
             .causal_links
-            .iter_mut()
-            .find(|l| l.cause_entity_id == cause && l.effect_entity_id == effect)
-        {
+            .iter()
+            .position(|l| l.cause_entity_id == cause && l.effect_entity_id == effect);
+
+        if let Some(pos) = existing_pos {
+            let existing = &mut inner.causal_links[pos];
             existing.observation_count += 1;
             existing.avg_delay_ms =
                 (existing.avg_delay_ms * (existing.observation_count - 1) as f64 + delay_ms)
@@ -560,6 +573,13 @@ impl WorldModel {
                 avg_delay_ms: delay_ms,
                 context_tags,
             });
+            // Maintain the index: record the new link's index by cause
+            let idx = inner.causal_links.len() - 1;
+            inner
+                .causal_links_by_cause
+                .entry(cause.to_string())
+                .or_default()
+                .push(idx);
         }
         inner.last_update_ms = now_ms();
     }
@@ -567,6 +587,9 @@ impl WorldModel {
     /// Predict the outcome of taking `action` on `target_entity`.
     ///
     /// Returns a list of predicted effects with confidence scores.
+    ///
+    /// Uses the causal_links_by_cause index for O(1) lookups by cause_entity_id
+    /// instead of scanning all causal_links (O(N)).
     pub fn predict_outcome(&self, action: &str, target_entity: &str) -> Vec<Prediction> {
         let inner = lock_guard(&self.inner);
         let mut results: Vec<Prediction> = Vec::new();
@@ -577,9 +600,10 @@ impl WorldModel {
                 serde_json::json!(props)
             };
 
-        // Find causal links where the action matches a known cause
-        for link in &inner.causal_links {
-            if link.cause_entity_id == action {
+        // Find causal links where the action matches a known cause — O(1) index lookup
+        if let Some(indices) = inner.causal_links_by_cause.get(action) {
+            for &idx in indices {
+                let link = &inner.causal_links[idx];
                 // Find the effect entity's current state
                 let effect_state = inner
                     .entities
@@ -600,16 +624,11 @@ impl WorldModel {
 
         // If no causal link found, do a similarity-based prediction
         if results.is_empty() {
-            // Find entities similar to target and see what actions affected them
-            let similar_entities: Vec<&WorldEntity> = inner
-                .entities
-                .iter()
-                .filter(|e| e.id == target_entity)
-                .collect();
-
-            for similar in &similar_entities {
-                for link in &inner.causal_links {
-                    if link.cause_entity_id == similar.id {
+            // Verify the target entity exists, then look up its causal links via the index
+            if inner.entities.iter().any(|e| e.id == target_entity) {
+                if let Some(indices) = inner.causal_links_by_cause.get(target_entity) {
+                    for &idx in indices {
+                        let link = &inner.causal_links[idx];
                         let effect_state = inner
                             .entities
                             .iter()
@@ -693,10 +712,19 @@ impl WorldModel {
             }
         }
 
-        // Push all discovered links into inner state
+        // Push all discovered links into inner state and maintain the index
         if !new_links.is_empty() {
             let mut inner = lock_guard(&self.inner);
+            let start = inner.causal_links.len();
             inner.causal_links.extend(new_links);
+            for i in start..inner.causal_links.len() {
+                let cause = inner.causal_links[i].cause_entity_id.clone();
+                inner
+                    .causal_links_by_cause
+                    .entry(cause)
+                    .or_default()
+                    .push(i);
+            }
         }
 
         discoveries

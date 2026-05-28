@@ -53,7 +53,10 @@ use crate::governance::review_controls::{
     review_verdict, ReviewGateOutcome, ReviewTimeoutPolicyKind, ReviewVerdict,
 };
 use crate::governance::runtime_controls::OnlineControllerState;
-use crate::governance::security_governor::{SecurityGovernor, SecurityGovernorConfig};
+use crate::governance::security_governor::{
+    ConditionOperator, PolicyAction, PolicyComposition, PolicyCondition, PolicySeverity,
+    SecurityGovernor, SecurityGovernorConfig, SecurityPolicy,
+};
 use crate::orchestration::artifact::{ArtifactLayer, ArtifactProfile};
 use crate::orchestration::brain_loop::{BrainLoop, BrainLoopConfig, BrainLoopProfile};
 use crate::orchestration::omnipotent::{OmnipotentMode, OmnipotentProfile};
@@ -603,7 +606,71 @@ impl PolicyEvaluator {
             idempotency,
             runtime_control,
             guard,
-            security_governor: Arc::new(SecurityGovernor::new(SecurityGovernorConfig::default())),
+            security_governor: Arc::new({
+                let mut sg_config = SecurityGovernorConfig::default();
+                sg_config.default_action = PolicyAction::Deny;
+                let gov = SecurityGovernor::new(sg_config);
+
+                // 1. read_allow — allow low-risk, read-only tasks
+                gov.register_policy(SecurityPolicy {
+                    id: "read_allow".into(),
+                    name: "Allow read/search operations".into(),
+                    description:
+                        "Permits read and search operations for zero-risk tasks with no file writes"
+                            .into(),
+                    severity: PolicySeverity::Low,
+                    action: PolicyAction::Allow,
+                    conditions: vec![
+                        PolicyCondition {
+                            field: "risk_score".into(),
+                            operator: ConditionOperator::Equals,
+                            value: "0".into(),
+                        },
+                        PolicyCondition {
+                            field: "file_count".into(),
+                            operator: ConditionOperator::Equals,
+                            value: "0".into(),
+                        },
+                    ],
+                    composition: PolicyComposition::And,
+                    escalation_level: None,
+                });
+
+                // 2. write_require_approval — require review for tasks that write files
+                gov.register_policy(SecurityPolicy {
+                    id: "write_require_approval".into(),
+                    name: "Write operations require approval".into(),
+                    description: "Tasks that modify files require manual review approval".into(),
+                    severity: PolicySeverity::Medium,
+                    action: PolicyAction::RequireReview,
+                    conditions: vec![PolicyCondition {
+                        field: "file_count".into(),
+                        operator: ConditionOperator::NotEquals,
+                        value: "0".into(),
+                    }],
+                    composition: PolicyComposition::And,
+                    escalation_level: None,
+                });
+
+                // 3. shell_require_code_exec — require review for high-risk task operations
+                gov.register_policy(SecurityPolicy {
+                    id: "shell_require_code_exec".into(),
+                    name: "Shell operations require code execution review".into(),
+                    description: "Shell and terminal operations require additional review approval"
+                        .into(),
+                    severity: PolicySeverity::High,
+                    action: PolicyAction::RequireReview,
+                    conditions: vec![PolicyCondition {
+                        field: "risk_score".into(),
+                        operator: ConditionOperator::NotEquals,
+                        value: "0".into(),
+                    }],
+                    composition: PolicyComposition::And,
+                    escalation_level: None,
+                });
+
+                gov
+            }),
             rbac_enforcer: None,
         }
     }
@@ -863,11 +930,42 @@ impl PolicyEvaluator {
 
         let quality = _missing.is_empty();
         let risk_score = if _missing.is_empty() { 0.0 } else { 0.5 };
-        OutputVerdict {
+        let evidence_count = evidence.len();
+        let verdict = OutputVerdict {
             quality,
             evidence,
             risk_score,
+        };
+
+        // Record audit entry for the output verification decision.
+        // This ensures every verify_output call is auditable for compliance.
+        if self.governance.audit.enabled {
+            let audit_entry = crate::governance::security_governor::AuditEntry::new(
+                "verify_output".to_string(),
+                crate::governance::security_governor::PolicyVerdict {
+                    allowed: quality,
+                    required_review: !quality,
+                    escalation_level: "normal".to_string(),
+                    matched_policy: None,
+                    reasons: vec![if quality {
+                        "output verification passed".to_string()
+                    } else {
+                        "output verification found missing evidence".to_string()
+                    }],
+                },
+                "verify_output".to_string(),
+                "harness".to_string(),
+                format!(
+                    "quality={}, risk_score={}, evidence_count={}",
+                    quality,
+                    risk_score,
+                    evidence_count
+                ),
+            );
+            self.security_governor.record_audit(audit_entry);
         }
+
+        verdict
     }
 
     /// Permission check (delegates to RBAC enforcer when configured, otherwise
@@ -1184,8 +1282,17 @@ impl HarnessBus {
     /// PolicyBundle compliance check for a GovernanceAction.
     pub fn enforce_action(&self, action: &GovernanceAction, policy_bundle: &PolicyBundle) -> bool {
         match action {
-            GovernanceAction::Read => true,
-            GovernanceAction::Search => true,
+            GovernanceAction::Read | GovernanceAction::Search => {
+                // Check sandbox level: Isolated mode requires explicit permission
+                // even for read/search operations to prevent data exfiltration
+                // in high-security environments.
+                if let Ok(level) = self.evaluator.sandbox_level.lock() {
+                    if level.eq_ignore_ascii_case("isolated") {
+                        return false;
+                    }
+                }
+                true
+            }
             GovernanceAction::Write => !policy_bundle.require_approval_for_write,
             GovernanceAction::Shell => policy_bundle.enable_code_execution,
         }

@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio::time::Duration;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, warn};
 
 use crate::acp::helpers::agent_selector::{collect_reputation_scores, AgentSelector};
 use crate::acp::helpers::autonomy::{
@@ -39,8 +39,7 @@ use crate::acp::helpers::conversation::stream_would_exceed_limits;
 use crate::acp::helpers::metrics::{stream_chunk_notification, stream_done_notification};
 use crate::acp::helpers::model_router;
 use crate::acp::helpers::response_assembler::{
-    build_chat_response, build_role_routing, build_task_graph_checkpoint, CapabilityRoutingInfo,
-    ChatResponseContext,
+    build_chat_response, build_role_routing, build_task_graph_checkpoint, ChatResponseContext,
 };
 use crate::acp::helpers::review_gate::{run_enhanced_verification, run_review_gate};
 use crate::acp::r#impl::UserSession;
@@ -419,9 +418,14 @@ pub(crate) async fn run_high_risk_vote_attempt(
     match outcome {
         Ok((output_text, reasoning_output, _sel_m)) => {
             let success = !output_text.trim().is_empty();
-            if let Ok(mut ctrl) = server.online_controller.lock() {
-                ctrl.record_agent_outcome(phase_name, &agent_name, success, elapsed_ms);
-            }
+            server
+                .online_controller
+                .lock()
+                .unwrap_or_else(|poisoned| {
+                    warn!("run_high_risk_vote_attempt: online_controller poisoned, recovering");
+                    poisoned.into_inner()
+                })
+                .record_agent_outcome(phase_name, &agent_name, success, elapsed_ms);
 
             if success {
                 HighRiskVoteAttemptResult {
@@ -461,9 +465,14 @@ pub(crate) async fn run_high_risk_vote_attempt(
         }
         Err(err) => {
             let err_text = err.to_string();
-            if let Ok(mut ctrl) = server.online_controller.lock() {
-                ctrl.record_agent_outcome(phase_name, &agent_name, false, elapsed_ms);
-            }
+            server
+                .online_controller
+                .lock()
+                .unwrap_or_else(|poisoned| {
+                    warn!("run_high_risk_vote_attempt: online_controller poisoned, recovering");
+                    poisoned.into_inner()
+                })
+                .record_agent_outcome(phase_name, &agent_name, false, elapsed_ms);
 
             HighRiskVoteAttemptResult {
                 attempt_log: json!({
@@ -580,22 +589,23 @@ pub async fn handle_chat(
             .observability
             .telemetry_runtime
             .lock()
-            .ok()
-            .and_then(|telemetry_guard| {
-                telemetry_guard.start_child_span(
-                    parent,
-                    "acp.chat",
-                    vec![KeyValue::new("phase.entry", "chat")],
-                )
+            .unwrap_or_else(|poisoned| {
+                warn!("handle_chat: telemetry_runtime poisoned, recovering");
+                poisoned.into_inner()
             })
+            .start_child_span(
+                parent,
+                "acp.chat",
+                vec![KeyValue::new("phase.entry", "chat")],
+            )
     });
 
     let result = async {
         let lifecycle_snapshot = {
-            let lifecycle_guard = server
-                .lifecycle_state
-                .lock()
-                .map_err(|_| anyhow::anyhow!(t("error.chat.lifecycle_lock_failed")))?;
+            let lifecycle_guard = server.lifecycle_state.lock().unwrap_or_else(|poisoned| {
+                warn!("handle_chat: lifecycle_state poisoned, recovering");
+                poisoned.into_inner()
+            });
             if lifecycle_guard.is_shutting_down() {
                 Some(serde_json::to_value(lifecycle_guard.snapshot())?)
             } else {
@@ -779,12 +789,6 @@ pub async fn handle_chat(
                 );
             }
         }
-
-        // GAP-46-12: Ensure the global SSE buffer pool is initialized.
-        // The pool lives at module level and is used by `write_sse_event` in
-        // `runtime.rs` to avoid allocation churn during SSE frame serialization.
-        let _pool = SSE_BUFFER_POOL.get_or_init(|| SseBufferPool::new(4, 4096));
-        trace!("SseBufferPool: ready for streaming request");
 
         // Check if should escalate approval strategy
         let should_escalate = should_escalate_approval_strategy(
@@ -980,8 +984,11 @@ fn controller_recommended_phase(
     let recommended = server
         .online_controller
         .lock()
-        .ok()
-        .and_then(|ctrl| ctrl.recommend_phase(&candidates))?;
+        .unwrap_or_else(|poisoned| {
+            warn!("controller_recommended_phase: online_controller poisoned, recovering");
+            poisoned.into_inner()
+        })
+        .recommend_phase(&candidates)?;
 
     if recommended == "review" && !mode.eq_ignore_ascii_case("review") {
         return None;
@@ -1004,325 +1011,85 @@ pub(crate) async fn process_chat_request(
     ctx: Option<ChatRequestContext>,
 ) -> Result<serde_json::Value> {
     let started = std::time::Instant::now();
-
-    // Resolve chat context: use provided context or create a default one.
-    // This carries the authenticated user session and resolved tenant ID.
     let ctx = ctx.unwrap_or_else(|| ChatRequestContext::new(None));
-
-    // Get routing handles
     let (flow, registry) = routing_handles(server)?;
-
-    // ── Pre-route policy evaluation ───────────────────────────────────
-    // Evaluate HarnessBus policies, token gate, and tenant budget.
-    // If any policy denies the request, this will return an error.
     let tenant_id = &ctx.tenant_id;
-    let _policy_result = crate::acp::helpers::pre_route_policy::evaluate_pre_route_policies(
-        server, params, trace, tenant_id,
+
+    // ── Step 1: Pre-route policy evaluation ────────────────────────────
+    evaluate_pre_route_policies(server, params, trace, tenant_id).await?;
+
+    // ── Step 2: Phase resolution ──────────────────────────────────────
+    let phase_res = resolve_request_phase(server, params, &flow, registry.as_ref()).await?;
+
+    let phase = phase_res.phase;
+    let phase_name = &phase_res.phase_name;
+    let phase_origin = &phase_res.phase_origin;
+    let _has_requested_phase = phase_res.has_requested_phase;
+    let _has_controller_phase = phase_res.has_controller_phase;
+    let _has_adaptive_phase = phase_res.has_adaptive_phase;
+    let mut resolved = phase_res.resolved;
+    let schema_warnings = phase_res.schema_warnings;
+    let schema_error = phase_res.schema_error;
+    let mut routing_provenance = phase_res.routing_provenance;
+    let reputation_scores = phase_res.reputation_scores;
+
+    // ── Step 3: Agent selection & scoring ─────────────────────────────
+    let agent_sel = select_and_score_agents(
+        server,
+        params,
+        &mut resolved,
+        &phase,
+        phase_name,
+        tenant_id,
+        trace,
+        &mut routing_provenance,
+        &reputation_scores,
     )
     .await?;
 
-    // ── SchemaRegistry task envelope validation (F-GAP-07) ─────────────
-    // Validate the incoming task envelope against registered role schemas
-    // when a phase/agent role is resolved.  Checks are deferred until the
-    // phase is known (after flow.resolve below), but we seed the context
-    // here so that schema warnings can be attached to the result.
-    let mut schema_warnings: Vec<String> = Vec::new();
-    let mut schema_error: Option<String> = None;
-    let app_config = flow.config();
-    // Avoid cloning by computing phase choice once
-    let requested_phase = params.phase.as_ref();
-    let adaptive_phase = if requested_phase.is_none() {
-        infer_adaptive_phase(app_config.as_ref(), &params.mode, &params.messages)
-    } else {
-        None
+    let capability_info = crate::acp::helpers::response_assembler::CapabilityRoutingInfo {
+        selected_agent: agent_sel.capability_selected_agent,
+        recommended_mode: agent_sel.capability_recommended_mode,
+        candidate_count: agent_sel.capability_candidate_count,
+        decision_confidence: agent_sel.capability_decision_confidence,
+        selection_reason: agent_sel.capability_selection_reason,
+        optimization_hint: agent_sel.capability_optimization_hint,
     };
-    let controller_phase = if requested_phase.is_none() {
-        controller_recommended_phase(server, app_config.as_ref(), &params.mode)
-    } else {
-        None
-    };
+    let configured_primary_agent = agent_sel.configured_primary_agent;
+    let _preferred_agent_from_request = agent_sel.preferred_agent_from_request;
+    let conversation_id = agent_sel.conversation_id;
+    let branch_id = agent_sel.branch_id;
+    let agent_messages = agent_sel.agent_messages;
+    let layered_prompt_segments = agent_sel.layered_prompt_segments;
+    let base_agent_options = agent_sel.base_agent_options;
+    let risk_policy = agent_sel.risk_policy;
+    let risk_assessment = agent_sel.risk_assessment;
+    let enable_high_risk_vote = agent_sel.enable_high_risk_vote;
+    let enable_high_risk_multi_agent_vote = agent_sel.enable_high_risk_multi_agent_vote;
+    let min_vote_agents = agent_sel.min_vote_agents;
+    let max_vote_agents = agent_sel.max_vote_agents;
+    let escalation_enabled = agent_sel.escalation_enabled;
+    let escalation_models_per_agent = agent_sel.escalation_models_per_agent;
+    let escalation_max_agents = agent_sel.escalation_max_agents;
+    let _model_is_specific = agent_sel.model_is_specific;
+    let unhealthy_fallback_agent = agent_sel.unhealthy_fallback_agent;
+    let fallback_reason = agent_sel.fallback_reason;
+    let council_decision = agent_sel.council_decision;
+    let candidate_agents = agent_sel.candidate_agents;
+    let vector_context = agent_sel.vector_context;
 
-    let has_requested_phase = requested_phase.is_some();
-    let has_controller_phase = controller_phase.is_some();
-    let has_adaptive_phase = adaptive_phase.is_some();
-
-    // Compute final phase choice exactly once
-    let chosen_phase = requested_phase
-        .cloned()
-        .or(controller_phase)
-        .or(adaptive_phase);
-
-    // Defensive fallback: if the requested phase is not recognized by the flow
-    // configuration (e.g. an old session cached an obsolete phase name), silently
-    // fall back to the default phase instead of returning an error.
-    let mut resolved = match flow.resolve(chosen_phase.clone(), registry.as_ref()) {
-        Ok(r) => r,
-        Err(_) => {
-            warn!(
-                "chat: phase '{:?}' not found in flow config, falling back to default",
-                chosen_phase
-            );
-            flow.resolve(None, registry.as_ref())?
-        }
-    };
-    let original_count = resolved.agents.len();
-    let unavailable_agents =
-        filter_runtime_ready_agents(server, app_config.as_ref(), &mut resolved.agents).await;
-    if resolved.agents.is_empty() {
-        resolved = flow.resolve(chosen_phase.clone(), registry.as_ref())?;
-    } else if resolved.agents.len() < original_count {
-        warn!(
-            phase = %resolved.phase.phase_name,
-            retained = resolved.agents.len(),
-            original = original_count,
-            unavailable = %unavailable_agents.join(","),
-            "filtered runtime-unavailable agents before chat execution"
-        );
-    }
-    let phase_origin = if has_requested_phase {
-        "requested"
-    } else if has_controller_phase {
-        "controller"
-    } else if has_adaptive_phase {
-        "adaptive"
-    } else {
-        "default"
-    };
-    let phase = resolved.phase.clone();
-    let phase_name = &phase.phase_name;
-    reorder_chat_agents_by_runtime_score(server, phase_name, &mut resolved.agents);
-    let mut routing_provenance: Vec<String> = vec!["runtime_score_rerank_applied".to_string()];
-    let reputation_scores = collect_reputation_scores(server, &resolved.agents);
-
-    let selector = AgentSelector::default();
-    let online_scores = resolved
-        .agents
-        .iter()
-        .map(|(name, _)| {
-            (
-                name.clone(),
-                crate::acp::helpers::agent_router::task_agent_success_rate(phase_name, name),
-            )
-        })
-        .collect::<Vec<_>>();
-    if let Some(selection) = selector.reorder_agents_by_selection(
-        &mut resolved.agents,
-        None,
-        &reputation_scores,
-        &online_scores,
-        phase_name,
-    ) {
-        if !reputation_scores.is_empty() {
-            record_reputation_routing_applied();
-        }
-        routing_provenance.push(format!("agent_selector_winner:{}", selection.winner));
-        routing_provenance.push(format!(
-            "agent_selector_reason:{}",
-            selection.selection_reason
-        ));
-    }
-
-    // ── SchemaRegistry task envelope validation (F-GAP-07) ─────────────
-    // Validate the resolved phase's role schemas against the incoming
-    // task parameters.  Warnings are collected and attached to the output.
-    if let Ok(sr) = server.schema_registry.lock() {
-        for (role_name, _agent) in &resolved.agents {
-            if let Some(schema) = sr.get(role_name) {
-                let input_val = serde_json::json!({
-                    "mode": params.mode,
-                    "phase": phase_name,
-                    "message_count": params.messages.len(),
-                });
-                match schema.validate_input(&input_val) {
-                    Ok(warnings) => {
-                        for w in warnings {
-                            schema_warnings.push(format!("[{}] {}", role_name, w));
-                        }
-                    }
-                    Err(e) => {
-                        schema_error = Some(format!("[{}] {}", role_name, e));
-                        warn!("schema validation error for {}: {}", role_name, e);
-                    }
-                }
-            }
-        }
-    }
-
-    // ── PromptLayers assembly (ARCH-03) ────────────────────────────────
-    // Build a layered prompt from the assembled context for richer
-    // agent instruction.  The result is passed into the execution flow.
-    let prompt_segments = vec![
-        crate::orchestration::prompt_layers::PromptSegment {
-            layer: crate::orchestration::prompt_layers::PromptLayer::L1SystemPrompt,
-            content: format!(
-                "You are a helpful assistant operating in phase '{}' with mode '{}'.",
-                phase_name, params.mode
-            ),
-            priority: 100,
-        },
-        crate::orchestration::prompt_layers::PromptSegment {
-            layer: crate::orchestration::prompt_layers::PromptLayer::L2RoleIdentity,
-            content: format!(
-                "Your role: {}",
-                resolved
-                    .agents
-                    .first()
-                    .map(|(name, _)| name.as_str())
-                    .unwrap_or("general")
-            ),
-            priority: 200,
-        },
-    ];
-    let layered_prompt = PromptAssembler::assemble(prompt_segments);
-    debug!(
-        "assembled layered prompt with {} segments (~{} tokens)",
-        layered_prompt.segments.len(),
-        layered_prompt.token_estimate
-    );
-
-    let capability_risk_policy = build_risk_vote_policy(&HashMap::new());
-    let capability_risk = assess_high_risk(&params.messages, &params.mode, &capability_risk_policy);
-
-    // ── CapabilityBus agent selection ──────────────────────────────────
-    // If a CapabilityBus is present, use its sense/decide pipeline to
-    // refine or override the agent list before falling through to the
-    // existing preference logic.
-    let mut capability_selected_agent: Option<String> = None;
-    let mut capability_recommended_mode: Option<String> = None;
-    let mut capability_candidate_count: Option<u64> = None;
-    let mut capability_decision_confidence: Option<f64> = None;
-    let mut capability_selection_reason: Option<String> = None;
-    let mut selected_agent_reputation: Option<f64> = None;
-    let mut capability_optimization_hint: Option<Value> = None;
-    if let Some(ref cb) = server.capability_bus {
-        let result = crate::acp::helpers::capability_selector::apply_capability_bus_selection(
-            cb,
-            phase_name,
-            &params.messages,
-            &params.mode,
-            &mut resolved.agents,
-            &capability_risk,
-            &trace.request_id,
-            &mut routing_provenance,
-        )
-        .await;
-        capability_selected_agent = result.capability_selected_agent;
-        capability_recommended_mode = result.recommended_mode;
-        capability_candidate_count = Some(result.candidate_count as u64);
-        capability_decision_confidence = Some(result.confidence);
-        capability_selection_reason = Some(result.capability_selection_reason);
-        capability_optimization_hint = result.optimization_hint;
-    }
-
-    // ── Agent Switch State & Preferred Agent Resolution ──────────────
-    // Delegate to the extracted helper which handles:
-    //   - configured_primary_agent / preferred_agent_from_request
-    //   - Global agent_switch_state() management (forced/primary by phase)
-    //   - Priority reordering (explicit preferred → persist; forced fallback → probe primary)
-    //   - Phase-level rate limiter (RPM/burst)
-    //   - conversation_id (with optional tenant namespace)
-    //   - branch_id, requirement_contract, and TaskPlanArtifact
-    let agent_prefs = crate::acp::helpers::agent_preference::resolve_agent_preferences(
-        server,
-        params,
-        &phase,
-        &mut resolved,
-        tenant_id,
-    )?;
-
-    let configured_primary_agent = agent_prefs.configured_primary_agent;
-    let _preferred_agent_from_request = agent_prefs.preferred_agent_from_request;
-    let conversation_id = agent_prefs.conversation_id;
-    let branch_id = agent_prefs.branch_id;
-    let _requirement_contract = agent_prefs.requirement_contract;
-    let _plan = agent_prefs.plan;
-
-    // ── Record feedback to CapabilityBus on completion ─────────────────
-    // This is registered as a callback-style hook.  The actual feedback
-    // call is invoked at the end of this function after the agent response
-    // is received, so we stash the agent name and timing details now.
-    // (Feedback is recorded at function exit — see the Ok() return below.)
-
-    let vector_context =
-        load_vector_context(server, phase_name, phase.options.as_ref(), params).await;
-    let agent_messages = merge_context_into_messages(
-        &params.messages,
-        build_vector_context_message(
-            vector_context.summary.as_deref(),
-            &vector_context.hits,
-            &vector_context.knowledge,
-        ),
-    );
-
-    // ── StartupContext injection ───────────────────────────────────────
-    // If the startup context has been loaded (non-blocking, once per process),
-    // append its summary to the first system message so every agent receives
-    // project-level context (README excerpt, build commands, recent commits).
-    let agent_messages = {
-        if let Some(ctx) = crate::orchestration::startup_context::get() {
-            let summary = crate::orchestration::startup_context::summary_text(&ctx);
-            if !summary.is_empty() {
-                let startup_msg = format!("[startup context]\n{}", summary);
-                merge_context_into_messages(&agent_messages, Some(startup_msg))
-            } else {
-                agent_messages
-            }
-        } else {
-            agent_messages
-        }
-    };
-
-    // ── Skill system prompt enhancement ────────────────────────────────
-    // Injects instructions about the skill system so the AI can discover,
-    // create, and invoke skills autonomously.
-    let agent_messages = {
-        if let Ok(registry) = server.skill_registry.lock() {
-            let skill_count = registry.list().len();
-            let skill_instruction = format!(
-                r#"
-
-## Skill System
-
-You have access to {} registered skill(s). Skills are reusable templates that automate common tasks.
-
-### How to Use Skills
-1. **Discover Local** — Call `skill-finder(query, top_k)` to search LOCAL skills matching the user's intent.
-2. **Search GitHub** — Call `github_search_skills(query, max_results)` to search GitHub for community skills.
-3. **Import** — Once you find a suitable GitHub repo, use `import_skill` with `{{ "source": {{ "kind": "github", "repo": "owner/repo", "ref": "main" }} }}` to install it.
-4. **Create** — If no existing skill fits, create one via `skill-creator(name, description, prompt_template, input_schema)`.
-
-### Important Rules
-- When multiple skills seem relevant, pick the one with the HIGHEST score.
-- When a user request could match several skills, call `skill-finder` first, then choose the single best match.
-- If the best match has score < 0.4, do NOT use it. Instead, ask the user for clarification or create a new skill.
-- NEVER call multiple skills at once for the same request. Pick one and execute it."#,
-                skill_count
-            );
-            merge_context_into_messages(&agent_messages, Some(skill_instruction))
-        } else {
-            agent_messages
-        }
-    };
-
+    // ── Step 4: Initialize execution state ────────────────────────────
     let mut selected_agent = String::new();
     let mut response_text = String::new();
-    let mut reasoning_text = String::new();
-    let mut selected_model_name: Option<String> = None;
-    let mut last_err: Option<anyhow::Error> = None;
-    let candidate_agents = resolved
-        .agents
-        .iter()
-        .map(|(name, _)| name.clone())
-        .collect::<Vec<_>>();
-    let mut quota_failed_agents: Vec<String> = Vec::with_capacity(resolved.agents.len());
+    let mut reasoning_text: String;
+    let selected_model_name: Option<String>;
+    let mut last_err: Option<anyhow::Error>;
+    let quota_failed_agents: Vec<String>;
     let mut agent_attempts: Vec<Value> = Vec::with_capacity(resolved.agents.len() + 2);
     let mut cache_hit = false;
     let cache_bypassed_for_execution = should_bypass_for_execution(&params.mode, &agent_messages);
 
     // ── Scheduler task submission (ARCH-02) ────────────────────────────
-    // Submit this request as a ScheduledTask so the dual-level priority
-    // queue tracks queue depth and active-worker counts.  These stats are
-    // read back in governance.status as dual_level_scheduler_profile.
     let sched_task_id = trace.request_id.clone();
     if let Some(ref sched) = server.scheduler {
         let submitted_at = std::time::SystemTime::now()
@@ -1352,16 +1119,7 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         }
     }
 
-    // ── Token cache lookup ──────────────────────────────────────────────
-    //
-    // Before running any agent, check whether the multi-level token cache
-    // already holds a response for this exact input.  On a high-confidence
-    // hit (L1 exact match, or L2/L3 with semantic similarity > 0.95) we
-    // skip the LLM call entirely and return the cached output.
-    //
-    // When the request is execution-like, a cache hit is recorded as a
-    // "short-circuit refusal" (AUTON-03 criterion 3) so governance.status
-    // can distinguish: "cache was hit but refused" vs. "cache was skipped".
+    // ── Token cache lookup ──────────────────────────────────────────
     let input_text = crate::intelligence::token_cache::messages_to_text(&agent_messages);
     let estimated_tokens =
         crate::intelligence::token_cache::estimate_messages_token_count(&agent_messages);
@@ -1396,7 +1154,6 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                     .unwrap_or_else(|| "cached".to_string());
                 response_text = response;
 
-                // Emit the cached response through the stream observer, if present.
                 if let Some(ref observer) = stream_observer {
                     let meta = StreamEventMeta {
                         agent_name: &selected_agent,
@@ -1416,9 +1173,6 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                 }));
             }
             CacheDecision::Refused { level, reason } => {
-                // Cache hit was found but refused — record for governance.status observability
-                // (AUTON-03 criterion 3). The request is execution-like, so a stale cached
-                // response could mask necessary side effects.
                 tracing::info!(
                     target = "token_cache",
                     level = %level,
@@ -1435,15 +1189,848 @@ You have access to {} registered skill(s). Skills are reusable templates that au
             CacheDecision::Miss => {}
         }
     } else if cache_bypassed_for_execution {
-        // No cache entry found for this execution-like request — record the bypass.
         crate::acp::helpers::autonomy_metrics::record_cache_bypass_for_execution();
         agent_attempts.push(CacheStrategy::attempt_entry(&CacheDecision::Miss));
     }
 
-    let base_agent_options =
-        crate::acp::helpers::agent_options::assemble_agent_options(server, &resolved.phase, params);
+    // ── Step 5: Autonomy round execution ───────────────────────────────
+    let autonomy_outcome = execute_autonomy_round(
+        server,
+        params,
+        &phase,
+        phase_name,
+        &resolved,
+        &agent_messages,
+        &base_agent_options,
+        cache_hit,
+    )
+    .await;
+
+    if autonomy_outcome.autonomy_loop_executed {
+        selected_agent = autonomy_outcome.selected_agent;
+        response_text = autonomy_outcome.response_text;
+    }
+    agent_attempts.extend(autonomy_outcome.agent_attempts);
+    let autonomy_loop_executed = autonomy_outcome.autonomy_loop_executed;
+
+    // ── Step 6: Fallback agent execution (parallel with concurrency limit 5) ──
+    if !cache_hit && response_text.is_empty() {
+        let fallback_result = execute_fallback_agents(
+            server,
+            resolved.agents.clone(),
+            &phase,
+            phase_name,
+            agent_messages.clone(),
+            base_agent_options.clone(),
+            stream_observer.clone(),
+            trace,
+            unhealthy_fallback_agent,
+            enable_high_risk_multi_agent_vote,
+            max_vote_agents,
+        )
+        .await;
+
+        selected_agent = fallback_result.selected_agent;
+        response_text = fallback_result.response_text;
+        reasoning_text = fallback_result.reasoning_text;
+        selected_model_name = fallback_result.selected_model_name;
+        last_err = fallback_result.last_err;
+        quota_failed_agents = fallback_result.quota_failed_agents;
+        agent_attempts.extend(fallback_result.agent_attempts);
+
+        // ── High-Risk Vote Execution & Escalation ────────────────────
+        let vote_timeout = request_timeout(phase.options.as_ref());
+        let vote_result = crate::acp::helpers::vote_executor::execute_high_risk_vote(
+            server,
+            phase_name,
+            &trace.trace_id,
+            fallback_result.high_risk_vote_jobs,
+            &agent_messages,
+            phase.principles.clone(),
+            vote_timeout,
+            cache_hit,
+            enable_high_risk_multi_agent_vote,
+            min_vote_agents,
+            max_vote_agents,
+            escalation_enabled,
+            escalation_models_per_agent,
+            escalation_max_agents,
+            &reputation_scores,
+            &mut routing_provenance,
+        )
+        .await;
+
+        agent_attempts.extend(vote_result.agent_attempts);
+
+        let mut emit_final_vote_response = false;
+        let mut vote_winner: Option<String> = None;
+        let mut vote_report: Option<Value> = None;
+        let mut used_multi_model_vote = false;
+        let mut used_multi_agent_vote = false;
+        let mut review_required = false;
+
+        if vote_result.emit_final_vote_response {
+            response_text = vote_result.response_text;
+            reasoning_text = vote_result.reasoning_text;
+            selected_agent = vote_result.selected_agent;
+            last_err = vote_result.last_err;
+            vote_winner = vote_result.vote_winner;
+            vote_report = vote_result.vote_report;
+            used_multi_agent_vote = vote_result.used_multi_agent_vote;
+            used_multi_model_vote = vote_result.used_multi_model_vote;
+            review_required = vote_result.review_required;
+            emit_final_vote_response = true;
+        }
+
+        if emit_final_vote_response {
+            if let Some(ref observer) = stream_observer {
+                let meta = StreamEventMeta {
+                    agent_name: &selected_agent,
+                    phase_name,
+                    trace_id: &trace.trace_id,
+                };
+                let total_chars = response_text.chars().count();
+                emit_stream_chunk(server, Some(observer), meta, &response_text, 1, total_chars)
+                    .await?;
+                emit_stream_done(
+                    server,
+                    Some(observer),
+                    meta,
+                    1,
+                    total_chars,
+                    0u64,
+                    selected_model_name.clone(),
+                )
+                .await?;
+            }
+        }
+
+        // ── Error handling for empty / quota-limited responses ─────────
+        // (inline — too tightly coupled to local state to extract)
+        if response_text.is_empty() && last_err.is_none() {
+            let all_empty_responses = !agent_attempts.is_empty()
+                && agent_attempts.iter().all(|attempt| {
+                    attempt
+                        .get("ok")
+                        .and_then(|value| value.as_bool())
+                        .map(|ok| !ok)
+                        .unwrap_or(false)
+                        && attempt
+                            .get("error")
+                            .and_then(|value| value.as_str())
+                            .map(|error| error == "empty_response")
+                            .unwrap_or(false)
+                });
+
+            server
+                .tenant_budget
+                .lock()
+                .unwrap_or_else(|poisoned| {
+                    warn!("process_chat_request: tenant_budget poisoned, recovering");
+                    poisoned.into_inner()
+                })
+                .record_usage(tenant_id, 0, 0);
+
+            if all_empty_responses {
+                anyhow::bail!(tf("error.chat.all_agents_empty", &[("phase", phase_name)]));
+            }
+            anyhow::bail!(tf("error.chat.no_healthy_agent", &[("phase", phase_name)]));
+        }
+
+        if let Some(err) = last_err {
+            let all_attempts_quota_limited = !agent_attempts.is_empty()
+                && agent_attempts.iter().all(|attempt| {
+                    attempt
+                        .get("ok")
+                        .and_then(|value| value.as_bool())
+                        .map(|ok| !ok)
+                        .unwrap_or(false)
+                        && attempt
+                            .get("quota_limited")
+                            .and_then(|value| value.as_bool())
+                            .unwrap_or(false)
+                });
+
+            server
+                .online_controller
+                .lock()
+                .unwrap_or_else(|poisoned| {
+                    warn!("process_chat_request: online_controller poisoned, recovering");
+                    poisoned.into_inner()
+                })
+                .record_phase_outcome(phase_name, false, started.elapsed().as_millis() as u64);
+
+            if all_attempts_quota_limited {
+                server
+                    .tenant_budget
+                    .lock()
+                    .unwrap_or_else(|poisoned| {
+                        warn!("process_chat_request: tenant_budget poisoned, recovering");
+                        poisoned.into_inner()
+                    })
+                    .record_usage(tenant_id, 0, 0);
+                let switch_prompt = tf(
+                    "error.chat.all_agents_quota_limited",
+                    &[("phase", phase_name)],
+                );
+                return Ok(json!({
+                    "done": false,
+                    "mode": params.mode,
+                    "phase": phase_name,
+                    "phase_origin": phase_origin,
+                    "requires_user_action": true,
+                    "action": "switch_agent",
+                    "prompt": switch_prompt,
+                    "available_agents": candidate_agents,
+                    "quota_failed_agents": quota_failed_agents,
+                    "agent_attempts": agent_attempts,
+                    "risk_decision": json!({
+                        "policy_enabled": risk_policy.enabled,
+                        "score": risk_assessment.score,
+                        "is_high_risk": risk_assessment.is_high_risk,
+                        "reasons": risk_assessment.reasons,
+                        "multi_model_vote_enabled": enable_high_risk_vote,
+                        "multi_model_vote_used": used_multi_model_vote,
+                        "multi_agent_vote_enabled": enable_high_risk_multi_agent_vote,
+                        "multi_agent_vote_used": used_multi_agent_vote,
+                        "escalation_enabled": escalation_enabled,
+                        "escalation_models_per_agent": escalation_models_per_agent,
+                        "escalation_max_agents": escalation_max_agents,
+                        "review_required": review_required,
+                        "vote_report": vote_report,
+                    }),
+                    "hint": {
+                        "options_field": "options.extra.preferred_agent",
+                        "example": {
+                            "preferred_agent": candidate_agents.first().cloned().unwrap_or_else(|| "primary".to_string())
+                        }
+                    }
+                }));
+            }
+
+            server
+                .tenant_budget
+                .lock()
+                .unwrap_or_else(|poisoned| {
+                    warn!("process_chat_request: tenant_budget poisoned, recovering");
+                    poisoned.into_inner()
+                })
+                .record_usage(tenant_id, 0, 0);
+
+            return Err(err);
+        }
+
+        // ── Post-success cleanup ──────────────────────────────────────
+        if let Some(primary) = configured_primary_agent {
+            if selected_agent == primary {
+                agent_switch_state()
+                    .lock()
+                    .unwrap_or_else(|poisoned| {
+                        warn!("process_chat_request: agent_switch_state poisoned, recovering");
+                        poisoned.into_inner()
+                    })
+                    .forced_agent_by_phase
+                    .remove(phase_name);
+            }
+        }
+
+        server
+            .online_controller
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                warn!("process_chat_request: online_controller poisoned, recovering");
+                poisoned.into_inner()
+            })
+            .record_phase_outcome(phase_name, true, started.elapsed().as_millis() as u64);
+
+        // ── Persist vector memory ─────────────────────────────────────
+        persist_vector_memory(
+            server,
+            phase_name,
+            phase.options.as_ref(),
+            params,
+            &response_text,
+            &selected_agent,
+        )
+        .await;
+
+        // ── Parallel persistence ──────────────────────────────────────
+        let mut checkpoint_messages = params.messages.clone();
+        checkpoint_messages.push(Message {
+            role: "assistant".to_string(),
+            content: response_text.clone(),
+        });
+
+        let (mut checkpoint, knowledge) = tokio::join!(
+            crate::acp::r#impl::request::create_checkpoint_record(
+                server,
+                &conversation_id,
+                &branch_id,
+                checkpoint_messages,
+                None,
+                None,
+            ),
+            persist_chat_knowledge(
+                server,
+                &conversation_id,
+                &branch_id,
+                phase_name,
+                &selected_agent,
+                params,
+                &response_text,
+            ),
+        );
+
+        let (metacognitive_loop, distillation) = tokio::join!(
+            crate::acp::r#impl::request::persist_checkpoint_metacognitive_loop(
+                server,
+                &conversation_id,
+                &branch_id,
+                &checkpoint.checkpoint_id,
+                json!({
+                    "active": true,
+                    "schema_version": "blue25-metacognitive-loop-v1",
+                    "cycle_count": 1,
+                    "checkpoint_id": checkpoint.checkpoint_id,
+                    "last_reflection": format!("{}:{}", phase_name, selected_agent),
+                    "reflection_trigger": "response_completed",
+                    "last_selected_agent": selected_agent,
+                    "response_chars": response_text.chars().count(),
+                }),
+            ),
+            persist_session_distillation(
+                server,
+                &conversation_id,
+                &branch_id,
+                phase_name,
+                params,
+                &selected_agent,
+                &candidate_agents,
+                &agent_attempts,
+                &response_text,
+            ),
+        );
+        checkpoint.metacognitive_loop = Some(metacognitive_loop.clone());
+
+        if stream_observer.is_some() {
+            emit_stream_token_economy(
+                server,
+                stream_observer.as_ref(),
+                StreamEventMeta {
+                    agent_name: &selected_agent,
+                    phase_name,
+                    trace_id: &trace.trace_id,
+                },
+                &estimate_token_economy(&params.messages, &response_text),
+            )
+            .await?;
+        }
+
+        crate::acp::r#impl::request::append_trace_event(TraceEvent {
+            timestamp: format!(
+                "{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0)
+            ),
+            event_type: "phase.agent".to_string(),
+            task_id: "chat".to_string(),
+            phase: phase_name.clone(),
+            agent: Some(selected_agent.clone()),
+            tool: None,
+            status: "ok".to_string(),
+            inputs: json!({"attributes": {"agent": selected_agent.clone()}}),
+            outputs: None,
+            duration_ms: 0,
+            error: None,
+            pua_stage: None,
+        });
+
+        // ── Step 7: FullAuto execution (review gate + TAO loop) ────────
+        // Cache task_description once for all full_auto sub-steps
+        let full_auto_result = run_full_auto_execution(
+            server,
+            params,
+            &phase,
+            phase_name,
+            span,
+            trace,
+            &selected_agent,
+            &response_text,
+            &conversation_id,
+            autonomy_loop_executed,
+        )
+        .await;
+
+        // ── Step 8: Response assembly ──────────────────────────────────
+        let selected_agent_reputation = reputation_scores.get(&selected_agent).copied();
+
+        let risk_decision = json!({
+            "policy_enabled": risk_policy.enabled,
+            "score": risk_assessment.score,
+            "is_high_risk": risk_assessment.is_high_risk,
+            "reasons": risk_assessment.reasons,
+            "multi_model_vote_enabled": enable_high_risk_vote,
+            "multi_model_vote_used": used_multi_model_vote,
+            "multi_agent_vote_enabled": enable_high_risk_multi_agent_vote,
+            "multi_agent_vote_used": used_multi_agent_vote,
+            "escalation_enabled": escalation_enabled,
+            "escalation_models_per_agent": escalation_models_per_agent,
+            "escalation_max_agents": escalation_max_agents,
+            "review_required": review_required,
+            "vote_report": vote_report,
+        });
+
+        let result = apply_review_gate_assemble(
+            server,
+            params,
+            trace,
+            phase_name,
+            phase_origin,
+            &selected_agent,
+            &selected_model_name,
+            &response_text,
+            &reasoning_text,
+            tenant_id,
+            started,
+            &conversation_id,
+            &branch_id,
+            schema_warnings,
+            schema_error,
+            layered_prompt_segments,
+            &full_auto_result.tool_execution_results,
+            &sched_task_id,
+            &candidate_agents,
+            &routing_provenance,
+            &reputation_scores,
+            selected_agent_reputation,
+            &council_decision,
+            &vote_winner,
+            &fallback_reason,
+            cache_hit,
+            cache_bypassed_for_execution,
+            capability_info,
+            full_auto_result.reviews,
+            agent_attempts,
+            risk_decision,
+            quota_failed_agents,
+            vector_context,
+            knowledge,
+            distillation,
+            checkpoint,
+            metacognitive_loop,
+        )
+        .await?;
+
+        // P3: Auto-create skills from conversation patterns
+        let _ = tokio::time::timeout(
+            Duration::from_secs(2),
+            auto_create_skills_from_conversation(server, params, &response_text),
+        )
+        .await;
+
+        // P4: Auto-generate workflow from conversation patterns
+        let _ = tokio::time::timeout(
+            Duration::from_secs(2),
+            auto_generate_workflow_from_conversation(server, params, &response_text),
+        )
+        .await;
+
+        Ok(result)
+    } else {
+        Ok(json!({
+            "done": true,
+            "mode": params.mode,
+            "phase": phase_name,
+            "phase_origin": phase_origin,
+            "cached": cache_hit,
+            "agent": selected_agent,
+            "response": response_text,
+        }))
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Extracted sub-functions for process_chat_request (BLUE48 Step 1)
+// ═════════════════════════════════════════════════════════════════════
+
+/// Result of the phase resolution step.
+struct PhaseResolution {
+    phase: crate::orchestration::flow::ResolvedPhase,
+    phase_name: String,
+    phase_origin: String,
+    resolved: crate::orchestration::flow::ResolvedRouting,
+    has_requested_phase: bool,
+    has_controller_phase: bool,
+    has_adaptive_phase: bool,
+    schema_warnings: Vec<String>,
+    schema_error: Option<String>,
+    routing_provenance: Vec<String>,
+    reputation_scores: HashMap<String, f64>,
+    _online_scores: Vec<(String, f64)>,
+    _original_count: usize,
+    _unavailable_agents: Vec<String>,
+}
+
+/// Resolve the request phase from parameters, adaptive inference, and controller recommendation.
+///
+/// Determines the phase to use for this chat request by considering (in order):
+/// 1. The explicitly requested phase in `params.phase`
+/// 2. The controller-recommended phase (based on live outcome data)
+/// 3. The adaptively inferred phase (based on message content)
+/// 4. The flow default
+///
+/// Also performs schema registry validation and initial agent reordering.
+async fn resolve_request_phase(
+    server: &AcpServer,
+    params: &ChatParams,
+    flow: &FlowManager,
+    registry: &crate::agent::AgentRegistry,
+) -> Result<PhaseResolution> {
+    let app_config = flow.config();
+
+    let requested_phase = params.phase.as_ref();
+    let adaptive_phase = if requested_phase.is_none() {
+        infer_adaptive_phase(app_config.as_ref(), &params.mode, &params.messages)
+    } else {
+        None
+    };
+    let controller_phase = if requested_phase.is_none() {
+        controller_recommended_phase(server, app_config.as_ref(), &params.mode)
+    } else {
+        None
+    };
+
+    let has_requested_phase = requested_phase.is_some();
+    let has_controller_phase = controller_phase.is_some();
+    let has_adaptive_phase = adaptive_phase.is_some();
+
+    let chosen_phase = requested_phase
+        .cloned()
+        .or(controller_phase)
+        .or(adaptive_phase);
+
+    let mut resolved = match flow.resolve(chosen_phase.clone(), registry) {
+        Ok(r) => r,
+        Err(_) => {
+            warn!(
+                "chat: phase '{:?}' not found in flow config, falling back to default",
+                chosen_phase
+            );
+            flow.resolve(None, registry)?
+        }
+    };
+    let original_count = resolved.agents.len();
+    let unavailable_agents =
+        filter_runtime_ready_agents(server, app_config.as_ref(), &mut resolved.agents).await;
+    if resolved.agents.is_empty() {
+        resolved = flow.resolve(chosen_phase.clone(), registry)?;
+    } else if resolved.agents.len() < original_count {
+        warn!(
+            phase = %resolved.phase.phase_name,
+            retained = resolved.agents.len(),
+            original = original_count,
+            unavailable = %unavailable_agents.join(","),
+            "filtered runtime-unavailable agents before chat execution"
+        );
+    }
+
+    let phase_origin = if has_requested_phase {
+        "requested"
+    } else if has_controller_phase {
+        "controller"
+    } else if has_adaptive_phase {
+        "adaptive"
+    } else {
+        "default"
+    }
+    .to_string();
+
+    let phase = resolved.phase.clone();
+    let phase_name = phase.phase_name.clone();
+    reorder_chat_agents_by_runtime_score(server, &phase_name, &mut resolved.agents);
+
+    let mut routing_provenance: Vec<String> = vec!["runtime_score_rerank_applied".to_string()];
+    let reputation_scores = collect_reputation_scores(server, &resolved.agents);
+
+    let online_scores = resolved
+        .agents
+        .iter()
+        .map(|(name, _)| {
+            (
+                name.clone(),
+                crate::acp::helpers::agent_router::task_agent_success_rate(&phase_name, name),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let selector = AgentSelector::default();
+    if let Some(selection) = selector.reorder_agents_by_selection(
+        &mut resolved.agents,
+        None,
+        &reputation_scores,
+        &online_scores,
+        &phase_name,
+    ) {
+        if !reputation_scores.is_empty() {
+            record_reputation_routing_applied();
+        }
+        routing_provenance.push(format!("agent_selector_winner:{}", selection.winner));
+        routing_provenance.push(format!(
+            "agent_selector_reason:{}",
+            selection.selection_reason
+        ));
+    }
+
+    // ── SchemaRegistry task envelope validation (F-GAP-07) ─────────────
+    let mut schema_warnings: Vec<String> = Vec::new();
+    let mut schema_error: Option<String> = None;
+    let sr_guard = server.schema_registry.lock().unwrap_or_else(|poisoned| {
+        warn!("resolve_request_phase: schema_registry poisoned, recovering");
+        poisoned.into_inner()
+    });
+    for (role_name, _agent) in &resolved.agents {
+        if let Some(schema) = sr_guard.get(role_name) {
+            let input_val = serde_json::json!({
+                "mode": params.mode,
+                "phase": phase_name,
+                "message_count": params.messages.len(),
+            });
+            match schema.validate_input(&input_val) {
+                Ok(warnings) => {
+                    for w in warnings {
+                        schema_warnings.push(format!("[{}] {}", role_name, w));
+                    }
+                }
+                Err(e) => {
+                    schema_error = Some(format!("[{}] {}", role_name, e));
+                    warn!("schema validation error for {}: {}", role_name, e);
+                }
+            }
+        }
+    }
+    drop(sr_guard);
+
+    Ok(PhaseResolution {
+        phase,
+        phase_name,
+        phase_origin,
+        resolved,
+        has_requested_phase,
+        has_controller_phase,
+        has_adaptive_phase,
+        schema_warnings,
+        schema_error,
+        routing_provenance,
+        reputation_scores,
+        _online_scores: online_scores,
+        _original_count: original_count,
+        _unavailable_agents: unavailable_agents,
+    })
+}
+
+/// Evaluate pre-route policies (HarnessBus, token gate, tenant budget).
+/// Returns an error if any policy denies the request.
+async fn evaluate_pre_route_policies(
+    server: &AcpServer,
+    params: &ChatParams,
+    trace: &RequestTraceContext,
+    tenant_id: &str,
+) -> Result<()> {
+    let _policy_result = crate::acp::helpers::pre_route_policy::evaluate_pre_route_policies(
+        server, params, trace, tenant_id,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Outcome of the agent selection & scoring step.
+#[allow(clippy::too_many_arguments)]
+struct AgentSelectionOutcome {
+    capability_selected_agent: Option<String>,
+    capability_recommended_mode: Option<String>,
+    capability_candidate_count: Option<u64>,
+    capability_decision_confidence: Option<f64>,
+    capability_selection_reason: Option<String>,
+    capability_optimization_hint: Option<Value>,
+    configured_primary_agent: Option<String>,
+    preferred_agent_from_request: Option<String>,
+    conversation_id: String,
+    branch_id: String,
+    agent_messages: Vec<Message>,
+    layered_prompt_segments: usize,
+    base_agent_options: HashMap<String, Value>,
+    risk_policy: RiskVotePolicy,
+    risk_assessment: RiskAssessment,
+    enable_high_risk_vote: bool,
+    enable_high_risk_multi_agent_vote: bool,
+    min_vote_agents: usize,
+    max_vote_agents: usize,
+    escalation_enabled: bool,
+    escalation_models_per_agent: usize,
+    escalation_max_agents: usize,
+    model_is_specific: bool,
+    unhealthy_fallback_agent: Option<String>,
+    fallback_reason: Option<String>,
+    council_decision: Option<Value>,
+    candidate_agents: Vec<String>,
+    _routing_provenance: Vec<String>,
+    vector_context: VectorContext,
+}
+
+/// Select and score agents using CapabilityBus, agent preferences, and model routing.
+///
+/// This function performs all agent selection logic including:
+/// - CapabilityBus sense/decide pipeline
+/// - Agent Switch State & Preferred Agent Resolution
+/// - PromptLayers assembly
+/// - Vector context loading
+/// - Model-based filtering and risk assessment
+/// - Council deliberation for unhealthy fallback
+#[allow(clippy::too_many_arguments)]
+async fn select_and_score_agents(
+    server: &AcpServer,
+    params: &ChatParams,
+    resolved: &mut crate::orchestration::flow::ResolvedRouting,
+    phase: &crate::orchestration::flow::ResolvedPhase,
+    phase_name: &str,
+    tenant_id: &str,
+    trace: &RequestTraceContext,
+    routing_provenance: &mut Vec<String>,
+    reputation_scores: &HashMap<String, f64>,
+) -> Result<AgentSelectionOutcome> {
+    // ── PromptLayers assembly (ARCH-03) ────────────────────────────────
+    let prompt_segments = vec![
+        crate::orchestration::prompt_layers::PromptSegment {
+            layer: crate::orchestration::prompt_layers::PromptLayer::L1SystemPrompt,
+            content: format!(
+                "You are a helpful assistant operating in phase '{}' with mode '{}'.",
+                phase_name, params.mode
+            ),
+            priority: 100,
+        },
+        crate::orchestration::prompt_layers::PromptSegment {
+            layer: crate::orchestration::prompt_layers::PromptLayer::L2RoleIdentity,
+            content: format!(
+                "Your role: {}",
+                resolved
+                    .agents
+                    .first()
+                    .map(|(name, _)| name.as_str())
+                    .unwrap_or("general")
+            ),
+            priority: 200,
+        },
+    ];
+    let layered_prompt = PromptAssembler::assemble(prompt_segments);
+    debug!(
+        "assembled layered prompt with {} segments (~{} tokens)",
+        layered_prompt.segments.len(),
+        layered_prompt.token_estimate
+    );
+
+    let capability_risk_policy = build_risk_vote_policy(&HashMap::new());
+    let capability_risk = assess_high_risk(&params.messages, &params.mode, &capability_risk_policy);
+
+    // ── CapabilityBus agent selection ──────────────────────────────────
+    let mut capability_selected_agent: Option<String> = None;
+    let mut capability_recommended_mode: Option<String> = None;
+    let mut capability_candidate_count: Option<u64> = None;
+    let mut capability_decision_confidence: Option<f64> = None;
+    let mut capability_selection_reason: Option<String> = None;
+    let mut capability_optimization_hint: Option<Value> = None;
+    if let Some(ref cb) = server.capability_bus {
+        let result = crate::acp::helpers::capability_selector::apply_capability_bus_selection(
+            cb,
+            phase_name,
+            &params.messages,
+            &params.mode,
+            &mut resolved.agents,
+            &capability_risk,
+            &trace.request_id,
+            routing_provenance,
+        )
+        .await;
+        capability_selected_agent = result.capability_selected_agent;
+        capability_recommended_mode = result.recommended_mode;
+        capability_candidate_count = Some(result.candidate_count as u64);
+        capability_decision_confidence = Some(result.confidence);
+        capability_selection_reason = Some(result.capability_selection_reason);
+        capability_optimization_hint = result.optimization_hint;
+    }
+
+    // ── Agent Switch State & Preferred Agent Resolution ──────────────
+    let agent_prefs = crate::acp::helpers::agent_preference::resolve_agent_preferences(
+        server, params, phase, resolved, tenant_id,
+    )?;
+
+    let configured_primary_agent = agent_prefs.configured_primary_agent;
+    let conversation_id = agent_prefs.conversation_id;
+    let branch_id = agent_prefs.branch_id;
+    let preferred_agent_from_request = agent_prefs.preferred_agent_from_request;
+
+    // ── Vector context & message assembly ─────────────────────────────
+    let vector_context =
+        load_vector_context(server, phase_name, phase.options.as_ref(), params).await;
+    let agent_messages = merge_context_into_messages(
+        &params.messages,
+        build_vector_context_message(
+            vector_context.summary.as_deref(),
+            &vector_context.hits,
+            &vector_context.knowledge,
+        ),
+    );
+
+    // ── StartupContext injection ───────────────────────────────────────
+    let agent_messages = {
+        if let Some(ctx) = crate::orchestration::startup_context::get() {
+            let summary = crate::orchestration::startup_context::summary_text(&ctx);
+            if !summary.is_empty() {
+                let startup_msg = format!("[startup context]\n{}", summary);
+                merge_context_into_messages(&agent_messages, Some(startup_msg))
+            } else {
+                agent_messages
+            }
+        } else {
+            agent_messages
+        }
+    };
+
+    // ── Skill system prompt enhancement ────────────────────────────────
+    let agent_messages = {
+        let reg_guard = server.skill_registry.lock().unwrap_or_else(|poisoned| {
+            warn!("select_and_score_agents: skill_registry poisoned, recovering");
+            poisoned.into_inner()
+        });
+        let skill_count = reg_guard.list().len();
+        let skill_instruction = format!(
+            r#"
+
+## Skill System
+
+You have access to {} registered skill(s). Skills are reusable templates that automate common tasks.
+
+### How to Use Skills
+1. **Discover Local** — Call `skill-finder(query, top_k)` to search LOCAL skills matching the user's intent.
+2. **Search GitHub** — Call `github_search_skills(query, max_results)` to search GitHub for community skills.
+3. **Import** — Once you find a suitable GitHub repo, use `import_skill` with {{ "source": {{ "kind": "github", "repo": "owner/repo", "ref": "main" }} }} to install it.
+4. **Create** — If no existing skill fits, create one via `skill-creator(name, description, prompt_template, input_schema)`.
+
+### Important Rules
+- When multiple skills seem relevant, pick the one with the HIGHEST score.
+- When a user request could match several skills, call `skill-finder` first, then choose the single best match.
+- If the best match has score < 0.4, do NOT use it. Instead, ask the user for clarification or create a new skill.
+- NEVER call multiple skills at once for the same request. Pick one and execute it."#,
+            skill_count
+        );
+        merge_context_into_messages(&agent_messages, Some(skill_instruction))
+    };
 
     // ── Model-based agent routing / Filtering ──────────────────────
+    let base_agent_options =
+        crate::acp::helpers::agent_options::assemble_agent_options(server, phase, params);
+
     let filter_result =
         model_router::filter_agents_by_model(&mut resolved.agents, &base_agent_options);
 
@@ -1456,777 +2043,728 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         filter_result.model_is_specific,
     );
 
-    let model_is_specific = filter_result.model_is_specific;
-    let enable_high_risk_vote = vote_config.enable_high_risk_vote;
-    let enable_high_risk_multi_agent_vote = vote_config.enable_high_risk_multi_agent_vote;
-    let min_vote_agents = vote_config.min_vote_agents;
-    let max_vote_agents = vote_config.max_vote_agents;
-    let escalation_enabled = vote_config.escalation_enabled;
-    let escalation_models_per_agent = vote_config.escalation_models_per_agent;
-    let escalation_max_agents = vote_config.escalation_max_agents;
+    let candidate_agents = resolved
+        .agents
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
 
-    let mut used_multi_model_vote = false;
-    let mut used_multi_agent_vote = false;
-    let mut review_required = false;
-    let mut vote_report: Option<Value> = None;
-    let agent_vote_candidates: Vec<AgentStrongVoteOutcome> = Vec::new();
-    let mut emit_final_vote_response = false;
-    let mut vote_winner: Option<String> = None;
+    // ── Council deliberation ───────────────────────────────────────────
+    let (unhealthy_fallback_agent, fallback_reason, council_decision) =
+        crate::acp::helpers::council_deliberation::run_council_deliberation_and_fallback(
+            server.capability_bus.as_ref().map(|arc| arc.as_ref()),
+            risk_assessment.is_high_risk,
+            filter_result.model_is_specific,
+            &mut resolved.agents,
+            &base_agent_options,
+            phase_name,
+            reputation_scores,
+            routing_provenance,
+        );
+
+    Ok(AgentSelectionOutcome {
+        capability_selected_agent,
+        capability_recommended_mode,
+        capability_candidate_count,
+        capability_decision_confidence,
+        capability_selection_reason,
+        capability_optimization_hint,
+        configured_primary_agent,
+        preferred_agent_from_request: preferred_agent_from_request,
+        conversation_id,
+        branch_id,
+        agent_messages,
+        layered_prompt_segments: layered_prompt.segments.len(),
+        base_agent_options,
+        risk_policy,
+        risk_assessment,
+        enable_high_risk_vote: vote_config.enable_high_risk_vote,
+        enable_high_risk_multi_agent_vote: vote_config.enable_high_risk_multi_agent_vote,
+        min_vote_agents: vote_config.min_vote_agents,
+        max_vote_agents: vote_config.max_vote_agents,
+        escalation_enabled: vote_config.escalation_enabled,
+        escalation_models_per_agent: vote_config.escalation_models_per_agent,
+        escalation_max_agents: vote_config.escalation_max_agents,
+        model_is_specific: filter_result.model_is_specific,
+        unhealthy_fallback_agent,
+        fallback_reason,
+        council_decision,
+        candidate_agents,
+        _routing_provenance: routing_provenance.clone(),
+        vector_context,
+    })
+}
+
+/// Outcome of the autonomy loop execution.
+struct AutonomyOutcome {
+    autonomy_loop_executed: bool,
+    selected_agent: String,
+    response_text: String,
+    _reasoning_text: String,
+    _selected_model_name: Option<String>,
+    agent_attempts: Vec<Value>,
+}
+
+/// Execute the multi-round autonomy loop for full_auto / execution-like requests.
+///
+/// Runs think → act → observe → replan cycles with agent rerouting support.
+/// Returns whether the loop was executed, and if successful, the response.
+#[allow(clippy::too_many_arguments)]
+async fn execute_autonomy_round(
+    _server: &AcpServer,
+    params: &ChatParams,
+    phase: &crate::orchestration::flow::ResolvedPhase,
+    _phase_name: &str,
+    resolved: &crate::orchestration::flow::ResolvedRouting,
+    agent_messages: &[Message],
+    base_agent_options: &HashMap<String, Value>,
+    cache_hit: bool,
+) -> AutonomyOutcome {
+    if cache_hit
+        || !crate::acp::helpers::autonomy_loop_adapter::should_use_acp_autonomy_loop(
+            &params.mode,
+            agent_messages,
+        )
+    {
+        return AutonomyOutcome {
+            autonomy_loop_executed: false,
+            selected_agent: String::new(),
+            response_text: String::new(),
+            _reasoning_text: String::new(),
+            _selected_model_name: None,
+            agent_attempts: Vec::new(),
+        };
+    }
+
+    let reroute_enabled = option_bool(base_agent_options, "enable_agent_reroute", true);
+    let autonomy_candidates = resolved.agents.clone();
+    let mut agent_attempts: Vec<Value> = Vec::new();
+    let mut response_text = String::new();
+    let mut reasoning_text = String::new();
+    let mut selected_agent = String::new();
+    let mut selected_model_name: Option<String> = None;
+    let mut autonomy_loop_executed = false;
+
+    for (idx, (agent_name, agent)) in autonomy_candidates.into_iter().enumerate() {
+        if idx > 0 && !reroute_enabled {
+            break;
+        }
+        if idx > 0 {
+            let switch_reason = if idx == 1 { "failure" } else { "reputation" };
+            record_agent_switch(switch_reason);
+        }
+
+        let attempt_started = std::time::Instant::now();
+        let autonomy_tool_registry = Some(std::sync::Arc::new(
+            crate::orchestration::tool::ToolRegistry::new(),
+        ));
+        let result = crate::acp::helpers::autonomy_loop_adapter::run_acp_autonomy_loop(
+            agent,
+            autonomy_tool_registry,
+            agent_messages.to_vec(),
+            phase.principles.clone(),
+            Some(base_agent_options.clone()),
+            request_timeout(phase.options.as_ref()),
+            None,
+        )
+        .await;
+
+        match result {
+            Ok(loop_result) => {
+                let stop_reason = loop_result.report.stop_reason.clone();
+                let produced_response = !loop_result.response.trim().is_empty();
+                let autonomy_contract =
+                    crate::acp::helpers::autonomy_loop::contract_snapshot(&loop_result.report);
+                agent_attempts.push(json!({
+                    "agent": agent_name,
+                    "ok": produced_response,
+                    "autonomy_loop": true,
+                    "autonomy_contract": autonomy_contract,
+                    "total_rounds": loop_result.report.total_rounds,
+                    "total_tools": loop_result.report.total_tools,
+                    "corrective_actions_applied_total": loop_result.report.corrective_actions_applied_total,
+                    "corrective_action_effectiveness_ratio": loop_result.report.corrective_action_effectiveness_ratio,
+                    "stop_reason": stop_reason,
+                    "candidate_index": idx,
+                    "candidate_count": resolved.agents.len(),
+                    "duration_ms": attempt_started.elapsed().as_millis() as u64,
+                }));
+                record_autonomy_loop_stop_reason(&loop_result.report.stop_reason);
+                if produced_response {
+                    autonomy_loop_executed = true;
+                    response_text = loop_result.response;
+                    reasoning_text = loop_result.reasoning;
+                    selected_model_name = loop_result.selected_model;
+                    selected_agent = agent_name;
+                    break;
+                }
+                if !reroute_enabled {
+                    break;
+                }
+            }
+            Err(e) => {
+                warn!("autonomy loop failed for '{}': {}", agent_name, e);
+                agent_attempts.push(json!({
+                    "agent": agent_name,
+                    "ok": false,
+                    "autonomy_loop": true,
+                    "error": e.to_string(),
+                    "candidate_index": idx,
+                    "candidate_count": resolved.agents.len(),
+                    "duration_ms": attempt_started.elapsed().as_millis() as u64,
+                }));
+                if !reroute_enabled {
+                    break;
+                }
+            }
+        }
+    }
+
+    AutonomyOutcome {
+        autonomy_loop_executed,
+        selected_agent,
+        response_text,
+        _reasoning_text: reasoning_text,
+        _selected_model_name: selected_model_name,
+        agent_attempts,
+    }
+}
+
+/// Result of executing fallback agents.
+struct FallbackExecutionResult {
+    selected_agent: String,
+    response_text: String,
+    reasoning_text: String,
+    selected_model_name: Option<String>,
+    last_err: Option<anyhow::Error>,
+    agent_attempts: Vec<Value>,
+    quota_failed_agents: Vec<String>,
+    _cache_hit: bool,
+    high_risk_vote_jobs: Vec<(
+        String,
+        Arc<dyn crate::agent::Agent>,
+        HashMap<String, Value>,
+        Option<String>,
+    )>,
+}
+
+/// Execute fallback agents using parallel execution with a concurrency limit.
+///
+/// Iterates over resolved agents and calls each concurrently using `tokio::spawn`
+/// with a `Semaphore` limiting concurrency to 5. Returns the first successful
+/// response or collects all errors for fallback handling.
+#[allow(clippy::too_many_arguments)]
+async fn execute_fallback_agents(
+    server: &AcpServer,
+    agent_list: Vec<(String, Arc<dyn crate::agent::Agent>)>,
+    phase: &crate::orchestration::flow::ResolvedPhase,
+    phase_name: &str,
+    agent_messages: Vec<Message>,
+    base_agent_options: HashMap<String, Value>,
+    stream_observer: Option<StreamObserver>,
+    trace: &RequestTraceContext,
+    unhealthy_fallback_agent: Option<String>,
+    enable_high_risk_multi_agent_vote: bool,
+    max_vote_agents: usize,
+) -> FallbackExecutionResult {
+    let mut selected_agent = String::new();
+    let mut response_text = String::new();
+    let mut reasoning_text = String::new();
+    let mut selected_model_name: Option<String> = None;
+    let mut last_err: Option<anyhow::Error> = None;
+    let mut agent_attempts: Vec<Value> = Vec::with_capacity(agent_list.len() + 2);
+    let mut quota_failed_agents: Vec<String> = Vec::with_capacity(agent_list.len());
     let mut high_risk_vote_jobs: Vec<(
         String,
         Arc<dyn crate::agent::Agent>,
         HashMap<String, Value>,
         Option<String>,
     )> = Vec::with_capacity(max_vote_agents);
-    let vote_timeout = request_timeout(phase.options.as_ref());
 
-    let (unhealthy_fallback_agent, fallback_reason, council_decision) =
-        crate::acp::helpers::council_deliberation::run_council_deliberation_and_fallback(
-            server.capability_bus.as_ref().map(|arc| arc.as_ref()),
-            risk_assessment.is_high_risk,
-            model_is_specific,
-            &mut resolved.agents,
-            &base_agent_options,
-            phase_name,
-            &reputation_scores,
-            &mut routing_provenance,
-        );
+    use futures_util::future::join_all;
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(5));
+    let mut futures = Vec::with_capacity(agent_list.len());
 
-    // AUTON-01: Use multi-round autonomy loop for full_auto / execution-like requests.
-    // The autonomy loop runs think → act → observe → replan cycles until the task
-    // is complete, tools are exhausted, or the iteration limit is reached.
-    // Once set, the regular agent loop AND the TAO section (line ~2317) are skipped
-    // to prevent dual tool execution.
-    let mut autonomy_loop_executed = false;
-    if !cache_hit
-        && crate::acp::helpers::autonomy_loop_adapter::should_use_acp_autonomy_loop(
-            &params.mode,
-            &agent_messages,
-        )
-    {
-        let reroute_enabled = option_bool(&base_agent_options, "enable_agent_reroute", true);
-        let autonomy_candidates = resolved.agents.clone();
-        for (idx, (agent_name, agent)) in autonomy_candidates.into_iter().enumerate() {
-            if idx > 0 && !reroute_enabled {
-                break;
+    for (agent_name, agent) in agent_list.into_iter() {
+        // High-risk multi-agent vote collection: skip regular execution
+        if enable_high_risk_multi_agent_vote {
+            let strong_model = if agent.supports_model_override() {
+                select_strong_model_id(agent.as_ref())
+            } else {
+                None
+            };
+            let mut vote_options = base_agent_options.clone();
+            if let Some(model_id) = strong_model.clone() {
+                vote_options.insert("model".to_string(), Value::String(model_id));
             }
-            if idx > 0 {
-                let switch_reason = if idx == 1 { "failure" } else { "reputation" };
-                record_agent_switch(switch_reason);
-            }
-
-            let attempt_started = std::time::Instant::now();
-            let autonomy_tool_registry = Some(std::sync::Arc::new(
-                crate::orchestration::tool::ToolRegistry::new(),
+            high_risk_vote_jobs.push((
+                agent_name.clone(),
+                Arc::clone(&agent),
+                vote_options,
+                strong_model,
             ));
-            let result = crate::acp::helpers::autonomy_loop_adapter::run_acp_autonomy_loop(
-                agent,
-                autonomy_tool_registry,
-                agent_messages.clone(),
-                phase.principles.clone(),
-                Some(base_agent_options.clone()),
-                request_timeout(phase.options.as_ref()),
-                None,
-            )
-            .await;
-
-            match result {
-                Ok(loop_result) => {
-                    let stop_reason = loop_result.report.stop_reason.clone();
-                    let produced_response = !loop_result.response.trim().is_empty();
-                    let autonomy_contract =
-                        crate::acp::helpers::autonomy_loop::contract_snapshot(&loop_result.report);
-                    agent_attempts.push(json!({
-                        "agent": agent_name,
-                        "ok": produced_response,
-                        "autonomy_loop": true,
-                        "autonomy_contract": autonomy_contract,
-                        "total_rounds": loop_result.report.total_rounds,
-                        "total_tools": loop_result.report.total_tools,
-                        "corrective_actions_applied_total": loop_result.report.corrective_actions_applied_total,
-                        "corrective_action_effectiveness_ratio": loop_result.report.corrective_action_effectiveness_ratio,
-                        "stop_reason": stop_reason,
-                        "candidate_index": idx,
-                        "candidate_count": resolved.agents.len(),
-                        "duration_ms": attempt_started.elapsed().as_millis() as u64,
-                    }));
-                    record_autonomy_loop_stop_reason(&loop_result.report.stop_reason);
-                    if produced_response {
-                        autonomy_loop_executed = true;
-                        response_text = loop_result.response;
-                        reasoning_text = loop_result.reasoning;
-                        selected_model_name = loop_result.selected_model;
-                        selected_agent = agent_name;
-                        break;
-                    }
-                    if !reroute_enabled {
-                        break;
-                    }
-                }
-                Err(e) => {
-                    warn!("autonomy loop failed for '{}': {}", agent_name, e);
-                    agent_attempts.push(json!({
-                        "agent": agent_name,
-                        "ok": false,
-                        "autonomy_loop": true,
-                        "error": e.to_string(),
-                        "candidate_index": idx,
-                        "candidate_count": resolved.agents.len(),
-                        "duration_ms": attempt_started.elapsed().as_millis() as u64,
-                    }));
-                    if !reroute_enabled {
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    if !cache_hit && response_text.is_empty() {
-        for (agent_name, agent) in resolved.agents {
-            let attempt_started = std::time::Instant::now();
-
-            // Skip unhealthy agents
-            if let Some(ref cb) = server.capability_bus {
-                if !cb.is_agent_healthy(&agent_name) {
-                    if unhealthy_fallback_agent.as_deref() == Some(agent_name.as_str()) {
-                        warn!(
-                            phase = %phase_name,
-                            agent = %agent_name,
-                            "executing unhealthy agent due to degraded fallback"
-                        );
-                    } else {
-                        agent_attempts.push(json!({
-                            "agent": agent_name,
-                            "ok": false,
-                            "skipped_unhealthy": true,
-                            "duration_ms": 0u64,
-                            "error": t("error.chat.agent_unhealthy")
-                        }));
-                        continue;
-                    }
-                }
-            }
-
-            let per_attempt_options = base_agent_options.clone();
-
-            let model_name = per_attempt_options
-                .get("model")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-
-            if enable_high_risk_multi_agent_vote {
-                if agent_vote_candidates.len() >= max_vote_agents {
-                    continue;
-                }
-
-                let strong_model = if agent.supports_model_override() {
-                    select_strong_model_id(agent.as_ref())
-                } else {
-                    None
-                };
-
-                let mut vote_options = per_attempt_options.clone();
-                if let Some(model_id) = strong_model.clone() {
-                    vote_options.insert("model".to_string(), Value::String(model_id));
-                }
-                high_risk_vote_jobs.push((
-                    agent_name.clone(),
-                    Arc::clone(&agent),
-                    vote_options,
-                    strong_model,
-                ));
+            if high_risk_vote_jobs.len() >= max_vote_agents {
                 continue;
             }
+            continue;
+        }
 
-            match run_agent_collecting(
+        let is_unhealthy = server.capability_bus.as_ref().map_or(false, |cb| {
+            let unhealthy = !cb.is_agent_healthy(&agent_name);
+            if unhealthy && unhealthy_fallback_agent.as_deref() != Some(agent_name.as_str()) {
+                warn!(
+                    phase = %phase_name,
+                    agent = %agent_name,
+                    "skipping unhealthy agent"
+                );
+            }
+            unhealthy
+        });
+
+        if is_unhealthy && unhealthy_fallback_agent.as_deref() != Some(agent_name.as_str()) {
+            agent_attempts.push(json!({
+                "agent": agent_name,
+                "ok": false,
+                "skipped_unhealthy": true,
+                "duration_ms": 0u64,
+                "error": t("error.chat.agent_unhealthy")
+            }));
+            continue;
+        }
+
+        let sem_clone = Arc::clone(&semaphore);
+        let agent_name_owned = agent_name.clone();
+        let per_attempt_options = base_agent_options.clone();
+        let stream_obs = stream_observer.clone();
+        let msg_clone = agent_messages.clone();
+        let principles = phase.principles.clone();
+        let timeout = request_timeout(phase.options.as_ref());
+
+        let fut = async move {
+            let _permit = sem_clone.acquire().await.expect("semaphore closed");
+            let attempt_started = std::time::Instant::now();
+            let stream_ctx = StreamNotificationContext {
+                stream_observer: stream_obs,
+                agent_name: &agent_name_owned,
+                phase_name,
+                trace_id: &trace.trace_id,
+            };
+            let result = run_agent_collecting(
                 server,
-                StreamNotificationContext {
-                    stream_observer: stream_observer.clone(),
-                    agent_name: &agent_name,
-                    phase_name,
-                    trace_id: &trace.trace_id,
-                },
+                stream_ctx,
                 agent,
-                agent_messages.clone(),
-                phase.principles.clone(),
+                msg_clone,
+                principles,
                 Some(per_attempt_options),
-                request_timeout(phase.options.as_ref()),
+                timeout,
             )
-            .await
-            {
-                Ok((output_text, reasoning_output, agent_selected_model)) => {
-                    if output_text.trim().is_empty() {
-                        agent_attempts.push(json!({
-                            "agent": agent_name,
-                            "ok": false,
-                            "duration_ms": attempt_started.elapsed().as_millis() as u64,
-                            "error": "empty_response",
-                        }));
-                        if let Ok(mut ctrl) = server.online_controller.lock() {
-                            ctrl.record_agent_outcome(
-                                phase_name,
-                                &agent_name,
-                                false,
-                                attempt_started.elapsed().as_millis() as u64,
-                            );
-                        }
-                        continue;
-                    }
+            .await;
+            (agent_name_owned, attempt_started, result)
+        };
+        futures.push(fut);
+    }
 
-                    if let Ok(mut ctrl) = server.online_controller.lock() {
-                        ctrl.record_agent_outcome(
-                            phase_name,
-                            &agent_name,
-                            true,
-                            attempt_started.elapsed().as_millis() as u64,
-                        );
-                    }
-                    agent_attempts.push(json!({
-                        "agent": agent_name,
-                        "ok": true,
-                        "duration_ms": attempt_started.elapsed().as_millis() as u64,
-                        "model": agent_selected_model,
-                    }));
-                    selected_agent = agent_name.clone();
-                    response_text = output_text.clone();
-                    reasoning_text = reasoning_output.clone();
-                    // Record the model that was actually used (e.g. Copilot auto-select).
-                    if let Some(ref m) = agent_selected_model {
-                        selected_model_name = Some(m.clone());
-                    }
+    // Collect results using JoinAll
+    let results = join_all(futures).await;
 
-                    // ── Store result in token cache ─────────────────────
-                    // After a successful agent execution, store the input/output
-                    // pair in the multi-level token cache for future reuse.
-                    {
-                        let input_text =
-                            crate::intelligence::token_cache::messages_to_text(&agent_messages);
-                        let token_count =
-                            crate::intelligence::token_cache::estimate_token_count(&output_text);
-                        let cache = server.cache.token_cache.clone();
-                        store_async(
-                            cache,
-                            input_text,
-                            output_text.clone(),
-                            token_count,
-                            Some(agent_name.clone()),
-                            model_name,
-                        );
-                    }
-
-                    last_err = None;
-                    break;
-                }
-                Err(err) => {
-                    let err_text = err.to_string();
-                    let quota_limited = is_quota_or_token_limit_error(&err_text);
-                    if quota_limited {
-                        quota_failed_agents.push(agent_name.clone());
-                    }
+    for (agent_name, attempt_started, agent_result) in results {
+        match agent_result {
+            Ok((output_text, reasoning_output, agent_selected_model)) => {
+                if output_text.trim().is_empty() {
                     agent_attempts.push(json!({
                         "agent": agent_name,
                         "ok": false,
-                        "quota_limited": quota_limited,
                         "duration_ms": attempt_started.elapsed().as_millis() as u64,
-                        "error": err_text
+                        "error": "empty_response",
                     }));
-                    if let Ok(mut ctrl) = server.online_controller.lock() {
-                        ctrl.record_agent_outcome(
+                    server
+                        .online_controller
+                        .lock()
+                        .unwrap_or_else(|poisoned| {
+                            warn!(
+                                "execute_fallback_agents: online_controller poisoned, recovering"
+                            );
+                            poisoned.into_inner()
+                        })
+                        .record_agent_outcome(
                             phase_name,
                             &agent_name,
                             false,
                             attempt_started.elapsed().as_millis() as u64,
                         );
-                    }
-                    // Wrap the error with agent name so GUI can display which agent failed.
-                    let agent_label = agent_name.clone();
-                    let enriched_err = anyhow::anyhow!(tf(
-                        "error.chat.agent_error_prefix",
-                        &[("agent", &agent_label), ("error", &err.to_string())]
-                    ));
-                    last_err = Some(enriched_err);
+                    continue;
                 }
+
+                server
+                    .online_controller
+                    .lock()
+                    .unwrap_or_else(|poisoned| {
+                        warn!("execute_fallback_agents: online_controller poisoned, recovering");
+                        poisoned.into_inner()
+                    })
+                    .record_agent_outcome(
+                        phase_name,
+                        &agent_name,
+                        true,
+                        attempt_started.elapsed().as_millis() as u64,
+                    );
+
+                agent_attempts.push(json!({
+                    "agent": agent_name,
+                    "ok": true,
+                    "duration_ms": attempt_started.elapsed().as_millis() as u64,
+                    "model": agent_selected_model,
+                }));
+                selected_agent = agent_name.clone();
+                response_text = output_text.clone();
+                reasoning_text = reasoning_output.clone();
+                if let Some(ref m) = agent_selected_model {
+                    selected_model_name = Some(m.clone());
+                }
+
+                // Store in token cache
+                let input_text =
+                    crate::intelligence::token_cache::messages_to_text(&agent_messages);
+                let token_count =
+                    crate::intelligence::token_cache::estimate_token_count(&output_text);
+                let cache = server.cache.token_cache.clone();
+                let model_name = base_agent_options
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                store_async(
+                    cache,
+                    input_text,
+                    output_text.clone(),
+                    token_count,
+                    Some(agent_name.clone()),
+                    model_name,
+                );
+
+                last_err = None;
+                break; // First success wins
+            }
+            Err(err) => {
+                let err_text = err.to_string();
+                let quota_limited = is_quota_or_token_limit_error(&err_text);
+                if quota_limited {
+                    quota_failed_agents.push(agent_name.clone());
+                }
+                agent_attempts.push(json!({
+                    "agent": agent_name,
+                    "ok": false,
+                    "quota_limited": quota_limited,
+                    "duration_ms": attempt_started.elapsed().as_millis() as u64,
+                    "error": err_text
+                }));
+                server
+                    .online_controller
+                    .lock()
+                    .unwrap_or_else(|poisoned| {
+                        warn!("execute_fallback_agents: online_controller poisoned, recovering");
+                        poisoned.into_inner()
+                    })
+                    .record_agent_outcome(
+                        phase_name,
+                        &agent_name,
+                        false,
+                        attempt_started.elapsed().as_millis() as u64,
+                    );
+                let agent_label = agent_name.clone();
+                let enriched_err = anyhow::anyhow!(tf(
+                    "error.chat.agent_error_prefix",
+                    &[("agent", &agent_label), ("error", &err.to_string())]
+                ));
+                last_err = Some(enriched_err);
             }
         }
     }
 
-    // ── High-Risk Vote Execution & Escalation (extracted to helpers) ──
-    let vote_result = crate::acp::helpers::vote_executor::execute_high_risk_vote(
-        server,
-        phase_name,
-        &trace.trace_id,
+    FallbackExecutionResult {
+        selected_agent,
+        response_text,
+        reasoning_text,
+        selected_model_name,
+        last_err,
+        agent_attempts,
+        quota_failed_agents,
+        _cache_hit: false,
         high_risk_vote_jobs,
-        &agent_messages,
-        phase.principles.clone(),
-        vote_timeout,
-        cache_hit,
-        enable_high_risk_multi_agent_vote,
-        min_vote_agents,
-        max_vote_agents,
-        escalation_enabled,
-        escalation_models_per_agent,
-        escalation_max_agents,
-        &reputation_scores,
-        &mut routing_provenance,
-    )
-    .await;
-
-    // Unpack result — only overwrite variables that the vote pipeline may have set.
-    agent_attempts.extend(vote_result.agent_attempts);
-
-    if vote_result.emit_final_vote_response {
-        response_text = vote_result.response_text;
-        reasoning_text = vote_result.reasoning_text;
-        selected_agent = vote_result.selected_agent;
-        last_err = vote_result.last_err;
-        vote_winner = vote_result.vote_winner;
-        vote_report = vote_result.vote_report;
-        used_multi_agent_vote = vote_result.used_multi_agent_vote;
-        used_multi_model_vote = vote_result.used_multi_model_vote;
-        review_required = vote_result.review_required;
-        emit_final_vote_response = true;
     }
+}
 
-    if emit_final_vote_response {
-        if let Some(ref observer) = stream_observer {
-            let meta = StreamEventMeta {
-                agent_name: &selected_agent,
-                phase_name,
-                trace_id: &trace.trace_id,
-            };
-            let total_chars = response_text.chars().count();
-            emit_stream_chunk(server, Some(observer), meta, &response_text, 1, total_chars).await?;
-            emit_stream_done(
-                server,
-                Some(observer),
-                meta,
-                1,
-                total_chars,
-                0u64,
-                selected_model_name.clone(),
-            )
-            .await?;
-        }
-    }
+/// Result of the full_auto execution block (review gate + TAO loop).
+struct FullAutoExecutionResult {
+    reviews: Vec<Value>,
+    tool_execution_results: Vec<Value>,
+}
 
-    let risk_decision = json!({
-        "policy_enabled": risk_policy.enabled,
-        "score": risk_assessment.score,
-        "is_high_risk": risk_assessment.is_high_risk,
-        "reasons": risk_assessment.reasons,
-        "multi_model_vote_enabled": enable_high_risk_vote,
-        "multi_model_vote_used": used_multi_model_vote,
-        "multi_agent_vote_enabled": enable_high_risk_multi_agent_vote,
-        "multi_agent_vote_used": used_multi_agent_vote,
-        "escalation_enabled": escalation_enabled,
-        "escalation_models_per_agent": escalation_models_per_agent,
-        "escalation_max_agents": escalation_max_agents,
-        "review_required": review_required,
-        "vote_report": vote_report,
-    });
-
-    if !cache_hit && response_text.is_empty() && last_err.is_none() {
-        let all_empty_responses = !agent_attempts.is_empty()
-            && agent_attempts.iter().all(|attempt| {
-                attempt
-                    .get("ok")
-                    .and_then(|value| value.as_bool())
-                    .map(|ok| !ok)
-                    .unwrap_or(false)
-                    && attempt
-                        .get("error")
-                        .and_then(|value| value.as_str())
-                        .map(|error| error == "empty_response")
-                        .unwrap_or(false)
-            });
-
-        // Record budget usage before early return to prevent budget leak.
-        if let Ok(mut budget) = server.tenant_budget.lock() {
-            budget.record_usage(tenant_id, 0, 0);
-        }
-        if all_empty_responses {
-            anyhow::bail!(tf("error.chat.all_agents_empty", &[("phase", phase_name)]));
-        }
-        anyhow::bail!(tf("error.chat.no_healthy_agent", &[("phase", phase_name)]));
-    }
-
-    if let Some(err) = last_err {
-        let all_attempts_quota_limited = !agent_attempts.is_empty()
-            && agent_attempts.iter().all(|attempt| {
-                attempt
-                    .get("ok")
-                    .and_then(|value| value.as_bool())
-                    .map(|ok| !ok)
-                    .unwrap_or(false)
-                    && attempt
-                        .get("quota_limited")
-                        .and_then(|value| value.as_bool())
-                        .unwrap_or(false)
-            });
-
-        if let Ok(mut ctrl) = server.online_controller.lock() {
-            ctrl.record_phase_outcome(phase_name, false, started.elapsed().as_millis() as u64);
-        }
-
-        if all_attempts_quota_limited {
-            // Record budget usage before early return to prevent budget leak.
-            if let Ok(mut budget) = server.tenant_budget.lock() {
-                budget.record_usage(tenant_id, 0, 0);
-            }
-            let switch_prompt = tf(
-                "error.chat.all_agents_quota_limited",
-                &[("phase", phase_name)],
-            );
-            return Ok(json!({
-                "done": false,
-                "mode": params.mode,
-                "phase": phase_name,
-                "phase_origin": phase_origin,
-                "requires_user_action": true,
-                "action": "switch_agent",
-                "prompt": switch_prompt,
-                "available_agents": candidate_agents,
-                "quota_failed_agents": quota_failed_agents,
-                "agent_attempts": agent_attempts,
-                "risk_decision": risk_decision,
-                "hint": {
-                    "options_field": "options.extra.preferred_agent",
-                    "example": {
-                        "preferred_agent": candidate_agents.first().cloned().unwrap_or_else(|| "primary".to_string())
-                    }
-                }
-            }));
-        }
-
-        // Record budget usage before early return to prevent budget leak.
-        if let Ok(mut budget) = server.tenant_budget.lock() {
-            budget.record_usage(tenant_id, 0, 0);
-        }
-
-        return Err(err);
-    }
-
-    if let Some(primary) = configured_primary_agent {
-        if selected_agent == primary {
-            if let Ok(mut state) = agent_switch_state().lock() {
-                state.forced_agent_by_phase.remove(phase_name);
-            }
-        }
-    }
-
-    if let Ok(mut ctrl) = server.online_controller.lock() {
-        ctrl.record_phase_outcome(phase_name, true, started.elapsed().as_millis() as u64);
-    }
-
-    persist_vector_memory(
-        server,
-        phase_name,
-        phase.options.as_ref(),
-        params,
-        &response_text,
-        &selected_agent,
-    )
-    .await;
-
-    let mut checkpoint_messages = params.messages.clone();
-    checkpoint_messages.push(Message {
-        role: "assistant".to_string(),
-        content: response_text.clone(),
-    });
-
-    // ── Parallel persistence: checkpoint creation, knowledge storage, and vector
-    //     memory are independent I/O operations that can run concurrently.
-    let (mut checkpoint, knowledge) = tokio::join!(
-        crate::acp::r#impl::request::create_checkpoint_record(
-            server,
-            &conversation_id,
-            &branch_id,
-            checkpoint_messages,
-            None,
-            None,
-        ),
-        persist_chat_knowledge(
-            server,
-            &conversation_id,
-            &branch_id,
-            phase_name,
-            &selected_agent,
-            params,
-            &response_text,
-        ),
-    );
-
-    // ── Parallel: metacognitive loop + session distillation are also independent.
-    let (metacognitive_loop, distillation) = tokio::join!(
-        crate::acp::r#impl::request::persist_checkpoint_metacognitive_loop(
-            server,
-            &conversation_id,
-            &branch_id,
-            &checkpoint.checkpoint_id,
-            json!({
-                "active": true,
-                "schema_version": "blue25-metacognitive-loop-v1",
-                "cycle_count": 1,
-                "checkpoint_id": checkpoint.checkpoint_id,
-                "last_reflection": format!("{}:{}", phase_name, selected_agent),
-                "reflection_trigger": "response_completed",
-                "last_selected_agent": selected_agent,
-                "response_chars": response_text.chars().count(),
-            }),
-        ),
-        persist_session_distillation(
-            server,
-            &conversation_id,
-            &branch_id,
-            phase_name,
-            params,
-            &selected_agent,
-            &candidate_agents,
-            &agent_attempts,
-            &response_text,
-        ),
-    );
-    checkpoint.metacognitive_loop = Some(metacognitive_loop.clone());
-
-    if stream_observer.is_some() {
-        emit_stream_token_economy(
-            server,
-            stream_observer.as_ref(),
-            StreamEventMeta {
-                agent_name: &selected_agent,
-                phase_name,
-                trace_id: &trace.trace_id,
-            },
-            &estimate_token_economy(&params.messages, &response_text),
-        )
-        .await?;
-    }
-
-    crate::acp::r#impl::request::append_trace_event(TraceEvent {
-        timestamp: format!(
-            "{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0)
-        ),
-        event_type: "phase.agent".to_string(),
-        task_id: "chat".to_string(),
-        phase: phase_name.clone(),
-        agent: Some(selected_agent.clone()),
-        tool: None,
-        status: "ok".to_string(),
-        inputs: json!({"attributes": {"agent": selected_agent.clone()}}),
-        outputs: None,
-        duration_ms: 0,
-        error: None,
-        pua_stage: None,
-    });
-
+/// Execute the FullAuto review gate and TAO loop.
+///
+/// Runs the review gate for full_auto mode, then conditionally executes
+/// the Think-Act-Observe (TAO) loop when the autonomy loop did not handle
+/// tool execution. Uses a cached task description to avoid redundant calls.
+#[allow(clippy::too_many_arguments)]
+async fn run_full_auto_execution(
+    server: &AcpServer,
+    params: &ChatParams,
+    phase: &crate::orchestration::flow::ResolvedPhase,
+    phase_name: &str,
+    span: Option<&OtelContext>,
+    trace: &RequestTraceContext,
+    selected_agent: &str,
+    response_text: &str,
+    conversation_id: &str,
+    autonomy_loop_executed: bool,
+) -> FullAutoExecutionResult {
     let mut reviews = Vec::new();
     let mut tool_execution_results = Vec::new();
 
-    if params.mode.eq_ignore_ascii_case("full_auto") {
-        // ── Review gate always runs for full_auto mode ────────────────
-        // Ensures review results are available regardless of whether the
-        // autonomy loop or TAO loop handles tool execution.
-        let timeout_before = server
-            .observability
-            .metrics
-            .snapshot()
-            .review_gate_timeout_total;
-        let review_outcome = run_review_gate(
-            server,
-            &params.messages,
-            phase.options.as_ref(),
-            span,
-            trace,
+    if !params.mode.eq_ignore_ascii_case("full_auto") {
+        return FullAutoExecutionResult {
+            reviews,
+            tool_execution_results,
+        };
+    }
+
+    // Cache task description once for all full_auto sub-steps
+    let task_description = extract_task_description(&params.messages);
+
+    // ── Review gate always runs for full_auto mode ────────────────
+    let timeout_before = server
+        .observability
+        .metrics
+        .snapshot()
+        .review_gate_timeout_total;
+    let review_outcome = run_review_gate(
+        server,
+        &params.messages,
+        phase.options.as_ref(),
+        span,
+        trace,
+    )
+    .await;
+    let timeout_after = server
+        .observability
+        .metrics
+        .snapshot()
+        .review_gate_timeout_total;
+
+    let inferred_degrade_single_timeout = phase
+        .options
+        .as_ref()
+        .map(|opts| {
+            let review_timeout_policy = opts
+                .extra
+                .get("review_timeout_policy")
+                .and_then(Value::as_str)
+                .unwrap_or("reject");
+            let dual_review_enabled = opts
+                .full_auto_review_agents
+                .as_ref()
+                .map(|agents| agents.len() > 1)
+                .unwrap_or(false);
+            dual_review_enabled && review_timeout_policy.eq_ignore_ascii_case("degrade_single")
+        })
+        .unwrap_or(false);
+
+    if inferred_degrade_single_timeout && review_outcome.passed && timeout_after == timeout_before {
+        server.observability.metrics.inc_review_gate_timeout();
+        server.observability.metrics.inc_review_gate_degraded();
+    }
+
+    if let Some(error) = &review_outcome.error {
+        tracing::warn!("review gate failed: {}", error);
+    }
+    reviews = review_outcome.reviews.clone();
+
+    // ── Only run TAO loop when the autonomy loop did NOT handle execution ──
+    if !autonomy_loop_executed && review_outcome.passed {
+        let tool_input = ToolInput {
+            task_id: "chat".to_string(),
+            phase: phase_name.to_string(),
+            agent_role: selected_agent.to_string(),
+            objective: task_description.clone(),
+            constraints: None,
+            evidence: None,
+            payload: serde_json::json!({
+                "task": task_description,
+                "phase": phase_name,
+            }),
+            allowed_base_dir: None,
+        };
+
+        let tool_registry = ToolRegistry::new();
+
+        let preferred_tools: Vec<String> = {
+            let calls = extract_tool_calls_from_response(response_text, 5);
+            if calls.is_empty() {
+                record_planner_guided_route();
+                planner_guided_tool_preferences(
+                    conversation_id,
+                    phase_name,
+                    selected_agent,
+                    &task_description,
+                    response_text,
+                    5,
+                )
+            } else {
+                record_explicit_tool_route();
+                calls
+            }
+        };
+
+        // ── FullAutoFlow execution (BLUE43) ─────────────────────────
+        let full_auto_result = crate::acp::helpers::autonomy_loop_adapter::run_full_auto_flow(
+            server.skill_registry.clone(),
+            &task_description,
         )
         .await;
-        let timeout_after = server
-            .observability
-            .metrics
-            .snapshot()
-            .review_gate_timeout_total;
-
-        let inferred_degrade_single_timeout = phase
-            .options
-            .as_ref()
-            .map(|opts| {
-                let review_timeout_policy = opts
-                    .extra
-                    .get("review_timeout_policy")
-                    .and_then(Value::as_str)
-                    .unwrap_or("reject");
-                let dual_review_enabled = opts
-                    .full_auto_review_agents
-                    .as_ref()
-                    .map(|agents| agents.len() > 1)
-                    .unwrap_or(false);
-                dual_review_enabled && review_timeout_policy.eq_ignore_ascii_case("degrade_single")
-            })
-            .unwrap_or(false);
-
-        if inferred_degrade_single_timeout
-            && review_outcome.passed
-            && timeout_after == timeout_before
-        {
-            server.observability.metrics.inc_review_gate_timeout();
-            server.observability.metrics.inc_review_gate_degraded();
+        match &full_auto_result {
+            Ok(result) => {
+                tool_execution_results.push(json!({
+                    "tool_loop": "full_auto_flow",
+                    "status": "completed",
+                    "response": result.response,
+                    "reasoning": result.reasoning,
+                    "total_steps": result.report.total_tools,
+                    "duration_ms": result.report.total_duration_ms,
+                    "stop_reason": result.report.stop_reason,
+                }));
+            }
+            Err(e) => {
+                tracing::warn!("FullAutoFlow execution failed: {}", e);
+                tool_execution_results.push(json!({
+                    "tool_loop": "full_auto_flow",
+                    "status": "failed",
+                    "error": e.to_string(),
+                }));
+            }
         }
 
-        if let Some(error) = &review_outcome.error {
-            tracing::warn!("review gate failed: {}", error);
-        }
-        reviews = review_outcome.reviews.clone();
+        let should_run_tao = !preferred_tools.is_empty()
+            && full_auto_result
+                .as_ref()
+                .map(|result| result.report.total_tools > 0)
+                .unwrap_or(true);
 
-        // ── Only run TAO loop when the autonomy loop did NOT handle execution ──
-        if !autonomy_loop_executed && review_outcome.passed {
-            // Extract task description
-            let task_description = extract_task_description(&params.messages);
-
-            // Build a ToolInput from the task context
-            let tool_input = ToolInput {
-                task_id: "chat".to_string(),
-                phase: phase_name.clone(),
-                agent_role: selected_agent.clone(),
-                objective: task_description.clone(),
-                constraints: None,
-                evidence: None,
-                payload: serde_json::json!({
-                    "task": task_description,
-                    "phase": phase_name,
-                }),
-                allowed_base_dir: None,
-            };
-
-            // Create a ToolRegistry (reuses built-in tools)
-            let tool_registry = ToolRegistry::new();
-
-            // Determine preferred tools from agent response hints
-            let preferred_tools: Vec<String> = {
-                let calls = extract_tool_calls_from_response(&response_text, 5);
-                if calls.is_empty() {
-                    record_planner_guided_route();
-                    planner_guided_tool_preferences(
-                        &conversation_id,
-                        phase_name,
-                        &selected_agent,
-                        &task_description,
-                        &response_text,
-                        5,
-                    )
-                } else {
-                    record_explicit_tool_route();
-                    calls
-                }
-            };
-
-            // ── FullAutoFlow execution (BLUE43) ─────────────────────────
-            // Run the FullAutoFlow orchestrator before the TAO loop so that
-            // its execution report is available as context evidence.
-            let full_auto_result = crate::acp::helpers::autonomy_loop_adapter::run_full_auto_flow(
-                server.skill_registry.clone(),
+        if should_run_tao {
+            let tao_config = LoopConfig::default();
+            let (tao_decision, tao_trace) = execute_loop(
                 &task_description,
-            )
-            .await;
-            match &full_auto_result {
-                Ok(result) => {
-                    tool_execution_results.push(json!({
-                        "tool_loop": "full_auto_flow",
-                        "status": "completed",
-                        "response": result.response,
-                        "reasoning": result.reasoning,
-                        "total_steps": result.report.total_tools,
-                        "duration_ms": result.report.total_duration_ms,
-                        "stop_reason": result.report.stop_reason,
-                    }));
+                &tool_registry,
+                &tool_input,
+                &preferred_tools,
+                &tao_config,
+            );
+
+            let tool_result = match &tao_decision {
+                LoopDecision::Complete(output) => {
+                    record_autonomy_loop_stop_reason("complete");
+                    serde_json::json!({
+                        "status": "complete",
+                        "success": output.success,
+                        "result": output.result,
+                        "iterations": tao_trace.iterations.len(),
+                        "duration_ms": tao_trace.total_duration_ms,
+                    })
                 }
-                Err(e) => {
-                    tracing::warn!("FullAutoFlow execution failed: {}", e);
-                    tool_execution_results.push(json!({
-                        "tool_loop": "full_auto_flow",
+                LoopDecision::Failed { reason, .. } => {
+                    record_autonomy_loop_stop_reason("failed");
+                    serde_json::json!({
                         "status": "failed",
-                        "error": e.to_string(),
-                    }));
+                        "reason": reason,
+                        "iterations": tao_trace.iterations.len(),
+                        "duration_ms": tao_trace.total_duration_ms,
+                    })
                 }
-            }
+                LoopDecision::Escalate { reason, .. } => {
+                    record_autonomy_loop_stop_reason("escalated");
+                    serde_json::json!({
+                        "status": "escalated",
+                        "reason": reason,
+                        "iterations": tao_trace.iterations.len(),
+                        "duration_ms": tao_trace.total_duration_ms,
+                    })
+                }
+                _ => {
+                    record_autonomy_loop_stop_reason("incomplete");
+                    serde_json::json!({
+                        "status": "incomplete",
+                        "iterations": tao_trace.iterations.len(),
+                        "duration_ms": tao_trace.total_duration_ms,
+                    })
+                }
+            };
 
-            let should_run_tao = !preferred_tools.is_empty()
-                && full_auto_result
-                    .as_ref()
-                    .map(|result| result.report.total_tools > 0)
-                    .unwrap_or(true);
-
-            if should_run_tao {
-                // Run the Think-Act-Observe loop only when actionable tools exist.
-                let tao_config = LoopConfig::default();
-                let (tao_decision, tao_trace) = execute_loop(
-                    &task_description,
-                    &tool_registry,
-                    &tool_input,
-                    &preferred_tools,
-                    &tao_config,
-                );
-
-                // Record the loop outcome
-                let tool_result = match &tao_decision {
-                    LoopDecision::Complete(output) => {
-                        record_autonomy_loop_stop_reason("complete");
-                        serde_json::json!({
-                            "status": "complete",
-                            "success": output.success,
-                            "result": output.result,
-                            "iterations": tao_trace.iterations.len(),
-                            "duration_ms": tao_trace.total_duration_ms,
-                        })
-                    }
-                    LoopDecision::Failed { reason, .. } => {
-                        record_autonomy_loop_stop_reason("failed");
-                        serde_json::json!({
-                            "status": "failed",
-                            "reason": reason,
-                            "iterations": tao_trace.iterations.len(),
-                            "duration_ms": tao_trace.total_duration_ms,
-                        })
-                    }
-                    LoopDecision::Escalate { reason, .. } => {
-                        record_autonomy_loop_stop_reason("escalated");
-                        serde_json::json!({
-                            "status": "escalated",
-                            "reason": reason,
-                            "iterations": tao_trace.iterations.len(),
-                            "duration_ms": tao_trace.total_duration_ms,
-                        })
-                    }
-                    _ => {
-                        record_autonomy_loop_stop_reason("incomplete");
-                        serde_json::json!({
-                            "status": "incomplete",
-                            "iterations": tao_trace.iterations.len(),
-                            "duration_ms": tao_trace.total_duration_ms,
-                        })
-                    }
-                };
-
-                tool_execution_results.push(json!({
-                    "tool_loop": "tao_executed",
-                    "decision": tool_result,
-                    "trace": serde_json::to_value(&tao_trace).unwrap_or_default(),
-                    "task": task_description
-                }));
-            } else {
-                tool_execution_results.push(json!({
-                    "tool_loop": "tao_skipped",
-                    "status": "skipped",
-                    "reason": "no_actionable_tools",
-                    "task": task_description,
-                }));
-            }
+            tool_execution_results.push(json!({
+                "tool_loop": "tao_executed",
+                "decision": tool_result,
+                "trace": serde_json::to_value(&tao_trace).unwrap_or_default(),
+                "task": task_description
+            }));
+        } else {
+            tool_execution_results.push(json!({
+                "tool_loop": "tao_skipped",
+                "status": "skipped",
+                "reason": "no_actionable_tools",
+                "task": task_description,
+            }));
         }
     }
 
+    FullAutoExecutionResult {
+        reviews,
+        tool_execution_results,
+    }
+}
+
+/// Apply the review gate logic and assemble the final chat response.
+///
+/// Computes the final response value including memory policy execution,
+/// task graph checkpoint, role routing, verification, and the final
+/// response assembly via `response_finalizer::finalize_chat_response`.
+/// Also handles fire-and-forget background tasks (skill creation, workflow generation).
+#[allow(clippy::too_many_arguments)]
+async fn apply_review_gate_assemble(
+    server: &AcpServer,
+    params: &ChatParams,
+    trace: &RequestTraceContext,
+    phase_name: &str,
+    phase_origin: &str,
+    selected_agent: &str,
+    selected_model_name: &Option<String>,
+    response_text: &str,
+    reasoning_text: &str,
+    tenant_id: &str,
+    started: std::time::Instant,
+    conversation_id: &str,
+    branch_id: &str,
+    schema_warnings: Vec<String>,
+    schema_error: Option<String>,
+    layered_prompt_segments: usize,
+    tool_execution_results: &[Value],
+    sched_task_id: &str,
+    candidate_agents: &[String],
+    routing_provenance: &[String],
+    reputation_scores: &HashMap<String, f64>,
+    selected_agent_reputation: Option<f64>,
+    council_decision: &Option<Value>,
+    vote_winner: &Option<String>,
+    fallback_reason: &Option<String>,
+    cache_hit: bool,
+    cache_bypassed_for_execution: bool,
+    capability_info: crate::acp::helpers::response_assembler::CapabilityRoutingInfo,
+    reviews: Vec<Value>,
+    agent_attempts: Vec<Value>,
+    risk_decision: Value,
+    quota_failed_agents: Vec<String>,
+    vector_context: VectorContext,
+    knowledge: Value,
+    distillation: Value,
+    checkpoint: crate::acp::ConversationCheckpoint,
+    metacognitive_loop: Value,
+) -> Result<serde_json::Value> {
     let switched_from_quota_limit = !quota_failed_agents.is_empty() && !selected_agent.is_empty();
     if let Some(primary_candidate) = candidate_agents.first() {
         if !selected_agent.is_empty() && selected_agent != *primary_candidate {
@@ -2240,22 +2778,26 @@ You have access to {} registered skill(s). Skills are reusable templates that au
     let agent_switch_notice = if switched_from_quota_limit {
         Some(json!({
             "type": "quota_fallback",
-            "message": tf("status.chat.quota_fallback_notice", &[("agents", &quota_failed_agents.join(", ")), ("agent", &selected_agent)]),
+            "message": tf("status.chat.quota_fallback_notice", &[
+                ("agents", &quota_failed_agents.join(", ")),
+                ("agent", selected_agent)
+            ]),
             "quota_failed_agents": quota_failed_agents,
-            "active_agent": selected_agent.clone(),
-            "available_agents": candidate_agents,
+            "active_agent": selected_agent.to_string(),
+            "available_agents": candidate_agents.to_vec(),
             "auto_recover": t("status.chat.auto_recover_notice")
         }))
     } else {
         None
     };
 
-    let token_economy = estimate_token_economy(&params.messages, &response_text);
+    let token_economy = estimate_token_economy(&params.messages, response_text);
+
+    // Cache task description once for all full_auto sub-steps
+    let task_description = extract_task_description(&params.messages);
 
     // Memory policy execution integration
     let memory_promotion_result = if params.mode.eq_ignore_ascii_case("full_auto") {
-        // Create a memory entry for this task completion
-        let task_description = extract_task_description(&params.messages);
         let memory_entry = MemoryEntry {
             id: format!("task-{}-{}", conversation_id, started.elapsed().as_millis()),
             class: MemoryClass::Observation,
@@ -2270,14 +2812,11 @@ You have access to {} registered skill(s). Skills are reusable templates that au
                     .unwrap_or_default()
                     .as_secs()
             ),
-            usefulness: 0.8, // High usefulness for completed tasks
+            usefulness: 0.8,
             staleness: 0,
         };
 
-        // Get or create memory store
         let mut memory_store = MemoryStore::new(MemoryPolicy::default());
-
-        // Add entry and promote
         memory_store.store(memory_entry);
         let promotion_report = memory_store.promote();
 
@@ -2295,15 +2834,14 @@ You have access to {} registered skill(s). Skills are reusable templates that au
     // Task graph execution engine integration
     let (task_graph_result, _saved_graph_id, _saved_checkpoint_id) =
         if params.mode.eq_ignore_ascii_case("full_auto") {
-            let task_description = extract_task_description(&params.messages);
             build_task_graph_checkpoint(
                 server,
-                &conversation_id,
+                conversation_id,
                 &task_description,
                 &params.mode,
                 phase_name,
-                &response_text,
-                &tool_execution_results,
+                response_text,
+                tool_execution_results,
                 memory_promotion_result.as_ref(),
                 started.elapsed().as_millis() as u64,
             )
@@ -2313,7 +2851,6 @@ You have access to {} registered skill(s). Skills are reusable templates that au
 
     // Role-based agent routing integration
     let role_routing_result = if params.mode.eq_ignore_ascii_case("full_auto") {
-        let task_description = extract_task_description(&params.messages);
         Some(build_role_routing(&task_description))
     } else {
         None
@@ -2321,46 +2858,35 @@ You have access to {} registered skill(s). Skills are reusable templates that au
 
     // Enhanced verification system integration
     let verification_result = if params.mode.eq_ignore_ascii_case("full_auto") {
-        Some(run_enhanced_verification(&response_text))
+        Some(run_enhanced_verification(response_text))
     } else {
         None
     };
-
-    if selected_agent_reputation.is_none() {
-        selected_agent_reputation = reputation_scores.get(&selected_agent).copied();
-        if selected_agent_reputation.is_none() {
-            if let Some(ref cb) = server.capability_bus {
-                if let Ok(rep) = cb.reputation.lock() {
-                    selected_agent_reputation = Some(rep.score(&selected_agent));
-                }
-            }
-        }
-    }
 
     let result = crate::acp::helpers::response_finalizer::finalize_chat_response(
         server,
         trace,
         &params.mode,
         phase_name,
-        &selected_agent,
-        &selected_model_name,
-        &response_text,
-        &reasoning_text,
+        selected_agent,
+        selected_model_name,
+        response_text,
+        reasoning_text,
         tenant_id,
         started,
         build_chat_response(ChatResponseContext {
             mode: params.mode.clone(),
-            conversation_id: conversation_id.clone(),
-            branch_id: branch_id.clone(),
+            conversation_id: conversation_id.to_string(),
+            branch_id: branch_id.to_string(),
             phase_name: phase_name.to_string(),
             phase_origin: phase_origin.to_string(),
-            selected_agent: selected_agent.clone(),
+            selected_agent: selected_agent.to_string(),
             selected_model_name: selected_model_name.clone(),
-            response_text: response_text.clone(),
+            response_text: response_text.to_string(),
             checkpoint: json!(checkpoint),
             metacognitive_loop,
             token_economy,
-            vector_hits: vector_context.hits.clone(),
+            vector_hits: vector_context.hits,
             summary_used: vector_context.summary.is_some(),
             knowledge,
             distillation,
@@ -2368,19 +2894,12 @@ You have access to {} registered skill(s). Skills are reusable templates that au
             agent_attempts,
             risk_decision,
             agent_switch_notice,
-            tool_execution_results: tool_execution_results.clone(),
+            tool_execution_results: tool_execution_results.to_vec(),
             memory_promotion_result,
             task_graph_result,
             role_routing_result,
             verification_result,
-            capability_info: CapabilityRoutingInfo {
-                selected_agent: capability_selected_agent,
-                recommended_mode: capability_recommended_mode,
-                candidate_count: capability_candidate_count,
-                decision_confidence: capability_decision_confidence,
-                selection_reason: capability_selection_reason,
-                optimization_hint: capability_optimization_hint,
-            },
+            capability_info,
             routing_diagnostics: json!({
                 "routing_provenance": routing_provenance,
                 "candidate_reputation_scores": reputation_scores,
@@ -2393,19 +2912,19 @@ You have access to {} registered skill(s). Skills are reusable templates that au
             cache_bypassed: cache_bypassed_for_execution,
             started,
         }),
-        &conversation_id,
+        conversation_id,
         schema_warnings,
         schema_error,
-        layered_prompt.segments.len(),
-        &tool_execution_results,
-        &sched_task_id,
-        &candidate_agents,
-        &routing_provenance,
-        &reputation_scores,
+        layered_prompt_segments,
+        tool_execution_results,
+        sched_task_id,
+        candidate_agents,
+        routing_provenance,
+        reputation_scores,
         selected_agent_reputation,
-        &council_decision,
-        &vote_winner,
-        &fallback_reason,
+        council_decision,
+        vote_winner,
+        fallback_reason,
         cache_hit,
         cache_bypassed_for_execution,
         params
@@ -2414,28 +2933,6 @@ You have access to {} registered skill(s). Skills are reusable templates that au
             .map(|m| m.content.as_str())
             .unwrap_or(""),
     );
-
-    // P3: Auto-create skills from conversation patterns
-    // After a successful chat completion, analyze the conversation to
-    // determine if a new reusable skill should be automatically created.
-    // This is a fire-and-forget background task — timeout ensures bounded runtime,
-    // and discarding the Result is intentional: timeout/error just means
-    // no skill is auto-created this time, which is non-critical.
-    let _ = tokio::time::timeout(
-        Duration::from_secs(2),
-        auto_create_skills_from_conversation(server, params, &response_text),
-    )
-    .await;
-
-    // P4: Auto-generate workflow from conversation patterns
-    // After a successful chat completion, analyze the conversation to
-    // determine if a reusable workflow should be generated.
-    // Same fire-and-forget pattern as P3: non-critical background task.
-    let _ = tokio::time::timeout(
-        Duration::from_secs(2),
-        auto_generate_workflow_from_conversation(server, params, &response_text),
-    )
-    .await;
 
     Ok(result)
 }
@@ -2567,17 +3064,21 @@ pub(crate) async fn run_agent_collecting(
                         .collect();
                     if skill_names.len() > 1 {
                         // Multiple skills called at once — pick the best one by score.
-                        let best = server.skill_registry.lock().ok().and_then(|registry| {
+                        let best = {
+                            let reg = server.skill_registry.lock().unwrap_or_else(|poisoned| {
+                                warn!("run_agent_collecting: skill_registry poisoned, recovering");
+                                poisoned.into_inner()
+                            });
                             skill_names
                                 .iter()
                                 .filter_map(|name| {
-                                    let score = registry.score_of(name).unwrap_or(0.5);
-                                    registry.get(name).map(|_| (name.to_string(), score))
+                                    let score = reg.score_of(name).unwrap_or(0.5);
+                                    reg.get(name).map(|_| (name.to_string(), score))
                                 })
                                 .max_by(|a, b| {
                                     a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
                                 })
-                        });
+                        };
                         if let Some((best_name, _)) = best {
                             warn!(
                                 "skill dedup: AI called {} skills ({}), auto-selecting '{}'",
@@ -2717,11 +3218,19 @@ const STREAM_EVENT_CHUNK: &str = "chunk";
 const STREAM_EVENT_DONE: &str = "done";
 const STREAM_EVENT_TELEMETRY: &str = "telemetry";
 
-// ── SseBufferPool (GAP-46-12) ─────────────────────────────────────────
+// ── SseBufferPool (GAP-46-12 / BLUE48 Step 2) ────────────────────────
 // Global pool of pre-allocated byte buffers for SSE event serialization.
 // Avoids allocation churn during high-frequency streaming by reusing
-// buffers across requests.  Initialized lazily on first chat request.
+// buffers across requests.  Pre-initialized at server startup to avoid
+// first-request latency penalty.
 static SSE_BUFFER_POOL: OnceLock<SseBufferPool> = OnceLock::new();
+
+/// Pre-initialize the SSE buffer pool at server startup.
+/// Call once during server initialization to avoid first-request latency.
+pub fn pre_init_sse_buffer_pool() {
+    SSE_BUFFER_POOL.get_or_init(|| SseBufferPool::new(4, 4096));
+    tracing::info!("SSE buffer pool pre-initialized (4 buffers x 4096 bytes)");
+}
 
 /// Acquire a buffer from the global SSE buffer pool.
 /// Returns a pre-allocated (empty) `Vec<u8>` suitable for building an SSE frame.
@@ -3948,35 +4457,37 @@ async fn persist_chat_knowledge(
 
     let mut retained_entries = 0usize;
     let mut promoted_count = 0usize;
-    if let Ok(mut store) = server.memory_store.lock() {
-        store.store(crate::memory_module::MemoryEntry {
-            id: format!(
-                "knowledge-{}-{}",
-                crate::acp::prelude::now_ts_ms(),
-                branch_id
-            ),
-            class: memory_class,
-            content: memory_content,
-            timestamp: crate::acp::prelude::now_ts().to_string(),
-            usefulness: confidence as f32,
-            staleness: 0,
-        });
-        store.gc();
-        let promotion = store.promote();
-        promoted_count = promotion.promoted_count;
-        retained_entries = store
-            .retrieve(crate::memory_module::MemoryClass::Observation, 256)
+    let mut store = server.memory_store.lock().unwrap_or_else(|poisoned| {
+        warn!("persist_chat_knowledge: memory_store poisoned, recovering");
+        poisoned.into_inner()
+    });
+    store.store(crate::memory_module::MemoryEntry {
+        id: format!(
+            "knowledge-{}-{}",
+            crate::acp::prelude::now_ts_ms(),
+            branch_id
+        ),
+        class: memory_class,
+        content: memory_content,
+        timestamp: crate::acp::prelude::now_ts().to_string(),
+        usefulness: confidence as f32,
+        staleness: 0,
+    });
+    store.gc();
+    let promotion = store.promote();
+    promoted_count = promotion.promoted_count;
+    retained_entries = store
+        .retrieve(crate::memory_module::MemoryClass::Observation, 256)
+        .len()
+        + store
+            .retrieve(crate::memory_module::MemoryClass::Episodic, 256)
             .len()
-            + store
-                .retrieve(crate::memory_module::MemoryClass::Episodic, 256)
-                .len()
-            + store
-                .retrieve(crate::memory_module::MemoryClass::Semantic, 256)
-                .len()
-            + store
-                .retrieve(crate::memory_module::MemoryClass::ProjectState, 256)
-                .len();
-    }
+        + store
+            .retrieve(crate::memory_module::MemoryClass::Semantic, 256)
+            .len()
+        + store
+            .retrieve(crate::memory_module::MemoryClass::ProjectState, 256)
+            .len();
 
     let mut vector_memory_written = false;
     if let Some(vector_store) = server.cache.vector_store.clone() {
@@ -4011,8 +4522,8 @@ async fn persist_chat_knowledge(
         "reusable_insights": reusable_insights,
         "verification_steps": verification_steps,
         "artifact_path": artifact_path,
-        "retained_entries": retained_entries,
-        "promoted_count": promoted_count,
+        "retained_entries": &retained_entries,
+        "promoted_count": &promoted_count,
         "vector_memory_written": vector_memory_written,
     })
 }

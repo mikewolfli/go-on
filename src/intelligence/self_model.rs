@@ -247,9 +247,19 @@ impl SelfModelCore {
     // -- Limitations ------------------------------------------------------
 
     /// Add a new limitation.
+    ///
+    /// If the number of limitations exceeds max_history, the oldest
+    /// limitation (by discovered_ms) is evicted.
     pub fn add_limitation(&self, limitation: SelfLimitation) {
         let mut inner = lock_guard(&self.inner);
         inner.limitations.push(limitation);
+
+        // Evict oldest limitation when max_history is exceeded.
+        let max = inner.config.max_history;
+        while inner.limitations.len() > max {
+            inner.limitations.remove(0);
+        }
+
         inner.last_update_ms = now_ms();
     }
 

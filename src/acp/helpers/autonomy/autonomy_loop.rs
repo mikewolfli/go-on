@@ -524,7 +524,28 @@ pub async fn run_autonomy_loop(
     let tool_execution_traces: Vec<Value> = Vec::new();
 
     // ── Phase 1: Planning ──
+    // BLUE48 Step 3: Gather intelligence context before planning
+    let intelligence_ctx =
+        crate::acp::helpers::intelligence_bridge::gather_intelligence_context(objective);
+    if intelligence_ctx.intelligence_active {
+        tracing::info!(
+            "Intelligence bridge: {} recommendations, {} insights",
+            intelligence_ctx.recommended_agents.len(),
+            intelligence_ctx.recent_insights.len()
+        );
+    }
+
     let plan = {
+        let mut input_payload = serde_json::json!({"objective": objective});
+        // Inject intelligence context into the planning input
+        if let Some(augmented) =
+            crate::acp::helpers::intelligence_bridge::build_intelligence_augmented_context(
+                &intelligence_ctx,
+            )
+        {
+            input_payload["intelligence_context"] = serde_json::json!(augmented);
+        }
+
         let envelope = crate::agent::AgentTaskEnvelope {
             task_id: "autonomy-loop".to_string(),
             phase: "planning".to_string(),
@@ -532,7 +553,7 @@ pub async fn run_autonomy_loop(
             objective: objective.to_string(),
             constraints: None,
             evidence: None,
-            input: serde_json::json!({"objective": objective}),
+            input: input_payload,
         };
         let plan = Planner::plan(&envelope);
         // BLUE43 Step 1: Persist DAG metrics for governance observability
@@ -1221,9 +1242,12 @@ pub async fn run_autonomy_loop(
         tf("status.autonomy.tools_exhausted", &[])
     };
 
+    let total_rounds_count = all_rounds.len();
+    let total_tools_count: usize = all_rounds.iter().map(|r| r.tools_executed.len()).sum();
+
     let report = AutonomyLoopReport {
-        total_rounds: all_rounds.len(),
-        total_tools: all_rounds.iter().map(|r| r.tools_executed.len()).sum(),
+        total_rounds: total_rounds_count,
+        total_tools: total_tools_count,
         final_phase: AutonomyPhase::Completed,
         rounds: all_rounds,
         planner_guidance_used,
@@ -1234,6 +1258,19 @@ pub async fn run_autonomy_loop(
         stop_reason,
         audit_trail: Some(audit_trail),
     };
+
+    // BLUE48 Step 3: Record performance data to EvolutionGraph for learning
+    if let Some(ref model) = final_model {
+        let success = !final_response.is_empty();
+        let success_rate = if success { 0.9 } else { 0.1 };
+        let avg_latency = total_duration_ms as f64 / total_rounds_count.max(1) as f64;
+        crate::acp::helpers::intelligence_bridge::record_capability_performance(
+            model,
+            "autonomy_execution",
+            success_rate,
+            avg_latency,
+        );
+    }
 
     Ok(AutonomyLoopResult {
         response: final_response,

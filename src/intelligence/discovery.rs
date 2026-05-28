@@ -218,16 +218,18 @@ impl DiscoveryCenter {
     pub fn search(&self, query: &DiscoveryQuery) -> DiscoveryResult {
         let start = now_ms();
 
-        let entries = match self.entries.lock() {
-            Ok(e) => e.clone(),
+        // Hold the lock and filter in-place to avoid cloning the entire entries vec;
+        // only matching entries are cloned out.
+        let entries_guard = match self.entries.lock() {
+            Ok(e) => e,
             Err(poisoned) => {
                 tracing::warn!(target: "discovery", "entries Mutex poisoned – recovering in search");
-                poisoned.into_inner().clone()
+                poisoned.into_inner()
             }
         };
 
-        let mut matches: Vec<DiscoveryEntry> = entries
-            .into_iter()
+        let mut matches: Vec<DiscoveryEntry> = entries_guard
+            .iter()
             .filter(|e| {
                 // Filter by problem pattern (substring match, case-insensitive)
                 if let Some(ref pat) = query.problem_pattern {
@@ -269,7 +271,10 @@ impl DiscoveryCenter {
 
                 true
             })
+            .cloned()
             .collect();
+        // Release the lock before sorting / truncating.
+        drop(entries_guard);
 
         // Sort by success rate descending, then by last_used_ms descending
         matches.sort_by(|a, b| {
@@ -317,26 +322,80 @@ impl DiscoveryCenter {
             return Vec::new();
         }
 
-        // Cluster by shared tags (entries sharing 2+ tags form a cluster)
-        let mut clusters: Vec<Vec<&DiscoveryEntry>> = Vec::new();
-        for candidate in &candidates {
-            let mut added = false;
-            for cluster in clusters.iter_mut() {
-                let shared_tags: usize = cluster[0]
-                    .applicability_tags
-                    .iter()
-                    .filter(|t| candidate.applicability_tags.contains(t))
-                    .count();
-                if shared_tags >= 2 {
-                    cluster.push(candidate);
-                    added = true;
-                    break;
-                }
-            }
-            if !added {
-                clusters.push(vec![candidate]);
+        // Cluster by shared tags using a tag→entry_index HashMap for O(N*T) performance.
+        // Build an index: tag → indices of candidates that have this tag
+        let mut tag_to_indices: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (i, entry) in candidates.iter().enumerate() {
+            for tag in &entry.applicability_tags {
+                tag_to_indices.entry(tag.as_str()).or_default().push(i);
             }
         }
+
+        // Union-find: cluster candidates that share 2+ tags
+        let n = candidates.len();
+        let mut parent: Vec<usize> = (0..n).collect();
+        let mut rank: Vec<usize> = vec![0; n];
+
+        for (i, entry) in candidates.iter().enumerate() {
+            // Count how many tags each other candidate shares with this one
+            let mut shared_counts: HashMap<usize, usize> = HashMap::new();
+            for tag in &entry.applicability_tags {
+                if let Some(indices) = tag_to_indices.get(tag.as_str()) {
+                    for &j in indices {
+                        if i != j {
+                            *shared_counts.entry(j).or_insert(0) += 1;
+                        }
+                    }
+                }
+            }
+            // Union with candidates sharing 2+ tags
+            for (&j, &count) in &shared_counts {
+                if count >= 2 {
+                    // Find root of i
+                    let mut ri = i;
+                    while parent[ri] != ri {
+                        ri = parent[ri];
+                    }
+                    // Find root of j
+                    let mut rj = j;
+                    while parent[rj] != rj {
+                        rj = parent[rj];
+                    }
+                    if ri != rj {
+                        if rank[ri] < rank[rj] {
+                            parent[ri] = rj;
+                        } else if rank[ri] > rank[rj] {
+                            parent[rj] = ri;
+                        } else {
+                            parent[rj] = ri;
+                            rank[ri] += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Collect clusters from union-find
+        let mut cluster_roots: HashMap<usize, Vec<usize>> = HashMap::new();
+        for i in 0..n {
+            // Find root with full path compression
+            let mut root = i;
+            while parent[root] != root {
+                root = parent[root];
+            }
+            let mut curr = i;
+            while parent[curr] != root {
+                let next = parent[curr];
+                parent[curr] = root;
+                curr = next;
+            }
+            cluster_roots.entry(root).or_default().push(i);
+        }
+
+        let clusters: Vec<Vec<&DiscoveryEntry>> = cluster_roots
+            .into_values()
+            .map(|indices| indices.into_iter().map(|i| candidates[i]).collect())
+            .collect();
 
         // Generate patterns for clusters above threshold
         let mut generated: Vec<String> = Vec::new();

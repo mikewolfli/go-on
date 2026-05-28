@@ -116,11 +116,12 @@ pub struct PlanningContext {
 }
 
 impl Planner {
-    /// Decompose a task envelope into an execution plan (legacy, fixed 3-step).
+    /// Decompose a task envelope into an execution plan.
     ///
-    /// Delegates to `plan_to_dag` with a default context for backward compatibility.
+    /// Uses EmbeddingTaskClassifier for semantic task complexity detection,
+    /// falling back to keyword heuristics (analyze_task) when embedding unavailable.
     pub fn plan(task: &AgentTaskEnvelope) -> ExecutionPlan {
-        // Classify task via embedding-based classifier and log the outcome
+        // Classify task via embedding-based classifier
         let classifier = EmbeddingTaskClassifier::default();
         let task_category = classifier.classify_task(&task.objective);
         let complexity_score = match task_category {
@@ -133,7 +134,18 @@ impl Planner {
             task_category, complexity_score
         );
 
-        let context = Planner::analyze_task(task);
+        // Build planning context directly from classifier result.
+        // analyze_task() provides keyword-based fallback context
+        // (subtask_hints, has_code, has_research, has_multiple_subtasks),
+        // while the primary complexity decision comes from the embedding classifier.
+        let keyword_ctx = Planner::analyze_task(task);
+        let context = PlanningContext {
+            complexity: task_category,
+            has_code: keyword_ctx.has_code,
+            has_research: keyword_ctx.has_research,
+            has_multiple_subtasks: keyword_ctx.has_multiple_subtasks,
+            subtask_hints: keyword_ctx.subtask_hints,
+        };
         Planner::plan_to_dag(task, &context)
     }
 
