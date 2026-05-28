@@ -17,7 +17,7 @@ use tokio::time::sleep;
 use tracing::warn;
 
 use crate::agent::{resolve_secret, Agent, Message, ModelInfo};
-use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
+use crate::agents::agent::{chat_request_failed_msg, is_non_retryable_4xx, request_failed_msg};
 use crate::agents::{apply_openai_common_options, option_string, principles_to_text};
 use crate::i18n::runtime::tf;
 use crate::orchestration::autonomy_runtime::build_model_used_token;
@@ -477,6 +477,16 @@ impl CopilotAgent {
             );
         }
 
+        let ct = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        if !ct.starts_with("text/event-stream") && !ct.starts_with("application/json") {
+            tracing::warn!("copilot: unexpected content-type: {ct}");
+            anyhow::bail!("unexpected content-type: {ct}");
+        }
+
         // Stream the SSE response and capture the actual model name.
         // OpenAI-compatible streaming responses include the "model" field
         // in every SSE data event.  We capture the first non-empty one.
@@ -586,14 +596,24 @@ impl Agent for CopilotAgent {
                         return Ok(());
                     }
                     Err(err) => {
-                        let err_text = err.to_string().to_ascii_lowercase();
+                        let err_text = err.to_string();
+                        let err_text_lower = err_text.to_ascii_lowercase();
+
+                        // Non-retryable 4xx (except 429) → skip model or fail
+                        if is_non_retryable_4xx(&err_text_lower) {
+                            if is_auto {
+                                continue 'models;
+                            }
+                            return Err(err.into());
+                        }
+
                         // Unsupported model, quota, rate-limit → skip model
-                        if err_text.contains("model_not_supported")
-                            || err_text.contains("not supported")
-                            || err_text.contains("429")
-                            || err_text.contains("rate limit")
-                            || err_text.contains("quota")
-                            || err_text.contains("insufficient_quota")
+                        if err_text_lower.contains("model_not_supported")
+                            || err_text_lower.contains("not supported")
+                            || err_text_lower.contains("429")
+                            || err_text_lower.contains("rate limit")
+                            || err_text_lower.contains("quota")
+                            || err_text_lower.contains("insufficient_quota")
                         {
                             if is_auto {
                                 // Try next model

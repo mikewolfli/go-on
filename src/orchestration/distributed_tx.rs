@@ -115,8 +115,11 @@ impl DistributedTransaction {
     /// Create a new distributed transaction.
     pub fn new(description: &str, phase_timeout_ms: u64) -> Self {
         let now = crate::acp::prelude::now_ts_ms() as u64;
+        let mut tx_id = String::with_capacity(41); // "dtx-" + 36 UUID chars
+        tx_id.push_str("dtx-");
+        tx_id.push_str(&uuid::Uuid::new_v4().as_hyphenated().to_string());
         Self {
-            tx_id: format!("dtx-{}", Uuid::new_v4()),
+            tx_id,
             description: description.to_string(),
             status: DistributedTxStatus::Initialized,
             participants: Vec::new(),
@@ -255,26 +258,36 @@ impl TwoPhaseCoordinator {
         let deadline = {
             let txs = self.active_transactions.read().await;
             let tx = match txs.get(tx_id) {
-                Some(tx) => tx.clone(),
+                Some(tx) => tx,
                 None => {
                     error!("[2PC] Transaction {} not found for 2PC execution", tx_id);
                     return DistributedTransaction::new("not_found", 0);
                 }
             };
             let no_participants = tx.participants.is_empty();
+            let deadline = Instant::now()
+                + Duration::from_millis(
+                    self.timeouts.prepare_timeout_ms * 2 + self.timeouts.commit_timeout_ms * 2,
+                );
             drop(txs);
             if no_participants {
                 warn!("[2PC] Transaction {} has no participants, skipping", tx_id);
-                let mut tx = tx;
-                tx.status = DistributedTxStatus::Committed;
-                tx.updated_at_ms = crate::acp::prelude::now_ts_ms() as u64;
-                self.finalize(tx_id, tx.clone()).await;
-                return tx;
+                // Lock again briefly to mutate and finalize
+                let mut txs_w = self.active_transactions.write().await;
+                if let Some(tx_mut) = txs_w.get_mut(tx_id) {
+                    tx_mut.status = DistributedTxStatus::Committed;
+                    tx_mut.updated_at_ms = crate::acp::prelude::now_ts_ms() as u64;
+                    let committed = tx_mut.clone();
+                    drop(txs_w);
+                    self.completed_transactions
+                        .lock()
+                        .expect("completed_tx lock")
+                        .push(committed.clone());
+                    return committed;
+                }
+                return DistributedTransaction::new("not_found", 0);
             }
-            Instant::now()
-                + Duration::from_millis(
-                    self.timeouts.prepare_timeout_ms * 2 + self.timeouts.commit_timeout_ms * 2,
-                )
+            deadline
         };
 
         // Phase 1: Prepare
@@ -387,29 +400,21 @@ impl TwoPhaseCoordinator {
 
     /// Move a transaction from active to completed and return it.
     async fn finalize_and_return(&self, tx_id: &str) -> DistributedTransaction {
-        let txs = self.active_transactions.write().await;
+        let mut txs = self.active_transactions.write().await;
         let tx = txs
-            .get(tx_id)
-            .cloned()
+            .remove(tx_id)
             .unwrap_or_else(|| DistributedTransaction::new("unknown", 0));
-        let tx_clone = tx.clone();
         drop(txs);
-        self.finalize(tx_id, tx_clone).await;
-        tx
-    }
-
-    /// Finalize a transaction by moving it to the completed list.
-    async fn finalize(&self, tx_id: &str, tx: DistributedTransaction) {
         let status = tx.status;
-        self.active_transactions.write().await.remove(tx_id);
         self.completed_transactions
             .lock()
             .expect("completed_tx lock")
-            .push(tx);
+            .push(tx.clone());
         info!(
             "[2PC] Transaction {} finalized with status {:?}",
             tx_id, status
         );
+        tx
     }
 
     /// Get a transaction by ID.
@@ -419,10 +424,13 @@ impl TwoPhaseCoordinator {
 
     /// Get all completed transactions.
     pub fn get_completed_transactions(&self) -> Vec<DistributedTransaction> {
-        self.completed_transactions
+        let guard = self
+            .completed_transactions
             .lock()
-            .expect("completed_tx lock")
-            .clone()
+            .expect("completed_tx lock");
+        let snapshot = guard.clone();
+        drop(guard);
+        snapshot
     }
 
     /// Get the count of active transactions.

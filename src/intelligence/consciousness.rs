@@ -438,10 +438,6 @@ impl ConsciousnessMetrics {
     }
 }
 
-// ── Timestamp helper ───────────────────────────────────────────────────────
-
-// Use `crate::intelligence::now_ms()` instead — shared utility in mod.rs
-
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

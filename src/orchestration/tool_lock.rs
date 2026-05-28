@@ -11,7 +11,8 @@
 //! or wrap calls with `tokio::task::spawn_blocking`.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use tracing::warn;
 
 // ---------------------------------------------------------------------------
 // LockMode
@@ -121,7 +122,7 @@ impl ToolLockManager {
     pub fn acquire(&self, path: &str, mode: LockMode) -> LockHandle {
         loop {
             {
-                let mut table = self.inner.lock().expect("ToolLockManager mutex poisoned");
+                let mut table = self.lock_table();
                 if Self::try_acquire_inner(&mut table, path, mode) {
                     break;
                 }
@@ -137,11 +138,19 @@ impl ToolLockManager {
         }
     }
 
+    /// Recover from a poisoned mutex by taking ownership of the inner data.
+    fn lock_table(&self) -> MutexGuard<'_, LockTable> {
+        self.inner.lock().unwrap_or_else(|e: PoisonError<_>| {
+            warn!("ToolLockManager mutex poisoned — recovering");
+            e.into_inner()
+        })
+    }
+
     /// Attempt to acquire a lock without blocking.
     ///
     /// Returns `Some(LockHandle)` on success, `None` if the lock would block.
     pub fn try_acquire(&self, path: &str, mode: LockMode) -> Option<LockHandle> {
-        let mut table = self.inner.lock().expect("ToolLockManager mutex poisoned");
+        let mut table = self.lock_table();
         if Self::try_acquire_inner(&mut table, path, mode) {
             Some(LockHandle {
                 path: path.to_string(),
@@ -182,7 +191,7 @@ impl ToolLockManager {
 
     /// Release a lock — called by [`LockHandle::drop`].
     fn release(&self, path: &str, mode: LockMode) {
-        let mut table = self.inner.lock().expect("ToolLockManager mutex poisoned");
+        let mut table = self.lock_table();
         if let Some(entry) = table.locks.get_mut(path) {
             match mode {
                 LockMode::Read => {

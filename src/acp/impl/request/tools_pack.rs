@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
+use super::config_handlers::build_trace_payload;
 use super::prompts_pack::{build_prompts_get_tool, build_prompts_list_tool};
 use super::*;
 use crate::acp::helpers::tool_governance::{

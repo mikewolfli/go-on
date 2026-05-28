@@ -289,7 +289,9 @@ pub fn finalize_chat_response(
         if let Ok(fr) = server.fork_registry.lock() {
             match fr.register(conversation_id) {
                 Ok(Some(fid)) => {
-                    let _ = fr.complete(&fid);
+                    if let Err(e) = fr.complete(&fid) {
+                        tracing::warn!(%conversation_id, fork_id = %fid, error = %e, "response_finalizer: failed to complete fork entry");
+                    }
                     Some(fid)
                 }
                 Ok(None) => None,

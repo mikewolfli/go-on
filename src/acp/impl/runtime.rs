@@ -1526,7 +1526,12 @@ async fn tcp_write_timeout(socket: &mut TcpStream, data: &[u8]) -> Result<()> {
 }
 
 async fn write_openai_sse_data(socket: &mut TcpStream, payload: &serde_json::Value) -> Result<()> {
-    let frame = format!("data: {}\n\n", serde_json::to_string(payload)?);
+    let json_str = serde_json::to_string(payload)?;
+    // Pre-allocate: "data: " (6) + json + "\n\n" (2)
+    let mut frame = String::with_capacity(6 + json_str.len() + 2);
+    frame.push_str("data: ");
+    frame.push_str(&json_str);
+    frame.push_str("\n\n");
     tcp_write_timeout(socket, frame.as_bytes()).await?;
     tokio::time::timeout(std::time::Duration::from_secs(30), socket.flush())
         .await
@@ -2469,7 +2474,7 @@ async fn handle_response_stream(
     // Forward SSE frames from the channel to the socket
     // (process_chat_request now streams tokens through the observer in real time)
     while let Some(frame) = rx.recv().await {
-        if let Err(err) = write_sse_event(socket, &frame.event, &frame.payload).await {
+        if let Err(err) = write_sse_event(socket, frame.event, &frame.payload).await {
             task.abort();
             return Err(err);
         }
@@ -2951,7 +2956,7 @@ async fn route_http_post(
                     });
 
                     while let Some(frame) = rx.recv().await {
-                        if let Err(err) = write_sse_event(socket, &frame.event, &frame.payload).await {
+                        if let Err(err) = write_sse_event(socket, frame.event, &frame.payload).await {
                             // Client disconnected while backend task is still active.
                             // Abort task to avoid orphan compute and channel buildup.
                             task.abort();
@@ -3028,26 +3033,26 @@ async fn route_http_post(
                         let _ = mem::replace(&mut *guard, Box::new(pipe_writer));
                     }
 
-                    // Dispatch the RPC request — response goes into the pipe
-                    if let Err(err) = handle_request(server.as_ref(), request).await {
-                        // Restore stdout before erroring out
-                        {
-                            let mut guard = server.output.lock().await;
-                            let _ = mem::replace(
-                                &mut *guard,
-                                Box::new(tokio::io::stdout()) as Box<dyn tokio::io::AsyncWrite + Send + Unpin>,
-                            );
-                        }
-                        write_http_json_response_with_context(
-                            socket,
-                            500,
-                            serde_json::json!({"error": format!("RPC dispatch error: {}", err)}),
-                            path,
-                            cors_headers,
-                        )
-                        .await?;
-                        return Ok(());
-                    }
+                    // Spawn the RPC handler so we can read from the pipe concurrently,
+                    // preventing a deadlock if the response exceeds the duplex buffer size.
+                    let server_ref = Arc::clone(&server);
+                    let rpc_task = tokio::spawn(async move {
+                        handle_request(server_ref.as_ref(), request).await
+                    });
+
+                    // Read the captured RPC response from the pipe concurrently.
+                    // The pipe may contain multiple JSON-RPC messages
+                    // (notifications such as chat.stream.chunk + final response).
+                    // Parse line by line and find the last line that is a
+                    // valid JSON-RPC response (has "id" field).
+                    let mut response_bytes = Vec::new();
+                    let read_result = tokio::time::timeout(
+                        std::time::Duration::from_secs(60),
+                        pipe_reader.read_to_end(&mut response_bytes),
+                    ).await;
+
+                    // Wait for the RPC task to complete
+                    let rpc_result = rpc_task.await;
 
                     // Restore stdout
                     {
@@ -3058,18 +3063,37 @@ async fn route_http_post(
                         );
                     }
 
-                    // Read the captured RPC response from the pipe.
-                    // The pipe may contain multiple JSON-RPC messages
-                    // (notifications such as chat.stream.chunk + final response).
-                    // Parse line by line and find the last line that is a
-                    // valid JSON-RPC response (has "id" field).
-                    let mut response_bytes = Vec::new();
-                    tokio::time::timeout(
-                        std::time::Duration::from_secs(60),
-                        pipe_reader.read_to_end(&mut response_bytes),
-                    ).await
-                    .map_err(|_| anyhow::anyhow!("timeout reading RPC pipe response"))?
-                    .map_err(|e| anyhow::anyhow!("RPC pipe read error: {e}"))?;
+                    // Check RPC task result
+                    match rpc_result {
+                        Err(join_err) => {
+                            write_http_json_response_with_context(
+                                socket,
+                                500,
+                                serde_json::json!({"error": format!("RPC task panicked: {}", join_err)}),
+                                path,
+                                cors_headers,
+                            )
+                            .await?;
+                            return Ok(());
+                        }
+                        Ok(Err(err)) => {
+                            write_http_json_response_with_context(
+                                socket,
+                                500,
+                                serde_json::json!({"error": format!("RPC dispatch error: {}", err)}),
+                                path,
+                                cors_headers,
+                            )
+                            .await?;
+                            return Ok(());
+                        }
+                        Ok(Ok(())) => {}
+                    }
+
+                    // Check read result
+                    read_result
+                        .map_err(|_| anyhow::anyhow!("timeout reading RPC pipe response"))?
+                        .map_err(|e| anyhow::anyhow!("RPC pipe read error: {e}"))?;
 
                     let response_str = String::from_utf8_lossy(&response_bytes);
                     // Parse each line; find the last JSON value that has an "id" field
@@ -3248,8 +3272,8 @@ async fn check_http_authorization(
         }
     };
 
-    // Exempt paths (health, root capabilities)
-    if matches!(path, "/" | "/health") {
+    // Exempt paths (health, root capabilities — GET only for root)
+    if path == "/health" || (path == "/" && method == "GET") {
         return Ok(false);
     }
 

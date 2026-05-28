@@ -59,8 +59,17 @@ impl PartialEq for ScheduledTask {
 
 impl Ord for ScheduledTask {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.effective_priority()
-            .partial_cmp(&other.effective_priority())
+        let self_p = self.effective_priority();
+        let other_p = other.effective_priority();
+
+        // NaN from float arithmetic violates the BinaryHeap contract (partial_cmp
+        // returns None and falls back to Equal). Clamp non-finite values to 0.0
+        // so ordering remains total and consistent.
+        let self_p = if self_p.is_finite() { self_p } else { 0.0 };
+        let other_p = if other_p.is_finite() { other_p } else { 0.0 };
+
+        self_p
+            .partial_cmp(&other_p)
             .unwrap_or(Ordering::Equal)
             // Tie-break by task_id to satisfy the BinaryHeap contract:
             // Eq(a,b) == true  →  cmp(a,b) == Equal

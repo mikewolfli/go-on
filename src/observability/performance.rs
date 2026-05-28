@@ -283,8 +283,8 @@ pub enum RecommendationSeverity {
 
 /// Smart cache with adaptive TTL
 pub struct AdaptiveCache<K, V> {
-    /// Cache storage
-    storage: HashMap<K, (V, Instant, u32)>,
+    /// Cache storage: (value, inserted_at, hit_count, adaptive_ttl)
+    storage: HashMap<K, (V, Instant, u32, Duration)>,
     /// Default TTL
     default_ttl: Duration,
     /// Maximum cache size
@@ -310,9 +310,9 @@ where
 
     /// Get a value from cache
     pub fn get(&mut self, key: &K) -> Option<V> {
-        if let Some((value, inserted_at, hit_count)) = self.storage.get(key) {
-            // Check if entry has expired
-            if inserted_at.elapsed() < self.default_ttl {
+        if let Some((value, inserted_at, hit_count, ttl)) = self.storage.get(key) {
+            // Check if entry has expired using its adaptive TTL
+            if inserted_at.elapsed() < *ttl {
                 // Update hit count for adaptive TTL
                 let new_hit_count = hit_count + 1;
                 self.hit_counts.insert(key.clone(), new_hit_count);
@@ -337,11 +337,11 @@ where
 
         // Get adaptive TTL based on historical hit count
         let hit_count = self.hit_counts.get(&key).copied().unwrap_or(0);
-        let _ttl = self.calculate_adaptive_ttl(hit_count);
+        let ttl = self.calculate_adaptive_ttl(hit_count);
 
-        // Store with creation time and hit count
+        // Store with creation time, hit count, and adaptive TTL
         self.storage
-            .insert(key.clone(), (value, Instant::now(), hit_count));
+            .insert(key.clone(), (value, Instant::now(), hit_count, ttl));
 
         // Reset hit count for new entry
         self.hit_counts.insert(key, 0);
@@ -368,7 +368,7 @@ where
         let oldest_key = self
             .storage
             .iter()
-            .min_by_key(|(_, (_, inserted_at, _))| inserted_at)
+            .min_by_key(|(_, (_, inserted_at, _, _))| inserted_at)
             .map(|(key, _)| key.clone());
 
         if let Some(key) = oldest_key {

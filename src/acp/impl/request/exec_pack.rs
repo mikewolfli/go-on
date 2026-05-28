@@ -2111,6 +2111,7 @@ pub(super) async fn handle_task_execute(
                 phase: format!("phase-{}", r.phase_index + 1),
                 outcome: r.outcome.clone(),
                 result_summary: None,
+                dependencies: vec![],
             })
             .collect();
         let ckpt = tg.snapshot(task, execution_report.phases_executed, graph_records);

@@ -494,9 +494,25 @@ pub struct AuditEntry {
     pub context_snapshot: Value,
 }
 
+/// Maximum number of audit entries retained in memory to prevent unbounded growth.
+const MAX_AUDIT_ENTRIES: usize = 10_000;
+
 #[derive(Debug, Default, Clone)]
 pub struct HarnessAuditTrail {
     pub entries: Vec<AuditEntry>,
+}
+
+impl HarnessAuditTrail {
+    /// Push an entry, evicting the oldest if the cap is exceeded.
+    pub fn push(&mut self, entry: AuditEntry) {
+        if self.entries.len() >= MAX_AUDIT_ENTRIES {
+            // Evict oldest half to amortize cost.
+            let keep = MAX_AUDIT_ENTRIES / 2;
+            let drain_end = self.entries.len() - keep;
+            self.entries.drain(0..drain_end);
+        }
+        self.entries.push(entry);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -625,7 +641,10 @@ impl PolicyEvaluator {
         }
 
         // 4. Runtime control check (adaptive sliding window / P95 / UCB)
-        if let Ok(mut ctrl) = self.runtime_control.lock() {
+        // NOTE: lock is acquired once here and reused at step 8 to avoid
+        // deadlock from ordering with guard/security_governor locks acquired below.
+        let mut runtime_ctrl = self.runtime_control.lock().ok();
+        if let Some(ref mut ctrl) = runtime_ctrl {
             if ctrl.should_escalate() {
                 // Record the escalation for adaptive control metrics
                 ctrl.record(false, _start.elapsed().as_millis() as u64);
@@ -715,33 +734,41 @@ impl PolicyEvaluator {
         ]
         .into_iter()
         .collect();
-        if let Ok(sg_verdict) = self
+        match self
             .security_governor
             .evaluate(&task_type_str, &actor, &context)
         {
-            if !sg_verdict.allowed {
+            Ok(sg_verdict) => {
+                if !sg_verdict.allowed {
+                    return PolicyVerdict::Deny(PolicyViolation {
+                        kind: "security_policy".to_string(),
+                        detail: sg_verdict.reasons.first().cloned().unwrap_or_else(|| {
+                            tf("error.harness_bus.security_governor_denied", &[])
+                        }),
+                    });
+                }
+                if sg_verdict.required_review {
+                    return PolicyVerdict::Review(ReviewReason {
+                        reason: sg_verdict.reasons.first().cloned().unwrap_or_else(|| {
+                            tf("error.harness_bus.security_governor_review", &[])
+                        }),
+                    });
+                }
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    "SecurityGovernor evaluate failed — denying operation as safety default"
+                );
                 return PolicyVerdict::Deny(PolicyViolation {
                     kind: "security_policy".to_string(),
-                    detail: sg_verdict
-                        .reasons
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| tf("error.harness_bus.security_governor_denied", &[])),
-                });
-            }
-            if sg_verdict.required_review {
-                return PolicyVerdict::Review(ReviewReason {
-                    reason: sg_verdict
-                        .reasons
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| tf("error.harness_bus.security_governor_review", &[])),
+                    detail: tf("error.harness_bus.security_governor_denied", &[]),
                 });
             }
         }
 
         // 8. All checks passed — record success for adaptive control
-        if let Ok(mut ctrl) = self.runtime_control.lock() {
+        if let Some(mut ctrl) = runtime_ctrl {
             ctrl.record(true, _start.elapsed().as_millis() as u64);
         }
         PolicyVerdict::Allow
@@ -755,12 +782,31 @@ impl PolicyEvaluator {
             .map(|s| s.clone())
             .unwrap_or_else(|_| "none".to_string());
         let allowed = match tool {
-            "read_file" | "search_files" | "inspect_git_diff" => {
-                SandboxPolicy::can_execute_read_file(&level)
+            // Read-only file operations
+            "read_file" | "search_files" | "inspect_git_diff"
+            // Read-only search/diagnostic operations
+            | "grep" | "find_path" | "semantic_search"
+            // MCP diagnostic/read-only tools — treated as read operations
+            // since they query internal state without side effects
+            | "acp_trace_get"
+            | "acp_debug_panel_get"
+            | "goon_workflow_run_list"
+            | "goon_workflow_run_get"
+            | "goon_metrics_window_query"
+            | "goon_metrics_errors_summary"
+            | "goon_provider_capabilities"
+            | "prompts_list"
+            | "prompts_get"
+            | "skill-finder" => SandboxPolicy::can_execute_read_file(&level),
+            // Write operations
+            "write_file" | "apply_patch" | "create_directory" | "delete_path" | "move_path" | "copy_path" => {
+                SandboxPolicy::can_execute_write(&level)
             }
-            "write_file" | "apply_patch" => SandboxPolicy::can_execute_write(&level),
-            "run_tests" | "execute_command" => SandboxPolicy::can_execute_shell(&level),
-            _ => true,
+            // Shell/execute operations
+            "run_tests" | "execute_command" | "terminal" | "bash" => {
+                SandboxPolicy::can_execute_shell(&level)
+            }
+            _ => false,
         };
         let idempotent = self
             .idempotency
@@ -771,7 +817,7 @@ impl PolicyEvaluator {
             .budget
             .lock()
             .map(|mut b| b.record_tool_call().is_ok())
-            .unwrap_or(true);
+            .unwrap_or(false);
         let permitted = self.check_permission(tool, _args);
         ToolVerdict {
             allowed,
@@ -786,19 +832,16 @@ impl PolicyEvaluator {
         let stage = "default";
         let completed: Vec<String> = Vec::new();
 
-        // Collect evidence from PuaRuleEngine
-        let evidence = self
-            .rule_engine
-            .lock()
-            .map(|engine| engine.collect_evidence(stage))
-            .unwrap_or_default();
-
-        // Find missing checks
-        let _missing = self
-            .rule_engine
-            .lock()
-            .map(|engine| engine.collect_missing(stage, &completed))
-            .unwrap_or_default();
+        // Collect evidence and find missing checks in a single lock acquisition
+        // to avoid TOCTOU between the two engine queries.
+        let (evidence, _missing) = match self.rule_engine.lock() {
+            Ok(engine) => {
+                let evidence = engine.collect_evidence(stage);
+                let missing = engine.collect_missing(stage, &completed);
+                (evidence, missing)
+            }
+            Err(_) => (Vec::new(), Vec::new()),
+        };
 
         let quality = _missing.is_empty();
         let risk_score = if _missing.is_empty() { 0.0 } else { 0.5 };
@@ -1040,8 +1083,13 @@ impl HarnessBus {
 
     /// Record an audit entry.
     pub fn audit(&self, entry: AuditEntry) {
-        if let Ok(mut trail) = self.audit_trail.lock() {
-            trail.entries.push(entry.clone());
+        match self.audit_trail.lock() {
+            Ok(mut trail) => trail.entries.push(entry.clone()),
+            Err(poisoned) => {
+                tracing::error!("audit_trail lock poisoned — recovering and recording audit entry");
+                let mut trail = poisoned.into_inner();
+                trail.entries.push(entry.clone());
+            }
         }
         if let Ok(mut p) = self.profile.lock() {
             p.audit_entries_total = p.audit_entries_total.saturating_add(1);
@@ -1049,12 +1097,16 @@ impl HarnessBus {
     }
 
     /// Build a per-agent execution policy from the three base policies.
+    ///
+    /// NOTE: Per-agent customization is not yet implemented — `_agent` and
+    /// `_task_type` are accepted for future use but currently ignored. The
+    /// returned policy is derived solely from the shared governance policies.
     pub fn get_agent_policy(&self, _agent: &str, _task_type: &str) -> AgentExecutionPolicy {
         AgentExecutionPolicy {
             timeout: self.evaluator.dispatch.timeout_policy.default_timeout,
             max_tool_calls: self.evaluator.execution.budget.max_tool_calls as u32,
-            allow_file_write: self.evaluator.governance.sandbox_level.level_index() as usize >= 2,
-            allow_shell: self.evaluator.governance.sandbox_level.level_index() as usize >= 3,
+            allow_file_write: self.evaluator.governance.sandbox_level.level_index() as usize <= 1,
+            allow_shell: self.evaluator.governance.sandbox_level.level_index() as usize == 0,
             allow_network: true,
             review_level: if self.evaluator.governance.sandbox_level.level_index() as usize >= 2 {
                 ReviewLevel::Manual

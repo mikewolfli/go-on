@@ -2126,12 +2126,14 @@ fn generate_adaptive_config_toml(
         all_agent_names.push(ca.name.clone());
     }
     let recommendations = aggregate_provider_recommendations(&providers);
+    // all_agent_names is guaranteed non-empty because `providers` always
+    // contains at least the default provider, so the `.first()` unwrap is safe.
     let review_agents = if all_agent_names.len() > 1 {
         all_agent_names.clone()
     } else {
-        vec![all_agent_names[0].clone()]
+        vec![all_agent_names.first().expect("all_agent_names should contain at least one provider").clone()]
     };
-    let delivery_agents = vec![all_agent_names[0].clone()];
+    let delivery_agents = vec![all_agent_names.first().expect("all_agent_names should contain at least one provider").clone()];
 
     let mut content = String::new();
     content.push_str(&format!(

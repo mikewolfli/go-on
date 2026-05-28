@@ -215,28 +215,30 @@ impl FastPathCache {
     ///
     /// The input is lowercased, non-alphanumeric/non-whitespace characters
     /// are stripped, then SHA-256 is applied.  Only the first 8 bytes are
-    /// used for the key.
+    /// used for the key.  Uses streaming to avoid an intermediate String
+    /// allocation.
     fn fingerprint(text: &str) -> u64 {
-        let normalized: String = text
-            .chars()
-            .filter(|c| c.is_alphanumeric() || c.is_whitespace())
-            .flat_map(|c| c.to_lowercase())
-            .collect();
         let mut hasher = Sha256::new();
-        hasher.update(normalized.as_bytes());
+        // Feed filtered, lowercased bytes directly into the hasher — avoids
+        // the intermediate `normalized: String` allocation.
+        for byte in text
+            .bytes()
+            .filter(|b| b.is_ascii_alphanumeric() || b.is_ascii_whitespace())
+        {
+            hasher.update([byte.to_ascii_lowercase()]);
+        }
         let result = hasher.finalize();
         u64::from_be_bytes(result[..8].try_into().expect("sha256 output >= 8 bytes"))
     }
 
     /// Compute a hash from a slice of strings (e.g. prerequisites).
+    /// Uses streaming to avoid an intermediate String allocation.
     fn fingerprint_slice(items: &[String]) -> u64 {
-        let mut joined = String::new();
-        for item in items {
-            joined.push_str(&item.to_lowercase());
-            joined.push('\x00');
-        }
         let mut hasher = Sha256::new();
-        hasher.update(joined.as_bytes());
+        for item in items {
+            hasher.update(item.to_lowercase().as_bytes());
+            hasher.update([0x00]);
+        }
         let result = hasher.finalize();
         u64::from_be_bytes(result[..8].try_into().expect("sha256 output >= 8 bytes"))
     }
@@ -358,7 +360,7 @@ impl FastPathCache {
             let count = template
                 .keywords
                 .iter()
-                .filter(|kw| lower.contains(&kw.to_lowercase()))
+                .filter(|kw| lower.contains(kw.as_str()))
                 .count();
             if count > 0 && count > best_count {
                 best_count = count;
@@ -450,6 +452,9 @@ impl FastPathCache {
             return;
         }
         let to_remove = (max_entries / 4).max(1);
+        // Collect keys sorted by created_at to evict the oldest.
+        // Using a Vec of (u64, Instant) is acceptable here because eviction
+        // is rare (only when at capacity) and bounded by max_entries.
         let mut entries: Vec<(u64, Instant)> =
             cache.iter().map(|(k, v)| (*k, v.created_at)).collect();
         entries.sort_by_key(|a| a.1);

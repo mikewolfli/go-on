@@ -45,12 +45,11 @@ pub enum PipelineStep {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PipelineErrorStrategy {
     /// Stop execution immediately and return the partial results.
-    #[cfg(test)]
+    #[allow(dead_code)]
     Stop,
     /// Continue executing remaining steps despite the error.
     Continue,
     /// Stop execution and invoke rollback (requires transactional context).
-    #[cfg(test)]
     #[allow(dead_code)]
     Rollback,
 }
@@ -303,16 +302,12 @@ async fn execute_parallel(
 
     let join_results = futures_util::future::join_all(futures).await;
     let mut results: Vec<PipelineStepResult> = Vec::new();
-    let mut all_ok = true;
 
     for step_results in join_results {
         results.extend(step_results);
-        let last_ok = results.iter().next_back().is_none_or(|r| r.error.is_none());
-        if !last_ok {
-            all_ok = false;
-        }
     }
 
+    let all_ok = results.iter().all(|r| r.error.is_none());
     let should_continue = all_ok || strategy == PipelineErrorStrategy::Continue;
     (results, should_continue)
 }

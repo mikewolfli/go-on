@@ -622,7 +622,7 @@ fn embed_text(text: &str, dimensions: usize) -> Vec<f32> {
     vector
 }
 
-#[cfg(feature = "backend-sqlite")]
+#[cfg(not(feature = "backend-postgres"))]
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f32>()
 }

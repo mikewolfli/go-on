@@ -10,6 +10,7 @@ use crate::i18n::runtime::tf;
 use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tracing::warn;
 
 use crate::orchestration::dag_executor::{build_dag_from_tool_calls, DagGraph};
 use crate::orchestration::execution_graph::{ExNodeId, ExNodeState};
@@ -45,7 +46,13 @@ pub fn build_tool_execution_dag(tool_calls: &[(String, String)]) -> (ExNodeId, V
     let converted: Vec<(String, Value)> = tool_calls
         .iter()
         .map(|(name, args_str)| {
-            let parsed: Value = serde_json::from_str(args_str).unwrap_or(serde_json::json!({}));
+            let parsed: Value = serde_json::from_str(args_str).unwrap_or_else(|e| {
+                warn!(
+                    "failed to parse JSON args for tool '{}': {}; using empty object",
+                    name, e
+                );
+                serde_json::json!({})
+            });
             (name.clone(), parsed)
         })
         .collect();
@@ -174,8 +181,8 @@ async fn execute_with_plan_topology(
         let trace = DagExecutionTrace {
             nodes: vec![],
             total_duration_ms: dag_start.elapsed().as_millis() as u64,
-            branch_count: width as u32,
-            join_count: depth as u32,
+            branch_count: depth as u32,
+            join_count: width as u32,
         };
         return (vec![], trace);
     }
@@ -254,8 +261,8 @@ async fn execute_with_plan_topology(
     let trace = DagExecutionTrace {
         nodes: all_results.clone(),
         total_duration_ms: dag_start.elapsed().as_millis() as u64,
-        branch_count: width as u32,
-        join_count: depth as u32,
+        branch_count: depth as u32,
+        join_count: width as u32,
     };
 
     (all_results, trace)
@@ -310,6 +317,9 @@ fn create_tool_jobs(
                     enable_fallback: false,
                     verify_output: None,
                 };
+                // NOTE: fallback tools (`&[]`) is hardcoded to empty —
+                // no retry/fallback tools are injected. Future work should
+                // wire in fallback tool definitions from the plan.
                 let (decision, _trace) = execute_loop(&tool_name, &registry, &input, &[], &cfg);
                 let (state, tool_output, error_payload) = match decision {
                     LoopDecision::Complete(ref output) => {
@@ -360,8 +370,8 @@ pub fn dag_trace_to_observability(trace: &DagExecutionTrace) -> Value {
             "branch_count": trace.branch_count,
             "join_count": trace.join_count,
             "total_duration_ms": trace.total_duration_ms,
-            "dag_width": trace.branch_count,
-            "dag_depth": trace.join_count,
+            "dag_width": trace.join_count,
+            "dag_depth": trace.branch_count,
             "has_tool_evidence": trace.nodes.iter().any(|n| n.tool_output.is_some()),
             "node_details": trace.nodes.iter().map(|n| serde_json::json!({
                 "node_id": n.node_id,
@@ -610,13 +620,10 @@ mod tests {
         // All 4 tools should execute
         assert_eq!(results.len(), 4, "all 4 tools should execute");
 
-        // DAG width = max tools per level = 2 (for 4 tools / 2 levels)
         // DAG depth = number of topological levels = 2
-        assert_eq!(
-            trace.branch_count, 1,
-            "width = 1 (plan has 1 step per level)"
-        );
-        assert_eq!(trace.join_count, 2, "depth = 2 levels");
+        // DAG width = max steps per level = 1 (plan: 1 step per level)
+        assert_eq!(trace.branch_count, 2, "depth = 2 levels");
+        assert_eq!(trace.join_count, 1, "width = 1 (plan has 1 step per level)");
 
         // Verify observability payload includes width and depth
         let obs = dag_trace_to_observability(&trace);

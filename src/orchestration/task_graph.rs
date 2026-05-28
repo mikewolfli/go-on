@@ -13,6 +13,10 @@ pub struct PlannedSubtaskRecord {
     pub phase: String,
     pub outcome: Option<String>,
     pub result_summary: Option<String>,
+    /// IDs of subtasks this subtask depends on.
+    /// Preserved across checkpoint/restore to reconstruct the DAG.
+    #[serde(default)]
+    pub dependencies: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

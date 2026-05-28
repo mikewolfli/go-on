@@ -389,7 +389,15 @@ impl FailurePrevention {
                 };
             }
             health.success_rate = success_rate;
-            health.error_rate = error_rate.max(failure_count / self.max_failure_threshold as f64);
+            health.error_rate =
+                if failure_count > 0.0 && failure_count >= self.max_failure_threshold as f64 {
+                    // When failures exceed threshold, use a blended rate that reflects
+                    // both the actual error_rate and the severity relative to threshold.
+                    let severity = (failure_count / self.max_failure_threshold as f64).min(1.0);
+                    error_rate.max(severity * 0.5)
+                } else {
+                    error_rate
+                };
             health.last_check_timestamp = now_epoch_seconds();
             health.status = if health.error_rate > self.anomaly_thresholds.error_rate_threshold {
                 HealthStatus::Unhealthy

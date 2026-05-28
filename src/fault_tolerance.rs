@@ -376,10 +376,12 @@ impl FaultToleranceEngine {
         }
 
         // Mark the node as degraded or offline based on severity
+        // IMPORTANT: Only escalate status (Online→Degraded→Offline), never downgrade.
+        // A node that is already Offline should not become Degraded from a lower-severity fault.
         if let Some(record) = inner.heartbeats.get_mut(&node_id) {
-            if severity >= 8 {
+            if severity >= 8 && record.status != NodeStatus::Offline {
                 record.status = NodeStatus::Offline;
-            } else if severity >= 4 {
+            } else if severity >= 4 && record.status == NodeStatus::Online {
                 record.status = NodeStatus::Degraded;
             }
         }
@@ -491,6 +493,23 @@ impl FaultToleranceEngine {
             if let Some(event) = inner.faults.get_mut(&fault_id) {
                 event.resolved_ms = Some(now);
                 event.recovered = true;
+            }
+        }
+
+        // Complete all active (Pending/InProgress) recovery plans for this node
+        let active_plan_ids: Vec<String> = inner
+            .recovery_plans
+            .values()
+            .filter(|p| {
+                p.node_id == node_id
+                    && (p.state == RecoveryState::Pending || p.state == RecoveryState::InProgress)
+            })
+            .map(|p| p.plan_id.clone())
+            .collect();
+        for plan_id in active_plan_ids {
+            if let Some(plan) = inner.recovery_plans.get_mut(&plan_id) {
+                plan.state = RecoveryState::Completed;
+                plan.completed_ms = Some(now);
             }
         }
 

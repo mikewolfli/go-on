@@ -120,14 +120,15 @@ impl ReputationStore {
         let outcome = if success { 1.0f64 } else { 0.0f64 };
         r.score = alpha * outcome + (1.0 - alpha) * r.score;
 
-        // Apply time-based decay: reduce weight of old scores
+        // Apply time-based decay: reduce weight of old scores toward baseline (0.5)
         let now_ms_val = r.last_updated_ms;
         let elapsed_ms = now_ms_val.saturating_sub(prev_updated_ms);
         if prev_updated_ms > 0 && elapsed_ms > 86_400_000 {
             // Apply decay factor for entries older than 24 hours since last update
             let elapsed_hours = elapsed_ms as f64 / 3_600_000.0;
             let decay = (-0.01 * (elapsed_hours - 24.0)).exp(); // exponential decay
-            r.score = 1.0 + (r.score - 1.0) * decay;
+                                                                // Decay score toward baseline 0.5 instead of 1.0
+            r.score = 0.5 + (r.score - 0.5) * decay;
         }
     }
 

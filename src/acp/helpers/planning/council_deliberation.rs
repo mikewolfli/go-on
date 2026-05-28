@@ -139,7 +139,7 @@ fn run_council_route_deliberation(
 
     let council = cb.council.lock().ok()?;
     for agent in candidate_agents {
-        let _ = council.add_member(CouncilMember {
+        if let Err(e) = council.add_member(CouncilMember {
             id: agent.clone(),
             name: agent.clone(),
             role: "routing_member".to_string(),
@@ -147,7 +147,14 @@ fn run_council_route_deliberation(
             specializations: vec![phase_name.to_string()],
             is_active: true,
             joined_ms: now_ms,
-        });
+        }) {
+            tracing::warn!(
+                phase = %phase_name,
+                agent = %agent,
+                error = %e,
+                "council_deliberation: failed to add council member"
+            );
+        }
     }
 
     let proposal = CouncilProposal {
@@ -175,14 +182,21 @@ fn run_council_route_deliberation(
         let weight = (reputation_scores.get(agent).copied().unwrap_or(0.5) * 100.0)
             .round()
             .clamp(1.0, 100.0) as u32;
-        let _ = council.cast_vote(CouncilVote {
+        if let Err(e) = council.cast_vote(CouncilVote {
             member_id: agent.clone(),
             proposal_id: proposal_id.clone(),
             selected_option: winner_guess.clone(),
             weight,
             vote_ms: now_ms,
             rationale: Some("Reputation-weighted route deliberation".to_string()),
-        });
+        }) {
+            tracing::warn!(
+                phase = %phase_name,
+                agent = %agent,
+                error = %e,
+                "council_deliberation: failed to cast council vote"
+            );
+        }
     }
 
     let tally = council.tally_votes(&proposal_id).ok()?;

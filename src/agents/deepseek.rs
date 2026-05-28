@@ -10,7 +10,7 @@ use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message, ModelInfo};
-use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
+use crate::agents::agent::{chat_request_failed_msg, is_non_retryable_4xx, request_failed_msg};
 use crate::agents::{
     apply_openai_common_options, option_string, principles_to_text, stream_sse_to_sender,
 };
@@ -94,6 +94,19 @@ impl DeepSeekAgent {
             payload["thinking"] = thinking.clone();
         }
 
+        // When thinking is enabled, DeepSeek API requires temperature and top_p
+        // to be UNSET. Remove them if they were set by apply_openai_common_options.
+        if let Some(thinking) = payload.get("thinking") {
+            let is_enabled = thinking.get("type").and_then(|v| v.as_str()) == Some("enabled")
+                || thinking.as_str() == Some("enabled");
+            if is_enabled {
+                if let Some(obj) = payload.as_object_mut() {
+                    obj.remove("temperature");
+                    obj.remove("top_p");
+                }
+            }
+        }
+
         // DeepSeek official field is `user_id`. Accept upstream `user` and map it.
         if payload.get("user_id").is_none() {
             if let Some(user) = options.as_ref().and_then(|o| o.get("user")) {
@@ -147,6 +160,16 @@ impl DeepSeekAgent {
             );
         }
 
+        let ct = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        if !ct.starts_with("text/event-stream") && !ct.starts_with("application/json") {
+            tracing::warn!("deepseek: unexpected content-type: {ct}");
+            anyhow::bail!("unexpected content-type: {ct}");
+        }
+
         stream_sse_to_sender(response, sender).await
     }
 }
@@ -174,6 +197,10 @@ impl Agent for DeepSeekAgent {
             {
                 Ok(()) => return Ok(()),
                 Err(err) => {
+                    let err_msg = err.to_string();
+                    if is_non_retryable_4xx(&err_msg) {
+                        return Err(err.into());
+                    }
                     last_error = Some(err);
                     if attempt < 2 {
                         sleep(Duration::from_secs(1_u64 << attempt)).await;

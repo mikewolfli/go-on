@@ -422,8 +422,13 @@ impl RbacEnforcer {
     ) {
         if let (Some(enforcer), Some(tenant_id)) = (budget_enforcer, principal.tenant_id.as_deref())
         {
-            if let Ok(mut guard) = enforcer.lock() {
-                guard.start_task(tenant_id);
+            match enforcer.lock() {
+                Ok(mut guard) => guard.start_task(tenant_id),
+                Err(poisoned) => {
+                    tracing::warn!("tenant budget enforcer mutex poisoned in start_tenant_task");
+                    let mut guard = poisoned.into_inner();
+                    guard.start_task(tenant_id);
+                }
             }
         }
     }
@@ -440,8 +445,13 @@ impl RbacEnforcer {
     ) {
         if let (Some(enforcer), Some(tenant_id)) = (budget_enforcer, principal.tenant_id.as_deref())
         {
-            if let Ok(mut guard) = enforcer.lock() {
-                guard.record_usage(tenant_id, tokens, api_calls);
+            match enforcer.lock() {
+                Ok(mut guard) => guard.record_usage(tenant_id, tokens, api_calls),
+                Err(poisoned) => {
+                    tracing::warn!("tenant budget enforcer mutex poisoned in record_tenant_usage");
+                    let mut guard = poisoned.into_inner();
+                    guard.record_usage(tenant_id, tokens, api_calls);
+                }
             }
         }
     }

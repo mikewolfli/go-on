@@ -260,10 +260,12 @@ pub fn build_task_graph_checkpoint(
                 retries: 0,
             };
             task_graph.add_node(tool_node);
-            let _ = task_graph.add_edge(
+            if let Err(e) = task_graph.add_edge(
                 format!("chat-{}-root", conversation_id),
                 format!("chat-{}-tools", conversation_id),
-            );
+            ) {
+                tracing::warn!(%conversation_id, error = %e, "response_assembler: failed to add tool edge to task graph");
+            }
         }
 
         if let Some(memory_result) = memory_promotion_result {
@@ -281,10 +283,12 @@ pub fn build_task_graph_checkpoint(
                 retries: 0,
             };
             task_graph.add_node(memory_node);
-            let _ = task_graph.add_edge(
+            if let Err(e) = task_graph.add_edge(
                 format!("chat-{}-root", conversation_id),
                 format!("chat-{}-memory", conversation_id),
-            );
+            ) {
+                tracing::warn!(%conversation_id, error = %e, "response_assembler: failed to add memory edge to task graph");
+            }
         }
 
         let graph_id = format!("graph-{}", conversation_id);
@@ -314,6 +318,7 @@ pub fn build_task_graph_checkpoint(
                         n.state.clone()
                     }),
                     result_summary: n.output.as_ref().map(|o| o.to_string()),
+                    dependencies: n.dependencies.iter().cloned().collect(),
                 })
                 .collect();
 

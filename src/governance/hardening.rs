@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
@@ -35,21 +36,39 @@ pub struct TenantResourceQuota {
 
 /// Tracks per-tenant resource usage and enforces quotas.
 /// Used by CapabilityBus to reject tasks when a tenant exceeds its limits.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct TenantBudgetEnforcer {
     quotas: HashMap<String, TenantResourceQuota>,
-    token_usage: HashMap<String, usize>,
-    api_call_usage: HashMap<String, usize>,
+    token_usage: RefCell<HashMap<String, usize>>,
+    api_call_usage: RefCell<HashMap<String, usize>>,
     active_tasks: HashMap<String, usize>,
+    /// The "day number" (unix_ts / 86400) last observed, used to reset daily counters.
+    current_day: Cell<i64>,
 }
 
 impl TenantBudgetEnforcer {
     pub fn new() -> Self {
         Self {
             quotas: HashMap::new(),
-            token_usage: HashMap::new(),
-            api_call_usage: HashMap::new(),
+            token_usage: RefCell::new(HashMap::new()),
+            api_call_usage: RefCell::new(HashMap::new()),
             active_tasks: HashMap::new(),
+            current_day: Cell::new(Self::today()),
+        }
+    }
+
+    /// Return the current day number (unix timestamp / 86400).
+    fn today() -> i64 {
+        crate::acp::prelude::now_ts() / 86400
+    }
+
+    /// Reset daily counters if the day has changed.
+    fn reset_daily_if_day_changed(&self) {
+        let today = Self::today();
+        if today != self.current_day.get() {
+            self.token_usage.borrow_mut().clear();
+            self.api_call_usage.borrow_mut().clear();
+            self.current_day.set(today);
         }
     }
 
@@ -60,6 +79,7 @@ impl TenantBudgetEnforcer {
 
     /// Check whether a tenant is allowed to start a new task.
     pub fn check_can_start(&self, tenant_id: &str) -> Result<(), String> {
+        self.reset_daily_if_day_changed();
         let quota = self
             .quotas
             .get(tenant_id)
@@ -73,7 +93,12 @@ impl TenantBudgetEnforcer {
             ));
         }
 
-        let tokens = self.token_usage.get(tenant_id).copied().unwrap_or(0);
+        let tokens = self
+            .token_usage
+            .borrow()
+            .get(tenant_id)
+            .copied()
+            .unwrap_or(0);
         if tokens >= quota.daily_token_limit {
             return Err(format!(
                 "tenant '{}' exceeded daily token limit ({}/{})",
@@ -81,7 +106,12 @@ impl TenantBudgetEnforcer {
             ));
         }
 
-        let calls = self.api_call_usage.get(tenant_id).copied().unwrap_or(0);
+        let calls = self
+            .api_call_usage
+            .borrow()
+            .get(tenant_id)
+            .copied()
+            .unwrap_or(0);
         if calls >= quota.daily_api_call_limit {
             return Err(tf(
                 "error.tenant_limit_exceeded",
@@ -103,9 +133,14 @@ impl TenantBudgetEnforcer {
 
     /// Record resource consumption after a task completes.
     pub fn record_usage(&mut self, tenant_id: &str, tokens: usize, api_calls: usize) {
-        *self.token_usage.entry(tenant_id.to_string()).or_insert(0) += tokens;
+        *self
+            .token_usage
+            .borrow_mut()
+            .entry(tenant_id.to_string())
+            .or_insert(0) += tokens;
         *self
             .api_call_usage
+            .borrow_mut()
             .entry(tenant_id.to_string())
             .or_insert(0) += api_calls;
         let tasks = self.active_tasks.entry(tenant_id.to_string()).or_insert(0);

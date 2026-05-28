@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Counter for generating unique artifact IDs.
 static ARTIFACT_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -216,9 +216,29 @@ impl ArtifactLayer {
             }
         };
 
-        // Check version compatibility (soft requirement — warning only).
+        // Check version compatibility.
+        // Major version mismatch (e.g. 1.x → 2.x) is a hard error.
+        // Minor/patch mismatch produces a warning only.
         let mut warnings: Vec<String> = Vec::new();
         if schema.version != artifact.schema_version {
+            let major_mismatch = schema
+                .version
+                .split('.')
+                .next()
+                .zip(artifact.schema_version.split('.').next())
+                .map(|(reg, art)| reg != art)
+                .unwrap_or(true);
+            if major_mismatch {
+                return ArtifactValidation {
+                    is_valid: false,
+                    errors: vec![format!(
+                        "Schema major version mismatch for '{}': registered '{}', artifact '{}'",
+                        artifact.schema_name, schema.version, artifact.schema_version
+                    )],
+                    missing_fields: vec![],
+                    warnings: vec![],
+                };
+            }
             warnings.push(format!(
                 "Schema version mismatch: registered '{}', artifact '{}'",
                 schema.version, artifact.schema_version
@@ -289,8 +309,9 @@ impl ArtifactLayer {
         artifacts.push(artifact);
 
         // Enforce retention limit: remove oldest entries when over cap.
-        while artifacts.len() > self.max_artifacts {
-            artifacts.remove(0);
+        if artifacts.len() > self.max_artifacts {
+            let excess = artifacts.len() - self.max_artifacts;
+            artifacts.drain(0..excess);
         }
 
         // Update profile.
@@ -351,13 +372,15 @@ impl ArtifactLayer {
     /// An artifact is considered expired when
     /// `created_ms + ttl_ms <= current_time_ms`.
     pub fn prune_expired(&self) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_else(|e| {
-                tracing::error!("clock error: {e}");
-                Duration::MAX
-            })
-            .as_millis() as u64;
+        let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
+            Ok(d) => d.as_millis() as u64,
+            Err(e) => {
+                tracing::error!(
+                    "Clock is before epoch; skipping artifact pruning to avoid data loss: {e}"
+                );
+                return;
+            }
+        };
 
         let mut artifacts = lock_mutex_recover(self.artifacts.as_ref(), "artifacts");
         artifacts.retain(|a| a.created_ms + a.ttl_ms > now);
@@ -573,7 +596,7 @@ mod tests {
         layer.register_schema(sample_schema("report")).unwrap();
 
         let artifact = Artifact {
-            schema_version: "2.0.0".to_string(),
+            schema_version: "1.1.0".to_string(),
             ..sample_artifact("report", "tester", "task-1")
         };
         let validation = layer.validate(&artifact);
@@ -582,6 +605,23 @@ mod tests {
             .warnings
             .iter()
             .any(|w| w.contains("version mismatch")));
+    }
+
+    #[test]
+    fn test_version_major_mismatch_error() {
+        let layer = ArtifactLayer::new();
+        layer.register_schema(sample_schema("report")).unwrap();
+
+        let artifact = Artifact {
+            schema_version: "2.0.0".to_string(),
+            ..sample_artifact("report", "tester", "task-1")
+        };
+        let validation = layer.validate(&artifact);
+        assert!(!validation.is_valid);
+        assert!(validation
+            .errors
+            .iter()
+            .any(|e| e.contains("major version mismatch")));
     }
 
     #[test]

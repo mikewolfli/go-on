@@ -632,7 +632,15 @@ impl ToolRegistry {
                 }
                 _ => {
                     // Failure — roll back everything completed so far.
-                    tokio::runtime::Handle::current().block_on(scope.rollback());
+                    // Use try_current to avoid panicking when no tokio runtime is active;
+                    // fall back to a temporary single-threaded runtime if necessary.
+                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                        handle.block_on(scope.rollback());
+                    } else {
+                        let rt = tokio::runtime::Runtime::new()
+                            .expect("failed to create tokio runtime for rollback");
+                        rt.block_on(scope.rollback());
+                    }
 
                     let completed: Vec<String> = scope.completed_tools.clone();
                     let failed: Vec<String> = vec![tool_name.clone()];

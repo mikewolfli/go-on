@@ -205,8 +205,9 @@ impl TaskGraphStore {
     /// Load a checkpoint and reconstruct a TaskGraph from its subtask_records.
     ///
     /// Each subtask record is converted back into a TaskNode.  The graph is
-    /// rebuilt with a synthetic root node, and dependencies are added so that
-    /// every subtask depends on the root.
+    /// rebuilt with a synthetic root node.  Dependencies are restored from
+    /// each record; nodes with no stored dependencies fall back to depending
+    /// on the root.
     pub fn restore_graph_from_checkpoint(&self, checkpoint_id: &str) -> Result<Option<TaskGraph>> {
         let ckpt = match self.load_checkpoint(checkpoint_id)? {
             Some(c) => c,
@@ -237,6 +238,13 @@ impl TaskGraphStore {
                 Some("failed") => "failed".to_string(),
                 _ => "pending".to_string(),
             };
+            // Build dependency set from stored dependencies (fall back to root
+            // for backward compatibility with checkpoints that lack this field).
+            let dependencies: HashSet<String> = if record.dependencies.is_empty() {
+                HashSet::from([root_id.clone()])
+            } else {
+                record.dependencies.iter().cloned().collect()
+            };
             let node = TaskNode {
                 id: node_id.clone(),
                 kind: record.phase.clone(),
@@ -248,11 +256,13 @@ impl TaskGraphStore {
                     .result_summary
                     .clone()
                     .map(|s| serde_json::json!({ "summary": s })),
-                dependencies: HashSet::from([root_id.clone()]),
+                dependencies: dependencies.clone(),
                 retries: 0,
             };
             graph.add_node(node);
-            let _ = graph.add_edge(root_id.clone(), node_id);
+            for dep_id in &dependencies {
+                let _ = graph.add_edge(dep_id.clone(), node_id.clone());
+            }
         }
 
         Ok(Some(graph))
@@ -434,8 +444,9 @@ impl TaskGraphStore {
     /// Load a checkpoint and reconstruct a TaskGraph from its subtask_records.
     ///
     /// Each subtask record is converted back into a TaskNode.  The graph is
-    /// rebuilt with a synthetic root node, and dependencies are added so that
-    /// every subtask depends on the root.
+    /// rebuilt with a synthetic root node.  Dependencies are restored from
+    /// each record; nodes with no stored dependencies fall back to depending
+    /// on the root.
     pub fn restore_graph_from_checkpoint(&self, checkpoint_id: &str) -> Result<Option<TaskGraph>> {
         let ckpt = match self.load_checkpoint(checkpoint_id)? {
             Some(c) => c,
@@ -466,6 +477,13 @@ impl TaskGraphStore {
                 Some("failed") => "failed".to_string(),
                 _ => "pending".to_string(),
             };
+            // Build dependency set from stored dependencies (fall back to root
+            // for backward compatibility with checkpoints that lack this field).
+            let dependencies: HashSet<String> = if record.dependencies.is_empty() {
+                HashSet::from([root_id.clone()])
+            } else {
+                record.dependencies.iter().cloned().collect()
+            };
             let node = TaskNode {
                 id: node_id.clone(),
                 kind: record.phase.clone(),
@@ -477,11 +495,13 @@ impl TaskGraphStore {
                     .result_summary
                     .clone()
                     .map(|s| serde_json::json!({ "summary": s })),
-                dependencies: HashSet::from([root_id.clone()]),
+                dependencies: dependencies.clone(),
                 retries: 0,
             };
             graph.add_node(node);
-            let _ = graph.add_edge(root_id.clone(), node_id);
+            for dep_id in &dependencies {
+                let _ = graph.add_edge(dep_id.clone(), node_id.clone());
+            }
         }
 
         Ok(Some(graph))
@@ -547,6 +567,7 @@ mod tests {
                     .to_string(),
                 ),
                 result_summary: n.output.as_ref().map(|o| o.to_string()),
+                dependencies: n.dependencies.iter().cloned().collect(),
             })
             .collect();
 

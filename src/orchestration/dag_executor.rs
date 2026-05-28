@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Semaphore;
 use tracing::{debug, info, warn};
@@ -154,14 +155,14 @@ impl Default for DagGraph {
 
 pub struct DagExecutor {
     max_concurrency: usize,
-    semaphore: Semaphore,
+    semaphore: Arc<Semaphore>,
 }
 
 impl DagExecutor {
     pub fn new(max_concurrency: usize) -> Self {
         Self {
             max_concurrency,
-            semaphore: Semaphore::new(max_concurrency),
+            semaphore: Arc::new(Semaphore::new(max_concurrency)),
         }
     }
 
@@ -195,15 +196,19 @@ impl DagExecutor {
                 let tool_name = node.tool_name.clone();
                 let id = node_id.clone();
 
-                // Collect dependency outputs
+                // Collect dependency outputs — iterate over THIS node's dependencies
+                // to gather outputs from its actual upstream nodes.
+                let node_deps: Vec<String> = node.dependencies.clone();
                 let dep_outputs: HashMap<String, Value> = graph
                     .nodes
                     .iter()
-                    .filter(|(_, n)| n.dependencies.contains(&id))
+                    .filter(|(dep_id, _)| node_deps.contains(dep_id))
                     .filter_map(|(dep_id, n)| n.output.clone().map(|o| (dep_id.clone(), o)))
                     .collect();
 
+                let permit = self.semaphore.clone().acquire_owned().await;
                 handles.push(tokio::spawn(async move {
+                    let _permit = permit;
                     let start = Instant::now();
                     let result = execute_tool(&tool_name, &input, &dep_outputs).await;
                     let duration_ms = start.elapsed().as_millis() as u64;

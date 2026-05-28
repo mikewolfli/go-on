@@ -181,7 +181,7 @@ pub(crate) fn collect_reputation_scores(
     server: &AcpServer,
     agents: &[(String, Arc<dyn Agent>)],
 ) -> HashMap<String, f64> {
-    let mut scores = HashMap::new();
+    let mut scores = HashMap::with_capacity(agents.len());
     if let Some(ref cb) = server.capability_bus {
         if let Ok(rep) = cb.reputation.lock() {
             for (name, _) in agents {

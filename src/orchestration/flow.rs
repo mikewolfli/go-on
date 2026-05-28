@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::agent::{Agent, AgentRegistry};
 use crate::config::{AppConfig, PhaseConfig, PhaseOptions};
@@ -128,9 +128,10 @@ impl FlowManager {
     ) -> Result<ResolvedRouting> {
         let mut phase_name = self
             .forced_phase
-            .clone()
-            .or(requested_phase)
-            .unwrap_or_else(|| self.config.default_phase.clone());
+            .as_deref()
+            .or(requested_phase.as_deref())
+            .unwrap_or(self.config.default_phase.as_str())
+            .to_string();
 
         // Unknown phase: silently fall back to the configured default phase.
         // This prevents errors when a GUI session has a stale phase value
@@ -147,6 +148,10 @@ impl FlowManager {
                 "phase '{}' not in [flow].phases ({:?}), falling back to default '{}'",
                 phase_name, self.config.flow.phases, fallback
             );
+            info!(
+                "phase silently overridden: requested '{}' not in [flow].phases — using default '{}'",
+                phase_name, fallback
+            );
             phase_name = fallback;
         }
 
@@ -157,7 +162,8 @@ impl FlowManager {
             .with_context(|| format!("phase '{}' not found in [phases]", phase_name))?;
 
         let resolved_phase = build_phase(&self.config.flow.name, &phase_name, phase_cfg);
-        let mut resolved_agents: Vec<(String, Arc<dyn Agent>)> = Vec::new();
+        let mut resolved_agents: Vec<(String, Arc<dyn Agent>)> =
+            Vec::with_capacity(resolved_phase.agent_names.len().max(4));
 
         if resolved_phase.agent_names.is_empty() {
             // Path B: no agents configured — auto-map by using all registered agents.

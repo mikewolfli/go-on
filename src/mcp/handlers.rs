@@ -89,6 +89,12 @@ fn error_code_for(err: &anyhow::Error) -> i32 {
 impl McpServer {
     fn mark_cancelled_request(&self, request_id: &Value) {
         if let Ok(mut cancelled) = self.cancelled_requests.lock() {
+            // Prevent unbounded growth: evict oldest entry if over 10K limit
+            if cancelled.len() >= 10_000 {
+                if let Some(oldest) = cancelled.iter().next().cloned() {
+                    cancelled.remove(&oldest);
+                }
+            }
             cancelled.insert(request_id_key(request_id));
         }
     }

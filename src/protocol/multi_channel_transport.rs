@@ -375,8 +375,15 @@ impl MultiChannelTransport {
     // ── acknowledgment / failure ──────────────────────────────────────────
 
     /// Mark a message as delivered and update statistics.
-    pub fn acknowledge(&self, _msg_id: &str) {
+    /// Removes the message from its queue and updates delivery statistics.
+    pub fn acknowledge(&self, msg_id: &str) {
         let mut inner = lock_guard(&self.inner);
+        for (_channel, queue) in inner.queues.iter_mut() {
+            if let Some(idx) = queue.iter().position(|m| m.id == msg_id) {
+                queue.remove(idx);
+                break;
+            }
+        }
         inner.total_delivered += 1;
         inner.last_activity_ms = Self::now_ms();
     }
@@ -395,14 +402,8 @@ impl MultiChannelTransport {
         let mut failed_channel: Option<TransportChannel> = None;
         for (channel, queue) in inner.queues.iter_mut() {
             if let Some(idx) = queue.iter().position(|m| m.id == _msg_id) {
-                let Some(mut msg) = queue.remove(idx) else {
-                    tracing::warn!(
-                        "queue index lookup succeeded but remove returned None for msg_id={} channel={}",
-                        _msg_id,
-                        channel.to_string()
-                    );
-                    continue;
-                };
+                // position() already confirmed the element exists, so unwrap is safe
+                let mut msg = queue.remove(idx).expect("element confirmed by position()");
                 let retry_count = match &msg.delivery_status {
                     DeliveryStatus::Failed { retry_count, .. } => *retry_count,
                     _ => 0,

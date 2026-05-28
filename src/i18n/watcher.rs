@@ -22,6 +22,64 @@ pub struct LanguageWatcher {
     should_stop: Arc<std::sync::atomic::AtomicBool>,
 }
 
+/// Check if any language file has been modified, comparing against recorded times.
+fn check_for_changes_in_dir(
+    watch_dir: &std::path::Path,
+    file_times: &std::collections::HashMap<std::path::PathBuf, std::time::SystemTime>,
+) -> bool {
+    if let Ok(entries) = std::fs::read_dir(watch_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+
+            match std::fs::metadata(&path) {
+                Ok(metadata) => match metadata.modified() {
+                    Ok(modified) => {
+                        if !file_times.contains_key(&path) {
+                            return true; // New file
+                        }
+                        if let Some(&old_time) = file_times.get(&path) {
+                            if modified > old_time {
+                                return true; // File modified
+                            }
+                        }
+                    }
+                    Err(_) => continue,
+                },
+                Err(_) => {
+                    // File was deleted
+                    if file_times.contains_key(&path) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Rebuild the file-times map from the current files in the watch directory.
+fn update_file_times_in_dir(
+    watch_dir: &std::path::Path,
+    file_times: &mut std::collections::HashMap<std::path::PathBuf, std::time::SystemTime>,
+) {
+    file_times.clear();
+    if let Ok(entries) = std::fs::read_dir(watch_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+                if let Ok(metadata) = std::fs::metadata(&path) {
+                    if let Ok(modified) = metadata.modified() {
+                        file_times.insert(path, modified);
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl LanguageWatcher {
     /// Create new language watcher
     pub fn new(i18n_manager: Arc<I18nManager>, watch_dir: &Path) -> Result<Self> {
@@ -59,6 +117,7 @@ impl LanguageWatcher {
     }
 
     /// Check if any language file has been modified
+    #[allow(dead_code)]
     fn check_for_changes(&self) -> bool {
         if let Ok(entries) = std::fs::read_dir(&self.watch_dir) {
             for entry in entries.flatten() {
@@ -97,12 +156,15 @@ impl LanguageWatcher {
         false
     }
 
-    /// Start watching for file changes (runs in background thread)
+    /// Start watching for file changes (runs in background thread).
+    ///
+    /// Moves ownership of the file-times map into the background thread so that
+    /// the thread operates on the same state that was initialised on `self`.
     pub fn start_watching(&mut self, check_interval: Duration) -> Result<()> {
         let i18n = self.i18n_manager.clone();
         let watch_dir = self.watch_dir.clone();
         let should_stop = self.should_stop.clone();
-        let mut watcher = LanguageWatcher::new(i18n, &watch_dir)?;
+        let mut file_times = std::mem::take(&mut self.file_times);
 
         thread::spawn(move || {
             loop {
@@ -113,17 +175,14 @@ impl LanguageWatcher {
                 }
 
                 // Check for changes
-                if watcher.check_for_changes() {
+                if check_for_changes_in_dir(&watch_dir, &file_times) {
                     info!("Language files changed, reloading...");
 
                     // Update tracked times
-                    if let Err(e) = watcher.update_file_times() {
-                        warn!("Failed to update file times: {}", e);
-                        continue;
-                    }
+                    update_file_times_in_dir(&watch_dir, &mut file_times);
 
                     // Reload all languages
-                    match watcher.i18n_manager.load_all_languages() {
+                    match i18n.load_all_languages() {
                         Ok(_) => info!("Languages reloaded successfully"),
                         Err(e) => warn!("Failed to reload languages: {}", e),
                     }

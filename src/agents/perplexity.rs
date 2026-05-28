@@ -11,7 +11,7 @@ use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message, ModelInfo};
-use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
+use crate::agents::agent::{chat_request_failed_msg, is_non_retryable_4xx, request_failed_msg};
 use crate::agents::{apply_openai_common_options, principles_to_text, stream_sse_to_sender};
 
 pub struct PerplexityAgent {
@@ -98,6 +98,16 @@ impl PerplexityAgent {
                 "{}",
                 chat_request_failed_msg("perplexity", &status.to_string(), &body)
             );
+        }
+
+        let ct = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        if !ct.starts_with("text/event-stream") && !ct.starts_with("application/json") {
+            tracing::warn!("perplexity: unexpected content-type: {ct}");
+            anyhow::bail!("unexpected content-type: {ct}");
         }
 
         stream_sse_to_sender(response, sender).await
@@ -194,6 +204,10 @@ impl Agent for PerplexityAgent {
             {
                 Ok(()) => return Ok(()),
                 Err(err) => {
+                    let err_msg = err.to_string();
+                    if is_non_retryable_4xx(&err_msg) {
+                        return Err(err.into());
+                    }
                     last_error = Some(err);
                     if attempt < 2 {
                         sleep(Duration::from_secs(1_u64 << attempt)).await;

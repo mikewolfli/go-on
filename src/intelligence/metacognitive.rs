@@ -234,8 +234,9 @@ impl MetacognitiveController {
         inner.observations.push(obs);
 
         let max = inner.config.max_observations;
-        while inner.observations.len() > max {
-            inner.observations.remove(0);
+        if inner.observations.len() > max {
+            let drain_end = inner.observations.len() - max;
+            inner.observations.drain(0..drain_end);
         }
 
         Ok(id)
@@ -330,8 +331,9 @@ impl MetacognitiveController {
         inner.actions.push(action);
 
         let max = inner.config.max_actions;
-        while inner.actions.len() > max {
-            inner.actions.remove(0);
+        if inner.actions.len() > max {
+            let drain_end = inner.actions.len() - max;
+            inner.actions.drain(0..drain_end);
         }
 
         Ok(id)
@@ -506,11 +508,12 @@ impl MetacognitiveController {
             .collect();
 
         // Collect actions tied to those observations.
-        let obs_ids: Vec<&str> = task_observations.iter().map(|o| o.id.as_str()).collect();
+        let obs_ids: std::collections::HashSet<&str> =
+            task_observations.iter().map(|o| o.id.as_str()).collect();
         let task_actions: Vec<CorrectiveAction> = inner
             .actions
             .iter()
-            .filter(|a| obs_ids.contains(&a.observation_id.as_str()))
+            .filter(|a| obs_ids.contains(a.observation_id.as_str()))
             .cloned()
             .collect();
 

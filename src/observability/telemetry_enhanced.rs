@@ -485,6 +485,10 @@ pub struct HealthMetrics {
     pub checks_failed: u64,
     /// Current health status
     pub is_healthy: bool,
+    /// Consecutive failures (reset on success)
+    consecutive_failures: u32,
+    /// Consecutive successes (reset on failure)
+    consecutive_successes: u32,
 }
 
 impl HealthMetrics {
@@ -495,21 +499,36 @@ impl HealthMetrics {
             checks_total: 0,
             checks_failed: 0,
             is_healthy: true,
+            consecutive_failures: 0,
+            consecutive_successes: 0,
         }
     }
 
-    /// Record health check
+    /// Record health check with consecutive-failure threshold (N=3)
+    /// to prevent health flapping from transient failures.
     pub fn record_check(&mut self, healthy: bool) {
         self.last_check = std::time::Instant::now();
         self.checks_total += 1;
 
         if !healthy {
             self.checks_failed += 1;
-            self.is_healthy = false;
-            error!("health_check_failed");
+            self.consecutive_failures += 1;
+            self.consecutive_successes = 0;
+            if self.consecutive_failures >= 3 {
+                self.is_healthy = false;
+                error!("health_check_failed ({} consecutive)", self.consecutive_failures);
+            } else {
+                error!("health_check_failed (transient, {}/3 consecutive)", self.consecutive_failures);
+            }
         } else {
-            self.is_healthy = true;
-            trace!("health_check_passed");
+            self.consecutive_successes += 1;
+            self.consecutive_failures = 0;
+            if self.consecutive_successes >= 3 {
+                self.is_healthy = true;
+                trace!("health_check_passed ({} consecutive)", self.consecutive_successes);
+            } else {
+                trace!("health_check_passed (recovering, {}/3 consecutive)", self.consecutive_successes);
+            }
         }
     }
 

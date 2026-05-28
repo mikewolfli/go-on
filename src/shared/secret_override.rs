@@ -39,16 +39,30 @@ static SECRET_OVERRIDE_MAP: std::sync::LazyLock<Mutex<HashMap<String, String>>> 
 ///
 /// This is the thread-safe replacement for `std::env::set_var(key, value)`.
 pub fn set_secret_override(key: &str, value: &str) {
-    if let Ok(mut map) = SECRET_OVERRIDE_MAP.lock() {
-        map.insert(key.to_string(), value.to_string());
+    match SECRET_OVERRIDE_MAP.lock() {
+        Ok(mut map) => {
+            map.insert(key.to_string(), value.to_string());
+        }
+        Err(poisoned) => {
+            tracing::warn!("SECRET_OVERRIDE_MAP mutex poisoned in set_secret_override");
+            let mut map = poisoned.into_inner();
+            map.insert(key.to_string(), value.to_string());
+        }
     }
 }
 
 /// Remove a secret override (restore env-var fallback).
 #[allow(dead_code)] // Public API — reserved for credential rotation flows
 pub fn remove_secret_override(key: &str) {
-    if let Ok(mut map) = SECRET_OVERRIDE_MAP.lock() {
-        map.remove(key);
+    match SECRET_OVERRIDE_MAP.lock() {
+        Ok(mut map) => {
+            map.remove(key);
+        }
+        Err(poisoned) => {
+            tracing::warn!("SECRET_OVERRIDE_MAP mutex poisoned in remove_secret_override");
+            let mut map = poisoned.into_inner();
+            map.remove(key);
+        }
     }
 }
 
@@ -59,6 +73,8 @@ pub fn get_secret(key: &str) -> Option<String> {
         if let Some(value) = map.get(key) {
             return Some(value.clone());
         }
+    } else {
+        tracing::warn!("SECRET_OVERRIDE_MAP mutex poisoned in get_secret");
     }
     std::env::var(key).ok()
 }
@@ -69,6 +85,7 @@ pub fn has_override(key: &str) -> bool {
     if let Ok(map) = SECRET_OVERRIDE_MAP.lock() {
         map.contains_key(key)
     } else {
+        tracing::warn!("SECRET_OVERRIDE_MAP mutex poisoned in has_override");
         false
     }
 }
@@ -107,6 +124,8 @@ pub fn get_keyring_cached(service: &str, account: &str) -> Option<String> {
                 return Some(entry.value.clone());
             }
         }
+    } else {
+        tracing::warn!("KEYRING_CACHE mutex poisoned in get_keyring_cached (read)");
     }
 
     // Cache miss or expired — perform real keyring lookup.
@@ -125,6 +144,8 @@ pub fn get_keyring_cached(service: &str, account: &str) -> Option<String> {
                     fetched_at: now,
                 },
             );
+        } else {
+            tracing::warn!("KEYRING_CACHE mutex poisoned in get_keyring_cached (write)");
         }
     }
 
@@ -135,16 +156,30 @@ pub fn get_keyring_cached(service: &str, account: &str) -> Option<String> {
 #[allow(dead_code)] // Public API — reserved for credential update flows
 pub fn invalidate_keyring_cache(service: &str, account: &str) {
     let key = (service.to_string(), account.to_string());
-    if let Ok(mut cache) = KEYRING_CACHE.lock() {
-        cache.remove(&key);
+    match KEYRING_CACHE.lock() {
+        Ok(mut cache) => {
+            cache.remove(&key);
+        }
+        Err(poisoned) => {
+            tracing::warn!("KEYRING_CACHE mutex poisoned in invalidate_keyring_cache");
+            let mut cache = poisoned.into_inner();
+            cache.remove(&key);
+        }
     }
 }
 
 /// Invalidate all cached keyring entries.
 #[allow(dead_code)] // Public API — reserved for credential reset flows
 pub fn clear_keyring_cache() {
-    if let Ok(mut cache) = KEYRING_CACHE.lock() {
-        cache.clear();
+    match KEYRING_CACHE.lock() {
+        Ok(mut cache) => {
+            cache.clear();
+        }
+        Err(poisoned) => {
+            tracing::warn!("KEYRING_CACHE mutex poisoned in clear_keyring_cache");
+            let mut cache = poisoned.into_inner();
+            cache.clear();
+        }
     }
 }
 

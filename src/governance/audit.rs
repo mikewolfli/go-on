@@ -230,7 +230,7 @@ fn redact_sensitive(value: &serde_json::Value) -> serde_json::Value {
             if s.len() > 20
                 && (s.starts_with("sk-") || s.starts_with("pk-") || s.starts_with("AKIA"))
             {
-                Value::String(format!("{}...{}", &s[..4], &s[s.len() - 4..]))
+                Value::String(format!("{}...{}", &s[..2], &s[s.len() - 2..]))
             } else {
                 Value::String(s.clone())
             }

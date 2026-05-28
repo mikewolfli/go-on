@@ -100,6 +100,7 @@ impl SseCompressor {
     fn compress_buffer(&self) -> Vec<u8> {
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
         // Write errors to a Vec are infallible.
+        // Writing to a Vec<T> is infallible per std::io::Write contract.
         encoder.write_all(&self.buffer).expect("gzip write to vec");
         encoder.finish().expect("gzip finish to vec")
     }

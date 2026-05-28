@@ -774,11 +774,17 @@ impl HyperResilienceEngine {
     /// This is the primary integration point for production code paths such as
     /// `HarnessBus::evaluate()` and `verify_output()`.
     pub fn record_execution(&self, breaker_name: &str, success: bool) {
-        // Auto-register under a single lock to avoid race.
+        // All work (auto-register, check state, update state) is done under a
+        // single lock acquisition to avoid a TOCTOU race between dropping the
+        // lock and calling record_success / record_failure.
         let mut inner = lock_guard(&self.inner);
-        if !inner.circuit_breakers.contains_key(breaker_name) {
-            let config = inner.config.clone();
-            let cb = CircuitBreaker {
+
+        // Auto-register if not present.
+        let config = inner.config.clone();
+        let cb_ref = inner
+            .circuit_breakers
+            .entry(breaker_name.to_string())
+            .or_insert_with(|| CircuitBreaker {
                 name: breaker_name.to_string(),
                 state: CircuitState::Closed,
                 failure_count: 0,
@@ -788,17 +794,57 @@ impl HyperResilienceEngine {
                 half_open_attempts: 0,
                 last_failure_mode: None,
                 failure_history: Vec::new(),
-            };
-            inner.circuit_breakers.insert(breaker_name.to_string(), cb);
-        }
-        // Drop the inner lock early so record_success / record_failure can
-        // acquire it without double-lock risk.
-        drop(inner);
+            });
+
+        let now = now_millis();
 
         if success {
-            let _ = self.record_success(breaker_name);
+            match cb_ref.state {
+                CircuitState::HalfOpen => {
+                    // Success in half-open → closed.
+                    cb_ref.state = CircuitState::Closed;
+                    cb_ref.failure_count = 0;
+                    cb_ref.half_open_attempts = 0;
+                    cb_ref.last_failure_ms = 0;
+                }
+                CircuitState::Closed => {
+                    // Reset failure count on success while closed.
+                    cb_ref.failure_count = 0;
+                }
+                CircuitState::Open => {
+                    // No-op: an open breaker can't accept successes directly;
+                    // it must transition through half-open first.
+                }
+            }
         } else {
-            let _ = self.record_failure(breaker_name);
+            // Track failure mode (default to ResourceExhaustion like record_failure).
+            let failure_mode = FailureMode::ResourceExhaustion;
+            cb_ref.last_failure_mode = Some(failure_mode);
+            cb_ref.failure_history.push(failure_mode);
+            if cb_ref.failure_history.len() > 10 {
+                cb_ref.failure_history.remove(0);
+            }
+
+            match cb_ref.state {
+                CircuitState::Closed => {
+                    cb_ref.failure_count += 1;
+                    cb_ref.last_failure_ms = now;
+                    if cb_ref.failure_count >= cb_ref.threshold {
+                        cb_ref.state = CircuitState::Open;
+                    }
+                }
+                CircuitState::Open => {
+                    // Already open; update last_failure so the timer resets.
+                    cb_ref.last_failure_ms = now;
+                }
+                CircuitState::HalfOpen => {
+                    // Failure in half-open immediately trips back to open.
+                    cb_ref.state = CircuitState::Open;
+                    cb_ref.failure_count += 1;
+                    cb_ref.last_failure_ms = now;
+                    cb_ref.half_open_attempts = 0;
+                }
+            }
         }
     }
 }

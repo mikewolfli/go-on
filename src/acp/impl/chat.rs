@@ -1314,8 +1314,8 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         .iter()
         .map(|(name, _)| name.clone())
         .collect::<Vec<_>>();
-    let mut quota_failed_agents: Vec<String> = Vec::new();
-    let mut agent_attempts: Vec<Value> = Vec::new();
+    let mut quota_failed_agents: Vec<String> = Vec::with_capacity(resolved.agents.len());
+    let mut agent_attempts: Vec<Value> = Vec::with_capacity(resolved.agents.len() + 2);
     let mut cache_hit = false;
     let cache_bypassed_for_execution = should_bypass_for_execution(&params.mode, &agent_messages);
 
@@ -1477,7 +1477,7 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         Arc<dyn crate::agent::Agent>,
         HashMap<String, Value>,
         Option<String>,
-    )> = Vec::new();
+    )> = Vec::with_capacity(max_vote_agents);
     let vote_timeout = request_timeout(phase.options.as_ref());
 
     let (unhealthy_fallback_agent, fallback_reason, council_decision) =
@@ -1934,58 +1934,60 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         role: "assistant".to_string(),
         content: response_text.clone(),
     });
-    let mut checkpoint = crate::acp::r#impl::request::create_checkpoint_record(
-        server,
-        &conversation_id,
-        &branch_id,
-        checkpoint_messages,
-        None,
-        None,
-    )
-    .await;
 
-    let knowledge = persist_chat_knowledge(
-        server,
-        &conversation_id,
-        &branch_id,
-        phase_name,
-        &selected_agent,
-        params,
-        &response_text,
-    )
-    .await;
+    // ── Parallel persistence: checkpoint creation, knowledge storage, and vector
+    //     memory are independent I/O operations that can run concurrently.
+    let (mut checkpoint, knowledge) = tokio::join!(
+        crate::acp::r#impl::request::create_checkpoint_record(
+            server,
+            &conversation_id,
+            &branch_id,
+            checkpoint_messages,
+            None,
+            None,
+        ),
+        persist_chat_knowledge(
+            server,
+            &conversation_id,
+            &branch_id,
+            phase_name,
+            &selected_agent,
+            params,
+            &response_text,
+        ),
+    );
 
-    let metacognitive_loop = crate::acp::r#impl::request::persist_checkpoint_metacognitive_loop(
-        server,
-        &conversation_id,
-        &branch_id,
-        &checkpoint.checkpoint_id,
-        json!({
-            "active": true,
-            "schema_version": "blue25-metacognitive-loop-v1",
-            "cycle_count": 1,
-            "checkpoint_id": checkpoint.checkpoint_id,
-            "last_reflection": format!("{}:{}", phase_name, selected_agent),
-            "reflection_trigger": "response_completed",
-            "last_selected_agent": selected_agent,
-            "response_chars": response_text.chars().count(),
-        }),
-    )
-    .await;
+    // ── Parallel: metacognitive loop + session distillation are also independent.
+    let (metacognitive_loop, distillation) = tokio::join!(
+        crate::acp::r#impl::request::persist_checkpoint_metacognitive_loop(
+            server,
+            &conversation_id,
+            &branch_id,
+            &checkpoint.checkpoint_id,
+            json!({
+                "active": true,
+                "schema_version": "blue25-metacognitive-loop-v1",
+                "cycle_count": 1,
+                "checkpoint_id": checkpoint.checkpoint_id,
+                "last_reflection": format!("{}:{}", phase_name, selected_agent),
+                "reflection_trigger": "response_completed",
+                "last_selected_agent": selected_agent,
+                "response_chars": response_text.chars().count(),
+            }),
+        ),
+        persist_session_distillation(
+            server,
+            &conversation_id,
+            &branch_id,
+            phase_name,
+            params,
+            &selected_agent,
+            &candidate_agents,
+            &agent_attempts,
+            &response_text,
+        ),
+    );
     checkpoint.metacognitive_loop = Some(metacognitive_loop.clone());
-
-    let distillation = persist_session_distillation(
-        server,
-        &conversation_id,
-        &branch_id,
-        phase_name,
-        params,
-        &selected_agent,
-        &candidate_agents,
-        &agent_attempts,
-        &response_text,
-    )
-    .await;
 
     if stream_observer.is_some() {
         emit_stream_token_economy(
@@ -2757,7 +2759,7 @@ async fn emit_stream_chunk(
             server,
             "chat.stream.chunk",
             stream_chunk_notification(
-                &Some(response_id.clone()),
+                Some(response_id),
                 meta.agent_name,
                 display_token,
                 chunk_index,
@@ -2789,7 +2791,7 @@ async fn emit_stream_chunk(
         }
         let _ = sender
             .send(StreamFrame {
-                event: STREAM_EVENT_CHUNK.to_string(),
+                event: STREAM_EVENT_CHUNK,
                 payload,
             })
             .await;
@@ -2819,7 +2821,7 @@ async fn emit_stream_done(
             server,
             "chat.stream.done",
             stream_done_notification(
-                &Some(response_id.clone()),
+                Some(response_id),
                 meta.agent_name,
                 chunk_index,
                 total_chars,
@@ -2850,7 +2852,7 @@ async fn emit_stream_done(
         }
         let _ = sender
             .send(StreamFrame {
-                event: STREAM_EVENT_DONE.to_string(),
+                event: STREAM_EVENT_DONE,
                 payload,
             })
             .await;
@@ -2871,7 +2873,6 @@ async fn emit_stream_token_economy(
 
     // Use as_ref() to avoid cloning response_id
     if let Some(response_id) = observer.jsonrpc_response_id.as_ref() {
-        let response_id = Some(response_id.clone());
         crate::acp::r#impl::io::send_notification(
             server,
             "chat.stream.telemetry",
@@ -2889,7 +2890,7 @@ async fn emit_stream_token_economy(
     if let Some(sender) = &observer.sse_sender {
         let _ = sender
             .send(StreamFrame {
-                event: STREAM_EVENT_TELEMETRY.to_string(),
+                event: STREAM_EVENT_TELEMETRY,
                 payload: json!({
                     "agent": meta.agent_name,
                     "phase": meta.phase_name,
@@ -3048,7 +3049,7 @@ pub(crate) struct StreamEventMeta<'a> {
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct StreamFrame {
-    pub event: String,
+    pub event: &'static str,
     pub payload: Value,
 }
 
@@ -4323,8 +4324,8 @@ fn run_tool_execution_loop(task: &str, subtask: &str, record_index: usize) -> St
 /// Extract model tool calls from response
 pub(crate) fn extract_tool_calls_from_response(response: &str, max_calls: usize) -> Vec<String> {
     // Parse only explicit tool-call markers; never synthesize placeholder calls.
-    let mut calls: Vec<String> = Vec::new();
-    let mut json_block: Vec<String> = Vec::new();
+    let mut calls: Vec<String> = Vec::with_capacity(max_calls);
+    let mut json_block: Vec<String> = Vec::with_capacity(32);
     let mut in_json_block = false;
 
     let flush_json_block = |json_block: &mut Vec<String>, calls: &mut Vec<String>| {

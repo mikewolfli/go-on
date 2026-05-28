@@ -13,7 +13,7 @@ use tracing::warn;
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message};
-use crate::agents::agent::{chat_request_failed_msg, request_failed_msg};
+use crate::agents::agent::{chat_request_failed_msg, is_non_retryable_4xx, request_failed_msg};
 use crate::agents::{
     option_f64, option_string, option_u64, principles_to_text, stream_sse_events, SseEventAction,
 };
@@ -424,6 +424,16 @@ impl AnthropicAgent {
             );
         }
 
+        let ct = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        if !ct.starts_with("text/event-stream") && !ct.starts_with("application/json") {
+            tracing::warn!("claude: unexpected content-type: {ct}");
+            anyhow::bail!("unexpected content-type: {ct}");
+        }
+
         self.stream_sse(response, sender).await
     }
 }
@@ -498,6 +508,10 @@ impl Agent for AnthropicAgent {
             {
                 Ok(()) => return Ok(()),
                 Err(err) => {
+                    let err_msg = err.to_string();
+                    if is_non_retryable_4xx(&err_msg) {
+                        return Err(err.into());
+                    }
                     last_error = Some(err);
                     if attempt < 2 {
                         sleep(Duration::from_secs(1_u64 << attempt)).await;

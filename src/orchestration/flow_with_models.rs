@@ -87,7 +87,7 @@ impl FlowModelSelector {
                         return AgentModelSelection {
                             selected_model: select_model_semantic(
                                 ctx,
-                                available,
+                                &available,
                                 desc,
                                 strategy.clone(),
                             ),
@@ -97,7 +97,7 @@ impl FlowModelSelector {
                     }
                 }
                 let criteria = Self::build_selection_criteria(task_complexity, task_description);
-                select_model_for_task(ctx, available, &criteria, strategy.clone())
+                select_model_for_task(ctx, &available, &criteria, strategy.clone())
             } else if !available.is_empty() {
                 agent.default_model()
             } else {

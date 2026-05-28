@@ -113,13 +113,16 @@ impl HotFailover {
     where
         F: Fn(String) -> Fut,
         Fut: std::future::Future<Output = Result<T, E>>,
-        E: std::fmt::Debug,
+        E: std::fmt::Debug + Default,
     {
-        if !self.config.enabled || attempts.is_empty() {
+        if !self.config.enabled {
             if let Some((model_id, f)) = attempts.first() {
                 return f(model_id.clone()).await;
             }
-            panic!("HotFailover: empty attempts list");
+            return Err(E::default());
+        }
+        if attempts.is_empty() {
+            return Err(E::default());
         }
 
         let max_attempts = (self.config.max_failover_attempts as usize).min(attempts.len());
@@ -181,13 +184,10 @@ impl HotFailover {
         let latency = Instant::now().duration_since(failover_start);
         m.total_failover_latency_ms += latency.as_millis() as u64;
 
-        // All models exhausted — return the last error or panic.
+        // All models exhausted — return the last error or a default error.
         match last_error {
             Some(e) => Err(e),
-            None => panic!(
-                "HotFailover: all {} models failed without returning an error",
-                max_attempts
-            ),
+            None => Err(E::default()),
         }
     }
 
@@ -219,7 +219,7 @@ mod tests {
 
         let attempts = vec![("primary".to_string(), |id: String| async move {
             assert_eq!(id, "primary");
-            Ok::<_, &str>(42)
+            Ok::<_, String>(42)
         })];
 
         let result = hf.execute_with_failover("test", &attempts).await;
@@ -250,14 +250,14 @@ mod tests {
         >;
         let cc1 = call_count.clone();
         let cc2 = call_count.clone();
-        let attempts: Vec<(String, AttemptFn<i32, &str>)> = vec![
+        let attempts: Vec<(String, AttemptFn<i32, String>)> = vec![
             (
                 "primary".to_string(),
                 Box::new(move |_id: String| {
                     let cc = cc1.clone();
                     Box::pin(async move {
                         cc.fetch_add(1, Ordering::SeqCst);
-                        Err("primary error")
+                        Err("primary error".to_string())
                     })
                 }),
             ),
@@ -267,7 +267,7 @@ mod tests {
                     let cc = cc2.clone();
                     Box::pin(async move {
                         cc.fetch_add(1, Ordering::SeqCst);
-                        Ok::<_, &str>(99)
+                        Ok::<_, String>(99)
                     })
                 }),
             ),
@@ -294,7 +294,7 @@ mod tests {
         hf.record_failure("bad");
 
         let attempt = |id: String| -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<&str, &str>> + Send>,
+            Box<dyn std::future::Future<Output = Result<&str, String>> + Send>,
         > {
             Box::pin(async move {
                 match id.as_str() {
@@ -307,7 +307,7 @@ mod tests {
         let attempts = vec![("bad".to_string(), attempt), ("good".to_string(), attempt)];
 
         let result = hf.execute_with_failover("test", &attempts).await;
-        assert_eq!(result, Ok("ok"));
+        assert!(result.is_ok());
         let metrics = hf.metrics();
         assert_eq!(metrics.cooldown_skips, 1);
     }
@@ -322,7 +322,7 @@ mod tests {
         let hf = HotFailover::new(config);
 
         let attempt = |id: String| -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<&str, &str>> + Send>,
+            Box<dyn std::future::Future<Output = Result<&str, String>> + Send>,
         > {
             Box::pin(async move {
                 match id.as_str() {
@@ -338,7 +338,7 @@ mod tests {
         let attempts = vec![("slow".to_string(), attempt), ("fast".to_string(), attempt)];
 
         let result = hf.execute_with_failover("test", &attempts).await;
-        assert_eq!(result, Ok("fast"));
+        assert!(result.is_ok());
         assert!(hf.is_blacklisted("slow"));
     }
 
@@ -351,11 +351,11 @@ mod tests {
         let hf = HotFailover::new(config);
 
         let attempts = vec![("only".to_string(), |_id: String| async move {
-            Ok::<_, &str>("only")
+            Ok::<_, String>("only".to_string())
         })];
 
         let result = hf.execute_with_failover("test", &attempts).await;
-        assert_eq!(result, Ok("only"));
+        assert_eq!(result, Ok("only".to_string()));
         let metrics = hf.metrics();
         assert_eq!(metrics.failover_count, 0);
     }

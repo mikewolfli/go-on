@@ -168,6 +168,7 @@ impl ComplexityEstimator {
     pub fn estimate(&self, task_description: &str) -> ComplexityEstimate {
         let lower = task_description.to_lowercase();
         let word_count = lower.split_whitespace().count();
+        let lower = &lower; // bind as &str to reuse
 
         // Signal 1: Keyword analysis (weight: 0.35)
         let complex_hits = self

@@ -1,7 +1,7 @@
 pub mod artifact;
 pub mod audit;
 pub mod autonomy_runtime;
-pub mod brain_loop; // F-GAP-17 (flat, legacy)
+pub mod brain_loop; // F-GAP-17 (flat, legacy — kept for backward compatibility; use `r#loop` for new code)
 pub mod cache_warming;
 pub mod capabilities_registry;
 pub mod capability_signals; // BLUE41: Structured capability decision data
@@ -25,7 +25,7 @@ pub mod flow_with_models;
 pub mod fork_registry;
 pub mod full_auto; // BLUE43 Step 10: Full-auto flow orchestrator
 pub mod integration;
-pub mod r#loop; // F-GAP-17 (structured sub-module)
+pub mod r#loop; // F-GAP-17 (structured sub-module — replaces brain_loop; new code should use this)
 pub mod mode;
 pub mod omnipotent;
 pub mod orchestrator;

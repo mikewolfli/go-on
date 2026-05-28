@@ -582,26 +582,6 @@ pub(super) async fn build_debug_panel_payload(server: &AcpServer) -> Value {
     })
 }
 
-pub(super) fn build_trace_payload(params: &Value) -> Value {
-    let limit = params.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
-
-    let (trace_events_len, limited_trace_events) = match trace_events().lock() {
-        Ok(guard) => {
-            let total = guard.len();
-            let start = total.saturating_sub(limit);
-            let events = guard.iter().skip(start).cloned().collect::<Vec<_>>();
-            (total, events)
-        }
-        Err(_) => (0, Vec::new()),
-    };
-
-    json!({
-        "events": limited_trace_events,
-        "total": trace_events_len,
-        "limit": limit,
-    })
-}
-
 pub(super) async fn handle_action_check(
     server: &AcpServer,
     params: Value,

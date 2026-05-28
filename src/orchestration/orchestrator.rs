@@ -87,7 +87,7 @@ pub fn execute_with_mode(mode: &str, task: AgentTaskEnvelope) -> Result<AgentTas
 /// Select best model from available models based on task characteristics
 ///
 /// # Arguments
-/// * `available_models` - Vector of ModelInfo from agent's available_models()
+/// * `available_models` - Slice of ModelInfo from agent's available_models()
 /// * `criteria` - Task characteristics
 /// * `strategy` - Selection strategy to use
 ///
@@ -95,7 +95,7 @@ pub fn execute_with_mode(mode: &str, task: AgentTaskEnvelope) -> Result<AgentTas
 /// * `Option<ModelInfo>` - Selected model, or None if no suitable model found
 pub fn select_model_for_task(
     ctx: &OrchestrationContext,
-    available_models: Vec<ModelInfo>,
+    available_models: &[ModelInfo],
     criteria: &SelectionCriteria,
     strategy: ModelSelectionStrategy,
 ) -> Option<ModelInfo> {
@@ -106,14 +106,18 @@ pub fn select_model_for_task(
     // Convert ModelInfo to ModelCharacteristics for selection
     let model_chars: Vec<ModelCharacteristics> = available_models
         .iter()
-        .map(|m| ModelCharacteristics {
-            id: m.id.clone(),
-            cost_per_request_cents: estimate_model_cost(ctx, &m.id),
-            latency_ms: estimate_model_latency(ctx, &m.id),
-            capability_tier: estimate_capability_tier(&m.capabilities),
-            supports_vision: m.capabilities.contains(&"vision".to_string()),
-            supports_function_calling: m.capabilities.contains(&"function_calling".to_string()),
-            excels_at_code: m.capabilities.contains(&"code".to_string()),
+        .map(|m| {
+            let caps = &m.capabilities;
+            ModelCharacteristics {
+                id: m.id.clone(),
+                cost_per_request_cents: estimate_model_cost(ctx, &m.id),
+                latency_ms: estimate_model_latency(ctx, &m.id),
+                capability_tier: estimate_capability_tier(caps),
+                supports_vision: caps.iter().any(|c| c == "vision"),
+                supports_function_calling: caps.iter().any(|c| c == "function_calling"),
+                excels_at_code: caps.iter().any(|c| c == "code"),
+                context_window: estimate_context_window(caps),
+            }
         })
         .collect();
 
@@ -134,7 +138,7 @@ pub fn select_model_for_task(
 /// Falls back to `select_model_for_task` if no semantic matches are found.
 pub fn select_model_semantic(
     ctx: &OrchestrationContext,
-    available_models: Vec<ModelInfo>,
+    available_models: &[ModelInfo],
     task_description: &str,
     fallback_strategy: ModelSelectionStrategy,
 ) -> Option<ModelInfo> {
@@ -368,6 +372,20 @@ pub fn estimate_capability_tier(capabilities: &[String]) -> u8 {
     score.min(5) // cap at 5
 }
 
+/// Estimate the context window size in tokens for a model based on its capabilities.
+pub fn estimate_context_window(caps: &[String]) -> usize {
+    if caps
+        .iter()
+        .any(|c| c == "long_context" || c == "large_window")
+    {
+        128_000
+    } else if caps.iter().any(|c| c == "code") {
+        32_000
+    } else {
+        8_000
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -443,7 +461,7 @@ mod tests {
         }];
         let result = select_model_semantic(
             &ctx,
-            models.clone(),
+            &models,
             "analyze images and screenshots",
             ModelSelectionStrategy::Balanced,
         );

@@ -432,7 +432,8 @@ pub fn sanitize_path(input: &ToolInput, path: &str) -> Result<PathBuf> {
         std::fs::canonicalize(&resolved)
             .map_err(|e| anyhow::anyhow!("path canonicalization failed: {e}"))?
     } else {
-        let cwd = std::env::current_dir().unwrap_or_default();
+        let cwd = std::env::current_dir()
+            .map_err(|e| anyhow::anyhow!("unable to determine current directory: {e}"))?;
         let joined = cwd.join(&resolved);
         std::fs::canonicalize(&joined)
             .map_err(|e| anyhow::anyhow!("path canonicalization failed: {e}"))?
@@ -474,7 +475,14 @@ pub fn sanitize_path_for_write(input: &ToolInput, path: &str) -> Result<PathBuf>
             parent.join(resolved.file_name().unwrap_or_default())
         })
     } else {
-        let cwd = std::env::current_dir().unwrap_or_default();
+        let cwd = match std::env::current_dir() {
+            Ok(dir) => dir,
+            Err(e) => {
+                return Err(anyhow::anyhow!(
+                    "unable to determine current directory: {e}"
+                ));
+            }
+        };
         let joined = cwd.join(&resolved);
         std::fs::canonicalize(&joined).unwrap_or_else(|_| {
             let parent = joined
@@ -536,7 +544,7 @@ impl Tool for WriteFileTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_content")))?;
         let mode = input.payload["mode"].as_str().unwrap_or("overwrite");
-        let path_buf = sanitize_path(input, path)?;
+        let path_buf = sanitize_path_for_write(input, path)?;
         if let Some(parent) = path_buf.parent() {
             if !parent.as_os_str().is_empty() {
                 fs::create_dir_all(parent)?;

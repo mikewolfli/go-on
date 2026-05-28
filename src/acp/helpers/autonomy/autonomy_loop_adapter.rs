@@ -74,7 +74,10 @@ pub(crate) async fn run_acp_autonomy_loop(
     // Stream the final response if a channel was provided
     if let Some(tx) = stream_tx {
         for chunk in split_for_streaming(&result.response, 256) {
-            let _ = tx.send(chunk);
+            if tx.send(chunk).is_err() {
+                tracing::warn!("autonomy_loop_adapter: streaming receiver disconnected");
+                break;
+            }
         }
     }
 

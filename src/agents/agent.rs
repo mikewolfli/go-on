@@ -81,6 +81,32 @@ pub fn token_request_failed_msg(provider: &str, status: &str, body: &str) -> Str
     }
 }
 
+/// Check if an error message indicates a non-retryable HTTP 4xx status
+/// (excluding 429 rate limit). This prevents wasting time retrying requests
+/// that will never succeed (e.g. 400, 401, 403).
+pub fn is_non_retryable_4xx(msg: &str) -> bool {
+    // Error messages from chat_request_failed_msg include the status code.
+    // Look for " 4XX " pattern and exclude 429.
+    let bytes = msg.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    while i + 3 < len {
+        if bytes[i] == b' '
+            && bytes[i + 1] == b'4'
+            && bytes[i + 2].is_ascii_digit()
+            && bytes[i + 3].is_ascii_digit()
+        {
+            // 429 rate limit is retryable
+            if bytes[i + 2] == b'2' && bytes[i + 3] == b'9' {
+                return false;
+            }
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
 /// Agent task envelope (Phase 0/1 discipline)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentTaskEnvelope {

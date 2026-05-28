@@ -11,6 +11,7 @@ use crate::orchestration::workflow_registry::WorkflowRegistry;
 use crate::pua::{build_enforcement_plan, PuaEnforcementPlan};
 use crate::roles::{role_registry, AgentRole, RoleSpecification, RoleSpecifications};
 use serde::{Deserialize, Serialize};
+use tracing;
 
 /// Task characteristics extracted from request
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,11 +105,16 @@ impl TaskRouter {
     pub fn analyze_task(task_description: &str) -> TaskCharacteristics {
         let lower = task_description.to_lowercase();
 
-        // Classify task type
+        // Classify task type.
+        // PerformanceOptimization MUST be checked before Refactoring because
+        // "optimize" (which maps to Refactoring) is a substring of common
+        // phrases like "optimize performance".
         let task_type = if lower.contains("fix") || lower.contains("bug") {
             TaskType::BugFix
         } else if lower.contains("feature") || lower.contains("implement") {
             TaskType::FeatureImplementation
+        } else if lower.contains("performance") || lower.contains("speed") {
+            TaskType::PerformanceOptimization
         } else if lower.contains("refactor") || lower.contains("optimize") {
             TaskType::Refactoring
         } else if lower.contains("test") {
@@ -117,8 +123,6 @@ impl TaskRouter {
             TaskType::Documentation
         } else if lower.contains("architecture") || lower.contains("design") {
             TaskType::ArchitectureDesign
-        } else if lower.contains("performance") || lower.contains("speed") {
-            TaskType::PerformanceOptimization
         } else if lower.contains("review") {
             TaskType::CodeReview
         } else {
@@ -314,23 +318,45 @@ impl TaskRouter {
                 AgentRole::Tester => RoleSpecifications::tester(),
                 AgentRole::Reviewer => RoleSpecifications::reviewer(),
                 AgentRole::Custom(name) => {
-                    // Try RoleRegistry first; fall back to default coder spec
+                    // Try RoleRegistry first; fall back to default coder spec.
+                    // Use lock-poison recovery so that a poisoned mutex does not
+                    // silently downgrade routing quality.
                     let registry = role_registry();
-                    if let Ok(guard) = registry.read() {
-                        if let Some(def) = guard.get(name) {
-                            RoleSpecification {
-                                role: AgentRole::Custom(name.clone()),
-                                tier: "primary".to_string(),
-                                allowed_tools: def.allowed_tools.clone(),
-                                max_tool_calls: def.max_tool_calls,
-                                token_budget: def.token_budget,
-                                timeout_seconds: def.timeout_seconds,
+                    match registry.read() {
+                        Ok(guard) => {
+                            if let Some(def) = guard.get(name) {
+                                RoleSpecification {
+                                    role: AgentRole::Custom(name.clone()),
+                                    tier: "primary".to_string(),
+                                    allowed_tools: def.allowed_tools.clone(),
+                                    max_tool_calls: def.max_tool_calls,
+                                    token_budget: def.token_budget,
+                                    timeout_seconds: def.timeout_seconds,
+                                }
+                            } else {
+                                RoleSpecifications::coder()
                             }
-                        } else {
-                            RoleSpecifications::coder()
                         }
-                    } else {
-                        RoleSpecifications::coder()
+                        Err(poisoned) => {
+                            tracing::warn!(
+                                "RoleRegistry lock is poisoned; recovering inner data for custom role '{}'",
+                                name
+                            );
+                            // Recover the inner guard – the data is still usable.
+                            let guard = poisoned.into_inner();
+                            if let Some(def) = guard.get(name) {
+                                RoleSpecification {
+                                    role: AgentRole::Custom(name.clone()),
+                                    tier: "primary".to_string(),
+                                    allowed_tools: def.allowed_tools.clone(),
+                                    max_tool_calls: def.max_tool_calls,
+                                    token_budget: def.token_budget,
+                                    timeout_seconds: def.timeout_seconds,
+                                }
+                            } else {
+                                RoleSpecifications::coder()
+                            }
+                        }
                     }
                 }
             })
@@ -350,14 +376,16 @@ impl TaskRouter {
         let task_type_str = format!("{:?}", characteristics.task_type).to_lowercase();
         let preset = workflow_registry.find(&task_type_str);
 
-        if let Some(p) = preset {
+        let matched_preset = if let Some(p) = preset {
             decision.recommended_safeguards.push(format!(
                 "workflow_preset:{} ({} phases)",
                 p.name,
                 p.phases.len()
             ));
+            Some(p.clone())
         } else {
             // Fallback: check all presets for a general-purpose one
+            let mut fallback = None;
             for preset in workflow_registry.list() {
                 if preset.name == "general" || preset.name == "autopilot" {
                     decision.recommended_safeguards.push(format!(
@@ -365,12 +393,54 @@ impl TaskRouter {
                         preset.name,
                         preset.phases.len()
                     ));
+                    fallback = Some(preset.clone());
                     break;
+                }
+            }
+            fallback
+        };
+
+        // Apply the workflow preset's phases: map phase names to agent roles
+        // and inject them into the routing decision when they are not already
+        // present.
+        if let Some(ref preset) = matched_preset {
+            let phase_roles = Self::map_phases_to_roles(&preset.phases);
+            for (role, phase_name) in &phase_roles {
+                if !decision.roles.contains(role) {
+                    decision.roles.push(role.clone());
+                    decision.requirements.push(RoleRequirement {
+                        role: role.clone(),
+                        priority: "important".to_string(),
+                        sequence_position: decision.requirements.len(),
+                        justification: format!(
+                            "Required by workflow preset '{}' phase '{}'",
+                            preset.name, phase_name
+                        ),
+                    });
                 }
             }
         }
 
         decision
+    }
+
+    /// Map workflow phase names to the corresponding agent roles.
+    fn map_phases_to_roles(phases: &[String]) -> Vec<(AgentRole, String)> {
+        phases
+            .iter()
+            .filter_map(|phase| {
+                let role = match phase.to_lowercase().as_str() {
+                    "planning" => AgentRole::Planner,
+                    "coding" | "executing" => AgentRole::Coder,
+                    "review" | "delivery" => AgentRole::Reviewer,
+                    "validating" | "testing" => AgentRole::Tester,
+                    "gathering" | "thinking" | "research" => AgentRole::Researcher,
+                    "closing" | "free" => return None, // no agent mapping
+                    _ => return None,
+                };
+                Some((role, phase.clone()))
+            })
+            .collect()
     }
 
     // ==================== Private Helper Methods ====================

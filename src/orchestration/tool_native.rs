@@ -11,12 +11,14 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 
 /// Bridge between go-on ToolRegistry and provider-native function calling.
+#[allow(dead_code)]
 pub struct NativeToolBridge {
     registry: ToolRegistry,
     /// Maps tool names to their JSON Schema function definitions
     schema_cache: HashMap<String, Value>,
 }
 
+#[allow(dead_code)]
 impl NativeToolBridge {
     /// Create a new bridge backed by the given ToolRegistry.
     pub fn new(registry: ToolRegistry) -> Self {

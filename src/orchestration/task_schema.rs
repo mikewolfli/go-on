@@ -259,6 +259,107 @@ impl SchemaRegistry {
                 },
             ],
         });
+        self.register(RoleSchema {
+            role: "tester".to_string(),
+            version: "1.0".to_string(),
+            input_fields: vec![
+                SchemaField {
+                    name: "code".to_string(),
+                    field_type: "string".to_string(),
+                    required: true,
+                    description: "Source code to test".to_string(),
+                    default_value: None,
+                },
+                SchemaField {
+                    name: "tests".to_string(),
+                    field_type: "string".to_string(),
+                    required: false,
+                    description: "Existing test suite to run against".to_string(),
+                    default_value: None,
+                },
+                SchemaField {
+                    name: "test_framework".to_string(),
+                    field_type: "string".to_string(),
+                    required: false,
+                    description: "Test framework to use (e.g. cargo test, pytest)".to_string(),
+                    default_value: Some(serde_json::json!("cargo test")),
+                },
+            ],
+            output_fields: vec![
+                SchemaField {
+                    name: "test_results".to_string(),
+                    field_type: "string".to_string(),
+                    required: true,
+                    description: "Summary of test execution results".to_string(),
+                    default_value: None,
+                },
+                SchemaField {
+                    name: "failures".to_string(),
+                    field_type: "array".to_string(),
+                    required: false,
+                    description: "List of test failures with details".to_string(),
+                    default_value: None,
+                },
+                SchemaField {
+                    name: "coverage".to_string(),
+                    field_type: "number".to_string(),
+                    required: false,
+                    description: "Code coverage percentage (0-100)".to_string(),
+                    default_value: None,
+                },
+            ],
+        });
+        self.register(RoleSchema {
+            role: "researcher".to_string(),
+            version: "1.0".to_string(),
+            input_fields: vec![
+                SchemaField {
+                    name: "query".to_string(),
+                    field_type: "string".to_string(),
+                    required: true,
+                    description: "Research question or topic to investigate".to_string(),
+                    default_value: None,
+                },
+                SchemaField {
+                    name: "scope".to_string(),
+                    field_type: "string".to_string(),
+                    required: false,
+                    description: "Scope of research (e.g. codebase, external docs, APIs)"
+                        .to_string(),
+                    default_value: Some(serde_json::json!("codebase")),
+                },
+                SchemaField {
+                    name: "max_results".to_string(),
+                    field_type: "number".to_string(),
+                    required: false,
+                    description: "Maximum number of results to return".to_string(),
+                    default_value: Some(serde_json::json!(10)),
+                },
+            ],
+            output_fields: vec![
+                SchemaField {
+                    name: "findings".to_string(),
+                    field_type: "string".to_string(),
+                    required: true,
+                    description: "Research findings and analysis".to_string(),
+                    default_value: None,
+                },
+                SchemaField {
+                    name: "sources".to_string(),
+                    field_type: "array".to_string(),
+                    required: false,
+                    description: "Sources consulted during research".to_string(),
+                    default_value: None,
+                },
+                SchemaField {
+                    name: "confidence".to_string(),
+                    field_type: "number".to_string(),
+                    required: false,
+                    description: "Confidence level in findings (0.0-1.0)".to_string(),
+                    default_value: None,
+                },
+            ],
+        });
     }
 }
 
@@ -344,10 +445,12 @@ mod tests {
         let mut reg = SchemaRegistry::new();
         reg.register_defaults();
         let all = reg.all();
-        assert_eq!(all.len(), 3);
+        assert_eq!(all.len(), 5);
         let names: Vec<&str> = all.iter().map(|s| s.role.as_str()).collect();
         assert!(names.contains(&"coder"));
         assert!(names.contains(&"planner"));
         assert!(names.contains(&"reviewer"));
+        assert!(names.contains(&"tester"));
+        assert!(names.contains(&"researcher"));
     }
 }

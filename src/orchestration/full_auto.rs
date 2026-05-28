@@ -667,7 +667,9 @@ impl FullAutoFlow {
         // production setting this would invoke the actual dependency
         // resolver.
         let dependencies_checked = true;
-        let runtime_ready = !intent.prerequisites.is_empty();
+        // Runtime is ready when there are NO outstanding prerequisites.
+        // Empty prerequisites means trivially ready.
+        let runtime_ready = intent.prerequisites.is_empty();
 
         let result = ExecutionEnvironment {
             dependencies_checked,
@@ -1393,7 +1395,8 @@ mod tests {
 
         let env = flow.prepare_environment(&intent);
         assert!(env.dependencies_checked);
-        assert!(env.runtime_ready);
+        // Prerequisites exist but haven't been resolved yet; runtime not ready
+        assert!(!env.runtime_ready);
         assert_eq!(env.env_snapshot.get("mode").unwrap(), "full_auto");
     }
 
@@ -1411,7 +1414,8 @@ mod tests {
 
         let env = flow.prepare_environment(&intent);
         assert!(env.dependencies_checked);
-        assert!(!env.runtime_ready);
+        // Empty prerequisites means trivially ready
+        assert!(env.runtime_ready);
     }
 
     #[test]

@@ -18,7 +18,7 @@
 //! Types are consumed through a global OnceLock static in tools_pack.rs.
 #![cfg_attr(not(test), allow(dead_code))]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -258,6 +258,8 @@ impl Default for SkillIndex {
 pub struct SkillDiscovery {
     index: SkillIndex,
     cache: HashMap<String, CachedResult>,
+    /// FIFO queue tracking insertion order for cache eviction.
+    insertion_order: VecDeque<String>,
     cache_ttl: Duration,
     max_cache_entries: usize,
     /// Optional reference to the skill registry for index rebuilds.
@@ -270,6 +272,7 @@ impl SkillDiscovery {
         Self {
             index: SkillIndex::new(),
             cache: HashMap::new(),
+            insertion_order: VecDeque::new(),
             cache_ttl: CACHE_TTL,
             max_cache_entries: MAX_CACHE_ENTRIES,
             registry_ref: None,
@@ -329,6 +332,7 @@ impl SkillDiscovery {
 
         // Cache the result
         self.evict_if_full();
+        self.insertion_order.push_back(cache_key.clone());
         self.cache.insert(
             cache_key,
             CachedResult {
@@ -344,14 +348,17 @@ impl SkillDiscovery {
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn invalidate_cache(&mut self) {
         self.cache.clear();
+        self.insertion_order.clear();
         self.index = SkillIndex::new();
     }
 
     /// Evict oldest cache entry if at capacity.
     fn evict_if_full(&mut self) {
-        if self.cache.len() >= self.max_cache_entries {
-            if let Some(oldest_key) = self.cache.keys().next().cloned() {
+        while self.cache.len() >= self.max_cache_entries {
+            if let Some(oldest_key) = self.insertion_order.pop_front() {
                 self.cache.remove(&oldest_key);
+            } else {
+                break;
             }
         }
     }

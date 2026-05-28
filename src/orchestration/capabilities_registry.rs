@@ -39,6 +39,7 @@ use crate::orchestration::tool_recommender::ToolRecommender;
 /// is intentionally discarded in the current bootstrap phase; callers that
 /// require a specific engine obtain it via direct construction or the global
 /// plugin registry.
+#[allow(dead_code)]
 pub fn initialize_capabilities() -> CapabilitiesHandle {
     CapabilitiesHandle::new()
 }

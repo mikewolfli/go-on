@@ -3,7 +3,7 @@
 //! Provides protocol-layer channel separation for different message types.
 //! Each channel is isolated with its own queue, configuration, and statistics.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -247,6 +247,7 @@ struct TransportInner {
     config: TransportConfig,
     channels: HashMap<ChannelId, ChannelState>,
     sent_ids: HashSet<String>,
+    sent_ids_order: VecDeque<String>,
     total_sent: u64,
     total_received: u64,
     total_failures: u64,
@@ -274,6 +275,7 @@ impl MultiChannelTransport {
                 config,
                 channels: HashMap::new(),
                 sent_ids: HashSet::new(),
+                sent_ids_order: VecDeque::new(),
                 total_sent: 0,
                 total_received: 0,
                 total_failures: 0,
@@ -422,6 +424,17 @@ impl MultiChannelTransport {
         // Record sent id for ExactlyOnce QoS dedup — after channel borrow is done
         if message.qos == QosLevel::ExactlyOnce {
             inner.sent_ids.insert(message.id.clone());
+            inner.sent_ids_order.push_back(message.id.clone());
+
+            // Evict oldest entries when the dedup set grows beyond capacity
+            const MAX_DEDUP_IDS: usize = 10_000;
+            while inner.sent_ids.len() > MAX_DEDUP_IDS {
+                if let Some(oldest) = inner.sent_ids_order.pop_front() {
+                    inner.sent_ids.remove(&oldest);
+                } else {
+                    break;
+                }
+            }
         }
         inner.total_sent += 1;
 

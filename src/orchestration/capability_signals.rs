@@ -38,7 +38,7 @@ impl CapabilitySignals {
         // Fallback: derive tool preferences from task type
         let task_lower = self.task_type.to_ascii_lowercase();
         let mode_lower = self.recommended_mode.to_ascii_lowercase();
-        let mut tools: Vec<String> = Vec::new();
+        let mut tools: Vec<String> = Vec::with_capacity(4);
 
         if task_lower.contains("fix")
             || task_lower.contains("modify")

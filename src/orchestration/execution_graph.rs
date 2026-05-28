@@ -177,7 +177,7 @@ impl ExecutionGraph {
     pub fn new(name: &str) -> Self {
         let start_id = "start".to_string();
         let end_id = "end".to_string();
-        let mut nodes = HashMap::new();
+        let mut nodes = HashMap::with_capacity(16);
         let mut start_node = ExNode::new(&start_id, ExNodeKind::Start, "Start");
         start_node.state = ExNodeState::Completed;
         nodes.insert(start_id.clone(), start_node);
@@ -185,10 +185,10 @@ impl ExecutionGraph {
 
         Self {
             nodes,
-            edges: Vec::new(),
+            edges: Vec::with_capacity(8),
             start_node: start_id,
             end_node: end_id,
-            fan_out_groups: Vec::new(),
+            fan_out_groups: Vec::with_capacity(4),
             name: name.to_string(),
         }
     }
@@ -270,7 +270,8 @@ impl ExecutionGraph {
     }
 
     /// Get nodes whose dependencies are all satisfied (ready to execute).
-    /// Only returns `Task` or `Branch` nodes — structural nodes (Start/End/Join) are excluded.
+    /// Returns `Task`, `Branch`, and `Condition` nodes whose dependencies are satisfied.
+    /// Condition nodes are included so they can be evaluated for branch selection.
     pub fn get_ready_nodes(&self) -> Vec<ExNodeId> {
         let completed: HashSet<&ExNodeId> = self
             .nodes
@@ -279,26 +280,28 @@ impl ExecutionGraph {
             .map(|(id, _)| id)
             .collect();
 
-        self.nodes
-            .iter()
-            .filter(|(id, node)| {
-                // Only Task and Branch nodes can be "ready" for execution
-                if !matches!(node.kind, ExNodeKind::Task | ExNodeKind::Branch) {
-                    return false;
-                }
-                if node.state != ExNodeState::Pending {
-                    return false;
-                }
-                let deps: Vec<&ExNodeId> = self
-                    .edges
-                    .iter()
-                    .filter(|e| e.to == **id)
-                    .map(|e| &e.from)
-                    .collect();
-                deps.is_empty() || deps.iter().all(|d| completed.contains(d))
-            })
-            .map(|(id, _)| id.clone())
-            .collect()
+        let mut ready = Vec::with_capacity(self.nodes.len() / 4);
+        for (id, node) in &self.nodes {
+            if !matches!(
+                node.kind,
+                ExNodeKind::Task | ExNodeKind::Branch | ExNodeKind::Condition
+            ) {
+                continue;
+            }
+            if node.state != ExNodeState::Pending {
+                continue;
+            }
+            let all_deps_satisfied = self
+                .edges
+                .iter()
+                .filter(|e| e.to == *id)
+                .map(|e| &e.from)
+                .all(|d| completed.contains(d));
+            if all_deps_satisfied {
+                ready.push(id.clone());
+            }
+        }
+        ready
     }
 
     /// Set a node's state.

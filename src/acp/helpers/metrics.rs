@@ -26,7 +26,7 @@ const HISTOGRAM_BUCKETS_SECONDS: [f64; 9] = [
 /// Stream chunk notification
 #[allow(clippy::too_many_arguments)]
 pub fn stream_chunk_notification(
-    id: &Option<Value>,
+    id: Option<&Value>,
     agent: &str,
     token: &str,
     chunk_index: usize,
@@ -37,7 +37,7 @@ pub fn stream_chunk_notification(
     reasoning: Option<&str>,
 ) -> Value {
     let mut payload = Map::new();
-    payload.insert("id".to_string(), id.clone().unwrap_or(Value::Null));
+    payload.insert("id".to_string(), id.cloned().unwrap_or(Value::Null));
     payload.insert("agent".to_string(), Value::String(agent.to_string()));
     payload.insert("token".to_string(), Value::String(token.to_string()));
     payload.insert("chunk_index".to_string(), json!(chunk_index));
@@ -68,7 +68,7 @@ pub fn stream_chunk_notification(
 /// Stream done notification
 #[allow(clippy::too_many_arguments)]
 pub fn stream_done_notification(
-    id: &Option<Value>,
+    id: Option<&Value>,
     agent: &str,
     chunks: usize,
     total_chars: usize,
@@ -78,7 +78,7 @@ pub fn stream_done_notification(
     duration_ms: u64,
 ) -> Value {
     let mut payload = Map::new();
-    payload.insert("id".to_string(), id.clone().unwrap_or(Value::Null));
+    payload.insert("id".to_string(), id.cloned().unwrap_or(Value::Null));
     payload.insert("agent".to_string(), Value::String(agent.to_string()));
     payload.insert("done".to_string(), Value::Bool(true));
     payload.insert("chunks".to_string(), json!(chunks));

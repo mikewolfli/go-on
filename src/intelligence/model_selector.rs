@@ -123,6 +123,8 @@ pub struct ModelCharacteristics {
     pub supports_function_calling: bool,
     /// Whether model excels at code
     pub excels_at_code: bool,
+    /// Maximum context window size in tokens
+    pub context_window: usize,
 }
 
 /// Model selector that implements automatic selection strategies
@@ -154,6 +156,12 @@ impl ModelSelector {
                 (m.excels_at_code || !criteria.requires_code)
                     && (m.supports_function_calling || !criteria.requires_function_calling)
                     && (m.supports_vision || !criteria.requires_vision)
+                    && criteria
+                        .min_context_window
+                        .is_none_or(|min| m.context_window >= min)
+                    && criteria
+                        .max_cost_cents
+                        .is_none_or(|max| m.cost_per_request_cents <= max)
             })
             .collect();
 
@@ -237,6 +245,7 @@ mod tests {
                 supports_vision: false,
                 supports_function_calling: false,
                 excels_at_code: false,
+                context_window: 4096,
             },
             ModelCharacteristics {
                 id: "model-2".to_string(),
@@ -246,6 +255,7 @@ mod tests {
                 supports_vision: true,
                 supports_function_calling: true,
                 excels_at_code: true,
+                context_window: 32768,
             },
         ];
 
@@ -267,6 +277,7 @@ mod tests {
                 supports_vision: true,
                 supports_function_calling: true,
                 excels_at_code: true,
+                context_window: 16384,
             },
             ModelCharacteristics {
                 id: "cheap".to_string(),
@@ -276,6 +287,7 @@ mod tests {
                 supports_vision: false,
                 supports_function_calling: false,
                 excels_at_code: false,
+                context_window: 4096,
             },
         ];
 
@@ -297,6 +309,7 @@ mod tests {
                 supports_vision: true,
                 supports_function_calling: true,
                 excels_at_code: true,
+                context_window: 16384,
             },
             ModelCharacteristics {
                 id: "fast".to_string(),
@@ -306,6 +319,7 @@ mod tests {
                 supports_vision: false,
                 supports_function_calling: false,
                 excels_at_code: false,
+                context_window: 8192,
             },
         ];
 
@@ -335,6 +349,7 @@ mod tests {
             supports_vision: false,
             supports_function_calling: false,
             excels_at_code: false,
+            context_window: 4096,
         }];
 
         let criteria = SelectionCriteria {

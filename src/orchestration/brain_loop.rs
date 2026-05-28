@@ -198,6 +198,7 @@ struct BrainLoopInner {
     total_plans_started: u64,
     completed_plans_total: u64,
     failed_plans_total: u64,
+    cancelled_plans_total: u64,
     /// Optional progress reporter for streaming status hints.
     progress_reporter: Option<ProgressReporter>,
 }
@@ -228,6 +229,7 @@ impl BrainLoop {
                 total_plans_started: 0,
                 completed_plans_total: 0,
                 failed_plans_total: 0,
+                cancelled_plans_total: 0,
                 progress_reporter: None,
             })),
             next_plan_id: Arc::new(AtomicU64::new(1)),
@@ -556,7 +558,7 @@ impl BrainLoop {
             anyhow::bail!("{}", tf("error.plan_already_terminal", &[("id", plan_id)]));
         }
         plan.phase = BrainLoopPhase::Cancelled;
-        inner.failed_plans_total += 1;
+        inner.cancelled_plans_total += 1;
 
         // Emit completion hint on terminal state.
         if let Some(ref mut reporter) = inner.progress_reporter {
@@ -739,7 +741,10 @@ impl BrainLoop {
 fn now_epoch_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
+        .unwrap_or_else(|e| {
+            tracing::warn!("system time is before UNIX_EPOCH: {}", e);
+            Default::default()
+        })
         .as_millis() as u64
 }
 

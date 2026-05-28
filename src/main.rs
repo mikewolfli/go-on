@@ -128,7 +128,6 @@ use tracing::{error, info, warn};
 
 use crate::agent::AgentRegistry;
 use crate::config::{validate_runtime_readiness, AppConfig, ConfigWarning};
-use crate::flow::FlowManager;
 use crate::i18n::runtime::{t, tf};
 use crate::intelligence::capability_graph::CapabilityGraph;
 
@@ -650,15 +649,11 @@ fn build_completeness_report(
         .unwrap_or((0, 0));
 
     if total > 0 {
-        score += 30.0 * (ready as f64 / total as f64);
+        score += 55.0 * (ready as f64 / total as f64);
         if ready < total {
             out.missing
                 .push("provider credentials or endpoint readiness incomplete".to_string());
         }
-    }
-
-    if total > 0 {
-        score += 25.0 * (ready as f64 / total as f64);
     }
 
     for phase_name in ["planning", "coding", "review", "delivery"] {
@@ -908,37 +903,10 @@ fn print_completeness_report(config: &crate::config::AppConfig, report: &Runtime
 /// Main function - entry point for the application
 #[tokio::main]
 async fn main() {
-    // Initialize NativeToolBridge for provider-native function calling support.
-    // This ensures the public API type is constructed and available for
-    // external consumers via the orchestration module.
-    let native_tool_bridge = crate::orchestration::tool_native::NativeToolBridge::new(
-        crate::orchestration::tool::ToolRegistry::new(),
-    );
-    // Exercise the bridge API to ensure all public methods are reachable
-    let _openai_tools = native_tool_bridge.to_openai_tools();
-    let _anthropic_tools = native_tool_bridge.to_anthropic_tools();
-    let _registry = native_tool_bridge.registry();
-    let _custom_token =
-        crate::orchestration::tool_native::NativeToolBridge::to_custom_protocol_token(
-            "read_file",
-            "{}",
-        );
-    let _parsed = crate::orchestration::tool_native::NativeToolBridge::parse_custom_protocol_token(
-        "__tool_call__:read_file:{}",
-    );
-    let _input = native_tool_bridge.parse_openai_tool_call(
-        "read_file",
-        &serde_json::json!({"path": ""}),
-        "init",
-        "init",
-        "system",
-        None,
-    );
-
-    // Initialize the capabilities registry to wire all modules together.
-    // This constructs every public type across the codebase to suppress
-    // dead_code warnings for intentionally-exported-but-not-yet-integrated types.
-    let _capabilities = crate::orchestration::capabilities_registry::initialize_capabilities();
+    // NativeToolBridge and CapabilityBus are wired inside the ACP runtime
+    // (transport_factory::dispatch_server → new_acp_server), where they are
+    // genuinely used for tool execution and cognitive orchestration.
+    // No orphaned scaffolding needed here.
 
     // Set up enhanced panic hook for production
     std::panic::set_hook(Box::new(|panic_info| {
@@ -1341,7 +1309,8 @@ async fn start_server(
         http_client.clone(),
         Arc::clone(&capability_graph),
     )?);
-    let _flow = Arc::new(FlowManager::new(Arc::clone(&config), cli.phase.clone()));
+    // FlowManager is initialized inside dispatch_server via transport_factory::flow_manager()
+    // with access to the parsed AppConfig. No need to create it here.
 
     // Display agent vendor information
     let agents_by_vendor = registry.agents_by_vendor();

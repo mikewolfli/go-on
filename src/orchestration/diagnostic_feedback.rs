@@ -93,8 +93,11 @@ impl DiagnosticBatch {
             .filter(|m| m.severity == DiagnosticSeverity::Warning)
             .count();
         let info_count = messages.len() - error_count - warning_count;
+        let mut batch_id = String::with_capacity(41); // "diag-" + 36 UUID chars
+        batch_id.push_str("diag-");
+        batch_id.push_str(&uuid::Uuid::new_v4().as_hyphenated().to_string());
         Self {
-            batch_id: format!("diag-{}", uuid::Uuid::new_v4()),
+            batch_id,
             timestamp_ms: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -168,8 +171,8 @@ pub struct DiagnosticFeedbackEngine {
 impl DiagnosticFeedbackEngine {
     pub fn new() -> Self {
         let mut engine = Self {
-            history: Vec::new(),
-            patterns: HashMap::new(),
+            history: Vec::with_capacity(50),
+            patterns: HashMap::with_capacity(16),
             max_history: 50,
         };
         engine.register_builtin_patterns();

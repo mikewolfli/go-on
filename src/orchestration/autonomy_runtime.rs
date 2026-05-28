@@ -10,16 +10,31 @@ pub const TOOL_EXECUTION_RESULTS_OPEN: &str = "[Tool execution results]";
 pub const TOOL_EXECUTION_RESULTS_CLOSE: &str = "[/Tool execution results]";
 
 pub fn build_tool_call_token(tool_name: &str, arguments_json: &str) -> String {
-    format!("{}{}:{}", TOKEN_TOOL_CALL_PREFIX, tool_name, arguments_json)
+    let mut token = String::with_capacity(
+        TOKEN_TOOL_CALL_PREFIX.len() + tool_name.len() + 1 + arguments_json.len(),
+    );
+    token.push_str(TOKEN_TOOL_CALL_PREFIX);
+    token.push_str(tool_name);
+    token.push(':');
+    token.push_str(arguments_json);
+    token
 }
 
 pub fn build_model_used_token(model_name: &str) -> String {
-    format!("{}{}", TOKEN_MODEL_USED_PREFIX, model_name)
+    let mut token = String::with_capacity(TOKEN_MODEL_USED_PREFIX.len() + model_name.len());
+    token.push_str(TOKEN_MODEL_USED_PREFIX);
+    token.push_str(model_name);
+    token
 }
 
 pub fn build_thinking_token(thinking: &str, content: Option<&str>) -> String {
     let tail = content.unwrap_or_default();
-    format!("{}{}{}", TOKEN_THINKING_PREFIX, thinking, tail)
+    let mut token =
+        String::with_capacity(TOKEN_THINKING_PREFIX.len() + thinking.len() + tail.len());
+    token.push_str(TOKEN_THINKING_PREFIX);
+    token.push_str(thinking);
+    token.push_str(tail);
+    token
 }
 
 pub fn parse_tool_call_token(token: &str) -> Option<(&str, &str)> {
@@ -46,28 +61,48 @@ pub fn parse_thinking_token(token: &str) -> Option<&str> {
 }
 
 pub fn build_tool_result_block(tool_name: &str, payload: &str, is_error: bool) -> String {
-    if is_error {
-        format!("[Tool error: {}]\n{}\n[/Tool error]", tool_name, payload)
+    let prefix = if is_error {
+        "[Tool error: "
     } else {
-        format!("[Tool result: {}]\n{}\n[/Tool result]", tool_name, payload)
-    }
+        "[Tool result: "
+    };
+    let close = if is_error {
+        "\n[/Tool error]"
+    } else {
+        "\n[/Tool result]"
+    };
+    let mut s =
+        String::with_capacity(prefix.len() + tool_name.len() + 2 + payload.len() + close.len());
+    s.push_str(prefix);
+    s.push_str(tool_name);
+    s.push_str("]\n");
+    s.push_str(payload);
+    s.push_str(close);
+    s
 }
 
 pub fn build_tool_execution_followup_message(
     tool_results: &[String],
     final_answer_only: bool,
 ) -> String {
-    let combined = tool_results.join("\n");
     let final_clause = if final_answer_only {
         "If the task is complete, provide only the final answer."
     } else {
         "If the task is complete, provide a summary."
     };
 
-    format!(
-        "{}\n{}\n{}\n\nPlease continue based on the tool results above. {}",
-        TOOL_EXECUTION_RESULTS_OPEN, combined, TOOL_EXECUTION_RESULTS_CLOSE, final_clause
-    )
+    // Avoid intermediate allocation from `join`: push parts into a single String.
+    let mut msg = String::with_capacity(256 + tool_results.iter().map(|s| s.len()).sum::<usize>());
+    msg.push_str(TOOL_EXECUTION_RESULTS_OPEN);
+    msg.push('\n');
+    for result in tool_results {
+        msg.push_str(result);
+        msg.push('\n');
+    }
+    msg.push_str(TOOL_EXECUTION_RESULTS_CLOSE);
+    msg.push_str("\n\nPlease continue based on the tool results above. ");
+    msg.push_str(final_clause);
+    msg
 }
 
 #[cfg(test)]

@@ -315,11 +315,11 @@ fn query_linux_memory() -> SystemMemoryInfo {
                 .find_map(|s| s.strip_prefix("avg10="))
             {
                 let val: f64 = avg.parse().unwrap_or(0.0);
-                if val > 30.0 {
+                if val > 70.0 {
                     4
-                } else if val > 10.0 {
+                } else if val > 40.0 {
                     3
-                } else if val > 5.0 {
+                } else if val > 20.0 {
                     2
                 } else {
                     1

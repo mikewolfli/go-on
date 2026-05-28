@@ -338,6 +338,7 @@ pub fn t(key: &str) -> String {
 
 /// Translate message with formatting
 pub fn tf(key: &str, args: &[(&str, &str)]) -> String {
+    const ESCAPED_SENTINEL: &str = "\x00ESCAPED_BRACE\x00";
     let template = {
         let i18n = read_guard(&I18N, "i18n.global");
         i18n.as_ref().map(|manager| manager.get(key))
@@ -345,9 +346,13 @@ pub fn tf(key: &str, args: &[(&str, &str)]) -> String {
     let template = template.unwrap_or_else(|| key.to_string());
 
     let mut message = template;
+    // Escape {{ → sentinel so literal {name} is not substituted
+    message = message.replace("{{", ESCAPED_SENTINEL);
     for (placeholder, value) in args {
         message = message.replace(&format!("{{{}}}", placeholder), value);
     }
+    // Restore sentinel → {
+    message = message.replace(ESCAPED_SENTINEL, "{");
     message
 }
 
