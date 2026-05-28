@@ -25,7 +25,7 @@ static PROMPT_SKILL_AGENT: OnceLock<Arc<dyn PromptSkillAgent>> = OnceLock::new()
 /// Set the global prompt skill agent for LLM execution.
 /// Must be called before any PromptBasedSkill.execute() invocations that
 /// require real LLM execution.
-#[cfg_attr(not(test), allow(dead_code))] // public API — reserved for LLM agent wiring
+#[allow(dead_code)] // public API — reserved for LLM agent wiring
 pub fn set_prompt_skill_agent(agent: Arc<dyn PromptSkillAgent>) {
     let _ = PROMPT_SKILL_AGENT.set(agent);
 }
@@ -668,7 +668,7 @@ impl Skill for PromptBasedSkill {
 impl PromptBasedSkill {
     /// Convenience method: wraps this skill into `Arc<dyn Skill>` for registry registration.
     /// Not called internally but kept as a public utility for consumers.
-    #[cfg_attr(not(test), allow(dead_code))] // public API — reserved for external registry wiring
+    #[allow(dead_code)] // public API — reserved for external registry wiring
     pub fn boxed(self) -> Arc<dyn Skill> {
         Arc::new(self)
     }

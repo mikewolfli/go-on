@@ -345,7 +345,7 @@ impl SkillDiscovery {
     }
 
     /// Invalidate all cached results (e.g., after skill registry changes).
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(dead_code)]
     pub fn invalidate_cache(&mut self) {
         self.cache.clear();
         self.insertion_order.clear();
@@ -437,7 +437,6 @@ mod tests {
     #[test]
     fn test_skill_index_search_finds_matching() {
         let mut index = SkillIndex::new();
-        let mut registry = SkillRegistry::default();
         let mut skills = Vec::new();
 
         let desc = make_skill("code-fixer", "Fixes bugs in source code");
@@ -456,7 +455,6 @@ mod tests {
     #[test]
     fn test_skill_index_search_empty_query() {
         let mut index = SkillIndex::new();
-        let mut registry = SkillRegistry::default();
 
         let desc = make_skill("test-skill", "A test skill");
         let entry = SkillIndexEntry::from_descriptor(&desc);
@@ -476,7 +474,7 @@ mod tests {
     #[test]
     fn test_skill_discovery_cache() {
         let mut discovery = SkillDiscovery::new();
-        let mut registry = SkillRegistry::default();
+        let registry = SkillRegistry::default();
         let desc = make_skill("cache-test", "Testing cache behavior");
         let entry = SkillIndexEntry::from_descriptor(&desc);
         discovery.index.entries.push(entry);
@@ -520,7 +518,7 @@ mod tests {
     #[test]
     fn test_rebuild_index() {
         let mut index = SkillIndex::new();
-        let mut registry = SkillRegistry::default();
+        let registry = SkillRegistry::default();
 
         // Add entry directly
         let desc = make_skill("skill-one", "First skill");

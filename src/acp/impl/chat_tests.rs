@@ -35,6 +35,7 @@ mod unit_tests {
     use crate::acp::server::ServerBuilder;
     #[cfg(not(feature = "backend-postgres"))]
     use crate::agent::AgentRegistry;
+    #[cfg(not(feature = "backend-postgres"))]
     use crate::agent::Message;
     #[cfg(not(feature = "backend-postgres"))]
     use crate::agent::{Agent, StreamingSender};

@@ -41,9 +41,11 @@ const SKILLS_DIR: &str = "skills";
 const FETCH_INTERVAL: Duration = Duration::from_secs(300);
 
 /// How often to rescan the folder for new files (seconds).
+#[allow(dead_code)]
 const RESCAN_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Timeout per URL fetch.
+#[allow(dead_code)]
 const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 
 // ---------------------------------------------------------------------------
@@ -70,6 +72,7 @@ pub struct RemoteSkill {
 // ---------------------------------------------------------------------------
 
 /// A URL source with its fetched skills and cache timestamp.
+#[allow(dead_code)]
 struct CachedSource {
     /// Names of skills previously fetched from this URL.
     skill_names: Vec<String>,
@@ -84,21 +87,23 @@ struct CachedSource {
 ///
 /// Consumed via global OnceLock static in tools_pack.rs.
 pub struct SkillsFolderIndex {
-    /// All indexed skills (keyed by name).
     skills: HashMap<String, RemoteSkill>,
     /// Known source URLs (keyed by URL string).
+    #[allow(dead_code)]
     sources: HashMap<String, CachedSource>,
     /// Directory path.
     skills_dir: PathBuf,
     /// Last folder scan time.
     last_scan: Instant,
     /// Last fetch time.
+    #[allow(dead_code)]
     last_fetch: Instant,
 }
 
 /// Async helper: fetch and parse skills from a URL.
 /// Extracted so `fetch_url` can run it via either `Handle::block_on` or
 /// a temporary `Runtime::block_on`, avoiding creating a new Runtime each time.
+#[allow(dead_code)]
 async fn fetch_skills_from_url(url: &str) -> Result<serde_json::Value, String> {
     let client = reqwest::Client::builder()
         .timeout(FETCH_TIMEOUT)
@@ -140,6 +145,7 @@ impl SkillsFolderIndex {
     }
 
     /// Refresh: rescan folder + re-fetch if stale.
+    #[allow(dead_code)]
     pub fn refresh(&mut self) {
         if self.last_scan.elapsed() >= RESCAN_INTERVAL {
             self.scan_folder();
@@ -223,6 +229,7 @@ impl SkillsFolderIndex {
     }
 
     /// Fetch all URLs that haven't been fetched recently.
+    #[allow(dead_code)]
     fn fetch_all(&mut self) {
         let now = Instant::now();
         let stale_urls: Vec<String> = self
@@ -240,6 +247,7 @@ impl SkillsFolderIndex {
     }
 
     /// Fetch a single URL and parse skills.
+    #[allow(dead_code)]
     fn fetch_url(&mut self, url: &str) {
         debug!("fetching skills from: {}", url);
 
@@ -396,7 +404,7 @@ impl SkillsFolderIndex {
     }
 
     /// Total indexed skills.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.skills.len()
     }
