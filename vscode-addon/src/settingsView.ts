@@ -776,6 +776,15 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       undefined,
     );
 
+    // Bug 8: Hook into onDidDispose to cancel polling when webview is closed.
+    // Without this, Copilot device auth continues making HTTP requests
+    // after the settings webview has been disposed.
+    webviewView.onDidDispose(() => {
+      if (this._pendingCopilotDeviceAuth) {
+        this._pendingCopilotDeviceAuth.cancelRequested = true;
+      }
+    });
+
     this._sendCurrentSettings();
     // Request webview to scroll to credentials section
     this._postMessage({ type: "focusCredentials" });
@@ -2283,7 +2292,11 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
   }
 
   private _postMessage(message: unknown) {
-    this._view?.webview.postMessage(message);
+    try {
+      this._view?.webview.postMessage(message);
+    } catch {
+      // Webview disposed — silently ignore
+    }
   }
 
   public async showConfigWizard() {

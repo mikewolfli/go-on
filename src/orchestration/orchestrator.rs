@@ -7,7 +7,7 @@
 //! Phase 10+: Model selection integration for automatic model discovery and selection.
 //! BLUE44: HotFailover + LivePerformanceFeed + SemanticCapabilityMatcher integration.
 
-use crate::agent::{AgentTaskEnvelope, AgentTaskResult, ModelInfo};
+use crate::agent::{AgentRegistry, AgentTaskEnvelope, AgentTaskResult, ModelInfo};
 use crate::intelligence::semantic_matcher::{
     ModelCapability as SemanticModelCapability, ScoredSkill, SemanticCapabilityMatcher,
     SkillCapability as SemanticSkillCapability,
@@ -26,6 +26,7 @@ use crate::orchestration::tool::ToolRegistry;
 use crate::orchestration::tool_pipeline::{PipelineResult, PipelineStep, ToolPipeline};
 use anyhow::Result;
 use serde_json::Value;
+use std::sync::Arc;
 
 pub use crate::orchestration::context::OrchestrationContext;
 
@@ -62,7 +63,27 @@ pub fn record_model_execution(
 // Mode selection
 // ---------------------------------------------------------------------------
 
-/// Select mode runtime based on mode string
+/// Select mode runtime based on mode string.
+///
+/// Creates runtimes with the provided agent registry so they can actually
+/// execute tasks instead of falling through to the no-agent fallback.
+pub fn select_mode_runtime_with_registry(
+    mode: &str,
+    registry: Arc<AgentRegistry>,
+) -> Box<dyn ModeRuntime> {
+    match mode {
+        "ask" => Box::new(AskModeRuntime::new(registry, None)),
+        "edit" => Box::new(EditModeRuntime::new(registry, None)),
+        "agent" => Box::new(AgentModeRuntime::new(registry, None)),
+        "full_auto" => Box::new(FullAutoModeRuntime::new(registry, None)),
+        "safeguard" => Box::new(SafeGuardModeRuntime::new(registry, None)),
+        _ => Box::new(AskModeRuntime::new(registry, None)),
+    }
+}
+
+/// Deprecated: returns runtimes with no agent registry.
+/// Use `select_mode_runtime_with_registry` instead.
+#[deprecated(note = "use select_mode_runtime_with_registry instead")]
 pub fn select_mode_runtime(mode: &str) -> Box<dyn ModeRuntime> {
     match mode {
         "ask" => Box::new(AskModeRuntime::default()),
@@ -70,11 +91,28 @@ pub fn select_mode_runtime(mode: &str) -> Box<dyn ModeRuntime> {
         "agent" => Box::new(AgentModeRuntime::default()),
         "full_auto" => Box::new(FullAutoModeRuntime::default()),
         "safeguard" => Box::new(SafeGuardModeRuntime::default()),
-        _ => Box::new(AskModeRuntime::default()), // default to ask
+        _ => Box::new(AskModeRuntime::default()),
     }
 }
 
-/// Execute task using selected mode
+/// Execute task using selected mode with a provided agent registry.
+///
+/// Uses `select_mode_runtime_with_registry` so the runtime has access to
+/// real agents.
+pub fn execute_with_mode_with_registry(
+    mode: &str,
+    registry: Arc<AgentRegistry>,
+    task: AgentTaskEnvelope,
+) -> Result<AgentTaskResult> {
+    let runtime = select_mode_runtime_with_registry(mode, registry);
+    runtime.run(task)
+}
+
+/// Execute task using selected mode (deprecated — no agent registry).
+///
+/// Regard as a placeholder; prefer `execute_with_mode_with_registry`.
+#[deprecated(note = "use execute_with_mode_with_registry instead")]
+#[allow(deprecated)]
 pub fn execute_with_mode(mode: &str, task: AgentTaskEnvelope) -> Result<AgentTaskResult> {
     let runtime = select_mode_runtime(mode);
     runtime.run(task)
@@ -390,6 +428,7 @@ pub fn estimate_context_window(caps: &[String]) -> usize {
 mod tests {
     use super::*;
 
+    #[allow(deprecated)]
     #[test]
     fn test_select_mode_runtime() {
         let ask = select_mode_runtime("ask");
@@ -469,6 +508,7 @@ mod tests {
         assert!(result.is_some());
     }
 
+    #[allow(deprecated)]
     #[test]
     fn test_safeguard_mode_selection() {
         let safeguard = select_mode_runtime("safeguard");
@@ -476,6 +516,7 @@ mod tests {
         assert!(!safeguard.user_approval_required()); // Base requirement is false
     }
 
+    #[allow(deprecated)]
     #[test]
     fn test_safeguard_mode_detects_high_risk_operations() {
         let safeguard = select_mode_runtime("safeguard");
@@ -498,6 +539,7 @@ mod tests {
         assert!(!safeguard.is_high_risk_operation("apply patch"));
     }
 
+    #[allow(deprecated)]
     #[test]
     fn test_other_modes_dont_flag_high_risk() {
         let ask = select_mode_runtime("ask");

@@ -209,31 +209,32 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     if (!this._view) return;
 
     try {
-      // Add user message to current session
+      // Create user message
       const userMessage = {
         role: "user",
         content: text,
         timestamp: new Date().toISOString(),
       } as ChatMessage;
-      await this._addMessageToCurrentSession(userMessage);
 
-      // Send message to UI
+      // Send message to UI first (sync — no race), then persist.
+      // Bug 10: persist only after confirming the view can display it.
       this._view.webview.postMessage({
         type: "addMessage",
         ...userMessage,
       });
+      await this._addMessageToCurrentSession(userMessage);
 
       // Build content array per OpenAI Vision API format
       let messagesPayload: Array<{
         role: string;
         content:
-        | string
-        | Array<{
-          type: string;
-          text?: string;
-          image_url?: { url: string; detail: string };
-          file_data?: { data: string; filename: string; mime_type: string };
-        }>;
+          | string
+          | Array<{
+              type: string;
+              text?: string;
+              image_url?: { url: string; detail: string };
+              file_data?: { data: string; filename: string; mime_type: string };
+            }>;
       }>;
       if (!attachments || attachments.length === 0) {
         // Backward compatible: plain text
@@ -244,9 +245,9 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
           | { type: "text"; text: string }
           | { type: "image_url"; image_url: { url: string; detail: string } }
           | {
-            type: "file";
-            file_data: { data: string; filename: string; mime_type: string };
-          }
+              type: "file";
+              file_data: { data: string; filename: string; mime_type: string };
+            }
         )[] = [{ type: "text", text }];
         for (const a of attachments) {
           if (a.type && a.type.startsWith("image/")) {
@@ -334,7 +335,11 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   public postMessage(message: unknown) {
-    this._view?.webview.postMessage(message);
+    try {
+      this._view?.webview.postMessage(message);
+    } catch {
+      // Webview disposed — silently ignore
+    }
   }
 
   public createNewSession(sessionName: string) {

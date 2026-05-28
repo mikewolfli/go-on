@@ -230,22 +230,46 @@ class ConfigManager {
         } else if (!isNaN(Number(rawValue))) {
           value = Number(rawValue);
         } else if (rawValue.startsWith("[")) {
-          // Array parsing: replace single quotes with double quotes for TOML arrays
-          // Use a more precise approach to avoid corrupting string content
-          const jsonArrayStr = rawValue.replace(/'/g, '"');
+          // Array parsing: TOML arrays use single quotes, but JSON requires
+          // double quotes. Try a more precise conversion:
+          // 1. Try JSON.parse as-is (in case it's already valid JSON with double quotes)
+          // 2. Replace single-quoted strings with double-quoted ones
+          // 3. Fall back to raw string if all parsing fails
           try {
-            value = JSON.parse(jsonArrayStr);
+            value = JSON.parse(rawValue);
           } catch {
-            // If JSON parse fails, keep the raw array as a string
-            value = rawValue;
+            // Try converting TOML-style single-quoted arrays to JSON
+            try {
+              const jsonArrayStr = rawValue.replace(/'/g, '"');
+              value = JSON.parse(jsonArrayStr);
+            } catch {
+              // If all parsing fails, keep the raw array as a string
+              value = rawValue;
+            }
           }
         }
 
         const parts = currentSection.split(".");
         if (parts[0] === "agents" && parts[1]) {
-          config.agents[parts[1]][key] = value;
+          // Handle sub-sections within agents, e.g. [agents.copilot.options]
+          let target = config.agents[parts[1]];
+          for (let i = 2; i < parts.length; i++) {
+            if (!target[parts[i]] || typeof target[parts[i]] !== "object") {
+              target[parts[i]] = {};
+            }
+            target = target[parts[i]] as Record<string, unknown>;
+          }
+          target[key] = value;
         } else if (parts[0] === "phases" && parts[1]) {
-          config.phases[parts[1]][key] = value;
+          // Handle sub-sections within phases, e.g. [phases.coding.options]
+          let target = config.phases[parts[1]];
+          for (let i = 2; i < parts.length; i++) {
+            if (!target[parts[i]] || typeof target[parts[i]] !== "object") {
+              target[parts[i]] = {};
+            }
+            target = target[parts[i]] as Record<string, unknown>;
+          }
+          target[key] = value;
         } else if (parts[0]) {
           if (!config[parts[0]]) {
             config[parts[0]] = {};

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing;
 
 use crate::i18n::runtime::tf;
 
@@ -220,12 +221,14 @@ impl DriftProtectionEngine {
         metrics.insert(name.to_string(), metric.clone());
 
         // Track history for trend analysis (keep last 100 entries per type)
-        if let Ok(mut history) = self.metric_history.lock() {
-            let entry = history.entry(drift_type_for_history).or_default();
-            entry.push(metric);
-            if entry.len() > 100 {
-                entry.remove(0);
-            }
+        let mut history = self.metric_history.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "drift_protection", "metric_history Mutex poisoned – recovering");
+            poisoned.into_inner()
+        });
+        let entry = history.entry(drift_type_for_history).or_default();
+        entry.push(metric);
+        if entry.len() > 100 {
+            entry.remove(0);
         }
 
         Ok(())
@@ -239,29 +242,39 @@ impl DriftProtectionEngine {
         let config = &self.config;
 
         // Auto-resolve stale alerts before checking again.
-        if let Ok(mut alerts) = self.alerts.lock() {
-            for alert in alerts.iter_mut() {
-                if !alert.resolved
-                    && now_ms.saturating_sub(alert.triggered_ms) >= config.auto_resolve_after_ms
-                {
-                    alert.resolved = true;
-                    alert.resolved_ms = Some(now_ms);
-                }
+        let mut alerts = self.alerts.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "drift_protection", "alerts Mutex poisoned – recovering");
+            poisoned.into_inner()
+        });
+        for alert in alerts.iter_mut() {
+            if !alert.resolved
+                && now_ms.saturating_sub(alert.triggered_ms) >= config.auto_resolve_after_ms
+            {
+                alert.resolved = true;
+                alert.resolved_ms = Some(now_ms);
             }
         }
 
-        let policies = match self.policies.lock() {
-            Ok(p) => p.clone(),
-            Err(_) => return Vec::new(),
-        };
-        let metrics = match self.metrics.lock() {
-            Ok(m) => m.clone(),
-            Err(_) => return Vec::new(),
-        };
-        let mut alerts = match self.alerts.lock() {
-            Ok(a) => a,
-            Err(_) => return Vec::new(),
-        };
+        let policies = self
+            .policies
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!(target: "drift_protection", "policies Mutex poisoned – recovering");
+                poisoned.into_inner()
+            })
+            .clone();
+        let metrics = self
+            .metrics
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!(target: "drift_protection", "metrics Mutex poisoned – recovering");
+                poisoned.into_inner()
+            })
+            .clone();
+        let mut alerts = self.alerts.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "drift_protection", "alerts Mutex poisoned – recovering");
+            poisoned.into_inner()
+        });
 
         let mut new_alerts: Vec<DriftAlert> = Vec::new();
 
@@ -295,10 +308,10 @@ impl DriftProtectionEngine {
                 }
 
                 let alert_id = format!("drift-{}", {
-                    let mut ctr = match self.alert_counter.lock() {
-                        Ok(c) => c,
-                        Err(_) => continue,
-                    };
+                    let mut ctr = self.alert_counter.lock().unwrap_or_else(|poisoned| {
+                        tracing::warn!(target: "drift_protection", "alert_counter Mutex poisoned – recovering");
+                        poisoned.into_inner()
+                    });
                     *ctr += 1;
                     *ctr
                 });
@@ -371,34 +384,44 @@ impl DriftProtectionEngine {
 
     /// Returns a list of all alerts that are currently unresolved.
     pub fn get_active_alerts(&self) -> Vec<DriftAlert> {
-        match self.alerts.lock() {
-            Ok(alerts) => alerts.iter().filter(|a| !a.resolved).cloned().collect(),
-            Err(_) => Vec::new(),
-        }
+        let alerts = self.alerts.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "drift_protection", "alerts Mutex poisoned – recovering");
+            poisoned.into_inner()
+        });
+        alerts.iter().filter(|a| !a.resolved).cloned().collect()
     }
 
     /// Returns all alerts (resolved and unresolved) filtered by severity.
     pub fn get_alerts_by_severity(&self, severity: DriftSeverity) -> Vec<DriftAlert> {
-        match self.alerts.lock() {
-            Ok(alerts) => alerts
-                .iter()
-                .filter(|a| a.severity == severity)
-                .cloned()
-                .collect(),
-            Err(_) => Vec::new(),
-        }
+        let alerts = self.alerts.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "drift_protection", "alerts Mutex poisoned – recovering");
+            poisoned.into_inner()
+        });
+        alerts
+            .iter()
+            .filter(|a| a.severity == severity)
+            .cloned()
+            .collect()
     }
 
     /// Returns a snapshot profile of the current drift protection state.
     pub fn profile(&self) -> DriftProfile {
-        let total_metrics = match self.metrics.lock() {
-            Ok(m) => m.len(),
-            Err(_) => 0,
-        };
-        let alerts = match self.alerts.lock() {
-            Ok(a) => a.clone(),
-            Err(_) => Vec::new(),
-        };
+        let total_metrics = self
+            .metrics
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!(target: "drift_protection", "metrics Mutex poisoned – recovering");
+                poisoned.into_inner()
+            })
+            .len();
+        let alerts = self
+            .alerts
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!(target: "drift_protection", "alerts Mutex poisoned – recovering");
+                poisoned.into_inner()
+            })
+            .clone();
 
         let active_alerts = alerts.iter().filter(|a| !a.resolved).count();
         let critical_alerts = alerts
@@ -423,10 +446,14 @@ impl DriftProtectionEngine {
     /// Analyze drift metrics over time to detect rising trends.
     /// Returns a list of drift types that show a statistically significant upward trend.
     pub fn detect_trends(&self) -> Vec<(DriftType, f64, String)> {
-        let history = match self.metric_history.lock() {
-            Ok(h) => h.clone(),
-            Err(_) => return Vec::new(),
-        };
+        let history = self
+            .metric_history
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!(target: "drift_protection", "metric_history Mutex poisoned – recovering");
+                poisoned.into_inner()
+            })
+            .clone();
         let mut trends = Vec::new();
 
         for (drift_type, metrics) in &history {
@@ -472,10 +499,14 @@ impl DriftProtectionEngine {
 
     /// Generate auto-remediation suggestions for detected drifts.
     pub fn suggest_remediation(&self) -> Vec<String> {
-        let alerts = match self.alerts.lock() {
-            Ok(a) => a.clone(),
-            Err(_) => return Vec::new(),
-        };
+        let alerts = self
+            .alerts
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!(target: "drift_protection", "alerts Mutex poisoned – recovering");
+                poisoned.into_inner()
+            })
+            .clone();
         let mut suggestions = Vec::new();
 
         for alert in &alerts {

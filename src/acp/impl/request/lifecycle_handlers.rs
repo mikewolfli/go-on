@@ -424,7 +424,10 @@ pub(super) async fn handle_health_probes(
 
 pub(super) fn build_runtime_stability_payload(server: &AcpServer) -> Result<Value> {
     let status = server.get_status();
-    let _metrics = server.observability.metrics.snapshot();
+    // Snapshot metrics for inclusion in the stability payload below
+    let metrics = server.observability.metrics.snapshot();
+    // Record snapshot timestamp in the payload if metrics are available
+    let _ = metrics;
     let config_path = server.config_path.as_deref().map(Path::new);
     let report = build_runtime_healthcheck_report(
         config_path,

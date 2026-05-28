@@ -1,15 +1,14 @@
-//! SSE streaming compression using gzip/deflate.
+//! SSE streaming decompression using gzip/deflate.
 //!
-//! Provides optional gzip compression for SSE event streams to reduce
-//! bandwidth consumption for large streaming responses from LLM APIs.
+//! Provides optional gzip decompression for SSE event streams to handle
+//! gzip-compressed streaming responses from LLM APIs.
 //!
-//! Uses `flate2` for gzip compression with a configurable buffer threshold.
+//! Uses `flate2` for gzip decompression with a configurable buffer threshold.
 //! When the internal buffer exceeds the threshold, the accumulated data is
-//! compressed and emitted. Any remaining data can be flushed at stream end.
+//! decompressed and emitted. Any remaining data can be flushed at stream end.
 
-use flate2::write::GzEncoder;
-use flate2::Compression;
-use std::io::Write;
+use flate2::read::MultiGzDecoder;
+use std::io::Read;
 
 /// Configuration for SSE streaming behavior
 #[derive(Debug, Clone)]
@@ -29,7 +28,7 @@ impl Default for StreamingConfig {
     }
 }
 
-/// Buffers raw bytes and emits gzip-compressed chunks when the
+/// Buffers raw bytes and emits gzip-decompressed chunks when the
 /// accumulated size reaches or exceeds the configured threshold.
 pub struct SseCompressor {
     buffer: Vec<u8>,
@@ -47,11 +46,11 @@ impl SseCompressor {
         }
     }
 
-    /// Feed a raw data chunk into the compressor.
+    /// Feed a raw (possibly gzip-compressed) data chunk into the decompressor.
     ///
-    /// If compression is enabled and the internal buffer reaches or exceeds
-    /// the threshold, the buffered data is gzip-compressed and returned
-    /// as a single compressed chunk. Otherwise, the uncompressed data is
+    /// If decompression is enabled and the internal buffer reaches or exceeds
+    /// the threshold, the buffered data is gzip-decompressed and returned
+    /// as a single decompressed chunk. Otherwise, the raw data is
     /// returned as-is (passthrough mode).
     pub fn compress_chunk(&mut self, data: &[u8]) -> Vec<u8> {
         if !self.enabled {
@@ -61,9 +60,9 @@ impl SseCompressor {
         self.buffer.extend_from_slice(data);
 
         if self.buffer.len() >= self.threshold {
-            let compressed = self.compress_buffer();
+            let decompressed = self.decompress_buffer();
             self.buffer.clear();
-            compressed
+            decompressed
         } else {
             // Hold in buffer, nothing emitted yet
             Vec::new()
@@ -72,13 +71,13 @@ impl SseCompressor {
 
     /// Flush any remaining buffered data.
     ///
-    /// If compression is enabled, the remaining buffer is compressed.
+    /// If decompression is enabled, the remaining buffer is decompressed.
     /// Otherwise, returns the raw buffer contents.
     pub fn flush(&mut self) -> Vec<u8> {
         if self.enabled && !self.buffer.is_empty() {
-            let compressed = self.compress_buffer();
+            let decompressed = self.decompress_buffer();
             self.buffer.clear();
-            compressed
+            decompressed
         } else if !self.enabled {
             std::mem::take(&mut self.buffer)
         } else {
@@ -86,7 +85,7 @@ impl SseCompressor {
         }
     }
 
-    /// Whether compression is enabled on this compressor.
+    /// Whether decompression is enabled on this decompressor.
     pub fn is_enabled(&self) -> bool {
         self.enabled
     }
@@ -96,13 +95,15 @@ impl SseCompressor {
         self.buffer.len()
     }
 
-    /// Compress the internal buffer using gzip at the default level.
-    fn compress_buffer(&self) -> Vec<u8> {
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-        // Write errors to a Vec are infallible.
-        // Writing to a Vec<T> is infallible per std::io::Write contract.
-        encoder.write_all(&self.buffer).expect("gzip write to vec");
-        encoder.finish().expect("gzip finish to vec")
+    /// Decompress the internal buffer using gzip.
+    fn decompress_buffer(&self) -> Vec<u8> {
+        let mut decoder = MultiGzDecoder::new(&self.buffer[..]);
+        let mut result = Vec::new();
+        // Read errors from a &[u8] are infallible for MultiGzDecoder
+        // when the data is valid gzip. If invalid, we return empty data
+        // rather than panicking.
+        let _ = decoder.read_to_end(&mut result);
+        result
     }
 }
 
@@ -137,21 +138,30 @@ mod tests {
     }
 
     #[test]
-    fn compresses_when_threshold_exceeded() {
+    fn decompresses_when_threshold_exceeded() {
         let config = StreamingConfig {
             enable_compression: true,
             compression_threshold: 10,
         };
         let mut comp = SseCompressor::new(&config);
+        // First we manually compress some data to feed to the decompressor
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+        let data = b"Hello world from gzip!";
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(data).unwrap();
+        let compressed = encoder.finish().unwrap();
+
         // First chunk below threshold
-        let r1 = comp.compress_chunk(b"hello");
+        let r1 = comp.compress_chunk(&compressed[..5]);
         assert!(r1.is_empty());
         // Second chunk pushes past threshold
-        let r2 = comp.compress_chunk(b" world!");
+        let r2 = comp.compress_chunk(&compressed[5..]);
         assert!(!r2.is_empty());
-        // Should be compressed (gzip header magic bytes: 0x1f 0x8b)
-        assert_eq!(r2[0], 0x1f);
-        assert_eq!(r2[1], 0x8b);
+        // Should contain the decompressed text
+        let output = String::from_utf8_lossy(&r2);
+        assert!(output.contains("Hello world"));
         assert_eq!(comp.buffered_bytes(), 0);
     }
 
@@ -162,11 +172,20 @@ mod tests {
             compression_threshold: 1024,
         };
         let mut comp = SseCompressor::new(&config);
-        comp.compress_chunk(b"small data");
+        // Small gzip data below threshold, flush should decompress
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+        let data = b"small data";
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(data).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        comp.compress_chunk(&compressed);
         let flushed = comp.flush();
         assert!(!flushed.is_empty());
-        assert_eq!(flushed[0], 0x1f);
-        assert_eq!(flushed[1], 0x8b);
+        let output = String::from_utf8_lossy(&flushed);
+        assert!(output.contains("small data"));
         assert_eq!(comp.buffered_bytes(), 0);
     }
 
@@ -186,20 +205,23 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_decompress() {
+    fn roundtrip_compress_decompress() {
         let config = StreamingConfig {
             enable_compression: true,
             compression_threshold: 5,
         };
         let mut comp = SseCompressor::new(&config);
-        let original = b"Hello, World! This is a test of SSE compression.";
-        let compressed = comp.compress_chunk(original);
-        // Decompress with flate2
-        use flate2::read::GzDecoder;
-        use std::io::Read;
-        let mut decoder = GzDecoder::new(&compressed[..]);
-        let mut decompressed = Vec::new();
-        decoder.read_to_end(&mut decompressed).unwrap();
+        let original = b"Hello, World! This is a test of SSE decompression.";
+        // Manually compress the original
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(original).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        // Feed compressed data to the decompressor
+        let decompressed = comp.compress_chunk(&compressed);
         assert_eq!(decompressed, original);
     }
 }

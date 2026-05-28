@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
@@ -39,8 +39,8 @@ pub struct TenantResourceQuota {
 #[derive(Debug, Default)]
 pub struct TenantBudgetEnforcer {
     quotas: HashMap<String, TenantResourceQuota>,
-    token_usage: RefCell<HashMap<String, usize>>,
-    api_call_usage: RefCell<HashMap<String, usize>>,
+    token_usage: std::sync::Mutex<HashMap<String, usize>>,
+    api_call_usage: std::sync::Mutex<HashMap<String, usize>>,
     active_tasks: HashMap<String, usize>,
     /// The "day number" (unix_ts / 86400) last observed, used to reset daily counters.
     current_day: Cell<i64>,
@@ -50,8 +50,8 @@ impl TenantBudgetEnforcer {
     pub fn new() -> Self {
         Self {
             quotas: HashMap::new(),
-            token_usage: RefCell::new(HashMap::new()),
-            api_call_usage: RefCell::new(HashMap::new()),
+            token_usage: std::sync::Mutex::new(HashMap::new()),
+            api_call_usage: std::sync::Mutex::new(HashMap::new()),
             active_tasks: HashMap::new(),
             current_day: Cell::new(Self::today()),
         }
@@ -66,8 +66,20 @@ impl TenantBudgetEnforcer {
     fn reset_daily_if_day_changed(&self) {
         let today = Self::today();
         if today != self.current_day.get() {
-            self.token_usage.borrow_mut().clear();
-            self.api_call_usage.borrow_mut().clear();
+            match self.token_usage.lock() {
+                Ok(mut tu) => tu.clear(),
+                Err(poisoned) => {
+                    tracing::warn!("token_usage lock poisoned, recovering");
+                    poisoned.into_inner().clear();
+                }
+            }
+            match self.api_call_usage.lock() {
+                Ok(mut au) => au.clear(),
+                Err(poisoned) => {
+                    tracing::warn!("api_call_usage lock poisoned, recovering");
+                    poisoned.into_inner().clear();
+                }
+            }
             self.current_day.set(today);
         }
     }
@@ -93,12 +105,14 @@ impl TenantBudgetEnforcer {
             ));
         }
 
-        let tokens = self
-            .token_usage
-            .borrow()
-            .get(tenant_id)
-            .copied()
-            .unwrap_or(0);
+        let guard_tokens = match self.token_usage.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                tracing::warn!("token_usage lock poisoned, recovering");
+                poisoned.into_inner()
+            }
+        };
+        let tokens = guard_tokens.get(tenant_id).copied().unwrap_or(0);
         if tokens >= quota.daily_token_limit {
             return Err(format!(
                 "tenant '{}' exceeded daily token limit ({}/{})",
@@ -106,12 +120,14 @@ impl TenantBudgetEnforcer {
             ));
         }
 
-        let calls = self
-            .api_call_usage
-            .borrow()
-            .get(tenant_id)
-            .copied()
-            .unwrap_or(0);
+        let guard_calls = match self.api_call_usage.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                tracing::warn!("api_call_usage lock poisoned, recovering");
+                poisoned.into_inner()
+            }
+        };
+        let calls = guard_calls.get(tenant_id).copied().unwrap_or(0);
         if calls >= quota.daily_api_call_limit {
             return Err(tf(
                 "error.tenant_limit_exceeded",
@@ -133,16 +149,26 @@ impl TenantBudgetEnforcer {
 
     /// Record resource consumption after a task completes.
     pub fn record_usage(&mut self, tenant_id: &str, tokens: usize, api_calls: usize) {
-        *self
-            .token_usage
-            .borrow_mut()
-            .entry(tenant_id.to_string())
-            .or_insert(0) += tokens;
-        *self
-            .api_call_usage
-            .borrow_mut()
-            .entry(tenant_id.to_string())
-            .or_insert(0) += api_calls;
+        {
+            let mut tu = match self.token_usage.lock() {
+                Ok(g) => g,
+                Err(poisoned) => {
+                    tracing::warn!("token_usage lock poisoned, recovering");
+                    poisoned.into_inner()
+                }
+            };
+            *tu.entry(tenant_id.to_string()).or_insert(0) += tokens;
+        }
+        {
+            let mut au = match self.api_call_usage.lock() {
+                Ok(g) => g,
+                Err(poisoned) => {
+                    tracing::warn!("api_call_usage lock poisoned, recovering");
+                    poisoned.into_inner()
+                }
+            };
+            *au.entry(tenant_id.to_string()).or_insert(0) += api_calls;
+        }
         let tasks = self.active_tasks.entry(tenant_id.to_string()).or_insert(0);
         *tasks = tasks.saturating_sub(1);
     }

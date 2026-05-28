@@ -579,7 +579,7 @@ impl WorldModel {
 
         // Find causal links where the action matches a known cause
         for link in &inner.causal_links {
-            if link.cause_entity_id == action || link.cause_entity_id.contains(action) {
+            if link.cause_entity_id == action {
                 // Find the effect entity's current state
                 let effect_state = inner
                     .entities
@@ -604,14 +604,12 @@ impl WorldModel {
             let similar_entities: Vec<&WorldEntity> = inner
                 .entities
                 .iter()
-                .filter(|e| e.id.contains(target_entity) || target_entity.contains(&e.id))
+                .filter(|e| e.id == target_entity)
                 .collect();
 
             for similar in &similar_entities {
                 for link in &inner.causal_links {
-                    if link.cause_entity_id.contains(&similar.id)
-                        || similar.id.contains(&link.cause_entity_id)
-                    {
+                    if link.cause_entity_id == similar.id {
                         let effect_state = inner
                             .entities
                             .iter()
@@ -697,9 +695,8 @@ impl WorldModel {
 
         // Push all discovered links into inner state
         if !new_links.is_empty() {
-            if let Ok(mut inner) = self.inner.lock() {
-                inner.causal_links.extend(new_links);
-            }
+            let mut inner = lock_guard(&self.inner);
+            inner.causal_links.extend(new_links);
         }
 
         discoveries

@@ -300,10 +300,16 @@ pub async fn perform_health_check_cycle(
         ACP_LOCK_MEMORY_CACHE,
         memory_cache.as_ref(),
         |cache| {
-            cache.active_entries();
-            true
+            // active_entries returns the number of non-expired entries.
+            // This also verifies the lock is accessible and not poisoned.
+            let entries = cache.active_entries();
+            debug!("memory cache health: {} active entries", entries);
+            entries > 0
         },
     );
+    if !memory_health {
+        debug!("memory cache is empty (0 active entries)");
+    }
 
     let sqlite_health = with_acp_lock(
         lock_monitor.as_ref(),

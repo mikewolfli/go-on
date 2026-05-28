@@ -430,9 +430,18 @@ class I18nManager {
    */
   private detectLanguage(): void {
     const env = process.env;
-    const lang = env.VSCODE_NLS_CONFIG
-      ? JSON.parse(env.VSCODE_NLS_CONFIG).locale
-      : env.LANG || env.LANGUAGE || "en";
+    let lang: string;
+    if (env.VSCODE_NLS_CONFIG) {
+      try {
+        const parsed = JSON.parse(env.VSCODE_NLS_CONFIG);
+        lang = parsed.locale || "en";
+      } catch {
+        // Malformed VSCODE_NLS_CONFIG — fall back to env vars or "en"
+        lang = env.LANG || env.LANGUAGE || "en";
+      }
+    } else {
+      lang = env.LANG || env.LANGUAGE || "en";
+    }
 
     if (
       lang.includes("zh_CN") ||

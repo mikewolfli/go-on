@@ -849,10 +849,9 @@ impl MetacognitiveController {
     ///
     /// Returns (adjusted_reward_multiplier, suggested_exploration_rate, key_insights).
     pub fn reflect_for_rl(&self) -> (f64, f64, Vec<String>) {
-        let state = match self.inner.lock() {
-            Ok(s) => Inner::clone(&s),
-            Err(_) => return (1.0, 0.1, vec![t("status.metacognitive.rl.lock_poisoned")]),
-        };
+        let guard = lock_guard(&self.inner);
+        let state = Inner::clone(&guard);
+        drop(guard);
 
         if state.observations.is_empty() {
             return (1.0, 0.1, vec![t("status.metacognitive.rl.no_observations")]);

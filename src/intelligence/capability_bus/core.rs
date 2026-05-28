@@ -52,6 +52,7 @@ use crate::intelligence::discovery::DiscoveryCenter;
 use crate::intelligence::evolution_graph::{EvolutionGraph, EvolutionStage, TrendDirection};
 
 use crate::intelligence::federated_rl::FederatedRL;
+use crate::intelligence::lock_guard;
 use crate::intelligence::matcher::ScenarioMatcher;
 use crate::intelligence::metacognitive::MetacognitiveController;
 use crate::intelligence::now_ms;
@@ -765,18 +766,17 @@ impl CapabilityBus {
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
 
-        if let Ok(mut history) = self.event_history.lock() {
-            history.push_back(BusEvent {
-                timestamp_ms: now_ms,
-                stage: stage.to_string(),
-                agent,
-                task_id,
-                outcome: outcome.to_string(),
-                detail,
-            });
-            while history.len() > self.max_event_history {
-                history.pop_front();
-            }
+        let mut history = lock_guard(&self.event_history);
+        history.push_back(BusEvent {
+            timestamp_ms: now_ms,
+            stage: stage.to_string(),
+            agent,
+            task_id,
+            outcome: outcome.to_string(),
+            detail,
+        });
+        while history.len() > self.max_event_history {
+            history.pop_front();
         }
     }
 
@@ -837,29 +837,17 @@ impl CapabilityBus {
     pub fn sense(&self, task: &TaskContext) -> SensingOutput {
         // Include task risk score in heartbeat so `task` is unconditionally referenced
         // across all feature configurations.
-        let cap_agents = self
-            .capability_graph
-            .lock()
-            .map(|g| g.total_agents())
-            .unwrap_or(0);
-        let rep_snapshot = self
-            .reputation
-            .lock()
-            .map(|r| r.snapshot())
-            .unwrap_or_default();
-        let _learning_rates = self
-            .learning_bus
-            .lock()
-            .map(|lb| {
-                let agents: Vec<String> = lb.snapshot().iter().map(|e| e.agent.clone()).collect();
-                agents
-            })
-            .unwrap_or_default();
-        let learning_snapshot = self
-            .learning_bus
-            .lock()
-            .map(|lb| lb.snapshot())
-            .unwrap_or_default();
+        let cap_agents = lock_guard(&self.capability_graph).total_agents();
+        let rep_snapshot = lock_guard(&self.reputation).snapshot();
+        let _learning_rates = {
+            let agents: Vec<String> = lock_guard(&self.learning_bus)
+                .snapshot()
+                .iter()
+                .map(|e| e.agent.clone())
+                .collect();
+            agents
+        };
+        let learning_snapshot = lock_guard(&self.learning_bus).snapshot();
 
         // Phase 4: Query ObservabilityBus for healthy agents
         #[cfg(feature = "sub-bus-observability")]
@@ -903,13 +891,12 @@ impl CapabilityBus {
 
         // Send a heartbeat through the transport layer, including task risk score
         // so the transport is always informed of the current task context.
-        if let Ok(transport) = self.transport.lock() {
-            let heartbeat = format!(
-                "{{\"status\":\"alive\",\"risk_score\":{}}}",
-                task.risk_score
-            );
-            let _ = transport.send_heartbeat("capability-bus", "harness-bus", &heartbeat);
-        }
+        let transport = lock_guard(&self.transport);
+        let heartbeat = format!(
+            "{{\"status\":\"alive\",\"risk_score\":{}}}",
+            task.risk_score
+        );
+        let _ = transport.send_heartbeat("capability-bus", "harness-bus", &heartbeat);
 
         SensingOutput {
             capability_agent_count: cap_agents,
@@ -1147,17 +1134,17 @@ impl CapabilityBus {
         #[cfg(feature = "sub-bus-observability")]
         let _healthy_agents_count = sensing.healthy_agents.len();
 
-        if let Ok(mut p) = self.profile.lock() {
+        {
+            let mut p = lock_guard(&self.profile);
             p.routing_count = p.routing_count.saturating_add(1);
             p.last_route_duration_ms = start.elapsed().as_millis() as u64;
         }
 
         // Send a control message through the transport layer if an agent was selected
         if let Some(agent) = &selected_agent {
-            if let Ok(transport) = self.transport.lock() {
-                let msg = serde_json::json!({ "selected_tool": agent, "agent": agent });
-                let _ = transport.send_control("capability-bus", "tool-bus", &msg.to_string());
-            }
+            let transport = lock_guard(&self.transport);
+            let msg = serde_json::json!({ "selected_tool": agent, "agent": agent });
+            let _ = transport.send_control("capability-bus", "tool-bus", &msg.to_string());
         }
 
         DecisionOutput {
@@ -1356,16 +1343,21 @@ impl CapabilityBus {
         #[cfg(feature = "sub-bus-orchestration")]
         let flow_id = format!("{}::{}", task_type, task_id);
         #[cfg(feature = "sub-bus-orchestration")]
-        let _flow_guard = FlowGuard {
-            bus: &self.orchestration_bus,
-            flow_id: &flow_id,
-            task_id,
+        let _flow_guard = match self.orchestration_bus.start_flow(&flow_id, task_id) {
+            Ok(_) => Some(FlowGuard {
+                bus: &self.orchestration_bus,
+                flow_id: &flow_id,
+                task_id,
+            }),
+            Err(e) => {
+                tracing::warn!("feedback: start_flow failed for {}: {}", flow_id, e);
+                None::<FlowGuard>
+            }
         };
-        #[cfg(feature = "sub-bus-orchestration")]
-        let _ = self.orchestration_bus.start_flow(&flow_id, task_id);
 
         // 1. Write to learning bus
-        if let Ok(mut lb) = self.learning_bus.lock() {
+        {
+            let mut lb = lock_guard(&self.learning_bus);
             lb.push(WorkflowLearningEvent {
                 task_type: task_type.to_string(),
                 agent: agent.to_string(),
@@ -1378,7 +1370,8 @@ impl CapabilityBus {
         }
 
         // 2. Write to reputation store
-        if let Ok(mut rep) = self.reputation.lock() {
+        {
+            let mut rep = lock_guard(&self.reputation);
             rep.record_outcome(agent, success);
         }
 
@@ -1489,28 +1482,18 @@ impl CapabilityBus {
         };
 
         // Calculate reward
-        let reward = self
-            .reward_fn
-            .lock()
-            .map(|rf| rf.calculate(&metrics))
-            .unwrap_or(0.0);
+        let reward = lock_guard(&self.reward_fn).calculate(&metrics);
 
         // Update Q table
-        if let Ok(mut ql) = self.q_learning.lock() {
-            ql.update(state, action, reward, next_state);
-        }
+        lock_guard(&self.q_learning).update(state, action, reward, next_state);
 
         // Record success/failure knowledge
         if success {
-            if let Err(e) = self.experience.lock().map(|mut exp| {
-                exp.add_success_case(SuccessCase {
-                    objective: format!("state_{:?}", state),
-                    strategy: format!("action_{}", action),
-                    confidence: quality_score,
-                })
-            }) {
-                warn!("failed to record success case for state {:?}: {}", state, e);
-            }
+            lock_guard(&self.experience).add_success_case(SuccessCase {
+                objective: format!("state_{:?}", state),
+                strategy: format!("action_{}", action),
+                confidence: quality_score,
+            });
         }
 
         // ── HarnessBus integration: Drift / FaultTolerance / Audit ──────
@@ -1628,20 +1611,18 @@ impl CapabilityBus {
         }
 
         // 2. ContinuousLearning: consolidate experience to prevent forgetting
-        if let Err(e) = self.continuous_learning.lock().map(|cl| {
-            cl.consolidate_experience(
-                &format!("{:?}_{}", state.0, action),
-                &serde_json::json!({
-                    "state": state,
-                    "action": action,
-                    "success": success,
-                    "reward": reward,
-                    "quality": quality_score,
-                })
-                .to_string(),
-                quality_score,
-            )
-        }) {
+        if let Err(e) = lock_guard(&self.continuous_learning).consolidate_experience(
+            &format!("{:?}_{}", state.0, action),
+            &serde_json::json!({
+                "state": state,
+                "action": action,
+                "success": success,
+                "reward": reward,
+                "quality": quality_score,
+            })
+            .to_string(),
+            quality_score,
+        ) {
             warn!(
                 "evolve: continuous_learning.consolidate_experience failed: {}",
                 e
@@ -1683,7 +1664,10 @@ impl CapabilityBus {
         // 4b. Run abstract_knowledge periodically when enough patterns accumulated.
         //     This generates cross-category insights that feed back into
         //     the learning system for F-GAP-13 knowledge extraction.
-        if now.is_multiple_of(50) && quality_score > 0.5 {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static EVOLVE_COUNTER: AtomicU64 = AtomicU64::new(0);
+        let evolve_count = EVOLVE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        if evolve_count.is_multiple_of(50) && quality_score > 0.5 {
             let insights = self.discovery.abstract_knowledge();
             if !insights.is_empty() {
                 tracing::info!(
@@ -1692,13 +1676,11 @@ impl CapabilityBus {
                 );
                 // Feed insights into continuous_learning for persistence
                 for insight in &insights {
-                    if let Err(e) = self.continuous_learning.lock().map(|cl| {
-                        cl.consolidate_experience(
-                            &format!("abstract_knowledge_{}", now),
-                            insight,
-                            0.5,
-                        )
-                    }) {
+                    if let Err(e) = lock_guard(&self.continuous_learning).consolidate_experience(
+                        &format!("abstract_knowledge_{}", now),
+                        insight,
+                        0.5,
+                    ) {
                         warn!("evolve: abstract_knowledge consolidate failed: {}", e);
                     }
                 }
@@ -1717,7 +1699,8 @@ impl CapabilityBus {
         }
 
         // 5. EvolutionGraph: update capability evolution trajectory
-        if let Ok(mut eg) = self.evolution_graph.lock() {
+        {
+            let mut eg = lock_guard(&self.evolution_graph);
             let cap_name = format!("evolve_{}", action);
 
             // Register the capability if it doesn't exist yet
@@ -1818,23 +1801,19 @@ impl CapabilityBus {
 
         // Send an event through the transport layer with evolve summary
         // Compute q_value for both the transport event and consensus
-        let q_value;
-        let exploration_rate;
-        if let Ok(ql) = self.q_learning.lock() {
-            q_value = ql
-                .q_table
-                .get(state)
-                .and_then(|m| m.get(action))
-                .copied()
-                .unwrap_or(0.0);
-            exploration_rate = ql.exploration_rate;
-        } else {
-            q_value = 0.0;
-            exploration_rate = 0.0;
-        }
+        let ql = lock_guard(&self.q_learning);
+        let q_value = ql
+            .q_table
+            .get(state)
+            .and_then(|m| m.get(action))
+            .copied()
+            .unwrap_or(0.0);
+        let exploration_rate = ql.exploration_rate;
+        drop(ql);
 
         // Send an event through the transport layer with evolve summary
-        if let Ok(transport) = self.transport.lock() {
+        {
+            let transport = lock_guard(&self.transport);
             let summary =
                 serde_json::json!({ "q_value": q_value, "exploration_rate": exploration_rate });
             if let Err(e) = transport.send_event("capability-bus", "monitor", &summary.to_string())
@@ -1894,132 +1873,110 @@ impl CapabilityBus {
     // ------------------------------------------------------------------
 
     pub fn snapshot_events(&self) -> Vec<BusEvent> {
-        self.event_history
-            .lock()
-            .map(|h| h.iter().cloned().collect())
-            .unwrap_or_default()
+        lock_guard(&self.event_history).iter().cloned().collect()
     }
 
     pub fn capability_bus_profile(&self) -> CapabilityBusProfile {
-        if let Ok(mut p) = self.profile.lock() {
-            p.learning_events_count = self.learning_bus.lock().map(|lb| lb.len()).unwrap_or(0);
-            p.reputation_agents_count = self
-                .reputation
-                .lock()
-                .map(|r| r.tracked_agent_count())
-                .unwrap_or(0);
-            p.capability_graph_agents = self
-                .capability_graph
-                .lock()
-                .map(|g| g.total_agents())
-                .unwrap_or(0);
-            p.knowledge_insights_count = self
-                .knowledge_bus
-                .lock()
-                .map(|kb| kb.snapshot().len())
-                .unwrap_or(0);
-            p.q_learning_table_size = self
-                .q_learning
-                .lock()
-                .map(|ql| ql.q_table.values().map(|m| m.len()).sum())
-                .unwrap_or(0);
-            p.experience_case_count = self
-                .experience
-                .lock()
-                .map(|exp| exp.success_cases.len() + exp.failure_patterns.len())
-                .unwrap_or(0);
-            p.event_history_len = self.event_history.lock().map(|h| h.len()).unwrap_or(0);
-            p.workflow_presets_count = self
-                .workflow_registry
-                .as_ref()
-                .and_then(|wr| wr.lock().ok())
-                .map(|r| r.list().len())
-                .unwrap_or(0);
-            p.provenance_entries_count = self.provenance_ledger.len();
-
-            // Phase 4 sub-bus profile enrichment
-            #[cfg(feature = "sub-bus-tool")]
-            {
-                let tb = self.tool_bus.profile();
-                p.tool_bus_tools = tb.total_tools;
-                p.tool_bus_skills = tb.total_skills;
-                p.tool_bus_calls = tb.total_calls;
-            }
-
-            #[cfg(feature = "sub-bus-observability")]
-            {
-                let ob = self.observability_bus.system_health();
-                p.observability_tracked_agents = ob.tracked_agents;
-                p.observability_system_error_rate = ob.system_error_rate;
-            }
-
-            #[cfg(feature = "sub-bus-optimization")]
-            {
-                let opt = self.optimization_bus.profile();
-                p.optimization_total = opt.total_optimizations;
-                p.optimization_circuit_breaker_trips = opt.circuit_breaker_trips;
-            }
-
-            #[cfg(feature = "sub-bus-protocol")]
-            {
-                let pb = self.protocol_bus.profile();
-                p.protocol_active_transport = pb.active_transport;
-                p.protocol_healthy_count = pb.healthy_protocols;
-            }
-
-            #[cfg(feature = "sub-bus-orchestration")]
-            {
-                let orb = self.orchestration_bus.profile();
-                p.orchestration_active_flows = orb.active_flows;
-                p.orchestration_available_modes = orb.available_modes;
-            }
-
-            #[cfg(feature = "sub-bus-memory")]
-            {
-                let mb = self.memory_bus.profile();
-                p.memory_cache_hit_rate = mb.cache_hit_rate;
-                p.memory_total_entries = mb.vector_docs_count + mb.memory_entries;
-            }
-
-            #[cfg(feature = "sub-bus-distributed-memory")]
-            {
-                let dmb = self.distributed_memory_bus.profile();
-                p.distributed_memory_peers = dmb.remote_peers;
-                p.distributed_memory_shared = dmb.shared_entries;
-            }
-
-            // Skill evolution metrics
-            #[cfg(feature = "sub-bus-tool")]
-            if let Ok(skills) = self.tool_bus.skill_registry_ref().lock() {
-                p.skill_evolution_count = skills
-                    .evolution_history
-                    .values()
-                    .map(|v| v.len())
-                    .sum::<usize>() as u32;
-            }
-
-            #[cfg(any(
-                feature = "sub-bus-tool",
-                feature = "profile-simple-server",
-                feature = "profile-multi-users-server"
-            ))]
-            {
-                if let Ok(factory) = self.agent_factory.lock() {
-                    let fp = factory.profile();
-                    p.agent_factory_active_instances = fp.active_instances as u32;
-                    p.agent_factory_templates = fp.total_templates as u32;
-                }
-                if let Ok(council) = self.council.lock() {
-                    let cp = council.profile();
-                    p.council_active_members = cp.active_members;
-                    p.council_pending_proposals = cp.pending_count;
-                }
-            }
-
-            p.clone()
-        } else {
-            CapabilityBusProfile::default()
+        let mut p = lock_guard(&self.profile);
+        p.learning_events_count = lock_guard(&self.learning_bus).len();
+        p.reputation_agents_count = lock_guard(&self.reputation).tracked_agent_count();
+        p.capability_graph_agents = lock_guard(&self.capability_graph).total_agents();
+        p.knowledge_insights_count = lock_guard(&self.knowledge_bus).snapshot().len();
+        p.q_learning_table_size = lock_guard(&self.q_learning)
+            .q_table
+            .values()
+            .map(|m| m.len())
+            .sum();
+        {
+            let exp = lock_guard(&self.experience);
+            p.experience_case_count = exp.success_cases.len() + exp.failure_patterns.len();
         }
+        p.event_history_len = lock_guard(&self.event_history).len();
+        p.workflow_presets_count = self
+            .workflow_registry
+            .as_ref()
+            .map(|wr| lock_guard(wr).list().len())
+            .unwrap_or(0);
+        p.provenance_entries_count = self.provenance_ledger.len();
+
+        // Phase 4 sub-bus profile enrichment
+        #[cfg(feature = "sub-bus-tool")]
+        {
+            let tb = self.tool_bus.profile();
+            p.tool_bus_tools = tb.total_tools;
+            p.tool_bus_skills = tb.total_skills;
+            p.tool_bus_calls = tb.total_calls;
+        }
+
+        #[cfg(feature = "sub-bus-observability")]
+        {
+            let ob = self.observability_bus.system_health();
+            p.observability_tracked_agents = ob.tracked_agents;
+            p.observability_system_error_rate = ob.system_error_rate;
+        }
+
+        #[cfg(feature = "sub-bus-optimization")]
+        {
+            let opt = self.optimization_bus.profile();
+            p.optimization_total = opt.total_optimizations;
+            p.optimization_circuit_breaker_trips = opt.circuit_breaker_trips;
+        }
+
+        #[cfg(feature = "sub-bus-protocol")]
+        {
+            let pb = self.protocol_bus.profile();
+            p.protocol_active_transport = pb.active_transport;
+            p.protocol_healthy_count = pb.healthy_protocols;
+        }
+
+        #[cfg(feature = "sub-bus-orchestration")]
+        {
+            let orb = self.orchestration_bus.profile();
+            p.orchestration_active_flows = orb.active_flows;
+            p.orchestration_available_modes = orb.available_modes;
+        }
+
+        #[cfg(feature = "sub-bus-memory")]
+        {
+            let mb = self.memory_bus.profile();
+            p.memory_cache_hit_rate = mb.cache_hit_rate;
+            p.memory_total_entries = mb.vector_docs_count + mb.memory_entries;
+        }
+
+        #[cfg(feature = "sub-bus-distributed-memory")]
+        {
+            let dmb = self.distributed_memory_bus.profile();
+            p.distributed_memory_peers = dmb.remote_peers;
+            p.distributed_memory_shared = dmb.shared_entries;
+        }
+
+        // Skill evolution metrics
+        #[cfg(feature = "sub-bus-tool")]
+        {
+            let skills = lock_guard(self.tool_bus.skill_registry_ref());
+            p.skill_evolution_count = skills
+                .evolution_history
+                .values()
+                .map(|v| v.len())
+                .sum::<usize>() as u32;
+        }
+
+        #[cfg(any(
+            feature = "sub-bus-tool",
+            feature = "profile-simple-server",
+            feature = "profile-multi-users-server"
+        ))]
+        {
+            let fp = lock_guard(&self.agent_factory).profile();
+            p.agent_factory_active_instances = fp.active_instances as u32;
+            p.agent_factory_templates = fp.total_templates as u32;
+
+            let cp = lock_guard(&self.council).profile();
+            p.council_active_members = cp.active_members;
+            p.council_pending_proposals = cp.pending_count;
+        }
+
+        p.clone()
     }
 }
 

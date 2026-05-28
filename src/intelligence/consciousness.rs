@@ -246,17 +246,20 @@ impl ConsciousnessMetrics {
     /// Trigger a reflexion cycle, generating a record and potentially advancing
     /// the consciousness state.
     pub fn trigger_reflexion(&self, trigger: &str) -> Result<ReflexionRecord> {
-        let mut inner = lock_guard(&self.inner);
+        // Clone metrics and other data under the lock, then process outside
+        let (metrics_clone, next_id) = {
+            let inner = lock_guard(&self.inner);
+            (inner.metrics.clone(), inner.next_reflexion_id)
+        };
 
-        let state_before = self.compute_state_from_metrics(&inner.metrics);
+        let state_before = self.compute_state_from_metrics(&metrics_clone);
 
         // Generate insights based on current awareness.
-        let insights = self.generate_insights(&inner.metrics);
+        let insights = self.generate_insights(&metrics_clone);
 
         // After reflexion, awareness gets a boost based on insight count.
         let boost = (insights.len() as f64).min(5.0) * 0.02;
-        let boosted_metrics: Vec<AwarenessMetric> = inner
-            .metrics
+        let boosted_metrics: Vec<AwarenessMetric> = metrics_clone
             .iter()
             .map(|m| {
                 let mut boosted = m.clone();
@@ -267,8 +270,7 @@ impl ConsciousnessMetrics {
 
         let state_after = self.compute_state_from_metrics(&boosted_metrics);
 
-        let id = format!("reflexion-{}", inner.next_reflexion_id);
-        inner.next_reflexion_id += 1;
+        let id = format!("reflexion-{}", next_id);
 
         let record = ReflexionRecord {
             id: id.clone(),
@@ -279,6 +281,9 @@ impl ConsciousnessMetrics {
             timestamp_ms: now_ms(),
         };
 
+        // Re-acquire lock to write back
+        let mut inner = lock_guard(&self.inner);
+        inner.next_reflexion_id += 1;
         // Replace metrics with boosted versions.
         inner.metrics = boosted_metrics;
 

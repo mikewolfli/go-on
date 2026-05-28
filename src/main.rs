@@ -859,7 +859,7 @@ fn build_completeness_report(
             .push("runtime.maintenance_interval_seconds missing".to_string());
     }
 
-    out.score = score.round().clamp(0.0, 100.0) as u32;
+    out.score = score.round().clamp(0.0, 100.0) as u64 as u32;
     out
 }
 

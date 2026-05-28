@@ -614,36 +614,43 @@ impl PolicyEvaluator {
         let _start = Instant::now();
 
         // 1. Red-line check (hard block)
-        if let Ok(engine) = self.rule_engine.lock() {
-            if let Err(violation) = engine.check_red_lines(&format!("{:?}", ctx.task_type)) {
-                return PolicyVerdict::Deny(PolicyViolation {
-                    kind: "red_line".to_string(),
-                    detail: violation.detail.clone(),
-                });
-            }
-            // 2. Stage validation
-            if let Err(fail) = engine.validate_stage("default", &[]) {
-                return PolicyVerdict::Escalate(EscalationReason {
-                    reason: fail.detail.clone(),
-                    suggested_level: 2,
-                });
-            }
+        let engine = self.rule_engine.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "harness_bus", "rule_engine Mutex poisoned – recovering");
+            poisoned.into_inner()
+        });
+        if let Err(violation) = engine.check_red_lines(&format!("{:?}", ctx.task_type)) {
+            return PolicyVerdict::Deny(PolicyViolation {
+                kind: "red_line".to_string(),
+                detail: violation.detail.clone(),
+            });
+        }
+        // 2. Stage validation
+        if let Err(fail) = engine.validate_stage("default", &[]) {
+            return PolicyVerdict::Escalate(EscalationReason {
+                reason: fail.detail.clone(),
+                suggested_level: 2,
+            });
         }
 
         // 3. Budget check (hard limit)
-        if let Ok(budget) = self.budget.lock() {
-            if let Err(_err) = budget.check_wall_clock() {
-                return PolicyVerdict::Deny(PolicyViolation {
-                    kind: "budget".to_string(),
-                    detail: tf("error.harness_bus.budget_exceeded", &[]),
-                });
-            }
+        let budget = self.budget.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "harness_bus", "budget Mutex poisoned – recovering");
+            poisoned.into_inner()
+        });
+        if let Err(_err) = budget.check_wall_clock() {
+            return PolicyVerdict::Deny(PolicyViolation {
+                kind: "budget".to_string(),
+                detail: tf("error.harness_bus.budget_exceeded", &[]),
+            });
         }
 
         // 4. Runtime control check (adaptive sliding window / P95 / UCB)
         // NOTE: lock is acquired once here and reused at step 8 to avoid
         // deadlock from ordering with guard/security_governor locks acquired below.
-        let mut runtime_ctrl = self.runtime_control.lock().ok();
+        let mut runtime_ctrl = Some(self.runtime_control.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "harness_bus", "runtime_control Mutex poisoned – recovering");
+            poisoned.into_inner()
+        }));
         if let Some(ref mut ctrl) = runtime_ctrl {
             if ctrl.should_escalate() {
                 // Record the escalation for adaptive control metrics
@@ -715,13 +722,15 @@ impl PolicyEvaluator {
         }
 
         // 6. Self-rationalization guard (low confidence check)
-        if let Ok(mut guard) = self.guard.lock() {
-            let mut annotation = RationalizationAnnotation::default();
-            if guard.evaluate(&mut annotation, ctx.risk_score as f32, false) {
-                return PolicyVerdict::Review(ReviewReason {
-                    reason: tf("error.harness_bus.low_confidence", &[]),
-                });
-            }
+        let mut guard = self.guard.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "harness_bus", "guard Mutex poisoned – recovering");
+            poisoned.into_inner()
+        });
+        let mut annotation = RationalizationAnnotation::default();
+        if guard.evaluate(&mut annotation, ctx.risk_score as f32, false) {
+            return PolicyVerdict::Review(ReviewReason {
+                reason: tf("error.harness_bus.low_confidence", &[]),
+            });
         }
 
         // 7. Security governor policy evaluation
@@ -779,8 +788,11 @@ impl PolicyEvaluator {
         let level = self
             .sandbox_level
             .lock()
-            .map(|s| s.clone())
-            .unwrap_or_else(|_| "none".to_string());
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!(target: "harness_bus", "sandbox_level Mutex poisoned – recovering");
+                poisoned.into_inner()
+            })
+            .clone();
         let allowed = match tool {
             // Read-only file operations
             "read_file" | "search_files" | "inspect_git_diff"
@@ -812,12 +824,18 @@ impl PolicyEvaluator {
             .idempotency
             .lock()
             .map(|cache| cache.get(tool).is_some())
-            .unwrap_or(false);
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!(target: "harness_bus", "idempotency Mutex poisoned – recovering");
+                poisoned.into_inner().get(tool).is_some()
+            });
         let budget_ok = self
             .budget
             .lock()
             .map(|mut b| b.record_tool_call().is_ok())
-            .unwrap_or(false);
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!(target: "harness_bus", "budget Mutex poisoned – recovering");
+                poisoned.into_inner().record_tool_call().is_ok()
+            });
         let permitted = self.check_permission(tool, _args);
         ToolVerdict {
             allowed,
@@ -1015,38 +1033,42 @@ impl HarnessBus {
         let verdict = self.evaluator.evaluate(ctx);
         let elapsed = start.elapsed().as_millis() as u64;
 
-        if let Ok(mut p) = self.profile.lock() {
-            p.total_evaluations = p.total_evaluations.saturating_add(1);
-            p.last_evaluation_ms = elapsed;
-            match &verdict {
-                PolicyVerdict::Allow => p.allow_count = p.allow_count.saturating_add(1),
-                PolicyVerdict::Deny(v) => {
-                    p.deny_count = p.deny_count.saturating_add(1);
-                    match v.kind.as_str() {
-                        "red_line" => p.red_line_blocks = p.red_line_blocks.saturating_add(1),
-                        "budget" => p.budget_violations = p.budget_violations.saturating_add(1),
-                        _ => p.other_denials = p.other_denials.saturating_add(1),
-                    }
-                }
-                PolicyVerdict::Escalate(_) => p.escalate_count = p.escalate_count.saturating_add(1),
-                PolicyVerdict::Review(_) => p.review_count = p.review_count.saturating_add(1),
-                PolicyVerdict::AllowWithConstraints(_) => {
-                    p.allow_count = p.allow_count.saturating_add(1)
+        let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "harness_bus", "profile Mutex poisoned – recovering");
+            poisoned.into_inner()
+        });
+        p.total_evaluations = p.total_evaluations.saturating_add(1);
+        p.last_evaluation_ms = elapsed;
+        match &verdict {
+            PolicyVerdict::Allow => p.allow_count = p.allow_count.saturating_add(1),
+            PolicyVerdict::Deny(v) => {
+                p.deny_count = p.deny_count.saturating_add(1);
+                match v.kind.as_str() {
+                    "red_line" => p.red_line_blocks = p.red_line_blocks.saturating_add(1),
+                    "budget" => p.budget_violations = p.budget_violations.saturating_add(1),
+                    _ => p.other_denials = p.other_denials.saturating_add(1),
                 }
             }
-            // Derive runtime state fields from OnlineControllerState
-            if let Ok(ctrl) = self.evaluator.runtime_control.lock() {
-                p.current_escalation_level = ctrl.control_mode();
-                p.runtime_control_mode = if ctrl.should_escalate() {
-                    tf("status.harness_bus.mode_restricted", &[])
-                } else {
-                    tf("status.harness_bus.mode_standard", &[])
-                };
-                p.policy_violation_trend = ctrl.violation_trend();
-                // current_active_policies: count how many active policy layers are engaged
-                p.current_active_policies = 5u32; // rule engine + budget + runtime control + sandbox + guard
+            PolicyVerdict::Escalate(_) => p.escalate_count = p.escalate_count.saturating_add(1),
+            PolicyVerdict::Review(_) => p.review_count = p.review_count.saturating_add(1),
+            PolicyVerdict::AllowWithConstraints(_) => {
+                p.allow_count = p.allow_count.saturating_add(1)
             }
         }
+        // Derive runtime state fields from OnlineControllerState
+        let ctrl = self.evaluator.runtime_control.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "harness_bus", "evaluator.runtime_control Mutex poisoned – recovering");
+            poisoned.into_inner()
+        });
+        p.current_escalation_level = ctrl.control_mode();
+        p.runtime_control_mode = if ctrl.should_escalate() {
+            tf("status.harness_bus.mode_restricted", &[])
+        } else {
+            tf("status.harness_bus.mode_standard", &[])
+        };
+        p.policy_violation_trend = ctrl.violation_trend();
+        // current_active_policies: count how many active policy layers are engaged
+        p.current_active_policies = 5u32; // rule engine + budget + runtime control + sandbox + guard
 
         // Record execution outcome through the resilience engine (F-GAP-27).
         let success = matches!(

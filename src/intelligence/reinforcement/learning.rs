@@ -575,14 +575,8 @@ impl QLearningAgent {
         let alpha = self.learning_rate;
         let gamma = self.discount_factor;
 
-        // Use a simple hash-based coin flip instead of depending on rand
-        let coin = {
-            use std::hash::{Hash, Hasher};
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            state.hash(&mut hasher);
-            action.hash(&mut hasher);
-            hasher.finish().is_multiple_of(2)
-        };
+        // Use fastrand for a true random coin flip
+        let coin = fastrand::bool();
 
         if coin {
             // Update q_table, using q_table_2 for next-state action selection
@@ -714,33 +708,13 @@ impl RewardFunction {
     }
 }
 
-/// Simple deterministic "random" value based on hashing the current timestamp.
-/// Used to avoid adding a `rand` dependency for exploration in Q-learning.
+/// Generate a random f64 in [0, 1) using fastrand.
 fn simple_random_f64() -> f64 {
-    use std::hash::{Hash, Hasher};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    nanos.hash(&mut hasher);
-    let hash = hasher.finish();
-    (hash as f64) / (u64::MAX as f64)
+    fastrand::f64()
 }
 
 fn simple_random_u64() -> u64 {
-    use std::hash::{Hash, Hasher};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    nanos.hash(&mut hasher);
-    hasher.finish()
+    fastrand::u64(..)
 }
 
 #[cfg(test)]
@@ -786,34 +760,29 @@ mod qlearning_tests {
     #[test]
     fn test_double_q_update_creates_tables() {
         let mut agent = QLearningAgent::default();
-        // Use two different state/action combos to hit both coin-flip branches
-        agent.double_q_update(
-            &("s1".to_string(), "s1".to_string()),
-            "a1",
-            1.0,
-            &("s2".to_string(), "s2".to_string()),
-        );
-        agent.double_q_update(
-            &("s3".to_string(), "s3".to_string()),
-            "b1",
-            0.5,
-            &("s4".to_string(), "s4".to_string()),
-        );
-        // At least one table should have entries from the two updates
-        let q1_has = agent
-            .q_table
-            .contains_key(&("s1".to_string(), "s1".to_string()))
-            || agent
+        // Run enough updates so both Q-tables are virtually guaranteed entries
+        // (fastrand::bool() is truly random, so a single pair of calls may both
+        // land in the same table with 50% probability).
+        for _ in 0..20 {
+            agent.double_q_update(
+                &("s1".to_string(), "s1".to_string()),
+                "a1",
+                1.0,
+                &("s2".to_string(), "s2".to_string()),
+            );
+        }
+        assert!(
+            agent
                 .q_table
-                .contains_key(&("s3".to_string(), "s3".to_string()));
-        let q2_has = agent
-            .q_table_2
-            .contains_key(&("s1".to_string(), "s1".to_string()))
-            || agent
+                .contains_key(&("s1".to_string(), "s1".to_string())),
+            "q_table should have at least one entry"
+        );
+        assert!(
+            agent
                 .q_table_2
-                .contains_key(&("s3".to_string(), "s3".to_string()));
-        assert!(q1_has, "q_table should have at least one entry");
-        assert!(q2_has, "q_table_2 should have at least one entry");
+                .contains_key(&("s1".to_string(), "s1".to_string())),
+            "q_table_2 should have at least one entry"
+        );
     }
 
     #[test]

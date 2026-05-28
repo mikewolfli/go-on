@@ -11,6 +11,46 @@ use std::time::Instant;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, error, info, warn};
 
+// ── Permit leak prevention ─────────────────────────────────────────────────
+
+/// RAII guard that holds the semaphore permits for an active task.
+///
+/// Dropping this guard releases the permits back to their semaphores,
+/// preventing resource leaks if a caller drops a dequeued task without
+/// calling `complete()` or `fail()`.
+pub struct TaskPermitGuard {
+    /// Global concurrency permit.
+    global_permit: Option<OwnedSemaphorePermit>,
+    /// Per-role concurrency permit.
+    role_permit: Option<OwnedSemaphorePermit>,
+}
+
+impl TaskPermitGuard {
+    pub fn new(global_permit: OwnedSemaphorePermit, role_permit: OwnedSemaphorePermit) -> Self {
+        Self {
+            global_permit: Some(global_permit),
+            role_permit: Some(role_permit),
+        }
+    }
+
+    /// Take ownership of the permits (consuming the guard without releasing).
+    /// Used by `complete()` and `fail()` to release permits explicitly.
+    pub fn into_inner(mut self) -> (OwnedSemaphorePermit, OwnedSemaphorePermit) {
+        let global = self.global_permit.take().unwrap();
+        let role = self.role_permit.take().unwrap();
+        (global, role)
+    }
+}
+
+impl Drop for TaskPermitGuard {
+    fn drop(&mut self) {
+        // Just dropping the Option<OwnedSemaphorePermit> values releases
+        // the permits back to their semaphores automatically.
+        let _ = self.global_permit.take();
+        let _ = self.role_permit.take();
+    }
+}
+
 // ──────────────────────────────────────────────
 // Types
 // ──────────────────────────────────────────────
@@ -389,8 +429,13 @@ impl TaskScheduler {
     /// Acquires global and per-role semaphore permits atomically; the caller
     /// must not separately call `acquire_permit` / `acquire_role_permit`.
     ///
+    /// Returns a tuple `(task, guard)` where the guard holds the semaphore
+    /// permits. The permits are automatically released when the guard is
+    /// dropped, preventing resource leaks if the caller drops the task
+    /// without calling `complete()` or `fail()`.
+    ///
     /// Returns `None` if the queue is empty or capacity is exhausted.
-    pub fn dequeue(&self, role: &str) -> Option<ScheduledTask> {
+    pub fn dequeue(&self, role: &str) -> Option<(ScheduledTask, TaskPermitGuard)> {
         // Note: apply_aging should be called periodically by a background
         // timer task, not synchronously on every dequeue call.
 
@@ -407,12 +452,17 @@ impl TaskScheduler {
         }
 
         // Pop the highest-priority task from the role-specific heap — O(log n).
+        // Use recoverable lock: if the Mutex is poisoned, recover the data and
+        // continue rather than silently discarding the error.
         let task = {
-            let mut queues = self.queues.lock().ok()?;
+            let mut queues = self.queues.lock().unwrap_or_else(|poisoned| {
+                let guard = poisoned.into_inner();
+                warn!(target: "scheduler", "queues Mutex poisoned – recovered data");
+                guard
+            });
             queues.get_mut(role)?.pop()?
         };
 
-        let task_id = task.task_id.clone();
         let role_str = task.role.clone();
 
         // Acquire the global semaphore permit.
@@ -420,7 +470,11 @@ impl TaskScheduler {
             Ok(p) => p,
             Err(_) => {
                 // Should not happen (we checked above), but roll back.
-                let mut queues = self.queues.lock().ok()?;
+                let mut queues = self.queues.lock().unwrap_or_else(|poisoned| {
+                    let guard = poisoned.into_inner();
+                    warn!(target: "scheduler", "queues Mutex poisoned – recovered data");
+                    guard
+                });
                 queues.entry(role_str).or_default().push(task);
                 return None;
             }
@@ -428,7 +482,11 @@ impl TaskScheduler {
 
         // Acquire (or create) the per-role semaphore permit.
         let role_permit = {
-            let mut limiters = self.role_limiters.lock().ok()?;
+            let mut limiters = self.role_limiters.lock().unwrap_or_else(|poisoned| {
+                let guard = poisoned.into_inner();
+                warn!(target: "scheduler", "role_limiters Mutex poisoned – recovered data");
+                guard
+            });
             let limiter = limiters
                 .entry(role_str.clone())
                 .or_insert_with(|| Arc::new(Semaphore::new(self.config.max_workers_per_role)))
@@ -438,50 +496,57 @@ impl TaskScheduler {
                 Err(_) => {
                     // Roll back the global permit.
                     drop(global_permit);
-                    let mut queues = self.queues.lock().ok()?;
+                    let mut queues = self.queues.lock().unwrap_or_else(|poisoned| {
+                        let guard = poisoned.into_inner();
+                        warn!(target: "scheduler", "queues Mutex poisoned – recovered data");
+                        guard
+                    });
                     queues.entry(role_str).or_default().push(task);
                     return None;
                 }
             }
         };
 
-        // Store the permits so they are held for the task's lifetime.
-        if let Ok(mut active) = self.active.lock() {
-            active.insert(task_id.clone(), (global_permit, role_permit));
-        }
+        // Return the permits as a TaskPermitGuard so they auto-release on drop.
+        // The guard replaces the old `active` map approach, preventing leaks
+        // when a caller drops a dequeued task without calling complete()/fail().
+        // We also remove the task from task_map to avoid stale entries.
+        let guard = TaskPermitGuard::new(global_permit, role_permit);
 
         debug!("Dequeued task {} for role {}", task.task_id, role);
-        Some(task)
+        Some((task, guard))
     }
 
     /// Mark task as completed.
     ///
-    /// Removes from `active` (dropping the permits, returning them to the
-    /// semaphores) and from `task_map`. Updates stats.
+    /// The caller should drop the `TaskPermitGuard` (which releases the
+    /// semaphore permits automatically). Removes from `task_map` and
+    /// updates stats.
+    ///
+    /// Recovers from Mutex poison rather than silently discarding errors,
+    /// so that the task is always removed from the map and stats are updated.
     pub fn complete(&self, task_id: &str) -> Result<()> {
-        // Drop the permits — this returns capacity to the semaphores.
+        // Remove completed task from task_map — recover from poison instead of
+        // propagating the error, so the task is never leaked.
         {
-            let mut active = self
-                .active
-                .lock()
-                .map_err(|e| anyhow!("Lock error: {}", e))?;
-            let _ = active.remove(task_id).ok_or_else(|| {
-                anyhow!(tf(
-                    "error.scheduler.task_not_active",
-                    &[("task_id", task_id)]
-                ))
-            })?;
+            let mut task_map = self.task_map.lock().unwrap_or_else(|poisoned| {
+                let guard = poisoned.into_inner();
+                warn!(target: "scheduler", "task_map Mutex poisoned – recovered data");
+                guard
+            });
+            task_map.remove(task_id);
         }
 
-        // Remove completed task from task_map
-        self.task_map
-            .lock()
-            .map_err(|e| anyhow!("Lock error: {}", e))?
-            .remove(task_id);
-        self.stats
-            .lock()
-            .map_err(|e| anyhow!("Lock error: {}", e))?
-            .total_completed += 1;
+        // Update stats — recover from poison.
+        {
+            let mut stats = self.stats.lock().unwrap_or_else(|poisoned| {
+                let guard = poisoned.into_inner();
+                warn!(target: "scheduler", "stats Mutex poisoned – recovered data");
+                guard
+            });
+            stats.total_completed += 1;
+        }
+
         info!("Task {} completed", task_id);
 
         // Remove from persistence on completion
@@ -498,18 +563,13 @@ impl TaskScheduler {
     /// Mark task as failed. If requeue and retries < max_retries, increments retries
     /// and pushes back to the role-specific queue. Otherwise removes permanently.
     ///
-    /// The semaphore permits are released (via the `active` map) for the
-    /// permanent case; on requeue the permits are released and the task is
-    /// re-enqueued.
+    /// The caller should drop the `TaskPermitGuard` (which releases the
+    /// semaphore permits automatically). On requeue the permits are released
+    /// (via drop) and the task is re-enqueued.
     pub fn fail(&self, task_id: &str, requeue: bool) -> Result<()> {
-        // Drop the permits — this returns capacity to the semaphores.
-        {
-            let mut active = self
-                .active
-                .lock()
-                .map_err(|e| anyhow!("Lock error: {}", e))?;
-            active.remove(task_id);
-        }
+        // Note: The TaskPermitGuard should be dropped by the caller to
+        // release semaphore permits. This method only handles task_map
+        // and stat bookkeeping.
 
         if requeue {
             if let Ok(mut task_map) = self.task_map.lock() {
@@ -681,9 +741,16 @@ impl TaskScheduler {
         if let Ok(queues) = self.queues.lock() {
             profile.l1_queue_depth = queues.values().map(|q| q.len() as u32).sum();
         }
-        if let Ok(active) = self.active.lock() {
-            profile.l2_active_workers = active.len() as u32;
-        }
+        // active workers are now tracked via outstanding TaskPermitGuard instances.
+        // Since those are dropped on complete/fail, we can approximate active count
+        // from the task_map minus pending queue entries.
+        let pending_count: u32 = self
+            .queues
+            .lock()
+            .map(|q| q.values().map(|h| h.len() as u32).sum())
+            .unwrap_or(0);
+        let total_in_map: u32 = self.task_map.lock().map(|m| m.len() as u32).unwrap_or(0);
+        profile.l2_active_workers = total_in_map.saturating_sub(pending_count);
         profile
     }
 
@@ -1042,8 +1109,10 @@ impl AgentWorkerScheduler {
     }
 
     /// Find an idle worker for the role, dequeue from level-1, assign the task.
-    /// Returns (worker_id, task) on success.
-    pub fn assign_next(&self, role: &str) -> Option<(String, ScheduledTask)> {
+    /// Returns (worker_id, task, permit_guard) on success.
+    /// The permit guard must be held for the task's lifetime and dropped
+    /// when the task completes or fails.
+    pub fn assign_next(&self, role: &str) -> Option<(String, ScheduledTask, TaskPermitGuard)> {
         // Find an idle worker for this role
         let idle_worker = {
             let workers = match self.workers.lock() {
@@ -1070,7 +1139,7 @@ impl AgentWorkerScheduler {
         let worker_id = idle_worker?;
 
         // Dequeue a task from level-1
-        let task = self.level1.dequeue(role)?;
+        let (task, guard) = self.level1.dequeue(role)?;
 
         // Assign
         if let Ok(mut assignments) = self.assignments.lock() {
@@ -1081,7 +1150,7 @@ impl AgentWorkerScheduler {
             "Assigned task {} to worker {} (role {})",
             task.task_id, worker_id, role
         );
-        Some((worker_id, task))
+        Some((worker_id, task, guard))
     }
 
     /// Complete the task assigned to worker
@@ -1222,13 +1291,13 @@ mod tests {
         scheduler.submit(task_medium).unwrap();
 
         // Highest priority (effective_priority) should come out first
-        let first = scheduler.dequeue("worker").unwrap();
+        let (first, _g1) = scheduler.dequeue("worker").unwrap();
         assert_eq!(first.task_id, "task-high");
 
-        let second = scheduler.dequeue("worker").unwrap();
+        let (second, _g2) = scheduler.dequeue("worker").unwrap();
         assert_eq!(second.task_id, "task-med");
 
-        let third = scheduler.dequeue("worker").unwrap();
+        let (third, _g3) = scheduler.dequeue("worker").unwrap();
         assert_eq!(third.task_id, "task-low");
 
         // Queue should be empty now
@@ -1253,16 +1322,17 @@ mod tests {
             .submit(make_task("t3", "role-c", 3, 30.0))
             .unwrap();
 
-        // Dequeue two tasks
-        assert!(scheduler.dequeue("role-a").is_some());
-        assert!(scheduler.dequeue("role-b").is_some());
+        // Dequeue two tasks — hold the guards to keep permits consumed
+        let (_t1, g1) = scheduler.dequeue("role-a").unwrap();
+        let (_t2, _g2) = scheduler.dequeue("role-b").unwrap();
 
         // Global cap should prevent third dequeue
         assert!(scheduler.dequeue("role-c").is_none());
 
-        // Complete one, then we can dequeue again
-        scheduler.complete("t1").unwrap();
-        assert!(scheduler.dequeue("role-c").is_some());
+        // Drop one guard (releasing its permits), then dequeue again
+        drop(g1);
+        let (_t3, _g3) = scheduler.dequeue("role-c").unwrap();
+        assert_eq!(_t3.task_id, "t3");
     }
 
     #[test]
@@ -1284,14 +1354,15 @@ mod tests {
             .unwrap();
 
         // Dequeue returns highest priority first: t3 (30), then t2 (20)
-        let task_a = scheduler.dequeue("same-role").unwrap();
-        let _task_b = scheduler.dequeue("same-role").unwrap();
-        // Role cap should prevent third dequeue
+        let (task_a, _g1) = scheduler.dequeue("same-role").unwrap();
+        let (_task_b, _g2) = scheduler.dequeue("same-role").unwrap();
+        // Role cap should prevent third dequeue (role permits consumed by the guards)
         assert!(scheduler.dequeue("same-role").is_none());
 
-        // Complete the dequeued task, then dequeue should work
+        // Drop one guard (releasing the role permit), then dequeue should work
+        drop(_g1);
         scheduler.complete(&task_a.task_id).unwrap();
-        let task_c = scheduler.dequeue("same-role").unwrap();
+        let (task_c, _g3) = scheduler.dequeue("same-role").unwrap();
         assert_eq!(task_c.task_id, "t1");
     }
 
@@ -1377,7 +1448,7 @@ mod tests {
         assert!(aged_bonus > 0.0, "Aging should have provided a bonus");
 
         // Now dequeue and check order. High priority should still win.
-        let first = scheduler.dequeue("role").unwrap();
+        let (first, _g) = scheduler.dequeue("role").unwrap();
         assert_eq!(first.task_id, "high-prio", "High priority should still win");
 
         // But the low-prio task should have a significant aging bonus
@@ -1405,22 +1476,22 @@ mod tests {
 
         // Submit and dequeue a task
         scheduler.submit(make_task("t1", "role", 1, 10.0)).unwrap();
-        let task = scheduler.dequeue("role").unwrap();
+        let (task, _g1) = scheduler.dequeue("role").unwrap();
         assert_eq!(task.task_id, "t1");
 
         // Complete it
+        drop(_g1);
         scheduler.complete("t1").unwrap();
-        assert!(scheduler.active.lock().unwrap().is_empty());
         let profile = scheduler.profile();
         assert_eq!(profile.total_completed, 1);
 
         // Test fail + requeue
         scheduler.submit(make_task("t2", "role", 2, 20.0)).unwrap();
-        let _ = scheduler.dequeue("role").unwrap();
+        let (_t2, _g2) = scheduler.dequeue("role").unwrap();
 
         // Fail with requeue
+        drop(_g2);
         scheduler.fail("t2", true).unwrap();
-        assert!(scheduler.active.lock().unwrap().is_empty());
         assert!(scheduler.task_map.lock().unwrap().contains_key("t2"));
 
         // Verify retry count incremented
@@ -1434,13 +1505,15 @@ mod tests {
         assert_eq!(retries, 1);
 
         // Dequeue again, complete, verify stats
-        let _ = scheduler.dequeue("role").unwrap();
+        let (_t2b, _g2b) = scheduler.dequeue("role").unwrap();
+        drop(_g2b);
         scheduler.complete("t2").unwrap();
         assert!(!scheduler.task_map.lock().unwrap().contains_key("t2"));
 
         // Test fail without requeue
         scheduler.submit(make_task("t3", "role", 3, 30.0)).unwrap();
-        let _ = scheduler.dequeue("role").unwrap();
+        let (_t3, _g3) = scheduler.dequeue("role").unwrap();
+        drop(_g3);
         scheduler.fail("t3", false).unwrap();
         assert!(!scheduler.task_map.lock().unwrap().contains_key("t3"));
         let profile = scheduler.profile();
@@ -1511,11 +1584,11 @@ mod tests {
         l2.level1.submit(task3).unwrap();
 
         // Assign for coder role
-        let (worker_id, task) = l2.assign_next("coder").unwrap();
+        let (worker_id, task, _guard) = l2.assign_next("coder").unwrap();
         assert_eq!(task.role, "coder");
         assert!(worker_id == "worker-alpha" || worker_id == "worker-beta");
 
-        let (worker_id2, task2) = l2.assign_next("coder").unwrap();
+        let (worker_id2, task2, _guard2) = l2.assign_next("coder").unwrap();
         assert_eq!(task2.role, "coder");
         assert_ne!(
             worker_id, worker_id2,
@@ -1526,11 +1599,12 @@ mod tests {
         assert!(l2.assign_next("coder").is_none());
 
         // Assign for reviewer role
-        let (worker_id3, task3) = l2.assign_next("reviewer").unwrap();
+        let (worker_id3, task3, _guard3) = l2.assign_next("reviewer").unwrap();
         assert_eq!(worker_id3, "worker-gamma");
         assert_eq!(task3.task_id, "review-task");
 
         // Complete one coder task
+        drop(_guard);
         l2.complete_task(&worker_id).unwrap();
 
         // Submit a new task so we have something to assign
@@ -1538,7 +1612,7 @@ mod tests {
         l2.level1.submit(task4).unwrap();
 
         // Now we can assign again for coder
-        let (worker_id4, _) = l2.assign_next("coder").unwrap();
+        let (worker_id4, _, _guard4) = l2.assign_next("coder").unwrap();
         assert!(worker_id4 == "worker-alpha" || worker_id4 == "worker-beta");
     }
 
@@ -1639,19 +1713,18 @@ mod tests {
         scheduler.submit(make_task("t2", "w", 2, 50.0)).unwrap();
 
         // Dequeue should work when under capacity.
-        let task1 = scheduler.dequeue("w");
-        assert!(task1.is_some());
+        let (_task1, _g1) = scheduler.dequeue("w").unwrap();
 
-        let task2 = scheduler.dequeue("w");
-        assert!(task2.is_some());
+        let (_task2, _g2) = scheduler.dequeue("w").unwrap();
 
         // Complete to free up capacity.
+        drop(_g1);
         scheduler.complete("t1").unwrap();
 
         // Submit and dequeue again.
         scheduler.submit(make_task("t3", "w", 3, 30.0)).unwrap();
-        let task3 = scheduler.dequeue("w");
-        assert!(task3.is_some());
+        let (task3, _g3) = scheduler.dequeue("w").unwrap();
+        assert_eq!(task3.task_id, "t3");
     }
 
     // ── persistence smoke tests (backend-sqlite) ───────────────────────

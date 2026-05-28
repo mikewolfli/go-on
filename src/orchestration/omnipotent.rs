@@ -348,12 +348,16 @@ impl OmnipotentMode {
 
     /// Return a snapshot of the current omnipotent mode profile metrics.
     pub fn profile(&self) -> OmnipotentProfile {
+        let active_sessions = self.active_sessions.load(Ordering::Acquire);
         self.profile
             .lock()
-            .map(|p| p.clone())
+            .map(|p| OmnipotentProfile {
+                active_sessions,
+                ..p.clone()
+            })
             .unwrap_or(OmnipotentProfile {
                 enabled: self.enabled.load(Ordering::Acquire),
-                active_sessions: self.active_sessions.load(Ordering::Acquire),
+                active_sessions,
                 total_escalations: 0,
                 total_actions: 0,
                 revoked_tokens: 0,

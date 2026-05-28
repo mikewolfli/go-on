@@ -4,8 +4,6 @@
 //! process crashes, resource exhaustion) and verifies that the
 //! RecoveryAction chain and fault tolerance mechanisms handle them correctly.
 
-#![cfg_attr(not(test), allow(dead_code, unused_imports))]
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -339,6 +337,7 @@ impl Default for ChaosEngine {
 // Built-in scenarios
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 pub fn network_resilience_scenario() -> DrillScenario {
     DrillScenario {
         name: "network_resilience".to_string(),
@@ -372,6 +371,7 @@ pub fn network_resilience_scenario() -> DrillScenario {
     }
 }
 
+#[allow(dead_code)]
 pub fn storage_resilience_scenario() -> DrillScenario {
     DrillScenario {
         name: "storage_resilience".to_string(),

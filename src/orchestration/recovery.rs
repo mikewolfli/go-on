@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_json::Value;
 use std::fmt;
-use std::time::Instant;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -297,10 +296,12 @@ pub struct RecoveryAttempt {
     pub action_taken: RecoveryAction,
     /// Whether the recovery was successful.
     pub success: bool,
-    /// Duration of the recovery attempt in milliseconds.
+    /// Duration of the recovery attempt in milliseconds (populated by record_outcome).
     pub duration_ms: u64,
     /// Evidence payload capturing context, error details, and outcome data.
     pub evidence: Value,
+    /// Monotonic timestamp (ms) when this attempt was created.
+    pub started_at_ms: u64,
 }
 
 impl RecoveryAttempt {
@@ -318,6 +319,10 @@ impl RecoveryAttempt {
             success: false,
             duration_ms,
             evidence,
+            started_at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
         }
     }
 }
@@ -478,29 +483,16 @@ impl RecoveryOrchestrator {
             .ok_or_else(|| format!("strategy '{}' has no actions", strategy.name))?;
 
         // Record the auto-recovery attempt (pre-execution, marked as pending).
-        let start = Instant::now();
+        // duration_ms is left as 0 — it will be populated by record_outcome()
+        // which computes elapsed time from started_at_ms.
         let attempt = RecoveryAttempt::new(failure_type, action.clone(), 0, context.clone());
-        let attempt_id = attempt.attempt_id.clone();
 
-        self.recovery_attempts.push(RecoveryAttempt {
-            attempt_id,
-            failure: failure_type.to_string(),
-            action_taken: action.clone(),
-            success: false,
-            duration_ms: 0,
-            evidence: context.clone(),
-        });
+        self.recovery_attempts.push(attempt);
 
         // Track attempt count only after we pick an action (not escalate).
         self.total_auto_attempts += 1;
         if let Some(idx) = strategy_index {
             self.strategies[idx].attempt_count += 1;
-        }
-
-        // Update the duration on the stored attempt.
-        let elapsed_ms = start.elapsed().as_millis() as u64;
-        if let Some(last) = self.recovery_attempts.last_mut() {
-            last.duration_ms = elapsed_ms;
         }
 
         Ok(action)
@@ -510,13 +502,19 @@ impl RecoveryOrchestrator {
     ///
     /// Updates strategy success tracking and consecutive failure counters.
     pub fn record_outcome(&mut self, attempt_id: &str, success: bool) {
-        // Update the attempt record.
+        // Update the attempt record and compute actual execution duration.
         if let Some(attempt) = self
             .recovery_attempts
             .iter_mut()
             .find(|a| a.attempt_id == attempt_id)
         {
             attempt.success = success;
+            // Compute actual duration from recorded start time to now.
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            attempt.duration_ms = now_ms.saturating_sub(attempt.started_at_ms);
         }
 
         // Update strategy statistics.

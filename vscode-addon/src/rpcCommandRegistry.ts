@@ -17,6 +17,33 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Safely serialize a value to JSON, falling back to readable representation
+ * if the value contains circular references or other serialization issues.
+ */
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    // Circular reference or other serialization issue
+    try {
+      // Use a replacer that tracks visited objects
+      const seen = new WeakSet<object>();
+      return JSON.stringify(value, (_key: string, val: unknown) => {
+        if (typeof val === "object" && val !== null) {
+          if (seen.has(val)) {
+            return "[Circular]";
+          }
+          seen.add(val);
+        }
+        return val;
+      });
+    } catch {
+      return String(value);
+    }
+  }
+}
+
 async function ensureRunning(deps: RpcCommandRegistryDeps): Promise<boolean> {
   if (!deps.isRunning()) {
     await vscode.window.showErrorMessage(
@@ -54,7 +81,7 @@ export function registerRpcCommands(
         vscode.window.showInformationMessage(
           i18n.getMessage(MessageKeys.rpcCommandCompleted, [
             "workflow.execute",
-            JSON.stringify(result),
+            safeStringify(result),
           ]),
         );
       } catch (error: unknown) {
@@ -88,7 +115,7 @@ export function registerRpcCommands(
         vscode.window.showInformationMessage(
           i18n.getMessage(MessageKeys.rpcCommandCompleted, [
             "task.plan",
-            JSON.stringify(result),
+            safeStringify(result),
           ]),
         );
       } catch (error: unknown) {
@@ -165,7 +192,7 @@ export function registerRpcCommands(
         vscode.window.showInformationMessage(
           i18n.getMessage(MessageKeys.rpcCommandResult, [
             "learning.summary",
-            JSON.stringify(result),
+            safeStringify(result),
           ]),
         );
       } catch (error: unknown) {
@@ -606,7 +633,7 @@ export function registerRpcCommands(
         vscode.window.showInformationMessage(
           i18n.getMessage(MessageKeys.rpcCommandResult, [
             "autotune.status",
-            JSON.stringify(result),
+            safeStringify(result),
           ]),
         );
       } catch (error: unknown) {
@@ -939,7 +966,7 @@ export function registerRpcCommands(
         vscode.window.showInformationMessage(
           i18n.getMessage(MessageKeys.rpcCommandResult, [
             "autotune.get",
-            JSON.stringify(result),
+            safeStringify(result),
           ]),
         );
       } catch (error: unknown) {
@@ -972,7 +999,7 @@ export function registerRpcCommands(
         vscode.window.showInformationMessage(
           i18n.getMessage(MessageKeys.rpcCommandResult, [
             "autotune.reset",
-            JSON.stringify(result),
+            safeStringify(result),
           ]),
         );
       } catch (error: unknown) {
@@ -1295,7 +1322,7 @@ export function registerRpcCommands(
         vscode.window.showInformationMessage(
           i18n.getMessage(MessageKeys.rpcCommandResult, [
             "trace.get",
-            JSON.stringify(result),
+            safeStringify(result),
           ]),
         );
       } catch (error: unknown) {
@@ -1391,7 +1418,7 @@ export function registerRpcCommands(
         vscode.window.showInformationMessage(
           i18n.getMessage(MessageKeys.rpcCommandResult, [
             "breaker.reset",
-            JSON.stringify(result),
+            safeStringify(result),
           ]),
         );
       } catch (error: unknown) {
@@ -1500,7 +1527,7 @@ export function registerRpcCommands(
         );
         vscode.window.showInformationMessage(
           i18n.getMessage(MessageKeys.checkpointCreated, [
-            JSON.stringify(result),
+            safeStringify(result),
           ]),
         );
       } catch (error: unknown) {
@@ -1535,7 +1562,7 @@ export function registerRpcCommands(
         });
         vscode.window.showInformationMessage(
           i18n.getMessage(MessageKeys.checkpointsResult, [
-            JSON.stringify(result),
+            safeStringify(result),
           ]),
         );
       } catch (error: unknown) {
@@ -1577,7 +1604,7 @@ export function registerRpcCommands(
           checkpoint_id: checkpointId,
         });
         vscode.window.showInformationMessage(
-          i18n.getMessage(MessageKeys.rolledBack, [JSON.stringify(result)]),
+          i18n.getMessage(MessageKeys.rolledBack, [safeStringify(result)]),
         );
       } catch (error: unknown) {
         vscode.window.showErrorMessage(
@@ -1601,7 +1628,7 @@ export function registerRpcCommands(
         vscode.window.showInformationMessage(
           i18n.getMessage(MessageKeys.rpcCommandResult, [
             "primary_secondary.summary",
-            JSON.stringify(result),
+            safeStringify(result),
           ]),
         );
       } catch (error: unknown) {

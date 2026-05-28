@@ -201,8 +201,10 @@ fn extract_objective(messages: &[Message]) -> String {
         .map(|m| {
             let text = m.content.trim();
             // Take first 200 chars as the objective
-            if text.len() > 200 {
-                format!("{}...", &text[..200])
+            // Use chars() to avoid panic on multi-byte UTF-8 boundary
+            let char_count = text.chars().count();
+            if char_count > 200 {
+                format!("{}...", text.chars().take(200).collect::<String>())
             } else {
                 text.to_string()
             }
@@ -211,26 +213,46 @@ fn extract_objective(messages: &[Message]) -> String {
 }
 
 /// Split text into chunks for streaming (preserving word boundaries).
+/// Uses char_indices to avoid panic on multi-byte UTF-8 boundaries.
 fn split_for_streaming(text: &str, chunk_size: usize) -> Vec<String> {
     let mut chunks = Vec::new();
-    let mut start = 0;
-    let bytes = text.as_bytes();
-    while start < bytes.len() {
-        let end = (start + chunk_size).min(bytes.len());
-        // Try to break at a word boundary
-        let break_at = if end < bytes.len() {
-            let search_end = end.saturating_sub(1);
-            let last_space = bytes[start..=search_end]
+    let mut start_byte = 0;
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    if chars.is_empty() {
+        return chunks;
+    }
+    let mut start_idx = 0; // char index
+    while start_idx < chars.len() {
+        let end_idx = (start_idx + chunk_size).min(chars.len());
+        let end_byte = if end_idx < chars.len() {
+            // end_byte is the byte offset of the char at end_idx — safe boundary
+            chars[end_idx].0
+        } else {
+            text.len()
+        };
+        // Try to break at a word boundary (space)
+        let break_at = if end_idx < chars.len() {
+            // Search backwards in the visible bytes for a space
+            let search_bytes = &text.as_bytes()[start_byte..end_byte];
+            let last_space = search_bytes
                 .iter()
                 .rposition(|&b| b == b' ')
-                .map(|pos| start + pos + 1)
-                .unwrap_or(end);
-            last_space
+                .map(|pos| start_byte + pos + 1);
+            match last_space {
+                Some(boundary) => boundary,
+                None => end_byte,
+            }
         } else {
-            end
+            text.len()
         };
-        chunks.push(text[start..break_at].to_string());
-        start = break_at;
+        chunks.push(text[start_byte..break_at].to_string());
+        // Advance start_byte to break_at, and start_idx to the corresponding char index
+        start_byte = break_at;
+        // Find the char index for the new start byte
+        match chars.binary_search_by_key(&start_byte, |&(b, _)| b) {
+            Ok(idx) => start_idx = idx,
+            Err(idx) => start_idx = idx,
+        }
     }
     chunks
 }

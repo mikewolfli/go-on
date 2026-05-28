@@ -156,10 +156,13 @@ impl DiscoveryCenter {
     /// Returns `Err(DiscoveryError::DuplicatePattern)` when a pattern with the
     /// same name already exists.
     pub fn register_pattern(&self, pattern: SolutionPattern) -> Result<()> {
-        let mut patterns = self
-            .patterns
-            .write()
-            .map_err(|_| DiscoveryError::DuplicatePattern(pattern.name.clone()))?;
+        let mut patterns = match self.patterns.write() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::warn!(target: "discovery", "patterns RwLock poisoned – recovering");
+                poisoned.into_inner()
+            }
+        };
 
         if patterns.contains_key(&pattern.name) {
             return Err(DiscoveryError::DuplicatePattern(pattern.name));
@@ -176,10 +179,13 @@ impl DiscoveryCenter {
     /// Returns the auto-generated entry id on success.  When the centre is at
     /// capacity the oldest entry (by `last_used_ms`) is evicted first.
     pub fn record_solution(&self, entry: DiscoveryEntry) -> Result<String> {
-        let mut entries = self
-            .entries
-            .lock()
-            .map_err(|_| DiscoveryError::EntryNotFound("lock poisoned".to_string()))?;
+        let mut entries = match self.entries.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::warn!(target: "discovery", "entries Mutex poisoned – recovering");
+                poisoned.into_inner()
+            }
+        };
 
         // Evict the least-recently-used entry when at capacity.
         if entries.len() >= self.max_entries {
@@ -214,14 +220,9 @@ impl DiscoveryCenter {
 
         let entries = match self.entries.lock() {
             Ok(e) => e.clone(),
-            Err(_) => {
-                tracing::warn!("DiscoveryCenter lock poisoned in search");
-                return DiscoveryResult {
-                    entries: vec![],
-                    total_matches: 0,
-                    query_duration_ms: now_ms().saturating_sub(start),
-                    best_match: None,
-                };
+            Err(poisoned) => {
+                tracing::warn!(target: "discovery", "entries Mutex poisoned – recovering in search");
+                poisoned.into_inner().clone()
             }
         };
 
@@ -300,9 +301,9 @@ impl DiscoveryCenter {
     pub fn extract_patterns(&self, min_success_rate: f64, min_occurrences: usize) -> Vec<String> {
         let entries = match self.entries.lock() {
             Ok(e) => e.clone(),
-            Err(_) => {
-                tracing::warn!("DiscoveryCenter lock poisoned in extract_patterns");
-                return Vec::new();
+            Err(poisoned) => {
+                tracing::warn!(target: "discovery", "entries Mutex poisoned – recovering in extract_patterns");
+                poisoned.into_inner().clone()
             }
         };
 
@@ -398,9 +399,9 @@ impl DiscoveryCenter {
     pub fn abstract_knowledge(&self) -> Vec<String> {
         let patterns = match self.patterns.read() {
             Ok(p) => p.clone(),
-            Err(_) => {
-                tracing::warn!("DiscoveryCenter RwLock poisoned in abstract_knowledge");
-                return Vec::new();
+            Err(poisoned) => {
+                tracing::warn!(target: "discovery", "patterns RwLock poisoned – recovering in abstract_knowledge");
+                poisoned.into_inner().clone()
             }
         };
 
@@ -456,9 +457,9 @@ impl DiscoveryCenter {
     pub fn record_outcome(&self, entry_id: &str, success: bool) {
         let mut entries = match self.entries.lock() {
             Ok(e) => e,
-            Err(_) => {
-                tracing::warn!("DiscoveryCenter lock poisoned in record_outcome");
-                return;
+            Err(poisoned) => {
+                tracing::warn!(target: "discovery", "entries Mutex poisoned – recovering in record_outcome");
+                poisoned.into_inner()
             }
         };
 
@@ -486,9 +487,9 @@ impl DiscoveryCenter {
     pub fn most_successful(&self, category: &str, limit: usize) -> Vec<DiscoveryEntry> {
         let entries = match self.entries.lock() {
             Ok(e) => e.clone(),
-            Err(_) => {
-                tracing::warn!("DiscoveryCenter lock poisoned in most_successful");
-                return vec![];
+            Err(poisoned) => {
+                tracing::warn!(target: "discovery", "entries Mutex poisoned – recovering in most_successful");
+                poisoned.into_inner().clone()
             }
         };
 
@@ -517,16 +518,9 @@ impl DiscoveryCenter {
     pub fn profile(&self) -> DiscoveryProfile {
         match self.profile.lock() {
             Ok(p) => p.clone(),
-            Err(_) => {
-                tracing::warn!("DiscoveryCenter lock poisoned in profile");
-                DiscoveryProfile {
-                    enabled: true,
-                    total_entries: 0,
-                    total_patterns: 0,
-                    categories: 0,
-                    avg_success_rate: 0.0,
-                    top_pattern: String::new(),
-                }
+            Err(poisoned) => {
+                tracing::warn!(target: "discovery", "profile Mutex poisoned – recovering");
+                poisoned.into_inner().clone()
             }
         }
     }
@@ -537,16 +531,16 @@ impl DiscoveryCenter {
     fn refresh_profile(&self) {
         let entries = match self.entries.lock() {
             Ok(e) => e.clone(),
-            Err(_) => {
-                tracing::warn!("DiscoveryCenter lock poisoned in refresh_profile (entries)");
-                return;
+            Err(poisoned) => {
+                tracing::warn!(target: "discovery", "entries Mutex poisoned – recovering in refresh_profile");
+                poisoned.into_inner().clone()
             }
         };
         let patterns = match self.patterns.read() {
             Ok(p) => p.clone(),
-            Err(_) => {
-                tracing::warn!("DiscoveryCenter RwLock poisoned in refresh_profile (patterns)");
-                return;
+            Err(poisoned) => {
+                tracing::warn!(target: "discovery", "patterns RwLock poisoned – recovering in refresh_profile");
+                poisoned.into_inner().clone()
             }
         };
 
@@ -579,12 +573,23 @@ impl DiscoveryCenter {
             .map(|p| p.name.clone())
             .unwrap_or_default();
 
-        if let Ok(mut profile) = self.profile.lock() {
-            profile.total_entries = total_entries;
-            profile.total_patterns = total_patterns;
-            profile.categories = categories;
-            profile.avg_success_rate = avg_success_rate;
-            profile.top_pattern = top_pattern;
+        match self.profile.lock() {
+            Ok(mut profile) => {
+                profile.total_entries = total_entries;
+                profile.total_patterns = total_patterns;
+                profile.categories = categories;
+                profile.avg_success_rate = avg_success_rate;
+                profile.top_pattern = top_pattern;
+            }
+            Err(poisoned) => {
+                tracing::warn!(target: "discovery", "profile Mutex poisoned – recovering in refresh_profile");
+                let mut profile = poisoned.into_inner();
+                profile.total_entries = total_entries;
+                profile.total_patterns = total_patterns;
+                profile.categories = categories;
+                profile.avg_success_rate = avg_success_rate;
+                profile.top_pattern = top_pattern;
+            }
         }
     }
 }

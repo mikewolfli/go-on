@@ -15,7 +15,9 @@ use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message, ModelInfo};
-use crate::agents::agent::{chat_request_failed_msg, request_failed_msg, token_request_failed_msg};
+use crate::agents::agent::{
+    chat_request_failed_msg, is_non_retryable_4xx, request_failed_msg, token_request_failed_msg,
+};
 use crate::agents::{option_f64, option_string, principles_to_text, stream_sse_to_sender};
 
 const STRICT_STAGE_NOTE: &str = "Enforce strict completeness checks: no empty functions, no unhandled errors, no missing boundary checks, and no placeholder implementations.";
@@ -224,6 +226,10 @@ impl Agent for WenxinAgent {
             {
                 Ok(()) => return Ok(()),
                 Err(err) => {
+                    let err_msg = err.to_string();
+                    if is_non_retryable_4xx(&err_msg) {
+                        return Err(err.into());
+                    }
                     last_error = Some(err);
                     if attempt < 2 {
                         sleep(Duration::from_secs(1_u64 << attempt)).await;

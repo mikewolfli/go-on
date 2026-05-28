@@ -2,6 +2,7 @@
 //! buffer pooling, and extraction caching for maximum throughput.
 
 use std::sync::Mutex;
+use tracing;
 
 #[cfg(test)]
 use crate::agent::StreamingSender;
@@ -40,7 +41,10 @@ impl SseBufferPool {
     }
 
     pub fn acquire(&self) -> Vec<u8> {
-        let mut guard = self.buffers.lock().unwrap();
+        let mut guard = self.buffers.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "sse_optimizer", "SseBufferPool buffers Mutex poisoned – recovering");
+            poisoned.into_inner()
+        });
         guard
             .pop()
             .unwrap_or_else(|| Vec::with_capacity(self.max_capacity))
@@ -48,7 +52,10 @@ impl SseBufferPool {
 
     pub fn release(&self, mut buf: Vec<u8>) {
         buf.clear();
-        let mut guard = self.buffers.lock().unwrap();
+        let mut guard = self.buffers.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "sse_optimizer", "SseBufferPool buffers Mutex poisoned – recovering");
+            poisoned.into_inner()
+        });
         if guard.len() < 32 {
             guard.push(buf);
         }

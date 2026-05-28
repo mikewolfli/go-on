@@ -607,13 +607,9 @@ impl Agent for CopilotAgent {
                             return Err(err.into());
                         }
 
-                        // Unsupported model, quota, rate-limit → skip model
+                        // Unsupported model (non-retryable) → skip model or fail
                         if err_text_lower.contains("model_not_supported")
                             || err_text_lower.contains("not supported")
-                            || err_text_lower.contains("429")
-                            || err_text_lower.contains("rate limit")
-                            || err_text_lower.contains("quota")
-                            || err_text_lower.contains("insufficient_quota")
                         {
                             if is_auto {
                                 // Try next model
@@ -621,6 +617,32 @@ impl Agent for CopilotAgent {
                             }
                             // Non-auto: fail immediately
                             return Err(err.into());
+                        }
+
+                        // Quota/rate-limit (transient) → retry with backoff
+                        if err_text_lower.contains("429")
+                            || err_text_lower.contains("rate limit")
+                            || err_text_lower.contains("quota")
+                            || err_text_lower.contains("insufficient_quota")
+                        {
+                            if is_auto {
+                                // For auto mode with multiple candidates,
+                                // still try next model after exhausting retries
+                                if attempt < 2 {
+                                    last_error = Some(err);
+                                    sleep(Duration::from_secs(1u64 << attempt)).await;
+                                    continue;
+                                }
+                                continue 'models;
+                            }
+                            // Non-auto: retry with backoff
+                            if attempt < 2 {
+                                last_error = Some(err);
+                                sleep(Duration::from_secs(1u64 << attempt)).await;
+                            } else {
+                                last_error = Some(err);
+                            }
+                            continue;
                         }
                         // Transient error → retry
                         if attempt < 2 {

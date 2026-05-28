@@ -36,22 +36,23 @@ pub(super) struct RepairAction {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(super) struct WorkflowRunRecord {
-    pub(super) run_id: String,
-    pub(super) source_method: String,
-    pub(super) task: String,
-    pub(super) status: String,
-    pub(super) phase: String,
-    pub(super) created_at: i64,
-    pub(super) started_at: i64,
-    pub(super) ended_at: Option<i64>,
-    pub(super) error: Option<String>,
-    pub(super) artifacts: Vec<String>,
-    pub(super) effective_options: Value,
+pub(crate) struct WorkflowRunRecord {
+    pub(crate) run_id: String,
+    pub(crate) source_method: String,
+    pub(crate) task: String,
+    pub(crate) status: String,
+    pub(crate) phase: String,
+    pub(crate) created_at: i64,
+    pub(crate) started_at: i64,
+    pub(crate) ended_at: Option<i64>,
+    pub(crate) error: Option<String>,
+    pub(crate) artifacts: Vec<String>,
+    pub(crate) effective_options: Value,
 }
 
-static WORKFLOW_RUNS: OnceLock<StdMutex<Vec<WorkflowRunRecord>>> = OnceLock::new();
-static WORKFLOW_RUN_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+pub(crate) static WORKFLOW_RUNS: OnceLock<StdMutex<Vec<WorkflowRunRecord>>> = OnceLock::new();
+pub(crate) static WORKFLOW_RUN_SEQ: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1);
 
 #[derive(Clone)]
 pub(super) struct RuntimeExecutionContext {

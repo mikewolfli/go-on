@@ -438,13 +438,12 @@ impl Executor {
         }
 
         // Track which steps have been dispatched to avoid double-processing
-        let mut dispatched: HashSet<&str> = HashSet::new();
+        let mut dispatched: HashSet<String> = HashSet::new();
 
         /// Execute a single step synchronously (shared by sequential and parallel paths).
         fn run_step(
             step: &PlanStep,
             plan_id: &str,
-            mode_kind: ModeKind,
             rt: &dyn ModeRuntime,
         ) -> Result<AgentTaskResult, String> {
             let envelope = AgentTaskEnvelope {
@@ -456,7 +455,7 @@ impl Executor {
                 evidence: None,
                 input: serde_json::json!({
                     "step": &step.step_id,
-                    "mode": format!("{:?}", mode_kind),
+                    "mode": format!("{:?}", step.mode),
                 }),
             };
             rt.run(envelope).map_err(|e| {
@@ -467,196 +466,224 @@ impl Executor {
             })
         }
 
-        // Process steps in declaration order, dispatching parallel groups concurrently
-        let mut i = 0;
-        while i < plan.steps.len() {
-            if dispatched.contains(plan.steps[i].step_id.as_str()) {
-                i += 1;
-                continue;
-            }
+        // Process steps in topological order:
+        // 1. At each iteration, find all steps whose dependencies are fully satisfied
+        // 2. Execute them (sequential steps are run directly; parallel groups use spawn_blocking)
+        // 3. Repeat until all steps are processed or no progress possible
 
-            let step = &plan.steps[i];
+        let all_step_ids: HashSet<String> = plan.steps.iter().map(|s| s.step_id.clone()).collect();
+        let mut remaining: HashSet<String> = all_step_ids.clone();
 
-            // Check for upstream failures first
-            let upstream_failed: Vec<&String> = step
-                .depends_on
+        while !remaining.is_empty() {
+            // Find all remaining steps whose dependencies are met
+            let ready: Vec<&PlanStep> = plan
+                .steps
                 .iter()
-                .filter(|d| failed.contains(d.as_str()))
+                .filter(|s| remaining.contains(&s.step_id))
+                .filter(|s| {
+                    s.depends_on.iter().all(|d| {
+                        // A dependency is met if it's completed, OR if it's not in the plan at all (external)
+                        completed.contains(d) || !all_step_ids.contains(d)
+                    })
+                })
+                .filter(|s| {
+                    // Also check that no dependency has failed
+                    !s.depends_on.iter().any(|d| failed.contains(d))
+                })
                 .collect();
-            if !upstream_failed.is_empty() {
-                failed.insert(step.step_id.clone());
-                results.push((
-                    step.step_id.clone(),
-                    Err(tf(
-                        "error.planner.upstream_failed",
-                        &[("failed_steps", &format!("{:?}", upstream_failed))],
-                    )),
-                ));
-                dispatched.insert(step.step_id.as_str());
-                i += 1;
-                continue;
-            }
 
-            // Check dependencies
-            let deps_met = step
-                .depends_on
-                .iter()
-                .all(|d| completed.contains(d.as_str()));
-            if !deps_met {
-                results.push((
-                    step.step_id.clone(),
-                    Err(tf(
-                        "error.planner.dependencies_not_met",
-                        &[("deps", &format!("{:?}", step.depends_on))],
-                    )),
-                ));
-                failed.insert(step.step_id.clone());
-                dispatched.insert(step.step_id.as_str());
-                i += 1;
-                continue;
-            }
-
-            // Check if this step belongs to a parallel group
-            if let Some(&gi) = step_group.get(step.step_id.as_str()) {
-                // Collect all steps in this parallel group that are ready to execute
-                let group_ids: Vec<&str> = plan.parallel_groups[gi]
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect();
-
-                let mut group_steps: Vec<&PlanStep> = Vec::new();
-                for gsid in &group_ids {
-                    if dispatched.contains(gsid) {
-                        continue;
-                    }
-                    // Find the step in plan.steps
-                    if let Some(gs) = plan.steps.iter().find(|s| s.step_id.as_str() == *gsid) {
-                        // Verify deps are met for this group member
-                        let g_deps_met =
-                            gs.depends_on.iter().all(|d| completed.contains(d.as_str()));
-                        let g_upstream_failed =
-                            gs.depends_on.iter().any(|d| failed.contains(d.as_str()));
-                        if g_deps_met && !g_upstream_failed {
-                            group_steps.push(gs);
+            if ready.is_empty() {
+                // No progress possible — remaining steps have missing or failed deps
+                for sid in &remaining {
+                    let step = plan.steps.iter().find(|s| s.step_id == *sid).unwrap();
+                    let mut reason = String::new();
+                    for dep in &step.depends_on {
+                        if failed.contains(dep) {
+                            reason = tf("error.planner.upstream_failed", &[("failed_steps", dep)]);
+                        } else if remaining.contains(dep) {
+                            reason = tf(
+                                "error.planner.dependencies_not_met",
+                                &[("deps", &format!("{:?}", step.depends_on))],
+                            );
                         }
                     }
-                }
-
-                if group_steps.is_empty() {
-                    // No ready steps in this group — advance past the group
-                    for gsid in &group_ids {
-                        dispatched.insert(gsid);
+                    if reason.is_empty() {
+                        reason = "dependency not satisfied".to_string();
                     }
-                    i += 1;
-                    continue;
+                    failed.insert(sid.clone());
+                    results.push((sid.clone(), Err(reason)));
                 }
+                break;
+            }
 
-                // Execute all ready steps in the parallel group concurrently.
-                // We use std::thread::scope to run multiple blocking runtime calls
-                // in parallel on OS threads while borrowing from the parent scope
-                // (no Arc / 'static required).
-                let plan_id = &plan.plan_id;
-                let parallel_results: Vec<(String, Result<AgentTaskResult, String>)> =
-                    std::thread::scope(|s| {
-                        let mut handles = Vec::new();
-                        for gs in &group_steps {
-                            let step = *gs;
-                            handles.push(s.spawn(|| {
-                                let runtime = runtimes.iter().find(|(kind, _)| *kind == step.mode);
-                                match runtime {
-                                    Some((_kind, rt)) => {
-                                        let envelope = AgentTaskEnvelope {
-                                            task_id: format!("plan-{}_{}", plan_id, step.step_id),
-                                            phase: "execution".to_string(),
-                                            role: step
-                                                .agent
-                                                .clone()
-                                                .unwrap_or_else(|| "agent".to_string()),
-                                            objective: step.description.clone(),
-                                            constraints: None,
-                                            evidence: None,
-                                            input: serde_json::json!({
-                                                "step": &step.step_id,
-                                                "mode": format!("{:?}", step.mode),
-                                            }),
-                                        };
-                                        let result = rt.run(envelope).map_err(|e| {
-                                            tf(
-                                                "error.planner.runtime_failed",
-                                                &[("detail", &e.to_string())],
-                                            )
-                                        });
-                                        (step.step_id.clone(), result)
+            for step in ready {
+                let step_id = step.step_id.clone();
+                remaining.remove(&step_id);
+                dispatched.insert(step_id.clone());
+
+                // Check if this step belongs to a parallel group
+                if let Some(&gi) = step_group.get(step.step_id.as_str()) {
+                    // Collect ALL ready members of this parallel group
+                    let group_ids: Vec<String> = plan.parallel_groups[gi].clone();
+                    let group_ready: Vec<&PlanStep> = plan
+                        .steps
+                        .iter()
+                        .filter(|s| group_ids.contains(&s.step_id))
+                        .filter(|s| remaining.contains(&s.step_id) || s.step_id == step_id)
+                        .filter(|s| {
+                            s.depends_on
+                                .iter()
+                                .all(|d| completed.contains(d) || !all_step_ids.contains(d))
+                        })
+                        .filter(|s| !s.depends_on.iter().any(|d| failed.contains(d)))
+                        .collect();
+
+                    if group_ready.len() <= 1 {
+                        // Only one ready step, run it sequentially
+                        let runtime = runtimes.iter().find(|(kind, _)| *kind == step.mode);
+                        match runtime {
+                            Some((_kind, rt)) => {
+                                let result = run_step(step, &plan.plan_id, rt.as_ref());
+                                match result {
+                                    Ok(agent_result) => {
+                                        completed.insert(step_id.clone());
+                                        results.push((step_id, Ok(agent_result)));
                                     }
-                                    None => (
-                                        step.step_id.clone(),
-                                        Err(tf(
-                                            "error.planner.no_runtime_found",
-                                            &[("mode", &format!("{:?}", step.mode))],
-                                        )),
-                                    ),
+                                    Err(e) => {
+                                        let sid = step_id.clone();
+                                        failed.insert(step_id);
+                                        results.push((sid, Err(e)));
+                                    }
                                 }
-                            }));
-                        }
-                        handles
-                            .into_iter()
-                            .map(|h| {
-                                h.join().unwrap_or_else(|_| {
-                                    (String::new(), Err(tf("error.planner.step_panicked", &[])))
-                                })
-                            })
-                            .collect::<Vec<_>>()
-                    });
-
-                for (sid, step_result) in parallel_results {
-                    match step_result {
-                        Ok(agent_result) => {
-                            completed.insert(sid.clone());
-                            results.push((sid, Ok(agent_result)));
-                        }
-                        Err(e) => {
-                            failed.insert(sid.clone());
-                            results.push((sid, Err(e)));
-                        }
-                    }
-                }
-
-                // Mark all group step IDs as dispatched
-                for gsid in &group_ids {
-                    dispatched.insert(gsid);
-                }
-            } else {
-                // Sequential step (not in a parallel group) — execute synchronously
-                let runtime = runtimes.iter().find(|(kind, _)| *kind == step.mode);
-                match runtime {
-                    Some((_kind, rt)) => {
-                        let result = run_step(step, &plan.plan_id, _kind.clone(), rt.as_ref());
-                        match result {
-                            Ok(agent_result) => {
-                                completed.insert(step.step_id.clone());
-                                results.push((step.step_id.clone(), Ok(agent_result)));
                             }
-                            Err(e) => {
-                                failed.insert(step.step_id.clone());
-                                results.push((step.step_id.clone(), Err(e)));
+                            None => {
+                                let sid = step_id.clone();
+                                failed.insert(step_id);
+                                results.push((
+                                    sid,
+                                    Err(tf(
+                                        "error.planner.no_runtime_found",
+                                        &[("mode", &format!("{:?}", step.mode))],
+                                    )),
+                                ));
                             }
                         }
+                    } else {
+                        // Multiple ready steps — execute concurrently using block_in_place
+                        // to allow the synchronous ModeRuntime::run calls to coexist without
+                        // blocking the async runtime's worker thread.
+                        let plan_id = plan.plan_id.clone();
+                        let mut parallel_results = Vec::with_capacity(group_ready.len());
+
+                        tokio::task::block_in_place(|| {
+                            std::thread::scope(|s| {
+                                let mut handles = Vec::with_capacity(group_ready.len());
+                                for gs in &group_ready {
+                                    let runtime =
+                                        runtimes.iter().find(|(kind, _)| *kind == gs.mode);
+                                    let step_id = gs.step_id.clone();
+                                    match runtime {
+                                        Some((_kind, rt)) => {
+                                            let envelope = AgentTaskEnvelope {
+                                                task_id: format!("plan-{}_{}", plan_id, gs.step_id),
+                                                phase: "execution".to_string(),
+                                                role: gs
+                                                    .agent
+                                                    .clone()
+                                                    .unwrap_or_else(|| "agent".to_string()),
+                                                objective: gs.description.clone(),
+                                                constraints: None,
+                                                evidence: None,
+                                                input: serde_json::json!({
+                                                    "step": &gs.step_id,
+                                                    "mode": format!("{:?}", gs.mode),
+                                                }),
+                                            };
+                                            handles.push(s.spawn(|| {
+                                                let result = rt.run(envelope).map_err(|e| {
+                                                    tf(
+                                                        "error.planner.runtime_failed",
+                                                        &[("detail", &e.to_string())],
+                                                    )
+                                                });
+                                                (step_id, result)
+                                            }));
+                                        }
+                                        None => {
+                                            parallel_results.push((
+                                                step_id,
+                                                Err(tf(
+                                                    "error.planner.no_runtime_found",
+                                                    &[("mode", &format!("{:?}", gs.mode))],
+                                                )),
+                                            ));
+                                        }
+                                    }
+                                }
+                                for handle in handles {
+                                    // Unwrap the thread join; a panic in a parallel step is a
+                                    // genuine bug in the runtime and should propagate.
+                                    parallel_results.push(handle.join().unwrap_or_else(|e| {
+                                        panic!(
+                                            "parallel group step panicked: {:?}",
+                                            e.downcast_ref::<&str>().unwrap_or(&"<unknown>")
+                                        )
+                                    }));
+                                }
+                            });
+                        });
+
+                        for (sid, result) in parallel_results {
+                            remaining.remove(&sid);
+                            match result {
+                                Ok(agent_result) => {
+                                    completed.insert(sid.clone());
+                                    results.push((sid, Ok(agent_result)));
+                                }
+                                Err(e) => {
+                                    failed.insert(sid.clone());
+                                    results.push((sid, Err(e)));
+                                }
+                            }
+                        }
+
+                        // Mark all group members as dispatched (whether executed or not)
+                        for gid in &group_ids {
+                            remaining.remove(gid);
+                            dispatched.insert(gid.clone());
+                        }
                     }
-                    None => {
-                        failed.insert(step.step_id.clone());
-                        results.push((
-                            step.step_id.clone(),
-                            Err(tf(
-                                "error.planner.no_runtime_found",
-                                &[("mode", &format!("{:?}", step.mode))],
-                            )),
-                        ));
+                } else {
+                    // Sequential step (not in a parallel group)
+                    remaining.remove(&step_id);
+                    let runtime = runtimes.iter().find(|(kind, _)| *kind == step.mode);
+                    match runtime {
+                        Some((_kind, rt)) => {
+                            let result = run_step(step, &plan.plan_id, rt.as_ref());
+                            match result {
+                                Ok(agent_result) => {
+                                    completed.insert(step_id.clone());
+                                    results.push((step_id, Ok(agent_result)));
+                                }
+                                Err(e) => {
+                                    failed.insert(step_id.clone());
+                                    results.push((step_id, Err(e)));
+                                }
+                            }
+                        }
+                        None => {
+                            failed.insert(step_id.clone());
+                            results.push((
+                                step_id,
+                                Err(tf(
+                                    "error.planner.no_runtime_found",
+                                    &[("mode", &format!("{:?}", step.mode))],
+                                )),
+                            ));
+                        }
                     }
                 }
-                dispatched.insert(step.step_id.as_str());
             }
-
-            i += 1;
         }
 
         results

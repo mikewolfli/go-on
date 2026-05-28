@@ -131,7 +131,7 @@ impl ThreadSafeAuditLog {
     /// warning is emitted. If a `log_path` is configured, the entry is appended
     /// as a JSON line to the file (I/O errors are logged but do not crash).
     pub fn record(&self, entry: AuditLogEntry) {
-        let mut inner = self.inner.lock().expect("audit lock poisoned");
+        let mut inner = self.audit_lock_guard();
 
         // Redact sensitive fields
         let mut entry = entry;
@@ -164,21 +164,29 @@ impl ThreadSafeAuditLog {
 
     /// Return a snapshot of all entries currently in the buffer.
     pub fn entries(&self) -> Vec<AuditLogEntry> {
-        let inner = self.inner.lock().expect("audit lock poisoned");
+        let inner = self.audit_lock_guard();
         inner.entries.iter().cloned().collect()
     }
 
     /// Return the number of entries that have been dropped due to buffer overflow.
     pub fn dropped_count(&self) -> u64 {
-        let inner = self.inner.lock().expect("audit lock poisoned");
+        let inner = self.audit_lock_guard();
         inner.dropped_count
     }
 
     /// Clear all entries and reset the dropped count.
     pub fn clear(&self) {
-        let mut inner = self.inner.lock().expect("audit lock poisoned");
+        let mut inner = self.audit_lock_guard();
         inner.entries.clear();
         inner.dropped_count = 0;
+    }
+
+    /// Acquire the inner lock, recovering from poisoning via `into_inner()` + `warn!`.
+    fn audit_lock_guard(&self) -> std::sync::MutexGuard<'_, AuditLogInner> {
+        self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("audit lock poisoned, recovering");
+            poisoned.into_inner()
+        })
     }
 
     /// Share the same underlying audit log by cloning the `Arc`.

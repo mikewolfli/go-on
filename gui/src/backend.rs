@@ -133,7 +133,8 @@ impl BackendClient {
         let mut stale_cached: Option<ProviderModels> = None;
 
         // Check cache (valid for 5 minutes)
-        if let Ok(cache) = self.models_cache.lock() {
+        {
+            let cache = self.models_cache.lock().unwrap_or_else(|e| e.into_inner());
             let (cached_models, timestamp) = &*cache;
             if let Some(models) = cached_models {
                 if timestamp.elapsed().as_secs() < MODELS_CACHE_TTL_SECS {
@@ -225,7 +226,8 @@ impl BackendClient {
         }
 
         // Update cache only on successful refresh.
-        if let Ok(mut cache) = self.models_cache.lock() {
+        {
+            let mut cache = self.models_cache.lock().unwrap_or_else(|e| e.into_inner());
             cache.0 = Some(result.clone());
             cache.1 = std::time::Instant::now();
         }
@@ -235,7 +237,8 @@ impl BackendClient {
 
     pub fn set_base_url(&mut self, url: &str) {
         self.base_url = url.trim_end_matches('/').to_string();
-        if let Ok(mut cache) = self.models_cache.lock() {
+        {
+            let mut cache = self.models_cache.lock().unwrap_or_else(|e| e.into_inner());
             cache.0 = None;
             cache.1 = std::time::Instant::now();
         }

@@ -520,6 +520,7 @@ dependencies = [
  "async-trait",
  "base64",
  "clap",
+ "fastrand",
  "flate2",
  "fs2",
  "futures-util",

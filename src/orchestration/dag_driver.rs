@@ -119,7 +119,13 @@ async fn execute_flat_fanout(
     let results: Vec<DagNodeResult> = join_all(jobs)
         .await
         .into_iter()
-        .filter_map(Result::ok)
+        .filter_map(|r| match r {
+            Ok(result) => Some(result),
+            Err(join_err) => {
+                warn!("DAG tool task panicked: {}", join_err);
+                None
+            }
+        })
         .collect();
 
     let trace = DagExecutionTrace {
@@ -242,11 +248,27 @@ async fn execute_with_plan_topology(
             dependency_evidence.clone(),
         );
 
+        // Track panicked tasks so the information is not lost.
+        let mut panicked_tasks: Vec<String> = Vec::new();
         let level_results: Vec<DagNodeResult> = join_all(jobs)
             .await
             .into_iter()
-            .filter_map(Result::ok)
+            .filter_map(|r| match r {
+                Ok(result) => Some(result),
+                Err(join_err) => {
+                    warn!("DAG tool task panicked: {}", join_err);
+                    panicked_tasks.push(format!("task panicked: {}", join_err));
+                    None
+                }
+            })
             .collect();
+        if !panicked_tasks.is_empty() {
+            warn!(
+                "DAG level {}: {} task(s) panicked and were discarded",
+                level_idx,
+                panicked_tasks.len()
+            );
+        }
 
         // Collect outputs from this level for propagation to the next level
         for node in &level_results {
@@ -553,7 +575,8 @@ mod tests {
             ("search".to_string(), "{}".to_string()),
         ];
         let (branch_id, tool_ids) = build_tool_execution_dag(&calls);
-        assert_eq!(branch_id, "branch-tools");
+        // entry_points is now properly tracked: first entry point is the first tool's ID
+        assert_eq!(branch_id, "tool-read_file-0");
         assert_eq!(tool_ids.len(), 2);
         assert!(tool_ids[0].starts_with("tool-"));
     }

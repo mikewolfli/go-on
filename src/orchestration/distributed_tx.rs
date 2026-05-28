@@ -253,7 +253,11 @@ impl TwoPhaseCoordinator {
     }
 
     /// Execute the full two-phase commit protocol.
-    /// Returns the final transaction state.
+    ///
+    /// Returns a transaction with the final status. If the transaction ID is
+    /// not found, returns a transaction with status `Indeterminate` and a
+    /// descriptive error message so callers can distinguish it from a valid
+    /// but freshly-initialized transaction.
     pub async fn execute_2pc(&self, tx_id: &str) -> DistributedTransaction {
         let deadline = {
             let txs = self.active_transactions.read().await;
@@ -261,7 +265,10 @@ impl TwoPhaseCoordinator {
                 Some(tx) => tx,
                 None => {
                     error!("[2PC] Transaction {} not found for 2PC execution", tx_id);
-                    return DistributedTransaction::new("not_found", 0);
+                    let mut not_found = DistributedTransaction::new("not_found", 0);
+                    not_found.status = DistributedTxStatus::Indeterminate;
+                    not_found.description = format!("transaction '{}' not found", tx_id);
+                    return not_found;
                 }
             };
             let no_participants = tx.participants.is_empty();
@@ -285,7 +292,11 @@ impl TwoPhaseCoordinator {
                         .push(committed.clone());
                     return committed;
                 }
-                return DistributedTransaction::new("not_found", 0);
+                let mut not_found = DistributedTransaction::new("not_found", 0);
+                not_found.status = DistributedTxStatus::Indeterminate;
+                not_found.description =
+                    format!("transaction '{}' disappeared during 2PC prepare", tx_id);
+                return not_found;
             }
             deadline
         };

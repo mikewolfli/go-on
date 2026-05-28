@@ -8,6 +8,7 @@ use std::path::Path;
 use tracing::info;
 
 /// Configuration for the bootstrap process.
+#[derive(Debug, Clone)]
 pub struct BootstrapConfig {
     pub enable_telemetry: bool,
     pub enable_i18n: bool,

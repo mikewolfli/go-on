@@ -9,6 +9,7 @@ use std::path::Path;
 use tracing::info;
 
 /// Configuration for the onboarding flow.
+#[derive(Debug, Clone)]
 pub struct OnboardingConfig {
     pub enabled: bool,
     /// Whether we're in a terminal that supports interactive prompts.

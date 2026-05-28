@@ -943,9 +943,14 @@ top_k = 2
     /// Kill the current backend child and start a new one with fresh env vars.
     /// Called after adding/updating API keys so the new keys take effect immediately.
     fn restart_backend(&mut self) {
+        // Increment crash counter unconditionally — this is called either from
+        // the crash-auto-restart path (where backend_child is already None) or
+        // from the manual restart path (provider add, URL change, etc.).
+        // Counting on both paths ensures the give-up gate (count >= 10) works.
+        self.backend_crash_count = self.backend_crash_count.saturating_add(1);
+
         // Kill old process
         if let Some(mut child) = self.backend_child.take() {
-            self.backend_crash_count = self.backend_crash_count.saturating_add(1);
             eprintln!("Restarting backend (old PID: {})...", child.id());
             let _ = child.kill();
             // Wait briefly for the old process to release port 8090 before
@@ -1335,8 +1340,12 @@ impl eframe::App for GoOnApp {
                             "Backend exited due to address-in-use; suppressing auto-restart storm"
                         );
                         self.backend_reused_external = true;
+                        // Keep backend_crash_time set so the auto-restart gate can
+                        // periodically re-check whether the address is still in use.
+                        // backend_crash_count is set >= 10 so the restart is suppressed
+                        // but crash_time remains valid for the re-check below.
                         self.backend_crash_count = 10;
-                        self.backend_crash_time = None;
+                        self.backend_crash_time = Some(Instant::now());
                     } else {
                         self.backend_crash_time = Some(Instant::now());
                     }
@@ -1376,11 +1385,27 @@ impl eframe::App for GoOnApp {
                 let backoff_secs = 3u64 * (1u64 << self.backend_crash_count.min(5)); // 3, 6, 12, 24, 48, 96
                 if crash_time.elapsed() >= Duration::from_secs(backoff_secs) {
                     if self.backend_crash_count >= 10 {
-                        eprintln!(
-                            "Backend crashed {} times; giving up auto-restart",
-                            self.backend_crash_count
-                        );
-                        self.backend_crash_time = None;
+                        if self.backend_reused_external {
+                            // Address-in-use: periodically re-check if the port freed up.
+                            // Every 30 seconds, check the backend log; if the address is
+                            // no longer in use, reset state so a normal restart can happen.
+                            if crash_time.elapsed() >= Duration::from_secs(30) {
+                                if !backend_log_has_addr_in_use() {
+                                    eprintln!("Address now free; re-enabling auto-restart");
+                                    self.backend_reused_external = false;
+                                    self.backend_crash_count = 0;
+                                    self.backend_crash_time = None;
+                                } else {
+                                    eprintln!("Address still in use; next check in 30s");
+                                }
+                            }
+                        } else {
+                            eprintln!(
+                                "Backend crashed {} times; giving up auto-restart",
+                                self.backend_crash_count
+                            );
+                            self.backend_crash_time = None;
+                        }
                     } else {
                         self.backend_crash_time = None;
                         eprintln!(
@@ -1944,9 +1969,9 @@ impl Drop for GoOnApp {
             eprintln!("Shutting down go-on backend (PID: {})...", child.id());
             // Try graceful shutdown first (SIGTERM on Unix)
             let _ = child.kill();
-            // Wait up to 3 seconds for clean exit, then force kill.
+            // Wait up to 500ms for clean exit (short poll to avoid blocking the Drop path), then force kill.
             let pid = child.id();
-            for _ in 0..30 {
+            for _ in 0..5 {
                 match child.try_wait() {
                     Ok(Some(_)) => {
                         eprintln!("Backend process {} exited cleanly.", pid);

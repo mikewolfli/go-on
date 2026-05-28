@@ -21,6 +21,27 @@ use crate::orchestration::task_router::{TaskCharacteristics, TaskType};
 use crate::pua::PuaEnforcementPlan;
 use crate::reinforcement::{RequirementContractArtifact, TaskPlanArtifact};
 
+/// Default capacity for the agent switch state maps (per-phase entries).
+/// Prevents unbounded memory growth when many distinct phases are used.
+const AGENT_SWITCH_STATE_CAPACITY: usize = 10_000;
+
+/// Insert a key-value pair into the map, evicting the oldest entry if at capacity.
+/// This prevents unbounded memory growth when many distinct phase names appear.
+fn map_insert_with_capacity<K: std::hash::Hash + Eq + Clone, V>(
+    map: &mut std::collections::HashMap<K, V>,
+    key: K,
+    value: V,
+    max_capacity: usize,
+) {
+    if map.len() >= max_capacity && !map.contains_key(&key) {
+        // Evict the first (oldest) entry
+        if let Some(oldest_key) = map.keys().next().cloned() {
+            map.remove(&oldest_key);
+        }
+    }
+    map.insert(key, value);
+}
+
 /// Result of resolving agent preferences for a chat request.
 ///
 /// Captures all outputs produced by `resolve_agent_preferences()`:
@@ -145,9 +166,12 @@ pub fn resolve_agent_preferences(
     // ── 3. Update primary agent by phase in global state ─────────────────
     if let Some(primary) = configured_primary_agent.as_ref() {
         if let Ok(mut state) = agent_switch_state().lock() {
-            state
-                .primary_agent_by_phase
-                .insert(phase_name.clone(), primary.clone());
+            map_insert_with_capacity(
+                &mut state.primary_agent_by_phase,
+                phase_name.clone(),
+                primary.clone(),
+                AGENT_SWITCH_STATE_CAPACITY,
+            );
         }
     }
 
@@ -159,9 +183,12 @@ pub fn resolve_agent_preferences(
     if let Some(preferred) = preferred_agent_from_request.as_deref() {
         if reorder_agents_with_priority(&mut resolved.agents, preferred) {
             if let Ok(mut state) = agent_switch_state().lock() {
-                state
-                    .forced_agent_by_phase
-                    .insert(phase_name.clone(), preferred.to_string());
+                map_insert_with_capacity(
+                    &mut state.forced_agent_by_phase,
+                    phase_name.clone(),
+                    preferred.to_string(),
+                    AGENT_SWITCH_STATE_CAPACITY,
+                );
             }
         }
     } else if let Ok(state) = agent_switch_state().lock() {

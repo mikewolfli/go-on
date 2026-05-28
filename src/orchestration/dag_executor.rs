@@ -11,6 +11,8 @@ use std::time::Instant;
 use tokio::sync::Semaphore;
 use tracing::{debug, info, warn};
 
+use crate::orchestration::tool::{ToolInput, ToolRegistry};
+
 // ---------------------------------------------------------------------------
 // DagNode
 // ---------------------------------------------------------------------------
@@ -53,6 +55,9 @@ impl DagGraph {
     }
 
     /// Add a node with explicit dependencies.
+    ///
+    /// Automatically maintains `entry_points`: a node is an entry point
+    /// if it has no dependencies AND no other node depends on it.
     pub fn add_node(
         &mut self,
         id: String,
@@ -60,6 +65,19 @@ impl DagGraph {
         input: Value,
         dependencies: Vec<String>,
     ) {
+        // Remove this node from entry_points if it was previously registered
+        self.entry_points.retain(|e| e != &id);
+
+        // Remove any dependency that was an entry point — it's no longer one
+        for dep in &dependencies {
+            self.entry_points.retain(|e| e != dep);
+        }
+
+        // If this node has no dependencies, it's an entry point
+        if dependencies.is_empty() {
+            self.entry_points.push(id.clone());
+        }
+
         self.nodes.insert(
             id.clone(),
             DagNode {
@@ -156,6 +174,7 @@ impl Default for DagGraph {
 pub struct DagExecutor {
     max_concurrency: usize,
     semaphore: Arc<Semaphore>,
+    tool_registry: Option<Arc<ToolRegistry>>,
 }
 
 impl DagExecutor {
@@ -163,7 +182,13 @@ impl DagExecutor {
         Self {
             max_concurrency,
             semaphore: Arc::new(Semaphore::new(max_concurrency)),
+            tool_registry: None,
         }
+    }
+
+    pub fn with_tool_registry(mut self, registry: Arc<ToolRegistry>) -> Self {
+        self.tool_registry = Some(registry);
+        self
     }
 
     /// Execute a DAG graph. Returns the graph with outputs populated.
@@ -199,6 +224,24 @@ impl DagExecutor {
                 // Collect dependency outputs — iterate over THIS node's dependencies
                 // to gather outputs from its actual upstream nodes.
                 let node_deps: Vec<String> = node.dependencies.clone();
+
+                // Check if any dependency has errored — if so, propagate the error
+                // instead of executing this node.
+                let dep_errors: Vec<String> = graph
+                    .nodes
+                    .iter()
+                    .filter(|(dep_id, _)| node_deps.contains(dep_id))
+                    .filter_map(|(dep_id, n)| n.error.clone().map(|e| (dep_id.clone(), e)))
+                    .map(|(id, err)| format!("dependency '{}' failed: {}", id, err))
+                    .collect();
+
+                if !dep_errors.is_empty() {
+                    if let Some(node) = graph.nodes.get_mut(&id) {
+                        node.error = Some(format!("Dependency failure: {}", dep_errors.join("; ")));
+                    }
+                    continue;
+                }
+
                 let dep_outputs: HashMap<String, Value> = graph
                     .nodes
                     .iter()
@@ -207,17 +250,36 @@ impl DagExecutor {
                     .collect();
 
                 let permit = self.semaphore.clone().acquire_owned().await;
+                let registry = self.tool_registry.clone();
                 handles.push(tokio::spawn(async move {
                     let _permit = permit;
                     let start = Instant::now();
-                    let result = execute_tool(&tool_name, &input, &dep_outputs).await;
+                    let result = {
+                        use futures_util::future::FutureExt;
+                        let fut =
+                            execute_tool(registry.as_deref(), &tool_name, &input, &dep_outputs);
+                        match std::panic::AssertUnwindSafe(fut).catch_unwind().await {
+                            Ok(Ok(val)) => Ok(val),
+                            Ok(Err(e)) => Err(e),
+                            Err(panic) => {
+                                let msg = panic
+                                    .downcast_ref::<&str>()
+                                    .copied()
+                                    .or_else(|| panic.downcast_ref::<String>().map(|s| s.as_str()))
+                                    .unwrap_or("unknown panic")
+                                    .to_string();
+                                Err(format!("task panicked: {}", msg))
+                            }
+                        }
+                    };
                     let duration_ms = start.elapsed().as_millis() as u64;
                     (id, result, duration_ms)
                 }));
             }
 
             // Wait for all nodes in this level
-            for handle in handles {
+            // Use zip to identify which node panicked if the task itself failed.
+            for (node_id, handle) in level.iter().zip(handles) {
                 match handle.await {
                     Ok((id, result, duration_ms)) => {
                         if let Some(node) = graph.nodes.get_mut(&id) {
@@ -230,6 +292,9 @@ impl DagExecutor {
                     }
                     Err(e) => {
                         warn!("DAG node task panicked: {}", e);
+                        if let Some(node) = graph.nodes.get_mut(node_id) {
+                            node.error = Some(format!("task panicked: {}", e));
+                        }
                     }
                 }
             }
@@ -244,18 +309,72 @@ impl Default for DagExecutor {
 }
 
 /// Execute a single tool with optional dependency outputs injected into context.
+///
+/// Looks up the tool in the registry (if available) and dispatches execution.
+/// If no registry is provided, returns an error indicating the tool is unavailable.
+/// Dependency outputs are injected into the evidence field of ToolInput.
 async fn execute_tool(
+    registry: Option<&ToolRegistry>,
     tool_name: &str,
-    _input: &Value,
+    input: &Value,
     dep_outputs: &HashMap<String, Value>,
 ) -> Result<Value, String> {
-    // This is a simplified version — in production it would call the tool registry
+    let registry = match registry {
+        Some(r) => r,
+        None => {
+            return Err(format!(
+                "Tool registry not available; cannot execute '{}'",
+                tool_name
+            ));
+        }
+    };
+
+    let tool = registry
+        .get(tool_name)
+        .ok_or_else(|| format!("Tool '{}' not found in registry", tool_name))?;
+
     debug!(
         "Executing tool: {} with dep_outputs: {:?}",
         tool_name,
         dep_outputs.keys()
     );
-    Ok(serde_json::json!({"result": "ok", "tool": tool_name}))
+
+    // Build evidence from dependency outputs.
+    let evidence = if dep_outputs.is_empty() {
+        None
+    } else {
+        Some(
+            serde_json::to_string(dep_outputs)
+                .unwrap_or_else(|_| "<serialization error>".to_string()),
+        )
+    };
+
+    let tool_input = ToolInput {
+        task_id: String::new(),
+        phase: "dag-execution".to_string(),
+        agent_role: "dag-executor".to_string(),
+        objective: format!("Execute tool '{}'", tool_name),
+        constraints: None,
+        evidence,
+        payload: input.clone(),
+        allowed_base_dir: None,
+    };
+
+    let output = tool
+        .run_async(&tool_input)
+        .await
+        .map_err(|e| format!("Tool '{}' execution failed: {}", tool_name, e))?;
+
+    if output.success {
+        Ok(output.result.unwrap_or(serde_json::json!({"status": "ok"})))
+    } else {
+        Err(output.error.unwrap_or_else(|| {
+            format!(
+                "Tool '{}' returned failure without error message",
+                tool_name
+            )
+        }))
+    }
 }
 
 // ---------------------------------------------------------------------------

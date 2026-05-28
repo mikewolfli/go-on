@@ -7,7 +7,7 @@ use crate::widgets::cache::{CachedView, Section, SectionCache};
 use serde_json::Value;
 use std::cell::RefCell;
 use std::sync::mpsc;
-use std::sync::{OnceLock, RwLock};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 thread_local! {
@@ -419,18 +419,6 @@ fn build_copilot_http_client() -> reqwest::Client {
 
 static COPILOT_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
-/// Thread-safe store for Copilot tokens, replacing std::env::set_var
-/// which is UB in multi-threaded Rust programs.
-static COPILOT_TOKENS: OnceLock<RwLock<std::collections::HashMap<String, String>>> =
-    OnceLock::new();
-
-fn set_copilot_token(key: &str, value: &str) {
-    let store = COPILOT_TOKENS.get_or_init(|| RwLock::new(std::collections::HashMap::new()));
-    if let Ok(mut map) = store.write() {
-        map.insert(key.to_string(), value.to_string());
-    }
-}
-
 impl ProvidersView {
     pub fn new() -> Self {
         let (pending_tx, pending_rx) = mpsc::sync_channel(256);
@@ -484,7 +472,7 @@ impl ProvidersView {
         self.provider_ops_status.clear();
     }
 
-    fn process_pending(&mut self, i18n: &I18n) {
+    fn process_pending(&mut self, i18n: &I18n, config: &mut AppConfig) {
         // Limit event processing per frame to prevent UI freeze
         const MAX_EVENTS_PER_FRAME: usize = 12;
         for _ in 0..MAX_EVENTS_PER_FRAME {
@@ -598,10 +586,25 @@ impl ProvidersView {
                             if let Err(e) = crate::keyring_util::store_copilot_token(token) {
                                 eprintln!("Warning: failed to store Copilot token in keyring (github_copilot_token): {e}");
                             }
-                            // Store tokens in thread-safe map so CopilotAgent can read them
-                            // without the UB of std::env::set_var.
-                            set_copilot_token("GITHUB_TOKEN", token);
-                            set_copilot_token("GITHUB_COPILOT_TOKEN", token);
+                            // Auto-create a Copilot provider entry in config so the user
+                            // doesn't need to manually click 'Add' after OAuth completes.
+                            if !config
+                                .providers
+                                .iter()
+                                .any(|p| p.name.eq_ignore_ascii_case("copilot"))
+                            {
+                                config.providers.push(ProviderConfig {
+                                    name: "copilot".to_string(),
+                                    api_key: token.to_string(),
+                                    secret_key: String::new(),
+                                    model: "auto".to_string(),
+                                    validated: true,
+                                    label: String::new(),
+                                });
+                            }
+                            // Note: tokens are persisted to keyring above (both copilot_api_key
+                            // and github_copilot_token). The backend receives them via env vars
+                            // populated from keyring_util at spawn time.
                         }
                     } else if let Some(error) = resp.get("error").and_then(Value::as_str) {
                         self.copilot_last_poll_result = format!("oauth_error={}", error);
@@ -776,7 +779,7 @@ impl ProvidersView {
         egui::ScrollArea::vertical()
             .auto_shrink([false; 2])
             .show(ui, |ui| {
-                self.process_pending(i18n);
+                self.process_pending(i18n, config);
                 self.ensure_models_loaded(backend, ctx);
                 self.refresh_security_cache();
 
@@ -1881,22 +1884,21 @@ impl ProvidersView {
                 }
 
                 if let Some(idx) = remove_idx {
-                    // Clean up keyring entries before removing from config
-                    if let Some(removed) = config.providers.get(idx) {
-                        // Only delete keyring entries if this is the LAST provider with this name,
-                        // otherwise other labeled instances would lose their shared key.
-                        let remaining = config.providers.iter().filter(|p| p.name == removed.name).count();
-                        if remaining <= 1 {
-                            let _ = crate::keyring_util::delete_api_key(&removed.name.to_lowercase());
-                            // Also clean up secret_key for dual-auth providers (wenxin, qianfan)
-                            let _ = crate::keyring_util::delete_secret_key(&removed.name.to_lowercase());
-                            // For copilot, also clean up github_copilot_token alias
-                            if removed.name.to_lowercase() == "copilot" {
-                                let _ = crate::keyring_util::delete_copilot_token();
-                            }
+                    // Remove from config first, then check if any instances with the same
+                    // provider name remain. Keyring stores keys per provider name (not per
+                    // name+label pair), so we must only delete the key when the count reaches
+                    // zero — otherwise a remaining labeled instance loses access to its key.
+                    let removed = config.providers.remove(idx);
+                    let remaining = config.providers.iter().filter(|p| p.name == removed.name).count();
+                    if remaining == 0 {
+                        let _ = crate::keyring_util::delete_api_key(&removed.name.to_lowercase());
+                        // Also clean up secret_key for dual-auth providers (wenxin, qianfan)
+                        let _ = crate::keyring_util::delete_secret_key(&removed.name.to_lowercase());
+                        // For copilot, also clean up github_copilot_token alias
+                        if removed.name.to_lowercase() == "copilot" {
+                            let _ = crate::keyring_util::delete_copilot_token();
                         }
                     }
-                    config.providers.remove(idx);
                     changed = true;
                     self.status = i18n.t("providers.removed").to_string();
                 } else if self.pending_delete_confirmation.is_some()

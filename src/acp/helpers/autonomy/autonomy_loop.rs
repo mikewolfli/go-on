@@ -290,7 +290,8 @@ mod tests {
             crate::orchestration::dag_driver::build_tool_execution_dag(&tool_calls);
 
         // DAG must produce a branch node and one node per tool call
-        assert_eq!(branch_id, "branch-tools");
+        // entry_points is now properly tracked: first entry point is the first tool's ID
+        assert_eq!(branch_id, "tool-read_file-0");
         assert_eq!(node_ids.len(), 3);
 
         // Sort node IDs for deterministic comparison (DAG order may vary)
@@ -603,37 +604,6 @@ pub async fn run_autonomy_loop(
         let mut reroute_health_score: Option<f64> = None;
         let mut round_dag_trace: Option<serde_json::Value> = None;
 
-        // BLUE42 Step 5: Pre-check — query metacognitive / world model before execution
-        if config.enable_execution_intelligence {
-            let pre = super::execution_intelligence::pre_check(
-                &format!("autonomy-{}", iteration),
-                objective,
-                consecutive_failures,
-            );
-            if pre.should_degrade {
-                let round_record = AutonomyRound {
-                    round_index: iteration + 1,
-                    phase: AutonomyPhase::Failed,
-                    tools_executed: Vec::new(),
-                    planner_guided: false,
-                    duration_ms: round_start.elapsed().as_millis() as u64,
-                    error: pre.reason.clone(),
-                    round_start_offset_ms: start.elapsed().as_millis() as u64,
-                    retry_count: 0,
-                    round_stop_reason: tf("status.autonomy.degraded_by_ei", &[]),
-                    agent_switched: false,
-                    agent_switch_reason: None,
-                    candidate_agent_count: 0,
-                    corrective_actions: Vec::new(),
-                    corrective_actions_applied: 0,
-                    reroute_expected_gain: None,
-                    reroute_health_score: None,
-                    dag_trace: None,
-                };
-                all_rounds.push(round_record);
-                break;
-            }
-        }
         let candidate_agent_count = if config
             .capability_signals
             .as_ref()

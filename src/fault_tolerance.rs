@@ -160,7 +160,7 @@ pub enum ClusterHealth {
 pub struct RecoveryCycleSummary {
     pub offenders: Vec<String>,
     pub plans_created: u32,
-    pub plans_completed: u32,
+    pub plans_activated: u32,
     pub cluster_health: ClusterHealth,
     pub active_faults: u32,
     pub isolated_groups: u32,
@@ -834,7 +834,7 @@ impl FaultToleranceEngine {
     pub fn run_recovery_cycle(&self) -> RecoveryCycleSummary {
         let offenders = self.check_heartbeats();
         let mut plans_created = 0u32;
-        let mut plans_completed = 0u32;
+        let mut plans_activated = 0u32;
 
         for node_id in &offenders {
             // Check if a plan already exists for this node
@@ -856,7 +856,7 @@ impl FaultToleranceEngine {
             if plan.state == RecoveryState::Pending
                 && self.execute_recovery_plan(&plan.plan_id).is_ok()
             {
-                plans_completed += 1;
+                plans_activated += 1;
             }
         }
 
@@ -866,7 +866,7 @@ impl FaultToleranceEngine {
         RecoveryCycleSummary {
             offenders,
             plans_created,
-            plans_completed,
+            plans_activated,
             cluster_health: health,
             active_faults: profile.active_faults as u32,
             isolated_groups: profile.isolated_groups as u32,

@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::warn;
 
 // ─── Data structures ─────────────────────────────────────────────────────────
 
@@ -156,10 +157,13 @@ impl AgentFactory {
             ));
         }
 
-        let mut templates = self
-            .templates
-            .lock()
-            .map_err(|e| anyhow!("Failed to acquire lock on templates: {}", e))?;
+        let mut templates = match self.templates.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                warn!("agent factory templates lock poisoned during register_template; recovering state");
+                poisoned.into_inner()
+            }
+        };
         templates.insert(template.name.clone(), template);
         Ok(())
     }
@@ -175,10 +179,13 @@ impl AgentFactory {
     pub fn create_agent(&self, request: CreateAgentRequest) -> Result<SubAgentInstance> {
         // Look up the template.
         let template = {
-            let templates = self
-                .templates
-                .lock()
-                .map_err(|e| anyhow!("Failed to acquire lock on templates: {}", e))?;
+            let templates = match self.templates.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    warn!("agent factory templates lock poisoned during create_agent; recovering state");
+                    poisoned.into_inner()
+                }
+            };
             templates
                 .get(&request.template_name)
                 .cloned()
@@ -187,10 +194,13 @@ impl AgentFactory {
 
         // Check max instances limit.
         {
-            let instances = self
-                .instances
-                .lock()
-                .map_err(|e| anyhow!("Failed to acquire lock on instances: {}", e))?;
+            let instances = match self.instances.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    warn!("agent factory instances lock poisoned during create_agent; recovering state");
+                    poisoned.into_inner()
+                }
+            };
             let max = self.config.max_instances;
             if max > 0 && instances.len() as u32 >= max {
                 return Err(anyhow!(
@@ -227,18 +237,24 @@ impl AgentFactory {
         let expiry_ms = now_ms + ttl;
 
         {
-            let mut instances = self
-                .instances
-                .lock()
-                .map_err(|e| anyhow!("Failed to acquire lock on instances: {}", e))?;
+            let mut instances = match self.instances.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    warn!("agent factory instances lock poisoned during create_agent (insert); recovering state");
+                    poisoned.into_inner()
+                }
+            };
             instances.insert(instance_id.clone(), instance.clone());
         }
 
         {
-            let mut expirations = self
-                .expirations
-                .lock()
-                .map_err(|e| anyhow!("Failed to acquire lock on expirations: {}", e))?;
+            let mut expirations = match self.expirations.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    warn!("agent factory expirations lock poisoned during create_agent (insert); recovering state");
+                    poisoned.into_inner()
+                }
+            };
             expirations.insert(instance_id, expiry_ms);
         }
 
@@ -255,7 +271,10 @@ impl AgentFactory {
         {
             let mut instances = match self.instances.lock() {
                 Ok(guard) => guard,
-                Err(_) => return,
+                Err(poisoned) => {
+                    warn!("agent factory instances lock poisoned during destroy_agent; recovering state");
+                    poisoned.into_inner()
+                }
             };
             if instances.remove(instance_id).is_none() {
                 return; // Not found — no-op.
@@ -265,7 +284,10 @@ impl AgentFactory {
         {
             let mut expirations = match self.expirations.lock() {
                 Ok(guard) => guard,
-                Err(_) => return,
+                Err(poisoned) => {
+                    warn!("agent factory expirations lock poisoned during destroy_agent; recovering state");
+                    poisoned.into_inner()
+                }
             };
             expirations.remove(instance_id);
         }
@@ -275,28 +297,40 @@ impl AgentFactory {
 
     /// Get details of a specific agent instance by its ID.
     pub fn get_agent(&self, instance_id: &str) -> Option<SubAgentInstance> {
-        self.instances
-            .lock()
-            .ok()
-            .and_then(|guard| guard.get(instance_id).cloned())
+        let guard = match self.instances.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                warn!("agent factory instances lock poisoned during get_agent; recovering state");
+                poisoned.into_inner()
+            }
+        };
+        guard.get(instance_id).cloned()
     }
 
     /// List all currently active agent instances.
     pub fn list_agents(&self) -> Vec<SubAgentInstance> {
-        self.instances
-            .lock()
-            .ok()
-            .map(|guard| guard.values().cloned().collect())
-            .unwrap_or_default()
+        let guard = match self.instances.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                warn!("agent factory instances lock poisoned during list_agents; recovering state");
+                poisoned.into_inner()
+            }
+        };
+        guard.values().cloned().collect()
     }
 
     /// List all registered templates.
     pub fn list_templates(&self) -> Vec<AgentTemplate> {
-        self.templates
-            .lock()
-            .ok()
-            .map(|guard| guard.values().cloned().collect())
-            .unwrap_or_default()
+        let guard = match self.templates.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                warn!(
+                    "agent factory templates lock poisoned during list_templates; recovering state"
+                );
+                poisoned.into_inner()
+            }
+        };
+        guard.values().cloned().collect()
     }
 
     /// Find active agent instances whose template matches the given capability tag.
@@ -307,12 +341,18 @@ impl AgentFactory {
     pub fn find_agents_by_capability(&self, tag: &str) -> Vec<SubAgentInstance> {
         let templates = match self.templates.lock() {
             Ok(guard) => guard,
-            Err(_) => return Vec::new(),
+            Err(poisoned) => {
+                warn!("agent factory templates lock poisoned during find_agents_by_capability; recovering state");
+                poisoned.into_inner()
+            }
         };
 
         let instances = match self.instances.lock() {
             Ok(guard) => guard,
-            Err(_) => return Vec::new(),
+            Err(poisoned) => {
+                warn!("agent factory instances lock poisoned during find_agents_by_capability; recovering state");
+                poisoned.into_inner()
+            }
         };
 
         instances
@@ -329,19 +369,21 @@ impl AgentFactory {
 
     /// Return a snapshot of the factory's current runtime metrics.
     pub fn profile(&self) -> FactoryProfile {
-        let templates = self
-            .templates
-            .lock()
-            .ok()
-            .map(|guard| guard.clone())
-            .unwrap_or_default();
+        let templates = match self.templates.lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => {
+                warn!("agent factory templates lock poisoned during profile; recovering state");
+                poisoned.into_inner().clone()
+            }
+        };
 
-        let active_instances = self
-            .instances
-            .lock()
-            .ok()
-            .map(|guard| guard.len())
-            .unwrap_or(0);
+        let active_instances = match self.instances.lock() {
+            Ok(guard) => guard.len(),
+            Err(poisoned) => {
+                warn!("agent factory instances lock poisoned during profile; recovering state");
+                poisoned.into_inner().len()
+            }
+        };
 
         let total_templates = templates.len();
 
@@ -371,28 +413,33 @@ impl AgentFactory {
         let now_ms = now_epoch_ms();
 
         // Collect expired instance IDs while holding only the expirations lock.
-        let expired_ids: Vec<String> = self
-            .expirations
-            .lock()
-            .ok()
-            .map(|guard| {
-                guard
-                    .iter()
-                    .filter(|(_, &expiry)| now_ms > expiry)
-                    .map(|(id, _)| id.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let expired_ids: Vec<String> = {
+            let guard = match self.expirations.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    warn!("agent factory expirations lock poisoned during prune_expired; recovering state");
+                    poisoned.into_inner()
+                }
+            };
+            guard
+                .iter()
+                .filter(|(_, &expiry)| now_ms > expiry)
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
 
         let count = expired_ids.len();
         for id in &expired_ids {
-            // Inline removal with consistent lock order (instances → expirations)
+            // Inline removal with consistent lock order (instances -> expirations)
             // instead of calling destroy_agent, to avoid potential deadlock
-            // with find_agents_by_capability (which locks templates → instances).
+            // with find_agents_by_capability (which locks templates -> instances).
             {
                 let mut instances = match self.instances.lock() {
                     Ok(guard) => guard,
-                    Err(_) => continue,
+                    Err(poisoned) => {
+                        warn!("agent factory instances lock poisoned during prune_expired; recovering state");
+                        poisoned.into_inner()
+                    }
                 };
                 if instances.remove(id).is_none() {
                     continue;
@@ -401,7 +448,10 @@ impl AgentFactory {
             {
                 let mut expirations = match self.expirations.lock() {
                     Ok(guard) => guard,
-                    Err(_) => continue,
+                    Err(poisoned) => {
+                        warn!("agent factory expirations lock poisoned during prune_expired (remove); recovering state");
+                        poisoned.into_inner()
+                    }
                 };
                 expirations.remove(id);
             }

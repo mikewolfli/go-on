@@ -15,7 +15,9 @@ use tokio::time::sleep;
 
 use crate::agent::resolve_secret;
 use crate::agent::{Agent, Message, ModelInfo};
-use crate::agents::agent::{chat_request_failed_msg, request_failed_msg, token_request_failed_msg};
+use crate::agents::agent::{
+    chat_request_failed_msg, is_non_retryable_4xx, request_failed_msg, token_request_failed_msg,
+};
 use crate::agents::{option_f64, principles_to_text, stream_sse_to_sender};
 
 const STRICT_STAGE_NOTE: &str = "Enforce strict completeness checks: no empty functions, no unhandled errors, no missing boundary checks, and no placeholder implementations.";
@@ -102,8 +104,24 @@ impl QianfanAgent {
         Ok(token_response.access_token)
     }
 
-    fn stage_instruction(_options: &Option<HashMap<String, Value>>) -> &'static str {
-        STRICT_STAGE_NOTE
+    fn stage_instruction(
+        has_principles: bool,
+        options: &Option<HashMap<String, Value>>,
+    ) -> &'static str {
+        let stage = options
+            .as_ref()
+            .and_then(|o| o.get("stage"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let is_strict_phase = matches!(
+            stage,
+            "strict" | "review" | "audit" | "final_review" | "verification"
+        );
+        if has_principles && is_strict_phase {
+            STRICT_STAGE_NOTE
+        } else {
+            ""
+        }
     }
 
     fn build_payload(
@@ -115,14 +133,19 @@ impl QianfanAgent {
         let mut final_messages: Vec<Message> = Vec::new();
         let mut system_text = String::new();
 
-        if let Some(items) = principles {
+        let has_principles = principles.as_ref().is_some_and(|p| !p.is_empty());
+
+        if let Some(ref items) = principles {
             if !items.is_empty() {
-                system_text.push_str(&principles_to_text(&items));
+                system_text.push_str(&principles_to_text(items));
                 system_text.push('\n');
             }
         }
 
-        system_text.push_str(Self::stage_instruction(options));
+        let stage_note = Self::stage_instruction(has_principles, options);
+        if !stage_note.is_empty() {
+            system_text.push_str(stage_note);
+        }
 
         final_messages.push(Message {
             role: "system".to_string(),
@@ -200,6 +223,10 @@ impl Agent for QianfanAgent {
             {
                 Ok(()) => return Ok(()),
                 Err(err) => {
+                    let err_msg = err.to_string();
+                    if is_non_retryable_4xx(&err_msg) {
+                        return Err(err.into());
+                    }
                     last_error = Some(err);
                     if attempt < 2 {
                         sleep(Duration::from_secs(1_u64 << attempt)).await;

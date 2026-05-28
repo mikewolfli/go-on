@@ -2418,6 +2418,9 @@ You have access to {} registered skill(s). Skills are reusable templates that au
     // P3: Auto-create skills from conversation patterns
     // After a successful chat completion, analyze the conversation to
     // determine if a new reusable skill should be automatically created.
+    // This is a fire-and-forget background task — timeout ensures bounded runtime,
+    // and discarding the Result is intentional: timeout/error just means
+    // no skill is auto-created this time, which is non-critical.
     let _ = tokio::time::timeout(
         Duration::from_secs(2),
         auto_create_skills_from_conversation(server, params, &response_text),
@@ -2427,6 +2430,7 @@ You have access to {} registered skill(s). Skills are reusable templates that au
     // P4: Auto-generate workflow from conversation patterns
     // After a successful chat completion, analyze the conversation to
     // determine if a reusable workflow should be generated.
+    // Same fire-and-forget pattern as P3: non-critical background task.
     let _ = tokio::time::timeout(
         Duration::from_secs(2),
         auto_generate_workflow_from_conversation(server, params, &response_text),
@@ -2789,6 +2793,7 @@ async fn emit_stream_chunk(
         if !reasoning_token.is_empty() {
             payload["reasoning"] = json!(reasoning_token);
         }
+        // Send failure is expected when client disconnects — non-critical.
         let _ = sender
             .send(StreamFrame {
                 event: STREAM_EVENT_CHUNK,
@@ -2850,6 +2855,7 @@ async fn emit_stream_done(
                 obj.insert("selected_model".to_string(), json!(m));
             }
         }
+        // Send failure is expected when client disconnects — non-critical.
         let _ = sender
             .send(StreamFrame {
                 event: STREAM_EVENT_DONE,
@@ -2888,6 +2894,7 @@ async fn emit_stream_token_economy(
     }
 
     if let Some(sender) = &observer.sse_sender {
+        // Send failure is expected when client disconnects — non-critical.
         let _ = sender
             .send(StreamFrame {
                 event: STREAM_EVENT_TELEMETRY,

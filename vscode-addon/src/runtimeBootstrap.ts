@@ -11,14 +11,15 @@ export interface RuntimeBootstrapDeps {
   startCommandId: string;
 }
 
-let runtimeReadyPromise: Promise<void> | null = null;
-
 export async function ensureRuntimeReadyAfterChatOpen(
   context: vscode.ExtensionContext,
   deps: RuntimeBootstrapDeps,
 ): Promise<void> {
-  // Always create a fresh promise to avoid stale state from previous activations
-  runtimeReadyPromise = (async () => {
+  // Each call manages its own promise — no shared mutable state.
+  // Previously a module-level `runtimeReadyPromise` was overwritten on each
+  // call, causing call A to await call B's promise if B started before A
+  // resolved. Bug 6: removed the shared promise.
+  const promise = (async () => {
     const config = vscode.workspace.getConfiguration("go-on");
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
@@ -39,9 +40,8 @@ export async function ensureRuntimeReadyAfterChatOpen(
   })();
 
   try {
-    await runtimeReadyPromise;
+    await promise;
   } catch (error) {
-    runtimeReadyPromise = null;
     throw error;
   }
 }

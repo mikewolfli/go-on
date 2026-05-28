@@ -504,11 +504,26 @@ pub async fn stream_sse_to_sender_compressed(
         }
     }
 
-    // Flush remaining compressed data
+    // Flush any remaining decompressed data and parse it
     let tail = compressor.flush();
     if !tail.is_empty() {
         let tail_text = String::from_utf8_lossy(&tail);
-        for event in parser.finish() {
+        // Parse decompressed tail data through a fresh parser
+        let mut tail_parser = SseEventParser::default();
+        if let Ok(events) = tail_parser.push_chunk(&tail_text) {
+            for event in events {
+                if event.trim() == "[DONE]" {
+                    break;
+                }
+                if let Ok(json) = serde_json::from_str::<Value>(&event) {
+                    if let Some(token) = extract_token(&json) {
+                        let _ = sender.send(token);
+                    }
+                }
+            }
+        }
+        // Finish any remaining partial data in the tail parser
+        for event in tail_parser.finish() {
             if event.trim() == "[DONE]" {
                 break;
             }
@@ -518,19 +533,10 @@ pub async fn stream_sse_to_sender_compressed(
                 }
             }
         }
-        // Also parse any data in the flushed tail
-        let mut tail_parser = SseEventParser::default();
-        if let Ok(events) = tail_parser.push_chunk(&tail_text) {
-            for event in events {
-                if let Ok(json) = serde_json::from_str::<Value>(&event) {
-                    if let Some(token) = extract_token(&json) {
-                        let _ = sender.send(token);
-                    }
-                }
-            }
-        }
     }
 
+    // Process any remaining events accumulated by the main parser
+    // that weren't terminated by a newline before stream end.
     for event in parser.finish() {
         if event.trim() == "[DONE]" {
             break;

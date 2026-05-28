@@ -221,12 +221,37 @@ fn requires_human_confirmation(task: &str, params: &Value) -> bool {
     characteristics.has_safety_concerns || characteristics.complexity >= 4
 }
 
+/// Maximum allowed recursion depth for auto-recovery in workflow confirm.
+const MAX_WORKFLOW_CONFIRM_DEPTH: usize = 5;
+
 pub(super) async fn handle_workflow_confirm(
     server: &AcpServer,
     params: Value,
     request_id: Option<Value>,
     _trace: &RequestTraceContext,
 ) -> Result<()> {
+    handle_workflow_confirm_with_depth(server, params, request_id, _trace, 0).await
+}
+
+async fn handle_workflow_confirm_with_depth(
+    server: &AcpServer,
+    params: Value,
+    request_id: Option<Value>,
+    _trace: &RequestTraceContext,
+    depth: usize,
+) -> Result<()> {
+    if depth > MAX_WORKFLOW_CONFIRM_DEPTH {
+        return send_error(
+            server,
+            request_id,
+            -32603,
+            "internal error: workflow.confirm auto-recovery exceeded maximum recursion depth"
+                .to_string(),
+            None,
+        )
+        .await;
+    }
+
     let task = params_task(&params).unwrap_or_default();
     let user_confirmed = params
         .get("user_confirmed")
@@ -265,11 +290,12 @@ pub(super) async fn handle_workflow_confirm(
                 }
                 crate::acp::helpers::autonomy_metrics::record_requirement_auto_recovery();
                 // Fall through to the confirmed path with auto-recovered params
-                return Box::pin(handle_workflow_confirm(
+                return Box::pin(handle_workflow_confirm_with_depth(
                     server,
                     auto_recovered_params,
                     request_id,
                     _trace,
+                    depth + 1,
                 ))
                 .await;
             }

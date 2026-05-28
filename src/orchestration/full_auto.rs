@@ -800,10 +800,10 @@ impl FullAutoFlow {
         // ---- Step 4: Execute ----
         // GAP-46-12: Run ToolRecommender to get additional tool suggestions.
         let recommended_tools: Vec<ToolRecommendation> = {
-            let recommender = self
-                .tool_recommender
-                .lock()
-                .expect("tool_recommender lock poisoned");
+            let recommender = self.tool_recommender.lock().unwrap_or_else(|poisoned| {
+                warn!("tool_recommender lock poisoned – recovered data");
+                poisoned.into_inner()
+            });
             let current_tools: Vec<String> =
                 matched_skills.iter().map(|m| m.name.clone()).collect();
             recommender.recommend(task, &current_tools)
@@ -855,10 +855,10 @@ impl FullAutoFlow {
 
             // Acquire lock just long enough to get the skill.
             let skill_opt = {
-                let registry = self
-                    .skill_registry
-                    .lock()
-                    .expect("skill_registry lock poisoned");
+                let registry = self.skill_registry.lock().unwrap_or_else(|poisoned| {
+                    warn!("skill_registry lock poisoned – recovered data");
+                    poisoned.into_inner()
+                });
                 registry.get(&skill_match.name)
             };
 
@@ -914,10 +914,10 @@ impl FullAutoFlow {
 
                     // Record the successful outcome back to the registry.
                     {
-                        let mut registry = self
-                            .skill_registry
-                            .lock()
-                            .expect("skill_registry lock poisoned");
+                        let mut registry = self.skill_registry.lock().unwrap_or_else(|poisoned| {
+                            warn!("skill_registry lock poisoned – recovered data");
+                            poisoned.into_inner()
+                        });
                         registry.record_outcome(&skill_match.name, true, elapsed);
                     }
 
@@ -976,10 +976,10 @@ impl FullAutoFlow {
                     };
                     let batch = DiagnosticBatch::new(vec![diag_msg]);
                     {
-                        let mut engine = self
-                            .diagnostic_engine
-                            .lock()
-                            .expect("diagnostic_engine lock poisoned");
+                        let mut engine = self.diagnostic_engine.lock().unwrap_or_else(|poisoned| {
+                            warn!("diagnostic_engine lock poisoned – recovered data");
+                            poisoned.into_inner()
+                        });
                         engine.submit_batch(batch);
                         if let Some((strategy, desc)) = engine.recommend_repair() {
                             info!(
@@ -1002,10 +1002,10 @@ impl FullAutoFlow {
 
                     // Record the failure.
                     {
-                        let mut registry = self
-                            .skill_registry
-                            .lock()
-                            .expect("skill_registry lock poisoned");
+                        let mut registry = self.skill_registry.lock().unwrap_or_else(|poisoned| {
+                            warn!("skill_registry lock poisoned – recovered data");
+                            poisoned.into_inner()
+                        });
                         registry.record_outcome(&skill_match.name, false, elapsed);
                     }
 

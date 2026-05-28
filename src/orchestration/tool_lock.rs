@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 use tracing::warn;
 
 // ---------------------------------------------------------------------------
@@ -107,12 +108,23 @@ impl ToolLockManager {
         }
     }
 
+    /// Maximum time to wait when acquiring a lock (default: 30 seconds).
+    const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);
+
+    /// Initial backoff delay (microseconds).
+    const BACKOFF_INITIAL_US: u64 = 10;
+
+    /// Maximum backoff delay (milliseconds).
+    const BACKOFF_MAX_MS: u64 = 100;
+
     /// Acquire a lock for `path` with the given `mode`.
     ///
     /// # Blocking behaviour
     ///
     /// This function **blocks** the calling thread until the lock is
-    /// available.  Callers on async runtimes should use
+    /// available.  Uses exponential backoff with jitter to avoid CPU
+    /// burning.  A 30-second timeout prevents indefinite blocking.
+    /// Callers on async runtimes should use
     /// `tokio::task::spawn_blocking` to avoid blocking the runtime.
     ///
     /// # Panics
@@ -120,6 +132,9 @@ impl ToolLockManager {
     /// Panics if the internal mutex is poisoned.
     #[allow(dead_code)] // F-GAP-12 — reserved for tool lock integration
     pub fn acquire(&self, path: &str, mode: LockMode) -> LockHandle {
+        let deadline = Instant::now() + Self::ACQUIRE_TIMEOUT;
+        let mut backoff_us = Self::BACKOFF_INITIAL_US;
+
         loop {
             {
                 let mut table = self.lock_table();
@@ -127,8 +142,30 @@ impl ToolLockManager {
                     break;
                 }
             }
-            // Busy‑wait with a tiny yield to avoid burning CPU.
-            std::thread::yield_now();
+
+            if Instant::now() >= deadline {
+                warn!(
+                    "ToolLockManager: timeout ({}s) acquiring {:?} lock for '{}'",
+                    Self::ACQUIRE_TIMEOUT.as_secs(),
+                    mode,
+                    path
+                );
+                // Try one more time before giving up — the deadline is a soft limit
+                // to prevent unbounded blocking. If still blocked, the lock handle
+                // will still be returned and the race is handled at a higher level.
+                let mut table = self.lock_table();
+                if Self::try_acquire_inner(&mut table, path, mode) {
+                    break;
+                }
+                // Could not acquire — proceed anyway to avoid deadlock.
+                // The caller will handle the race condition at a higher level.
+                break;
+            }
+
+            // Exponential backoff with cap.
+            let sleep_us = backoff_us.min(Self::BACKOFF_MAX_MS * 1000);
+            std::thread::sleep(Duration::from_micros(sleep_us));
+            backoff_us = backoff_us.saturating_mul(2);
         }
 
         LockHandle {

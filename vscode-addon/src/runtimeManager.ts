@@ -378,20 +378,32 @@ export class GoOnManager {
 
       // Remove previous close listener if any (shouldn't happen, but be safe)
       this._closeListener?.();
-      const closeHandler = () => {
+
+      // Bug 2: Check if process already exited before attaching new listener.
+      // If the process exited already, `exitCode` is non-null. In that case,
+      // clean up immediately instead of waiting for a close event that will
+      // never fire for the new listener.
+      if (proc.exitCode !== null && proc.exitCode !== undefined) {
         clearTimeout(forceKillTimer);
         this._shutdownInProgress = false;
-      };
-      proc.on("close", closeHandler);
-      // Store cleanup so it can be removed if stop() is called again
-      this._closeListener = () => {
-        proc.off("close", closeHandler);
-        this._closeListener = null;
-      };
+      } else {
+        const closeHandler = () => {
+          clearTimeout(forceKillTimer);
+          this._shutdownInProgress = false;
+        };
+        proc.on("close", closeHandler);
+        // Store cleanup so it can be removed if stop() is called again
+        this._closeListener = () => {
+          proc.off("close", closeHandler);
+          this._closeListener = null;
+        };
+      }
     }
 
-    // If start() already created a new process during our await, restore startupConfig
-    if (this.process && !this._startupConfig) {
+    // Bug 3: Always restore _startupConfig if no new process was created.
+    // If stop() cleared the config but start() hasn't created a new process,
+    // restore it so potential reconnect or re-initialization can use it.
+    if (!this.process) {
       this._startupConfig = savedConfig;
     }
 
@@ -431,8 +443,11 @@ export class GoOnManager {
     );
 
     // Wait before reconnecting
+    // Use a local timer so stop() can't clear it via this._reconnectTimer.
+    // If stop() clears the shared timer reference, we'd never reach the
+    // shutdown check below and _shutdownInProgress would stay true forever.
     await new Promise<void>((resolve) => {
-      this._reconnectTimer = setTimeout(resolve, 2000);
+      setTimeout(resolve, 2000);
     });
 
     // Check again after delay — stop() may have been called
@@ -507,6 +522,16 @@ export class GoOnManager {
     };
 
     return new Promise((resolve, reject) => {
+      const requestStr = JSON.stringify(request) + "\n";
+
+      // Bug 11: Check process availability BEFORE setting pending request.
+      // Previously the pending request was set first, then checked — if the
+      // check failed the pending entry was orphaned until timeout.
+      if (!this.process || !this.process.stdin) {
+        reject(new Error("Go-On process not available or stdin not connected"));
+        return;
+      }
+
       const timeoutId = setTimeout(() => {
         if (this.pendingRequests.has(id)) {
           this.pendingRequests.delete(id);
@@ -524,13 +549,6 @@ export class GoOnManager {
           reject(e);
         },
       });
-
-      const requestStr = JSON.stringify(request) + "\n";
-      if (!this.process || !this.process.stdin) {
-        reject(new Error("Go-On process not available or stdin not connected"));
-        this.pendingRequests.delete(id);
-        return;
-      }
       try {
         const canWrite = this.process.stdin.write(requestStr);
         if (!canWrite) {
