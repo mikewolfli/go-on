@@ -52,6 +52,9 @@ macro_rules! ansi {
 
 /// Resolve a path relative to the current working directory.
 /// Rejects paths that escape the workspace via ".." or absolute paths outside cwd.
+///
+/// TOCTOU-safe: returns the canonicalized path that should be used for all subsequent
+/// file operations to prevent symlink race conditions.
 fn resolve_safe_path(path_str: &str, allow_new_file: bool) -> Result<std::path::PathBuf> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let cwd = cwd.canonicalize().context("failed to canonicalize cwd")?;
@@ -70,10 +73,12 @@ fn resolve_safe_path(path_str: &str, allow_new_file: bool) -> Result<std::path::
             if !canon_parent.starts_with(&cwd) {
                 anyhow::bail!("path '{}' is outside the workspace directory", path_str);
             }
+            // Return the canonicalized parent + filename to avoid TOCTOU
+            return Ok(canon_parent.join(target.file_name().unwrap_or_default()));
         }
         return Ok(target);
     }
-    // For existing files, canonicalize the full path
+    // For existing files, canonicalize the full path and return it
     let target = target
         .canonicalize()
         .with_context(|| format!("path does not exist: {path_str}"))?;
@@ -574,11 +579,8 @@ mod tests {
     #[tokio::test]
     async fn test_execute_simple_tool_rejects_traversal() {
         // Attempt to read a file outside workspace via path traversal
-        let result = execute_simple_tool(
-            "read_file",
-            &json!({"path": "../../../etc/passwd"}),
-        )
-        .await;
+        let result =
+            execute_simple_tool("read_file", &json!({"path": "../../../etc/passwd"})).await;
         assert!(
             result.is_err(),
             "read_file with traversal path should be rejected"
@@ -596,22 +598,22 @@ mod tests {
     #[tokio::test]
     async fn test_execute_simple_tool_missing_arguments() {
         let result = execute_simple_tool("read_file", &json!({})).await;
+        assert!(result.is_err(), "read_file without path should fail");
         assert!(
-            result.is_err(),
-            "read_file without path should fail"
-        );
-        assert!(
-            result.unwrap_err().to_string().contains("missing path argument"),
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("missing path argument"),
             "error should mention missing path"
         );
 
         let result = execute_simple_tool("write_file", &json!({"path": "test.txt"})).await;
+        assert!(result.is_err(), "write_file without content should fail");
         assert!(
-            result.is_err(),
-            "write_file without content should fail"
-        );
-        assert!(
-            result.unwrap_err().to_string().contains("missing content argument"),
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("missing content argument"),
             "error should mention missing content"
         );
     }
@@ -643,6 +645,9 @@ mod tests {
         let result = resolve_safe_path("src", false);
         assert!(result.is_ok(), "src dir should be resolvable");
         let path = result.unwrap();
-        assert!(path.starts_with(&cwd), "resolved path should start with cwd");
+        assert!(
+            path.starts_with(&cwd),
+            "resolved path should start with cwd"
+        );
     }
 }

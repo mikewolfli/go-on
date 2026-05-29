@@ -1,15 +1,19 @@
 //! GoOnClient and GoOnClientBuilder for the go-on Rust SDK.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use futures::Stream;
 use serde_json::Value;
 use tokio::sync::mpsc;
-use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::StreamExt;
 
 use crate::error::SdkError;
 use crate::types::*;
+
+/// Atomic counter for unique JSON-RPC request IDs.
+static NEXT_RPC_ID: AtomicU64 = AtomicU64::new(1);
 
 // ---------------------------------------------------------------------------
 // GoOnClientBuilder
@@ -214,9 +218,7 @@ impl GoOnClient {
                                 }
                                 Err(e) => {
                                     let _ = tx
-                                        .send(Err(SdkError::Stream(format!(
-                                            "json parse: {e}"
-                                        ))))
+                                        .send(Err(SdkError::Stream(format!("json parse: {e}"))))
                                         .await;
                                     return;
                                 }
@@ -235,7 +237,7 @@ impl GoOnClient {
     async fn json_rpc(&self, method: &str, params: Value) -> Result<Value, SdkError> {
         let payload = serde_json::json!({
             "jsonrpc": "2.0",
-            "id": 1,
+            "id": NEXT_RPC_ID.fetch_add(1, Ordering::Relaxed),
             "method": method,
             "params": params,
         });
@@ -278,7 +280,12 @@ impl GoOnClient {
             }
         }
 
-        Err(last_error.unwrap_or(SdkError::UnexpectedShape("retries exhausted".to_string())))
+        Err(last_error.unwrap_or_else(|| {
+            SdkError::UnexpectedShape(format!(
+                "retries exhausted after {} attempts",
+                self.max_retries + 1
+            ))
+        }))
     }
 
     fn extract<T>(&self, result: Value) -> Result<T, SdkError>
@@ -376,7 +383,9 @@ impl GoOnClient {
         let result = self
             .json_rpc("metrics.prometheus", serde_json::json!({}))
             .await?;
-        Ok(result.as_str().unwrap_or("").to_string())
+        result.as_str().map(|s| s.to_string()).ok_or_else(|| {
+            SdkError::UnexpectedShape("metrics.prometheus returned non-string value".to_string())
+        })
     }
 
     /// trace.get — get trace entries.

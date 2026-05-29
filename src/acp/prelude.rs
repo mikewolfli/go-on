@@ -608,15 +608,17 @@ pub fn checkpoint_message_chars(messages: &[Message]) -> usize {
 /// Touch conversation order (update LRU)
 #[allow(dead_code)] // F-GAP-01 — planned wiring
 pub fn touch_conversation_order(order: &StdMutex<Vec<String>>, conversation_id: &str) {
-    if let Ok(mut guard) = order.lock() {
-        // Remove if exists
-        guard.retain(|id| id != conversation_id);
-        // Add to front (most recent)
-        guard.insert(0, conversation_id.to_string());
-        // Trim if too long
-        if guard.len() > MAX_CONVERSATIONS_TRACKED {
-            guard.truncate(MAX_CONVERSATIONS_TRACKED);
-        }
+    let mut guard = order.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("conversation order lock poisoned, recovering");
+        poisoned.into_inner()
+    });
+    // Remove if exists
+    guard.retain(|id| id != conversation_id);
+    // Add to front (most recent)
+    guard.insert(0, conversation_id.to_string());
+    // Trim if too long
+    if guard.len() > MAX_CONVERSATIONS_TRACKED {
+        guard.truncate(MAX_CONVERSATIONS_TRACKED);
     }
 }
 

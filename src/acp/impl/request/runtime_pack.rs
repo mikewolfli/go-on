@@ -425,29 +425,31 @@ pub(super) fn metrics_errors_summary_payload(server: &AcpServer, params: &Value)
     let mut failed_events_count = 0usize;
     let mut sample_failures_ring = std::collections::VecDeque::with_capacity(limit);
 
-    if let Ok(guard) = trace_events().lock() {
-        for event in guard.iter() {
-            if !event.status.eq_ignore_ascii_case("error") {
-                continue;
-            }
-            failed_events_count += 1;
-            let key = classify_error_group(event);
-            *error_groups.entry(key.clone()).or_insert(0) += 1;
+    let guard = trace_events().lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("trace_events lock poisoned during error analysis – recovered");
+        poisoned.into_inner()
+    });
+    for event in guard.iter() {
+        if !event.status.eq_ignore_ascii_case("error") {
+            continue;
+        }
+        failed_events_count += 1;
+        let key = classify_error_group(event);
+        *error_groups.entry(key.clone()).or_insert(0) += 1;
 
-            if limit > 0 {
-                sample_failures_ring.push_back(json!({
-                    "timestamp": event.timestamp,
-                    "event_type": event.event_type,
-                    "task_id": event.task_id,
-                    "phase": event.phase,
-                    "status": event.status,
-                    "duration_ms": event.duration_ms,
-                    "error_code": key,
-                    "error": event.error,
-                }));
-                if sample_failures_ring.len() > limit {
-                    sample_failures_ring.pop_front();
-                }
+        if limit > 0 {
+            sample_failures_ring.push_back(json!({
+                "timestamp": event.timestamp,
+                "event_type": event.event_type,
+                "task_id": event.task_id,
+                "phase": event.phase,
+                "status": event.status,
+                "duration_ms": event.duration_ms,
+                "error_code": key,
+                "error": event.error,
+            }));
+            if sample_failures_ring.len() > limit {
+                sample_failures_ring.pop_front();
             }
         }
     }

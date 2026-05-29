@@ -33,7 +33,9 @@ impl CrossProcessLock {
     fn lock(path: &Path) -> Self {
         let file = std::fs::OpenOptions::new()
             .create(true)
-            .truncate(true)
+            // Do NOT use .truncate(true) here — truncating the file after
+            // creation can break flock() on some filesystems (NFS, certain
+            // Linux kernel configs). .create(true) alone is sufficient.
             .read(true)
             .write(true)
             .open(path)

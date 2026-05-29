@@ -31,17 +31,19 @@ static EVOLUTION_GRAPH: LazyLock<Mutex<EvolutionGraph>> =
     LazyLock::new(|| Mutex::new(EvolutionGraph::new()));
 
 /// Initialize or retrieve the global EvolutionGraph instance.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-25 — reserved for evolution graph external access
 pub fn evolution_graph() -> &'static Mutex<EvolutionGraph> {
     &EVOLUTION_GRAPH
 }
 
 /// Register an agent capability in the evolution graph for tracking.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-25 — reserved for evolution graph external registration
 pub fn register_agent_capability(agent: &str, capability: &str) {
-    if let Ok(mut graph) = EVOLUTION_GRAPH.lock() {
-        let _ = graph.register_capability(agent, capability, EvolutionStage::New);
-    }
+    let mut graph = EVOLUTION_GRAPH.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("EVOLUTION_GRAPH lock poisoned during capability registration – recovered");
+        poisoned.into_inner()
+    });
+    let _ = graph.register_capability(agent, capability, EvolutionStage::New);
 }
 
 /// Record a performance data point for an agent capability.
@@ -51,38 +53,40 @@ pub fn record_capability_performance(
     success_rate: f64,
     avg_latency_ms: f64,
 ) {
-    if let Ok(mut graph) = EVOLUTION_GRAPH.lock() {
-        let _ = graph.record_version(agent, capability, success_rate, avg_latency_ms);
-        // Auto-advance stage based on version count and success rate
-        if let Ok(record) = graph.get_record(agent, capability) {
-            let version_count = record.versions.len();
-            let avg_success: f64 = if version_count > 0 {
-                record.versions.iter().map(|v| v.success_rate).sum::<f64>() / version_count as f64
-            } else {
-                0.0
-            };
+    let mut graph = EVOLUTION_GRAPH.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("EVOLUTION_GRAPH lock poisoned during performance recording – recovered");
+        poisoned.into_inner()
+    });
+    let _ = graph.record_version(agent, capability, success_rate, avg_latency_ms);
+    // Auto-advance stage based on version count and success rate
+    if let Ok(record) = graph.get_record(agent, capability) {
+        let version_count = record.versions.len();
+        let avg_success: f64 = if version_count > 0 {
+            record.versions.iter().map(|v| v.success_rate).sum::<f64>() / version_count as f64
+        } else {
+            0.0
+        };
 
-            let new_stage = match (version_count, avg_success) {
-                (n, _) if n >= 50 && avg_success > 0.95 => EvolutionStage::Stable,
-                (n, _) if n >= 20 && avg_success > 0.85 => EvolutionStage::Mature,
-                (n, _) if n >= 5 && avg_success > 0.70 => EvolutionStage::Learning,
-                _ => return, // Keep current stage
-            };
+        let new_stage = match (version_count, avg_success) {
+            (n, _) if n >= 50 && avg_success > 0.95 => EvolutionStage::Stable,
+            (n, _) if n >= 20 && avg_success > 0.85 => EvolutionStage::Mature,
+            (n, _) if n >= 5 && avg_success > 0.70 => EvolutionStage::Learning,
+            _ => return, // Keep current stage
+        };
 
-            // Only advance forward
-            let should_advance = matches!(
-                (record.current_stage, new_stage),
-                (EvolutionStage::New, _)
-                    | (
-                        EvolutionStage::Learning,
-                        EvolutionStage::Mature | EvolutionStage::Stable
-                    )
-                    | (EvolutionStage::Mature, EvolutionStage::Stable)
-            );
+        // Only advance forward
+        let should_advance = matches!(
+            (record.current_stage, new_stage),
+            (EvolutionStage::New, _)
+                | (
+                    EvolutionStage::Learning,
+                    EvolutionStage::Mature | EvolutionStage::Stable
+                )
+                | (EvolutionStage::Mature, EvolutionStage::Stable)
+        );
 
-            if should_advance {
-                let _ = graph.advance_stage(agent, capability, new_stage);
-            }
+        if should_advance {
+            let _ = graph.advance_stage(agent, capability, new_stage);
         }
     }
 }
@@ -138,7 +142,7 @@ pub fn get_agent_recommendations() -> Vec<(String, String, EvolutionStage, Trend
 }
 
 /// Check if an agent is recommended for a given task type based on EvolutionGraph data.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-25 — reserved for evolution graph recommendation queries
 pub fn is_agent_recommended_for(agent: &str, task_category: &str) -> bool {
     let graph = match EVOLUTION_GRAPH.lock() {
         Ok(g) => g,

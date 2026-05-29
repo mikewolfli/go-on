@@ -125,13 +125,17 @@ impl DagGraph {
             let mut level: Vec<String> = Vec::with_capacity(level_size);
 
             for _ in 0..level_size {
-                let node_id = queue.pop_front().unwrap();
+                let node_id = queue
+                    .pop_front()
+                    .expect("queue non-empty: guarded by level_size loop bound");
                 level.push(node_id.to_string());
                 visited += 1;
 
                 if let Some(neighbors) = adjacency.get(node_id) {
                     for neighbor in neighbors {
-                        let deg = in_degree.get_mut(neighbor).unwrap();
+                        let deg = in_degree
+                            .get_mut(neighbor)
+                            .expect("in_degree invariant: every adjacency neighbor has an entry");
                         *deg -= 1;
                         if *deg == 0 {
                             queue.push_back(neighbor);

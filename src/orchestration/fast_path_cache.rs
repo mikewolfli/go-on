@@ -23,9 +23,11 @@ static LATEST_CACHE_METRICS: LazyLock<Mutex<Option<Value>>> = LazyLock::new(|| M
 
 /// Store FastPathCache metrics for governance observability.
 pub fn store_cache_metrics(metrics: Value) {
-    if let Ok(mut guard) = LATEST_CACHE_METRICS.lock() {
-        *guard = Some(metrics);
-    }
+    let mut guard = LATEST_CACHE_METRICS.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("cache metrics lock poisoned, recovering");
+        poisoned.into_inner()
+    });
+    *guard = Some(metrics);
 }
 
 /// Read the latest FastPathCache metrics snapshot.

@@ -728,6 +728,9 @@ impl BackendClient {
     ///
     /// Uses the `/acp/chat` endpoint with `"stream": true` in the request body.
     /// Each SSE `data:` line is parsed as a JSON value and yielded via the stream.
+    #[allow(dead_code)]
+    /// Reserved for future SSE streaming chat integration. Currently unused
+    /// while the GUI uses `chat_with_options` for non-streaming requests.
     pub async fn chat_stream(
         &self,
         message: &str,
@@ -785,7 +788,7 @@ impl BackendClient {
 
         let response = self
             .long_client
-            .post(format!("{}/acp/chat", self.base_url))
+            .post(format!("{}/chat/stream", self.base_url))
             .json(&body)
             .send()
             .await
@@ -827,9 +830,7 @@ impl BackendClient {
                             // Max line length check — prevent OOM on malformed responses
                             if segment.len() > MAX_LINE_LENGTH {
                                 let _ = tx
-                                    .send(Err(
-                                        "SSE line exceeds maximum length (1MB)".to_string(),
-                                    ))
+                                    .send(Err("SSE line exceeds maximum length (1MB)".to_string()))
                                     .await;
                                 return;
                             }
@@ -857,10 +858,7 @@ impl BackendClient {
                                         }
                                         Err(e) => {
                                             let _ = tx
-                                                .send(Err(format!(
-                                                    "JSON parse error: {}",
-                                                    e
-                                                )))
+                                                .send(Err(format!("JSON parse error: {}", e)))
                                                 .await;
                                             return;
                                         }

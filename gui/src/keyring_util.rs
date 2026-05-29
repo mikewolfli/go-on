@@ -242,17 +242,10 @@ pub fn store_copilot_token(token: &str) -> Result<()> {
     Ok(())
 }
 
-/// Retrieve an API key, falling back to a config-provided key if the system
-/// keyring returns nothing and the config key is non-empty and not a placeholder.
-pub fn get_api_key_with_fallback(provider: &str, config_key: Option<&str>) -> Option<String> {
-    let k = get_api_key(provider);
-    if k.is_some() {
-        return k;
-    }
-    if let Some(ck) = config_key {
-        if !ck.is_empty() && ck != REDACTED_API_KEY {
-            return Some(ck.to_owned());
-        }
-    }
-    None
+/// Retrieve an API key exclusively from the system keyring.
+/// Does NOT fall back to config-provided keys to prevent secrets
+/// from being stored in plaintext config files.
+/// Returns `None` if the key is not found in the keyring.
+pub fn get_api_key_with_fallback(provider: &str, _config_key: Option<&str>) -> Option<String> {
+    get_api_key(provider)
 }

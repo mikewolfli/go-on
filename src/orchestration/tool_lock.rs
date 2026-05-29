@@ -26,6 +26,7 @@ pub enum LockMode {
     #[allow(dead_code)] // F-GAP-12 — reserved for tool lock integration
     Read,
     /// Exclusive / write lock — only one writer, no concurrent readers.
+    #[allow(dead_code)] // F-GAP-12 — reserved for tool lock integration
     Write,
 }
 
@@ -186,6 +187,7 @@ impl ToolLockManager {
     /// Attempt to acquire a lock without blocking.
     ///
     /// Returns `Some(LockHandle)` on success, `None` if the lock would block.
+    #[allow(dead_code)] // F-GAP-12 — reserved for tool lock integration
     pub fn try_acquire(&self, path: &str, mode: LockMode) -> Option<LockHandle> {
         let mut table = self.lock_table();
         if Self::try_acquire_inner(&mut table, path, mode) {

@@ -35,9 +35,11 @@ static LATEST_DAG_METRICS: LazyLock<Mutex<Option<DagMetrics>>> = LazyLock::new(|
 
 /// Store latest DAG metrics for governance observability.
 pub fn store_latest_dag_metrics(metrics: DagMetrics) {
-    if let Ok(mut guard) = LATEST_DAG_METRICS.lock() {
-        *guard = Some(metrics);
-    }
+    let mut guard = LATEST_DAG_METRICS.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("LATEST_DAG_METRICS lock poisoned – recovered");
+        poisoned.into_inner()
+    });
+    *guard = Some(metrics);
 }
 
 /// Read latest DAG metrics for governance payload.
@@ -386,7 +388,6 @@ pub struct AutonomyLoopConfig {
     pub recovery_orchestrator: Option<RecoveryOrchestrator>,
     /// BLUE48-06: Maximum messages retained in the conversation window.
     /// When exceeded, the oldest messages are evicted (FIFO).
-    #[allow(dead_code)]
     pub max_messages: usize,
 }
 
@@ -977,6 +978,12 @@ pub async fn run_autonomy_loop(
             });
             record_tool_followup_attempt();
             record_tool_followup_success();
+        }
+
+        // Enforce max_messages limit — evict oldest when exceeded.
+        if config.max_messages > 0 && messages.len() > config.max_messages {
+            let excess = messages.len() - config.max_messages;
+            messages.drain(0..excess);
         }
 
         // BLUE42 Step 5: Post-check — record outcome into metacognitive / world model

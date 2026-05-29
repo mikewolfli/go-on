@@ -19,7 +19,10 @@ impl MemoryResponseCache {
     #[allow(dead_code)] // F-GAP-02 — used by agent response cache layer
     pub(crate) fn get(&self, key: &str) -> Option<MemoryCachedResponse> {
         let now = now_ts();
-        let mut guard = self.inner.lock().ok()?;
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned in MemoryResponseCache::get: recovering");
+            poisoned.into_inner()
+        });
         // Only evict the requested key if expired; bulk cleanup happens in purge_expired().
         if let Some(entry) = guard.get(key) {
             if entry.expires_at <= now {
@@ -33,21 +36,23 @@ impl MemoryResponseCache {
 
     pub(crate) fn purge_expired(&self) -> usize {
         let now = now_ts();
-        if let Ok(mut guard) = self.inner.lock() {
-            let before = guard.len();
-            guard.retain(|_, entry| entry.expires_at > now);
-            return before.saturating_sub(guard.len());
-        }
-        0
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned in MemoryResponseCache::purge_expired: recovering");
+            poisoned.into_inner()
+        });
+        let before = guard.len();
+        guard.retain(|_, entry| entry.expires_at > now);
+        before.saturating_sub(guard.len())
     }
 
     pub(crate) fn clear_all(&self) -> usize {
-        if let Ok(mut guard) = self.inner.lock() {
-            let removed = guard.len();
-            guard.clear();
-            return removed;
-        }
-        0
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned in MemoryResponseCache::clear_all: recovering");
+            poisoned.into_inner()
+        });
+        let removed = guard.len();
+        guard.clear();
+        removed
     }
 
     pub(crate) fn active_entries(&self) -> usize {
@@ -68,26 +73,28 @@ impl MemoryResponseCache {
         }
 
         let expires_at = now_ts() + ttl_seconds as i64;
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.insert(
-                key,
-                MemoryCachedResponse {
-                    response_text,
-                    expires_at,
-                },
-            );
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned in MemoryResponseCache::put: recovering");
+            poisoned.into_inner()
+        });
+        guard.insert(
+            key,
+            MemoryCachedResponse {
+                response_text,
+                expires_at,
+            },
+        );
 
-            // Keep L1 cache bounded to avoid unbounded memory growth.
-            if guard.len() > 2048 {
-                let mut entries: Vec<(String, i64)> = guard
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.expires_at))
-                    .collect();
-                entries.sort_by_key(|(_, expires_at)| *expires_at);
-                let remove_count = guard.len() - 2048;
-                for (k, _) in entries.into_iter().take(remove_count) {
-                    guard.remove(&k);
-                }
+        // Keep L1 cache bounded to avoid unbounded memory growth.
+        if guard.len() > 2048 {
+            let mut entries: Vec<(String, i64)> = guard
+                .iter()
+                .map(|(k, v)| (k.clone(), v.expires_at))
+                .collect();
+            entries.sort_by_key(|(_, expires_at)| *expires_at);
+            let remove_count = guard.len() - 2048;
+            for (k, _) in entries.into_iter().take(remove_count) {
+                guard.remove(&k);
             }
         }
     }

@@ -4,16 +4,13 @@ use crate::widgets::cache::CachedView;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-/// Send a message over a SyncSender, retrying up to 3 times with a 5 ms sleep between attempts.
-/// If all retries fail, a warning is printed to stderr.
+/// Send a message over a SyncSender, trying once without blocking.
+/// If the channel is full, the message is silently dropped — the monitor
+/// will pick up fresh data on the next refresh cycle.
+///
+/// This avoids blocking the UI thread with `thread::sleep` calls.
 fn send_with_retry(tx: &mpsc::SyncSender<String>, msg: String) {
-    for _ in 0..3 {
-        if tx.try_send(msg.clone()).is_ok() {
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    eprintln!("WARN: monitor failed to send after 3 retries");
+    let _ = tx.try_send(msg);
 }
 
 pub struct MonitorView {

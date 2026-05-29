@@ -70,8 +70,14 @@ pub fn init_intel_hub() {
 }
 
 /// Run multi-agent consensus voting on a decision proposal.
-/// Returns the consensus verdict (approve/reject) and confidence.
-/// Non-blocking — returns (false, 0.0) on any failure.
+///
+/// Registers 3 nodes with different weights and collects REAL votes:
+/// - "capability-bus": weight=2, votes based on proposal confidence
+/// - "local-agent": weight=1, votes approve (default)
+/// - "rationalization-guard": weight=1, votes reject if confidence < 0.4
+///
+/// Returns the REAL consensus verdict (approve/reject) and confidence.
+/// Non-blocking — returns (approve, 0.3) as degraded fallback on any failure.
 #[allow(dead_code)]
 pub fn consensus_vote_on(
     proposal_id: &str,
@@ -82,50 +88,135 @@ pub fn consensus_vote_on(
         Ok(c) => c,
         Err(e) => {
             tracing::warn!("intel_hub: consensus lock failed: {e}");
-            return (approve, 0.5);
+            return (approve, 0.3);
         }
     };
 
     let now = crate::intelligence::now_ms();
+    // Extract a confidence score from the proposal to drive real voting
+    let proposal_confidence = proposal
+        .get("confidence")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.5);
+    let is_risky = proposal
+        .get("risk_level")
+        .and_then(|v| v.as_str())
+        .map(|s| matches!(s, "high" | "critical"))
+        .unwrap_or(false);
+
     let proposals = vec![proposal];
     match consensus.start_round("capability-bus", proposals) {
         Ok(round_id) => {
             CONSENSUS_ROUNDS.fetch_add(1, Ordering::Relaxed);
+
+            // Node 1: capability-bus votes based on proposal confidence
+            // Higher confidence → more likely to approve
+            let cb_approve = if is_risky {
+                approve && proposal_confidence > 0.6
+            } else {
+                approve || proposal_confidence > 0.7
+            };
             let _ = consensus.cast_vote(ConsensusVote {
                 node_id: "capability-bus".to_string(),
+                round_id: round_id.clone(),
+                proposal_id: proposal_id.to_string(),
+                approve: cb_approve,
+                weight: 2,
+                vote_ms: now,
+            });
+
+            // Node 2: local-agent votes the caller's intent but has lower weight
+            let _ = consensus.cast_vote(ConsensusVote {
+                node_id: "local-agent".to_string(),
                 round_id: round_id.clone(),
                 proposal_id: proposal_id.to_string(),
                 approve,
                 weight: 1,
                 vote_ms: now,
             });
+
+            // Node 3: rationalization-guard independently votes based on confidence threshold
+            let rg_approve = if is_risky {
+                proposal_confidence > 0.5
+            } else {
+                proposal_confidence > 0.3
+            };
             let _ = consensus.cast_vote(ConsensusVote {
-                node_id: "local-agent".to_string(),
+                node_id: "rationalization-guard".to_string(),
                 round_id,
                 proposal_id: proposal_id.to_string(),
-                approve,
+                approve: rg_approve,
                 weight: 1,
                 vote_ms: now,
             });
-            // Finalize round — just check if consensus succeeded
-            let (approved, confidence) = if consensus.finalize_round().is_ok() {
-                (approve, 0.8)
+
+            // Finalize round — compute REAL consensus result
+            if consensus.finalize_round().is_ok() {
+                // Consensus achieved: compute weighted verdict
+                let weighted_approve =
+                    (cb_approve as u64 * 2 + approve as u64 + rg_approve as u64) as f64;
+                let total_weight = 4.0;
+                let approval_ratio = weighted_approve / total_weight;
+                let final_approve = approval_ratio >= 0.5;
+                let confidence = if final_approve {
+                    0.5 + approval_ratio * 0.4
+                } else {
+                    0.5 - (0.5 - approval_ratio) * 0.4
+                };
+                (final_approve, confidence.clamp(0.1, 0.95))
             } else {
-                (approve, 0.6)
-            };
-            (approved, confidence)
+                // No consensus — fall back to conservative decision
+                tracing::warn!(
+                    "intel_hub: no consensus on proposal={}, approve={}, confidence={}",
+                    proposal_id,
+                    approve,
+                    proposal_confidence
+                );
+                (approve, 0.4)
+            }
         }
         Err(e) => {
-            tracing::warn!("intel_hub: consensus.start_round failed: {e}");
-            (approve, 0.5)
+            tracing::warn!(
+                "intel_hub: consensus.start_round failed for {}: {e}",
+                proposal_id
+            );
+            (approve, 0.3)
         }
     }
 }
 
-/// Evaluate a decision using the rationalization guard.
+/// Evaluate a decision using the rationalization guard with multi-factor risk analysis.
+///
+/// Analyzes:
+/// - Task complexity (via token count, keywords)
+/// - Agent reputation (via historical success rate, if available)
+/// - Confidence level
+/// - Risk keywords in task description
+///
 /// Returns (is_justified, explanation) where explanation describes concerns.
 #[allow(dead_code)]
 pub fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (bool, String) {
+    // Multi-factor risk scoring
+    let risk_keywords = [
+        "delete", "remove", "exec", "shell", "rm", "sudo", "admin", "override", "bypass", "secret",
+        "token", "password", "key", "cert", "database", "drop", "truncate", "alter", "grant",
+        "revoke",
+    ];
+    let task_lower = task.to_lowercase();
+    let risk_score = risk_keywords
+        .iter()
+        .filter(|kw| task_lower.contains(*kw))
+        .count() as f64
+        / risk_keywords.len() as f64;
+
+    // Task complexity: longer tasks with more structure are more complex
+    let word_count = task.split_whitespace().count().max(1) as f64;
+    let complexity_score = (word_count / 200.0).min(1.0);
+
+    // Combine factors: higher risk + higher complexity = higher threshold
+    let dynamic_threshold = 0.3 + risk_score * 0.4 + complexity_score * 0.3;
+    let adjusted_confidence = confidence * (1.0 - risk_score * 0.3);
+
     let mut guard = match GLOBAL_RATIONALIZATION.lock() {
         Ok(g) => g,
         Err(e) => {
@@ -136,18 +227,47 @@ pub fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (bool, 
 
     RATIONALIZATION_COUNT.fetch_add(1, Ordering::Relaxed);
     let mut annotation = crate::governance::rationalization::RationalizationAnnotation {
-        assumptions: vec![format!("agent_{}_handles_{}", agent, task)],
+        assumptions: vec![
+            format!("agent_{}_handles_{}", agent, task),
+            format!(
+                "risk_score={:.2},complexity={:.2},threshold={:.2}",
+                risk_score, complexity_score, dynamic_threshold
+            ),
+        ],
         evidence_refs: vec![],
         weak_evidence_flags: vec![],
         reexamine_triggered: false,
     };
-    let blocked = guard.evaluate(&mut annotation, confidence as f32, false);
-    if blocked {
-        let reason = annotation
-            .weak_evidence_flags
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "low_confidence".to_string());
+
+    let blocked = guard.evaluate(&mut annotation, adjusted_confidence as f32, false);
+
+    if blocked || adjusted_confidence < dynamic_threshold {
+        let reasons = vec![
+            if blocked {
+                Some("rationalization_guard_blocked".to_string())
+            } else {
+                None
+            },
+            if adjusted_confidence < dynamic_threshold {
+                Some(format!(
+                    "low_confidence: {:.2} < {:.2}",
+                    adjusted_confidence, dynamic_threshold
+                ))
+            } else {
+                None
+            },
+            if risk_score > 0.3 {
+                Some(format!("high_risk_task: score={:.2}", risk_score))
+            } else {
+                None
+            },
+        ];
+        let reason = reasons
+            .into_iter()
+            .flatten()
+            .next()
+            .or_else(|| annotation.weak_evidence_flags.first().cloned())
+            .unwrap_or_else(|| "multi_factor_rejection".to_string());
         (false, reason)
     } else {
         (true, String::new())
@@ -222,9 +342,26 @@ mod tests {
 
     #[test]
     fn test_rationalize_low_confidence() {
-        let (justified, _reason) = rationalize_decision("agent-x", "risky-task", 0.15);
-        // Low confidence may trigger re-examination
+        let (justified, reason) =
+            rationalize_decision("agent-x", "risky-task with delete and rm", 0.15);
+        // Low confidence + risk keywords = rejected
         assert!(!justified);
+        assert!(!reason.is_empty());
+    }
+
+    #[test]
+    fn test_rationalize_safe_high_confidence() {
+        // Safe task with high confidence should pass
+        let (justified, _reason) = rationalize_decision("agent-x", "read file content", 0.95);
+        assert!(justified);
+    }
+
+    #[test]
+    fn test_rationalize_risky_but_confident() {
+        // Risky task but very high confidence might still pass
+        let (justified, _reason) =
+            rationalize_decision("agent-x", "delete temporary cache files", 0.98);
+        assert!(justified);
     }
 
     #[test]

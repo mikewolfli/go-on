@@ -348,7 +348,7 @@ impl Default for ChaosEngine {
 // Built-in scenarios
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-12 — reserved for chaos testing integration
 pub fn network_resilience_scenario() -> DrillScenario {
     DrillScenario {
         name: "network_resilience".to_string(),
@@ -382,7 +382,7 @@ pub fn network_resilience_scenario() -> DrillScenario {
     }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-12 — reserved for chaos testing integration
 pub fn storage_resilience_scenario() -> DrillScenario {
     DrillScenario {
         name: "storage_resilience".to_string(),

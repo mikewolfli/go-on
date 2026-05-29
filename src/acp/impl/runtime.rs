@@ -294,6 +294,10 @@ pub fn new_acp_server(
                 ));
             }
 
+            // BLUE48 Step 19: Initialize intelligence hub at startup so consensus
+            // voting, rationalization, and audit are wired into the request path.
+            crate::intelligence::hub::init_intel_hub();
+
             server
         }
         Err(err) => {
@@ -496,10 +500,13 @@ pub fn new_acp_server(
             // the budget enforcer does not reject every request with "no quota
             // configured for tenant 'default-tenant'" (F-GAP-08).
             if fallback_server.runtime_config.user_auth_enabled {
-                let mut budget = fallback_server.tenant_budget.lock().unwrap_or_else(|poisoned| {
-                    tracing::warn!("tenant_budget lock poisoned in new_acp_server (fallback)");
-                    poisoned.into_inner()
-                });
+                let mut budget = fallback_server
+                    .tenant_budget
+                    .lock()
+                    .unwrap_or_else(|poisoned| {
+                        tracing::warn!("tenant_budget lock poisoned in new_acp_server (fallback)");
+                        poisoned.into_inner()
+                    });
                 budget.auto_provision_default(&fallback_server.runtime_config);
             }
 
@@ -1232,10 +1239,13 @@ fn store_responses_api_payload(server: &AcpServer, payload: &serde_json::Value) 
     let Some(id) = payload.get("id").and_then(|value| value.as_str()) else {
         return;
     };
-    let mut store = server.responses_api_store.lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("responses_api_store lock poisoned in store_responses_api_payload");
-        poisoned.into_inner()
-    });
+    let mut store = server
+        .responses_api_store
+        .lock()
+        .unwrap_or_else(|poisoned| {
+            tracing::warn!("responses_api_store lock poisoned in store_responses_api_payload");
+            poisoned.into_inner()
+        });
     // Evict oldest entries when store exceeds 1000 items
     if store.len() >= 1000 {
         // Remove 200 oldest entries
@@ -2766,7 +2776,9 @@ async fn route_http_get(
             .await?;
         }
         _ if extract_response_id_from_path(path).is_some() => {
-            let response_id = extract_response_id_from_path(path).expect("guard ensured Some; qed");
+            let response_id = extract_response_id_from_path(path).ok_or_else(|| {
+                anyhow::anyhow!("response_id extraction failed despite prior is_some check")
+            })?;
             handle_response_get(socket, server, response_id, cors_headers).await?;
         }
         _ => {

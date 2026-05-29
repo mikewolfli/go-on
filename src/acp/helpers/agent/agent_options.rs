@@ -81,36 +81,38 @@ pub(crate) fn assemble_agent_options(
     // NOTE: DeepSeek and some other providers enforce a strict pattern on
     // function names: ^[a-zA-Z0-9_-]+$. We sanitize skill names to match.
     {
-        if let Ok(registry) = server.skill_registry.lock() {
-            let sanitize_fn_name = |name: &str| -> String {
-                name.chars()
-                    .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
-                    .collect::<String>()
-            };
-            let skill_tools: Vec<Value> = registry
-                .list()
-                .iter()
-                .map(|skill: &SkillDescriptor| {
-                    let safe_name = sanitize_fn_name(&skill.name);
-                    let fallback_name = if safe_name.is_empty() {
-                        format!("skill-{}", skill.name.len())
-                    } else {
-                        safe_name
-                    };
-                    json!({
-                        "type": "function",
-                        "function": {
-                            "name": fallback_name,
-                            "description": skill.description,
-                            "parameters": skill.input_schema,
-                        }
-                    })
+        let registry = server.skill_registry.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("skill_registry lock poisoned during tool injection – recovered");
+            poisoned.into_inner()
+        });
+        let sanitize_fn_name = |name: &str| -> String {
+            name.chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                .collect::<String>()
+        };
+        let skill_tools: Vec<Value> = registry
+            .list()
+            .iter()
+            .map(|skill: &SkillDescriptor| {
+                let safe_name = sanitize_fn_name(&skill.name);
+                let fallback_name = if safe_name.is_empty() {
+                    format!("skill-{}", skill.name.len())
+                } else {
+                    safe_name
+                };
+                json!({
+                    "type": "function",
+                    "function": {
+                        "name": fallback_name,
+                        "description": skill.description,
+                        "parameters": skill.input_schema,
+                    }
                 })
-                .collect();
-            if !skill_tools.is_empty() {
-                base_agent_options.insert("tools".to_string(), json!(skill_tools));
-                base_agent_options.insert("tool_choice".to_string(), json!("auto"));
-            }
+            })
+            .collect();
+        if !skill_tools.is_empty() {
+            base_agent_options.insert("tools".to_string(), json!(skill_tools));
+            base_agent_options.insert("tool_choice".to_string(), json!("auto"));
         }
     }
 

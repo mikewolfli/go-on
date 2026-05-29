@@ -38,11 +38,27 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+/**
+ * Extract the keyring account name from a provider's env-var / keyring URI.
+ *
+ * Handles two formats:
+ * - `keyring://go-on/{account_name}` — extract account_name directly
+ * - `OPENAI_API_KEY` — old-style env var name, convert to lowercase
+ *
+ * Returns the account name suitable for use with the system keyring
+ * (e.g. `copilot_api_key`, `openai_api_key`).
+ */
 function secretNameForEnvVar(envVar: string): string {
   const normalized = String(envVar || "").trim();
   if (!normalized) {
     return "";
   }
+  // Handle keyring://go-on/{name} URIs
+  const keyringPrefix = "keyring://go-on/";
+  if (normalized.startsWith(keyringPrefix)) {
+    return normalized.slice(keyringPrefix.length);
+  }
+  // Legacy env-var name: GITHUB_COPILOT_TOKEN → github_copilot_token
   if (normalized === "GITHUB_COPILOT_TOKEN") {
     return "github_copilot_token";
   }
@@ -63,7 +79,12 @@ export class GoOnManager {
   private _reconnectAttempts = 0;
   private readonly maxReconnectAttempts = 3;
   private _shutdownInProgress = false;
-  private _isOperating = false;
+  /**
+   * Guards start()/stop() from concurrent calls.
+   * When a start() or stop() is in progress, subsequent calls await the
+   * in-flight operation instead of being silently dropped.
+   */
+  private _operationPromise: Promise<void> | null = null;
   private _closeListener: (() => void) | null = null;
   private _reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private _startupConfig?: {
@@ -127,8 +148,10 @@ export class GoOnManager {
     if (this._shutdownInProgress) {
       throw new Error("Go-On is shutting down. Please wait and try again.");
     }
-    if (this._isOperating) return;
-    this._isOperating = true;
+    // If an operation is already in flight, await it instead of dropping.
+    if (this._operationPromise) {
+      return this._operationPromise;
+    }
     if (this.process) {
       throw new Error("Go-On is already running");
     }
@@ -335,7 +358,7 @@ export class GoOnManager {
     });
 
     return startPromise.finally(() => {
-      this._isOperating = false;
+      this._operationPromise = null;
     });
   }
 
@@ -366,8 +389,10 @@ export class GoOnManager {
   }
 
   stop(): void {
-    if (this._isOperating) return;
-    this._isOperating = true;
+    if (this._operationPromise) {
+      // An operation is in flight; can't stop now. Caller should retry.
+      return;
+    }
     this._shutdownInProgress = true;
     this._reconnectAttempts = 0;
     // Save startupConfig before clearing, so we can restore it
@@ -408,7 +433,6 @@ export class GoOnManager {
       const closeHandler = () => {
         clearTimeout(forceKillTimer);
         this._shutdownInProgress = false;
-        this._isOperating = false;
       };
       proc.on("close", closeHandler);
       // Store cleanup so it can be removed if stop() is called again
@@ -421,7 +445,6 @@ export class GoOnManager {
       if (proc.exitCode !== null && proc.exitCode !== undefined) {
         clearTimeout(forceKillTimer);
         this._shutdownInProgress = false;
-        this._isOperating = false;
       }
     }
 
@@ -433,7 +456,8 @@ export class GoOnManager {
     }
 
     if (!proc) {
-      this._isOperating = false;
+      this.updateStatus();
+      return;
     }
 
     this.updateStatus();
@@ -711,8 +735,8 @@ export class GoOnManager {
           String(p.name ?? "")
             .charAt(0)
             .toUpperCase() + String(p.name ?? "").slice(1),
-        description: String(p.agent_type || p.url || ""),
-        detail: `Model: ${p.model || "auto"} | Env: ${p.api_key_env || p.secret_key_env || "N/A"}`,
+        description: String(p.type || p.url || ""),
+        detail: `Model: ${p.model || "auto"} | Env: ${p.api_key_env ? "keyring" : p.secret_key_env ? "keyring" : "N/A"}`,
         envVar: String(p.api_key_env || p.secret_key_env || ""),
         apiKeyEnv: String(p.api_key_env || ""),
         secretKeyEnv: String(p.secret_key_env || ""),
@@ -820,19 +844,15 @@ export class GoOnManager {
         });
       }
 
-      // If provider has a known env var, also set it as runtime env override
-      const envOverrides: Record<string, string> = {};
-      if (selectedProvider.envVar) {
-        envOverrides[selectedProvider.envVar] = apiKey.trim();
-      }
-      if (selectedProvider.secretKeyEnv && secretKey) {
-        envOverrides[selectedProvider.secretKeyEnv] = secretKey;
-      }
-      if (Object.keys(envOverrides).length > 0) {
-        this.setRuntimeEnvOverrides({
-          ...envOverrides,
-        });
-      }
+      // API keys are NOT injected into the backend process environment.
+      // The generated config.toml uses `keyring://go-on/{name}_api_key` URIs
+      // and the backend resolves these via system keyring (libsecret, Keychain,
+      // Credential Manager). Skipping env overrides prevents secrets from leaking
+      // to /proc/PID/environ.
+      //
+      // For headless/server deployments, operators can still set env vars directly
+      // (e.g., DEEPSEEK_API_KEY=sk-xxx) which the backend's load_secret_value()
+      // uses as fallback when keyring:// resolution fails.
 
       // Save provider selection to config.toml
       if (selectedProvider.name) {

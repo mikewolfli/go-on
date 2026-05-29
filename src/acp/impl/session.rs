@@ -9,8 +9,20 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 
 use crate::config::RuntimeConfig;
+
+// ---------------------------------------------------------------------------
+// Constant-time equality helper for token comparison
+// ---------------------------------------------------------------------------
+
+/// Compare two byte slices in constant time to prevent timing side-channel
+/// attacks on authentication token validation.
+#[inline]
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    a.ct_eq(b).into()
+}
 
 // ---------------------------------------------------------------------------
 // Data structures
@@ -265,13 +277,19 @@ impl SessionManager {
             };
         }
 
-        // Verify HMAC signature.
+        // Verify HMAC signature with constant-time comparison to prevent
+        // timing side-channel attacks on token validation.
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         let secret = &inner.token_secret;
         let payload = format!("{}:{}", user_id, expires_at_str);
         let expected_sig = hmac_sha256_b64(secret.as_bytes(), payload.as_bytes());
 
-        if provided_sig != expected_sig {
+        // Use constant-time equality to prevent timing attacks on token comparison.
+        // Length comparison is safe to do non-constant-time; only the byte-by-byte
+        // comparison must be constant-time.
+        if provided_sig.len() != expected_sig.len()
+            || !constant_time_eq(provided_sig.as_bytes(), expected_sig.as_bytes())
+        {
             return TokenIntrospectResult {
                 valid: false,
                 session: None,

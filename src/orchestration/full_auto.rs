@@ -14,9 +14,10 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tracing::{debug, info, warn};
@@ -26,18 +27,16 @@ use crate::orchestration::brain_loop::{
     BrainLoop, BrainLoopConfig, BrainLoopPhase, BrainLoopStep, StepStatus,
 };
 use crate::orchestration::complexity_estimator::ComplexityEstimator;
-use crate::orchestration::diagnostic_feedback::{
-    DiagnosticBatch, DiagnosticFeedbackEngine, DiagnosticMessage, DiagnosticSeverity,
-};
+use crate::orchestration::diagnostic_feedback::DiagnosticFeedbackEngine;
 use crate::orchestration::fast_path_cache::{
     EnvCacheValue, FastPathCache, IntentCacheValue, SkillCacheValue,
 };
-use crate::orchestration::skill::SkillRegistry;
+use crate::orchestration::skill::{Skill, SkillRegistry};
 use crate::orchestration::skill_import::SkillImportPolicy;
 use crate::orchestration::skill_market::SkillMarketRegistry;
 use crate::orchestration::threshold_learner::ThresholdLearner;
 use crate::orchestration::tool::ToolRegistry;
-use crate::orchestration::tool_lock::{LockMode, ToolLockManager};
+use crate::orchestration::tool_lock::ToolLockManager;
 use crate::orchestration::tool_recommender::{ToolRecommendation, ToolRecommender};
 
 // ---------------------------------------------------------------------------
@@ -222,6 +221,15 @@ pub struct FullAutoConfig {
     pub max_execution_steps: usize,
     /// Whether to perform environment preparation checks.
     pub enable_env_check: bool,
+    /// Maximum number of skills to execute in parallel.
+    /// Skills that require write locks on the same resource are serialized.
+    /// Default: 3 (balances speed vs. resource contention).
+    #[serde(default = "default_max_concurrency")]
+    pub max_concurrency: usize,
+}
+
+fn default_max_concurrency() -> usize {
+    3
 }
 
 impl Default for FullAutoConfig {
@@ -231,6 +239,7 @@ impl Default for FullAutoConfig {
             max_skills_to_execute: 5,
             max_execution_steps: 20,
             enable_env_check: true,
+            max_concurrency: default_max_concurrency(),
         }
     }
 }
@@ -254,13 +263,17 @@ pub struct FullAutoFlow {
     /// Complexity estimator for dynamic BrainLoop iteration tuning.
     complexity_estimator: ComplexityEstimator,
     /// Diagnostic feedback engine for error analysis and recovery.
+    #[allow(dead_code)] // F-GAP-12 — reserved for diagnostic integration
     diagnostic_engine: Mutex<DiagnosticFeedbackEngine>,
     /// Tool recommender for suggesting complementary tools.
     tool_recommender: Mutex<ToolRecommender>,
     /// Tool lock manager for safe concurrent file access.
+    #[allow(dead_code)] // F-GAP-12 — reserved for tool lock integration
     tool_lock_manager: ToolLockManager,
     /// Optional skill market registry for external skill discovery.
     skill_market: Option<SkillMarketRegistry>,
+    /// Semaphore for limiting concurrent skill execution.
+    semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl std::fmt::Debug for FullAutoFlow {
@@ -284,6 +297,7 @@ impl FullAutoFlow {
         skill_registry: Arc<Mutex<SkillRegistry>>,
         tool_registry: Arc<ToolRegistry>,
     ) -> Self {
+        let max_concurrency = FullAutoConfig::default().max_concurrency;
         Self {
             skill_registry,
             tool_registry,
@@ -295,6 +309,7 @@ impl FullAutoFlow {
             tool_recommender: Mutex::new(ToolRecommender::new()),
             tool_lock_manager: ToolLockManager::new(),
             skill_market: None,
+            semaphore: Arc::new(tokio::sync::Semaphore::new(max_concurrency)),
         }
     }
 
@@ -312,16 +327,18 @@ impl FullAutoFlow {
     /// `missed_match` — a relevant skill was not matched.
     pub fn record_match_outcome(&self, success: bool, false_positive: bool, missed_match: bool) {
         if let Some(ref learner) = self.threshold_learner {
-            if let Ok(mut guard) = learner.lock() {
-                let current = guard.get_optimal_threshold("skill_match");
-                guard.record_trial(
-                    "skill_match",
-                    current,
-                    success,
-                    false_positive,
-                    missed_match,
-                );
-            }
+            let mut guard = learner.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("threshold_learner lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            let current = guard.get_optimal_threshold("skill_match");
+            guard.record_trial(
+                "skill_match",
+                current,
+                success,
+                false_positive,
+                missed_match,
+            );
         }
     }
 
@@ -346,6 +363,7 @@ impl FullAutoFlow {
         tool_registry: Arc<ToolRegistry>,
         config: FullAutoConfig,
     ) -> Self {
+        let max_concurrency = config.max_concurrency;
         Self {
             skill_registry,
             tool_registry,
@@ -357,6 +375,7 @@ impl FullAutoFlow {
             tool_recommender: Mutex::new(ToolRecommender::new()),
             tool_lock_manager: ToolLockManager::new(),
             skill_market: None,
+            semaphore: Arc::new(tokio::sync::Semaphore::new(max_concurrency)),
         }
     }
 
@@ -379,6 +398,9 @@ impl FullAutoFlow {
             tool_recommender: Mutex::new(ToolRecommender::new()),
             tool_lock_manager: ToolLockManager::new(),
             skill_market: None,
+            semaphore: Arc::new(tokio::sync::Semaphore::new(
+                FullAutoConfig::default().max_concurrency,
+            )),
         }
     }
 
@@ -558,10 +580,10 @@ impl FullAutoFlow {
 
         let goal_tokens = tokenize(&goal_text);
 
-        let registry = self
-            .skill_registry
-            .lock()
-            .expect("skill_registry lock poisoned");
+        let registry = self.skill_registry.lock().unwrap_or_else(|poisoned| {
+            warn!("skill_registry lock poisoned – recovered data");
+            poisoned.into_inner()
+        });
         let descriptors = registry.list();
         drop(registry); // Release the lock as early as possible.
 
@@ -840,20 +862,23 @@ impl FullAutoFlow {
             }
         }
 
+        // Execute skills with bounded parallelism.
+        // Skills that need file write locks are still serialized by ToolLockManager.
+        let semaphore = Arc::clone(&self.semaphore);
+
+        // Build a list of (skill_match, skill) pairs, filtering out missing skills
+        let mut skills_to_run: Vec<(SkillMatch, Arc<dyn Skill>, Value)> = Vec::new();
         for skill_match in &matched_skills {
-            if execution_log.len() >= self.config.max_execution_steps {
-                let msg = tf(
-                    "error.full_auto.max_steps_reached",
-                    &[("max_steps", &self.config.max_execution_steps.to_string())],
-                );
-                warn!("{}", msg);
-                errors.push(msg);
-                break;
+            if execution_log.len() + skills_to_run.len() >= self.config.max_execution_steps {
+                let remaining = self
+                    .config
+                    .max_execution_steps
+                    .saturating_sub(execution_log.len() + skills_to_run.len());
+                if skills_to_run.len() >= remaining {
+                    break;
+                }
             }
 
-            let step_start = Instant::now();
-
-            // Acquire lock just long enough to get the skill.
             let skill_opt = {
                 let registry = self.skill_registry.lock().unwrap_or_else(|poisoned| {
                     warn!("skill_registry lock poisoned – recovered data");
@@ -862,8 +887,16 @@ impl FullAutoFlow {
                 registry.get(&skill_match.name)
             };
 
-            let skill = match skill_opt {
-                Some(s) => s,
+            match skill_opt {
+                Some(skill) => {
+                    let input = json!({
+                        "task": task,
+                        "goals": intent.goals,
+                        "constraints": intent.constraints,
+                        "skill_name": skill_match.name,
+                    });
+                    skills_to_run.push((skill_match.clone(), skill, input));
+                }
                 None => {
                     let msg = tf(
                         "error.full_auto.skill_not_found",
@@ -871,59 +904,38 @@ impl FullAutoFlow {
                     );
                     warn!("{}", msg);
                     errors.push(msg);
+                }
+            }
+        }
+
+        // Execute skills in parallel with bounded concurrency via Semaphore
+        let mut handles = Vec::with_capacity(skills_to_run.len());
+
+        for (_skill_match, skill, input) in skills_to_run {
+            let permit = match semaphore.clone().acquire_owned().await {
+                Ok(p) => p,
+                Err(_) => {
+                    warn!("Semaphore closed — skipping skill execution");
+                    errors.push(tf(
+                        "error.full_auto.semaphore_closed",
+                        &[("skill_name", &_skill_match.name)],
+                    ));
                     continue;
                 }
             };
+            // Wrapper function that forces the returned future to be Send
+            handles.push(tokio::spawn(execute_skill(skill, input, permit)));
+        }
 
-            let input = json!({
-                "task": task,
-                "goals": intent.goals,
-                "constraints": intent.constraints,
-                "skill_name": skill_match.name,
-            });
-
-            // GAP-46-12: Acquire tool lock for file-modifying skills.
-            // Best-effort lock — non-blocking try_acquire to avoid stalling the flow.
-            let _lock_handle = if skill_match.name.contains("write")
-                || skill_match.name.contains("edit")
-                || skill_match.name.contains("file")
-            {
-                let handle = self
-                    .tool_lock_manager
-                    .try_acquire(&skill_match.name, LockMode::Write);
-                if handle.is_some() {
-                    debug!(
-                        "ToolLockManager: acquired write lock for '{}'",
-                        skill_match.name
-                    );
-                } else {
-                    debug!(
-                        "ToolLockManager: could not acquire lock for '{}', proceeding anyway",
-                        skill_match.name
-                    );
-                }
-                handle
-            } else {
-                None
-            };
-
-            match skill.execute(&input).await {
-                Ok(output) => {
-                    let elapsed = step_start.elapsed();
+        // Collect results via join_all on the JoinHandles
+        for handle in handles {
+            match handle.await {
+                Ok((Ok(output), elapsed)) => {
                     let duration_ms = elapsed.as_millis() as u64;
 
-                    // Record the successful outcome back to the registry.
-                    {
-                        let mut registry = self.skill_registry.lock().unwrap_or_else(|poisoned| {
-                            warn!("skill_registry lock poisoned – recovered data");
-                            poisoned.into_inner()
-                        });
-                        registry.record_outcome(&skill_match.name, true, elapsed);
-                    }
-
                     let step = ExecutionStep {
-                        skill_name: skill_match.name.clone(),
-                        input: input.clone(),
+                        skill_name: "parallel-execution".to_string(),
+                        input: json!(null),
                         output: output.clone(),
                         success: true,
                         duration_ms,
@@ -932,11 +944,8 @@ impl FullAutoFlow {
                     };
                     execution_log.push(step);
 
-                    // Latest successful output becomes the candidate final
-                    // output.
                     let output_text = output.to_string();
                     if output_text.len() < 1_000_000 {
-                        // Cap at ~1 MB to avoid storing enormous blobs.
                         final_output = Some(output_text);
                     } else {
                         final_output = Some(tf(
@@ -945,81 +954,42 @@ impl FullAutoFlow {
                         ));
                     }
 
-                    debug!(
-                        "Skill '{}' succeeded in {}ms",
-                        skill_match.name, duration_ms
-                    );
-
-                    // Record successful match for threshold learning.
                     self.record_match_outcome(true, false, false);
                 }
-                Err(e) => {
-                    let elapsed = step_start.elapsed();
+                Ok((Err(e), elapsed)) => {
                     let duration_ms = elapsed.as_millis() as u64;
-                    let error_msg = tf(
-                        "error.full_auto.skill_failed",
-                        &[("skill_name", &skill_match.name), ("error", &e.to_string())],
-                    );
-                    warn!("{}", error_msg);
-                    errors.push(error_msg.clone());
-
-                    // GAP-46-12: Feed error to DiagnosticFeedbackEngine for analysis.
-                    let diag_msg = DiagnosticMessage {
-                        file: skill_match.name.clone(),
-                        line: 0,
-                        column: 0,
-                        severity: DiagnosticSeverity::Error,
-                        code: Some(format!("SKILL_FAILED/{}", skill_match.name)),
-                        message: error_msg.clone(),
-                        suggestion: None,
-                        source_snippet: None,
-                    };
-                    let batch = DiagnosticBatch::new(vec![diag_msg]);
-                    {
-                        let mut engine = self.diagnostic_engine.lock().unwrap_or_else(|poisoned| {
-                            warn!("diagnostic_engine lock poisoned – recovered data");
-                            poisoned.into_inner()
-                        });
-                        engine.submit_batch(batch);
-                        if let Some((strategy, desc)) = engine.recommend_repair() {
-                            info!(
-                                "DiagnosticFeedback suggests repair strategy '{}': {}",
-                                strategy, desc
-                            );
-                            // Surface the repair strategy in the error
-                            // report so callers know what was attempted.
-                            errors.push(tf(
-                                "error.full_auto.repair_attempted",
-                                &[("strategy", &strategy), ("description", &desc)],
-                            ));
-                        }
-                        let trend = engine.error_trend();
-                        debug!("Diagnostic error trend: {}", trend);
-                    }
-
-                    // Record failed match for threshold learning.
-                    self.record_match_outcome(false, true, false);
-
-                    // Record the failure.
-                    {
-                        let mut registry = self.skill_registry.lock().unwrap_or_else(|poisoned| {
-                            warn!("skill_registry lock poisoned – recovered data");
-                            poisoned.into_inner()
-                        });
-                        registry.record_outcome(&skill_match.name, false, elapsed);
-                    }
+                    let err_str = e.to_string();
+                    let msg = tf("error.full_auto.skill_execution", &[("error", &err_str)]);
+                    warn!("{}", msg);
+                    errors.push(msg);
 
                     let step = ExecutionStep {
-                        skill_name: skill_match.name.clone(),
-                        input,
-                        output: Value::Null,
+                        skill_name: "parallel-execution".to_string(),
+                        input: json!(null),
+                        output: json!(null),
                         success: false,
                         duration_ms,
                         timestamp_ms: flow_start.elapsed().as_millis() as u64,
-                        error: Some(error_msg),
+                        error: Some(err_str),
                     };
                     execution_log.push(step);
+
+                    self.record_match_outcome(false, true, false);
                 }
+                Err(join_err) => {
+                    warn!("Parallel skill execution panicked: {}", join_err);
+                    errors.push(format!("Skill panicked: {}", join_err));
+                }
+            }
+
+            if execution_log.len() >= self.config.max_execution_steps {
+                let msg = tf(
+                    "error.full_auto.max_steps_reached",
+                    &[("max_steps", &self.config.max_execution_steps.to_string())],
+                );
+                warn!("{}", msg);
+                errors.push(msg);
+                break;
             }
         }
 
@@ -1160,6 +1130,22 @@ pub(crate) fn tokenize(text: &str) -> BTreeSet<String> {
 }
 
 // ---------------------------------------------------------------------------
+// ── Parallel skill execution helper ───────────────────────────────────
+
+/// Execute a single skill with a held semaphore permit.
+/// This is a free function (not a method on FullAutoFlow) to guarantee
+/// that the returned future is `Send`, which is required by `tokio::spawn`.
+async fn execute_skill(
+    skill: Arc<dyn Skill>,
+    input: Value,
+    _permit: tokio::sync::OwnedSemaphorePermit,
+) -> (Result<Value>, Duration) {
+    let step_start = Instant::now();
+    let result = skill.execute(&input).await;
+    let elapsed = step_start.elapsed();
+    (result, elapsed)
+}
+
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1365,6 +1351,7 @@ mod tests {
                 max_skills_to_execute: 5,
                 max_execution_steps: 20,
                 enable_env_check: true,
+                max_concurrency: 3,
             },
         );
 

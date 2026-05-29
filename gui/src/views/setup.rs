@@ -163,7 +163,8 @@ impl SetupView {
                     .iter()
                     .any(|name| name.eq_ignore_ascii_case(&self.selected_provider))
                 {
-                    self.selected_provider = self.provider_names.first().cloned().unwrap_or_default();
+                    self.selected_provider =
+                        self.provider_names.first().cloned().unwrap_or_default();
                 }
             }
         }
@@ -307,19 +308,19 @@ impl SetupView {
                             );
                         }
 
-                        // Persist to config (always works)
+                        // Persist only metadata to config — API key is stored in system keyring above.
+                        // The config's api_key field is cleared by save_app_config() during serialization.
                         if let Some(existing) = config
                             .providers
                             .iter_mut()
                             .find(|p| p.name == self.selected_provider)
                         {
-                            existing.api_key = api_key.clone();
                             existing.model = self.selected_model.clone();
                             existing.validated = true;
                         } else {
                             config.providers.push(ProviderConfig {
                                 name: self.selected_provider.clone(),
-                                api_key: api_key.clone(),
+                                api_key: String::new(),
                                 secret_key: String::new(),
                                 model: self.selected_model.clone(),
                                 validated: true,

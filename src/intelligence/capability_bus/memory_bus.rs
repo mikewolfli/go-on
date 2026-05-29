@@ -131,20 +131,22 @@ impl MemoryBus {
         // ---- L1: In-memory response cache ----
         if strategy.use_l1_memory {
             if let Some(ref mrc) = self.memory_response_cache {
-                if let Ok(guard) = mrc.lock() {
-                    let cached = guard.get(key);
-                    drop(guard);
-                    if cached.is_some() {
-                        profile.total_cache_hits += 1;
-                        let total = profile.total_cache_hits + profile.total_cache_misses;
-                        profile.cache_hit_rate = if total == 0 {
-                            0.0
-                        } else {
-                            profile.total_cache_hits as f64 / total as f64
-                        };
-                        // MemoryResponseCache stores String; convert to Vec<u8>.
-                        return cached.map(|entry| entry.response_text.into_bytes());
-                    }
+                let guard = mrc.lock().unwrap_or_else(|poisoned| {
+                    tracing::warn!("memory_response_cache lock poisoned in lookup L1 – recovered");
+                    poisoned.into_inner()
+                });
+                let cached = guard.get(key);
+                drop(guard);
+                if cached.is_some() {
+                    profile.total_cache_hits += 1;
+                    let total = profile.total_cache_hits + profile.total_cache_misses;
+                    profile.cache_hit_rate = if total == 0 {
+                        0.0
+                    } else {
+                        profile.total_cache_hits as f64 / total as f64
+                    };
+                    // MemoryResponseCache stores String; convert to Vec<u8>.
+                    return cached.map(|entry| entry.response_text.into_bytes());
                 }
             }
         }
@@ -209,14 +211,16 @@ impl MemoryBus {
         // ---- L1: In-memory response cache ----
         if strategy.use_l1_memory {
             if let Some(ref mrc) = self.memory_response_cache {
-                if let Ok(guard) = mrc.lock() {
-                    guard.put(
-                        key.to_string(),
-                        value_str.clone(),
-                        None, // no agent context at this level
-                        strategy.ttl_seconds,
-                    );
-                }
+                let guard = mrc.lock().unwrap_or_else(|poisoned| {
+                    tracing::warn!("memory_response_cache lock poisoned in store L1 – recovered");
+                    poisoned.into_inner()
+                });
+                guard.put(
+                    key.to_string(),
+                    value_str.clone(),
+                    None, // no agent context at this level
+                    strategy.ttl_seconds,
+                );
             }
         }
 
@@ -238,17 +242,19 @@ impl MemoryBus {
 
         // ---- In-memory MemoryStore (if available) ----
         if let Some(ref ms) = self.memory_store {
-            if let Ok(mut guard) = ms.lock() {
-                let entry = crate::memory_module::MemoryEntry {
-                    id: key.to_string(),
-                    class: crate::memory_module::MemoryClass::Episodic,
-                    content: value_str,
-                    timestamp: now_iso8601(),
-                    usefulness: 1.0,
-                    staleness: 0,
-                };
-                guard.store(entry);
-            }
+            let mut guard = ms.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("memory_bus store lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            let entry = crate::memory_module::MemoryEntry {
+                id: key.to_string(),
+                class: crate::memory_module::MemoryClass::Episodic,
+                content: value_str,
+                timestamp: now_iso8601(),
+                usefulness: 1.0,
+                staleness: 0,
+            };
+            guard.store(entry);
         }
     }
 
@@ -307,9 +313,11 @@ impl MemoryBus {
 
         // MemoryStore: run garbage collection.
         if let Some(ref ms) = self.memory_store {
-            if let Ok(mut guard) = ms.lock() {
-                guard.gc();
-            }
+            let mut guard = ms.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("memory_bus gc lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            guard.gc();
         }
 
         // VectorStore entries are aged out by LRU via max_entries internally;

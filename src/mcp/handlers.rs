@@ -100,16 +100,21 @@ impl McpServer {
     }
 
     fn clear_cancelled_request(&self, request_id: &Value) {
-        if let Ok(mut cancelled) = self.cancelled_requests.lock() {
-            cancelled.remove(&request_id_key(request_id));
-        }
+        let mut cancelled = self.cancelled_requests.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("cancelled_requests lock poisoned – recovered data");
+            poisoned.into_inner()
+        });
+        cancelled.remove(&request_id_key(request_id));
     }
 
     fn is_cancelled_request(&self, request_id: &Value) -> bool {
         self.cancelled_requests
             .lock()
-            .map(|cancelled| cancelled.contains(&request_id_key(request_id)))
-            .unwrap_or(false)
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("cancelled_requests lock poisoned in is_cancelled – recovered");
+                poisoned.into_inner()
+            })
+            .contains(&request_id_key(request_id))
     }
 
     fn request_timeout_ms(&self, request: &JsonRpcRequest) -> u64 {
@@ -436,14 +441,16 @@ impl McpServer {
 
         // Inject registered skills from ACP server (if available)
         if let Some(registry) = self.skill_registry() {
-            if let Ok(guard) = registry.lock() {
-                for descriptor in guard.list() {
-                    tools.push(json!({
-                        "name": descriptor.name,
-                        "description": descriptor.description,
-                        "input_schema": descriptor.input_schema,
-                    }));
-                }
+            let guard = registry.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("MCP skill_registry lock poisoned – recovered");
+                poisoned.into_inner()
+            });
+            for descriptor in guard.list() {
+                tools.push(json!({
+                    "name": descriptor.name,
+                    "description": descriptor.description,
+                    "input_schema": descriptor.input_schema,
+                }));
             }
         }
 

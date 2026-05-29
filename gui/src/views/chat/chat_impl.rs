@@ -750,14 +750,14 @@ impl ChatView {
                 if self.show_thinking_idx == Some(idx) {
                     self.show_thinking_idx = None;
                 } else if self.show_thinking_idx.is_some_and(|i| i > idx) {
-                    self.show_thinking_idx = Some(self.show_thinking_idx.unwrap() - 1);
+                    self.show_thinking_idx = self.show_thinking_idx.map(|i| i - 1);
                 }
                 // Adjust edit_msg_idx similarly
                 if self.edit_msg_idx == Some(idx) {
                     self.edit_msg_idx = None;
                     self.edit_msg_buf.clear();
                 } else if self.edit_msg_idx.is_some_and(|i| i > idx) {
-                    self.edit_msg_idx = Some(self.edit_msg_idx.unwrap() - 1);
+                    self.edit_msg_idx = self.edit_msg_idx.map(|i| i - 1);
                 }
             }
         }

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from typing import Any
@@ -160,7 +161,7 @@ class GoOnClient:
     async def _json_rpc(self, method: str, params: dict[str, Any] | None = None) -> Any:
         payload: dict[str, Any] = {
             "jsonrpc": "2.0",
-            "id": 1,
+            "id": str(uuid.uuid4()),
             "method": method,
             "params": params or {},
         }
@@ -195,13 +196,16 @@ class GoOnClient:
                 last_error = e
                 if attempt < self.max_retries:
                     await asyncio.sleep(self.retry_delay)
-            except (GoOnClientError, httpx.HTTPStatusError, json.JSONDecodeError):
+            except (
+                GoOnClientError,
+                httpx.HTTPStatusError,
+                json.JSONDecodeError,
+                KeyboardInterrupt,
+                SystemExit,
+            ):
                 # Non-transient errors — do not retry
                 raise
-            except Exception as e:
-                last_error = e
-                if attempt < self.max_retries:
-                    await asyncio.sleep(self.retry_delay)
+            # No bare except Exception — only known retryable network errors are retried
 
         raise GoOnClientError(
             f"Request failed after {self.max_retries} retries: {last_error}"
@@ -242,14 +246,15 @@ class GoOnClient:
             json=request_dict,
         ) as response:
             async for line in response.aiter_lines():
-                if line.startswith("data: "):
-                    payload = line[6:]
+                # Handle both "data: " and "data:" (without space) per SSE spec tolerance
+                if line.startswith("data:"):
+                    payload = line[5:].lstrip() if len(line) > 5 else ""
                     # Handle the [DONE] SSE terminator — break instead of trying to parse it as JSON
                     if payload.strip() == "[DONE]":
                         break
                     try:
                         yield json.loads(payload)
-                    except json.JSONDecodeError as e:
+                    except json.JSONDecodeError:
                         if payload.strip() == "[DONE]":
                             break
                         logger.warning(f"SSE parse error on payload: {payload[:100]}")

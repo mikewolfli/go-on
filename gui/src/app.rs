@@ -377,55 +377,15 @@ impl GoOnApp {
                     .arg(&config.protocol_mode)
                     .stdout(std::process::Stdio::null());
 
-                // Inject API keys for ALL configured providers into backend process environment.
-                // Priority: config file (fast) > keyring (slow on macOS) > inherited env.
-                // Keyring is only checked when the config doesn't have a usable key,
-                // since macOS Keychain access is ~100ms slower per call.
-                for provider in &config.providers {
-                    let provider_lower = provider.name.to_lowercase();
-                    let derived_var = format!("{}_API_KEY", provider_lower.to_uppercase());
-                    let env_var = match provider_lower.as_str() {
-                        "copilot" => "GITHUB_COPILOT_TOKEN",
-                        "replicate" => "REPLICATE_API_TOKEN",
-                        _ => &derived_var,
-                    };
-
-                    // 1. Config file (fast, no I/O). Use this directly if available.
-                    let mut key =
-                        if !provider.api_key.is_empty() && provider.api_key != REDACTED_API_KEY {
-                            Some(provider.api_key.clone())
-                        } else {
-                            None
-                        };
-
-                    // 2. Keyring (slow on macOS — Keychain access per call).
-                    // Only hit keyring when config doesn't have the key.
-                    if key.is_none() {
-                        key = crate::keyring_util::get_api_key(&provider_lower);
-                        #[cfg(debug_assertions)]
-                        if key.is_none() {
-                            eprintln!("backend: keyring returned no key for '{}'", provider_lower);
-                        }
-                    }
-
-                    // 3. Inherited env var (from parent process)
-                    if key.is_none() {
-                        key = std::env::var(env_var).ok().filter(|v| !v.is_empty());
-                    }
-
-                    if let Some(k) = key {
-                        let _preview = if k.len() > 4 {
-                            format!("{}...", &k[..4])
-                        } else {
-                            "[short]".to_string()
-                        };
-                        eprintln!("backend: set {}={}", env_var, _preview);
-                        cmd.env(env_var, k);
-                    } else {
-                        #[cfg(debug_assertions)]
-                        eprintln!("backend: no key found for '{}'", provider_lower);
-                    }
-                }
+                // API keys are NOT injected into the backend process environment.
+                // The generated config.toml uses `keyring://go-on/{name}_api_key` URIs
+                // and the backend resolves these via system keyring (libsecret, Keychain,
+                // Credential Manager). This ensures secrets stay in the secure keyring
+                // rather than leaking into the process environment (visible via /proc/PID/environ).
+                //
+                // For headless/server deployments, operators can still set env vars directly
+                // (e.g., DEEPSEEK_API_KEY=sk-xxx) which the backend's load_secret_value()
+                // uses as fallback when keyring:// resolution fails.
 
                 // Sync language between GUI and backend
                 cmd.env("LANG", &config.language);
@@ -734,10 +694,7 @@ impl GoOnApp {
                 };
 
                 // API key env var reference
-                let api_key_env = match name.as_str() {
-                    "copilot" => "GITHUB_COPILOT_TOKEN".to_string(),
-                    _ => format!("keyring://go-on/{}_api_key", name),
-                };
+                let api_key_env = format!("keyring://go-on/{}_api_key", name);
 
                 // Secret key line: wenxin/qianfan dual-auth
                 let secret_key_line = match name.as_str() {
@@ -988,7 +945,8 @@ top_k = 2
         }
         // Schedule non-blocking cooldown so the old process can release the port
         // before we spawn the new one (prevents EADDRINUSE).
-        self.restart_cooldown_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(300));
+        self.restart_cooldown_until =
+            Some(std::time::Instant::now() + std::time::Duration::from_millis(300));
         ctx.request_repaint_after(std::time::Duration::from_millis(300));
 
         // Reset state for the new backend (will be spawned once cooldown elapses)

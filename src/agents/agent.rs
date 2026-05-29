@@ -596,15 +596,20 @@ impl AgentRegistry {
                 tags.push("fallback".to_string());
             }
 
-            // Register with capability graph
+            // Register with capability graph — recover from poison to avoid
+            // silently dropping agent capability registration.
             let decl = CapabilityDecl {
                 name: name.clone(),
                 description: format!("Agent {} of type {}", name, agent_cfg.agent_type),
                 tags: tags.clone(),
             };
-            if let Ok(mut graph) = capability_graph.lock() {
-                graph.register_agent(name, vec![decl]);
-            }
+            let mut graph = capability_graph.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!(
+                    "capability_graph lock poisoned during agent registration – recovered"
+                );
+                poisoned.into_inner()
+            });
+            graph.register_agent(name, vec![decl]);
         }
 
         Ok(Self {

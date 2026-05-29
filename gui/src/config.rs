@@ -152,12 +152,13 @@ impl Default for FeatureToggles {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
     pub name: String,
-    /// API key stored directly in config (fallback when keyring unavailable).
-    /// Can be empty if key is only in system keyring.
+    /// API key — stored securely in system keyring, never serialized to config JSON.
+    /// When deserializing from old configs, this field is loaded for migration
+    /// to keyring but is cleared before saving.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub api_key: String,
-    /// Secret key stored directly in config (fallback when keyring unavailable).
-    /// Can be empty if key is only in system keyring.
-    #[serde(default)]
+    /// Secret key — same as api_key; only stored in keyring, never in config JSON.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub secret_key: String,
     pub model: String,
     pub validated: bool,
@@ -443,6 +444,11 @@ pub fn load_app_config() -> AppConfig {
 }
 
 /// Save GUI app config to JSON file. Returns true on success, false on failure.
+///
+/// API keys and secret keys are NEVER written to the config file.
+/// They are stored exclusively in the system keyring.
+/// Before serialization, the keys are cleared from the in-memory config
+/// (the original AppConfig is NOT modified — a clone is used).
 pub fn save_app_config(config: &AppConfig) -> bool {
     let path = app_config_path();
     if let Some(parent) = path.parent() {
@@ -454,7 +460,14 @@ pub fn save_app_config(config: &AppConfig) -> bool {
             return false;
         }
     }
-    match serde_json::to_string_pretty(config) {
+    // Clone and redact API keys before serialization to prevent
+    // plaintext secrets from being written to disk.
+    let mut config_for_save = config.clone();
+    for provider in &mut config_for_save.providers {
+        provider.api_key.clear();
+        provider.secret_key.clear();
+    }
+    match serde_json::to_string_pretty(&config_for_save) {
         Ok(content) => match crate::fs_util::save_with_backup(&path, &content) {
             Ok(_) => true,
             Err(e) => {

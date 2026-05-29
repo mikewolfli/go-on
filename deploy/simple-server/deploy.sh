@@ -14,7 +14,9 @@ echo "Install dir: ${INSTALL_DIR}/backend"
 
 # 1. Create directories
 sudo mkdir -p "${INSTALL_DIR}/backend"
-sudo chown "$USER:$USER" "${INSTALL_DIR}" -R
+# Use colon-separated user (no group) for compatibility with systems
+# where the user's primary group name differs from the username.
+sudo chown "$USER:" "${INSTALL_DIR}" -R
 
 # 2. Build
 echo "Building..."

@@ -52,7 +52,7 @@ model = "deepseek-v4-flash"
 
 [agents.copilot]
 type = "copilot"
-api_key_env = "GITHUB_COPILOT_TOKEN"
+api_key_env = "keyring://go-on/copilot_api_key"
 url = "http://127.0.0.1:8080"
 model = ""
 

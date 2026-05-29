@@ -16,6 +16,8 @@ use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::{Instant, SystemTime};
 
+use tracing::warn;
+
 use crate::orchestration::distributed_tx::{DistributedTxStatus, TwoPhaseCoordinator};
 use crate::orchestration::tool::{ToolInput, ToolOutput, ToolRegistry};
 
@@ -56,9 +58,13 @@ static LATEST_IDEMPOTENCY_CONFLICT_RATE: LazyLock<Mutex<Option<f64>>> =
 
 /// Store the latest idempotency conflict rate for governance observability.
 pub fn store_idempotency_conflict_rate(rate: f64) {
-    if let Ok(mut guard) = LATEST_IDEMPOTENCY_CONFLICT_RATE.lock() {
-        *guard = Some(rate);
-    }
+    let mut guard = LATEST_IDEMPOTENCY_CONFLICT_RATE
+        .lock()
+        .unwrap_or_else(|poisoned| {
+            warn!("LATEST_IDEMPOTENCY_CONFLICT_RATE lock poisoned – recovered");
+            poisoned.into_inner()
+        });
+    *guard = Some(rate);
 }
 
 /// Read the latest idempotency conflict rate.
@@ -109,7 +115,10 @@ impl IdempotencyStore {
     ///   registered and **must** call [`record_result`] after executing.
     pub fn check_and_record(&self, key: &str, tool_name: &str) -> (bool, Option<ToolCallResult>) {
         let composite = format!("{}::{}", tool_name, key);
-        let mut keys = self.keys.lock().expect("IdempotencyStore lock poisoned");
+        let mut keys = self.keys.lock().unwrap_or_else(|poisoned| {
+            warn!("IdempotencyStore lock poisoned – recovered data");
+            poisoned.into_inner()
+        });
 
         // Check if this composite key already exists (even without a result).
         if keys.contains_key(&composite) {
@@ -149,7 +158,10 @@ impl IdempotencyStore {
     /// `key` must have been previously registered via [`check_and_record`].
     pub fn record_result(&self, key: &str, tool_name: &str, result: ToolCallResult) {
         let composite = format!("{}::{}", tool_name, key);
-        let mut keys = self.keys.lock().expect("IdempotencyStore lock poisoned");
+        let mut keys = self.keys.lock().unwrap_or_else(|poisoned| {
+            warn!("IdempotencyStore lock poisoned – recovered data");
+            poisoned.into_inner()
+        });
 
         if let Some(record) = keys.get_mut(&composite) {
             record.last_result = Some(result);
@@ -167,7 +179,10 @@ impl IdempotencyStore {
     /// Also stores the computed rate in the global governance store so that
     /// the governance status endpoint can expose idempotency health.
     pub fn conflict_rate(&self) -> f64 {
-        let keys = self.keys.lock().expect("IdempotencyStore lock poisoned");
+        let keys = self.keys.lock().unwrap_or_else(|poisoned| {
+            warn!("IdempotencyStore lock poisoned – recovered data");
+            poisoned.into_inner()
+        });
         let total = keys.len();
         if total == 0 {
             store_idempotency_conflict_rate(0.0);

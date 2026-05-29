@@ -112,6 +112,21 @@ pub struct CouncilConfig {
     pub voting_duration_ms: u64,
     /// Maximum number of proposals tracked at once.
     pub max_proposals: usize,
+    /// Enable reputation-based voting power adjustment.
+    /// When enabled, members who vote accurately gain influence over time.
+    #[serde(default = "default_enable_reputation")]
+    pub enable_reputation: bool,
+    /// Number of voting rounds before reputation affects voting power.
+    #[serde(default = "default_reputation_warmup_rounds")]
+    pub reputation_warmup_rounds: u32,
+}
+
+fn default_enable_reputation() -> bool {
+    true
+}
+
+fn default_reputation_warmup_rounds() -> u32 {
+    5
 }
 
 impl Default for CouncilConfig {
@@ -121,6 +136,8 @@ impl Default for CouncilConfig {
             min_members_for_quorum: 3,
             voting_duration_ms: 86_400_000, // 24 hours
             max_proposals: 100,
+            enable_reputation: default_enable_reputation(),
+            reputation_warmup_rounds: default_reputation_warmup_rounds(),
         }
     }
 }
@@ -142,13 +159,114 @@ pub struct CouncilProfile {
     pub pending_count: u32,
     /// Number of proposals that ended in a tie.
     pub tied_count: u32,
+    /// Number of members with adjusted voting power due to reputation.
+    pub reputation_adjusted_members: u32,
+}
+
+/// Reputation tracking record for a council member.
+///
+/// Tracks voting accuracy over time to enable adaptive voting power.
+/// Members who consistently vote with the council's final outcome gain
+/// influence; those who vote against consensus lose influence.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReputationRecord {
+    /// Member ID this record belongs to.
+    pub member_id: String,
+    /// Total votes cast by this member.
+    pub total_votes: u64,
+    /// Number of times this member voted with the majority outcome.
+    pub accurate_votes: u64,
+    /// Current accuracy ratio (0.0–1.0).
+    pub accuracy: f64,
+    /// Rolling window of recent vote outcomes (true=accurate, false=inaccurate).
+    /// Limited to the last 50 votes.
+    pub recent_window: Vec<bool>,
+    /// Current effective voting power multiplier (0.5–2.0).
+    /// Starts at 1.0 and adjusts based on accuracy.
+    pub influence_multiplier: f64,
+    /// Number of warmup rounds remaining before reputation takes effect.
+    pub warmup_remaining: u32,
+}
+
+impl ReputationRecord {
+    /// Create a new reputation record for a member.
+    pub fn new(member_id: &str, warmup_rounds: u32) -> Self {
+        Self {
+            member_id: member_id.to_string(),
+            total_votes: 0,
+            accurate_votes: 0,
+            accuracy: 0.5,
+            recent_window: Vec::with_capacity(50),
+            influence_multiplier: 1.0,
+            warmup_remaining: warmup_rounds,
+        }
+    }
+
+    /// Record whether this member's vote was accurate (matched outcome).
+    /// Returns the updated influence multiplier.
+    pub fn record_outcome(&mut self, was_accurate: bool) -> f64 {
+        self.total_votes += 1;
+        if was_accurate {
+            self.accurate_votes += 1;
+        }
+        self.recent_window.push(was_accurate);
+        if self.recent_window.len() > 50 {
+            self.recent_window.remove(0);
+        }
+
+        // Compute accuracy from recent window (exponential focus on recent)
+        let recent_accuracy = if self.recent_window.is_empty() {
+            0.5
+        } else {
+            // Weight recent votes more heavily
+            let weighted_sum: f64 = self
+                .recent_window
+                .iter()
+                .enumerate()
+                .map(|(i, &acc)| {
+                    let weight = 1.0 + (i as f64 / self.recent_window.len() as f64) * 2.0;
+                    if acc {
+                        weight
+                    } else {
+                        0.0
+                    }
+                })
+                .sum();
+            let total_weight: f64 = self
+                .recent_window
+                .iter()
+                .enumerate()
+                .map(|(i, _)| 1.0 + (i as f64 / self.recent_window.len() as f64) * 2.0)
+                .sum();
+            weighted_sum / total_weight.max(1.0)
+        };
+
+        self.accuracy = (self.accuracy * 0.3 + recent_accuracy * 0.7).clamp(0.0, 1.0);
+
+        // Decrease warmup
+        if self.warmup_remaining > 0 {
+            self.warmup_remaining -= 1;
+            self.influence_multiplier = 1.0;
+        } else {
+            // Adjust influence multiplier based on accuracy
+            // accuracy 0.5 → multiplier 1.0, accuracy 0.9 → 1.8, accuracy 0.2 → 0.5
+            self.influence_multiplier = (0.5 + self.accuracy).clamp(0.5, 2.0);
+        }
+
+        self.influence_multiplier
+    }
 }
 
 /// Multi-agent orchestration council — F-GAP-15.
 ///
 /// Thread-safe: all mutable state is protected behind `Arc<Mutex<>>`.
 /// Members vote on proposals with weighted voting power, and outcomes
-/// are determined by simple majority.
+/// are determined by weighted majority with reputation-based adjustments.
+///
+/// Reputation learning: members who consistently vote with the council's
+/// final outcome gain influence (up to 2.0x); those who vote against
+/// consensus lose influence (down to 0.5x). This enables the council to
+/// become smarter over time by amplifying the voice of accurate members.
 #[derive(Debug)]
 pub struct OrchestrationCouncil {
     /// Council configuration.
@@ -159,6 +277,8 @@ pub struct OrchestrationCouncil {
     proposals: Arc<Mutex<HashMap<String, CouncilProposal>>>,
     /// Votes keyed by (member_id, proposal_id).
     votes: Arc<Mutex<HashMap<(String, String), CouncilVote>>>,
+    /// Reputation records keyed by member ID.
+    reputation: Arc<Mutex<HashMap<String, ReputationRecord>>>,
 }
 
 impl OrchestrationCouncil {
@@ -169,7 +289,80 @@ impl OrchestrationCouncil {
             members: Arc::new(Mutex::new(HashMap::new())),
             proposals: Arc::new(Mutex::new(HashMap::new())),
             votes: Arc::new(Mutex::new(HashMap::new())),
+            reputation: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Initialize reputation tracking for a member (called automatically on first vote).
+    #[allow(dead_code)] // F-GAP-15 — kept for external API consistency; used indirectly via record_vote_accuracy
+    fn ensure_reputation(&self, member_id: &str) {
+        if let Ok(mut rep) = self.reputation.lock() {
+            if !rep.contains_key(member_id) {
+                rep.insert(
+                    member_id.to_string(),
+                    ReputationRecord::new(member_id, self.config.reputation_warmup_rounds),
+                );
+            }
+        }
+    }
+
+    /// Get the effective voting power for a member, accounting for reputation.
+    /// When reputation is disabled or member is in warmup, returns nominal voting_power.
+    fn effective_voting_power(&self, member_id: &str, nominal_power: u32) -> u32 {
+        if !self.config.enable_reputation {
+            return nominal_power;
+        }
+        if let Ok(rep) = self.reputation.lock() {
+            if let Some(record) = rep.get(member_id) {
+                if record.warmup_remaining > 0 {
+                    return nominal_power;
+                }
+                let adjusted = (nominal_power as f64 * record.influence_multiplier).round() as u32;
+                return adjusted.max(1); // Minimum voting power of 1
+            }
+        }
+        nominal_power
+    }
+
+    /// Record the accuracy of a member's vote after the final outcome is known.
+    /// Call this after `tally_votes()` to enable the council to learn.
+    pub fn record_vote_accuracy(
+        &self,
+        proposal_id: &str,
+        winning_option: &Option<String>,
+    ) -> Result<()> {
+        let votes = self
+            .votes
+            .lock()
+            .map_err(|e| anyhow!("Failed to acquire lock on votes: {e}"))?;
+        let mut reputation = self
+            .reputation
+            .lock()
+            .map_err(|e| anyhow!("Failed to acquire lock on reputation: {e}"))?;
+
+        for vote in votes.values().filter(|v| v.proposal_id == proposal_id) {
+            // Initialize reputation if not present (called without holding reputation lock, which
+            // is already held in the outer scope, so we access the map directly)
+            if !reputation.contains_key(&vote.member_id) {
+                reputation.insert(
+                    vote.member_id.to_string(),
+                    ReputationRecord::new(&vote.member_id, self.config.reputation_warmup_rounds),
+                );
+            }
+            if let Some(record) = reputation.get_mut(&vote.member_id) {
+                let was_accurate = match winning_option {
+                    Some(winner) => vote.selected_option == *winner,
+                    None => false, // No winner (e.g. tie), no one was accurate
+                };
+                record.record_outcome(was_accurate);
+            }
+        }
+        Ok(())
+    }
+
+    /// Get the reputation record for a member, if available.
+    pub fn get_reputation(&self, member_id: &str) -> Option<ReputationRecord> {
+        self.reputation.lock().ok()?.get(member_id).cloned()
     }
 
     /// Add a new member to the council.
@@ -411,7 +604,7 @@ impl OrchestrationCouncil {
             });
         }
 
-        // Tally weighted votes per option.
+        // Tally weighted votes per option, using reputation-adjusted voting power.
         let mut option_tallies: HashMap<String, u32> = HashMap::new();
         for option in &proposal.options {
             option_tallies.insert(option.clone(), 0);
@@ -419,11 +612,12 @@ impl OrchestrationCouncil {
 
         let mut total_votes: u32 = 0;
         for vote in &proposal_votes {
+            let effective_weight = self.effective_voting_power(&vote.member_id, vote.weight);
             let tally = option_tallies
                 .entry(vote.selected_option.clone())
                 .or_insert(0);
-            *tally += vote.weight;
-            total_votes += vote.weight;
+            *tally += effective_weight;
+            total_votes += effective_weight;
         }
 
         // Determine the winner(s).
@@ -580,6 +774,18 @@ impl OrchestrationCouncil {
             })
             .unwrap_or(0);
 
+        let reputation_adjusted_members = self
+            .reputation
+            .lock()
+            .map(|r| {
+                r.values()
+                    .filter(|rec| {
+                        rec.warmup_remaining == 0 && (rec.influence_multiplier - 1.0).abs() > 0.01
+                    })
+                    .count() as u32
+            })
+            .unwrap_or(0);
+
         CouncilProfile {
             total_members,
             active_members,
@@ -588,6 +794,7 @@ impl OrchestrationCouncil {
             rejected_count,
             pending_count,
             tied_count,
+            reputation_adjusted_members,
         }
     }
 }
@@ -637,6 +844,8 @@ mod tests {
             min_members_for_quorum: 2,
             voting_duration_ms: 86_400_000,
             max_proposals: 100,
+            enable_reputation: true,
+            reputation_warmup_rounds: 0, // Zero warmup for tests
         })
     }
 
@@ -882,6 +1091,8 @@ mod tests {
             min_members_for_quorum: 5,
             voting_duration_ms: 86_400_000,
             max_proposals: 100,
+            enable_reputation: false,
+            reputation_warmup_rounds: 0,
         });
 
         council
@@ -933,6 +1144,8 @@ mod tests {
             min_members_for_quorum: 1,
             voting_duration_ms: 1, // 1 ms → everything expires immediately
             max_proposals: 100,
+            enable_reputation: false,
+            reputation_warmup_rounds: 0,
         });
 
         council
@@ -1128,6 +1341,8 @@ mod tests {
             min_members_for_quorum: 1,
             voting_duration_ms: 86_400_000,
             max_proposals: 2,
+            enable_reputation: false,
+            reputation_warmup_rounds: 0,
         });
 
         council
@@ -1249,6 +1464,8 @@ mod tests {
             min_members_for_quorum: 1,
             voting_duration_ms: 1,
             max_proposals: 100,
+            enable_reputation: false,
+            reputation_warmup_rounds: 0,
         });
 
         // Add a member.
@@ -1284,5 +1501,178 @@ mod tests {
         assert_eq!(p.passed_count, 1);
         assert_eq!(p.rejected_count, 1);
         assert_eq!(p.tied_count, 1);
+    }
+
+    #[test]
+    fn test_reputation_record_accuracy_updates() {
+        let mut record = ReputationRecord::new("member-1", 0);
+        assert_eq!(record.accuracy, 0.5);
+        assert_eq!(record.influence_multiplier, 1.0);
+
+        // 3 accurate votes in a row → accuracy increases
+        record.record_outcome(true);
+        let m1 = record.influence_multiplier;
+        record.record_outcome(true);
+        record.record_outcome(true);
+        let m2 = record.influence_multiplier;
+        assert!(m2 > m1, "accuracy should improve multiplier");
+    }
+
+    #[test]
+    fn test_reputation_penalizes_inaccurate_voting() {
+        let mut record = ReputationRecord::new("member-1", 0);
+        let initial = record.influence_multiplier;
+
+        // 3 inaccurate votes → accuracy drops
+        record.record_outcome(false);
+        record.record_outcome(false);
+        record.record_outcome(false);
+        assert!(
+            record.influence_multiplier < initial,
+            "inaccurate voting should reduce multiplier"
+        );
+        assert!(record.influence_multiplier >= 0.5); // Minimum floor
+    }
+
+    #[test]
+    fn test_reputation_warmup_protects_new_members() {
+        let mut record = ReputationRecord::new("new-member", 3);
+        assert_eq!(record.warmup_remaining, 3);
+
+        // During warmup, multiplier stays at 1.0 regardless of outcomes
+        record.record_outcome(false);
+        assert_eq!(record.warmup_remaining, 2);
+        assert_eq!(record.influence_multiplier, 1.0);
+
+        record.record_outcome(false);
+        assert_eq!(record.warmup_remaining, 1);
+        assert_eq!(record.influence_multiplier, 1.0);
+
+        record.record_outcome(false);
+        assert_eq!(record.warmup_remaining, 0);
+        assert_eq!(record.influence_multiplier, 1.0); // Still 1.0 (warmup covered this call)
+
+        // After warmup exhausts, reputation takes effect
+        record.record_outcome(false);
+        assert_eq!(record.warmup_remaining, 0);
+        assert!(record.influence_multiplier < 1.0);
+    }
+
+    #[test]
+    fn test_council_tally_with_reputation() {
+        let council = default_council();
+        council
+            .add_member(sample_member("high-acc", "High Accuracy", "expert", 10))
+            .unwrap();
+        council
+            .add_member(sample_member("low-acc", "Low Accuracy", "novice", 10))
+            .unwrap();
+
+        // Simulate past votes: high-acc is accurate, low-acc is inaccurate
+        for _ in 0..5 {
+            council.ensure_reputation("high-acc");
+            if let Ok(mut rep) = council.reputation.lock() {
+                if let Some(r) = rep.get_mut("high-acc") {
+                    r.record_outcome(true);
+                }
+            }
+            council.ensure_reputation("low-acc");
+            if let Ok(mut rep) = council.reputation.lock() {
+                if let Some(r) = rep.get_mut("low-acc") {
+                    r.record_outcome(false);
+                }
+            }
+        }
+
+        // Submit proposal
+        let proposal = sample_proposal("prop-1", "Test", "high-acc");
+        council.submit_proposal(proposal).unwrap();
+
+        // Both vote approve
+        council
+            .cast_vote(CouncilVote {
+                member_id: "high-acc".to_string(),
+                proposal_id: "prop-1".to_string(),
+                selected_option: "approve".to_string(),
+                weight: 10,
+                vote_ms: now_epoch_ms(),
+                rationale: None,
+            })
+            .unwrap();
+        council
+            .cast_vote(CouncilVote {
+                member_id: "low-acc".to_string(),
+                proposal_id: "prop-1".to_string(),
+                selected_option: "approve".to_string(),
+                weight: 10,
+                vote_ms: now_epoch_ms(),
+                rationale: None,
+            })
+            .unwrap();
+
+        let result = council.tally_votes("prop-1").unwrap();
+        assert!(result.passed);
+
+        // High-accuracy member's vote should have more weight now
+        let high_power = council.effective_voting_power("high-acc", 10);
+        let low_power = council.effective_voting_power("low-acc", 10);
+        assert!(
+            high_power > low_power,
+            "high-accuracy member should have more voting power, got {} vs {}",
+            high_power,
+            low_power
+        );
+    }
+
+    #[test]
+    fn test_record_vote_accuracy_updates_reputation() {
+        let council = default_council();
+        council
+            .add_member(sample_member("voter-1", "Voter One", "analyst", 1))
+            .unwrap();
+        council
+            .add_member(sample_member("voter-2", "Voter Two", "analyst", 1))
+            .unwrap();
+
+        let proposal = sample_proposal("prop-rep", "Rep Test", "voter-1");
+        council.submit_proposal(proposal).unwrap();
+
+        // Both vote approve
+        council
+            .cast_vote(CouncilVote {
+                member_id: "voter-1".to_string(),
+                proposal_id: "prop-rep".to_string(),
+                selected_option: "approve".to_string(),
+                weight: 1,
+                vote_ms: now_epoch_ms(),
+                rationale: None,
+            })
+            .unwrap();
+        council
+            .cast_vote(CouncilVote {
+                member_id: "voter-2".to_string(),
+                proposal_id: "prop-rep".to_string(),
+                selected_option: "approve".to_string(),
+                weight: 1,
+                vote_ms: now_epoch_ms(),
+                rationale: None,
+            })
+            .unwrap();
+
+        let result = council.tally_votes("prop-rep").unwrap();
+        assert!(result.passed);
+
+        // Record accuracy - both should be marked accurate since they voted with the winner
+        council
+            .record_vote_accuracy("prop-rep", &result.winning_option)
+            .unwrap();
+
+        let rep1 = council.get_reputation("voter-1").unwrap();
+        assert_eq!(rep1.accurate_votes, 1);
+        assert_eq!(rep1.total_votes, 1);
+
+        let rep2 = council.get_reputation("voter-2").unwrap();
+        assert_eq!(rep2.accurate_votes, 1);
+        assert_eq!(rep2.total_votes, 1);
     }
 }

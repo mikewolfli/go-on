@@ -106,9 +106,11 @@ pub fn get() -> Option<StartupContext> {
 /// Reset the cached startup context. Only available in tests.
 #[cfg(test)]
 fn reset_cache() {
-    if let Ok(mut guard) = STARTUP_CONTEXT.lock() {
-        *guard = None;
-    }
+    let mut guard = STARTUP_CONTEXT.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("startup_context reset_cache lock poisoned, recovering");
+        poisoned.into_inner()
+    });
+    *guard = None;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -169,9 +171,11 @@ pub async fn load(cfg: &StartupContextConfig) -> Result<StartupContext, std::io:
         let ctx = StartupContext::default();
         #[cfg(not(test))]
         {
-            if let Ok(mut guard) = STARTUP_CONTEXT.lock() {
-                *guard = Some(ctx.clone());
-            }
+            let mut guard = STARTUP_CONTEXT.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("startup_context lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            *guard = Some(ctx.clone());
         }
         return Ok(ctx);
     }
@@ -445,10 +449,12 @@ pub async fn load(cfg: &StartupContextConfig) -> Result<StartupContext, std::io:
     // ── Cache and return ───────────────────────────────────────────────
     #[cfg(not(test))]
     {
-        if let Ok(mut guard) = STARTUP_CONTEXT.lock() {
-            if guard.is_none() {
-                *guard = Some(ctx.clone());
-            }
+        let mut guard = STARTUP_CONTEXT.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("startup_context lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        if guard.is_none() {
+            *guard = Some(ctx.clone());
         }
     }
     debug!(

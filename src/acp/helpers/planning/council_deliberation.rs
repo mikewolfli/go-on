@@ -204,6 +204,17 @@ fn run_council_route_deliberation(
         .winning_option
         .clone()
         .unwrap_or_else(|| winner_guess.clone());
+
+    // BLUE48 Step 17: Update council member reputations based on vote accuracy.
+    // This enables the reputation learning system to improve voting quality over time.
+    if let Err(e) = council.record_vote_accuracy(&proposal_id, &tally.winning_option) {
+        tracing::warn!(
+            phase = %phase_name,
+            proposal_id = %proposal_id,
+            error = %e,
+            "council_deliberation: failed to record vote accuracy"
+        );
+    }
     Some((
         winner,
         json!({

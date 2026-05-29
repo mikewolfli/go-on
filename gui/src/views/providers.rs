@@ -1184,7 +1184,8 @@ impl ProvidersView {
                                 // update the first matching entry instead.
                                 if !key.is_empty() {
                                     if let Some(existing) = config.providers.iter_mut().find(|p| p.name == name && p.label.is_empty()) {
-                                        existing.api_key = key.clone();
+                                        // Key is stored in system keyring above — no need to write to config.
+                                        // The validated flag and model are still tracked in config.
                                         existing.validated = true;
                                         if !model.is_empty() && model != "auto" {
                                             existing.model = model.clone();
@@ -1475,8 +1476,8 @@ impl ProvidersView {
                                                 );
                                             }
                                         }
-                                        // Always save to config as well (dual storage)
-                                        provider.api_key = new_key.clone();
+                                        // Key is stored exclusively in system keyring — DO NOT write to config.
+                                        // The config's api_key field is cleared on serialization (see save_app_config).
                                         provider.validated = true;
                                         self.status = format!(
                                             "{} '{}' {}.",

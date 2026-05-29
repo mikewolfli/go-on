@@ -178,8 +178,9 @@ impl DiscoveryCenter {
 
         patterns.insert(pattern.name.clone(), pattern);
         drop(patterns); // release write lock before refresh_profile
-        // Bump pattern version so abstract_knowledge cache is invalidated.
-        self.pattern_version.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        // Bump pattern version so abstract_knowledge cache is invalidated.
+        self.pattern_version
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.refresh_profile();
         Ok(())
     }
@@ -470,7 +471,9 @@ impl DiscoveryCenter {
     /// Cross-category insight mining — reserved for cross-session knowledge extraction.
     /// Currently serves as an extension point for F-GAP-13.
     pub fn abstract_knowledge(&self) -> Vec<String> {
-        let current_version = self.pattern_version.load(std::sync::atomic::Ordering::Relaxed);
+        let current_version = self
+            .pattern_version
+            .load(std::sync::atomic::Ordering::Relaxed);
 
         // Fast path: return cached results if patterns haven't changed.
         {
@@ -508,15 +511,59 @@ impl DiscoveryCenter {
 
         // Cross-category insight: patterns with similar tags across categories
         let all_patterns: Vec<&SolutionPattern> = patterns.values().collect();
-        for (i, pa) in all_patterns.iter().enumerate() {
-            for pb in all_patterns.iter().skip(i + 1) {
-                if pa.category != pb.category {
-                    let shared: Vec<&String> =
-                        pa.tags.iter().filter(|t| pb.tags.contains(t)).collect();
-                    if shared.len() >= 2 {
+        // Use tag→pattern index to avoid O(N²) pairwise comparison
+        let mut tag_to_patterns: HashMap<&str, Vec<&SolutionPattern>> = HashMap::new();
+        for pattern in &all_patterns {
+            for tag in &pattern.tags {
+                tag_to_patterns
+                    .entry(tag.as_str())
+                    .or_default()
+                    .push(pattern);
+            }
+        }
+
+        // Find patterns that share 2+ tags but are in different categories
+        let mut seen_pairs: std::collections::HashSet<(usize, usize)> =
+            std::collections::HashSet::new();
+        for pattern in &all_patterns {
+            // Build set of patterns sharing tags with this one
+            let mut candidate_counts: std::collections::HashMap<usize, usize> =
+                std::collections::HashMap::new();
+            for tag in &pattern.tags {
+                if let Some(peers) = tag_to_patterns.get(tag.as_str()) {
+                    for peer in peers {
+                        if peer.category != pattern.category {
+                            let peer_idx = all_patterns
+                                .iter()
+                                .position(|p| std::ptr::eq(*p, *peer))
+                                .unwrap();
+                            *candidate_counts.entry(peer_idx).or_insert(0) += 1;
+                        }
+                    }
+                }
+            }
+            // Only report pairs with 2+ shared tags, avoiding duplicates
+            let my_idx = all_patterns
+                .iter()
+                .position(|p| std::ptr::eq(*p, *pattern))
+                .unwrap();
+            for (&peer_idx, &shared_count) in &candidate_counts {
+                if shared_count >= 2 {
+                    let key = if my_idx < peer_idx {
+                        (my_idx, peer_idx)
+                    } else {
+                        (peer_idx, my_idx)
+                    };
+                    if seen_pairs.insert(key) {
+                        let pb = all_patterns[peer_idx];
+                        let shared: Vec<&String> = pattern
+                            .tags
+                            .iter()
+                            .filter(|t| pb.tags.contains(t))
+                            .collect();
                         insights.push(format!(
                             "Cross-domain insight: patterns '{}' ({}) and '{}' ({}) share tags: {:?}",
-                            pa.name, pa.category, pb.name, pb.category, shared
+                            pattern.name, pattern.category, pb.name, pb.category, shared
                         ));
                     }
                 }

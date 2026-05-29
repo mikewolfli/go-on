@@ -594,9 +594,11 @@ static PERFORMANCE_MONITOR: OnceLock<Arc<Mutex<PerformanceMonitor>>> = OnceLock:
 
 pub fn record_global_operation(success: bool, latency_ms: f64) {
     if let Some(monitor) = PERFORMANCE_MONITOR.get() {
-        if let Ok(mut guard) = monitor.lock() {
-            guard.record_operation(success, latency_ms);
-        }
+        let mut guard = monitor.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("performance monitor lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.record_operation(success, latency_ms);
     }
 }
 

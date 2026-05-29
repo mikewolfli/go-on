@@ -2173,17 +2173,19 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     apiKey: string,
   ): Promise<void> {
     try {
-      // Infer env var name from provider
-      const envVarName = inferEnvVar(provider);
+      // 1. Derive keyring account name from provider name
+      const accountName = secretNameForEnvVar(inferEnvVar(provider));
 
-      // 1. Store API key in keyring
+      // 2. Store API key in keyring (primary secure storage)
+      //    The generated config.toml uses `keyring://go-on/{name}_api_key` URIs
+      //    and the backend resolves these via system keyring. No env overrides
+      //    are set — secrets must NOT leak to /proc/PID/environ.
       await vscode.commands.executeCommand("go-on.keyringSet", {
-        name: secretNameForEnvVar(envVarName),
+        name: accountName,
         value: apiKey,
       });
-      this.manager.setRuntimeEnvOverrides?.({ [envVarName]: apiKey });
 
-      // 1b. Handle secret key for dual-auth providers (e.g. wenxin, qianfan)
+      // 3. Handle secret key for dual-auth providers (e.g. wenxin, qianfan)
       const catalog = await this._loadProviderCatalog();
       const matched = catalog.find((item) => item.name === provider);
       if (matched?.secret_key_env) {
@@ -2198,14 +2200,15 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
             name: secretNameForEnvVar(matched.secret_key_env),
             value: secretKey,
           });
-          this.manager.setRuntimeEnvOverrides?.({
-            [matched.secret_key_env]: secretKey,
-          });
         }
       }
 
-      // 2. Save provider selection to config.toml
-      await this._saveProviderSelection(provider, "auto", envVarName);
+      // 4. Save provider selection to config.toml (uses keyring:// URI)
+      await this._saveProviderSelection(
+        provider,
+        "auto",
+        inferEnvVar(provider),
+      );
 
       this._postMessage({
         type: "quickSetupResult",

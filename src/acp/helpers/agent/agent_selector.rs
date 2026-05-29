@@ -181,10 +181,12 @@ pub(crate) fn collect_reputation_scores(
 ) -> HashMap<String, f64> {
     let mut scores = HashMap::with_capacity(agents.len());
     if let Some(ref cb) = server.capability_bus {
-        if let Ok(rep) = cb.reputation.lock() {
-            for (name, _) in agents {
-                scores.insert(name.clone(), rep.score(name));
-            }
+        let rep = cb.reputation.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("reputation lock poisoned during score collection – recovered");
+            poisoned.into_inner()
+        });
+        for (name, _) in agents {
+            scores.insert(name.clone(), rep.score(name));
         }
     }
     scores

@@ -1643,6 +1643,22 @@ pub(crate) async fn process_chat_request(
         )
         .await;
 
+        // BLUE48 Step 19: Run rationalization on the final decision.
+        // This wires the intelligence hub's multi-factor risk analysis into
+        // the request path. The result is logged for observability.
+        let task_description = extract_task_description(&params.messages);
+        let (justified, reason) = crate::intelligence::hub::rationalize_decision(
+            &selected_agent,
+            &task_description,
+            if response_text.is_empty() { 0.3 } else { 0.8 },
+        );
+        if !justified {
+            debug!(
+                "rationalize_decision: decision blocked for agent={} reason={} confidence={}",
+                selected_agent, reason, 0.8
+            );
+        }
+
         Ok(result)
     } else {
         Ok(json!({
@@ -2357,7 +2373,19 @@ async fn execute_fallback_agents(
         let timeout = request_timeout(phase.options.as_ref());
 
         let fut = async move {
-            let _permit = sem_clone.acquire().await.expect("semaphore closed");
+            let _permit = sem_clone.acquire().await.map_err(|_| {
+                tracing::warn!("semaphore closed during agent execution — task skipped");
+            });
+            let _permit = match _permit {
+                Ok(p) => p,
+                Err(()) => {
+                    return (
+                        agent_name_owned,
+                        std::time::Instant::now(),
+                        Err(anyhow::anyhow!("semaphore closed")),
+                    )
+                }
+            };
             let attempt_started = std::time::Instant::now();
             let stream_ctx = StreamNotificationContext {
                 stream_observer: stream_obs,
