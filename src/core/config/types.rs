@@ -158,7 +158,7 @@ pub(crate) struct ProviderSpec {
 
 impl ProviderSpec {
     /// Returns whether this provider supports vision/image inputs.
-    #[allow(dead_code)] // F-GAP-13 — reserved for multi-modal capability checks
+    #[allow(dead_code)] // F-GAP-49 — reserved for multi-modal capability checks
     pub fn supports_vision(&self) -> bool {
         self.supports_vision.unwrap_or(false)
     }

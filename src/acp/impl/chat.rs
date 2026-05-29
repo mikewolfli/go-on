@@ -125,7 +125,7 @@ impl ChatRequestContext {
 #[derive(Default)]
 struct AgentSwitchState {
     forced_agent_by_phase: HashMap<String, String>,
-    #[allow(dead_code)] // F-GAP-17 — reserved for agent switch state extensibility
+    #[allow(dead_code)] // F-GAP-49 — reserved for agent switch state extensibility
     primary_agent_by_phase: HashMap<String, String>,
 }
 
@@ -954,6 +954,48 @@ pub async fn handle_chat(
         .observability
         .metrics
         .record_chat_latency(duration_ms as f64);
+
+    // ── AlertManager evaluation ─────────────────────────────────────────
+    {
+        let mut alert_mgr = server
+            .observability
+            .alert_manager
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                warn!("handle_chat: alert_manager poisoned, recovering");
+                poisoned.into_inner()
+            });
+        let fired = alert_mgr.evaluate("chat_latency_ms", duration_ms as f64);
+        for alert in &fired {
+            tracing::warn!(
+                target = "alert_manager",
+                rule = %alert.rule,
+                severity = %alert.severity,
+                value = %alert.value,
+                threshold = %alert.threshold,
+                "AlertManager: {}", alert.message
+            );
+        }
+        // Also evaluate cache hit ratio if applicable
+        if let Ok(stats) = server.cache.semantic_cache.lock() {
+            let s = stats.stats();
+            if s.total_hits + s.total_misses > 0 {
+                let ratio = s.hit_ratio * 100.0;
+                let cache_fired = alert_mgr.evaluate("cache_hit_ratio_pct", ratio);
+                for alert in &cache_fired {
+                    tracing::warn!(
+                        target = "alert_manager",
+                        rule = %alert.rule,
+                        severity = %alert.severity,
+                        value = %alert.value,
+                        threshold = %alert.threshold,
+                        "AlertManager: {}", alert.message
+                    );
+                }
+            }
+        }
+    }
+
     record_trace_event(
         server,
         &pipeline_trace,
@@ -1317,6 +1359,49 @@ pub(crate) async fn process_chat_request(
         agent_attempts.push(CacheStrategy::attempt_entry(&CacheDecision::Miss));
     }
 
+    // ── Semantic cache lookup ──────────────────────────────────────────
+    let semantic_cache_hit_text: Option<String> =
+        if !cache_hit && response_text.is_empty() && !cache_bypassed_for_execution {
+            let cache_key = input_text.clone();
+            server
+                .cache
+                .semantic_cache
+                .lock()
+                .unwrap_or_else(|poisoned| {
+                    warn!("process_chat_request: semantic_cache poisoned, recovering");
+                    poisoned.into_inner()
+                })
+                .get(&cache_key)
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+        } else {
+            None
+        };
+
+    if let Some(text) = semantic_cache_hit_text {
+        tracing::info!(
+            target = "semantic_cache",
+            "process_chat_request: semantic cache HIT"
+        );
+        cache_hit = true;
+        selected_agent = resolved
+            .agents
+            .first()
+            .map(|(name, _)| name.clone())
+            .unwrap_or_else(|| "cached".to_string());
+        response_text = text;
+
+        if let Some(ref observer) = stream_observer {
+            let meta = StreamEventMeta {
+                agent_name: &selected_agent,
+                phase_name,
+                trace_id: &trace.trace_id,
+            };
+            let total_chars = response_text.chars().count();
+            emit_stream_chunk(server, Some(observer), meta, &response_text, 1, total_chars).await?;
+            emit_stream_done(server, Some(observer), meta, 1, total_chars, 0u64, None).await?;
+        }
+    }
+
     // ── Step 5: Autonomy round execution ───────────────────────────────
     let autonomy_outcome = execute_autonomy_round(
         server,
@@ -1542,6 +1627,24 @@ pub(crate) async fn process_chat_request(
                 .record_usage(tenant_id, 0, 0);
 
             return Err(err);
+        }
+
+        // ── Populate semantic cache ────────────────────────────────────
+        if !cache_hit && !response_text.is_empty() && !cache_bypassed_for_execution {
+            let cache_key = input_text.clone();
+            server
+                .cache
+                .semantic_cache
+                .lock()
+                .unwrap_or_else(|poisoned| {
+                    warn!("process_chat_request: semantic_cache poisoned, recovering");
+                    poisoned.into_inner()
+                })
+                .put(&cache_key, serde_json::Value::String(response_text.clone()));
+            tracing::debug!(
+                target = "semantic_cache",
+                "process_chat_request: semantic cache populated"
+            );
         }
 
         // ── Post-success cleanup ──────────────────────────────────────
@@ -3702,7 +3805,7 @@ pub(crate) fn extract_task_description(messages: &[Message]) -> String {
 }
 
 /// Create default requirement contract
-#[allow(dead_code)] // F-GAP-17 — reserved for default requirement contract wiring
+#[allow(dead_code)] // F-GAP-49 — reserved for default requirement contract wiring
 fn default_requirement_contract(task: &str, source: &str) -> RequirementContractArtifact {
     RequirementContractArtifact {
         generated_at: std::time::SystemTime::now()
@@ -5257,7 +5360,7 @@ fn execute_tool_calls(
 
 /// A detected repeated task pattern in a conversation.
 /// Used by P3 to proactively propose skill creation.
-#[allow(dead_code)] // F-GAP-17
+#[allow(dead_code)] // F-GAP-49
 struct DetectedTaskPattern {
     /// Suggested skill name
     name: String,

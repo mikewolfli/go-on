@@ -121,7 +121,7 @@ pub async fn write_json_line(server: &AcpServer, value: &Value) -> Result<()> {
 /// Read JSON line from input
 ///
 /// This function replaces the `AcpServer::read_json_line` method.
-#[allow(dead_code)] // F-GAP-10 — planned wiring: multi-channel transport I/O
+#[allow(dead_code)] // F-GAP-49 — planned wiring: multi-channel transport I/O
 pub async fn read_json_line() -> Result<Option<Value>> {
     use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -147,7 +147,7 @@ pub async fn read_json_line() -> Result<Option<Value>> {
 /// Flush output buffer
 ///
 /// This function replaces the `AcpServer::flush_output` method.
-#[allow(dead_code)] // F-GAP-10 — planned wiring: multi-channel transport I/O
+#[allow(dead_code)] // F-GAP-49 — planned wiring: multi-channel transport I/O
 pub async fn flush_output(server: &AcpServer) -> Result<()> {
     let mut stdout = server.output.lock().await;
     stdout.flush().await?;
@@ -162,7 +162,7 @@ pub async fn flush_output(server: &AcpServer) -> Result<()> {
 /// in auto/adaptive mode.
 /// If the timeout fires, we conservatively return false (no input).
 #[cfg(unix)]
-#[allow(dead_code)] // F-GAP-10 — planned wiring: multi-channel transport I/O
+#[allow(dead_code)] // F-GAP-49 — planned wiring: multi-channel transport I/O
 pub async fn has_input() -> Result<bool> {
     use std::os::unix::io::AsRawFd;
 
@@ -188,7 +188,7 @@ pub async fn has_input() -> Result<bool> {
 /// `true` so that the caller proceeds to actually read stdin. The actual
 /// read will determine whether input truly exists.
 #[cfg(windows)]
-#[allow(dead_code)] // F-GAP-10 — planned wiring: multi-channel transport I/O
+#[allow(dead_code)] // F-GAP-49 — planned wiring: multi-channel transport I/O
 pub async fn has_input() -> Result<bool> {
     // Return true so the caller attempts to read stdin instead of hanging.
     Ok(true)

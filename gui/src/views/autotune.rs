@@ -65,7 +65,7 @@ impl AutoTuneView {
     /// DEPRECATED: Unused. Autotune state is currently not persisted during GUI operation.
     /// The `save_state` method exists but is never called. Retained for reference;
     /// remove in a future cleanup round if autotune state persistence is not needed.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-48: Reserved for future autotune state persistence
     fn save_state(&self) {
         let path = Self::state_path();
         if let Some(parent) = path.parent() {

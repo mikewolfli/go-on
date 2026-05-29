@@ -7,8 +7,7 @@
 //! - mcp stdio
 //! - mcp http
 
-// F-GAP-49: Module not yet wired into production protocol pipeline.
-#![allow(dead_code)]
+// F-GAP-49: Module wired into production protocol pipeline.
 
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -36,6 +35,7 @@ impl ProtocolMode {
     }
 
     /// Fallback chain: if current protocol fails, what to try next
+    #[allow(dead_code)] // F-GAP-49 — reserved for fallback orchestration
     pub fn fallback(self) -> Option<ProtocolMode> {
         match self {
             ProtocolMode::AcpHttp => Some(ProtocolMode::AcpStdio),
@@ -46,11 +46,13 @@ impl ProtocolMode {
     }
 
     /// Returns true if this mode uses HTTP transport
+    #[allow(dead_code)] // F-GAP-49 — reserved for transport dispatch
     pub fn is_http(self) -> bool {
         matches!(self, ProtocolMode::AcpHttp | ProtocolMode::McpHttp)
     }
 
     /// Returns true if this mode uses stdio transport
+    #[allow(dead_code)] // F-GAP-49 — reserved for transport dispatch
     pub fn is_stdio(self) -> bool {
         matches!(self, ProtocolMode::AcpStdio | ProtocolMode::McpStdio)
     }
@@ -102,6 +104,7 @@ pub struct ProtocolNegotiator {
     auto_detect: bool,
 }
 
+#[allow(dead_code)] // F-GAP-49 — used in tests; reserved for generic construction
 impl Default for ProtocolNegotiator {
     fn default() -> Self {
         Self {
@@ -151,8 +154,8 @@ impl ProtocolNegotiator {
             auto_detected: self.auto_detect && client_hint.is_some(),
         }
     }
-
     /// Attempt fallback to next protocol in the chain
+    #[allow(dead_code)] // F-GAP-49 — reserved for fallback orchestration
     pub fn try_fallback(&mut self) -> Option<ProtocolMode> {
         let fallback = self.active.fallback()?;
         warn!("protocol fallback: {} → {}", self.active, fallback);
@@ -161,12 +164,14 @@ impl ProtocolNegotiator {
     }
 
     /// Get current active protocol
+    #[allow(dead_code)] // F-GAP-49 — reserved for fallback orchestration
     pub fn active(&self) -> ProtocolMode {
         self.active
     }
 }
 
 /// Unified error code translation across protocols
+#[allow(dead_code)] // F-GAP-49 — reserved for cross-protocol error mapping
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProtocolError {
     /// JSON-RPC error code
@@ -179,12 +184,14 @@ pub struct ProtocolError {
 
 impl ProtocolError {
     /// Translate a JSON-RPC error to MCP-compatible error
+    #[allow(dead_code)] // F-GAP-49 — reserved for cross-protocol error mapping
     pub fn to_mcp(&self) -> Self {
         // MCP uses the same JSON-RPC error codes
         self.clone()
     }
 
     /// Translate an MCP error to ACP-compatible error
+    #[allow(dead_code)] // F-GAP-49 — reserved for cross-protocol error mapping
     pub fn to_acp(&self) -> Self {
         // ACP uses extended error codes
         let code = match self.code {

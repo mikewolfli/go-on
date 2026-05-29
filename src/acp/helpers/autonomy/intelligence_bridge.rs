@@ -31,13 +31,13 @@ static EVOLUTION_GRAPH: LazyLock<Mutex<EvolutionGraph>> =
     LazyLock::new(|| Mutex::new(EvolutionGraph::new()));
 
 /// Initialize or retrieve the global EvolutionGraph instance.
-#[allow(dead_code)] // F-GAP-25 — reserved for evolution graph external access
+#[allow(dead_code)] // F-GAP-49 — reserved for evolution graph external access
 pub fn evolution_graph() -> &'static Mutex<EvolutionGraph> {
     &EVOLUTION_GRAPH
 }
 
 /// Register an agent capability in the evolution graph for tracking.
-#[allow(dead_code)] // F-GAP-25 — reserved for evolution graph external registration
+#[allow(dead_code)] // F-GAP-49 — reserved for evolution graph external registration
 pub fn register_agent_capability(agent: &str, capability: &str) {
     let mut graph = EVOLUTION_GRAPH.lock().unwrap_or_else(|poisoned| {
         tracing::warn!("EVOLUTION_GRAPH lock poisoned during capability registration – recovered");
@@ -142,7 +142,7 @@ pub fn get_agent_recommendations() -> Vec<(String, String, EvolutionStage, Trend
 }
 
 /// Check if an agent is recommended for a given task type based on EvolutionGraph data.
-#[allow(dead_code)] // F-GAP-25 — reserved for evolution graph recommendation queries
+#[allow(dead_code)] // F-GAP-49 — reserved for evolution graph recommendation queries
 pub fn is_agent_recommended_for(agent: &str, task_category: &str) -> bool {
     let graph = match EVOLUTION_GRAPH.lock() {
         Ok(g) => g,

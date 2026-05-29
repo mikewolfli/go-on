@@ -27,34 +27,34 @@ use crate::roles::AgentRole;
 // ============================================================================
 
 /// Default circuit breaker failure threshold
-#[allow(dead_code)] // F-GAP-01 — planned wiring
+#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub const DEFAULT_BREAKER_FAILURE_THRESHOLD: u32 = 3;
 /// Default circuit breaker open time in seconds
-#[allow(dead_code)] // F-GAP-01 — planned wiring
+#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub const DEFAULT_BREAKER_OPEN_SECONDS: i64 = 60;
 /// Maximum conversation ID length
-#[allow(dead_code)] // F-GAP-01 — planned wiring
+#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub const MAX_CONVERSATION_ID_LEN: usize = 128;
 /// Maximum branch ID length
-#[allow(dead_code)] // F-GAP-01 — planned wiring
+#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub const MAX_BRANCH_ID_LEN: usize = 64;
 /// Maximum checkpoint ID length
-#[allow(dead_code)] // F-GAP-01 — planned wiring
+#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub const MAX_CHECKPOINT_ID_LEN: usize = 128;
 /// Maximum checkpoints per conversation
-#[allow(dead_code)] // F-GAP-01 — planned wiring
+#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub const MAX_CHECKPOINTS_PER_CONVERSATION: usize = 256;
 /// Maximum checkpoint message characters
-#[allow(dead_code)] // F-GAP-01 — planned wiring
+#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub const MAX_CHECKPOINT_MESSAGE_CHARS: usize = 64_000;
 /// Maximum conversations tracked
-#[allow(dead_code)] // F-GAP-01 — planned wiring
+#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub const MAX_CONVERSATIONS_TRACKED: usize = 512;
 /// Maximum stream chunks
-#[allow(dead_code)] // F-GAP-01 — planned wiring
+#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub const MAX_STREAM_CHUNKS: usize = 4_096;
 /// Maximum stream characters
-#[allow(dead_code)] // F-GAP-01 — planned wiring
+#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub const MAX_STREAM_CHARS: usize = 256_000;
 
 pub const ACP_LOCK_RUNTIME_CONFIG: &str = "runtime_config";
@@ -71,7 +71,7 @@ pub const ACP_LOCK_INFLIGHT_LIMITER: &str = "inflight_limiter";
 const ACP_LOCK_SLOW_WAIT_THRESHOLD: Duration = Duration::from_millis(5);
 
 /// Histogram buckets for latency measurements (seconds)
-#[allow(dead_code)] // F-GAP-01 — planned wiring
+#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub const HISTOGRAM_BUCKETS_SECONDS: [f64; 10] = [
     0.001, // 1ms
     0.005, // 5ms
@@ -124,7 +124,7 @@ pub struct ConversationState {
 
 /// Conversation prune result
 #[derive(Debug, Clone, Serialize, Default)]
-#[allow(dead_code)] // F-GAP-02 — planned wiring
+#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub struct ConversationPruneResult {
     /// Number of conversations removed
     pub removed: usize,
@@ -417,7 +417,7 @@ pub struct LifecycleSnapshot {
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct MaintenanceSnapshot {
     /// Whether maintenance is running
-    #[allow(dead_code)] // F-GAP-03 — planned wiring
+    #[allow(dead_code)] // F-GAP-49 — planned wiring
     pub running: bool,
     /// Total maintenance cycles completed
     pub cycles_total: u64,
@@ -474,7 +474,7 @@ pub use crate::acp::r#impl::agent::ReviewGateOutcome;
 
 /// Review decision
 #[derive(Debug, Clone, Serialize)]
-#[allow(dead_code)] // F-GAP-02 — planned wiring
+#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub struct ReviewDecision {
     /// Reviewer name
     pub reviewer: String,
@@ -491,7 +491,7 @@ pub struct ReviewDecision {
 /// `crate::governance::review_controls` that uses `Approve`/`Reject`/`Invalid`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-#[allow(dead_code)] // F-GAP-02 — planned wiring
+#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub enum ReviewVerdict {
     /// Review passed
     Pass,
@@ -503,7 +503,7 @@ pub enum ReviewVerdict {
 
 impl ReviewVerdict {
     /// Convert to string
-    #[allow(dead_code)] // F-GAP-02 — planned wiring
+    #[allow(dead_code)] // F-GAP-49 — planned wiring
     pub fn as_str(&self) -> &'static str {
         match self {
             ReviewVerdict::Pass => "pass",
@@ -515,7 +515,7 @@ impl ReviewVerdict {
 
 /// Chat parameters structure
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[allow(dead_code)] // F-GAP-02 — planned wiring
+#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub struct ChatParams {
     /// Chat mode (e.g., "ask", "edit", "agent", "safeguard", "full_auto")
     pub mode: String,
@@ -533,7 +533,7 @@ pub struct ChatParams {
 
 /// Task characteristics
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)] // F-GAP-02 — planned wiring
+#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub struct TaskCharacteristics {
     /// Task complexity (simple, medium, complex)
     pub complexity: String,
@@ -551,7 +551,7 @@ pub struct TaskCharacteristics {
 
 /// Routing decision
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)] // F-GAP-02 — planned wiring
+#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub struct RoutingDecision {
     /// Selected roles in execution order
     pub roles: Vec<AgentRole>,
@@ -600,13 +600,13 @@ pub fn now_ts_ms() -> i64 {
 }
 
 /// Calculate checkpoint message characters
-#[allow(dead_code)] // F-GAP-01 — planned wiring
+#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub fn checkpoint_message_chars(messages: &[Message]) -> usize {
     messages.iter().map(|m| m.content.chars().count()).sum()
 }
 
 /// Touch conversation order (update LRU)
-#[allow(dead_code)] // F-GAP-01 — planned wiring
+#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub fn touch_conversation_order(order: &StdMutex<Vec<String>>, conversation_id: &str) {
     let mut guard = order.lock().unwrap_or_else(|poisoned| {
         tracing::warn!("conversation order lock poisoned, recovering");
@@ -652,7 +652,7 @@ pub fn enforce_checkpoint_capacity(
 }
 
 /// Evict oldest conversation
-#[allow(dead_code)] // F-GAP-01 — planned wiring
+#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub fn evict_oldest_conversation(
     store: &mut HashMap<String, ConversationState>,
     order: &StdMutex<Vec<String>>,
@@ -694,7 +694,7 @@ struct CircuitBreakerState {
 
 /// Circuit breaker stage
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-#[allow(dead_code)] // F-GAP-04 — planned wiring
+#[allow(dead_code)] // F-GAP-49 — planned wiring
 enum CircuitBreakerStage {
     #[default]
     Closed,
@@ -716,7 +716,7 @@ impl Default for CircuitBreakerState {
 
 /// Circuit breaker admission result
 #[non_exhaustive]
-#[allow(dead_code)] // F-GAP-04 — planned wiring
+#[allow(dead_code)] // F-GAP-49 — planned wiring
 pub enum CircuitBreakerAdmission {
     Closed,
     Rejected {

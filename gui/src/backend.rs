@@ -728,7 +728,7 @@ impl BackendClient {
     ///
     /// Uses the `/acp/chat` endpoint with `"stream": true` in the request body.
     /// Each SSE `data:` line is parsed as a JSON value and yielded via the stream.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-48: Reserved for future SSE streaming chat integration
     /// Reserved for future SSE streaming chat integration. Currently unused
     /// while the GUI uses `chat_with_options` for non-streaming requests.
     pub async fn chat_stream(

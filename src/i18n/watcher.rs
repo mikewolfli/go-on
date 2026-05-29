@@ -117,7 +117,7 @@ impl LanguageWatcher {
     }
 
     /// Check if any language file has been modified
-    #[allow(dead_code)] // F-GAP-50 — reserved for i18n file change detection
+    #[allow(dead_code)] // F-GAP-49 — reserved for i18n file change detection
     fn check_for_changes(&self) -> bool {
         if let Ok(entries) = std::fs::read_dir(&self.watch_dir) {
             for entry in entries.flatten() {

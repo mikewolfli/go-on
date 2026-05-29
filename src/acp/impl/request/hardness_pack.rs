@@ -10,7 +10,7 @@ pub(super) struct HardnessDimensions {
 
 #[derive(Clone, Debug, Serialize, Default)]
 pub(super) struct HardnessBudgetProfile {
-    #[allow(dead_code)] // F-GAP-17 — reserved for per-profile timeout enforcement
+    #[allow(dead_code)] // F-GAP-49 — reserved for per-profile timeout enforcement
     pub timeout_seconds: u64,
     pub parallelism_cap: usize,
     pub required_reviews: usize,

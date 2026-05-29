@@ -3,8 +3,7 @@
 //! GAP-B49-10: Predefined alert rules that fire webhooks when breached.
 //! Supports deduplication (5-minute cooldown between same alert).
 
-// F-GAP-49: Module not yet wired into production observability pipeline.
-#![allow(dead_code)]
+// F-GAP-49: Module now wired into production observability pipeline.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -13,7 +12,6 @@ use std::time::{Duration, Instant};
 use tracing::warn;
 
 /// Severity level for an alert
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AlertSeverity {
     Info,
@@ -32,7 +30,6 @@ impl std::fmt::Display for AlertSeverity {
 }
 
 /// An alert event
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Alert {
     /// Alert rule name
@@ -50,7 +47,6 @@ pub struct Alert {
 }
 
 /// An alert rule definition
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct AlertRule {
     pub name: &'static str,
@@ -64,7 +60,6 @@ pub struct AlertRule {
 }
 
 /// Predefined alert rules
-#[allow(dead_code)]
 pub fn default_alert_rules() -> Vec<AlertRule> {
     vec![
         AlertRule {
@@ -111,7 +106,7 @@ pub fn default_alert_rules() -> Vec<AlertRule> {
 }
 
 /// Webhook configuration for alert notification
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49: Webhook dispatch not yet active in production
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WebhookConfig {
     pub url: String,
@@ -121,7 +116,6 @@ pub struct WebhookConfig {
 }
 
 /// AlertManager — manages alert rules and fires notifications
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct AlertManager {
     rules: Vec<AlertRule>,
@@ -131,7 +125,6 @@ pub struct AlertManager {
     total_alerts_fired: u64,
 }
 
-#[allow(dead_code)]
 impl AlertManager {
     pub fn new(rules: Vec<AlertRule>) -> Self {
         Self {
@@ -216,7 +209,8 @@ impl AlertManager {
     }
 }
 
-#[allow(dead_code)]
+/// Statistics for the AlertManager
+#[allow(dead_code)] // F-GAP-49: Reserved for future monitoring dashboard integration
 #[derive(Debug, Clone, Serialize)]
 pub struct AlertManagerStats {
     pub total_rules: u64,
@@ -225,11 +219,11 @@ pub struct AlertManagerStats {
 }
 
 /// Global alert manager instance
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49: Global singleton kept for emergency access; ObservabilityLayer preferred
 static ALERT_MANAGER: std::sync::OnceLock<Mutex<AlertManager>> = std::sync::OnceLock::new();
 
 /// Get or initialize the global AlertManager
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49: Global singleton kept for emergency access; ObservabilityLayer preferred
 pub fn alert_manager() -> &'static Mutex<AlertManager> {
     ALERT_MANAGER.get_or_init(|| Mutex::new(AlertManager::new(default_alert_rules())))
 }

@@ -120,11 +120,12 @@ pub use crate::protocol::rpc_protocol;
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use clap::{ArgAction, Parser, Subcommand};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::agent::AgentRegistry;
 use crate::config::{validate_runtime_readiness, AppConfig, ConfigWarning};
@@ -132,6 +133,7 @@ use crate::i18n::runtime::{t, tf};
 use crate::intelligence::capability_graph::CapabilityGraph;
 
 use crate::protocol::access_mode::resolve_access_selection;
+use crate::protocol::negotiator::{ProtocolMode as NegProtocolMode, ProtocolNegotiator};
 use crate::reinforcement::{
     build_runtime_healthcheck_report, build_task_plan, persist_runtime_healthcheck,
     persist_task_plan, run_action_check, ActionCheckKind, ArtifactLedger, RuntimeHealthcheckReport,
@@ -390,7 +392,7 @@ fn emit_config_warnings(warnings: &[ConfigWarning], mirror_stderr: bool) {
 }
 
 // Reserved for future config-driven path resolution during bootstrap.
-#[allow(dead_code)] // F-GAP-13 — reserved for config path resolution
+#[allow(dead_code)] // F-GAP-49 — reserved for config path resolution
 fn resolve_config_relative_path(config_path: &std::path::Path, raw_path: &str) -> PathBuf {
     let candidate = PathBuf::from(raw_path);
     if candidate.is_absolute() {
@@ -1054,6 +1056,15 @@ async fn handle_chat_mode(
         eprintln!("  go-on -c {} --setup", config_path.display());
         return Ok(());
     }
+
+    // ── ProtocolNegotiator: chat mode uses ACP stdio ────────────────
+    let negotiator = ProtocolNegotiator::new(NegProtocolMode::AcpStdio);
+    let negotiated = negotiator.negotiate(None);
+    debug!(
+        "chat mode protocol: mode={}, version={}",
+        negotiated.mode, negotiated.version
+    );
+
     crate::cli::chat::run_terminal_chat(config).await
 }
 
@@ -1475,6 +1486,17 @@ async fn start_server(
     } else {
         access_selection.configured_mode.as_str()
     };
+
+    // ── ProtocolNegotiator ───────────────────────────────────────────
+    // Create negotiator with the resolved mode and log the negotiated result.
+    let negotiator_mode =
+        NegProtocolMode::from_str(dispatch_mode).unwrap_or(NegProtocolMode::AcpHttp);
+    let negotiator = ProtocolNegotiator::new(negotiator_mode);
+    let negotiated = negotiator.negotiate(None);
+    info!(
+        "protocol negotiated: mode={}, version={}, auto_detected={}",
+        negotiated.mode, negotiated.version, negotiated.auto_detected
+    );
 
     // Delegate to the transport factory for protocol-mode-specific server construction
     crate::acp::transport_factory::dispatch_server(

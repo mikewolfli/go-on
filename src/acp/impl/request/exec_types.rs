@@ -131,7 +131,7 @@ pub(super) struct SubtaskRunResult {
     pub(super) response_excerpt: String,
     pub(super) tool_loop_used: bool,
     pub(super) tool_observations: Vec<String>,
-    #[allow(dead_code)] // F-GAP-17 — reserved for self-rationalization audit trail
+    #[allow(dead_code)] // F-GAP-49 — reserved for self-rationalization audit trail
     pub(super) audit_log_json: Option<String>,
 }
 

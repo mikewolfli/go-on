@@ -641,7 +641,7 @@ pub struct L3TemplateCache {
     /// Known templates by structure signature
     templates: HashMap<String, TemplatePattern>,
     /// Disk path for future template persistence
-    #[allow(dead_code)] // F-GAP-09 — planned wiring for persistence
+    #[allow(dead_code)] // F-GAP-49 — planned wiring for persistence
     store_path: Option<String>,
     /// Maximum number of templates before FIFO eviction
     max_templates: usize,

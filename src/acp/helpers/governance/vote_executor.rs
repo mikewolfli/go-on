@@ -20,7 +20,7 @@ use crate::acp::server::AcpServer;
 use crate::agent::Message;
 
 /// Result of executing the high-risk vote pipeline (ballot + optional escalation).
-#[allow(dead_code)] // F-GAP-17 — reserved for high-risk vote pipeline integration
+#[allow(dead_code)] // F-GAP-49 — reserved for high-risk vote pipeline integration
 pub(crate) struct HighRiskVoteExecutionResult {
     pub response_text: String,
     pub reasoning_text: String,

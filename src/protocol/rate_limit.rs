@@ -3,8 +3,7 @@
 //! GAP-B49-11: Extends PhaseRateLimiter with tenant-level tracking.
 //! Returns 429 + Retry-After when exceeded.
 
-// F-GAP-49: Module not yet wired into production protocol pipeline.
-#![allow(dead_code)]
+// F-GAP-49: Module wired into production protocol pipeline.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -12,7 +11,6 @@ use std::time::Instant;
 use tracing::warn;
 
 /// Rate limit configuration for a tenant
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct TenantRateLimit {
     /// Maximum requests per minute
@@ -21,7 +19,6 @@ pub struct TenantRateLimit {
     pub burst: u64,
 }
 
-#[allow(dead_code)]
 impl Default for TenantRateLimit {
     fn default() -> Self {
         Self { rpm: 60, burst: 10 }
@@ -29,7 +26,6 @@ impl Default for TenantRateLimit {
 }
 
 /// Rate limiter state for a single tenant
-#[allow(dead_code)]
 #[derive(Debug)]
 struct TokenBucket {
     tokens: f64,
@@ -38,7 +34,6 @@ struct TokenBucket {
     refill_rate: f64, // tokens per second
 }
 
-#[allow(dead_code)]
 impl TokenBucket {
     fn new(rpm: u64, burst: u64) -> Self {
         Self {
@@ -69,21 +64,19 @@ impl TokenBucket {
 }
 
 /// Rate limit middleware
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct RateLimitMiddleware {
     buckets: Mutex<HashMap<String, TokenBucket>>,
     default_limit: TenantRateLimit,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for generic construction
 impl Default for RateLimitMiddleware {
     fn default() -> Self {
         Self::new(TenantRateLimit::default())
     }
 }
 
-#[allow(dead_code)]
 impl RateLimitMiddleware {
     pub fn new(default_limit: TenantRateLimit) -> Self {
         Self {
@@ -113,6 +106,7 @@ impl RateLimitMiddleware {
     }
 
     /// Get current rate limit state for a tenant
+    #[allow(dead_code)] // F-GAP-49 — reserved for observability/metrics integration
     pub fn state(&self, tenant_id: &str) -> RateLimitState {
         let buckets = self.buckets.lock().unwrap_or_else(|poisoned| {
             warn!("rate limit state lock poisoned, recovering");
@@ -135,7 +129,7 @@ impl RateLimitMiddleware {
     }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for observability/metrics integration
 #[derive(Debug, Clone)]
 pub struct RateLimitState {
     pub remaining: u64,
@@ -144,10 +138,10 @@ pub struct RateLimitState {
 }
 
 /// Global rate limiter instance
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for standalone server usage
 static RATE_LIMITER: std::sync::OnceLock<RateLimitMiddleware> = std::sync::OnceLock::new();
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for standalone server usage
 pub fn rate_limiter() -> &'static RateLimitMiddleware {
     RATE_LIMITER.get_or_init(|| RateLimitMiddleware::new(TenantRateLimit::default()))
 }

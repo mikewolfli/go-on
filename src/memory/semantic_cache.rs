@@ -6,8 +6,7 @@
 //! - Embedding similarity matching for near-duplicate requests
 //! - Cache warm-up on startup
 
-// F-GAP-49: Module not yet wired into production chat pipeline.
-#![allow(dead_code)]
+// F-GAP-49: Module now wired into production chat pipeline.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -182,20 +181,22 @@ impl SemanticResponseCache {
     /// Evict least recently used entry
     fn evict_lru(&mut self) {
         let mut oldest_key = None;
+        let mut oldest_idx = 0;
         let mut oldest_time = Instant::now();
 
         for (key, bucket) in &self.entries {
-            for entry in bucket {
+            for (i, entry) in bucket.iter().enumerate() {
                 if entry.created_at < oldest_time {
                     oldest_time = entry.created_at;
                     oldest_key = Some(*key);
+                    oldest_idx = i;
                 }
             }
         }
 
         if let Some(key) = oldest_key {
             if let Some(bucket) = self.entries.get_mut(&key) {
-                bucket.pop();
+                bucket.remove(oldest_idx);
                 if bucket.is_empty() {
                     self.entries.remove(&key);
                 }

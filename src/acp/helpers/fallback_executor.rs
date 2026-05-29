@@ -16,7 +16,7 @@ use crate::agent::{Agent, Message};
 
 /// Result of a single fallback agent execution.
 #[derive(Debug)]
-#[allow(dead_code)] // F-GAP-B48-R3: reserved for fallback executor integration
+#[allow(dead_code)] // F-GAP-49 — reserved for fallback executor integration
 pub struct FallbackAgentResult {
     pub agent_name: String,
     pub response_text: String,
@@ -29,7 +29,7 @@ pub struct FallbackAgentResult {
 ///
 /// Runs up to `max_concurrency` agents simultaneously. Returns the first
 /// successful response, or all failures if all agents fail.
-#[allow(unused_variables, dead_code)] // F-GAP-B48-R3: reserved for fallback executor integration
+#[allow(unused_variables, dead_code)] // F-GAP-49 — reserved for fallback executor integration
 pub async fn execute_fallback_agents_parallel(
     server: &AcpServer,
     agents: Vec<(String, Arc<dyn Agent>)>,
@@ -120,7 +120,7 @@ pub async fn execute_fallback_agents_parallel(
 
 /// Select the best result from fallback agent executions.
 /// Prefers successful responses with the most content.
-#[allow(dead_code)] // F-GAP-B48-R3: reserved for fallback executor integration
+#[allow(dead_code)] // F-GAP-49 — reserved for fallback executor integration
 pub fn select_best_fallback_result(
     results: &[FallbackAgentResult],
 ) -> Option<&FallbackAgentResult> {

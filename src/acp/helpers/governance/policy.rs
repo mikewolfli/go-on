@@ -23,7 +23,7 @@ fn extra_u64(options: Option<&PhaseOptions>, key: &str) -> Option<u64> {
         .and_then(|v| v.as_u64())
 }
 
-#[allow(dead_code)] // F-GAP-17 — reserved for future f64 extra policy parameters
+#[allow(dead_code)] // F-GAP-49 — reserved for future f64 extra policy parameters
 fn extra_f64(options: Option<&PhaseOptions>, key: &str) -> Option<f64> {
     options
         .and_then(|opts| opts.extra.get(key))
@@ -126,7 +126,7 @@ pub fn resolve_review_policy(
 }
 
 /// Convert required check names to ActionCheckKind enum values
-#[allow(dead_code)] // F-GAP-17 — reserved for action gate integration
+#[allow(dead_code)] // F-GAP-49 — reserved for action gate integration
 pub fn action_check_kinds_from_policy(required_checks: &[String]) -> Vec<ActionCheckKind> {
     if required_checks.is_empty() {
         return Vec::new();
@@ -168,7 +168,7 @@ impl WorkGrade {
     }
 
     /// Convert work grade to string representation
-    #[allow(dead_code)] // F-GAP-17 — reserved for serialization in policy reports
+    #[allow(dead_code)] // F-GAP-49 — reserved for serialization in policy reports
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Ask => "ask",

@@ -358,7 +358,7 @@ fn keyring_env_fallback_candidates(service: &str, account: &str) -> Vec<String> 
     candidates
 }
 
-#[allow(dead_code)] // F-GAP-13 — reserved for secret pool diagnostics
+#[allow(dead_code)] // F-GAP-49 — reserved for secret pool diagnostics
 fn secret_pool_status(config: &AppConfig) -> Value {
     let mut secrets = Vec::new();
     for agent_config in config.agents.values() {
@@ -373,7 +373,7 @@ fn secret_pool_status(config: &AppConfig) -> Value {
     json!(secrets)
 }
 
-#[allow(dead_code)] // F-GAP-13 — reserved for agent environment validation
+#[allow(dead_code)] // F-GAP-49 — reserved for agent environment validation
 fn missing_envs_for_agent(config: &AppConfig) -> Vec<Value> {
     let mut missing = Vec::new();
     for agent_config in config.agents.values() {

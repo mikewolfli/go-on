@@ -84,7 +84,7 @@ impl McpServer {
     }
 
     /// Get a reference to the token cache if available
-    #[allow(dead_code)] // F-GAP-09 — planned wiring: memory/caching accessor
+    #[allow(dead_code)] // F-GAP-49 — planned wiring: memory/caching accessor
     pub fn token_cache(&self) -> Option<&Arc<TokenMultiLevelCache>> {
         self.acp_server.as_ref().map(|s| &s.cache.token_cache)
     }

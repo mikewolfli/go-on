@@ -25,8 +25,10 @@ use crate::flow_with_models::FlowModelSelector;
 use crate::governance::harness_bus::HarnessBus;
 use crate::intelligence::capability_bus::core::CapabilityBus;
 use crate::intelligence::token_cache::TokenMultiLevelCache;
+use crate::memory::semantic_cache::SemanticResponseCache;
 use crate::memory_module::{MemoryPolicy, MemoryStore};
 use crate::memory_response_cache::MemoryResponseCache;
+use crate::observability::alert_manager::AlertManager;
 use crate::observability::telemetry::TelemetryRuntime;
 use crate::orchestration::fork_registry::{ForkConfig, ForkRegistry};
 use crate::orchestration::promotion_plugin::PromotionRegistry;
@@ -56,6 +58,8 @@ pub struct CacheLayer {
     pub vector_store: Option<Arc<VectorStore>>,
     /// Multi-level token cache for Agent output reuse (L1 exact, L2 semantic, L3 template)
     pub token_cache: Arc<TokenMultiLevelCache>,
+    /// Semantic response cache for near-duplicate request detection
+    pub semantic_cache: Arc<StdMutex<SemanticResponseCache>>,
 }
 
 /// Observability-related subsystems grouped together
@@ -66,6 +70,8 @@ pub struct ObservabilityLayer {
     pub lock_monitor: Arc<AcpLockMonitor>,
     /// Telemetry runtime
     pub telemetry_runtime: Arc<StdMutex<TelemetryRuntime>>,
+    /// Alert manager for threshold-based alerting
+    pub alert_manager: Arc<StdMutex<AlertManager>>,
 }
 
 /// Main ACP server structure
@@ -108,6 +114,8 @@ pub struct AcpServer {
     pub conversation_state: Arc<Mutex<ConversationState>>,
     /// Phase rate limiter
     pub phase_rate_limiter: Arc<StdMutex<PhaseRateLimiter>>,
+    /// Tenant-level rate limit middleware (F-GAP-49)
+    pub rate_limit_middleware: Option<Arc<crate::protocol::rate_limit::RateLimitMiddleware>>,
     /// Review timeout policy
     pub review_timeout_policy: Arc<StdMutex<ReviewTimeoutPolicy>>,
     /// Adaptive model selector
@@ -427,7 +435,7 @@ impl ServerBuilder {
     }
 
     /// Set the memory response cache
-    #[allow(dead_code)] // F-GAP-09 — reserved for cache configuration wiring
+    #[allow(dead_code)] // F-GAP-49 — reserved for cache configuration wiring
     pub fn with_memory_response_cache(
         mut self,
         memory_response_cache: MemoryResponseCache,
@@ -437,49 +445,49 @@ impl ServerBuilder {
     }
 
     /// Set verbose mode
-    #[allow(dead_code)] // F-GAP-03 — planned wiring: lifecycle configuration
+    #[allow(dead_code)] // F-GAP-49 — planned wiring: lifecycle configuration
     pub fn verbose(mut self, verbose: bool) -> Self {
         self.verbose = verbose;
         self
     }
 
     /// Set the harness bus
-    #[allow(dead_code)] // F-GAP-16 — planned wiring: capability bus/orchestration
+    #[allow(dead_code)] // F-GAP-49 — planned wiring: capability bus/orchestration
     pub fn with_harness_bus(mut self, harness_bus: Arc<HarnessBus>) -> Self {
         self.harness_bus = Some(harness_bus);
         self
     }
 
     /// Set the capability bus
-    #[allow(dead_code)] // F-GAP-16 — planned wiring: capability bus/orchestration
+    #[allow(dead_code)] // F-GAP-49 — planned wiring: capability bus/orchestration
     pub fn with_capability_bus(mut self, capability_bus: Arc<CapabilityBus>) -> Self {
         self.capability_bus = Some(capability_bus);
         self
     }
 
     /// Set the task graph store
-    #[allow(dead_code)] // F-GAP-04 — planned wiring: execution graph / circuit breakers
+    #[allow(dead_code)] // F-GAP-49 — planned wiring: execution graph / circuit breakers
     pub fn with_task_graph_store(mut self, store: Arc<TaskGraphStore>) -> Self {
         self.task_graph_store = Some(store);
         self
     }
 
     /// Set the dual-level task scheduler
-    #[allow(dead_code)] // F-GAP-04 — planned wiring: execution graph / circuit breakers
+    #[allow(dead_code)] // F-GAP-49 — planned wiring: execution graph / circuit breakers
     pub fn with_scheduler(mut self, scheduler: Arc<AgentWorkerScheduler>) -> Self {
         self.scheduler = Some(scheduler);
         self
     }
 
     /// Set the provenance ledger
-    #[allow(dead_code)] // F-GAP-11 — planned wiring: checkpoint/conversation
+    #[allow(dead_code)] // F-GAP-49 — planned wiring: checkpoint/conversation
     pub fn with_provenance_ledger(mut self, ledger: Arc<ProvenanceLedger>) -> Self {
         self.provenance_ledger = Some(ledger);
         self
     }
 
     /// Set the planner-executor configuration (timeouts, etc.)
-    #[allow(dead_code)] // F-GAP-17 — reserved for planner-executor integration
+    #[allow(dead_code)] // F-GAP-49 — reserved for planner-executor integration
     pub fn with_planner_executor_config(
         mut self,
         config: crate::orchestration::planner_executor::PlannerExecutorConfig,
@@ -580,6 +588,9 @@ impl ServerBuilder {
                     200,
                     ".goon/token_cache",
                 )),
+                semantic_cache: Arc::new(StdMutex::new(
+                    crate::memory::semantic_cache::SemanticResponseCache::new(Default::default()),
+                )),
             },
             vector_config: None,
             autotune: None,
@@ -591,6 +602,11 @@ impl ServerBuilder {
                 metrics,
                 lock_monitor,
                 telemetry_runtime,
+                alert_manager: Arc::new(StdMutex::new(
+                    crate::observability::alert_manager::AlertManager::new(
+                        crate::observability::alert_manager::default_alert_rules(),
+                    ),
+                )),
             },
             online_controller,
             circuit_breakers,
@@ -637,6 +653,7 @@ impl ServerBuilder {
             prompt_manager,
             rbac_enforcer: None,
             skill_market_registry: None,
+            rate_limit_middleware: None,
         })
     }
 }

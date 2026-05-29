@@ -6,7 +6,7 @@
 //! diagnostic data. Enables the system to self-correct based on
 //! build output feedback.
 
-#![allow(dead_code)] // F-GAP-12 — reserved for full diagnostic integration
+#![allow(dead_code)] // F-GAP-49 — reserved for full diagnostic integration
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

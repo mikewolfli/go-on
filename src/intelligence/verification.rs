@@ -458,7 +458,7 @@ enum ArbitrationOutcome {
     /// Require human review.
     HumanReview,
     /// Insufficient evidence — defer.
-    #[allow(dead_code)] // F-GAP-17 — planned for insufficient-evidence resolution path
+    #[allow(dead_code)] // F-GAP-49 — planned for insufficient-evidence resolution path
     Defer,
 }
 
@@ -469,7 +469,7 @@ struct ArbitrationConfig {
     /// Confidence threshold below which human review is required.
     pub human_review_threshold: f64,
     /// Whether to require adversarial verification on high-risk content.
-    #[allow(dead_code)] // F-GAP-17 — planned wiring for adversarial verification
+    #[allow(dead_code)] // F-GAP-49 — planned wiring for adversarial verification
     pub require_adversarial_on_high_risk: bool,
 }
 

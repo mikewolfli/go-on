@@ -453,7 +453,7 @@ pub async fn start_background_tasks(
 }
 
 /// Stop all background tasks
-#[allow(dead_code)] // F-GAP-03 — planned wiring: lifecycle/background task orchestration
+#[allow(dead_code)] // F-GAP-49 — planned wiring: lifecycle/background task orchestration
 pub fn stop_background_tasks(shutdown_notify: Arc<Notify>) {
     shutdown_notify.notify_waiters();
 }

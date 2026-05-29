@@ -189,6 +189,11 @@ pub fn new_acp_server(
             server.provenance_ledger = Some(provenance_ledger);
             server.rbac_enforcer = Some(rbac_enforcer);
             server.skill_market_registry = None;
+            server.rate_limit_middleware = Some(Arc::new(
+                crate::protocol::rate_limit::RateLimitMiddleware::new(
+                    crate::protocol::rate_limit::TenantRateLimit::default(),
+                ),
+            ));
 
             // Create session manager if user auth is enabled
             if server.runtime_config.user_auth_enabled {
@@ -330,6 +335,11 @@ pub fn new_acp_server(
                             ".goon/token_cache",
                         ),
                     ),
+                    semantic_cache: Arc::new(StdMutex::new(
+                        crate::memory::semantic_cache::SemanticResponseCache::new(
+                            Default::default(),
+                        ),
+                    )),
                 },
                 vector_config,
                 autotune,
@@ -343,6 +353,11 @@ pub fn new_acp_server(
                     telemetry_runtime: Arc::new(StdMutex::new(TelemetryRuntime::new(
                         &runtime_config,
                     ))),
+                    alert_manager: Arc::new(StdMutex::new(
+                        crate::observability::alert_manager::AlertManager::new(
+                            crate::observability::alert_manager::default_alert_rules(),
+                        ),
+                    )),
                 },
                 online_controller: Arc::new(StdMutex::new(OnlineControllerState::default())),
                 circuit_breakers: Arc::new(StdMutex::new(CircuitBreakerRegistry::new())),
@@ -423,6 +438,7 @@ pub fn new_acp_server(
                 session_manager: None,
                 rbac_enforcer: None,
                 skill_market_registry: None,
+                rate_limit_middleware: None,
             };
 
             // Create session manager if user auth is enabled
@@ -739,7 +755,7 @@ pub fn routing_handles(server: &AcpServer) -> Result<(Arc<FlowManager>, Arc<Agen
 }
 
 /// Get cache handle
-#[allow(dead_code)] // F-GAP-09 — planned wiring: memory/caching accessor
+#[allow(dead_code)] // F-GAP-49 — planned wiring: memory/caching accessor
 #[must_use]
 pub fn cache_handle(server: &AcpServer) -> Option<Arc<crate::cache::ResponseCache>> {
     server.cache.response_cache.clone()
@@ -759,20 +775,20 @@ pub fn artifact_ledger(_server: &AcpServer) -> crate::reinforcement::ArtifactLed
 }
 
 /// Get vector store handle
-#[allow(dead_code)] // F-GAP-08 — planned wiring: learning/intelligence accessor
+#[allow(dead_code)] // F-GAP-49 — planned wiring: learning/intelligence accessor
 #[must_use]
 pub fn vector_store_handle(server: &AcpServer) -> Option<Arc<VectorStore>> {
     server.cache.vector_store.clone()
 }
 
 /// Get vector configuration snapshot
-#[allow(dead_code)] // F-GAP-08 — planned wiring: learning/intelligence accessor
+#[allow(dead_code)] // F-GAP-49 — planned wiring: learning/intelligence accessor
 pub fn vector_config_snapshot(server: &AcpServer) -> Option<VectorConfig> {
     server.vector_config.clone()
 }
 
 /// Get autotune handle
-#[allow(dead_code)] // F-GAP-08 — planned wiring: learning/intelligence accessor
+#[allow(dead_code)] // F-GAP-49 — planned wiring: learning/intelligence accessor
 #[must_use]
 pub fn autotune_handle(server: &AcpServer) -> Option<Arc<tokio::sync::Mutex<AutoTuneState>>> {
     server.autotune.clone()
@@ -2672,7 +2688,7 @@ struct ParsedHttpRequest<'a> {
     path: &'a str,
     header_part: &'a str,
     body_initial_part: &'a str,
-    #[allow(dead_code)] // F-GAP-05 — reserved for planner/executor adaptive signal
+    #[allow(dead_code)] // F-GAP-49 — reserved for planner/executor adaptive signal
     adaptive_signal: &'static str,
 }
 
@@ -3195,7 +3211,7 @@ async fn route_http_post(
 }
 
 /// Write a standard HTTP JSON response. Thin wrapper for consistency.
-#[allow(dead_code)] // F-GAP-03 — planned wiring: lifecycle/utility
+#[allow(dead_code)] // F-GAP-49 — planned wiring: lifecycle/utility
 async fn write_http_response(
     socket: &mut TcpStream,
     status: u16,

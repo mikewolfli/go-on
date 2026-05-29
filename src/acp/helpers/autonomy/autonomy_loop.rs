@@ -43,7 +43,7 @@ pub fn store_latest_dag_metrics(metrics: DagMetrics) {
 }
 
 /// Read latest DAG metrics for governance payload.
-#[allow(dead_code)] // F-GAP-17 — reserved for governance DAG metrics integration
+#[allow(dead_code)] // F-GAP-49 — reserved for governance DAG metrics integration
 pub fn read_latest_dag_metrics() -> Option<DagMetrics> {
     LATEST_DAG_METRICS
         .lock()
