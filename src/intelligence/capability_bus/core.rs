@@ -1047,11 +1047,13 @@ impl CapabilityBus {
         ))]
         let candidate_agents = {
             let mut agents = candidate_agents;
-            if let Ok(factory) = self.agent_factory.lock() {
-                for inst in factory.find_agents_by_capability("general") {
-                    if !agents.iter().any(|name| name == &inst.template_name) {
-                        agents.push(inst.template_name);
-                    }
+            let factory = self.agent_factory.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            for inst in factory.find_agents_by_capability("general") {
+                if !agents.iter().any(|name| name == &inst.template_name) {
+                    agents.push(inst.template_name);
                 }
             }
             agents
@@ -1089,14 +1091,16 @@ impl CapabilityBus {
 
         // Step B2: Consult WorkflowRegistry for workflow-based routing metadata
         let workflow_preset = self.workflow_registry.as_ref().and_then(|wr| {
-            wr.lock().ok().and_then(|registry| {
-                let task_type_str = format!("{:?}", task.task_type).to_lowercase();
-                let mapped_name = match task_type_str.as_str() {
-                    "bugfix" | "featureadd" | "refactor" | "securitypatch" => "dev",
-                    _ => "general",
-                };
-                registry.find(mapped_name).cloned()
-            })
+            let registry = wr.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            let task_type_str = format!("{:?}", task.task_type).to_lowercase();
+            let mapped_name = match task_type_str.as_str() {
+                "bugfix" | "featureadd" | "refactor" | "securitypatch" => "dev",
+                _ => "general",
+            };
+            registry.find(mapped_name).cloned()
         });
 
         if let Some(ref preset) = workflow_preset {
@@ -1541,11 +1545,7 @@ impl CapabilityBus {
     }
 
     /// Record drift metrics through HarnessBus drift engine.
-    fn evolve_drift_protection(
-        &self,
-        quality_score: f64,
-        success: bool,
-    ) {
+    fn evolve_drift_protection(&self, quality_score: f64, success: bool) {
         use crate::governance::drift::drift_protection::DriftType;
         let _ = self.harness.drift_engine.record_metric(
             "evolve_quality",
@@ -1654,7 +1654,10 @@ impl CapabilityBus {
             .to_string(),
             quality_score,
         ) {
-            warn!("evolve: continuous_learning.consolidate_experience failed: {}", e);
+            warn!(
+                "evolve: continuous_learning.consolidate_experience failed: {}",
+                e
+            );
         }
     }
 
@@ -1735,8 +1738,7 @@ impl CapabilityBus {
                 let next_stage = match rec.current_stage {
                     EvolutionStage::New => Some(EvolutionStage::Learning),
                     EvolutionStage::Learning
-                        if rec.versions.len() >= 3
-                            && rec.trend == TrendDirection::Improving =>
+                        if rec.versions.len() >= 3 && rec.trend == TrendDirection::Improving =>
                     {
                         Some(EvolutionStage::Mature)
                     }
@@ -1797,12 +1799,7 @@ impl CapabilityBus {
     }
 
     /// Update WorldModel with entity state.
-    fn evolve_world_model(
-        &self,
-        action: &str,
-        state: &(String, String),
-        reward: f64,
-    ) {
+    fn evolve_world_model(&self, action: &str, state: &(String, String), reward: f64) {
         if let Err(e) = self.world_model.register_entity(
             &format!("action_{}", action),
             crate::intelligence::world_model::EntityType::System,
@@ -1907,8 +1904,17 @@ impl CapabilityBus {
     ) {
         // ── Core RL update (reward, Q-table, experience) ────────────────
         let reward = match timeout(Duration::from_millis(100), async {
-            self.evolve_q_learning(state, action, next_state, token_cost, success, quality_score)
-        }).await {
+            self.evolve_q_learning(
+                state,
+                action,
+                next_state,
+                token_cost,
+                success,
+                quality_score,
+            )
+        })
+        .await
+        {
             Ok(r) => r,
             Err(_) => {
                 warn!("evolve: evolve_q_learning timed out — using default reward");
@@ -1918,7 +1924,10 @@ impl CapabilityBus {
 
         if timeout(Duration::from_millis(100), async {
             self.evolve_experience(state, action, success, quality_score)
-        }).await.is_err() {
+        })
+        .await
+        .is_err()
+        {
             warn!("evolve: evolve_experience timed out — skipping");
         }
 
@@ -1952,53 +1961,77 @@ impl CapabilityBus {
                     created_ms: now,
                     is_active: success && quality_score > 0.6,
                 });
-        }).await.is_err() {
+        })
+        .await
+        .is_err()
+        {
             warn!("evolve: scenario registration timed out — skipping");
         }
 
         // ── HarnessBus: drift / fault tolerance / audit ─────────────────
         if timeout(Duration::from_millis(100), async {
             self.evolve_drift_protection(quality_score, success)
-        }).await.is_err() {
+        })
+        .await
+        .is_err()
+        {
             warn!("evolve: evolve_drift_protection timed out — skipping");
         }
 
         let node_id = format!("evolve::{}_{}", state.0, action);
         if timeout(Duration::from_millis(100), async {
             self.evolve_fault_tolerance(&node_id)
-        }).await.is_err() {
+        })
+        .await
+        .is_err()
+        {
             warn!("evolve: evolve_fault_tolerance timed out — skipping");
         }
 
         if timeout(Duration::from_millis(100), async {
             self.evolve_harness_bus(state, action, reward, success, quality_score)
-        }).await.is_err() {
+        })
+        .await
+        .is_err()
+        {
             warn!("evolve: evolve_harness_bus timed out — skipping");
         }
 
         // ── Cognitive modules ───────────────────────────────────────────
         if timeout(Duration::from_millis(100), async {
             self.evolve_federated_rl(state, action, reward, quality_score, success)
-        }).await.is_err() {
+        })
+        .await
+        .is_err()
+        {
             warn!("evolve: evolve_federated_rl timed out — skipping");
         }
 
         if timeout(Duration::from_millis(100), async {
             self.evolve_continuous_learning(state, action, reward, success, quality_score)
-        }).await.is_err() {
+        })
+        .await
+        .is_err()
+        {
             warn!("evolve: evolve_continuous_learning timed out — skipping");
         }
 
         if timeout(Duration::from_millis(100), async {
             self.evolve_metacognitive(state, action, reward, quality_score, success)
-        }).await.is_err() {
+        })
+        .await
+        .is_err()
+        {
             warn!("evolve: evolve_metacognitive timed out — skipping");
         }
 
         let now = now_ms();
         if timeout(Duration::from_millis(100), async {
             self.evolve_discovery(state, action, reward, quality_score, success, now)
-        }).await.is_err() {
+        })
+        .await
+        .is_err()
+        {
             warn!("evolve: evolve_discovery timed out — skipping");
         }
 
@@ -2015,8 +2048,8 @@ impl CapabilityBus {
                         insights.len()
                     );
                     for insight in &insights {
-                        if let Err(e) =
-                            lock_guard(&self.continuous_learning).consolidate_experience(
+                        if let Err(e) = lock_guard(&self.continuous_learning)
+                            .consolidate_experience(
                                 &format!("abstract_knowledge_{}", now),
                                 insight,
                                 0.5,
@@ -2037,32 +2070,47 @@ impl CapabilityBus {
                     );
                 }
             }
-        }).await.is_err() {
+        })
+        .await
+        .is_err()
+        {
             warn!("evolve: abstract_knowledge phase timed out — skipping");
         }
 
         // ── Self-model & meta-cognitive evolution ───────────────────────
         if timeout(Duration::from_millis(100), async {
             self.evolve_evolution_graph(state, action, success, quality_score)
-        }).await.is_err() {
+        })
+        .await
+        .is_err()
+        {
             warn!("evolve: evolve_evolution_graph timed out — skipping");
         }
 
         if timeout(Duration::from_millis(100), async {
             self.evolve_self_model(now, success)
-        }).await.is_err() {
+        })
+        .await
+        .is_err()
+        {
             warn!("evolve: evolve_self_model timed out — skipping");
         }
 
         if timeout(Duration::from_millis(100), async {
             self.evolve_consciousness(state, action, quality_score, success)
-        }).await.is_err() {
+        })
+        .await
+        .is_err()
+        {
             warn!("evolve: evolve_consciousness timed out — skipping");
         }
 
         if timeout(Duration::from_millis(100), async {
             self.evolve_world_model(action, state, reward)
-        }).await.is_err() {
+        })
+        .await
+        .is_err()
+        {
             warn!("evolve: evolve_world_model timed out — skipping");
         }
 
@@ -2078,7 +2126,9 @@ impl CapabilityBus {
             let er = ql.exploration_rate;
             drop(ql);
             (qv, er)
-        }).await.unwrap_or_else(|_| {
+        })
+        .await
+        .unwrap_or_else(|_| {
             warn!("evolve: q_learning lock timed out — using defaults");
             (0.0, 0.0)
         });
@@ -2089,18 +2139,23 @@ impl CapabilityBus {
                 "q_value": q_value,
                 "exploration_rate": exploration_rate,
             });
-            if let Err(e) =
-                transport.send_event("capability-bus", "monitor", &summary.to_string())
+            if let Err(e) = transport.send_event("capability-bus", "monitor", &summary.to_string())
             {
                 warn!("evolve: transport.send_event failed: {}", e);
             }
-        }).await.is_err() {
+        })
+        .await
+        .is_err()
+        {
             warn!("evolve: transport.send_event timed out — skipping");
         }
 
         if timeout(Duration::from_millis(100), async {
             self.evolve_consensus(state, action, reward, q_value, success, now)
-        }).await.is_err() {
+        })
+        .await
+        .is_err()
+        {
             warn!("evolve: evolve_consensus timed out — skipping");
         }
 

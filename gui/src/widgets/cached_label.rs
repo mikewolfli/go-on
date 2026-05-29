@@ -9,12 +9,12 @@ use crate::widgets::cache::Section;
 /// Label that skips text shaping when content hash matches.
 /// On cache hit, allocates the previously rendered size (empty space).
 /// Reserved for future use — kept to avoid re-adding later.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-48: Widget caching layer, kept for future UI optimization
 pub struct CachedLabel {
     section: Section,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-48: Widget caching layer, kept for future UI optimization
 impl CachedLabel {
     pub fn new(section: Section) -> Self {
         Self { section }

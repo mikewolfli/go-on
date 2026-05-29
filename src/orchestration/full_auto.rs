@@ -346,11 +346,14 @@ impl FullAutoFlow {
     /// learned if a ThresholdLearner is attached.
     pub fn effective_min_match_score(&self) -> f64 {
         if let Some(ref learner) = self.threshold_learner {
-            if let Ok(guard) = learner.lock() {
-                guard.get_optimal_threshold("skill_match")
-            } else {
-                self.config.min_match_score
-            }
+            let guard = match learner.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    tracing::warn!("[B48] learner lock poisoned, recovering");
+                    poisoned.into_inner()
+                }
+            };
+            guard.get_optimal_threshold("skill_match")
         } else {
             self.config.min_match_score
         }
@@ -410,6 +413,7 @@ impl FullAutoFlow {
     /// Caller-available builder method — callers should invoke
     /// `enable_skill_market()` before `run()` for external skill discovery.
     #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
     pub fn enable_skill_market(&mut self) {
         let cache_dir = std::env::temp_dir().join("go-on-skill-market");
         let import_policy = SkillImportPolicy {

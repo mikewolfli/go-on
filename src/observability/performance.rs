@@ -604,7 +604,15 @@ pub fn record_global_operation(success: bool, latency_ms: f64) {
 
 pub fn global_metrics_snapshot() -> Option<PerformanceMetrics> {
     let monitor = PERFORMANCE_MONITOR.get()?;
-    monitor.lock().ok().map(|guard| guard.get_metrics())
+    Some(
+        monitor
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            })
+            .get_metrics(),
+    )
 }
 
 #[cfg(test)]

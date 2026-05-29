@@ -346,6 +346,7 @@ impl SkillDiscovery {
 
     /// Invalidate all cached results (e.g., after skill registry changes).
     #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
     pub fn invalidate_cache(&mut self) {
         self.cache.clear();
         self.insertion_order.clear();

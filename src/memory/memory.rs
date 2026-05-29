@@ -68,6 +68,9 @@ pub struct MemoryPromotionReport {
     pub promotion_map: Vec<(String, String, String)>,
 }
 
+/// Maximum total entries across all memory classes (safety net beyond per-class limits).
+const MAX_ENTRIES: usize = 500;
+
 /// Memory store with policy management
 #[derive(Debug)]
 pub struct MemoryStore {
@@ -126,6 +129,18 @@ impl MemoryStore {
         }
 
         self.entries.insert(entry.id.clone(), entry);
+
+        // Enforce total capacity safety net across all classes.
+        if self.entries.len() > MAX_ENTRIES {
+            let oldest_id = self
+                .entries
+                .values()
+                .min_by(|a, b| a.timestamp.cmp(&b.timestamp))
+                .map(|e| e.id.clone());
+            if let Some(id) = oldest_id {
+                self.entries.remove(&id);
+            }
+        }
     }
 
     pub fn retrieve(&self, class: MemoryClass, limit: usize) -> Vec<MemoryEntry> {

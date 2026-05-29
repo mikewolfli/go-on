@@ -27,6 +27,13 @@ import {
   RuntimeBootstrapDeps,
 } from "./runtimeBootstrap";
 
+/**
+ * DUPLICATE: This function is duplicated (with variations) as
+ * `_runSecretCommand` in settingsView.ts (line ~1001).
+ * The extension.ts version pipes secrets via stdin (secure) and has
+ * timeout handling; the settingsView.ts version passes secrets as CLI args
+ * without timeout. Consider consolidating into a shared utility.
+ */
 async function runGoOnSecretCommand(
   context: vscode.ExtensionContext,
   action: "set" | "get" | "delete" | "list",
@@ -41,15 +48,23 @@ async function runGoOnSecretCommand(
   if (secretName) {
     args.push("--secret-name", secretName);
   }
-  if (secretValue !== undefined) {
-    args.push("--secret-value", secretValue);
-  }
+  // Secret value is written to stdin instead of passing as --secret-value CLI
+  // argument, so it's not visible in /proc/PID/cmdline or ps aux.
+  const hasSecretValue = secretValue !== undefined;
 
   return new Promise<string>((resolve, reject) => {
     const proc = spawn(runtime.executablePath, args, {
       cwd: workspaceRoot || runtime.runtimeDir,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [hasSecretValue ? "pipe" : "ignore", "pipe", "pipe"],
     });
+
+    // Pipe secret through stdin so it doesn't leak in process listings
+    if (hasSecretValue && proc.stdin) {
+      proc.stdin.write(secretValue!);
+      proc.stdin.end();
+    } else if (proc.stdin) {
+      proc.stdin.end();
+    }
 
     let stdout = "";
     let stderr = "";
@@ -139,6 +154,15 @@ function upsertTopLevelString(
   }
   return `${replacement}\n${content}`;
 }
+
+/**
+ * ── TOML manipulation functions ──
+ * NOTE: These functions are duplicated (with variations) from
+ * settingsView.ts (escapeRegex, upsertSectionLine, upsertPhaseAgents).
+ * The extension.ts copies operate on TOML at the workspace level while
+ * settingsView.ts operates within the settings panel webview context.
+ * Consider consolidating into a shared utility module.
+ */
 
 /**
  * Maximum TOML file size to process (1MB).

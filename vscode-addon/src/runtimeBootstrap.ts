@@ -39,11 +39,7 @@ export async function ensureRuntimeReadyAfterChatOpen(
     }
   })();
 
-  try {
-    await promise;
-  } catch (error) {
-    throw error;
-  }
+  await promise;
 }
 
 export async function ensureGoOnStarted(

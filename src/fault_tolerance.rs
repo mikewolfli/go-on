@@ -174,6 +174,10 @@ pub struct RecoveryCycleSummary {
 const MAX_FAULTS: usize = 500;
 /// Maximum completed or failed recovery plans to retain before evicting oldest.
 const MAX_RECOVERY_PLANS: usize = 200;
+/// Maximum heartbeat records to track before evicting the node with the oldest heartbeat.
+const MAX_HEARTBEATS: usize = 1000;
+/// Maximum isolation groups before evicting the oldest group.
+const MAX_GROUPS: usize = 200;
 
 // ---------------------------------------------------------------------------
 // Internal state
@@ -279,7 +283,20 @@ impl FaultToleranceEngine {
             missed_beats: 0,
             status: NodeStatus::Online,
         };
-        inner.heartbeats.insert(node_id, record);
+        inner.heartbeats.insert(node_id.clone(), record);
+
+        // Evict node with the oldest heartbeat when at capacity.
+        if inner.heartbeats.len() > MAX_HEARTBEATS {
+            let oldest_id = inner
+                .heartbeats
+                .iter()
+                .min_by_key(|(_, r)| r.last_heartbeat_ms)
+                .map(|(id, _)| id.clone());
+            if let Some(id) = oldest_id {
+                inner.heartbeats.remove(&id);
+            }
+        }
+
         Ok(())
     }
 
@@ -444,7 +461,20 @@ impl FaultToleranceEngine {
             isolation_level: level,
             created_ms: now,
         };
-        inner.isolation_groups.insert(group_id, group);
+        inner.isolation_groups.insert(group_id.clone(), group);
+
+        // Evict oldest isolation group when at capacity.
+        if inner.isolation_groups.len() > MAX_GROUPS {
+            let oldest_id = inner
+                .isolation_groups
+                .iter()
+                .min_by_key(|(_, g)| g.created_ms)
+                .map(|(id, _)| id.clone());
+            if let Some(id) = oldest_id {
+                inner.isolation_groups.remove(&id);
+            }
+        }
+
         Ok(())
     }
 

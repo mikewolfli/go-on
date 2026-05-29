@@ -521,6 +521,10 @@ pub fn new_acp_server(
             // Wire the token cache into the agent registry for the fallback path too.
             registry.set_token_cache(Some(Arc::clone(&fallback_server.cache.token_cache)));
 
+            // BLUE48 Step 19: Initialize intelligence hub in the fallback path too so
+            // consensus voting, rationalization, and audit are wired into the request path.
+            crate::intelligence::hub::init_intel_hub();
+
             fallback_server
         }
     }

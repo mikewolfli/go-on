@@ -268,22 +268,21 @@ impl PromotionPlugin for EvidenceWeightedPromotion {
             );
 
             // Track in history.
-            if let Ok(mut hist) = self.history.lock() {
-                hist.entry(agent.clone())
-                    .or_default()
-                    .push(PromotionHistoryEntry {
-                        timestamp: format!("{:?}", SystemTime::now())
-                            .trim_matches('"')
-                            .to_string(),
-                        evidence_quality: eq,
-                        multiplier,
-                        reason: reason.clone(),
-                    });
-                // Cap history at 100 entries per agent
-                if let Some(entries) = hist.get_mut(agent.as_str()) {
-                    if entries.len() > 100 {
-                        entries.drain(0..entries.len() - 100);
-                    }
+            let mut hist = self.history.lock().unwrap_or_else(|poisoned| { tracing::warn!("lock poisoned, recovering"); poisoned.into_inner() });
+            hist.entry(agent.clone())
+                .or_default()
+                .push(PromotionHistoryEntry {
+                    timestamp: format!("{:?}", SystemTime::now())
+                        .trim_matches('"')
+                        .to_string(),
+                    evidence_quality: eq,
+                    multiplier,
+                    reason: reason.clone(),
+                });
+            // Cap history at 100 entries per agent
+            if let Some(entries) = hist.get_mut(agent.as_str()) {
+                if entries.len() > 100 {
+                    entries.drain(0..entries.len() - 100);
                 }
             }
 

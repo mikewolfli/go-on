@@ -28,7 +28,7 @@ use crate::rpc_protocol::RequestTraceContext;
 struct AgentExecutionMetrics {
     elapsed_ms: u64,
     used_tokens: u64,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for future use
     request_succeeded: bool,
 }
 
@@ -86,22 +86,44 @@ pub fn finalize_chat_response(
 ) -> Value {
     // ── Step 1: Collect agent outputs & record side-effects ────────────
     let metrics = collect_agent_outputs(
-        server, trace, mode, phase_name, selected_agent,
-        selected_model_name, response_text, tenant_id, started, &result,
-        conversation_id, sched_task_id, candidate_agents,
+        server,
+        trace,
+        mode,
+        phase_name,
+        selected_agent,
+        selected_model_name,
+        response_text,
+        tenant_id,
+        started,
+        &result,
+        conversation_id,
+        sched_task_id,
+        candidate_agents,
     );
 
     // ── Step 2: Build response metadata ───────────────────────────────
     let metadata = build_response_metadata(
-        server, &result, mode, phase_name,
-        selected_agent, conversation_id, first_message_content,
-        tool_execution_results, response_text, &metrics,
+        server,
+        &result,
+        mode,
+        phase_name,
+        selected_agent,
+        conversation_id,
+        first_message_content,
+        tool_execution_results,
+        response_text,
+        &metrics,
     );
 
     // ── Step 3: Format the final response body ────────────────────────
     format_response_body(
-        &mut result, reasoning_text, schema_warnings, schema_error,
-        layered_prompt_segments_len, tenant_id, &metadata,
+        &mut result,
+        reasoning_text,
+        schema_warnings,
+        schema_error,
+        layered_prompt_segments_len,
+        tenant_id,
+        &metadata,
     );
 
     result
@@ -247,7 +269,11 @@ fn build_response_metadata(
 
     // ── PromotionPlugin evaluation (ARCH-10) ──────────────────────────
     let promotion_decisions: Vec<String> = {
-        let success_rate = if response_text.trim().is_empty() { 0.0 } else { 1.0 };
+        let success_rate = if response_text.trim().is_empty() {
+            0.0
+        } else {
+            1.0
+        };
         let latency_ms = elapsed as f64;
         let cost_score = (used_tokens as f64 / 100_000.0).min(1.0);
         let reg = server.promotion_registry.lock().unwrap_or_else(|poisoned| {
@@ -412,14 +438,35 @@ fn format_response_body(
     if let Some(obj) = result.as_object_mut() {
         obj.insert("schema_warnings".to_string(), json!(schema_warnings));
         obj.insert("schema_error".to_string(), json!(schema_error));
-        obj.insert("layered_prompt_segments".to_string(), json!(layered_prompt_segments_len));
-        obj.insert("promotion_decisions".to_string(), json!(metadata.promotion_decisions));
-        obj.insert("optimizer_recommendations".to_string(), json!(metadata.optimizer_recommendations));
-        obj.insert("execution_plan".to_string(), metadata.execution_plan.clone());
-        obj.insert("orchestration_alignment".to_string(), metadata.orchestration_alignment.clone());
-        obj.insert("orchestration_node_decisions".to_string(), metadata.orchestration_node_decisions.clone());
+        obj.insert(
+            "layered_prompt_segments".to_string(),
+            json!(layered_prompt_segments_len),
+        );
+        obj.insert(
+            "promotion_decisions".to_string(),
+            json!(metadata.promotion_decisions),
+        );
+        obj.insert(
+            "optimizer_recommendations".to_string(),
+            json!(metadata.optimizer_recommendations),
+        );
+        obj.insert(
+            "execution_plan".to_string(),
+            metadata.execution_plan.clone(),
+        );
+        obj.insert(
+            "orchestration_alignment".to_string(),
+            metadata.orchestration_alignment.clone(),
+        );
+        obj.insert(
+            "orchestration_node_decisions".to_string(),
+            metadata.orchestration_node_decisions.clone(),
+        );
         obj.insert("fork_id".to_string(), json!(metadata.fork_id));
-        obj.insert("evaluation_results".to_string(), json!(metadata.evaluation_results));
+        obj.insert(
+            "evaluation_results".to_string(),
+            json!(metadata.evaluation_results),
+        );
         obj.insert("tenant_id".to_string(), json!(tenant_id));
         if !reasoning_text.is_empty() {
             obj.insert("thinking".to_string(), json!(reasoning_text));

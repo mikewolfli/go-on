@@ -137,7 +137,10 @@ fn run_council_route_deliberation(
         .unwrap_or(0);
     let proposal_id = format!("route-{}-{}", phase_name, now_ms);
 
-    let council = cb.council.lock().ok()?;
+    let council = cb.council.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("lock poisoned, recovering");
+        poisoned.into_inner()
+    });
     for agent in candidate_agents {
         if let Err(e) = council.add_member(CouncilMember {
             id: agent.clone(),

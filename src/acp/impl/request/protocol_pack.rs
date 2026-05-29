@@ -395,7 +395,7 @@ pub(super) async fn handle_session_new(
                 .modes(modes)
                 .config_options(config_options),
         )
-        .expect("NewSessionResponse serialization should never fail"),
+        .expect("B48: NewSessionResponse serialization should never fail"),
     )
     .await
 }
@@ -432,7 +432,7 @@ pub(super) async fn handle_session_load(
             config_options: Some(config_options),
             meta: None,
         })
-        .expect("LoadSessionResponse serialization should never fail"),
+        .expect("B48: LoadSessionResponse serialization should never fail"),
     )
     .await
 }
@@ -551,15 +551,17 @@ pub(super) async fn handle_session_prompt(
                 // This lets Zed render thinking in a collapsible box rather than
                 // as raw text.
                 let re = regex::Regex::new(r"<thinking>(.*?)</thinking>")
-                    .expect("hardcoded thinking regex is valid");
+                    .expect("B48: hardcoded thinking regex is valid");
                 let mut last_end = 0;
                 let sid = sid.as_str();
 
                 for cap in re.captures_iter(response_text) {
-                    let m = cap.get(0)
-                        .expect("regex capture group 0 (full match) is always present");
-                    let thought_content = cap.get(1)
-                        .expect("regex capture group 1 (thinking content) is always present")
+                    let m = cap
+                        .get(0)
+                        .expect("B48: regex capture group 0 (full match) is always present");
+                    let thought_content = cap
+                        .get(1)
+                        .expect("B48: regex capture group 1 (thinking content) is always present")
                         .as_str();
 
                     // Send text before this thinking block as a regular message chunk
@@ -621,7 +623,7 @@ pub(super) async fn handle_session_prompt(
             let prompt_response = serde_json::to_value(crate::schema::PromptResponse::new(
                 crate::schema::StopReason::EndTurn,
             ))
-            .expect("PromptResponse serialization should never fail");
+            .expect("B48: PromptResponse serialization should never fail");
 
             // Use io::send_result directly to bypass inject_platform_profiles_if_absent.
             // The chat_pack::send_result adds a "platform_context" field that Zed's
@@ -701,7 +703,7 @@ pub(super) async fn handle_session_list(
             next_cursor: None,
             meta: None,
         })
-        .expect("ListSessionsResponse serialization should never fail"),
+        .expect("B48: ListSessionsResponse serialization should never fail"),
     )
     .await
 }
@@ -884,7 +886,9 @@ pub(super) async fn handle_session_set_config_option(
 
     if !session_id.is_empty() && !config_id.is_empty() {
         let mut state = acp_session_state().lock().unwrap_or_else(|poisoned| {
-            warn!("ACP session state lock poisoned in handle_session_set_config_option, recovering");
+            warn!(
+                "ACP session state lock poisoned in handle_session_set_config_option, recovering"
+            );
             poisoned.into_inner()
         });
         let session = state.entry(session_id.to_string()).or_default();
@@ -903,7 +907,7 @@ pub(super) async fn handle_session_set_config_option(
             config_options: vec![],
             meta: None,
         })
-        .expect("SetSessionConfigOptionResponse serialization should never fail"),
+        .expect("B48: SetSessionConfigOptionResponse serialization should never fail"),
     )
     .await
 }
@@ -2325,7 +2329,9 @@ pub(super) async fn handle_terminal_wait_for_exit(
         let tid = terminal_id.clone();
         tokio::task::spawn_blocking(move || -> Option<i32> {
             let mut state = acp_terminal_state().lock().unwrap_or_else(|poisoned| {
-                warn!("ACP terminal state lock poisoned in handle_terminal_wait_for_exit, recovering");
+                warn!(
+                    "ACP terminal state lock poisoned in handle_terminal_wait_for_exit, recovering"
+                );
                 poisoned.into_inner()
             });
             if let Some(proc) = state.get_mut(&tid) {

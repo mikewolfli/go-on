@@ -503,12 +503,11 @@ impl CopilotAgent {
 
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
                 // Capture model name from the first event that has it.
-                if let Ok(mut m) = capture.lock() {
-                    if m.is_none() {
-                        if let Some(model_name) = json.get("model").and_then(|v| v.as_str()) {
-                            if !model_name.is_empty() {
-                                *m = Some(model_name.to_string());
-                            }
+                let mut m = capture.lock().unwrap_or_else(|poisoned| { tracing::warn!("lock poisoned, recovering"); poisoned.into_inner() });
+                if m.is_none() {
+                    if let Some(model_name) = json.get("model").and_then(|v| v.as_str()) {
+                        if !model_name.is_empty() {
+                            *m = Some(model_name.to_string());
                         }
                     }
                 }
@@ -525,11 +524,16 @@ impl CopilotAgent {
         .await?;
 
         // Notify the caller about the actual model used.
-        if let Ok(mutex) = actual_model.lock() {
-            if let Some(ref model_name) = *mutex {
-                if !model_name.is_empty() {
-                    let _ = sender.send(build_model_used_token(model_name));
-                }
+        let mutex = match actual_model.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::warn!("[B48] actual_model lock poisoned, recovering");
+                poisoned.into_inner()
+            }
+        };
+        if let Some(ref model_name) = *mutex {
+            if !model_name.is_empty() {
+                let _ = sender.send(build_model_used_token(model_name));
             }
         }
 

@@ -135,7 +135,13 @@ class GoOnClient:
     max_retries:
         Number of retries for transient HTTP failures (default: 3).
     retry_delay:
-        Delay in seconds between retries (default: 1.0).
+        Base delay in seconds between retries (default: 1.0).
+        Uses exponential backoff with jitter for faster recovery.
+        Actual delays: retry_delay * 1x, 2x, 4x + random 0-100ms jitter.
+    use_exponential_backoff:
+        Enable exponential backoff with jitter for retries (default: True).
+        When True, retry delays grow exponentially, improving throughput
+        during transient failures by avoiding thundering herd.
     """
 
     def __init__(
@@ -144,14 +150,38 @@ class GoOnClient:
         timeout: float = 30.0,
         max_retries: int = 3,
         retry_delay: float = 1.0,
+        use_exponential_backoff: bool = True,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.max_retries = max_retries
         self.retry_delay = retry_delay
+        self._use_exponential_backoff = use_exponential_backoff
         self._client: httpx.AsyncClient = httpx.AsyncClient(
-            timeout=httpx.Timeout(timeout)
+            timeout=httpx.Timeout(timeout),
+            limits=httpx.Limits(
+                max_keepalive_connections=20,
+                max_connections=100,
+                keepalive_expiry=30.0,
+            ),
         )
+
+    def _retry_delay_for_attempt(self, attempt: int) -> float:
+        """Compute retry delay with exponential backoff and jitter.
+
+        B48-R4: Uses exponential backoff + random jitter for faster recovery.
+        - attempt 0: 1.0s + jitter
+        - attempt 1: 2.0s + jitter
+        - attempt 2: 4.0s + jitter
+        - attempt 3+: 8.0s + jitter (capped)
+        """
+        import random as _random
+
+        if not self._use_exponential_backoff:
+            return self.retry_delay
+        base = self.retry_delay * (2.0 ** min(attempt, 3))  # cap at 8x
+        jitter = _random.uniform(0, 0.1)  # 0-100ms jitter
+        return base + jitter
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -195,7 +225,7 @@ class GoOnClient:
             ) as e:
                 last_error = e
                 if attempt < self.max_retries:
-                    await asyncio.sleep(self.retry_delay)
+                    await asyncio.sleep(self._retry_delay_for_attempt(attempt))
             except (
                 GoOnClientError,
                 httpx.HTTPStatusError,
@@ -242,7 +272,7 @@ class GoOnClient:
 
         async with self._client.stream(
             "POST",
-            f"{self.base_url}/acp/chat",
+            f"{self.base_url}/chat/stream",
             json=request_dict,
         ) as response:
             async for line in response.aiter_lines():

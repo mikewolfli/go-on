@@ -160,6 +160,8 @@ export class GoOnManager {
     this._startupConfig = { configPath, executablePath, cwd, protocolMode };
 
     const startPromise = new Promise<void>((resolve, reject) => {
+      // Assign immediately so concurrent callers await the same operation
+      this._operationPromise = startPromise;
       let settled = false;
       let resolved = false;
       let stderrBuffer = "";
@@ -181,10 +183,19 @@ export class GoOnManager {
         args.push("--protocol-mode", normalizedProtocolMode);
       }
 
+      // Prune known API key env vars — keys should only flow through keyring://
+      const {
+        ANTHROPIC_API_KEY: _ANTHROPIC_API_KEY,
+        OPENAI_API_KEY: _OPENAI_API_KEY,
+        DEEPSEEK_API_KEY: _DEEPSEEK_API_KEY,
+        GITHUB_COPILOT_TOKEN: _GITHUB_COPILOT_TOKEN,
+        ...safeEnv
+      } = process.env;
+
       this.process = spawn(executablePath, args, {
         cwd,
         env: {
-          ...process.env,
+          ...safeEnv,
           ...this.runtimeEnvOverrides,
         },
         stdio: ["pipe", "pipe", "pipe"],

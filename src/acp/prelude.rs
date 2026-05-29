@@ -733,45 +733,46 @@ impl CircuitBreakerRegistry {
 
     /// Get the number of open circuit breakers
     pub fn open_count(&self) -> u32 {
-        if let Ok(guard) = self.inner.lock() {
-            guard
-                .values()
-                .filter(|state| matches!(state.stage, CircuitBreakerStage::Open))
-                .count() as u32
-        } else {
-            0
-        }
+        let guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard
+            .values()
+            .filter(|state| matches!(state.stage, CircuitBreakerStage::Open))
+            .count() as u32
     }
 
     /// Get circuit breaker snapshots
     pub fn snapshots(&self) -> Vec<CircuitBreakerSnapshot> {
-        if let Ok(guard) = self.inner.lock() {
-            guard
-                .iter()
-                .map(|(name, state)| CircuitBreakerSnapshot {
-                    name: name.clone(),
-                    state: match state.stage {
-                        CircuitBreakerStage::Closed => "closed".to_string(),
-                        CircuitBreakerStage::Open => "open".to_string(),
-                        CircuitBreakerStage::HalfOpen => "half-open".to_string(),
-                    },
-                    failure_count: state.failure_count,
-                    success_count: state.success_count,
-                    last_state_change: state.last_state_change,
-                    total_failures: state.failure_count as u64,
-                    total_successes: state.success_count as u64,
-                })
-                .collect()
-        } else {
-            Vec::new()
-        }
+        let guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard
+            .iter()
+            .map(|(name, state)| CircuitBreakerSnapshot {
+                name: name.clone(),
+                state: match state.stage {
+                    CircuitBreakerStage::Closed => "closed".to_string(),
+                    CircuitBreakerStage::Open => "open".to_string(),
+                    CircuitBreakerStage::HalfOpen => "half-open".to_string(),
+                },
+                failure_count: state.failure_count,
+                success_count: state.success_count,
+                last_state_change: state.last_state_change,
+                total_failures: state.failure_count as u64,
+                total_successes: state.success_count as u64,
+            })
+            .collect()
     }
 
     /// Reset one circuit breaker or all tracked breakers back to closed state.
     pub fn reset(&self, name: Option<&str>) -> usize {
-        let Ok(mut guard) = self.inner.lock() else {
-            return 0;
-        };
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
 
         let reset_state = |state: &mut CircuitBreakerState| {
             state.stage = CircuitBreakerStage::Closed;
@@ -939,34 +940,42 @@ impl MaintenanceTracker {
 
     /// Begin maintenance
     pub fn begin_maintenance(&self) {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.maintenance_in_progress = true;
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.maintenance_in_progress = true;
     }
 
     /// Note that maintenance has started
     pub fn note_started(&self) {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.running = true;
-            guard.last_started_at = Some(now_ts());
-            guard.last_error = None;
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.running = true;
+        guard.last_started_at = Some(now_ts());
+        guard.last_error = None;
     }
 
     /// End maintenance
     pub fn end_maintenance(&self) {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.maintenance_in_progress = false;
-            guard.last_maintenance = now_ts();
-            guard.next_maintenance_due = guard.last_maintenance + guard.maintenance_interval;
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.maintenance_in_progress = false;
+        guard.last_maintenance = now_ts();
+        guard.next_maintenance_due = guard.last_maintenance + guard.maintenance_interval;
     }
 
     /// Note that maintenance has failed
     pub fn note_failed(&self, error: &str) {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.last_error = Some(error.to_string());
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.last_error = Some(error.to_string());
     }
 
     /// Record maintenance cycle completion
@@ -977,26 +986,30 @@ impl MaintenanceTracker {
         cache_vacuumed: bool,
         vector_vacuumed: bool,
     ) {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.running = false;
-            guard.last_completed_at = Some(now_ts());
-            guard.last_memory_expired_removed = memory_removed as u64;
-            guard.last_sqlite_expired_removed = sqlite_removed as u64;
-            guard.last_cache_vacuumed = cache_vacuumed;
-            guard.last_vector_vacuumed = vector_vacuumed;
-            guard.last_error = None;
-            guard.cycles_total += 1;
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.running = false;
+        guard.last_completed_at = Some(now_ts());
+        guard.last_memory_expired_removed = memory_removed as u64;
+        guard.last_sqlite_expired_removed = sqlite_removed as u64;
+        guard.last_cache_vacuumed = cache_vacuumed;
+        guard.last_vector_vacuumed = vector_vacuumed;
+        guard.last_error = None;
+        guard.cycles_total += 1;
     }
 
     /// Record health check result
     pub fn record_health_check(&self, healthy: bool) {
-        if let Ok(mut guard) = self.inner.lock() {
-            if healthy {
-                guard.tasks_completed += 1;
-            } else {
-                guard.tasks_failed += 1;
-            }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        if healthy {
+            guard.tasks_completed += 1;
+        } else {
+            guard.tasks_failed += 1;
         }
     }
 }
@@ -1049,25 +1062,25 @@ impl PhaseRateLimiter {
         let refill_per_second = rpm_limit as f64 / 60.0;
         let capacity = burst_capacity.unwrap_or(rpm_limit).max(1) as f64;
 
-        if let Ok(mut guard) = self.inner.lock() {
-            let state = guard
-                .entry(phase_name.to_string())
-                .or_insert_with(|| TokenBucketState::new(capacity, refill_per_second, now));
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        let state = guard
+            .entry(phase_name.to_string())
+            .or_insert_with(|| TokenBucketState::new(capacity, refill_per_second, now));
 
-            if (state.capacity - capacity).abs() > f64::EPSILON
-                || (state.refill_per_second - refill_per_second).abs() > f64::EPSILON
-            {
-                *state = TokenBucketState::new(capacity, refill_per_second, now);
-            }
-
-            state.refill(now);
-            if state.tokens < 1.0 {
-                return false;
-            }
-            state.tokens -= 1.0;
-            return true;
+        if (state.capacity - capacity).abs() > f64::EPSILON
+            || (state.refill_per_second - refill_per_second).abs() > f64::EPSILON
+        {
+            *state = TokenBucketState::new(capacity, refill_per_second, now);
         }
 
+        state.refill(now);
+        if state.tokens < 1.0 {
+            return false;
+        }
+        state.tokens -= 1.0;
         true
     }
 
@@ -1128,39 +1141,41 @@ impl InflightLimiter {
         phase_limit: Option<u64>,
         global_limit: Option<u64>,
     ) -> Option<InflightGuard> {
-        if let Ok(mut guard) = self.inner.lock() {
-            if let Some(limit) = global_limit {
-                if guard.global as u64 >= limit.max(1) {
-                    return None;
-                }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        if let Some(limit) = global_limit {
+            if guard.global as u64 >= limit.max(1) {
+                return None;
             }
-
-            let phase_count = guard.phase.get(phase_name).copied().unwrap_or(0);
-            if let Some(limit) = phase_limit {
-                if phase_count as u64 >= limit.max(1) {
-                    return None;
-                }
-            }
-
-            guard.global += 1;
-            *guard.phase.entry(phase_name.to_string()).or_insert(0) += 1;
-            return Some(InflightGuard {
-                limiter: Arc::clone(self),
-                phase_name: phase_name.to_string(),
-            });
         }
 
-        None
+        let phase_count = guard.phase.get(phase_name).copied().unwrap_or(0);
+        if let Some(limit) = phase_limit {
+            if phase_count as u64 >= limit.max(1) {
+                return None;
+            }
+        }
+
+        guard.global += 1;
+        *guard.phase.entry(phase_name.to_string()).or_insert(0) += 1;
+        Some(InflightGuard {
+            limiter: Arc::clone(self),
+            phase_name: phase_name.to_string(),
+        })
     }
 
     fn leave(&self, phase_name: &str) {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.global = guard.global.saturating_sub(1);
-            if let Some(value) = guard.phase.get_mut(phase_name) {
-                *value = value.saturating_sub(1);
-                if *value == 0 {
-                    guard.phase.remove(phase_name);
-                }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.global = guard.global.saturating_sub(1);
+        if let Some(value) = guard.phase.get_mut(phase_name) {
+            *value = value.saturating_sub(1);
+            if *value == 0 {
+                guard.phase.remove(phase_name);
             }
         }
     }
@@ -1215,225 +1230,266 @@ impl RuntimeMetrics {
 
     /// Increment successful requests
     pub fn inc_successful_requests(&self) {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.successful_requests += 1;
-            guard.total_requests += 1;
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.successful_requests += 1;
+        guard.total_requests += 1;
     }
 
     /// Increment failed requests
     pub fn inc_failed_requests(&self) {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.failed_requests += 1;
-            guard.total_requests += 1;
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.failed_requests += 1;
+        guard.total_requests += 1;
     }
 
     /// Increment active requests
     pub fn inc_active_requests(&self) {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.active_requests += 1;
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.active_requests += 1;
     }
 
     /// Decrement active requests
     pub fn dec_active_requests(&self) {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.active_requests = guard.active_requests.saturating_sub(1);
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.active_requests = guard.active_requests.saturating_sub(1);
     }
 
     /// Get successful requests count
     pub fn successful_requests(&self) -> u64 {
-        if let Ok(guard) = self.inner.lock() {
-            guard.successful_requests
-        } else {
-            0
-        }
+        let guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.successful_requests
     }
 
     /// Get failed requests count
     pub fn failed_requests(&self) -> u64 {
-        if let Ok(guard) = self.inner.lock() {
-            guard.failed_requests
-        } else {
-            0
-        }
+        let guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.failed_requests
     }
 
     /// Get active requests count
     pub fn active_requests(&self) -> u32 {
-        if let Ok(guard) = self.inner.lock() {
-            guard.active_requests
-        } else {
-            0
-        }
+        let guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.active_requests
     }
 
     /// Get total requests count
     pub fn total_requests(&self) -> u64 {
-        if let Ok(guard) = self.inner.lock() {
-            guard.total_requests
-        } else {
-            0
-        }
+        let guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.total_requests
     }
 
     /// Get average request duration in milliseconds
     pub fn avg_request_duration_ms(&self) -> f64 {
-        if let Ok(guard) = self.inner.lock() {
-            guard.avg_request_duration_ms
-        } else {
-            0.0
-        }
+        let guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.avg_request_duration_ms
     }
 
     /// Update average request duration
     pub fn update_avg_duration(&self, duration_ms: f64) {
-        if let Ok(mut guard) = self.inner.lock() {
-            let total = guard.total_requests as f64;
-            guard.avg_request_duration_ms = if total <= 1.0 {
-                duration_ms
-            } else {
-                (guard.avg_request_duration_ms * (total - 1.0) + duration_ms) / total
-            };
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        let total = guard.total_requests as f64;
+        guard.avg_request_duration_ms = if total <= 1.0 {
+            duration_ms
+        } else {
+            (guard.avg_request_duration_ms * (total - 1.0) + duration_ms) / total
+        };
     }
 
     /// Increment review gate count
     pub fn inc_review_gate(&self) {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.review_gate_total += 1;
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.review_gate_total += 1;
     }
 
     /// Increment review gate rejected count
     pub fn inc_review_gate_rejected(&self) {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.review_gate_rejected_total += 1;
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.review_gate_rejected_total += 1;
     }
 
     /// Increment review gate timeout count
     pub fn inc_review_gate_timeout(&self) {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.review_gate_timeout_total += 1;
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.review_gate_timeout_total += 1;
     }
 
     /// Increment review gate degraded count
     pub fn inc_review_gate_degraded(&self) {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.review_gate_degraded_total += 1;
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.review_gate_degraded_total += 1;
     }
 
     /// Increment review gate approved count
     pub fn inc_review_gate_approved(&self) {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.review_gate_approved_total += 1;
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.review_gate_approved_total += 1;
     }
 
     /// Increment review gate invalid response count
     pub fn inc_review_gate_invalid_response(&self) {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.review_gate_invalid_response_total += 1;
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.review_gate_invalid_response_total += 1;
     }
 
     /// Increment chat requests count
     pub fn inc_chat_requests(&self) {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.chat_requests_total += 1;
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.chat_requests_total += 1;
     }
 
     /// Record one ACP request outcome with duration.
     pub fn record_request_outcome(&self, success: bool, duration_ms: f64) {
-        if let Ok(mut guard) = self.inner.lock() {
-            if success {
-                guard.successful_requests += 1;
-            } else {
-                guard.failed_requests += 1;
-            }
-            guard.total_requests += 1;
-
-            let duration_ms = duration_ms.max(0.0);
-            guard.request_latency_sum_ms += duration_ms;
-            let bucket_idx = latency_bucket_index_ms(duration_ms);
-            guard.request_latency_bucket_counts[bucket_idx] =
-                guard.request_latency_bucket_counts[bucket_idx].saturating_add(1);
-            guard.avg_request_duration_ms = if guard.total_requests == 0 {
-                0.0
-            } else {
-                guard.request_latency_sum_ms / guard.total_requests as f64
-            };
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        if success {
+            guard.successful_requests += 1;
+        } else {
+            guard.failed_requests += 1;
         }
+        guard.total_requests += 1;
+
+        let duration_ms = duration_ms.max(0.0);
+        guard.request_latency_sum_ms += duration_ms;
+        let bucket_idx = latency_bucket_index_ms(duration_ms);
+        guard.request_latency_bucket_counts[bucket_idx] =
+            guard.request_latency_bucket_counts[bucket_idx].saturating_add(1);
+        guard.avg_request_duration_ms = if guard.total_requests == 0 {
+            0.0
+        } else {
+            guard.request_latency_sum_ms / guard.total_requests as f64
+        };
     }
 
     /// Record chat latency.
     pub fn record_chat_latency(&self, duration_ms: f64) {
-        if let Ok(mut guard) = self.inner.lock() {
-            let duration_ms = duration_ms.max(0.0);
-            guard.chat_requests_total += 1;
-            guard.chat_latency_sum_ms += duration_ms;
-            let bucket_idx = latency_bucket_index_ms(duration_ms);
-            guard.chat_latency_bucket_counts[bucket_idx] =
-                guard.chat_latency_bucket_counts[bucket_idx].saturating_add(1);
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        let duration_ms = duration_ms.max(0.0);
+        guard.chat_requests_total += 1;
+        guard.chat_latency_sum_ms += duration_ms;
+        let bucket_idx = latency_bucket_index_ms(duration_ms);
+        guard.chat_latency_bucket_counts[bucket_idx] =
+            guard.chat_latency_bucket_counts[bucket_idx].saturating_add(1);
     }
 
     pub fn inc_agent_timeout_failure(&self) {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.agent_timeout_failures_total =
-                guard.agent_timeout_failures_total.saturating_add(1);
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.agent_timeout_failures_total = guard.agent_timeout_failures_total.saturating_add(1);
     }
 
     pub fn inc_runtime_probe_timeout(&self) {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.runtime_probe_timeout_total = guard.runtime_probe_timeout_total.saturating_add(1);
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.runtime_probe_timeout_total = guard.runtime_probe_timeout_total.saturating_add(1);
     }
 
     pub fn record_vector_search(&self, hit_count: usize) {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.vector_search_total = guard.vector_search_total.saturating_add(1);
-            guard.vector_hit_total = guard.vector_hit_total.saturating_add(hit_count as u64);
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.vector_search_total = guard.vector_search_total.saturating_add(1);
+        guard.vector_hit_total = guard.vector_hit_total.saturating_add(hit_count as u64);
     }
 
     pub fn record_vector_store(&self) {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.vector_store_total = guard.vector_store_total.saturating_add(1);
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.vector_store_total = guard.vector_store_total.saturating_add(1);
     }
 
     pub fn record_summary_read(&self, hit: bool) {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.summary_read_total = guard.summary_read_total.saturating_add(1);
-            if hit {
-                guard.summary_hit_total = guard.summary_hit_total.saturating_add(1);
-            }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.summary_read_total = guard.summary_read_total.saturating_add(1);
+        if hit {
+            guard.summary_hit_total = guard.summary_hit_total.saturating_add(1);
         }
     }
 
     pub fn record_summary_store(&self) {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.summary_store_total = guard.summary_store_total.saturating_add(1);
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.summary_store_total = guard.summary_store_total.saturating_add(1);
     }
 
     /// Record review gate latency.
     pub fn record_review_latency(&self, duration_ms: f64) {
-        if let Ok(mut guard) = self.inner.lock() {
-            let duration_ms = duration_ms.max(0.0);
-            guard.review_latency_sum_ms += duration_ms;
-            let bucket_idx = latency_bucket_index_ms(duration_ms);
-            guard.review_latency_bucket_counts[bucket_idx] =
-                guard.review_latency_bucket_counts[bucket_idx].saturating_add(1);
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        let duration_ms = duration_ms.max(0.0);
+        guard.review_latency_sum_ms += duration_ms;
+        let bucket_idx = latency_bucket_index_ms(duration_ms);
+        guard.review_latency_bucket_counts[bucket_idx] =
+            guard.review_latency_bucket_counts[bucket_idx].saturating_add(1);
     }
 
     pub fn snapshot(&self) -> MetricsSnapshot {
@@ -1445,9 +1501,11 @@ impl RuntimeMetrics {
 
     /// Reset all collected runtime metrics.
     pub fn reset_all(&self) {
-        if let Ok(mut guard) = self.inner.lock() {
-            *guard = MetricsSnapshot::default();
-        }
+        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
+            warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        *guard = MetricsSnapshot::default();
     }
 }
 

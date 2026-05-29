@@ -88,15 +88,14 @@ fn error_code_for(err: &anyhow::Error) -> i32 {
 
 impl McpServer {
     fn mark_cancelled_request(&self, request_id: &Value) {
-        if let Ok(mut cancelled) = self.cancelled_requests.lock() {
-            // Prevent unbounded growth: evict oldest entry if over 10K limit
-            if cancelled.len() >= 10_000 {
-                if let Some(oldest) = cancelled.iter().next().cloned() {
-                    cancelled.remove(&oldest);
-                }
+        let mut cancelled = self.cancelled_requests.lock().unwrap_or_else(|poisoned| { tracing::warn!("lock poisoned, recovering"); poisoned.into_inner() });
+        // Prevent unbounded growth: evict oldest entry if over 10K limit
+        if cancelled.len() >= 10_000 {
+            if let Some(oldest) = cancelled.iter().next().cloned() {
+                cancelled.remove(&oldest);
             }
-            cancelled.insert(request_id_key(request_id));
         }
+        cancelled.insert(request_id_key(request_id));
     }
 
     fn clear_cancelled_request(&self, request_id: &Value) {
@@ -254,12 +253,9 @@ impl McpServer {
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
                 if let Some(ref lvl) = level {
-                    if let Ok(mut guard) = self.logging_level.lock() {
-                        *guard = Some(lvl.clone());
-                        info!("MCP: logging level set to {}", lvl);
-                    } else {
-                        warn!("MCP: logging_level mutex poisoned — cannot set level");
-                    }
+                    let mut guard = self.logging_level.lock().unwrap_or_else(|poisoned| { tracing::warn!("lock poisoned, recovering"); poisoned.into_inner() });
+                    *guard = Some(lvl.clone());
+                    info!("MCP: logging level set to {}", lvl);
                 }
                 // F-GAP-10 — planned wiring: propagate level to subsystem log filters.
                 Ok(json!({}))

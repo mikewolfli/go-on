@@ -174,6 +174,7 @@ impl TokenExtractionCache {
 /// Falls back to uncompressed when brotli would expand the data.
 #[cfg(test)]
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 pub fn compress_and_send_brotli(
     data: &str,
     sender: &StreamingSender,
@@ -213,11 +214,14 @@ pub fn compress_and_send_brotli(
 pub struct StreamingMetrics {
     pub total_bytes_sent: u64,
     #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
     pub total_events_sent: u64,
     #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
     pub batches_flushed: u64,
     pub bytes_saved_by_compression: u64,
     #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
     pub avg_batch_size: f64,
     pub cache_hits: u64,
     pub cache_misses: u64,

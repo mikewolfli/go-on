@@ -981,7 +981,7 @@ top_k = 2
     /// Called once at startup before the I18n instance is created.
     /// NOTE: Currently unused — the window title is set via egui context directly.
     /// Retained for reference in case programmatic title setting is re-enabled.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-48: Reserved for future window title detection feature
     pub fn detect_initial_window_title(config: &AppConfig) -> String {
         if config.language == "zh-CN" {
             "Go-On 图形界面".to_string()
@@ -1844,7 +1844,7 @@ impl eframe::App for GoOnApp {
                     frame_elapsed.as_millis()
                 ));
             }
-            // TODO: All EGUI widgets now use double-buffering + partial redraw via view-level caching.
+            // F-GAP-49: All EGUI widgets now use double-buffering + partial redraw via view-level caching.
         }
     }
 }
@@ -1991,25 +1991,28 @@ impl Drop for GoOnApp {
 
         if let Some(mut child) = self.backend_child.take() {
             eprintln!("Shutting down go-on backend (PID: {})...", child.id());
-            // Try graceful shutdown first (SIGTERM on Unix)
-            let _ = child.kill();
-            // Wait up to 500ms for clean exit (short poll to avoid blocking the Drop path), then force kill.
-            let pid = child.id();
-            for _ in 0..5 {
-                match child.try_wait() {
-                    Ok(Some(_)) => {
-                        eprintln!("Backend process {} exited cleanly.", pid);
-                        return;
+            // B49: non-blocking cleanup (Drop on UI thread) — spawn a background
+            //      thread to wait for the process so we don't block the UI.
+            std::thread::spawn(move || {
+                // Try graceful shutdown first (SIGTERM on Unix)
+                let _ = child.kill();
+                let pid = child.id();
+                for _ in 0..5 {
+                    match child.try_wait() {
+                        Ok(Some(_)) => {
+                            eprintln!("Backend process {} exited cleanly.", pid);
+                            return;
+                        }
+                        Ok(None) => {}
+                        Err(_) => break,
                     }
-                    Ok(None) => {}
-                    Err(_) => break,
+                    std::thread::sleep(std::time::Duration::from_millis(100));
                 }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            // Force kill if still running
-            eprintln!("Backend {} did not exit gracefully, force killing...", pid);
-            let _ = child.kill();
-            let _ = child.wait();
+                // Force kill if still running
+                eprintln!("Backend {} did not exit gracefully, force killing...", pid);
+                let _ = child.kill();
+                let _ = child.wait();
+            });
         }
         self.backend_crash_count = 0;
     }

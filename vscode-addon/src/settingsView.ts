@@ -492,6 +492,12 @@ function secretNameForEnvVar(envVar: string): string {
   if (!normalized) {
     return "";
   }
+  // Handle keyring://go-on/{name} URIs
+  const keyringPrefix = "keyring://go-on/";
+  if (normalized.startsWith(keyringPrefix)) {
+    return normalized.slice(keyringPrefix.length);
+  }
+  // Legacy env-var name: GITHUB_COPILOT_TOKEN → github_copilot_token
   if (normalized === "GITHUB_COPILOT_TOKEN") {
     return "github_copilot_token";
   }

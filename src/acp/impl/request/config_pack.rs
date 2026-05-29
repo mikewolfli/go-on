@@ -11,7 +11,7 @@ pub(super) static RUNTIME_CONFIG: OnceLock<std::sync::RwLock<Option<RuntimeConfi
     std::sync::OnceLock::new();
 
 /// Try to read the reloaded runtime config, if one was stored via `config.reload`.
-#[allow(dead_code)] // Public API — reserved for subsystems that support hot-reload
+#[allow(dead_code)] // F-GAP-49 — Public API — reserved for subsystems that support hot-reload
 pub fn try_get_reload_config() -> Option<RuntimeConfig> {
     RUNTIME_CONFIG
         .get()

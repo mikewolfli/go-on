@@ -327,9 +327,11 @@ impl TaskScheduler {
             .map(|q| q.len())
             .sum();
         if total_pending >= self.config.backpressure_queue_depth {
-            if let Ok(mut stats) = self.stats.lock() {
-                stats.backpressure_rejections += 1;
-            }
+            let mut stats = self.stats.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            stats.backpressure_rejections += 1;
             return Err(anyhow!(tf(
                 "error.scheduler.backpressure_rejected",
                 &[
@@ -364,11 +366,13 @@ impl TaskScheduler {
         // Persist the task if persistence is enabled
         #[cfg(feature = "backend-sqlite")]
         if let Some(ref p) = self.persistence {
-            if let Ok(task_map) = self.task_map.lock() {
-                if let Some(saved) = task_map.get(&task_id) {
-                    if let Err(e) = p.save_task(saved) {
-                        warn!("Failed to persist task {}: {}", task_id, e);
-                    }
+            let task_map = self.task_map.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            if let Some(saved) = task_map.get(&task_id) {
+                if let Err(e) = p.save_task(saved) {
+                    warn!("Failed to persist task {}: {}", task_id, e);
                 }
             }
         }
@@ -572,36 +576,38 @@ impl TaskScheduler {
         // and stat bookkeeping.
 
         if requeue {
-            if let Ok(mut task_map) = self.task_map.lock() {
-                if let Some(task) = task_map.get_mut(task_id) {
-                    if task.retries < task.max_retries {
-                        task.retries += 1;
-                        let updated_task = task.clone();
-                        let role = task.role.clone();
-                        // Re-push into role-specific queue
-                        self.queues
-                            .lock()
-                            .map_err(|e| anyhow!("Lock error: {}", e))?
-                            .entry(role)
-                            .or_default()
-                            .push(updated_task);
-                        self.stats
-                            .lock()
-                            .map_err(|e| anyhow!("Lock error: {}", e))?
-                            .total_failed += 1;
-                        warn!(
-                            "{}",
-                            tf(
-                                "status.scheduler.task_requeued",
-                                &[
-                                    ("task_id", task_id),
-                                    ("retries", &task.retries.to_string()),
-                                    ("max_retries", &task.max_retries.to_string()),
-                                ]
-                            )
-                        );
-                        return Ok(());
-                    }
+            let mut task_map = self.task_map.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            if let Some(task) = task_map.get_mut(task_id) {
+                if task.retries < task.max_retries {
+                    task.retries += 1;
+                    let updated_task = task.clone();
+                    let role = task.role.clone();
+                    // Re-push into role-specific queue
+                    self.queues
+                        .lock()
+                        .map_err(|e| anyhow!("Lock error: {}", e))?
+                        .entry(role)
+                        .or_default()
+                        .push(updated_task);
+                    self.stats
+                        .lock()
+                        .map_err(|e| anyhow!("Lock error: {}", e))?
+                        .total_failed += 1;
+                    warn!(
+                        "{}",
+                        tf(
+                            "status.scheduler.task_requeued",
+                            &[
+                                ("task_id", task_id),
+                                ("retries", &task.retries.to_string()),
+                                ("max_retries", &task.max_retries.to_string()),
+                            ]
+                        )
+                    );
+                    return Ok(());
                 }
             }
         }
@@ -644,16 +650,17 @@ impl TaskScheduler {
     /// Should be called periodically (e.g. every 1-2 seconds) by a background
     /// timer task, not synchronously on every dequeue call.
     #[allow(dead_code)] // BLUE48 — public API for external background timer
+                        // F-GAP-49 — reserved for future use
     pub fn apply_aging(&self) {
         let now = Instant::now();
         let elapsed = {
-            if let Ok(mut last) = self.last_aging.lock() {
-                let dur = now.duration_since(*last);
-                *last = now;
-                dur
-            } else {
-                return;
-            }
+            let mut last = self.last_aging.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            let dur = now.duration_since(*last);
+            *last = now;
+            dur
         };
 
         let elapsed_secs = elapsed.as_secs_f64();
@@ -667,58 +674,68 @@ impl TaskScheduler {
         // Aging threshold for starvation prevention tracking
         let starvation_threshold = 2.0;
 
-        if let Ok(mut task_map) = self.task_map.lock() {
-            let mut starvation_events = 0u64;
-            for task in task_map.values_mut() {
-                let old_bonus = task.aging_bonus;
-                let bonus = (task.aging_bonus + aging_rate * elapsed_secs).min(max_bonus);
-                task.aging_bonus = bonus;
-                // Check if aging crossed the starvation threshold
-                if old_bonus < starvation_threshold && bonus >= starvation_threshold {
-                    starvation_events += 1;
-                }
+        let mut task_map = self.task_map.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        let mut starvation_events = 0u64;
+        for task in task_map.values_mut() {
+            let old_bonus = task.aging_bonus;
+            let bonus = (task.aging_bonus + aging_rate * elapsed_secs).min(max_bonus);
+            task.aging_bonus = bonus;
+            // Check if aging crossed the starvation threshold
+            if old_bonus < starvation_threshold && bonus >= starvation_threshold {
+                starvation_events += 1;
             }
+        }
 
-            // Update stats
-            if starvation_events > 0 {
-                if let Ok(mut stats) = self.stats.lock() {
-                    stats.starvation_events_prevented += starvation_events;
-                }
-                debug!(
-                    "Aging triggered {} starvation prevention events",
-                    starvation_events
-                );
-            }
+        // Update stats
+        if starvation_events > 0 {
+            let mut stats = self.stats.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            stats.starvation_events_prevented += starvation_events;
+            debug!(
+                "Aging triggered {} starvation prevention events",
+                starvation_events
+            );
         }
 
         // Collect non-active tasks from task_map (briefly holds task_map lock).
         let pending_tasks: Vec<ScheduledTask> = {
-            if let (Ok(task_map), Ok(active)) = (self.task_map.lock(), self.active.lock()) {
-                task_map
-                    .values()
-                    .filter(|t| !active.contains_key(&t.task_id))
-                    .cloned()
-                    .collect()
-            } else {
-                return;
-            }
+            let task_map = self.task_map.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            let active = self.active.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            task_map
+                .values()
+                .filter(|t| !active.contains_key(&t.task_id))
+                .cloned()
+                .collect()
         };
 
         // Rebuild per-role BinaryHeaps — only needs queues lock now.
-        if let Ok(mut queues) = self.queues.lock() {
-            queues.clear();
-            for task in &pending_tasks {
-                queues
-                    .entry(task.role.clone())
-                    .or_default()
-                    .push(task.clone());
-            }
-            debug!(
-                "Aging applied (elapsed={:.2}s), queues rebuilt with {} tasks",
-                elapsed_secs,
-                pending_tasks.len()
-            );
+        let mut queues = self.queues.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        queues.clear();
+        for task in &pending_tasks {
+            queues
+                .entry(task.role.clone())
+                .or_default()
+                .push(task.clone());
         }
+        debug!(
+            "Aging applied (elapsed={:.2}s), queues rebuilt with {} tasks",
+            elapsed_secs,
+            pending_tasks.len()
+        );
     }
 
     /// Return a snapshot of current stats
@@ -737,9 +754,11 @@ impl TaskScheduler {
                 starvation_events_prevented: 0,
                 backpressure_rejections: 0,
             });
-        if let Ok(queues) = self.queues.lock() {
-            profile.l1_queue_depth = queues.values().map(|q| q.len() as u32).sum();
-        }
+        let queues = self.queues.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        profile.l1_queue_depth = queues.values().map(|q| q.len() as u32).sum();
         // active workers are now tracked via outstanding TaskPermitGuard instances.
         // Since those are dropped on complete/fail, we can approximate active count
         // from the task_map minus pending queue entries.
@@ -755,10 +774,12 @@ impl TaskScheduler {
 
     /// Check if a role has reached its max_workers limit via the per-role semaphore.
     pub fn is_role_at_capacity(&self, role: &str) -> bool {
-        if let Ok(limiters) = self.role_limiters.lock() {
-            if let Some(limiter) = limiters.get(role) {
-                return limiter.available_permits() == 0;
-            }
+        let limiters = self.role_limiters.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        if let Some(limiter) = limiters.get(role) {
+            return limiter.available_permits() == 0;
         }
         false
     }
@@ -1085,11 +1106,13 @@ impl AgentWorkerScheduler {
                 workers.remove(role);
             }
             // Remove any active assignment for this worker
-            if let Ok(mut assignments) = self.assignments.lock() {
-                if let Some(task_id) = assignments.remove(worker_id) {
-                    // Mark the task as failed since the worker left
-                    let _ = self.level1.fail(&task_id, true);
-                }
+            let mut assignments = self.assignments.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            if let Some(task_id) = assignments.remove(worker_id) {
+                // Mark the task as failed since the worker left
+                let _ = self.level1.fail(&task_id, true);
             }
             info!(
                 "{}",
@@ -1141,9 +1164,11 @@ impl AgentWorkerScheduler {
         let (task, guard) = self.level1.dequeue(role)?;
 
         // Assign
-        if let Ok(mut assignments) = self.assignments.lock() {
-            assignments.insert(worker_id.clone(), task.task_id.clone());
-        }
+        let mut assignments = self.assignments.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        assignments.insert(worker_id.clone(), task.task_id.clone());
 
         debug!(
             "Assigned task {} to worker {} (role {})",
@@ -1188,9 +1213,11 @@ impl AgentWorkerScheduler {
             .insert(group_id.clone(), task_ids);
 
         // Update stats
-        if let Ok(mut stats) = self.level1.stats.lock() {
-            stats.l2_fan_out_count += 1;
-        }
+        let mut stats = self.level1.stats.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        stats.l2_fan_out_count += 1;
 
         info!(
             "{}",
@@ -1233,12 +1260,16 @@ impl AgentWorkerScheduler {
     /// Aggregate profile from level-1 + worker stats
     pub fn profile(&self) -> SchedulerProfile {
         let mut profile = self.level1.profile();
-        if let Ok(assignments) = self.assignments.lock() {
-            profile.l2_active_workers = assignments.len() as u32;
-        }
-        if let Ok(groups) = self.fan_out_groups.lock() {
-            profile.l2_fan_out_count = groups.len() as u32;
-        }
+        let assignments = self.assignments.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        profile.l2_active_workers = assignments.len() as u32;
+        let groups = self.fan_out_groups.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        profile.l2_fan_out_count = groups.len() as u32;
         profile
     }
 }

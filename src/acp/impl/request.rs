@@ -329,12 +329,14 @@ use self::tools_pack::*;
 use self::trace_pack::*;
 
 pub(crate) fn append_trace_event(event: TraceEvent) {
-    if let Ok(mut guard) = trace_events().lock() {
-        guard.push(event);
-        if guard.len() > 2048 {
-            let overflow = guard.len() - 2048;
-            guard.drain(0..overflow);
-        }
+    let mut guard = trace_events().lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("lock poisoned, recovering");
+        poisoned.into_inner()
+    });
+    guard.push(event);
+    if guard.len() > 2048 {
+        let overflow = guard.len() - 2048;
+        guard.drain(0..overflow);
     }
 }
 
@@ -462,14 +464,20 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
     let started = Instant::now();
     server.observability.metrics.inc_active_requests();
     let trace = new_request_trace(server, &request);
-    let _request_span = if let Ok(telemetry_guard) = server.observability.telemetry_runtime.lock() {
+    let _request_span = {
+        let telemetry_guard = server
+            .observability
+            .telemetry_runtime
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
         telemetry_guard.start_root_span(
             "acp.request",
             &format!("{}:{}", trace.method, trace.request_id),
             vec![],
         )
-    } else {
-        None
     };
 
     record_trace_event(

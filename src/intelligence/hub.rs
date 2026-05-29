@@ -21,6 +21,7 @@ use crate::intelligence::consensus::{ConsensusEngine, ConsensusNode, ConsensusVo
 
 /// How many times the intelligence hub has been activated.
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 pub static INTEL_HUB_ACTIVATIONS: AtomicU64 = AtomicU64::new(0);
 /// How many consensus rounds have been started.
 pub static CONSENSUS_ROUNDS: AtomicU64 = AtomicU64::new(0);
@@ -46,26 +47,30 @@ static GLOBAL_AUDIT: LazyLock<ThreadSafeAuditLog> = LazyLock::new(|| {
 
 /// Initialize intelligence hub at server startup.
 /// Registers local nodes in the consensus engine.
-#[allow(dead_code)]
 pub fn init_intel_hub() {
-    if let Ok(consensus) = GLOBAL_CONSENSUS.lock() {
-        let _ = consensus.register_node(ConsensusNode {
-            id: "local-agent".to_string(),
-            address: "internal://local".to_string(),
-            weight: 1,
-            role: NodeRole::Leader,
-            is_online: true,
-            last_heartbeat_ms: crate::intelligence::now_ms(),
-        });
-        let _ = consensus.register_node(ConsensusNode {
-            id: "capability-bus".to_string(),
-            address: "internal://capability_bus".to_string(),
-            weight: 1,
-            role: NodeRole::Follower,
-            is_online: true,
-            last_heartbeat_ms: crate::intelligence::now_ms(),
-        });
-    }
+    let consensus = match GLOBAL_CONSENSUS.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("[B48] GLOBAL_CONSENSUS lock poisoned, recovering");
+            poisoned.into_inner()
+        }
+    };
+    let _ = consensus.register_node(ConsensusNode {
+        id: "local-agent".to_string(),
+        address: "internal://local".to_string(),
+        weight: 1,
+        role: NodeRole::Leader,
+        is_online: true,
+        last_heartbeat_ms: crate::intelligence::now_ms(),
+    });
+    let _ = consensus.register_node(ConsensusNode {
+        id: "capability-bus".to_string(),
+        address: "internal://capability_bus".to_string(),
+        weight: 1,
+        role: NodeRole::Follower,
+        is_online: true,
+        last_heartbeat_ms: crate::intelligence::now_ms(),
+    });
     tracing::info!("intel_hub: initialized consensus, rationalization, audit");
 }
 
@@ -78,7 +83,9 @@ pub fn init_intel_hub() {
 ///
 /// Returns the REAL consensus verdict (approve/reject) and confidence.
 /// Non-blocking — returns (approve, 0.3) as degraded fallback on any failure.
+// F-GAP-48: intentionally not wired into the hot path; rationalize_decision is primary
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 pub fn consensus_vote_on(
     proposal_id: &str,
     proposal: serde_json::Value,
@@ -195,6 +202,7 @@ pub fn consensus_vote_on(
 ///
 /// Returns (is_justified, explanation) where explanation describes concerns.
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 pub fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (bool, String) {
     // Multi-factor risk scoring
     let risk_keywords = [
@@ -275,13 +283,16 @@ pub fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (bool, 
 }
 
 /// Record an audit entry for the decision pipeline.
+// F-GAP-48: intentionally not wired into the hot path; rationalize_decision is primary
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 pub fn record_audit_entry(entry: AuditLogEntry) {
     GLOBAL_AUDIT.record(entry);
     AUDIT_ENTRY_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Build an audit entry for agent decision.
+// F-GAP-48: intentionally not wired into the hot path; rationalize_decision is primary
 #[allow(clippy::too_many_arguments, dead_code)]
 pub fn build_audit_entry(
     task_id: &str,

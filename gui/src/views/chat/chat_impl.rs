@@ -779,7 +779,7 @@ impl ChatView {
         }
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-48: Reserved for future prompt command expansion
     fn expand_prompt_command(&self, raw_input: &str) -> String {
         self.expand_prompt_command_with_fallback(raw_input, None)
     }

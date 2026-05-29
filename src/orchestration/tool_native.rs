@@ -12,6 +12,7 @@ use std::collections::HashMap;
 
 /// Bridge between go-on ToolRegistry and provider-native function calling.
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 pub struct NativeToolBridge {
     registry: ToolRegistry,
     /// Maps tool names to their JSON Schema function definitions
@@ -19,6 +20,7 @@ pub struct NativeToolBridge {
 }
 
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 impl NativeToolBridge {
     /// Create a new bridge backed by the given ToolRegistry.
     pub fn new(registry: ToolRegistry) -> Self {

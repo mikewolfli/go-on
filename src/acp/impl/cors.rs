@@ -105,7 +105,7 @@ pub fn build_cors_headers(origin: Option<&str>, config: &CorsConfig) -> Vec<(Str
 
 /// Convenience wrapper around `build_cors_headers` for **actual** (non-preflight)
 /// responses.  Equivalent to calling `build_cors_headers(origin, config)`.
-#[allow(dead_code)] // Public API — reserved for non-Origin-based CORS header generation
+#[allow(dead_code)] // F-GAP-49 — Public API — reserved for non-Origin-based CORS header generation
 pub fn build_cors_response_headers(config: &CorsConfig) -> Vec<(String, String)> {
     // The caller should pass the actual Origin header value at runtime.
     // This function exists as a shim for cases where we want a consistent

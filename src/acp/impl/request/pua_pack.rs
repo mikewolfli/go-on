@@ -19,9 +19,11 @@ pub(super) fn stash_pua_report(id: Option<&Value>, encoded: String) {
     let Some(id) = id else {
         return;
     };
-    if let Ok(mut guard) = pua_response_reports().lock() {
-        guard.insert(value_to_id(id), encoded);
-    }
+    let mut guard = pua_response_reports().lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("lock poisoned, recovering");
+        poisoned.into_inner()
+    });
+    guard.insert(value_to_id(id), encoded);
 }
 
 pub(super) fn take_pua_report(id: Option<&Value>) -> Option<String> {

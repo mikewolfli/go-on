@@ -128,7 +128,10 @@ impl PluginRegistry {
     /// Get a plugin by ID.
     #[allow(dead_code)] // F-GAP-12 — reserved for plugin system integration
     pub fn get(&self, id: &str) -> Option<PluginState> {
-        let plugins = self.plugins.lock().ok()?;
+        let plugins = self.plugins.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
         plugins.get(id).map(|p| p.state())
     }
 

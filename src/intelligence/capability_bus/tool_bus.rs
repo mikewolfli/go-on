@@ -130,13 +130,27 @@ impl ToolBus {
         let mut stats = HashMap::new();
 
         // Pre-populate stats entries for every known tool.
-        if let Ok(reg) = tool_registry.lock() {
+        {
+            let reg = match tool_registry.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    tracing::warn!("[B48] tool_registry lock poisoned, recovering");
+                    poisoned.into_inner()
+                }
+            };
             for name in reg.names() {
                 stats.entry(name.to_string()).or_default();
             }
         }
         // Pre-populate stats entries for every known skill.
-        if let Ok(reg) = skill_registry.lock() {
+        {
+            let reg = match skill_registry.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    tracing::warn!("[B48] skill_registry lock poisoned, recovering");
+                    poisoned.into_inner()
+                }
+            };
             for desc in reg.list() {
                 stats.entry(desc.name.clone()).or_default();
             }
@@ -166,43 +180,47 @@ impl ToolBus {
         let mut descriptors: Vec<ToolDescriptor> = Vec::new();
 
         // Tools
-        if let Ok(reg) = self.tool_registry.lock() {
-            for name in reg.names() {
-                let profile = reg.profile(name);
-                descriptors.push(ToolDescriptor {
-                    name: name.to_string(),
-                    capability: profile
-                        .map(|p| p.capability.clone())
-                        .unwrap_or_else(|| "unknown".to_string()),
-                    risk_level: profile
-                        .map(|p| match p.risk_level {
-                            ToolRiskLevel::Low => "low",
-                            ToolRiskLevel::Medium => "medium",
-                            ToolRiskLevel::High => "high",
-                        })
-                        .unwrap_or("medium")
-                        .to_string(),
-                    timeout_ms: profile.map(|p| p.timeout_budget_ms).unwrap_or(30_000),
-                    fallback_chain: profile
-                        .map(|p| p.fallback_chain.clone())
-                        .unwrap_or_default(),
-                    is_skill: false,
-                });
-            }
+        let reg = self.tool_registry.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        for name in reg.names() {
+            let profile = reg.profile(name);
+            descriptors.push(ToolDescriptor {
+                name: name.to_string(),
+                capability: profile
+                    .map(|p| p.capability.clone())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                risk_level: profile
+                    .map(|p| match p.risk_level {
+                        ToolRiskLevel::Low => "low",
+                        ToolRiskLevel::Medium => "medium",
+                        ToolRiskLevel::High => "high",
+                    })
+                    .unwrap_or("medium")
+                    .to_string(),
+                timeout_ms: profile.map(|p| p.timeout_budget_ms).unwrap_or(30_000),
+                fallback_chain: profile
+                    .map(|p| p.fallback_chain.clone())
+                    .unwrap_or_default(),
+                is_skill: false,
+            });
         }
 
         // Skills
-        if let Ok(reg) = self.skill_registry.lock() {
-            for desc in reg.list() {
-                descriptors.push(ToolDescriptor {
-                    name: desc.name.clone(),
-                    capability: format!("skill:{}", desc.name),
-                    risk_level: "medium".to_string(),
-                    timeout_ms: 30_000,
-                    fallback_chain: Vec::new(),
-                    is_skill: true,
-                });
-            }
+        let reg = self.skill_registry.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        for desc in reg.list() {
+            descriptors.push(ToolDescriptor {
+                name: desc.name.clone(),
+                capability: format!("skill:{}", desc.name),
+                risk_level: "medium".to_string(),
+                timeout_ms: 30_000,
+                fallback_chain: Vec::new(),
+                is_skill: true,
+            });
         }
 
         descriptors
@@ -233,33 +251,37 @@ impl ToolBus {
         let task_lower = task_type.to_lowercase();
 
         // Match tools by capability field.
-        if let Ok(reg) = self.tool_registry.lock() {
-            for name in reg.names() {
-                let profile = reg.profile(name);
-                if let Some(prof) = profile {
-                    let cap_lower = prof.capability.to_lowercase();
-                    // A tool matches if its capability overlaps with the agent
-                    // role or the task type.
-                    if cap_lower.contains(&role_lower)
-                        || role_lower.contains(&cap_lower)
-                        || cap_lower.contains(&task_lower)
-                        || task_lower.contains(&cap_lower)
-                    {
-                        matches.push(name.to_string());
-                    }
+        let reg = self.tool_registry.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        for name in reg.names() {
+            let profile = reg.profile(name);
+            if let Some(prof) = profile {
+                let cap_lower = prof.capability.to_lowercase();
+                // A tool matches if its capability overlaps with the agent
+                // role or the task type.
+                if cap_lower.contains(&role_lower)
+                    || role_lower.contains(&cap_lower)
+                    || cap_lower.contains(&task_lower)
+                    || task_lower.contains(&cap_lower)
+                {
+                    matches.push(name.to_string());
                 }
             }
         }
 
         // Match skills via the skill-registry's best-match logic.
-        if let Ok(reg) = self.skill_registry.lock() {
-            if let Some(best) = reg.best_match_with_input(
-                task_type,
-                &serde_json::json!({"task": task_type, "objective": task_type}),
-            ) {
-                if !matches.contains(&best) {
-                    matches.push(best);
-                }
+        let reg = self.skill_registry.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        if let Some(best) = reg.best_match_with_input(
+            task_type,
+            &serde_json::json!({"task": task_type, "objective": task_type}),
+        ) {
+            if !matches.contains(&best) {
+                matches.push(best);
             }
         }
 
@@ -301,57 +323,61 @@ impl ToolBus {
     /// Inner dispatch — separate from the stats-recording wrapper.
     fn dispatch_tool(&self, tool_name: &str, input: &ToolInput) -> Result<ToolOutput> {
         // Check if it is a built-in tool.
-        if let Ok(reg) = self.tool_registry.lock() {
-            if reg.get(tool_name).is_some() {
-                return reg.run_with_fallback(tool_name, input);
-            }
+        let reg = self.tool_registry.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        if reg.get(tool_name).is_some() {
+            return reg.run_with_fallback(tool_name, input);
         }
 
         // Check if it is a registered skill.
-        if let Ok(reg) = self.skill_registry.lock() {
-            if let Some(skill) = reg.get(tool_name) {
-                // Convert ToolInput → serde_json::Value for the skill.
-                let skill_input = serde_json::json!({
-                    "task_id": input.task_id,
-                    "phase": input.phase,
-                    "agent_role": input.agent_role,
-                    "objective": input.objective,
-                    "constraints": input.constraints,
-                    "evidence": input.evidence,
-                    "payload": input.payload,
-                });
+        let reg = self.skill_registry.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        if let Some(skill) = reg.get(tool_name) {
+            // Convert ToolInput → serde_json::Value for the skill.
+            let skill_input = serde_json::json!({
+                "task_id": input.task_id,
+                "phase": input.phase,
+                "agent_role": input.agent_role,
+                "objective": input.objective,
+                "constraints": input.constraints,
+                "evidence": input.evidence,
+                "payload": input.payload,
+            });
 
-                // The Skill trait is async.  We block on it here because
-                // the ToolBus interface is synchronous (matching the Tool
-                // trait).  Callers must ensure they are running inside a
-                // Tokio runtime.
-                //
-                // This mirrors the same pattern used by `execute_loop` in
-                // `orchestration::tool` (which is also synchronous).
-                let output_value = std::thread::spawn(move || {
-                    let rt = match tokio::runtime::Runtime::new() {
-                        Ok(rt) => rt,
-                        Err(e) => {
-                            return Err(anyhow::anyhow!(
-                                "ToolBus: failed to create Tokio runtime for skill dispatch: {}",
-                                e
-                            ));
-                        }
-                    };
-                    rt.block_on(skill.execute(&skill_input))
-                })
-                .join()
-                .map_err(|_| anyhow::anyhow!("ToolBus: skill dispatch thread panicked"))??;
+            // The Skill trait is async.  We block on it here because
+            // the ToolBus interface is synchronous (matching the Tool
+            // trait).  Callers must ensure they are running inside a
+            // Tokio runtime.
+            //
+            // This mirrors the same pattern used by `execute_loop` in
+            // `orchestration::tool` (which is also synchronous).
+            let output_value = std::thread::spawn(move || {
+                let rt = match tokio::runtime::Runtime::new() {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        return Err(anyhow::anyhow!(
+                            "ToolBus: failed to create Tokio runtime for skill dispatch: {}",
+                            e
+                        ));
+                    }
+                };
+                rt.block_on(skill.execute(&skill_input))
+            })
+            .join()
+            .map_err(|_| anyhow::anyhow!("ToolBus: skill dispatch thread panicked"))??;
 
-                return Ok(ToolOutput {
-                    success: true,
-                    result: Some(output_value),
-                    error: None,
-                    verification: None,
-                    audit_log: Some(format!("executed skill '{}'", tool_name)),
-                    pua_report: None,
-                });
-            }
+            return Ok(ToolOutput {
+                success: true,
+                result: Some(output_value),
+                error: None,
+                verification: None,
+                audit_log: Some(format!("executed skill '{}'", tool_name)),
+                pua_report: None,
+            });
         }
 
         anyhow::bail!("ToolBus: tool or skill '{}' not found", tool_name)
@@ -372,9 +398,10 @@ impl ToolBus {
 
     /// Record a tool call outcome for statistics tracking.
     pub fn record_tool_call(&self, tool_name: &str, success: bool, duration_ms: u64) {
-        let Ok(mut inner) = self.inner.lock() else {
-            return;
-        };
+        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
 
         let entry = inner.stats.entry(tool_name.to_string()).or_default();
         entry.record(success, duration_ms);
@@ -408,10 +435,10 @@ impl ToolBus {
             .map(|reg| reg.list().len() as u32)
             .unwrap_or(0);
 
-        let inner = self.inner.lock().ok();
-        let total_calls = inner.as_ref().map(|i| i.total_calls).unwrap_or(0);
-        let total_success_calls = inner.as_ref().map(|i| i.total_success_calls).unwrap_or(0);
-        let enabled = inner.as_ref().map(|i| i.enabled).unwrap_or(false);
+        let inner = self.inner.lock().unwrap_or_else(|poisoned| { tracing::warn!("lock poisoned, recovering"); poisoned.into_inner() });
+        let total_calls = inner.total_calls;
+        let total_success_calls = inner.total_success_calls;
+        let enabled = inner.enabled;
 
         let success_rate = if total_calls == 0 {
             1.0
@@ -491,9 +518,12 @@ mod tests {
         let bus = ToolBus::new(tool_registry, skill_registry);
 
         // Register the builtin echo skill for testing.
-        if let Ok(mut reg) = bus.skill_registry.lock() {
-            let _ = reg.register(Arc::new(EchoSkill));
-        }
+        let mut reg = bus.skill_registry.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        let _ = reg.register(Arc::new(EchoSkill));
+        drop(reg);
 
         bus
     }
@@ -600,9 +630,11 @@ mod tests {
     #[test]
     fn execute_tool_ok_but_logical_failure_tracks_failure_stats() {
         let bus = make_bus();
-        if let Ok(mut reg) = bus.tool_registry.lock() {
-            reg.register(LogicalFailureTool);
-        }
+        let mut reg = bus.tool_registry.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        reg.register(LogicalFailureTool);
 
         let input = ToolInput {
             task_id: "test-003".to_string(),

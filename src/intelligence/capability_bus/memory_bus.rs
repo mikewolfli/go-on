@@ -271,27 +271,37 @@ impl MemoryBus {
         }
 
         if let Some(ref ms) = self.memory_store {
-            if let Ok(guard) = ms.lock() {
-                // Approximate total entry count by summing across all classes.
-                use crate::memory_module::MemoryClass;
-                let mut total: u32 = 0;
-                for class in &[
-                    MemoryClass::Observation,
-                    MemoryClass::Episodic,
-                    MemoryClass::Semantic,
-                    MemoryClass::ProjectState,
-                    MemoryClass::Transient,
-                ] {
-                    total += guard.retrieve(class.clone(), usize::MAX).len() as u32;
+            let guard = match ms.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    tracing::warn!("[B48] ms lock poisoned, recovering");
+                    poisoned.into_inner()
                 }
-                snapshot.memory_entries = total;
+            };
+            // Approximate total entry count by summing across all classes.
+            use crate::memory_module::MemoryClass;
+            let mut total: u32 = 0;
+            for class in &[
+                MemoryClass::Observation,
+                MemoryClass::Episodic,
+                MemoryClass::Semantic,
+                MemoryClass::ProjectState,
+                MemoryClass::Transient,
+            ] {
+                total += guard.retrieve(class.clone(), usize::MAX).len() as u32;
             }
+            snapshot.memory_entries = total;
         }
 
         if let Some(ref mrc) = self.memory_response_cache {
-            if let Ok(guard) = mrc.lock() {
-                snapshot.vector_docs_count = guard.active_entries() as u32;
-            }
+            let guard = match mrc.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    tracing::warn!("[B48] mrc lock poisoned, recovering");
+                    poisoned.into_inner()
+                }
+            };
+            snapshot.vector_docs_count = guard.active_entries() as u32;
         }
 
         snapshot
@@ -301,9 +311,14 @@ impl MemoryBus {
     pub fn clear_expired(&self) {
         // L1: In-memory response cache — purge_expired does this inline.
         if let Some(ref mrc) = self.memory_response_cache {
-            if let Ok(guard) = mrc.lock() {
-                guard.purge_expired();
-            }
+            let guard = match mrc.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    tracing::warn!("[B48] mrc lock poisoned, recovering");
+                    poisoned.into_inner()
+                }
+            };
+            guard.purge_expired();
         }
 
         // L2: SQLite / Postgres response cache.

@@ -19,7 +19,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 ///
 /// Many variants are reserved for future use; `#[allow(dead_code)]`
 /// suppresses the warning so CI (`-D warnings`) passes.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-48: Widget caching layer, kept for future performance optimization
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Section {
     // ── Existing variants ────────────────────────────────────
@@ -94,7 +94,7 @@ pub enum Section {
 
 // ── Cached size entry ──────────────────────────────────────────────
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-48: Widget caching layer, kept for future performance optimization
 struct CacheEntry {
     hash: u64,
     size: egui::Vec2,
@@ -134,13 +134,13 @@ impl SectionCache {
     }
 
     /// Remove a section from the cache (force re-render).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-48: Widget caching layer, kept for future performance optimization
     pub fn invalidate(&mut self, section: Section) {
         self.entries.remove(&section);
     }
 
     /// Clear all cached entries.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-48: Widget caching layer, kept for future performance optimization
     pub fn clear(&mut self) {
         self.entries.clear();
     }
@@ -225,7 +225,7 @@ macro_rules! section_hash {
 /// Compute a 64-bit hash from a string slice.
 ///
 /// Convenience wrapper — equivalent to `section_hash!(my_str)`.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-48: Widget caching layer, kept for future performance optimization
 pub fn hash_str(s: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     s.hash(&mut hasher);
@@ -233,7 +233,7 @@ pub fn hash_str(s: &str) -> u64 {
 }
 
 /// Compute a 64-bit hash from a boolean (yields `0u64` or `1u64`).
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-48: Widget caching layer, kept for future performance optimization
 pub fn hash_bool(b: bool) -> u64 {
     if b {
         1
@@ -246,7 +246,7 @@ pub fn hash_bool(b: bool) -> u64 {
 ///
 /// Uses the same mixing strategy as `boost::hash_combine` to spread
 /// both hash values across the output range.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-48: Widget caching layer, kept for future performance optimization
 pub fn hash_combine(h1: u64, h2: u64) -> u64 {
     // 0x9e3779b97f4a7c15 is the golden-ratio reciprocal for 64-bit.
     h1.wrapping_mul(0x9e3779b97f4a7c15)

@@ -53,6 +53,7 @@ pub fn set_secret_override(key: &str, value: &str) {
 
 /// Remove a secret override (restore env-var fallback).
 #[allow(dead_code)] // Public API — reserved for credential rotation flows
+                    // F-GAP-49 — reserved for future use
 pub fn remove_secret_override(key: &str) {
     match SECRET_OVERRIDE_MAP.lock() {
         Ok(mut map) => {
@@ -69,25 +70,25 @@ pub fn remove_secret_override(key: &str) {
 /// Resolve a secret value: returns the in-memory override if set, otherwise
 /// falls back to `std::env::var(key)`.
 pub fn get_secret(key: &str) -> Option<String> {
-    if let Ok(map) = SECRET_OVERRIDE_MAP.lock() {
-        if let Some(value) = map.get(key) {
-            return Some(value.clone());
-        }
-    } else {
-        tracing::warn!("SECRET_OVERRIDE_MAP mutex poisoned in get_secret");
+    let map = SECRET_OVERRIDE_MAP.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("lock poisoned, recovering");
+        poisoned.into_inner()
+    });
+    if let Some(value) = map.get(key) {
+        return Some(value.clone());
     }
     std::env::var(key).ok()
 }
 
 /// Returns `true` if the given key has an in-memory override set.
 #[allow(dead_code)] // Public API — reserved for diagnostic use
+                    // F-GAP-49 — reserved for future use
 pub fn has_override(key: &str) -> bool {
-    if let Ok(map) = SECRET_OVERRIDE_MAP.lock() {
-        map.contains_key(key)
-    } else {
-        tracing::warn!("SECRET_OVERRIDE_MAP mutex poisoned in has_override");
-        false
-    }
+    let map = SECRET_OVERRIDE_MAP.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("lock poisoned, recovering");
+        poisoned.into_inner()
+    });
+    map.contains_key(key)
 }
 
 // ── Keyring cache ──────────────────────────────────────────────────
@@ -118,14 +119,14 @@ pub fn get_keyring_cached(service: &str, account: &str) -> Option<String> {
     let now = Instant::now();
 
     // Check cache first.
-    if let Ok(cache) = KEYRING_CACHE.lock() {
-        if let Some(entry) = cache.get(&key) {
-            if now.duration_since(entry.fetched_at) < KEYRING_CACHE_TTL {
-                return Some(entry.value.clone());
-            }
+    let cache = KEYRING_CACHE.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("lock poisoned, recovering");
+        poisoned.into_inner()
+    });
+    if let Some(entry) = cache.get(&key) {
+        if now.duration_since(entry.fetched_at) < KEYRING_CACHE_TTL {
+            return Some(entry.value.clone());
         }
-    } else {
-        tracing::warn!("KEYRING_CACHE mutex poisoned in get_keyring_cached (read)");
     }
 
     // Cache miss or expired — perform real keyring lookup.
@@ -136,17 +137,17 @@ pub fn get_keyring_cached(service: &str, account: &str) -> Option<String> {
 
     // Update cache (best-effort).
     if let Some(ref v) = value {
-        if let Ok(mut cache) = KEYRING_CACHE.lock() {
-            cache.insert(
-                key,
-                CachedEntry {
-                    value: v.clone(),
-                    fetched_at: now,
-                },
-            );
-        } else {
-            tracing::warn!("KEYRING_CACHE mutex poisoned in get_keyring_cached (write)");
-        }
+        let mut cache = KEYRING_CACHE.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        cache.insert(
+            key,
+            CachedEntry {
+                value: v.clone(),
+                fetched_at: now,
+            },
+        );
     }
 
     value
@@ -154,6 +155,7 @@ pub fn get_keyring_cached(service: &str, account: &str) -> Option<String> {
 
 /// Invalidate a cached keyring entry.
 #[allow(dead_code)] // Public API — reserved for credential update flows
+                    // F-GAP-49 — reserved for future use
 pub fn invalidate_keyring_cache(service: &str, account: &str) {
     let key = (service.to_string(), account.to_string());
     match KEYRING_CACHE.lock() {
@@ -170,6 +172,7 @@ pub fn invalidate_keyring_cache(service: &str, account: &str) {
 
 /// Invalidate all cached keyring entries.
 #[allow(dead_code)] // Public API — reserved for credential reset flows
+                    // F-GAP-49 — reserved for future use
 pub fn clear_keyring_cache() {
     match KEYRING_CACHE.lock() {
         Ok(mut cache) => {
@@ -185,12 +188,13 @@ pub fn clear_keyring_cache() {
 
 /// Returns the number of overrides currently stored.
 #[allow(dead_code)] // Public API — reserved for diagnostic use
+                    // F-GAP-49 — reserved for future use
 pub fn override_count() -> usize {
-    if let Ok(map) = SECRET_OVERRIDE_MAP.lock() {
-        map.len()
-    } else {
-        0
-    }
+    let map = SECRET_OVERRIDE_MAP.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("lock poisoned, recovering");
+        poisoned.into_inner()
+    });
+    map.len()
 }
 
 #[cfg(test)]

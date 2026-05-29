@@ -43,9 +43,11 @@ pub(super) fn mark_error_response(id: Option<&Value>) {
     let Some(value) = id else {
         return;
     };
-    if let Ok(mut guard) = error_response_ids().lock() {
-        guard.insert(value_to_id(value));
-    }
+    let mut guard = error_response_ids().lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("lock poisoned, recovering");
+        poisoned.into_inner()
+    });
+    guard.insert(value_to_id(value));
 }
 
 pub(super) fn take_error_response_mark(request_id: &str) -> bool {
@@ -118,43 +120,43 @@ pub(super) fn trace_metrics_snapshot(server: &AcpServer) -> Value {
     let mut requests: Vec<(u64, Value)> = Vec::new();
     let mut phase_buckets: HashMap<String, Vec<u64>> = HashMap::new();
     let mut by_pua_stage: HashMap<String, u64> = HashMap::new();
-    let mut buffered_events = 0usize;
+    let events = trace_events().lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("lock poisoned, recovering");
+        poisoned.into_inner()
+    });
+    let buffered_events = events.len();
+    for event in events.iter() {
+        if event.event_type == "request.end" {
+            let method = event
+                .inputs
+                .get("attributes")
+                .and_then(|value| value.get("method"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_string();
+            requests.push((
+                event.duration_ms,
+                json!({
+                    "request_id": event.task_id,
+                    "method": method,
+                    "duration_ms": event.duration_ms,
+                    "status": event.status,
+                    "timestamp": event.timestamp,
+                }),
+            ));
+        }
 
-    if let Ok(events) = trace_events().lock() {
-        buffered_events = events.len();
-        for event in events.iter() {
-            if event.event_type == "request.end" {
-                let method = event
-                    .inputs
-                    .get("attributes")
-                    .and_then(|value| value.get("method"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown")
-                    .to_string();
-                requests.push((
-                    event.duration_ms,
-                    json!({
-                        "request_id": event.task_id,
-                        "method": method,
-                        "duration_ms": event.duration_ms,
-                        "status": event.status,
-                        "timestamp": event.timestamp,
-                    }),
-                ));
-            }
+        if event.duration_ms > 0
+            && (event.event_type.starts_with("phase.") || event.event_type == "request.end")
+        {
+            phase_buckets
+                .entry(event.phase.clone())
+                .or_default()
+                .push(event.duration_ms);
+        }
 
-            if event.duration_ms > 0
-                && (event.event_type.starts_with("phase.") || event.event_type == "request.end")
-            {
-                phase_buckets
-                    .entry(event.phase.clone())
-                    .or_default()
-                    .push(event.duration_ms);
-            }
-
-            if let Some(stage) = event.pua_stage.as_ref() {
-                *by_pua_stage.entry(stage.clone()).or_insert(0) += 1;
-            }
+        if let Some(stage) = event.pua_stage.as_ref() {
+            *by_pua_stage.entry(stage.clone()).or_insert(0) += 1;
         }
     }
 

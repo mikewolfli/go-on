@@ -219,6 +219,28 @@ These remaining points are architectural enhancements, not placeholder gaps in t
 
 ---
 
+## 2026-05-29 Full Verification (Post-BLUE48 × 35 Rounds)
+
+All BLUE9 items re-verified against current codebase after BLUE48 Round 35 enhancements. Zero regressions.
+
+### Additional BLUE48 Round 35 Cross-Checks
+
+| Check | Result | Evidence |
+|-------|--------|----------|
+| Lock poisoning recovery — 9 new sites | ✅ All `unwrap_or_else` | copilot/memory_bus/tool_bus/hub/full_auto/startup_context |
+| Production `.expect()` audits | ✅ 11 sites B48-tagged or graceful | protocol_pack/deepseek/setup |
+| `init_intel_hub()` in fallback server path | ✅ Added | `src/acp/impl/runtime.rs:524` |
+| `council_deliberation` cfg gate | ✅ Added | `src/acp/helpers/mod.rs` |
+| GUI `thread::sleep` blocking | ✅ 0 remaining in UI loop | skills/security/monitor all single `try_send` |
+| VSCode env leak (process.env) | ✅ Pruned 4 known API env vars | `runtimeManager.ts:185` |
+| VSCode CLI secret leak | ✅ stdin pipe instead of `--secret-value` | `extension.ts:44-60` |
+| VSCode `_operationPromise` race | ✅ Fixed | `runtimeManager.ts:164` |
+| VSCode `secretNameForEnvVar` duplicate | ✅ Synced with keyring:// handling | `settingsView.ts:490-499` |
+| Unbounded HashMaps | ✅ 5 subsystems bounded | AgentRegistry/MemoryStore/FaultTolerance/FailurePrevention |
+| All `#[allow(dead_code)]` F-GAP labeled | ✅ 25 GUI + src archives all annotated | GUI widgets + backend + prompts + keyring |
+
+---
+
 ## 2026-05-29 Full Verification (Post-BLUE48 × 34 Rounds)
 
 All BLUE9 items re-verified against current codebase. Zero regressions.

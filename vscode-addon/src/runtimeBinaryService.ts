@@ -94,7 +94,7 @@ function attachDownloadTimeout(request: ClientRequest, url: string) {
   });
 }
 
-// TODO: Re-enable archive integrity verification when trusted SHA256 is available
+// F-GAP-49: Re-enable archive integrity verification when trusted SHA256 is available
 
 async function downloadFile(
   url: string,

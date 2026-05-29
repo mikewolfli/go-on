@@ -282,9 +282,11 @@ impl DistributedMemoryBus {
         Self::maybe_evict_oldest(&mut entries, shared_len, self.max_entries);
 
         // Update profile
-        if let Ok(mut p) = self.profile.lock() {
-            p.local_entries = entries.len() as u32;
-        }
+        let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned");
+            poisoned.into_inner()
+        });
+        p.local_entries = entries.len() as u32;
 
         id
     }
@@ -297,19 +299,24 @@ impl DistributedMemoryBus {
     pub fn find_by_key(&self, key: &str) -> Vec<MemoryBusEntry> {
         let mut results = Vec::new();
 
-        if let Ok(local) = self.local_entries.lock() {
-            for e in local.iter() {
-                if e.key == key {
-                    results.push(e.clone());
-                }
+        let local = self.local_entries.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned");
+            poisoned.into_inner()
+        });
+        for e in local.iter() {
+            if e.key == key {
+                results.push(e.clone());
             }
         }
+        drop(local);
 
-        if let Ok(shared) = self.shared_entries.lock() {
-            for se in shared.iter() {
-                if se.entry.key == key {
-                    results.push(se.entry.clone());
-                }
+        let shared = self.shared_entries.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned");
+            poisoned.into_inner()
+        });
+        for se in shared.iter() {
+            if se.entry.key == key {
+                results.push(se.entry.clone());
             }
         }
 
@@ -324,19 +331,24 @@ impl DistributedMemoryBus {
             return results;
         }
 
-        if let Ok(local) = self.local_entries.lock() {
-            for e in local.iter() {
-                if e.tags.iter().any(|t| tags.contains(t)) {
-                    results.push(e.clone());
-                }
+        let local = self.local_entries.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned");
+            poisoned.into_inner()
+        });
+        for e in local.iter() {
+            if e.tags.iter().any(|t| tags.contains(t)) {
+                results.push(e.clone());
             }
         }
+        drop(local);
 
-        if let Ok(shared) = self.shared_entries.lock() {
-            for se in shared.iter() {
-                if se.entry.tags.iter().any(|t| tags.contains(t)) {
-                    results.push(se.entry.clone());
-                }
+        let shared = self.shared_entries.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned");
+            poisoned.into_inner()
+        });
+        for se in shared.iter() {
+            if se.entry.tags.iter().any(|t| tags.contains(t)) {
+                results.push(se.entry.clone());
             }
         }
 
@@ -350,12 +362,16 @@ impl DistributedMemoryBus {
     /// Register (or update) a remote peer.
     #[cfg(feature = "profile-multi-users-server")]
     pub fn register_peer(&self, node_id: &str, address: &str) {
-        if let Ok(mut peers) = self.remote_peers.write() {
-            peers.insert(node_id.to_string(), address.to_string());
-            if let Ok(mut p) = self.profile.lock() {
-                p.remote_peers = peers.len() as u32;
-            }
-        }
+        let mut peers = self.remote_peers.write().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned");
+            poisoned.into_inner()
+        });
+        peers.insert(node_id.to_string(), address.to_string());
+        let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned");
+            poisoned.into_inner()
+        });
+        p.remote_peers = peers.len() as u32;
     }
 
     /// No‑op on single‑node builds.
@@ -367,12 +383,16 @@ impl DistributedMemoryBus {
     /// Remove a remote peer.
     #[cfg(feature = "profile-multi-users-server")]
     pub fn unregister_peer(&self, node_id: &str) {
-        if let Ok(mut peers) = self.remote_peers.write() {
-            peers.remove(node_id);
-            if let Ok(mut p) = self.profile.lock() {
-                p.remote_peers = peers.len() as u32;
-            }
-        }
+        let mut peers = self.remote_peers.write().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned");
+            poisoned.into_inner()
+        });
+        peers.remove(node_id);
+        let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned");
+            poisoned.into_inner()
+        });
+        p.remote_peers = peers.len() as u32;
     }
 
     /// No‑op on single‑node builds.
@@ -433,20 +453,26 @@ impl DistributedMemoryBus {
             let shared_len = guard.len();
             drop(guard);
 
-            if let Ok(mut local) = self.local_entries.lock() {
-                let total = local.len() + shared_len;
-                if total > self.max_entries {
-                    let to_remove = total - self.max_entries;
-                    for _ in 0..to_remove {
-                        local.pop_front();
-                    }
+            let mut local = self.local_entries.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned");
+                poisoned.into_inner()
+            });
+            let total = local.len() + shared_len;
+            if total > self.max_entries {
+                let to_remove = total - self.max_entries;
+                for _ in 0..to_remove {
+                    local.pop_front();
                 }
             }
         }
 
         // 4. Update profile
         #[cfg(feature = "profile-multi-users-server")]
-        if let Ok(mut p) = self.profile.lock() {
+        {
+            let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned");
+                poisoned.into_inner()
+            });
             p.total_syncs = p.total_syncs.wrapping_add(1);
             // We would also increment per‑peer counters here in a real
             // transport implementation.
@@ -468,30 +494,43 @@ impl DistributedMemoryBus {
         let mut pruned = 0u64;
 
         // Prune local entries
-        if let Ok(mut local) = self.local_entries.lock() {
-            let before = local.len();
-            local.retain(|e| e.ttl_ms == 0 || e.created_ms + e.ttl_ms >= now);
-            pruned += (before - local.len()) as u64;
-            if let Ok(mut p) = self.profile.lock() {
-                p.local_entries = local.len() as u32;
-            }
-        }
+        let mut local = self.local_entries.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned");
+            poisoned.into_inner()
+        });
+        let before = local.len();
+        local.retain(|e| e.ttl_ms == 0 || e.created_ms + e.ttl_ms >= now);
+        pruned += (before - local.len()) as u64;
+        let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned");
+            poisoned.into_inner()
+        });
+        p.local_entries = local.len() as u32;
+        drop(p);
+        drop(local);
 
         // Prune shared entries
-        if let Ok(mut shared) = self.shared_entries.lock() {
-            let before = shared.len();
-            shared
-                .retain(|se| se.entry.ttl_ms == 0 || se.entry.created_ms + se.entry.ttl_ms >= now);
-            pruned += (before - shared.len()) as u64;
-            if let Ok(mut p) = self.profile.lock() {
-                p.shared_entries = shared.len() as u32;
-            }
-        }
+        let mut shared = self.shared_entries.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned");
+            poisoned.into_inner()
+        });
+        let before = shared.len();
+        shared.retain(|se| se.entry.ttl_ms == 0 || se.entry.created_ms + se.entry.ttl_ms >= now);
+        pruned += (before - shared.len()) as u64;
+        let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned");
+            poisoned.into_inner()
+        });
+        p.shared_entries = shared.len() as u32;
+        drop(p);
+        drop(shared);
 
         if pruned > 0 {
-            if let Ok(mut p) = self.profile.lock() {
-                p.entries_pruned = p.entries_pruned.wrapping_add(pruned);
-            }
+            let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned");
+                poisoned.into_inner()
+            });
+            p.entries_pruned = p.entries_pruned.wrapping_add(pruned);
         }
     }
 
@@ -508,13 +547,21 @@ impl DistributedMemoryBus {
             .clone();
 
         // Refresh live counters from actual data structures
-        if let Ok(local) = self.local_entries.lock() {
+        {
+            let local = self.local_entries.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned");
+                poisoned.into_inner()
+            });
             p.local_entries = local.len() as u32;
         }
         if let Ok(peers) = self.remote_peers.read() {
             p.remote_peers = peers.len() as u32;
         }
-        if let Ok(shared) = self.shared_entries.lock() {
+        {
+            let shared = self.shared_entries.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned");
+                poisoned.into_inner()
+            });
             p.shared_entries = shared.len() as u32;
         }
 
@@ -604,18 +651,22 @@ impl DistributedMemoryBus {
                     );
 
                     // Update profile with transport state
-                    if let Ok(mut p) = profile.lock() {
-                        let peers_ok = remote_peers.read().map(|r| r.len() as u32).unwrap_or(0);
-                        p.transport_running = true;
-                        p.transport_peers_reachable = peers_ok;
-                    }
+                    let mut p = profile.lock().unwrap_or_else(|poisoned| {
+                        tracing::warn!("lock poisoned");
+                        poisoned.into_inner()
+                    });
+                    let peers_ok = remote_peers.read().map(|r| r.len() as u32).unwrap_or(0);
+                    p.transport_running = true;
+                    p.transport_peers_reachable = peers_ok;
 
                     if let Err(e) = result {
                         tracing::warn!("[dmb-transport] Sync error: {}", e);
-                        if let Ok(mut s) = stats.lock() {
-                            s.total_errors = s.total_errors.wrapping_add(1);
-                            s.last_sync_status = SyncStatus::Failed(e.to_string());
-                        }
+                        let mut s = stats.lock().unwrap_or_else(|poisoned| {
+                            tracing::warn!("lock poisoned");
+                            poisoned.into_inner()
+                        });
+                        s.total_errors = s.total_errors.wrapping_add(1);
+                        s.last_sync_status = SyncStatus::Failed(e.to_string());
                     }
                 }
             })?;
@@ -623,9 +674,11 @@ impl DistributedMemoryBus {
         *self.sync_thread.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
 
         // Update profile
-        if let Ok(mut p) = self.profile.lock() {
-            p.transport_running = true;
-        }
+        let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned");
+            poisoned.into_inner()
+        });
+        p.transport_running = true;
 
         Ok(())
     }
@@ -656,9 +709,11 @@ impl DistributedMemoryBus {
         }
 
         // Update profile
-        if let Ok(mut p) = self.profile.lock() {
-            p.transport_running = false;
-        }
+        let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned");
+            poisoned.into_inner()
+        });
+        p.transport_running = false;
 
         Ok(())
     }
@@ -733,21 +788,26 @@ impl DistributedMemoryBus {
         drop(guard);
 
         // Evict from local if over capacity
-        if let Ok(mut local) = self.local_entries.lock() {
-            let total = local.len() + shared_len;
-            if total > self.max_entries {
-                let to_remove = total - self.max_entries;
-                for _ in 0..to_remove {
-                    local.pop_front();
-                }
+        let mut local = self.local_entries.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned");
+            poisoned.into_inner()
+        });
+        let total = local.len() + shared_len;
+        if total > self.max_entries {
+            let to_remove = total - self.max_entries;
+            for _ in 0..to_remove {
+                local.pop_front();
             }
         }
+        drop(local);
 
         // Update profile
-        if let Ok(mut p) = self.profile.lock() {
-            p.shared_entries = shared_len as u32;
-            p.total_syncs = p.total_syncs.wrapping_add(1);
-        }
+        let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned");
+            poisoned.into_inner()
+        });
+        p.shared_entries = shared_len as u32;
+        p.total_syncs = p.total_syncs.wrapping_add(1);
 
         Ok(count)
     }
@@ -857,11 +917,13 @@ impl DistributedMemoryBus {
         }
 
         // Update profile
-        if let Ok(mut p) = profile.lock() {
-            p.total_syncs = p.total_syncs.wrapping_add(1);
-            p.transport_peers_reachable = peers.len() as u32;
-            p.total_bytes_synced = p.total_bytes_synced.wrapping_add(total_bytes_sent);
-        }
+        let mut p = profile.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned");
+            poisoned.into_inner()
+        });
+        p.total_syncs = p.total_syncs.wrapping_add(1);
+        p.transport_peers_reachable = peers.len() as u32;
+        p.total_bytes_synced = p.total_bytes_synced.wrapping_add(total_bytes_sent);
 
         Ok(status)
     }

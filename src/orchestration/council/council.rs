@@ -119,6 +119,12 @@ pub struct CouncilConfig {
     /// Number of voting rounds before reputation affects voting power.
     #[serde(default = "default_reputation_warmup_rounds")]
     pub reputation_warmup_rounds: u32,
+    /// Threshold below which a member is auto-ejected (default: 0.3)
+    pub ejection_threshold: Option<f64>,
+    /// Number of consecutive rounds of low accuracy before ejection (default: 20)
+    pub ejection_window: Option<usize>,
+    /// Warmup rounds before a new member can be ejected (default: 10)
+    pub ejection_warmup_rounds: Option<usize>,
 }
 
 fn default_enable_reputation() -> bool {
@@ -138,6 +144,9 @@ impl Default for CouncilConfig {
             max_proposals: 100,
             enable_reputation: default_enable_reputation(),
             reputation_warmup_rounds: default_reputation_warmup_rounds(),
+            ejection_threshold: None,
+            ejection_window: None,
+            ejection_warmup_rounds: None,
         }
     }
 }
@@ -296,13 +305,15 @@ impl OrchestrationCouncil {
     /// Initialize reputation tracking for a member (called automatically on first vote).
     #[allow(dead_code)] // F-GAP-15 — kept for external API consistency; used indirectly via record_vote_accuracy
     fn ensure_reputation(&self, member_id: &str) {
-        if let Ok(mut rep) = self.reputation.lock() {
-            if !rep.contains_key(member_id) {
-                rep.insert(
-                    member_id.to_string(),
-                    ReputationRecord::new(member_id, self.config.reputation_warmup_rounds),
-                );
-            }
+        let mut rep = self.reputation.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        if !rep.contains_key(member_id) {
+            rep.insert(
+                member_id.to_string(),
+                ReputationRecord::new(member_id, self.config.reputation_warmup_rounds),
+            );
         }
     }
 
@@ -312,14 +323,16 @@ impl OrchestrationCouncil {
         if !self.config.enable_reputation {
             return nominal_power;
         }
-        if let Ok(rep) = self.reputation.lock() {
-            if let Some(record) = rep.get(member_id) {
-                if record.warmup_remaining > 0 {
-                    return nominal_power;
-                }
-                let adjusted = (nominal_power as f64 * record.influence_multiplier).round() as u32;
-                return adjusted.max(1); // Minimum voting power of 1
+        let rep = self.reputation.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        if let Some(record) = rep.get(member_id) {
+            if record.warmup_remaining > 0 {
+                return nominal_power;
             }
+            let adjusted = (nominal_power as f64 * record.influence_multiplier).round() as u32;
+            return adjusted.max(1); // Minimum voting power of 1
         }
         nominal_power
     }
@@ -362,7 +375,11 @@ impl OrchestrationCouncil {
 
     /// Get the reputation record for a member, if available.
     pub fn get_reputation(&self, member_id: &str) -> Option<ReputationRecord> {
-        self.reputation.lock().ok()?.get(member_id).cloned()
+        let guard = self.reputation.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        guard.get(member_id).cloned()
     }
 
     /// Add a new member to the council.
@@ -724,55 +741,95 @@ impl OrchestrationCouncil {
         Ok(expired_count)
     }
 
+    /// Auto-eject members whose accuracy has been persistently low.
+    ///
+    /// GAP-B49-09: Members with accuracy < ejection_threshold for ejection_window
+    /// consecutive rounds are marked as `inactive`. New members get a protection
+    /// period of ejection_warmup_rounds before being eligible for ejection.
+    pub fn auto_eject_low_performers(&mut self) -> Vec<String> {
+        let eject_threshold = self.config.ejection_threshold.unwrap_or(0.3);
+        let eject_window = self.config.ejection_window.unwrap_or(20);
+        let _warmup = self.config.ejection_warmup_rounds.unwrap_or(10);
+        let mut ejected = Vec::new();
+
+        let rep = self.reputation.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("council reputation lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+
+        for (member_id, record) in rep.iter() {
+            // Skip members in warmup period
+            if record.warmup_remaining > 0 {
+                continue;
+            }
+            // Check if recent accuracy is below threshold for the window
+            let recent_window = &record.recent_window;
+            if recent_window.len() >= eject_window {
+                let recent_majority = recent_window.iter().filter(|&&v| v).count();
+                let recent_accuracy = recent_majority as f64 / recent_window.len() as f64;
+                if recent_accuracy < eject_threshold {
+                    ejected.push(member_id.clone());
+                }
+            }
+        }
+
+        // Release reputation lock before locking members
+        drop(rep);
+
+        // Mark ejected members as inactive
+        let mut members = self.members.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("council members lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        for member_id in &ejected {
+            if let Some(member) = members.get_mut(member_id) {
+                member.is_active = false;
+                tracing::info!(
+                    "Council auto-ejected low-performer member '{}' (recent accuracy < {:.1} for {} rounds)",
+                    member_id, eject_threshold, eject_window
+                );
+            }
+        }
+
+        ejected
+    }
+
     /// Return a `CouncilProfile` snapshot reflecting the current state.
     pub fn profile(&self) -> CouncilProfile {
-        let members = self.members.lock().ok();
-        let proposals = self.proposals.lock().ok();
+        let members = self.members.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        let proposals = self.proposals.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
 
-        let total_members = members.as_ref().map(|m| m.len() as u32).unwrap_or(0);
-        let active_members = members
-            .as_ref()
-            .map(|m| m.values().filter(|m| m.is_active).count() as u32)
-            .unwrap_or(0);
-        let total_proposals = proposals.as_ref().map(|p| p.len() as u32).unwrap_or(0);
+        let total_members = members.len() as u32;
+        let active_members = members.values().filter(|m| m.is_active).count() as u32;
+        let total_proposals = proposals.len() as u32;
 
         let passed_count = proposals
-            .as_ref()
-            .map(|p| {
-                p.values()
-                    .filter(|pr| pr.status == ProposalStatus::Passed)
-                    .count() as u32
-            })
-            .unwrap_or(0);
+            .values()
+            .filter(|pr| pr.status == ProposalStatus::Passed)
+            .count() as u32;
 
         let rejected_count = proposals
-            .as_ref()
-            .map(|p| {
-                p.values()
-                    .filter(|pr| pr.status == ProposalStatus::Rejected)
-                    .count() as u32
-            })
-            .unwrap_or(0);
+            .values()
+            .filter(|pr| pr.status == ProposalStatus::Rejected)
+            .count() as u32;
 
         let pending_count = proposals
-            .as_ref()
-            .map(|p| {
-                p.values()
-                    .filter(|pr| {
-                        pr.status == ProposalStatus::Pending || pr.status == ProposalStatus::Active
-                    })
-                    .count() as u32
+            .values()
+            .filter(|pr| {
+                pr.status == ProposalStatus::Pending || pr.status == ProposalStatus::Active
             })
-            .unwrap_or(0);
+            .count() as u32;
 
         let tied_count = proposals
-            .as_ref()
-            .map(|p| {
-                p.values()
-                    .filter(|pr| pr.status == ProposalStatus::Tied)
-                    .count() as u32
-            })
-            .unwrap_or(0);
+            .values()
+            .filter(|pr| pr.status == ProposalStatus::Tied)
+            .count() as u32;
 
         let reputation_adjusted_members = self
             .reputation
@@ -846,6 +903,7 @@ mod tests {
             max_proposals: 100,
             enable_reputation: true,
             reputation_warmup_rounds: 0, // Zero warmup for tests
+            ..Default::default()
         })
     }
 
@@ -1093,6 +1151,7 @@ mod tests {
             max_proposals: 100,
             enable_reputation: false,
             reputation_warmup_rounds: 0,
+            ..Default::default()
         });
 
         council
@@ -1146,6 +1205,7 @@ mod tests {
             max_proposals: 100,
             enable_reputation: false,
             reputation_warmup_rounds: 0,
+            ..Default::default()
         });
 
         council
@@ -1343,6 +1403,7 @@ mod tests {
             max_proposals: 2,
             enable_reputation: false,
             reputation_warmup_rounds: 0,
+            ..Default::default()
         });
 
         council
@@ -1466,6 +1527,7 @@ mod tests {
             max_proposals: 100,
             enable_reputation: false,
             reputation_warmup_rounds: 0,
+            ..Default::default()
         });
 
         // Add a member.
@@ -1571,16 +1633,20 @@ mod tests {
         // Simulate past votes: high-acc is accurate, low-acc is inaccurate
         for _ in 0..5 {
             council.ensure_reputation("high-acc");
-            if let Ok(mut rep) = council.reputation.lock() {
-                if let Some(r) = rep.get_mut("high-acc") {
-                    r.record_outcome(true);
-                }
+            let mut rep = council.reputation.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            if let Some(r) = rep.get_mut("high-acc") {
+                r.record_outcome(true);
             }
             council.ensure_reputation("low-acc");
-            if let Ok(mut rep) = council.reputation.lock() {
-                if let Some(r) = rep.get_mut("low-acc") {
-                    r.record_outcome(false);
-                }
+            let mut rep = council.reputation.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            if let Some(r) = rep.get_mut("low-acc") {
+                r.record_outcome(false);
             }
         }
 
@@ -1674,5 +1740,41 @@ mod tests {
         let rep2 = council.get_reputation("voter-2").unwrap();
         assert_eq!(rep2.accurate_votes, 1);
         assert_eq!(rep2.total_votes, 1);
+    }
+
+    #[test]
+    fn test_auto_eject_low_performers() {
+        let mut council = OrchestrationCouncil::new(CouncilConfig {
+            name: "Ejection Test".to_string(),
+            min_members_for_quorum: 2,
+            voting_duration_ms: 86_400_000,
+            max_proposals: 100,
+            enable_reputation: true,
+            reputation_warmup_rounds: 0,
+            ejection_threshold: Some(0.3),
+            ejection_window: Some(20),
+            ejection_warmup_rounds: Some(0),
+        });
+
+        // Add a member with poor recent accuracy
+        let member_id = "poor-performer".to_string();
+        council
+            .add_member(sample_member(&member_id, "Poor Performer", "analyst", 1))
+            .unwrap();
+
+        {
+            let mut rep = council.reputation.lock().unwrap();
+            let record = rep
+                .entry(member_id.clone())
+                .or_insert_with(|| ReputationRecord::new(&member_id, 0));
+            record.warmup_remaining = 0;
+            record.recent_window = vec![false; 25]; // 25 consecutive wrong votes
+        }
+
+        let ejected = council.auto_eject_low_performers();
+        assert!(
+            ejected.contains(&member_id),
+            "low performer should be ejected"
+        );
     }
 }

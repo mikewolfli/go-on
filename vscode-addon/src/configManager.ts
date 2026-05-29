@@ -10,6 +10,7 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
+import * as vscode from "vscode";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 
 export interface CacheConfig {
@@ -98,6 +99,33 @@ export interface GoOnConfig {
   [key: string]: unknown;
 }
 
+/**
+ * Normalize known boolean fields in the parsed config that may arrive as
+ * strings from TOML (e.g. `"true"` / `"false"` instead of `true` / `false`).
+ */
+function normalizeBooleans(config: Record<string, unknown>): void {
+  const BOOLEAN_PATHS: Record<string, string[]> = {
+    cache: ["enabled"],
+    vector: ["enabled", "auto_mode", "summary_enabled"],
+    autotune: ["enabled"],
+    agents: ["supports_system"],
+  };
+
+  for (const [section, fields] of Object.entries(BOOLEAN_PATHS)) {
+    const obj = config[section];
+    if (!obj || typeof obj !== "object") continue;
+    const record = obj as Record<string, unknown>;
+    for (const field of fields) {
+      const val = record[field];
+      if (typeof val === "string") {
+        const trimmed = val.trim().toLowerCase();
+        if (trimmed === "true") record[field] = true;
+        else if (trimmed === "false") record[field] = false;
+      }
+    }
+  }
+}
+
 class ConfigManager {
   private config: GoOnConfig | null = null;
   private configPath: string = "";
@@ -157,10 +185,10 @@ class ConfigManager {
       try {
         this.config = this.parseTOML(content);
       } catch (e) {
+        const message = `Failed to parse TOML config: ${e}. Using defaults.`;
         // eslint-disable-next-line no-console
-        console.warn(
-          `configManager: Failed to parse TOML config: ${e}. Using defaults.`,
-        );
+        console.warn(`configManager: ${message}`);
+        void vscode.window.showErrorMessage(`Go-On: ${message}`);
         this.createDefaultConfig();
       }
     } catch {
@@ -198,6 +226,9 @@ class ConfigManager {
         "configManager: TOML file appears empty or malformed, using defaults",
       );
     }
+
+    // Normalize known string-to-boolean fields from TOML (which may parse as strings)
+    normalizeBooleans(config);
 
     return config as unknown as GoOnConfig;
   }

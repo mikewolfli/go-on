@@ -913,6 +913,7 @@ impl BackendClient {
         self.rpc_call("runtime.restart", None).await
     }
 
+    /// F-GAP-48: Reserved for future config reload feature
     /// DEPRECATED: Unused. Config reload is handled by backend restart + config.toml rewrite.
     /// Retained for reference; remove in a future cleanup round.
     #[allow(dead_code)]
@@ -920,6 +921,7 @@ impl BackendClient {
         self.rpc_call("config.reload", None).await
     }
 
+    /// F-GAP-48: Reserved for future device code auth flow
     /// DEPRECATED: Copilot OAuth is handled via direct HTTP polling in providers.rs, not this RPC.
     /// Retained for reference; remove in a future cleanup round.
     #[allow(dead_code)]
@@ -931,6 +933,7 @@ impl BackendClient {
         .await
     }
 
+    /// F-GAP-48: Reserved for future device code auth flow
     /// DEPRECATED: Copilot OAuth is handled via direct HTTP polling in providers.rs, not this RPC.
     /// Retained for reference; remove in a future cleanup round.
     #[allow(dead_code)]
@@ -1184,6 +1187,7 @@ impl BackendClient {
             .await
     }
 
+    /// F-GAP-48: Reserved for future provider catalog browsing
     /// DEPRECATED: Unused. Provider metadata is currently hardcoded in app.rs `provider_meta()`.
     /// This RPC exists on the backend but the GUI does not call it.
     /// Retained for reference; remove in a future cleanup round.

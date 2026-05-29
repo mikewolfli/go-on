@@ -913,22 +913,10 @@ impl ChatView {
                                     if let Ok(edited) = std::fs::read_to_string(&p_clone) {
                                         let trimmed = edited.trim().to_string();
                                         if !trimmed.is_empty() {
-                                            // Use blocking send to guarantee delivery.
-                                            // In the rare case the channel is full, retry periodically.
-                                            loop {
-                                                match tx.send(
-                                                    PendingResponse::ExternalEditorResult(
-                                                        trimmed.clone(),
-                                                    ),
-                                                ) {
-                                                    Ok(()) => break,
-                                                    Err(std::sync::mpsc::SendError(_)) => {
-                                                        std::thread::sleep(
-                                                            std::time::Duration::from_millis(50),
-                                                        );
-                                                    }
-                                                }
-                                            }
+                                            // Non-blocking send; if the channel is full, the result is dropped gracefully.
+                                            let _ = tx.send(PendingResponse::ExternalEditorResult(
+                                                trimmed,
+                                            ));
                                         }
                                     }
                                 });

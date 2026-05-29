@@ -100,7 +100,13 @@ static STARTUP_CONTEXT: Mutex<Option<StartupContext>> = Mutex::new(None);
 
 /// Get the globally cached startup context (None until first `load()` call).
 pub fn get() -> Option<StartupContext> {
-    STARTUP_CONTEXT.lock().ok()?.clone()
+    STARTUP_CONTEXT
+        .lock()
+        .unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        })
+        .clone()
 }
 
 /// Reset the cached startup context. Only available in tests.
@@ -183,10 +189,15 @@ pub async fn load(cfg: &StartupContextConfig) -> Result<StartupContext, std::io:
     // If another task already initialised the global, just return a clone.
     #[cfg(not(test))]
     {
-        if let Ok(guard) = STARTUP_CONTEXT.lock() {
-            if let Some(cached) = &*guard {
-                return Ok(cached.clone());
+        let guard = match STARTUP_CONTEXT.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::warn!("[B48] STARTUP_CONTEXT lock poisoned, recovering");
+                poisoned.into_inner()
             }
+        };
+        if let Some(cached) = &*guard {
+            return Ok(cached.clone());
         }
     }
 

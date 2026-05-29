@@ -2133,13 +2133,13 @@ fn generate_adaptive_config_toml(
     } else {
         vec![all_agent_names
             .first()
-            .expect("all_agent_names should contain at least one provider")
-            .clone()]
+            .cloned()
+            .unwrap_or_else(|| "default".to_string())]
     };
     let delivery_agents = vec![all_agent_names
         .first()
-        .expect("all_agent_names should contain at least one provider")
-        .clone()];
+        .cloned()
+        .unwrap_or_else(|| "default".to_string())];
 
     let mut content = String::new();
     content.push_str(&format!(

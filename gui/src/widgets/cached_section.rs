@@ -8,7 +8,7 @@ use crate::widgets::cache::{Section, SectionCache};
 /// On cache hit: allocates the previous size (no widget rebuild).
 /// On miss: calls `render_fn`, captures size, caches it.
 /// Reserved for future use — kept to avoid re-adding later.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-48: Widget caching layer, kept for future UI optimization
 pub fn cached_section(
     ui: &mut egui::Ui,
     cache: &mut SectionCache,

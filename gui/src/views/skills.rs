@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use std::time::Instant;
 
 use crate::backend::{BackendClient, SkillRecord};
 use crate::i18n::I18n;
@@ -11,16 +12,15 @@ thread_local! {
     static SKILLS_CACHE: RefCell<SectionCache> = RefCell::new(SectionCache::new());
 }
 
-/// Send a SkillsUpdate over a SyncSender, retrying up to 3 times with a 5 ms sleep between attempts.
-/// If all retries fail, a warning is printed to stderr.
+/// Send a SkillsUpdate over a SyncSender with a single try_send attempt.
+/// If the channel is full the update is silently dropped — the cache will be
+/// refreshed on the next poll cycle.
+///
+/// No retry loop with thread::sleep is used to avoid blocking the UI thread.
 fn send_update(tx: &mpsc::SyncSender<SkillsUpdate>, msg: SkillsUpdate) {
-    for _ in 0..3 {
-        if tx.try_send(msg.clone()).is_ok() {
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
+    if tx.try_send(msg).is_err() {
+        eprintln!("WARN: skills update dropped (channel full)");
     }
-    eprintln!("WARN: skills failed to send after 3 retries");
 }
 
 #[derive(Clone)]

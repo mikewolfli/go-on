@@ -69,6 +69,15 @@ pub struct AnomalyDetectionResult {
     pub recommended_action: String,
 }
 
+/// Maximum circuit breaker states to track before evicting oldest.
+const MAX_CIRCUIT_BREAKERS: usize = 1000;
+/// Maximum per-service failure count entries before evicting oldest.
+const MAX_FAILURES: usize = 1000;
+/// Maximum health monitor entries before evicting oldest.
+const MAX_HEALTH_MONITORS: usize = 1000;
+/// Maximum request count entries before evicting oldest.
+const MAX_REQUESTS: usize = 1000;
+
 /// Failure prevention system
 #[derive(Debug, Clone)]
 pub struct FailurePrevention {
@@ -79,8 +88,6 @@ pub struct FailurePrevention {
     successful_requests: HashMap<String, u64>,
     anomaly_thresholds: AnomalyThresholds,
     max_failure_threshold: u32,
-    /// Maximum number of tracked services before FIFO eviction
-    max_services: usize,
 }
 
 /// Anomaly detection thresholds
@@ -105,7 +112,6 @@ impl FailurePrevention {
                 success_rate_threshold: 0.8,
             },
             max_failure_threshold: 5,
-            max_services: 1000,
         }
     }
 
@@ -149,6 +155,15 @@ impl FailurePrevention {
     /// Record failure for a service
     pub fn record_failure(&mut self, service_name: &str) {
         self.ensure_service_registered(service_name);
+        // Evict oldest request counts when at capacity.
+        if self.total_requests.len() >= MAX_REQUESTS
+            && !self.total_requests.contains_key(service_name)
+        {
+            if let Some(oldest) = self.total_requests.keys().next().cloned() {
+                self.total_requests.remove(&oldest);
+                self.successful_requests.remove(&oldest);
+            }
+        }
         *self
             .total_requests
             .entry(service_name.to_string())
@@ -158,6 +173,14 @@ impl FailurePrevention {
 
     fn record_failure_with_latency(&mut self, service_name: &str, latency_ms: Option<u64>) {
         self.ensure_service_registered(service_name);
+        // Evict oldest entry when at capacity.
+        if self.failure_counts.len() >= MAX_FAILURES
+            && !self.failure_counts.contains_key(service_name)
+        {
+            if let Some(oldest) = self.failure_counts.keys().next().cloned() {
+                self.failure_counts.remove(&oldest);
+            }
+        }
         let count = self
             .failure_counts
             .entry(service_name.to_string())
@@ -174,6 +197,15 @@ impl FailurePrevention {
     /// Record success and reset failure count
     pub fn record_success(&mut self, service_name: &str) {
         self.ensure_service_registered(service_name);
+        // Evict oldest request counts when at capacity.
+        if self.total_requests.len() >= MAX_REQUESTS
+            && !self.total_requests.contains_key(service_name)
+        {
+            if let Some(oldest) = self.total_requests.keys().next().cloned() {
+                self.total_requests.remove(&oldest);
+                self.successful_requests.remove(&oldest);
+            }
+        }
         *self
             .total_requests
             .entry(service_name.to_string())
@@ -195,6 +227,15 @@ impl FailurePrevention {
 
     pub fn record_outcome(&mut self, service_name: &str, success: bool, latency_ms: u64) {
         self.ensure_service_registered(service_name);
+        // Evict oldest request counts when at capacity.
+        if self.total_requests.len() >= MAX_REQUESTS
+            && !self.total_requests.contains_key(service_name)
+        {
+            if let Some(oldest) = self.total_requests.keys().next().cloned() {
+                self.total_requests.remove(&oldest);
+                self.successful_requests.remove(&oldest);
+            }
+        }
         *self
             .total_requests
             .entry(service_name.to_string())
@@ -213,6 +254,14 @@ impl FailurePrevention {
 
     /// Open circuit breaker for a service (predictive failure prevention)
     pub fn open_circuit(&mut self, service_name: &str) {
+        // Evict oldest entry when at capacity.
+        if self.circuit_breakers.len() >= MAX_CIRCUIT_BREAKERS
+            && !self.circuit_breakers.contains_key(service_name)
+        {
+            if let Some(oldest) = self.circuit_breakers.keys().next().cloned() {
+                self.circuit_breakers.remove(&oldest);
+            }
+        }
         self.circuit_breakers
             .insert(service_name.to_string(), CircuitBreakerState::Open);
     }
@@ -228,7 +277,7 @@ impl FailurePrevention {
     /// Register service for health monitoring
     pub fn register_service(&mut self, name: &str) {
         // Evict oldest service when at capacity.
-        if self.health_monitors.len() >= self.max_services
+        if self.health_monitors.len() >= MAX_HEALTH_MONITORS
             && !self.health_monitors.contains_key(name)
         {
             if let Some(oldest) = self.health_monitors.keys().next().cloned() {

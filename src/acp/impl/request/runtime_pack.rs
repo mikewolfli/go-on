@@ -107,7 +107,7 @@ fn copilot_models_cache() -> &'static CopilotModelsCache {
 }
 
 fn read_copilot_models_cache() -> Option<Vec<String>> {
-    let guard = copilot_models_cache().lock().ok()?;
+    let guard = copilot_models_cache().lock().unwrap_or_else(|poisoned| { tracing::warn!("lock poisoned, recovering"); poisoned.into_inner() });
     let (fetched_at, models) = guard.as_ref()?.clone();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -121,18 +121,17 @@ fn read_copilot_models_cache() -> Option<Vec<String>> {
 }
 
 fn read_stale_copilot_models_cache() -> Option<Vec<String>> {
-    let guard = copilot_models_cache().lock().ok()?;
+    let guard = copilot_models_cache().lock().unwrap_or_else(|poisoned| { tracing::warn!("lock poisoned, recovering"); poisoned.into_inner() });
     guard.as_ref().map(|(_, models)| models.clone())
 }
 
 fn store_copilot_models_cache(models: Vec<String>) {
-    if let Ok(mut guard) = copilot_models_cache().lock() {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        *guard = Some((now, models));
-    }
+    let mut guard = copilot_models_cache().lock().unwrap_or_else(|poisoned| { tracing::warn!("lock poisoned, recovering"); poisoned.into_inner() });
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    *guard = Some((now, models));
 }
 
 fn resolve_copilot_github_token() -> Option<String> {
@@ -258,11 +257,10 @@ fn append_metric_window_sample(server: &AcpServer) -> MetricWindowPoint {
             .clamp(0.0, 1.0),
     };
 
-    if let Ok(mut history) = metric_window_history().lock() {
-        history.push(point.clone());
-        let cutoff = point.ts - 3600;
-        history.retain(|item| item.ts >= cutoff);
-    }
+    let mut history = metric_window_history().lock().unwrap_or_else(|poisoned| { tracing::warn!("lock poisoned, recovering"); poisoned.into_inner() });
+    history.push(point.clone());
+    let cutoff = point.ts - 3600;
+    history.retain(|item| item.ts >= cutoff);
 
     point
 }

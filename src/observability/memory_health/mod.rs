@@ -40,11 +40,13 @@ pub const MEMORY_CRITICAL_MB: u64 = 256;
 /// Free memory threshold (MB) below which we abort immediately.
 // F-GAP-11 — reserved for future runtime monitor integration
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 pub const MEMORY_JETSAM_RISK_MB: u64 = 128;
 
 /// How often the runtime monitor checks memory pressure (seconds).
 // F-GAP-11 — reserved for future runtime monitor integration
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 pub const MEMORY_MONITOR_INTERVAL_SECS: u64 = 30;
 
 // ── System Memory Info ──────────────────────────────────────────────────────
@@ -403,6 +405,7 @@ fn query_windows_memory() -> SystemMemoryInfo {
 /// Result of a pre-startup memory health check.
 // F-GAP-11 — reserved for future startup health-check integration
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 #[derive(Debug, Clone, PartialEq)]
 pub enum MemoryHealth {
     /// Memory is sufficient to run normally.
@@ -422,6 +425,7 @@ pub enum MemoryHealth {
 /// Returns `MemoryHealth::Critical` if starting would likely trigger OOM.
 // F-GAP-11 — reserved for future startup health-check integration
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 pub fn check_startup_memory() -> MemoryHealth {
     let info = query_system_memory();
     let free_mb = info.free_mb();
@@ -500,6 +504,7 @@ pub fn check_startup_memory() -> MemoryHealth {
 /// Print a formatted memory health report to stderr.
 // F-GAP-11 — reserved for future startup health-check integration
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 pub fn print_memory_health(health: &MemoryHealth) {
     match health {
         MemoryHealth::Healthy => {
@@ -545,6 +550,7 @@ static RUNTIME_MEMORY_TOTAL_MB: AtomicU64 = AtomicU64::new(0);
 static RUNTIME_PRESSURE_LEVEL: AtomicU64 = AtomicU64::new(0);
 // F-GAP-11 — reserved for future runtime monitor integration
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 static MEMORY_MONITOR_INITIALIZED: OnceLock<bool> = OnceLock::new();
 
 #[allow(dead_code)] // Public API — used by external runtime consumers
@@ -572,6 +578,7 @@ pub fn runtime_pressure_level() -> u8 {
 /// memory is critically low.
 // F-GAP-11 — reserved for future runtime monitor integration
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 pub fn start_memory_monitor() {
     MEMORY_MONITOR_INITIALIZED.set(true).unwrap_or(());
 

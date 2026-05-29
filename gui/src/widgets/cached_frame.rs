@@ -7,12 +7,12 @@ use crate::widgets::cache::Section;
 /// Frame whose background fill is cached. Skips frame widget when
 /// the visual style (dark/light mode) hasn't changed.
 /// Reserved for future use — kept to avoid re-adding later.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-48: Widget caching layer, kept for future UI optimization
 pub struct CachedFrame {
     section: Section,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-48: Widget caching layer, kept for future UI optimization
 impl CachedFrame {
     pub fn new(section: Section) -> Self {
         Self { section }

@@ -412,13 +412,15 @@ impl TokenLayerChain {
             let verdict = gate.evaluate(ctx);
 
             // Record the verdict in the counters.
-            if let Ok(mut profile) = self.profile.lock() {
-                let counters = profile
-                    .layers
-                    .entry(gate.layer.label().to_string())
-                    .or_insert_with(LayerCounters::default);
-                counters.record(&verdict);
-            }
+            let mut profile = self.profile.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            let counters = profile
+                .layers
+                .entry(gate.layer.label().to_string())
+                .or_default();
+            counters.record(&verdict);
 
             last_verdict = verdict.clone();
 
@@ -447,9 +449,11 @@ impl TokenLayerChain {
 
     /// Reset all counters to zero.
     pub fn reset_profile(&self) {
-        if let Ok(mut profile) = self.profile.lock() {
-            profile.layers.clear();
-        }
+        let mut profile = self.profile.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        profile.layers.clear();
     }
 
     /// Return per-layer stats as a map from layer label to `(allow, reject)` counts.

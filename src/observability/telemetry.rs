@@ -271,13 +271,27 @@ mod tests {
             reset_otel();
 
             let rt = TelemetryRuntime::new(&otel_config(true, 1.0));
-            assert!(rt.is_enabled(), "iteration {}: should be enabled after reset+init", i);
+            assert!(
+                rt.is_enabled(),
+                "iteration {}: should be enabled after reset+init",
+                i
+            );
 
             // After re-init, the OTEL_INIT guard should be Some(Ok(()))
-            if let Ok(guard) = OTEL_INIT.lock() {
-                assert!(guard.is_some(), "iteration {}: OTEL_INIT should be Some after init", i);
-                assert!(guard.as_ref().unwrap().is_ok(), "iteration {}: OTEL_INIT should be Ok", i);
-            }
+            let guard = OTEL_INIT.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            assert!(
+                guard.is_some(),
+                "iteration {}: OTEL_INIT should be Some after init",
+                i
+            );
+            assert!(
+                guard.as_ref().unwrap().is_ok(),
+                "iteration {}: OTEL_INIT should be Ok",
+                i
+            );
             // If poisoned (from a prior panic), the recovery handled it;
         }
     }
@@ -385,10 +399,16 @@ mod tests {
     #[test]
     fn test_should_sample_clamps_ratio() {
         let rt = TelemetryRuntime::new(&otel_config(true, 1.5));
-        assert!(rt.should_sample("anything"), "ratio clamped to 1.0 should always sample");
+        assert!(
+            rt.should_sample("anything"),
+            "ratio clamped to 1.0 should always sample"
+        );
 
         let rt2 = TelemetryRuntime::new(&otel_config(true, -0.5));
-        assert!(!rt2.should_sample("anything"), "ratio clamped to 0.0 should never sample");
+        assert!(
+            !rt2.should_sample("anything"),
+            "ratio clamped to 0.0 should never sample"
+        );
     }
 
     // ── Span lifecycle ────────────────────────────────────────────────
@@ -417,7 +437,10 @@ mod tests {
         }
 
         let rate = rt.sampling_rate();
-        assert!(rate > 0.0, "sampling rate should be > 0 after 1000 attempts");
+        assert!(
+            rate > 0.0,
+            "sampling rate should be > 0 after 1000 attempts"
+        );
         assert!(rate <= 1.0, "sampling rate should be <= 1.0");
         // At ratio 0.25, expected ~250 samples. Allow 50-500 range.
         let sampled = rt.sampled_roots.load(Ordering::Relaxed);

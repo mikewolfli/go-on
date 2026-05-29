@@ -200,22 +200,24 @@ pub(crate) fn build_mcp_tool_descriptors(server: Option<&AcpServer>) -> Vec<Valu
     }));
 
     if let Some(server) = server {
-        if let Ok(registry) = server.skill_registry.lock() {
-            tools.extend(registry.list().into_iter().map(|skill| {
-                json!({
-                    "name": skill.name,
-                    "description": skill.description,
-                    "input_schema": skill.input_schema,
-                    "x_runtime": {
-                        "score": skill.score,
-                        "total_calls": skill.total_calls,
-                        "success_calls": skill.success_calls,
-                        "failure_calls": skill.failure_calls,
-                        "average_latency_ms": skill.average_latency_ms,
-                    }
-                })
-            }));
-        }
+        let registry = server.skill_registry.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        tools.extend(registry.list().into_iter().map(|skill| {
+            json!({
+                "name": skill.name,
+                "description": skill.description,
+                "input_schema": skill.input_schema,
+                "x_runtime": {
+                    "score": skill.score,
+                    "total_calls": skill.total_calls,
+                    "success_calls": skill.success_calls,
+                    "failure_calls": skill.failure_calls,
+                    "average_latency_ms": skill.average_latency_ms,
+                }
+            })
+        }));
 
         if let Ok(store) = open_skill_import_store(server) {
             for record in store.list().into_iter().filter(|record| record.enabled) {
@@ -417,49 +419,50 @@ pub(crate) async fn execute_mcp_tool_call(
                 .min(20) as usize;
 
             let mut results: Vec<Value> = Vec::new();
-            if let Ok(registry) = server.skill_registry.lock() {
-                for skill in registry.list().iter().take(top_k) {
-                    let score = registry.score_of(&skill.name).unwrap_or(0.5);
-                    // Simple TF-like match: score higher when query tokens appear in
-                    // the skill name or description.
-                    let query_lower = query.to_ascii_lowercase();
-                    let name_lower = skill.name.to_ascii_lowercase();
-                    let desc_lower = skill.description.to_ascii_lowercase();
-                    let match_score = if query_lower.is_empty() {
-                        0.0
-                    } else if name_lower.contains(&query_lower) || desc_lower.contains(&query_lower)
-                    {
-                        // Boost for direct substring matches
-                        (score * 0.7 + 0.3).clamp(0.0, 1.0)
+            let registry = server.skill_registry.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            for skill in registry.list().iter().take(top_k) {
+                let score = registry.score_of(&skill.name).unwrap_or(0.5);
+                // Simple TF-like match: score higher when query tokens appear in
+                // the skill name or description.
+                let query_lower = query.to_ascii_lowercase();
+                let name_lower = skill.name.to_ascii_lowercase();
+                let desc_lower = skill.description.to_ascii_lowercase();
+                let match_score = if query_lower.is_empty() {
+                    0.0
+                } else if name_lower.contains(&query_lower) || desc_lower.contains(&query_lower) {
+                    // Boost for direct substring matches
+                    (score * 0.7 + 0.3).clamp(0.0, 1.0)
+                } else {
+                    // Try word-level matching
+                    let query_words: Vec<&str> = query_lower.split_whitespace().collect();
+                    let name_words: Vec<&str> = name_lower.split_whitespace().collect();
+                    let desc_words: Vec<&str> = desc_lower.split_whitespace().collect();
+                    let all_words: Vec<&str> = name_words
+                        .iter()
+                        .chain(desc_words.iter())
+                        .copied()
+                        .collect();
+                    let matches = query_words.iter().filter(|w| all_words.contains(w)).count();
+                    if matches > 0 {
+                        let ratio = matches as f64 / query_words.len() as f64;
+                        (score * 0.5 + ratio * 0.5).clamp(0.0, 1.0)
                     } else {
-                        // Try word-level matching
-                        let query_words: Vec<&str> = query_lower.split_whitespace().collect();
-                        let name_words: Vec<&str> = name_lower.split_whitespace().collect();
-                        let desc_words: Vec<&str> = desc_lower.split_whitespace().collect();
-                        let all_words: Vec<&str> = name_words
-                            .iter()
-                            .chain(desc_words.iter())
-                            .copied()
-                            .collect();
-                        let matches = query_words.iter().filter(|w| all_words.contains(w)).count();
-                        if matches > 0 {
-                            let ratio = matches as f64 / query_words.len() as f64;
-                            (score * 0.5 + ratio * 0.5).clamp(0.0, 1.0)
-                        } else {
-                            score * 0.3 // Low match = low relevance
-                        }
-                    };
-                    results.push(json!({
-                        "name": skill.name,
-                        "description": skill.description,
-                        "score": (match_score * 100.0).round() / 100.0,
-                        "input_schema": skill.input_schema,
-                        "total_calls": skill.total_calls,
-                        "success_calls": skill.success_calls,
-                        "failure_calls": skill.failure_calls,
-                        "average_latency_ms": skill.average_latency_ms,
-                    }));
-                }
+                        score * 0.3 // Low match = low relevance
+                    }
+                };
+                results.push(json!({
+                    "name": skill.name,
+                    "description": skill.description,
+                    "score": (match_score * 100.0).round() / 100.0,
+                    "input_schema": skill.input_schema,
+                    "total_calls": skill.total_calls,
+                    "success_calls": skill.success_calls,
+                    "failure_calls": skill.failure_calls,
+                    "average_latency_ms": skill.average_latency_ms,
+                }));
             }
             // Sort by score descending
             results.sort_by(|a, b| {
@@ -591,28 +594,34 @@ pub(crate) async fn execute_mcp_tool_call(
                 return Ok(serde_json::to_value(result)?);
             }
 
-            let resolved_skill_name = server.skill_registry.lock().ok().and_then(|registry| {
+            let resolved_skill_name = {
+                let registry = server.skill_registry.lock().unwrap_or_else(|poisoned| {
+                    tracing::warn!("lock poisoned, recovering");
+                    poisoned.into_inner()
+                });
                 if registry.get(name).is_some() {
                     Some(name.to_string())
                 } else {
                     registry.best_match_with_input(name, arguments)
                 }
-            });
+            };
             let skill = resolved_skill_name.as_ref().and_then(|resolved| {
-                server
-                    .skill_registry
-                    .lock()
-                    .ok()
-                    .and_then(|registry| registry.get(resolved))
+                let registry = server.skill_registry.lock().unwrap_or_else(|poisoned| {
+                    tracing::warn!("lock poisoned, recovering");
+                    poisoned.into_inner()
+                });
+                registry.get(resolved)
             });
             match skill {
                 Some(skill) => {
                     let started = Instant::now();
                     let outcome = skill.execute(arguments).await;
                     let skill_name = resolved_skill_name.as_deref().unwrap_or(name);
-                    if let Ok(mut registry) = server.skill_registry.lock() {
-                        registry.record_outcome(skill_name, outcome.is_ok(), started.elapsed());
-                    }
+                    let mut registry = server.skill_registry.lock().unwrap_or_else(|poisoned| {
+                        tracing::warn!("lock poisoned, recovering");
+                        poisoned.into_inner()
+                    });
+                    registry.record_outcome(skill_name, outcome.is_ok(), started.elapsed());
                     outcome
                 }
                 None => {

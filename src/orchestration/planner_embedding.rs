@@ -19,7 +19,7 @@ pub fn init_global_task_vector_store(store: Arc<crate::memory::vector::VectorSto
 }
 
 /// Check if the global task vector store is available.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for future use
 pub fn has_global_task_vector_store() -> bool {
     GLOBAL_TASK_VECTOR_STORE.get().is_some()
 }
@@ -39,6 +39,7 @@ impl EmbeddingTaskClassifier {
     /// Create a new classifier with an optional per-instance vector store reference.
     /// When `None`, the global vector store (if set via `init_global_task_vector_store`) is used.
     #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
     pub fn new(vector_store: Option<Arc<crate::memory::vector::VectorStore>>) -> Self {
         Self { vector_store }
     }

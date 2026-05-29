@@ -174,7 +174,11 @@ impl CapabilityGraph {
     fn adjacency(&self) -> (HashMap<String, Vec<String>>, HashMap<String, Vec<String>>) {
         let version = self.modification_count;
         // Fast path: check the cache first (extract result, drop lock, then return).
-        let cached_hit = self.cached_adjacency.lock().ok().and_then(|cache| {
+        let cached_hit = {
+            let cache = self.cached_adjacency.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
             cache.as_ref().and_then(|cached| {
                 if cached.version == version {
                     let fwd: HashMap<String, Vec<String>> = cached
@@ -192,7 +196,7 @@ impl CapabilityGraph {
                     None
                 }
             })
-        });
+        };
         if let Some(result) = cached_hit {
             return result;
         }
@@ -212,13 +216,15 @@ impl CapabilityGraph {
         }
 
         // Store into cache for subsequent calls.
-        if let Ok(mut cache) = self.cached_adjacency.lock() {
-            *cache = Some(AdjacencyCache {
-                version,
-                fwd_adj: fwd_adj.clone(),
-                rev_adj: rev_adj.clone(),
-            });
-        }
+        let mut cache = self.cached_adjacency.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        *cache = Some(AdjacencyCache {
+            version,
+            fwd_adj: fwd_adj.clone(),
+            rev_adj: rev_adj.clone(),
+        });
 
         // Return as owned types for compatibility with existing callers.
         let fwd: HashMap<String, Vec<String>> = fwd_adj
@@ -242,7 +248,10 @@ impl CapabilityGraph {
     ) -> Option<Vec<String>> {
         let (adjacency, _rev) = self.adjacency();
         // Convert to borrowed references for iteration within this scope.
-        let adj: HashMap<&str, &[String]> = adjacency.iter().map(|(k, v)| (k.as_str(), v.as_slice())).collect();
+        let adj: HashMap<&str, &[String]> = adjacency
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_slice()))
+            .collect();
 
         let mut visited: HashSet<&str> = HashSet::new();
         let mut parent: HashMap<&str, &str> = HashMap::new();

@@ -4,16 +4,15 @@ use crate::views::security_prefs::{self, SecurityPrefs};
 use crate::widgets::cache::CachedView;
 use std::sync::mpsc;
 
-/// Send a message over a SyncSender, retrying up to 3 times with a 5 ms sleep between attempts.
-/// If all retries fail, a warning is printed to stderr.
+/// Send a message over a SyncSender with a single try_send attempt.
+/// If the channel is full the message is silently dropped — the next poll cycle
+/// will fetch fresh state from the backend.
+///
+/// No retry loop with thread::sleep is used to avoid blocking the UI thread.
 fn send_with_retry(tx: &mpsc::SyncSender<String>, msg: String) {
-    for _ in 0..3 {
-        if tx.try_send(msg.clone()).is_ok() {
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
+    if tx.try_send(msg).is_err() {
+        eprintln!("WARN: security update dropped (channel full)");
     }
-    eprintln!("WARN: security failed to send after 3 retries");
 }
 
 pub struct SecurityView {

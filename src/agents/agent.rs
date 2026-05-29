@@ -521,6 +521,9 @@ pub struct AgentRegistry {
     capability_graph: Arc<Mutex<CapabilityGraph>>,
 }
 
+/// Maximum agents allowed in the registry before evicting the oldest entry.
+const MAX_AGENTS: usize = 1000;
+
 impl std::fmt::Debug for AgentRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentRegistry")
@@ -658,7 +661,14 @@ impl AgentRegistry {
     }
 
     pub fn register_arc(&mut self, name: impl Into<String>, agent: Arc<dyn Agent>) {
-        self.agents.insert(name.into(), agent);
+        let name = name.into();
+        // Evict oldest entry when at capacity.
+        if self.agents.len() >= MAX_AGENTS && !self.agents.contains_key(&name) {
+            if let Some(oldest) = self.agents.keys().next().cloned() {
+                self.agents.remove(&oldest);
+            }
+        }
+        self.agents.insert(name, agent);
     }
 
     pub fn names(&self) -> Vec<String> {

@@ -1,0 +1,313 @@
+//! AlertManager — real-time alerts based on system metrics thresholds
+//!
+//! GAP-B49-10: Predefined alert rules that fire webhooks when breached.
+//! Supports deduplication (5-minute cooldown between same alert).
+
+// F-GAP-49: Module not yet wired into production observability pipeline.
+#![allow(dead_code)]
+
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+use tracing::warn;
+
+/// Severity level for an alert
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AlertSeverity {
+    Info,
+    Warning,
+    Critical,
+}
+
+impl std::fmt::Display for AlertSeverity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AlertSeverity::Info => write!(f, "info"),
+            AlertSeverity::Warning => write!(f, "warning"),
+            AlertSeverity::Critical => write!(f, "critical"),
+        }
+    }
+}
+
+/// An alert event
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Alert {
+    /// Alert rule name
+    pub rule: String,
+    /// Severity
+    pub severity: AlertSeverity,
+    /// Human-readable message
+    pub message: String,
+    /// Current metric value
+    pub value: f64,
+    /// Threshold value
+    pub threshold: f64,
+    /// When the alert was created
+    pub timestamp: i64,
+}
+
+/// An alert rule definition
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct AlertRule {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub severity: AlertSeverity,
+    /// Check function takes (metric_value, threshold) and returns true if alert should fire
+    pub check: fn(f64, f64) -> bool,
+    pub threshold: f64,
+    /// Cooldown in seconds to prevent alert storms
+    pub cooldown_seconds: u64,
+}
+
+/// Predefined alert rules
+#[allow(dead_code)]
+pub fn default_alert_rules() -> Vec<AlertRule> {
+    vec![
+        AlertRule {
+            name: "p95_latency_high",
+            description: "P95 request latency exceeds 5 seconds",
+            severity: AlertSeverity::Warning,
+            check: |value, threshold| value > threshold,
+            threshold: 5000.0,
+            cooldown_seconds: 300, // 5 min
+        },
+        AlertRule {
+            name: "circuit_breaker_open",
+            description: "More than 3 circuit breakers are open",
+            severity: AlertSeverity::Critical,
+            check: |value, threshold| value > threshold,
+            threshold: 3.0,
+            cooldown_seconds: 60,
+        },
+        AlertRule {
+            name: "error_rate_high",
+            description: "Request error rate exceeds 5%",
+            severity: AlertSeverity::Warning,
+            check: |value, threshold| value > threshold,
+            threshold: 5.0,
+            cooldown_seconds: 300,
+        },
+        AlertRule {
+            name: "cache_hit_ratio_low",
+            description: "Cache hit ratio below 50%",
+            severity: AlertSeverity::Info,
+            check: |value, threshold| value < threshold,
+            threshold: 50.0,
+            cooldown_seconds: 600,
+        },
+        AlertRule {
+            name: "agent_timeout_rate",
+            description: "Agent timeout rate exceeds 10%",
+            severity: AlertSeverity::Warning,
+            check: |value, threshold| value > threshold,
+            threshold: 10.0,
+            cooldown_seconds: 300,
+        },
+    ]
+}
+
+/// Webhook configuration for alert notification
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WebhookConfig {
+    pub url: String,
+    pub headers: HashMap<String, String>,
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+/// AlertManager — manages alert rules and fires notifications
+#[allow(dead_code)]
+#[derive(Debug)]
+pub struct AlertManager {
+    rules: Vec<AlertRule>,
+    /// Tracks last fire time per rule for deduplication
+    last_fire: HashMap<String, Instant>,
+    webhook: WebhookConfig,
+    total_alerts_fired: u64,
+}
+
+#[allow(dead_code)]
+impl AlertManager {
+    pub fn new(rules: Vec<AlertRule>) -> Self {
+        Self {
+            rules,
+            last_fire: HashMap::new(),
+            webhook: WebhookConfig::default(),
+            total_alerts_fired: 0,
+        }
+    }
+
+    /// Evaluate all alert rules against current metrics
+    pub fn evaluate(&mut self, metric_name: &str, value: f64) -> Vec<Alert> {
+        let mut fired = Vec::new();
+        let now = Instant::now();
+
+        for rule in &self.rules {
+            let threshold = rule.threshold;
+            if (rule.check)(value, threshold) {
+                let cooldown = Duration::from_secs(rule.cooldown_seconds);
+                let should_fire = self
+                    .last_fire
+                    .get(rule.name)
+                    .is_none_or(|last| now.duration_since(*last) >= cooldown);
+
+                if should_fire {
+                    let alert = Alert {
+                        rule: rule.name.to_string(),
+                        severity: rule.severity,
+                        message: format!(
+                            "{}: {} = {:.2} (threshold: {:.2})",
+                            rule.description, metric_name, value, threshold
+                        ),
+                        value,
+                        threshold,
+                        timestamp: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64,
+                    };
+
+                    self.last_fire.insert(rule.name.to_string(), now);
+                    self.total_alerts_fired += 1;
+
+                    if self.webhook.enabled && !self.webhook.url.is_empty() {
+                        self.fire_webhook(&alert);
+                    }
+
+                    fired.push(alert);
+                }
+            }
+        }
+
+        fired
+    }
+
+    /// Set webhook configuration
+    pub fn set_webhook(&mut self, config: WebhookConfig) {
+        self.webhook = config;
+    }
+
+    /// Fire webhook notification (non-blocking, logs errors)
+    fn fire_webhook(&self, alert: &Alert) {
+        let url = self.webhook.url.clone();
+        let payload = serde_json::json!(alert);
+        // Spawn a background task to send the webhook
+        tokio::spawn(async move {
+            let client = reqwest::Client::new();
+            match client.post(&url).json(&payload).send().await {
+                Ok(_) => {}
+                Err(e) => warn!("AlertManager webhook failed: {e}"),
+            }
+        });
+    }
+
+    /// Get alert statistics
+    pub fn stats(&self) -> AlertManagerStats {
+        AlertManagerStats {
+            total_rules: self.rules.len() as u64,
+            total_alerts_fired: self.total_alerts_fired,
+            active_webhook: self.webhook.enabled,
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize)]
+pub struct AlertManagerStats {
+    pub total_rules: u64,
+    pub total_alerts_fired: u64,
+    pub active_webhook: bool,
+}
+
+/// Global alert manager instance
+#[allow(dead_code)]
+static ALERT_MANAGER: std::sync::OnceLock<Mutex<AlertManager>> = std::sync::OnceLock::new();
+
+/// Get or initialize the global AlertManager
+#[allow(dead_code)]
+pub fn alert_manager() -> &'static Mutex<AlertManager> {
+    ALERT_MANAGER.get_or_init(|| Mutex::new(AlertManager::new(default_alert_rules())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_alert_fires_when_threshold_exceeded() {
+        let rules = vec![AlertRule {
+            name: "test_rule",
+            description: "Test alert",
+            severity: AlertSeverity::Warning,
+            check: |v, t| v > t,
+            threshold: 10.0,
+            cooldown_seconds: 1,
+        }];
+        let mut mgr = AlertManager::new(rules);
+        let alerts = mgr.evaluate("test_metric", 15.0);
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].rule, "test_rule");
+    }
+
+    #[test]
+    fn test_alert_does_not_fire_below_threshold() {
+        let rules = vec![AlertRule {
+            name: "test_rule",
+            description: "Test alert",
+            severity: AlertSeverity::Warning,
+            check: |v, t| v > t,
+            threshold: 10.0,
+            cooldown_seconds: 1,
+        }];
+        let mut mgr = AlertManager::new(rules);
+        let alerts = mgr.evaluate("test_metric", 5.0);
+        assert_eq!(alerts.len(), 0);
+    }
+
+    #[test]
+    fn test_alert_deduplication() {
+        let rules = vec![AlertRule {
+            name: "test_rule",
+            description: "Test alert",
+            severity: AlertSeverity::Warning,
+            check: |v, t| v > t,
+            threshold: 10.0,
+            cooldown_seconds: 3600, // 1 hour cooldown
+        }];
+        let mut mgr = AlertManager::new(rules);
+        let first = mgr.evaluate("test", 15.0);
+        assert_eq!(first.len(), 1);
+        let second = mgr.evaluate("test", 20.0); // Still above threshold
+        assert_eq!(second.len(), 0); // Deduplicated
+    }
+
+    #[test]
+    fn test_default_rules_exist() {
+        let rules = default_alert_rules();
+        assert!(rules.len() >= 3);
+        assert!(rules.iter().any(|r| r.name == "p95_latency_high"));
+        assert!(rules.iter().any(|r| r.name == "error_rate_high"));
+    }
+
+    #[test]
+    fn test_stats() {
+        let rules = vec![AlertRule {
+            name: "test",
+            description: "test",
+            severity: AlertSeverity::Info,
+            check: |v, t| v > t,
+            threshold: 1.0,
+            cooldown_seconds: 1,
+        }];
+        let mut mgr = AlertManager::new(rules);
+        mgr.evaluate("m", 2.0);
+        let stats = mgr.stats();
+        assert_eq!(stats.total_rules, 1);
+        assert_eq!(stats.total_alerts_fired, 1);
+    }
+}

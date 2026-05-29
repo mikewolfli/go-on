@@ -485,7 +485,7 @@ mod tests {
         );
         let ev = verification
             .get("enhanced_verification")
-            .expect("verification must have 'enhanced_verification'");
+            .expect("B49: verification must have 'enhanced_verification'");
         assert!(ev.get("verdict").is_some());
         assert!(ev.get("confidence").is_some());
 
@@ -493,7 +493,7 @@ mod tests {
         let routing = build_role_routing("implement the feature");
         let rr = routing
             .get("role_routing")
-            .expect("routing must have 'role_routing'");
+            .expect("B49: routing must have 'role_routing'");
         assert!(
             rr.get("suggested_roles").is_some(),
             "role_routing must have 'suggested_roles'"

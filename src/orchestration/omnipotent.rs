@@ -199,16 +199,20 @@ impl OmnipotentMode {
         if let Some(token) = tokens.get_mut(token_id) {
             if !token.is_revoked {
                 token.is_revoked = true;
-                if let Ok(mut profile) = self.profile.lock() {
-                    profile.revoked_tokens += 1;
-                }
+                let mut profile = self.profile.lock().unwrap_or_else(|poisoned| {
+                    tracing::warn!("lock poisoned, recovering");
+                    poisoned.into_inner()
+                });
+                profile.revoked_tokens += 1;
             }
         } else {
             // Token does not exist — still count it as a revocation attempt
             // for observability.
-            if let Ok(mut profile) = self.profile.lock() {
-                profile.revoked_tokens += 1;
-            }
+            let mut profile = self.profile.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            profile.revoked_tokens += 1;
         }
 
         // Disable omnipotent mode if there are no valid tokens remaining.
@@ -217,9 +221,11 @@ impl OmnipotentMode {
         }
 
         // Sync profile enabled state.
-        if let Ok(mut profile) = self.profile.lock() {
-            profile.enabled = self.enabled.load(Ordering::Acquire);
-        }
+        let mut profile = self.profile.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        profile.enabled = self.enabled.load(Ordering::Acquire);
     }
 
     /// Validate an escalation token and return the appropriate verdict.
@@ -301,9 +307,11 @@ impl OmnipotentMode {
         self.active_sessions.fetch_add(1, Ordering::Release);
 
         // Update profile.
-        if let Ok(mut profile) = self.profile.lock() {
-            profile.active_sessions = self.active_sessions.load(Ordering::Acquire);
-        }
+        let mut profile = self.profile.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        profile.active_sessions = self.active_sessions.load(Ordering::Acquire);
 
         Ok(OmnipotentSession {
             active_sessions: Arc::clone(&self.active_sessions),
@@ -332,13 +340,17 @@ impl OmnipotentMode {
             token_id: token_id.to_string(),
         };
 
-        if let Ok(mut log) = self.audit_log.lock() {
-            log.push(entry);
-        }
+        let mut log = self.audit_log.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        log.push(entry);
 
-        if let Ok(mut profile) = self.profile.lock() {
-            profile.total_actions += 1;
-        }
+        let mut profile = self.profile.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        profile.total_actions += 1;
     }
 
     /// Check whether anyone is currently in omnipotent mode.

@@ -163,6 +163,7 @@ pub struct BrainLoopProfile {
 /// Summary report produced by a full Plan → Execute → Reflect → Replan cycle.
 // Reserved for future BrainLoop integration.
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrainLoopReport {
     /// Number of iterations executed.
@@ -178,6 +179,7 @@ pub struct BrainLoopReport {
 /// A reflection produced after analysing a plan + result pair.
 // Reserved for future BrainLoop integration.
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 #[derive(Debug, Clone)]
 pub struct Reflection {
     pub score: f64,

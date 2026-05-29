@@ -39,7 +39,7 @@ use crate::orchestration::tool_recommender::ToolRecommender;
 /// is intentionally discarded in the current bootstrap phase; callers that
 /// require a specific engine obtain it via direct construction or the global
 /// plugin registry.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for future use
 pub fn initialize_capabilities() -> CapabilitiesHandle {
     CapabilitiesHandle::new()
 }

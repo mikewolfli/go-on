@@ -70,6 +70,11 @@ pub mod vote_orchestration;
 // ── Planning & orchestration ───────────────────────────────────────────────
 #[path = "planning/context.rs"]
 pub mod context;
+#[cfg(any(
+    feature = "sub-bus-tool",
+    feature = "profile-simple-server",
+    feature = "profile-multi-users-server"
+))]
 #[path = "planning/council_deliberation.rs"]
 pub mod council_deliberation;
 #[path = "planning/orchestration_alignment.rs"]

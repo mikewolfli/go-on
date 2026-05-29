@@ -102,7 +102,7 @@ pub struct ChatParams {
 #[derive(Debug, Clone)]
 pub struct ChatRequestContext {
     /// Authenticated user session, if user auth is enabled.
-    #[allow(dead_code)] // Public API — reserved for audit logging and in-chat RBAC
+    #[allow(dead_code)] // F-GAP-49 — Public API — reserved for audit logging and in-chat RBAC
     pub user_session: Option<UserSession>,
     /// Resolved tenant ID (from user session, or conversation_id, or default).
     pub tenant_id: String,
@@ -564,6 +564,116 @@ pub(crate) fn reorder_agents_with_priority(
     false
 }
 
+/// BLUE48-AUTO: Intelligently select the optimal mode when none is specified.
+///
+/// Analyzes user messages to determine the best mode:
+/// - "edit": code editing/refactoring/requests with code blocks or file paths
+/// - "agent": complex multi-step tasks that need autonomous execution
+/// - "safeguard": security-sensitive operations (delete/remove/shell commands)
+/// - "full_auto": highly structured tasks with clear steps
+/// - "ask": general Q&A / conversation (fallback)
+///
+/// This is analogous to VSCode Copilot Chat's auto mode, but with more
+/// granular mode classification (5 modes instead of 2).
+fn infer_optimal_mode(messages: &[Message], _server: &AcpServer) -> String {
+    // Collect all user message text
+    let corpus: String = messages
+        .iter()
+        .filter(|m| m.role.eq_ignore_ascii_case("user"))
+        .map(|m| &m.content[..])
+        .collect::<Vec<_>>()
+        .join("\n");
+    let lower = corpus.to_lowercase();
+    let word_count = lower.split_whitespace().count().max(1);
+
+    // ── Check for security-sensitive operations → "safeguard" ────
+    let security_keywords = [
+        "delete",
+        "remove file",
+        "rm ",
+        "sudo",
+        "chmod",
+        "chown",
+        "drop table",
+        "drop database",
+        "truncate",
+        "format",
+        "shutdown",
+        "reboot",
+        "kill ",
+        "exec ",
+        "eval ",
+    ];
+    if security_keywords.iter().any(|kw| lower.contains(kw)) {
+        debug!("auto-mode: security keywords detected → safeguard");
+        return "safeguard".to_string();
+    }
+
+    // ── Check for code editing requests → "edit" ────────────────
+    let has_code_block = corpus.contains("```");
+    let has_file_path = corpus.contains('/')
+        && (corpus.contains(".rs")
+            || corpus.contains(".py")
+            || corpus.contains(".ts")
+            || corpus.contains(".js")
+            || corpus.contains(".go")
+            || corpus.contains(".rs"));
+    let edit_keywords = [
+        "refactor",
+        "rewrite",
+        "change",
+        "update",
+        "modify",
+        "fix bug",
+        "add feature",
+        "implement",
+        "write code",
+        "code review",
+    ];
+    let is_edit_request = edit_keywords.iter().any(|kw| lower.contains(kw));
+
+    if (has_code_block || has_file_path) && is_edit_request {
+        debug!("auto-mode: code editing detected → edit");
+        return "edit".to_string();
+    }
+
+    // ── Check for complex multi-step tasks → "agent" ────────────
+    let agent_keywords = [
+        "investigate",
+        "research",
+        "analyze",
+        "compare",
+        "summarize",
+        "explore",
+        "monitor",
+        "watch",
+        "track",
+        "debug",
+        "troubleshoot",
+        "diagnose",
+        "find out",
+        "figure out",
+    ];
+    let is_complex_task = word_count > 30 && agent_keywords.iter().any(|kw| lower.contains(kw));
+
+    if is_complex_task {
+        debug!("auto-mode: complex task detected → agent");
+        return "agent".to_string();
+    }
+
+    // ── Check for highly structured tasks → "full_auto" ─────────
+    let has_bullets = corpus.contains("* ") || corpus.contains("- ");
+    let has_numbers = corpus.contains("1. ") && corpus.contains("2. ");
+    if has_bullets && has_numbers && word_count > 50 {
+        debug!("auto-mode: structured task detected → full_auto");
+        return "full_auto".to_string();
+    }
+
+    // ── Default: general conversation → "ask" ───────────────────
+    debug!("auto-mode: general conversation → ask");
+    "ask".to_string()
+}
+
 /// Handle chat request
 ///
 /// This function replaces the `AcpServer::handle_chat` method.
@@ -640,10 +750,18 @@ pub async fn handle_chat(
             }
         };
 
-        // Fallback to "ask" mode when absent or empty (e.g., from external clients like Zed)
-        if chat_params.mode.trim().is_empty() {
-            chat_params.mode = "ask".to_string();
-            info!("mode not specified by client, defaulting to 'ask'");
+        // BLUE48-AUTO: Intelligent mode selection when mode is absent, empty, or "auto".
+        // - Client passes a specific mode ("ask"/"edit"/"agent"/"safeguard"/"full_auto"): use it as-is
+        // - Client passes nothing or "auto": analyze input to select optimal mode
+        if chat_params.mode.trim().is_empty()
+            || chat_params.mode.trim().eq_ignore_ascii_case("auto")
+        {
+            let auto_mode = infer_optimal_mode(&chat_params.messages, server);
+            chat_params.mode = auto_mode;
+            info!(
+                "mode not specified by client, auto-selected mode='{}'",
+                chat_params.mode
+            );
         }
 
         // GAP-46-12: Track session context across requests.
@@ -4914,6 +5032,7 @@ fn record_trace_event(
 /// This function integrates the tool execution loop from request.rs into the chat flow
 #[cfg(test)]
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 fn run_tool_execution_loop(task: &str, subtask: &str, record_index: usize) -> String {
     // Simplified tool execution loop
     format!(
@@ -5117,6 +5236,7 @@ pub(crate) fn extract_tool_calls_from_response(response: &str, max_calls: usize)
 /// Execute model tool calls
 #[cfg(test)]
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 fn execute_tool_calls(
     task: &str,
     subtask: &str,
@@ -5336,7 +5456,11 @@ async fn auto_create_skills_from_conversation(
                     skill_description, last_user_msg
                 );
 
-                let result = server.skill_registry.lock().ok().and_then(|mut registry| {
+                let result = {
+                    let mut registry = server.skill_registry.lock().unwrap_or_else(|poisoned| {
+                        tracing::warn!("lock poisoned, recovering");
+                        poisoned.into_inner()
+                    });
                     registry
                         .create_skill_from_prompt(
                             &skill_name,
@@ -5345,7 +5469,7 @@ async fn auto_create_skills_from_conversation(
                             std::collections::HashMap::new(),
                         )
                         .ok()
-                });
+                };
 
                 if result.is_some() {
                     info!("Auto-created skill '{}' from conversation", skill_name);

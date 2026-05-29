@@ -45,7 +45,13 @@ pub fn store_latest_dag_metrics(metrics: DagMetrics) {
 /// Read latest DAG metrics for governance payload.
 #[allow(dead_code)] // F-GAP-17 — reserved for governance DAG metrics integration
 pub fn read_latest_dag_metrics() -> Option<DagMetrics> {
-    LATEST_DAG_METRICS.lock().ok()?.clone()
+    LATEST_DAG_METRICS
+        .lock()
+        .unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        })
+        .clone()
 }
 
 /// Predictive reroute scoring result.
@@ -262,7 +268,9 @@ mod tests {
         // Verify effectiveness ratio appears with correct value
         let ratio = snapshot["corrective_action_effectiveness_ratio"]
             .as_f64()
-            .expect("contract_snapshot must include corrective_action_effectiveness_ratio as f64");
+            .expect(
+                "B49: contract_snapshot must include corrective_action_effectiveness_ratio as f64",
+            );
         assert!(
             (ratio - 0.75).abs() < f64::EPSILON,
             "expected effectiveness ratio 0.75, got {}",

@@ -8,12 +8,12 @@ use crate::widgets::cache::Section;
 
 /// Button that skips widget rebuild when label hasn't changed.
 /// Reserved for future use — kept to avoid re-adding later.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-48: Widget caching layer, kept for future UI optimization
 pub struct CachedButton {
     section: Section,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-48: Widget caching layer, kept for future UI optimization
 impl CachedButton {
     pub fn new(section: Section) -> Self {
         Self { section }

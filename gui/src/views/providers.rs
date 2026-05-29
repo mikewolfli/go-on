@@ -78,7 +78,7 @@ pub struct ProvidersView {
 /// Provider names for the dropdown (36 total, matching built_in_provider_specs())
 /// This is the CANONICAL source of provider names used throughout the codebase.
 /// Keep in sync with `src/core/config.rs` built_in_provider_specs().
-// FIXME: This hardcoded list should be fetched from the backend's provider.catalog
+// F-GAP-49: This hardcoded list should be fetched from the backend's provider.catalog
 //        endpoint instead, so it stays in sync automatically.
 pub const PROVIDER_NAMES: &[&str] = &[
     // OpenAI Family (4)

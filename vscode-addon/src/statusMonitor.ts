@@ -99,6 +99,7 @@ export class StatusMonitor {
         // Check provider readiness when runtime is healthy
         if (health) {
           this._checkProviderReadiness().catch((err) => {
+            // eslint-disable-next-line no-console
             console.error("Provider readiness check failed:", err);
           });
         }

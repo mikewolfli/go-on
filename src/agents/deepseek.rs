@@ -119,7 +119,7 @@ impl DeepSeekAgent {
         if payload.get("user").is_some() {
             payload
                 .as_object_mut()
-                .expect("payload object")
+                .expect("B48: payload object")
                 .remove("user");
         }
 

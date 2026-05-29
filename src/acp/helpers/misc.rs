@@ -17,6 +17,7 @@ use std::path::PathBuf;
 /// Extract u64 value from PhaseOptions extra field (test duplicate)
 #[cfg(test)]
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 pub fn extra_u64(options: Option<&PhaseOptions>, key: &str) -> Option<u64> {
     options
         .and_then(|opts| opts.extra.get(key))
@@ -26,6 +27,7 @@ pub fn extra_u64(options: Option<&PhaseOptions>, key: &str) -> Option<u64> {
 /// Extract f64 value from PhaseOptions extra field (test duplicate)
 #[cfg(test)]
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 pub fn extra_f64(options: Option<&PhaseOptions>, key: &str) -> Option<f64> {
     options
         .and_then(|opts| opts.extra.get(key))
@@ -35,6 +37,7 @@ pub fn extra_f64(options: Option<&PhaseOptions>, key: &str) -> Option<f64> {
 /// Extract string value from PhaseOptions extra field (test duplicate)
 #[cfg(test)]
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 pub fn extra_string(options: Option<&PhaseOptions>, key: &str) -> Option<String> {
     options
         .and_then(|opts| opts.extra.get(key))
@@ -45,6 +48,7 @@ pub fn extra_string(options: Option<&PhaseOptions>, key: &str) -> Option<String>
 /// Extract bool value from PhaseOptions extra field (test duplicate)
 #[cfg(test)]
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 pub fn extra_bool(options: Option<&PhaseOptions>, key: &str) -> Option<bool> {
     options
         .and_then(|opts| opts.extra.get(key))
@@ -54,6 +58,7 @@ pub fn extra_bool(options: Option<&PhaseOptions>, key: &str) -> Option<bool> {
 /// Extract string list from PhaseOptions extra field (test duplicate)
 #[cfg(test)]
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 pub fn extra_string_list(options: Option<&PhaseOptions>, key: &str) -> Option<Vec<String>> {
     options
         .and_then(|opts| opts.extra.get(key))
@@ -69,6 +74,7 @@ pub fn extra_string_list(options: Option<&PhaseOptions>, key: &str) -> Option<Ve
 /// Calculate percentile value from a sorted slice of u64 samples
 #[cfg(test)]
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 pub fn percentile(samples: &[u64], percentile: f64) -> u64 {
     if samples.is_empty() {
         return 0;
@@ -82,6 +88,7 @@ pub fn percentile(samples: &[u64], percentile: f64) -> u64 {
 #[derive(Debug, Clone)]
 #[cfg(test)]
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 pub struct RequirementGateDecision {
     /// Whether the request is blocked
     pub blocked: bool,
@@ -99,6 +106,7 @@ pub struct RequirementGateDecision {
 #[derive(Debug, Clone, Copy)]
 #[cfg(test)]
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 pub struct LearningClarificationMetrics {
     /// Number of clarification rounds
     pub rounds: u32,
@@ -111,6 +119,7 @@ pub struct LearningClarificationMetrics {
 /// Parse a string list from JSON Value (test duplicate)
 #[cfg(test)]
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 pub fn parse_string_list(value: Option<&Value>) -> Vec<String> {
     value
         .and_then(|v| v.as_array())
