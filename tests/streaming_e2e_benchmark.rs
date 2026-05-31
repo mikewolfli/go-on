@@ -9,7 +9,6 @@
 /// Tested modes: GUI mode, VSCode mode, pure HTTP mode
 /// Records 3 server profiles differences.
 /// Regression detection: TTFT p50 > baseline × 1.5
-
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -93,7 +92,10 @@ impl BenchHarness {
             .spawn()
             .expect("failed to spawn go-on");
 
-        let stdin = child.stdin.take().map(|s| Box::new(s) as Box<dyn Write + Send>);
+        let stdin = child
+            .stdin
+            .take()
+            .map(|s| Box::new(s) as Box<dyn Write + Send>);
         let stderr_lines = Arc::new(Mutex::new(Vec::new()));
         let stderr_reader = BufReader::new(child.stderr.take().unwrap());
         let stderr_log = Arc::clone(&stderr_lines);
@@ -149,8 +151,7 @@ impl BenchHarness {
             match self.stdout_rx.recv_timeout(Duration::from_secs(30)) {
                 Ok(chunk) => {
                     let now = Instant::now();
-                    let is_final = chunk.get("type").and_then(|t| t.as_str())
-                        == Some("final")
+                    let is_final = chunk.get("type").and_then(|t| t.as_str()) == Some("final")
                         || chunk.get("done").and_then(|d| d.as_bool()).unwrap_or(false);
                     chunks.push(StreamChunk {
                         timestamp: now,
@@ -251,11 +252,8 @@ fn bench_stream(harness: &mut BenchHarness, prompt: &str) -> StreamBenchResult {
     let mut result = StreamBenchResult::default();
 
     if let Some(first) = chunks.first() {
-        result.time_to_first_token_ms = first
-            .timestamp
-            .duration_since(start)
-            .as_secs_f64()
-            * 1000.0;
+        result.time_to_first_token_ms =
+            first.timestamp.duration_since(start).as_secs_f64() * 1000.0;
     }
 
     result.time_to_complete_ms = total_duration.as_secs_f64() * 1000.0;
@@ -329,10 +327,7 @@ fn aggregate_results(results: &[StreamBenchResult]) -> BTreeMap<String, Percenti
 const BASELINE_TTFT_P50_MS: f64 = 500.0;
 
 /// Check if the given metrics exceed the regression threshold.
-fn check_regression(
-    label: &str,
-    percentiles: &Percentiles,
-) -> Vec<String> {
+fn check_regression(label: &str, percentiles: &Percentiles) -> Vec<String> {
     let mut regressions = Vec::new();
 
     if percentiles.count > 0 {
@@ -409,8 +404,9 @@ fn run_benchmarks() -> BTreeMap<String, Vec<StreamBenchResult>> {
 
         harness.kill();
 
-        all_results.insert(label, mode_results);
-        eprintln!("  [bench] {} complete ({} runs)", label, mode_results.len());
+        let runs_count = mode_results.len();
+        all_results.insert(label.clone(), mode_results);
+        eprintln!("  [bench] {} complete ({} runs)", label, runs_count);
     }
 
     all_results
@@ -462,7 +458,10 @@ fn streaming_e2e_benchmark() {
         let avg_ttft = ttft.iter().sum::<f64>() / ttft.len() as f64;
         let avg_ttc = ttc.iter().sum::<f64>() / ttc.len() as f64;
         let avg_tps = tps.iter().sum::<f64>() / tps.len() as f64;
-        eprintln!("  {:<20} TTFT avg={:>8.1}ms  TTC avg={:>8.1}ms  TPS avg={:>8.1}", label, avg_ttft, avg_ttc, avg_tps);
+        eprintln!(
+            "  {:<20} TTFT avg={:>8.1}ms  TTC avg={:>8.1}ms  TPS avg={:>8.1}",
+            label, avg_ttft, avg_ttc, avg_tps
+        );
     }
     eprintln!("");
 

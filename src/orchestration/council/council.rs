@@ -2257,8 +2257,7 @@ mod tests {
         let council = sample_deliberation_council();
         let err = council.start_deliberation("nonexistent").unwrap_err();
         assert!(
-            err.to_string().contains("not found")
-                || err.to_string().contains("error.council."),
+            err.to_string().contains("not found") || err.to_string().contains("error.council."),
             "unexpected error: {}",
             err
         );
@@ -2285,14 +2284,15 @@ mod tests {
             submitted_at: now_epoch_ms(),
         };
 
-        council
-            .submit_statement(&delib_id, statement)
-            .unwrap();
+        council.submit_statement(&delib_id, statement).unwrap();
 
         let delib = council.get_deliberation(&delib_id).unwrap();
         assert_eq!(delib.rounds[0].statements.len(), 1);
         assert_eq!(delib.rounds[0].statements[0].member_id, "alice");
-        assert_eq!(delib.rounds[0].statements[0].position, CouncilPosition::Support);
+        assert_eq!(
+            delib.rounds[0].statements[0].position,
+            CouncilPosition::Support
+        );
     }
 
     #[test]
@@ -2564,9 +2564,11 @@ mod tests {
         let delib_id = council.start_deliberation("prop-1").unwrap();
 
         // Round 1: alice and carol support, bob opposes.
-        for (member, vote) in
-            &[("alice", "support"), ("bob", "oppose"), ("carol", "support")]
-        {
+        for (member, vote) in &[
+            ("alice", "support"),
+            ("bob", "oppose"),
+            ("carol", "support"),
+        ] {
             council
                 .vote_in_round(
                     &delib_id,
@@ -2751,7 +2753,35 @@ mod tests {
 
     #[test]
     fn test_deliberation_vote_in_concluded_round_fails() {
-        let council = sample_deliberation_council();
+        // Use max_rounds=1 so that a split vote in round 1 forces conclusion.
+        let council = OrchestrationCouncil::new_with_deliberation_config(
+            CouncilConfig {
+                name: "Test Council".to_string(),
+                min_members_for_quorum: 2,
+                voting_duration_ms: 86_400_000,
+                max_proposals: 100,
+                enable_reputation: false,
+                reputation_warmup_rounds: 0,
+                ..Default::default()
+            },
+            DeliberationConfig {
+                max_rounds: 1,
+                require_consensus: false,
+                debate_timeout_secs: 60,
+            },
+        );
+        council
+            .add_member(sample_member("alice", "Alice", "strategist", 1))
+            .unwrap();
+        council
+            .add_member(sample_member("bob", "Bob", "analyst", 1))
+            .unwrap();
+        council
+            .add_member(sample_member("carol", "Carol", "overseer", 1))
+            .unwrap();
+        council
+            .submit_proposal(sample_proposal("prop-1", "Test Proposal", "alice"))
+            .unwrap();
         let delib_id = council.start_deliberation("prop-1").unwrap();
 
         // Round 1 votes split, conclude round 1.
@@ -2782,9 +2812,14 @@ mod tests {
             )
             .unwrap();
 
-        council.conclude_round(&delib_id).unwrap();
+        let concluded = council.conclude_round(&delib_id).unwrap();
+        assert!(
+            concluded,
+            "Deliberation should have concluded with max_rounds=1"
+        );
 
-        // Try to vote in now-concluded round 1.
+        // With max_rounds=1 and a split vote, the deliberation has concluded.
+        // Attempting to vote should fail with "already concluded".
         let err = council
             .vote_in_round(
                 &delib_id,
@@ -2798,7 +2833,11 @@ mod tests {
                 },
             )
             .unwrap_err();
-        assert!(err.to_string().contains("concluded"));
+        assert!(
+            err.to_string().contains("concluded"),
+            "Expected error containing 'concluded', got: {}",
+            err
+        );
     }
 
     #[test]
@@ -2845,9 +2884,7 @@ mod tests {
             submitted_at: now_epoch_ms(),
         };
 
-        council
-            .submit_statement(&delib_id, statement)
-            .unwrap();
+        council.submit_statement(&delib_id, statement).unwrap();
 
         let delib = council.get_deliberation(&delib_id).unwrap();
         let stmt = &delib.rounds[0].statements[0];

@@ -22,7 +22,7 @@
 
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
@@ -717,25 +717,15 @@ impl SimpleEmbeddingCache {
             }
         }
 
-        // Step 2: TF-IDF similarity
-        let query_tokens = tokenize(request);
-        let (df_guard, total_docs) = match (self.df.read(), self.total_docs.read()) {
-            (Ok(df), Ok(td)) => (df, *td),
-            _ => return None,
-        };
-
-        if total_docs == 0 {
-            return None;
-        }
-
-        let query_tfidf = compute_tfidf_vector(&query_tokens, &df_guard, total_docs);
+        // Step 2: Embedding similarity (character-hash, fixed-dimension)
+        let query_embedding = compute_embedding_inner(request, self.embedding_dim());
 
         let entries = self.entries.read().ok()?;
         let mut scored: Vec<(usize, f64)> = entries
             .iter()
             .enumerate()
             .filter(|(_, e)| now < e.created_at.saturating_add(e.ttl_secs))
-            .map(|(i, e)| (i, cosine_similarity(&query_tfidf, &e.embedding)))
+            .map(|(i, e)| (i, cosine_similarity(&query_embedding, &e.embedding)))
             .collect();
 
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -756,30 +746,9 @@ impl SimpleEmbeddingCache {
         None
     }
 
-    /// Store a response, computing its TF-IDF embedding from the corpus.
+    /// Store a response, computing its character-hash embedding.
     pub fn set(&self, request: &str, value: Value, ttl_secs: u64) {
-        let tokens = tokenize(request);
-
-        // Update document frequencies
-        {
-            if let Ok(mut df) = self.df.write() {
-                let unique_tokens: HashSet<&str> = tokens.iter().map(|s| s.as_str()).collect();
-                for token in unique_tokens {
-                    *df.entry(token.to_string()).or_insert(0) += 1;
-                }
-            }
-        }
-        {
-            if let Ok(mut td) = self.total_docs.write() {
-                *td += 1;
-            }
-        }
-
-        let (df_guard, total_docs) = match (self.df.read(), self.total_docs.read()) {
-            (Ok(df), Ok(td)) => (df, *td),
-            _ => return,
-        };
-        let embedding = compute_tfidf_vector(&tokens, &df_guard, total_docs);
+        let embedding = compute_embedding_inner(request, self.embedding_dim());
 
         let entry = EmbeddingCacheEntry {
             key: request.to_string(),
@@ -798,6 +767,10 @@ impl SimpleEmbeddingCache {
                 entries.push(entry);
             }
         }
+    }
+
+    fn embedding_dim(&self) -> usize {
+        self.cosine_threshold as usize * 100 + 128
     }
 
     /// Evict the entry with the lowest access count (LRU).
@@ -1088,12 +1061,13 @@ impl RemoteEmbeddingCache {
 
 /// Tokenize text into lowercase words (bag-of-words).
 ///
-/// Splits on non-alphanumeric characters, filters out empty strings
-/// and single-character tokens (which carry little semantic weight).
+/// Splits on non-alphanumeric characters, filters out empty strings,
+/// single-character tokens, and purely numeric tokens (which carry little semantic weight).
+#[allow(dead_code)]
 fn tokenize(text: &str) -> Vec<String> {
     text.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
-        .filter(|s| !s.is_empty() && s.len() >= 2)
+        .filter(|s| !s.is_empty() && s.len() >= 2 && !s.chars().all(|c| c.is_ascii_digit()))
         .map(|s| s.to_string())
         .collect()
 }
@@ -1102,6 +1076,7 @@ fn tokenize(text: &str) -> Vec<String> {
 ///
 /// The returned vector is sorted by term score for deterministic ordering
 /// across calls. Each dimension represents a TF-IDF-weighted term signal.
+#[allow(dead_code)]
 fn compute_tfidf_vector(
     tokens: &[String],
     df: &HashMap<String, usize>,
