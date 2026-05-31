@@ -128,6 +128,25 @@ type ResponsesApiContract = {
   nonStreamSetupUnavailableRetrievableById: boolean;
 };
 
+/** A message in the framed protocol, with an optional message_id for deduplication. */
+export type FramedMessage = {
+  message_id?: string;
+  type?: string;
+  [key: string]: unknown;
+};
+
+/** Heartbeat ping sent by the client every 30s to check connection liveness. */
+export type HeartbeatPing = {
+  message_id: string;
+  type: "heartbeat.ping";
+};
+
+/** Heartbeat pong sent by the server in response to a heartbeat.ping. */
+export type HeartbeatPong = {
+  message_id: string;
+  type: "heartbeat.pong";
+};
+
 export type ProtocolContract = {
   version: string;
   runtime: {

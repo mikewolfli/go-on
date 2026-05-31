@@ -2471,11 +2471,13 @@ async fn build_execution_context(
     params: &Value,
 ) -> Result<RuntimeExecutionContext> {
     let flow = server
+        .model_deps
         .flow_manager
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("flow manager not initialized"))?
         .clone();
     let registry = server
+        .model_deps
         .agent_registry
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("agent registry not initialized"))?
@@ -2574,7 +2576,7 @@ async fn build_execution_context(
         secondary_agents,
         candidates,
         failure_strategy: failure_strategy.clone(),
-        adaptive_selector: server.adaptive_model_selector.clone(),
+        adaptive_selector: server.model_deps.adaptive_model_selector.clone(),
         online_controller: server.online_controller.clone(),
         failure_prevention: server.failure_prevention.clone(),
         metrics: server.observability.metrics.clone(),
@@ -2592,7 +2594,7 @@ async fn build_execution_context(
             cost,
         },
         artifact_ledger: ledger,
-        vector_store: server.cache.vector_store.clone(),
+        vector_store: server.cache_deps.cache.vector_store.clone(),
         orchestration_ctx: Arc::new(OrchestrationContext::new()),
     })
 }
@@ -3239,10 +3241,13 @@ async fn execute_single_subtask(
             ctrl.record_agent_outcome(&phase_name, agent_name, run_result.is_ok(), duration_ms);
         }
         {
-            let mut fp = context.failure_prevention.lock().unwrap_or_else(|poisoned| {
-                warn!("Failure prevention lock poisoned in execute_single_subtask, recovering");
-                poisoned.into_inner()
-            });
+            let mut fp = context
+                .failure_prevention
+                .lock()
+                .unwrap_or_else(|poisoned| {
+                    warn!("Failure prevention lock poisoned in execute_single_subtask, recovering");
+                    poisoned.into_inner()
+                });
             fp.record_outcome(agent_name, run_result.is_ok(), duration_ms);
         }
 
@@ -3381,7 +3386,7 @@ async fn filter_unavailable_agents(
 
     for (name, agent) in candidates.drain(..) {
         // Simple health probe: check if agent responds to a basic availability check
-        let is_available = match server.agent_registry.as_ref() {
+        let is_available = match server.model_deps.agent_registry.as_ref() {
             Some(registry) => registry.get(&name).is_some(),
             None => {
                 // Agent is not in registry - check if it has a configured provider
@@ -3597,5 +3602,158 @@ mod tests {
 
         let invalid = transition_workflow_run("run-test-transition", "paused");
         assert!(invalid.is_err());
+    }
+
+    // ── Workflow run lifecycle ────────────────────────────────────────
+
+    #[test]
+    fn start_workflow_run_increments_id() {
+        let id1 = next_workflow_run_id();
+        let id2 = next_workflow_run_id();
+        assert!(id2 > id1, "run IDs must be monotonically increasing");
+    }
+
+    #[test]
+    fn start_workflow_run_id_format() {
+        let id = next_workflow_run_id();
+        assert!(id.starts_with("wr-"));
+    }
+
+    #[test]
+    fn complete_workflow_run_unknown_id_no_panic() {
+        // complete_workflow_run returns () and works via side effects;
+        // calling it with a nonexistent ID should not panic.
+        complete_workflow_run("nonexistent-run-id", "completed", None, vec![]);
+    }
+
+    #[test]
+    fn start_and_complete_workflow_run_full_cycle() {
+        let params = json!({"run_id": "run-full-cycle"});
+        let started = start_workflow_run("workflow.execute", "full-test", Some("execute"), &params);
+        assert_eq!(started.status, "running");
+        assert_eq!(started.source_method, "workflow.execute");
+
+        complete_workflow_run("run-full-cycle", "completed", None, vec![]);
+        if let Some(record) = get_workflow_run_record("run-full-cycle") {
+            assert_eq!(record.status, "completed");
+            assert!(record.ended_at.is_some());
+        }
+    }
+
+    #[test]
+    fn transition_workflow_run_rejects_invalid_transition() {
+        let params = json!({"run_id": "run-invalid-trans"});
+        let _ = start_workflow_run("test", "test", None, &params);
+
+        // completed -> running should be invalid
+        let _ = transition_workflow_run("run-invalid-trans", "succeeded");
+        let result = transition_workflow_run("run-invalid-trans", "running");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn is_terminal_status_true_for_terminal() {
+        let is_terminal = |s: &str| matches!(s, "succeeded" | "failed" | "cancelled");
+        assert!(is_terminal("succeeded"));
+        assert!(is_terminal("failed"));
+        assert!(is_terminal("cancelled"));
+    }
+
+    #[test]
+    fn is_terminal_status_false_for_non_terminal() {
+        let is_terminal = |s: &str| matches!(s, "succeeded" | "failed" | "cancelled");
+        assert!(!is_terminal("running"));
+        assert!(!is_terminal("paused"));
+    }
+
+    // ── Run ID from params ────────────────────────────────────────────
+
+    #[test]
+    fn run_id_from_params_extracts_run_id() {
+        let params = json!({"run_id": "my-custom-id"});
+        assert_eq!(
+            run_id_from_params(&params),
+            Some("my-custom-id".to_string())
+        );
+    }
+
+    #[test]
+    fn run_id_from_params_generates_when_absent() {
+        let params = json!({});
+        let id = run_id_from_params(&params);
+        assert!(id.is_some() && id.unwrap().starts_with("wr-"));
+    }
+
+    // ── Extract effective options ─────────────────────────────────────
+
+    #[test]
+    fn extract_effective_options_extra_merge() {
+        let params = json!({
+            "temperature": 0.7,
+            "options": {
+                "extra": {
+                    "temperature": 0.3,
+                    "top_p": 0.85
+                }
+            }
+        });
+        let options = extract_effective_options(&params);
+        // root temperature should win over extra
+        assert!(
+            (options
+                .get("temperature")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0)
+                - 0.7)
+                .abs()
+                < 0.01
+        );
+    }
+
+    // ── Workflow run list payload ─────────────────────────────────────
+
+    #[test]
+    fn workflow_run_list_payload_paginates() {
+        // Create a few runs
+        let _ = start_workflow_run("test", "t1", None, &json!({"run_id": "list-test-1"}));
+        let _ = start_workflow_run("test", "t2", None, &json!({"run_id": "list-test-2"}));
+        let _ = start_workflow_run("test", "t3", None, &json!({"run_id": "list-test-3"}));
+
+        let payload = workflow_run_list_payload(&json!({"limit": 2}));
+        assert_eq!(payload["limit"], 2);
+    }
+
+    // ── Workflow run get payload ──────────────────────────────────────
+
+    #[test]
+    fn workflow_run_get_payload_found() {
+        let _ = start_workflow_run("test", "get-test", None, &json!({"run_id": "get-test-1"}));
+        let result = workflow_run_get_payload(&json!({"run_id": "get-test-1"}));
+        assert!(result.is_ok());
+        let payload = result.unwrap();
+        assert_eq!(payload["run_id"], "get-test-1");
+    }
+
+    #[test]
+    fn workflow_run_get_payload_not_found() {
+        let result = workflow_run_get_payload(&json!({"run_id": "get-nonexistent"}));
+        assert!(result.is_err());
+    }
+
+    // ── Workflow run cancel/succeed payload ───────────────────────────
+
+    #[test]
+    fn workflow_run_cancel_transitions() {
+        let _ = start_workflow_run(
+            "test",
+            "cancel-test",
+            None,
+            &json!({"run_id": "cancel-test-1"}),
+        );
+        let result =
+            workflow_run_transition_payload(&json!({"run_id": "cancel-test-1"}), "cancelled");
+        assert!(result.is_ok());
+        let payload = result.unwrap();
+        assert_eq!(payload["status"], "cancelled");
     }
 }

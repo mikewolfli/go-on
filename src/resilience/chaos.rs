@@ -186,7 +186,10 @@ impl ChaosEngine {
 
     /// Register fault injections for a scenario.
     pub fn load_scenario(&self, scenario: &DrillScenario) {
-        let mut injections = self.injections.write().expect("B49: chaos injections lock");
+        let mut injections = self.injections.write().unwrap_or_else(|poisoned| {
+            warn!("chaos injections lock poisoned, recovering");
+            poisoned.into_inner()
+        });
         injections.clear();
         injections.extend(scenario.injections.clone());
         info!(
@@ -201,11 +204,17 @@ impl ChaosEngine {
     pub fn clear(&self) {
         self.injections
             .write()
-            .expect("B49: chaos injections lock")
+            .unwrap_or_else(|poisoned| {
+                warn!("chaos injections lock poisoned, recovering");
+                poisoned.into_inner()
+            })
             .clear();
         self.injection_counts
             .write()
-            .expect("B49: chaos counts lock")
+            .unwrap_or_else(|poisoned| {
+                warn!("chaos counts lock poisoned, recovering");
+                poisoned.into_inner()
+            })
             .clear();
     }
 
@@ -216,7 +225,10 @@ impl ChaosEngine {
             return None;
         }
 
-        let injections = self.injections.read().expect("B49: chaos injections lock");
+        let injections = self.injections.read().unwrap_or_else(|poisoned| {
+            warn!("chaos injections lock poisoned, recovering");
+            poisoned.into_inner()
+        });
         for injection in injections.iter() {
             // Check target tool match
             if !injection.target_tool.is_empty() && injection.target_tool != tool_name {
@@ -230,10 +242,10 @@ impl ChaosEngine {
 
             // Check max injections
             if injection.max_injections > 0 {
-                let mut counts = self
-                    .injection_counts
-                    .write()
-                    .expect("B49: chaos counts lock");
+                let mut counts = self.injection_counts.write().unwrap_or_else(|poisoned| {
+                    warn!("chaos counts lock poisoned, recovering");
+                    poisoned.into_inner()
+                });
                 let key = format!("{}:{}", injection.fault_type.label(), tool_name);
                 let count = counts.entry(key.clone()).or_insert(0);
                 if *count >= injection.max_injections {

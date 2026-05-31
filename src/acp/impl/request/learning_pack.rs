@@ -1241,6 +1241,7 @@ pub(super) async fn handle_phase_policy_replay(
     });
 
     let candidate_phases = server
+        .model_deps
         .flow_manager
         .as_ref()
         .map(|flow| flow.config().flow.phases.clone())

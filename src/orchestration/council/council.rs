@@ -151,6 +151,115 @@ impl Default for CouncilConfig {
     }
 }
 
+/// Wrapper for deliberation identifiers.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct DeliberationId(pub String);
+
+impl std::fmt::Display for DeliberationId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// Position a council member can take during deliberation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum CouncilPosition {
+    Support,
+    Oppose,
+    Amend,
+    Abstain,
+}
+
+/// A statement made by a council member during a deliberation round.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliberationStatement {
+    /// ID of the member making the statement.
+    pub member_id: String,
+    /// The member's position on the proposal.
+    pub position: CouncilPosition,
+    /// Detailed reasoning for the position.
+    pub reasoning: String,
+    /// Proposed amendments to the proposal (if position is Amend).
+    pub amendments: Vec<String>,
+    /// Unix timestamp (milliseconds) when the statement was submitted.
+    pub submitted_at: u64,
+}
+
+/// A single round of deliberation within a multi-round debate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliberationRound {
+    /// Round number (1-based).
+    pub round_number: usize,
+    /// Statements submitted by members in this round.
+    pub statements: Vec<DeliberationStatement>,
+    /// Votes cast by members in this round.
+    pub votes: Vec<CouncilVote>,
+    /// Whether this round has been concluded.
+    pub concluded: bool,
+}
+
+/// A multi-round deliberation process for a proposal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Deliberation {
+    /// Unique deliberation identifier.
+    pub id: DeliberationId,
+    /// ID of the proposal under deliberation.
+    pub proposal_id: String,
+    /// Rounds of debate that have occurred.
+    pub rounds: Vec<DeliberationRound>,
+    /// Maximum number of rounds allowed.
+    pub max_rounds: usize,
+    /// Whether consensus has been reached.
+    pub consensus_reached: bool,
+    /// Final decision, if the deliberation has concluded.
+    pub final_decision: Option<CouncilDecision>,
+    /// Unix timestamp (milliseconds) when deliberation started.
+    pub started_at: u64,
+}
+
+/// Decision reached by the council after deliberation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CouncilDecision {
+    /// The final position adopted.
+    pub position: CouncilPosition,
+    /// Amended proposal text, if any amendments were adopted.
+    pub amended_text: Option<String>,
+    /// Round number at which the decision was reached.
+    pub decided_at_round: usize,
+}
+
+/// Configuration for deliberation processes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliberationConfig {
+    /// Maximum number of rounds (default: 3).
+    #[serde(default = "default_max_rounds")]
+    pub max_rounds: usize,
+    /// Whether consensus is required for a decision (default: false).
+    #[serde(default)]
+    pub require_consensus: bool,
+    /// Timeout in seconds for debate within a round (default: 60).
+    #[serde(default = "default_debate_timeout_secs")]
+    pub debate_timeout_secs: u64,
+}
+
+fn default_max_rounds() -> usize {
+    3
+}
+
+fn default_debate_timeout_secs() -> u64 {
+    60
+}
+
+impl Default for DeliberationConfig {
+    fn default() -> Self {
+        Self {
+            max_rounds: 3,
+            require_consensus: false,
+            debate_timeout_secs: 60,
+        }
+    }
+}
+
 /// Runtime profile snapshot for the orchestration council.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CouncilProfile {
@@ -276,6 +385,10 @@ impl ReputationRecord {
 /// final outcome gain influence (up to 2.0x); those who vote against
 /// consensus lose influence (down to 0.5x). This enables the council to
 /// become smarter over time by amplifying the voice of accurate members.
+///
+/// Deliberation (GAP-B50-08): optional multi-round debate mechanism.
+/// When deliberation is active, members submit statements and vote in
+/// successive rounds, with the option to change positions between rounds.
 #[derive(Debug)]
 pub struct OrchestrationCouncil {
     /// Council configuration.
@@ -288,6 +401,10 @@ pub struct OrchestrationCouncil {
     votes: Arc<Mutex<HashMap<(String, String), CouncilVote>>>,
     /// Reputation records keyed by member ID.
     reputation: Arc<Mutex<HashMap<String, ReputationRecord>>>,
+    /// Deliberation processes keyed by deliberation ID.
+    deliberations: Arc<Mutex<HashMap<DeliberationId, Deliberation>>>,
+    /// Configuration for deliberation processes.
+    deliberation_config: DeliberationConfig,
 }
 
 impl OrchestrationCouncil {
@@ -299,6 +416,24 @@ impl OrchestrationCouncil {
             proposals: Arc::new(Mutex::new(HashMap::new())),
             votes: Arc::new(Mutex::new(HashMap::new())),
             reputation: Arc::new(Mutex::new(HashMap::new())),
+            deliberations: Arc::new(Mutex::new(HashMap::new())),
+            deliberation_config: DeliberationConfig::default(),
+        }
+    }
+
+    /// Create a new `OrchestrationCouncil` with deliberation configuration.
+    pub fn new_with_deliberation_config(
+        config: CouncilConfig,
+        deliberation_config: DeliberationConfig,
+    ) -> Self {
+        Self {
+            config,
+            members: Arc::new(Mutex::new(HashMap::new())),
+            proposals: Arc::new(Mutex::new(HashMap::new())),
+            votes: Arc::new(Mutex::new(HashMap::new())),
+            reputation: Arc::new(Mutex::new(HashMap::new())),
+            deliberations: Arc::new(Mutex::new(HashMap::new())),
+            deliberation_config,
         }
     }
 
@@ -792,6 +927,330 @@ impl OrchestrationCouncil {
         }
 
         ejected
+    }
+
+    // ─── Deliberation Methods (GAP-B50-08) ───────────────────────────────────
+
+    /// Start a new deliberation for the given proposal.
+    ///
+    /// Returns a `DeliberationId` that can be used to submit statements,
+    /// vote in rounds, and query the deliberation state.
+    pub fn start_deliberation(&self, proposal_id: &str) -> Result<DeliberationId> {
+        // Verify the proposal exists.
+        self.get_proposal(proposal_id)?;
+
+        let id = DeliberationId(format!("delib-{}", proposal_id));
+        let now = now_epoch_ms();
+
+        let deliberation = Deliberation {
+            id: id.clone(),
+            proposal_id: proposal_id.to_string(),
+            rounds: vec![DeliberationRound {
+                round_number: 1,
+                statements: Vec::new(),
+                votes: Vec::new(),
+                concluded: false,
+            }],
+            max_rounds: self.deliberation_config.max_rounds,
+            consensus_reached: false,
+            final_decision: None,
+            started_at: now,
+        };
+
+        let mut deliberations = self
+            .deliberations
+            .lock()
+            .map_err(|e| anyhow!("Failed to acquire lock on deliberations: {e}"))?;
+
+        if deliberations.contains_key(&id) {
+            return Err(anyhow!(
+                "Deliberation already exists for proposal '{}'",
+                proposal_id
+            ));
+        }
+
+        deliberations.insert(id.clone(), deliberation);
+        Ok(id)
+    }
+
+    /// Submit a statement in the current round of a deliberation.
+    ///
+    /// If the member has already submitted a statement in this round, it is
+    /// replaced with the new statement (allowing position changes within a round).
+    pub fn submit_statement(
+        &self,
+        deliberation_id: &DeliberationId,
+        statement: DeliberationStatement,
+    ) -> Result<()> {
+        let mut deliberations = self
+            .deliberations
+            .lock()
+            .map_err(|e| anyhow!("Failed to acquire lock on deliberations: {e}"))?;
+
+        let deliberation = deliberations
+            .get_mut(deliberation_id)
+            .ok_or_else(|| anyhow!("Deliberation '{}' not found", deliberation_id))?;
+
+        // Cannot submit statements after deliberation is concluded.
+        if deliberation.final_decision.is_some() {
+            return Err(anyhow!(
+                "Deliberation '{}' has already concluded",
+                deliberation_id
+            ));
+        }
+
+        let current_round = deliberation
+            .rounds
+            .last_mut()
+            .ok_or_else(|| anyhow!("Deliberation '{}' has no rounds", deliberation_id))?;
+
+        if current_round.concluded {
+            return Err(anyhow!(
+                "Current round {} of deliberation '{}' is already concluded",
+                current_round.round_number,
+                deliberation_id
+            ));
+        }
+
+        // Replace existing statement from this member in this round, or add new one.
+        if let Some(existing) = current_round
+            .statements
+            .iter_mut()
+            .find(|s| s.member_id == statement.member_id)
+        {
+            *existing = statement;
+        } else {
+            current_round.statements.push(statement);
+        }
+
+        Ok(())
+    }
+
+    /// Cast a vote in the current round of a deliberation.
+    ///
+    /// Unlike the simple `cast_vote` method, this allows the same member
+    /// to vote again in a new round (changing position between rounds).
+    /// Within a single round, the previous vote is replaced.
+    pub fn vote_in_round(&self, deliberation_id: &DeliberationId, vote: CouncilVote) -> Result<()> {
+        // Validate member exists and is active.
+        {
+            let members = self
+                .members
+                .lock()
+                .map_err(|e| anyhow!("Failed to acquire lock on members: {e}"))?;
+            let member = members
+                .get(&vote.member_id)
+                .ok_or_else(|| anyhow!("Member '{}' not found", vote.member_id))?;
+            if !member.is_active {
+                return Err(anyhow!(
+                    "Member '{}' is inactive and cannot vote",
+                    vote.member_id
+                ));
+            }
+        }
+
+        let mut deliberations = self
+            .deliberations
+            .lock()
+            .map_err(|e| anyhow!("Failed to acquire lock on deliberations: {e}"))?;
+
+        let deliberation = deliberations
+            .get_mut(deliberation_id)
+            .ok_or_else(|| anyhow!("Deliberation '{}' not found", deliberation_id))?;
+
+        if deliberation.final_decision.is_some() {
+            return Err(anyhow!(
+                "Deliberation '{}' has already concluded",
+                deliberation_id
+            ));
+        }
+
+        let current_round = deliberation
+            .rounds
+            .last_mut()
+            .ok_or_else(|| anyhow!("Deliberation '{}' has no rounds", deliberation_id))?;
+
+        if current_round.concluded {
+            return Err(anyhow!(
+                "Current round {} of deliberation '{}' is already concluded",
+                current_round.round_number,
+                deliberation_id
+            ));
+        }
+
+        // Replace existing vote from this member in this round, or add new one.
+        if let Some(existing) = current_round
+            .votes
+            .iter_mut()
+            .find(|v| v.member_id == vote.member_id)
+        {
+            *existing = vote;
+        } else {
+            current_round.votes.push(vote);
+        }
+
+        Ok(())
+    }
+
+    /// Conclude the current round of deliberation and advance to the next round.
+    ///
+    /// If all members have voted unanimously, consensus is reached and the
+    /// deliberation concludes. Otherwise, the process advances to the next
+    /// round (up to `max_rounds`). After the final round, a forced conclusion
+    /// is applied based on majority vote.
+    ///
+    /// Returns `true` if the deliberation has concluded, `false` otherwise.
+    pub fn conclude_round(&self, deliberation_id: &DeliberationId) -> Result<bool> {
+        let mut deliberations = self
+            .deliberations
+            .lock()
+            .map_err(|e| anyhow!("Failed to acquire lock on deliberations: {e}"))?;
+
+        let deliberation = deliberations
+            .get_mut(deliberation_id)
+            .ok_or_else(|| anyhow!("Deliberation '{}' not found", deliberation_id))?;
+
+        if deliberation.final_decision.is_some() {
+            return Ok(true);
+        }
+
+        let current_round = deliberation
+            .rounds
+            .last()
+            .ok_or_else(|| anyhow!("Deliberation '{}' has no rounds", deliberation_id))?;
+
+        if current_round.concluded {
+            return Err(anyhow!(
+                "Current round {} of deliberation '{}' is already concluded",
+                current_round.round_number,
+                deliberation_id
+            ));
+        }
+
+        let round_number = current_round.round_number;
+        let is_last_round = round_number >= deliberation.max_rounds;
+
+        // Mark current round as concluded.
+        if let Some(round) = deliberation.rounds.last_mut() {
+            round.concluded = true;
+        }
+
+        // Tally the votes in the current round.
+        let current_round = deliberation.rounds.last().unwrap();
+        let tally = self.tally_deliberation_round_votes(current_round);
+
+        // Check for unanimity (all non-abstain votes agree).
+        let unanimous = self.is_round_unanimous(&tally);
+
+        if unanimous {
+            // Consensus reached!
+            deliberation.consensus_reached = true;
+            let winning_position = tally
+                .iter()
+                .max_by_key(|(_, &count)| count)
+                .map(|(pos, _)| pos.clone());
+
+            deliberation.final_decision = winning_position.map(|pos| CouncilDecision {
+                position: pos,
+                amended_text: None,
+                decided_at_round: round_number,
+            });
+            return Ok(true);
+        }
+
+        if is_last_round {
+            // Final round: force conclusion by majority vote.
+            let winning_position = tally
+                .iter()
+                .max_by_key(|(_, &count)| count)
+                .map(|(pos, _)| pos.clone())
+                .unwrap_or(CouncilPosition::Abstain);
+
+            deliberation.final_decision = Some(CouncilDecision {
+                position: winning_position,
+                amended_text: None,
+                decided_at_round: round_number,
+            });
+            return Ok(true);
+        }
+
+        // Advance to next round.
+        let next_round = DeliberationRound {
+            round_number: round_number + 1,
+            statements: Vec::new(),
+            votes: Vec::new(),
+            concluded: false,
+        };
+
+        deliberation.rounds.push(next_round);
+        Ok(false)
+    }
+
+    /// Get a deliberation by ID.
+    pub fn get_deliberation(&self, id: &DeliberationId) -> Result<Deliberation> {
+        let deliberations = self
+            .deliberations
+            .lock()
+            .map_err(|e| anyhow!("Failed to acquire lock on deliberations: {e}"))?;
+
+        deliberations
+            .get(id)
+            .cloned()
+            .ok_or_else(|| anyhow!("Deliberation '{}' not found", id))
+    }
+
+    /// Get all active (non-concluded) deliberation IDs.
+    pub fn get_active_deliberations(&self) -> Vec<DeliberationId> {
+        let deliberations = self.deliberations.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+
+        deliberations
+            .iter()
+            .filter(|(_, d)| d.final_decision.is_none())
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    // ─── Internal deliberation helpers ───────────────────────────────────────
+
+    /// Tally votes in a deliberation round by CouncilPosition.
+    /// Maps each `CouncilVote`'s selected_option to a CouncilPosition tally.
+    fn tally_deliberation_round_votes(
+        &self,
+        round: &DeliberationRound,
+    ) -> HashMap<CouncilPosition, u32> {
+        let mut tally: HashMap<CouncilPosition, u32> = HashMap::new();
+        tally.insert(CouncilPosition::Support, 0);
+        tally.insert(CouncilPosition::Oppose, 0);
+        tally.insert(CouncilPosition::Amend, 0);
+        tally.insert(CouncilPosition::Abstain, 0);
+
+        for vote in &round.votes {
+            // Determine which CouncilPosition this vote maps to.
+            let pos = match vote.selected_option.to_lowercase().as_str() {
+                "support" | "approve" | "yes" | "for" => CouncilPosition::Support,
+                "oppose" | "reject" | "no" | "against" => CouncilPosition::Oppose,
+                "amend" | "modify" | "change" => CouncilPosition::Amend,
+                _ => CouncilPosition::Abstain,
+            };
+            *tally.entry(pos).or_insert(0) += 1;
+        }
+
+        tally
+    }
+
+    /// Check if a round's vote tally is unanimous (all non-abstain votes agree).
+    fn is_round_unanimous(&self, tally: &HashMap<CouncilPosition, u32>) -> bool {
+        let non_abstain: Vec<(_, _)> = tally
+            .iter()
+            .filter(|(pos, _)| **pos != CouncilPosition::Abstain)
+            .filter(|(_, &count)| count > 0)
+            .collect();
+
+        // Unanimous if exactly one non-abstain position has all the votes.
+        non_abstain.len() == 1
     }
 
     /// Return a `CouncilProfile` snapshot reflecting the current state.
@@ -1740,6 +2199,669 @@ mod tests {
         let rep2 = council.get_reputation("voter-2").unwrap();
         assert_eq!(rep2.accurate_votes, 1);
         assert_eq!(rep2.total_votes, 1);
+    }
+
+    // ─── Deliberation Tests (GAP-B50-08) ──────────────────────────────────
+
+    fn sample_deliberation_council() -> OrchestrationCouncil {
+        let council = OrchestrationCouncil::new_with_deliberation_config(
+            CouncilConfig {
+                name: "Deliberation Test Council".to_string(),
+                min_members_for_quorum: 2,
+                voting_duration_ms: 86_400_000,
+                max_proposals: 100,
+                enable_reputation: false,
+                reputation_warmup_rounds: 0,
+                ..Default::default()
+            },
+            DeliberationConfig {
+                max_rounds: 3,
+                require_consensus: false,
+                debate_timeout_secs: 60,
+            },
+        );
+        council
+            .add_member(sample_member("alice", "Alice", "strategist", 1))
+            .unwrap();
+        council
+            .add_member(sample_member("bob", "Bob", "analyst", 1))
+            .unwrap();
+        council
+            .add_member(sample_member("carol", "Carol", "overseer", 1))
+            .unwrap();
+        council
+            .submit_proposal(sample_proposal("prop-1", "Test Proposal", "alice"))
+            .unwrap();
+        council
+    }
+
+    #[test]
+    fn test_start_deliberation() {
+        let council = sample_deliberation_council();
+
+        let delib_id = council.start_deliberation("prop-1").unwrap();
+        assert_eq!(delib_id.0, "delib-prop-1");
+
+        let delib = council.get_deliberation(&delib_id).unwrap();
+        assert_eq!(delib.proposal_id, "prop-1");
+        assert_eq!(delib.max_rounds, 3);
+        assert!(!delib.consensus_reached);
+        assert!(delib.final_decision.is_none());
+        assert_eq!(delib.rounds.len(), 1);
+        assert_eq!(delib.rounds[0].round_number, 1);
+        assert!(!delib.rounds[0].concluded);
+    }
+
+    #[test]
+    fn test_start_deliberation_nonexistent_proposal_fails() {
+        let council = sample_deliberation_council();
+        let err = council.start_deliberation("nonexistent").unwrap_err();
+        assert!(
+            err.to_string().contains("not found")
+                || err.to_string().contains("error.council."),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_start_deliberation_duplicate_fails() {
+        let council = sample_deliberation_council();
+        council.start_deliberation("prop-1").unwrap();
+        let err = council.start_deliberation("prop-1").unwrap_err();
+        assert!(err.to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn test_submit_statement_in_deliberation() {
+        let council = sample_deliberation_council();
+        let delib_id = council.start_deliberation("prop-1").unwrap();
+
+        let statement = DeliberationStatement {
+            member_id: "alice".to_string(),
+            position: CouncilPosition::Support,
+            reasoning: "This is a good proposal.".to_string(),
+            amendments: vec![],
+            submitted_at: now_epoch_ms(),
+        };
+
+        council
+            .submit_statement(&delib_id, statement)
+            .unwrap();
+
+        let delib = council.get_deliberation(&delib_id).unwrap();
+        assert_eq!(delib.rounds[0].statements.len(), 1);
+        assert_eq!(delib.rounds[0].statements[0].member_id, "alice");
+        assert_eq!(delib.rounds[0].statements[0].position, CouncilPosition::Support);
+    }
+
+    #[test]
+    fn test_submit_statement_replaces_existing_in_round() {
+        let council = sample_deliberation_council();
+        let delib_id = council.start_deliberation("prop-1").unwrap();
+
+        // Alice submits initial statement.
+        council
+            .submit_statement(
+                &delib_id,
+                DeliberationStatement {
+                    member_id: "alice".to_string(),
+                    position: CouncilPosition::Support,
+                    reasoning: "I support this.".to_string(),
+                    amendments: vec![],
+                    submitted_at: now_epoch_ms(),
+                },
+            )
+            .unwrap();
+
+        // Alice changes her mind (still in round 1).
+        council
+            .submit_statement(
+                &delib_id,
+                DeliberationStatement {
+                    member_id: "alice".to_string(),
+                    position: CouncilPosition::Oppose,
+                    reasoning: "Actually, I oppose this now.".to_string(),
+                    amendments: vec![],
+                    submitted_at: now_epoch_ms(),
+                },
+            )
+            .unwrap();
+
+        let delib = council.get_deliberation(&delib_id).unwrap();
+        assert_eq!(delib.rounds[0].statements.len(), 1);
+        assert_eq!(
+            delib.rounds[0].statements[0].position,
+            CouncilPosition::Oppose
+        );
+    }
+
+    #[test]
+    fn test_vote_in_round() {
+        let council = sample_deliberation_council();
+        let delib_id = council.start_deliberation("prop-1").unwrap();
+
+        council
+            .vote_in_round(
+                &delib_id,
+                CouncilVote {
+                    member_id: "alice".to_string(),
+                    proposal_id: "prop-1".to_string(),
+                    selected_option: "support".to_string(),
+                    weight: 1,
+                    vote_ms: now_epoch_ms(),
+                    rationale: None,
+                },
+            )
+            .unwrap();
+
+        council
+            .vote_in_round(
+                &delib_id,
+                CouncilVote {
+                    member_id: "bob".to_string(),
+                    proposal_id: "prop-1".to_string(),
+                    selected_option: "oppose".to_string(),
+                    weight: 1,
+                    vote_ms: now_epoch_ms(),
+                    rationale: None,
+                },
+            )
+            .unwrap();
+
+        let delib = council.get_deliberation(&delib_id).unwrap();
+        assert_eq!(delib.rounds[0].votes.len(), 2);
+    }
+
+    #[test]
+    fn test_vote_in_round_replaces_previous_vote() {
+        let council = sample_deliberation_council();
+        let delib_id = council.start_deliberation("prop-1").unwrap();
+
+        // Alice votes support.
+        council
+            .vote_in_round(
+                &delib_id,
+                CouncilVote {
+                    member_id: "alice".to_string(),
+                    proposal_id: "prop-1".to_string(),
+                    selected_option: "support".to_string(),
+                    weight: 1,
+                    vote_ms: now_epoch_ms(),
+                    rationale: None,
+                },
+            )
+            .unwrap();
+
+        // Alice changes vote to oppose (still in round 1).
+        council
+            .vote_in_round(
+                &delib_id,
+                CouncilVote {
+                    member_id: "alice".to_string(),
+                    proposal_id: "prop-1".to_string(),
+                    selected_option: "oppose".to_string(),
+                    weight: 1,
+                    vote_ms: now_epoch_ms(),
+                    rationale: None,
+                },
+            )
+            .unwrap();
+
+        let delib = council.get_deliberation(&delib_id).unwrap();
+        assert_eq!(delib.rounds[0].votes.len(), 1);
+        assert_eq!(delib.rounds[0].votes[0].selected_option, "oppose");
+    }
+
+    #[test]
+    fn test_inactive_member_cannot_vote_in_round() {
+        let council = sample_deliberation_council();
+        let delib_id = council.start_deliberation("prop-1").unwrap();
+
+        // Deactivate Alice.
+        {
+            let mut members = council.members.lock().unwrap();
+            if let Some(m) = members.get_mut("alice") {
+                m.is_active = false;
+            }
+        }
+
+        let err = council
+            .vote_in_round(
+                &delib_id,
+                CouncilVote {
+                    member_id: "alice".to_string(),
+                    proposal_id: "prop-1".to_string(),
+                    selected_option: "support".to_string(),
+                    weight: 1,
+                    vote_ms: now_epoch_ms(),
+                    rationale: None,
+                },
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("inactive"));
+    }
+
+    #[test]
+    fn test_get_active_deliberations() {
+        let council = sample_deliberation_council();
+
+        // Submit a second proposal.
+        let mut p2 = sample_proposal("prop-2", "Another Test", "bob");
+        p2.options = vec!["support".to_string(), "oppose".to_string()];
+        p2.status = ProposalStatus::Active;
+        council.submit_proposal(p2).unwrap();
+
+        let d1 = council.start_deliberation("prop-1").unwrap();
+        let d2 = council.start_deliberation("prop-2").unwrap();
+
+        let active = council.get_active_deliberations();
+        assert_eq!(active.len(), 2);
+        assert!(active.contains(&d1));
+        assert!(active.contains(&d2));
+    }
+
+    #[test]
+    fn test_multi_round_deliberation_unanimous_round_one() {
+        let council = sample_deliberation_council();
+        let delib_id = council.start_deliberation("prop-1").unwrap();
+
+        // All three members vote support in round 1.
+        for member in &["alice", "bob", "carol"] {
+            council
+                .vote_in_round(
+                    &delib_id,
+                    CouncilVote {
+                        member_id: member.to_string(),
+                        proposal_id: "prop-1".to_string(),
+                        selected_option: "support".to_string(),
+                        weight: 1,
+                        vote_ms: now_epoch_ms(),
+                        rationale: None,
+                    },
+                )
+                .unwrap();
+        }
+
+        // Conclude round 1 — should reach consensus.
+        let concluded = council.conclude_round(&delib_id).unwrap();
+        assert!(concluded);
+
+        let delib = council.get_deliberation(&delib_id).unwrap();
+        assert!(delib.consensus_reached);
+        assert!(delib.final_decision.is_some());
+        assert_eq!(
+            delib.final_decision.unwrap().position,
+            CouncilPosition::Support
+        );
+
+        // No active deliberations after conclusion.
+        let active = council.get_active_deliberations();
+        assert!(active.is_empty());
+    }
+
+    #[test]
+    fn test_multi_round_deliberation_advances_to_round_two() {
+        let council = sample_deliberation_council();
+        let delib_id = council.start_deliberation("prop-1").unwrap();
+
+        // Split vote: alice supports, bob opposes, carol supports.
+        council
+            .vote_in_round(
+                &delib_id,
+                CouncilVote {
+                    member_id: "alice".to_string(),
+                    proposal_id: "prop-1".to_string(),
+                    selected_option: "support".to_string(),
+                    weight: 1,
+                    vote_ms: now_epoch_ms(),
+                    rationale: None,
+                },
+            )
+            .unwrap();
+        council
+            .vote_in_round(
+                &delib_id,
+                CouncilVote {
+                    member_id: "bob".to_string(),
+                    proposal_id: "prop-1".to_string(),
+                    selected_option: "oppose".to_string(),
+                    weight: 1,
+                    vote_ms: now_epoch_ms(),
+                    rationale: None,
+                },
+            )
+            .unwrap();
+        council
+            .vote_in_round(
+                &delib_id,
+                CouncilVote {
+                    member_id: "carol".to_string(),
+                    proposal_id: "prop-1".to_string(),
+                    selected_option: "support".to_string(),
+                    weight: 1,
+                    vote_ms: now_epoch_ms(),
+                    rationale: None,
+                },
+            )
+            .unwrap();
+
+        // Round 1 not unanimous — advance to round 2.
+        let concluded = council.conclude_round(&delib_id).unwrap();
+        assert!(!concluded);
+
+        let delib = council.get_deliberation(&delib_id).unwrap();
+        assert_eq!(delib.rounds.len(), 2);
+        assert_eq!(delib.rounds[0].round_number, 1);
+        assert!(delib.rounds[0].concluded);
+        assert_eq!(delib.rounds[1].round_number, 2);
+        assert!(!delib.rounds[1].concluded);
+    }
+
+    #[test]
+    fn test_multi_round_deliberation_position_changes_between_rounds() {
+        let council = sample_deliberation_council();
+        let delib_id = council.start_deliberation("prop-1").unwrap();
+
+        // Round 1: alice and carol support, bob opposes.
+        for (member, vote) in
+            &[("alice", "support"), ("bob", "oppose"), ("carol", "support")]
+        {
+            council
+                .vote_in_round(
+                    &delib_id,
+                    CouncilVote {
+                        member_id: member.to_string(),
+                        proposal_id: "prop-1".to_string(),
+                        selected_option: vote.to_string(),
+                        weight: 1,
+                        vote_ms: now_epoch_ms(),
+                        rationale: None,
+                    },
+                )
+                .unwrap();
+        }
+
+        // Conclude round 1 — not unanimous, advances to round 2.
+        council.conclude_round(&delib_id).unwrap();
+
+        // Round 2: bob changes position from oppose to support.
+        council
+            .vote_in_round(
+                &delib_id,
+                CouncilVote {
+                    member_id: "bob".to_string(),
+                    proposal_id: "prop-1".to_string(),
+                    selected_option: "support".to_string(),
+                    weight: 1,
+                    vote_ms: now_epoch_ms(),
+                    rationale: None,
+                },
+            )
+            .unwrap();
+
+        // Alice and carol also vote again (same positions).
+        for member in &["alice", "carol"] {
+            council
+                .vote_in_round(
+                    &delib_id,
+                    CouncilVote {
+                        member_id: member.to_string(),
+                        proposal_id: "prop-1".to_string(),
+                        selected_option: "support".to_string(),
+                        weight: 1,
+                        vote_ms: now_epoch_ms(),
+                        rationale: None,
+                    },
+                )
+                .unwrap();
+        }
+
+        // Conclude round 2 — now unanimous, should conclude.
+        let concluded = council.conclude_round(&delib_id).unwrap();
+        assert!(concluded);
+
+        let delib = council.get_deliberation(&delib_id).unwrap();
+        assert!(delib.consensus_reached);
+        assert_eq!(
+            delib.final_decision.unwrap().position,
+            CouncilPosition::Support
+        );
+    }
+
+    #[test]
+    fn test_multi_round_deliberation_forced_conclusion_at_max_rounds() {
+        let council = OrchestrationCouncil::new_with_deliberation_config(
+            CouncilConfig {
+                name: "Forced Conclusion Test".to_string(),
+                min_members_for_quorum: 2,
+                voting_duration_ms: 86_400_000,
+                max_proposals: 100,
+                enable_reputation: false,
+                reputation_warmup_rounds: 0,
+                ..Default::default()
+            },
+            DeliberationConfig {
+                max_rounds: 2, // Use 2 for faster test
+                require_consensus: false,
+                debate_timeout_secs: 60,
+            },
+        );
+        council
+            .add_member(sample_member("alice", "Alice", "strategist", 1))
+            .unwrap();
+        council
+            .add_member(sample_member("bob", "Bob", "analyst", 1))
+            .unwrap();
+        council
+            .submit_proposal(sample_proposal("prop-1", "Forced Test", "alice"))
+            .unwrap();
+
+        let delib_id = council.start_deliberation("prop-1").unwrap();
+
+        // Round 1: split vote.
+        for (member, vote) in &[("alice", "support"), ("bob", "oppose")] {
+            council
+                .vote_in_round(
+                    &delib_id,
+                    CouncilVote {
+                        member_id: member.to_string(),
+                        proposal_id: "prop-1".to_string(),
+                        selected_option: vote.to_string(),
+                        weight: 1,
+                        vote_ms: now_epoch_ms(),
+                        rationale: None,
+                    },
+                )
+                .unwrap();
+        }
+
+        // Round 1 not unanimous — advances to round 2 (max).
+        let concluded = council.conclude_round(&delib_id).unwrap();
+        assert!(!concluded);
+
+        // Round 2: still split.
+        for (member, vote) in &[("alice", "support"), ("bob", "oppose")] {
+            council
+                .vote_in_round(
+                    &delib_id,
+                    CouncilVote {
+                        member_id: member.to_string(),
+                        proposal_id: "prop-1".to_string(),
+                        selected_option: vote.to_string(),
+                        weight: 1,
+                        vote_ms: now_epoch_ms(),
+                        rationale: None,
+                    },
+                )
+                .unwrap();
+        }
+
+        // Round 2 is last — forced conclusion (support wins by tiebreak / first max).
+        let concluded = council.conclude_round(&delib_id).unwrap();
+        assert!(concluded);
+
+        let delib = council.get_deliberation(&delib_id).unwrap();
+        assert!(delib.final_decision.is_some());
+        let decision = delib.final_decision.unwrap();
+        assert_eq!(decision.decided_at_round, 2);
+        // After forced conclusion, there should be a decision.
+        assert_eq!(decision.position, CouncilPosition::Support);
+    }
+
+    #[test]
+    fn test_deliberation_submit_statement_after_conclusion_fails() {
+        let council = sample_deliberation_council();
+        let delib_id = council.start_deliberation("prop-1").unwrap();
+
+        // All vote unanimously.
+        for member in &["alice", "bob", "carol"] {
+            council
+                .vote_in_round(
+                    &delib_id,
+                    CouncilVote {
+                        member_id: member.to_string(),
+                        proposal_id: "prop-1".to_string(),
+                        selected_option: "support".to_string(),
+                        weight: 1,
+                        vote_ms: now_epoch_ms(),
+                        rationale: None,
+                    },
+                )
+                .unwrap();
+        }
+
+        council.conclude_round(&delib_id).unwrap();
+
+        // Try to submit statement after conclusion.
+        let err = council
+            .submit_statement(
+                &delib_id,
+                DeliberationStatement {
+                    member_id: "alice".to_string(),
+                    position: CouncilPosition::Amend,
+                    reasoning: "Too late!".to_string(),
+                    amendments: vec![],
+                    submitted_at: now_epoch_ms(),
+                },
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("concluded"));
+    }
+
+    #[test]
+    fn test_deliberation_vote_in_concluded_round_fails() {
+        let council = sample_deliberation_council();
+        let delib_id = council.start_deliberation("prop-1").unwrap();
+
+        // Round 1 votes split, conclude round 1.
+        council
+            .vote_in_round(
+                &delib_id,
+                CouncilVote {
+                    member_id: "alice".to_string(),
+                    proposal_id: "prop-1".to_string(),
+                    selected_option: "support".to_string(),
+                    weight: 1,
+                    vote_ms: now_epoch_ms(),
+                    rationale: None,
+                },
+            )
+            .unwrap();
+        council
+            .vote_in_round(
+                &delib_id,
+                CouncilVote {
+                    member_id: "bob".to_string(),
+                    proposal_id: "prop-1".to_string(),
+                    selected_option: "oppose".to_string(),
+                    weight: 1,
+                    vote_ms: now_epoch_ms(),
+                    rationale: None,
+                },
+            )
+            .unwrap();
+
+        council.conclude_round(&delib_id).unwrap();
+
+        // Try to vote in now-concluded round 1.
+        let err = council
+            .vote_in_round(
+                &delib_id,
+                CouncilVote {
+                    member_id: "carol".to_string(),
+                    proposal_id: "prop-1".to_string(),
+                    selected_option: "support".to_string(),
+                    weight: 1,
+                    vote_ms: now_epoch_ms(),
+                    rationale: None,
+                },
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("concluded"));
+    }
+
+    #[test]
+    fn test_conclude_round_twice_fails() {
+        let council = sample_deliberation_council();
+        let delib_id = council.start_deliberation("prop-1").unwrap();
+
+        // Vote and conclude round 1.
+        for member in &["alice", "bob"] {
+            council
+                .vote_in_round(
+                    &delib_id,
+                    CouncilVote {
+                        member_id: member.to_string(),
+                        proposal_id: "prop-1".to_string(),
+                        selected_option: "oppose".to_string(),
+                        weight: 1,
+                        vote_ms: now_epoch_ms(),
+                        rationale: None,
+                    },
+                )
+                .unwrap();
+        }
+        council.conclude_round(&delib_id).unwrap();
+
+        // Second conclude on the same round should fail.
+        let err = council.conclude_round(&delib_id).unwrap_err();
+        assert!(err.to_string().contains("concluded"));
+    }
+
+    #[test]
+    fn test_deliberation_statement_with_amendments() {
+        let council = sample_deliberation_council();
+        let delib_id = council.start_deliberation("prop-1").unwrap();
+
+        let statement = DeliberationStatement {
+            member_id: "alice".to_string(),
+            position: CouncilPosition::Amend,
+            reasoning: "We should increase the memory limit.".to_string(),
+            amendments: vec![
+                "Increase memory limit from 512MB to 1GB".to_string(),
+                "Add monitoring alerts".to_string(),
+            ],
+            submitted_at: now_epoch_ms(),
+        };
+
+        council
+            .submit_statement(&delib_id, statement)
+            .unwrap();
+
+        let delib = council.get_deliberation(&delib_id).unwrap();
+        let stmt = &delib.rounds[0].statements[0];
+        assert_eq!(stmt.position, CouncilPosition::Amend);
+        assert_eq!(stmt.amendments.len(), 2);
+        assert!(stmt.amendments[0].contains("1GB"));
+    }
+
+    #[test]
+    fn test_deliberation_config_default_values() {
+        let config = DeliberationConfig::default();
+        assert_eq!(config.max_rounds, 3);
+        assert_eq!(config.debate_timeout_secs, 60);
+        assert!(!config.require_consensus);
     }
 
     #[test]

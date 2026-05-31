@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(transparent)]
 pub struct AuthMethodId(pub String);
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
 impl AuthMethodId {
+    #[allow(dead_code)]
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
@@ -63,9 +63,9 @@ pub struct LogoutResponse {
     pub meta: Option<Meta>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
 pub struct InitializeRequest {
     pub protocol_version: ProtocolVersion,
     #[serde(default)]
@@ -369,9 +369,9 @@ pub struct SetSessionConfigOptionResponse {
 
 // ── Capabilities ──────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
 pub struct ClientCapabilities {
     #[serde(default)]
     pub fs: FileSystemCapabilities,
@@ -381,9 +381,9 @@ pub struct ClientCapabilities {
     pub meta: Option<Meta>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
 pub struct FileSystemCapabilities {
     #[serde(default)]
     pub read_text_file: bool,

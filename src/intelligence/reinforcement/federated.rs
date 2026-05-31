@@ -476,6 +476,599 @@ fn elapsed_ms() -> u64 {
 /// sharing across agents or async tasks.
 pub type SharedFederatedLearning = Arc<Mutex<FederatedLearning>>;
 
+// =========================================================================
+// FederatedRL — cross-node policy distillation (from federated_rl.rs)
+// =========================================================================
+//
+// Manages policy submission, distillation round orchestration, and
+// reward-weighted policy merging. Thread-safe via Arc<Mutex<Inner>>.
+//
+// F-GAP-19: Federated Reinforcement Learning (BLUE38)
+
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static FRL_POLICY_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+static FRL_ROUND_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+fn frl_generate_policy_id() -> String {
+    let n = FRL_POLICY_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("policy-{}", n)
+}
+
+fn frl_generate_round_id() -> String {
+    let n = FRL_ROUND_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("round-{}", n)
+}
+
+/// Errors that can occur during FederatedRL operations.
+#[derive(Debug, Clone)]
+pub enum FederatedError {
+    /// A policy with the given id was not found.
+    PolicyNotFound(String),
+    /// A round with the given id was not found.
+    RoundNotFound(String),
+    /// The round is not in a state that allows contribution.
+    RoundNotActive(String),
+    /// The specified policy has already been contributed to this round.
+    PolicyAlreadyContributed(String),
+    /// There are not enough contributors to complete the round.
+    InsufficientContributors { have: u32, need: u32 },
+    /// The policy data for a contributed policy was unexpectedly missing.
+    MissingPolicyData(String),
+}
+
+impl std::fmt::Display for FederatedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PolicyNotFound(id) => write!(f, "policy not found: {}", id),
+            Self::RoundNotFound(id) => write!(f, "round not found: {}", id),
+            Self::RoundNotActive(id) => write!(f, "round not active: {}", id),
+            Self::PolicyAlreadyContributed(id) => {
+                write!(f, "policy already contributed: {}", id)
+            }
+            Self::InsufficientContributors { have, need } => {
+                write!(f, "insufficient contributors: have {}, need {}", have, need)
+            }
+            Self::MissingPolicyData(id) => write!(f, "missing policy data: {}", id),
+        }
+    }
+}
+
+impl std::error::Error for FederatedError {}
+
+/// Convenience result alias for FederatedRL operations.
+pub type FederatedResult<T> = std::result::Result<T, FederatedError>;
+
+/// Status of a distillation round.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum DistillationStatus {
+    /// Round has been created but is not yet accepting contributions.
+    Pending,
+    /// Round is accepting policy contributions.
+    InProgress,
+    /// Policies have been merged; round is complete.
+    Completed,
+    /// Round could not be completed due to an error.
+    Failed,
+}
+
+/// A single policy entry submitted to the FederatedRL system.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyEntry {
+    /// Unique policy identifier.
+    pub id: String,
+    /// The node that submitted this policy.
+    pub node_id: String,
+    /// The type of task this policy was trained for.
+    pub task_type: String,
+    /// Opaque policy data (JSON blob).
+    pub policy_data: String,
+    /// Average reward achieved by this policy.
+    pub reward_avg: f64,
+    /// Number of training samples used.
+    pub sample_count: u64,
+    /// Timestamp (ms since epoch) when the policy was created.
+    pub created_ms: u64,
+    /// Timestamp (ms since epoch) when the policy was last updated.
+    pub updated_ms: u64,
+}
+
+/// A single distillation round in the FederatedRL system.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DistillationRound {
+    /// Unique round identifier.
+    pub id: String,
+    /// Sequential round number.
+    pub round_number: u64,
+    /// Timestamp (ms since epoch) when the round started.
+    pub start_ms: u64,
+    /// Timestamp (ms since epoch) when the round was completed.
+    pub completed_ms: u64,
+    /// Number of unique contributor nodes.
+    pub contributor_count: u32,
+    /// IDs of policies contributed to this round.
+    pub contributed_policy_ids: Vec<String>,
+    /// Merged policy data (JSON string), populated when the round is completed.
+    pub merged_policy: Option<String>,
+    /// Current status of the round.
+    pub status: DistillationStatus,
+}
+
+/// Configuration for the FederatedRL distillation engine.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FederatedRLConfig {
+    /// Minimum number of contributors required to complete a round.
+    pub min_contributors: u32,
+    /// Minimum interval (ms) between merge rounds.
+    pub merge_interval_ms: u64,
+    /// Maximum number of policies to retain in the store.
+    pub max_policies: usize,
+    /// Minimum total samples across contributors to allow a merge.
+    pub min_samples_for_merge: u64,
+}
+
+impl Default for FederatedRLConfig {
+    fn default() -> Self {
+        Self {
+            min_contributors: 2,
+            merge_interval_ms: 60_000,
+            max_policies: 100,
+            min_samples_for_merge: 1,
+        }
+    }
+}
+
+/// Profile snapshot of the FederatedRL system.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FederatedRLProfile {
+    /// Total number of policies ever submitted.
+    pub total_policies: usize,
+    /// Total number of distillation rounds started.
+    pub total_rounds: usize,
+    /// Number of rounds that completed successfully.
+    pub completed_rounds: usize,
+    /// Set of distinct nodes that have contributed at least one policy.
+    pub contributor_nodes: Vec<String>,
+    /// Timestamp (ms since epoch) of the last completed merge.
+    pub last_merge_ms: u64,
+    /// Average reward across all stored policies.
+    pub avg_reward_across_policies: f64,
+}
+
+struct FrlInner {
+    policies: HashMap<String, PolicyEntry>,
+    rounds: HashMap<String, DistillationRound>,
+    next_round_number: u64,
+    last_merge_ms: u64,
+    config: FederatedRLConfig,
+}
+
+/// Cross-node policy distillation engine.
+///
+/// Nodes share local policy snapshots (reward + sample count), which are
+/// merged via reward-weighted averaging during distillation rounds.
+///
+/// Thread-safe: `Arc<Mutex<FrlInner>>`
+#[derive(Clone)]
+pub struct FederatedRL {
+    inner: Arc<Mutex<FrlInner>>,
+}
+
+impl FederatedRL {
+    /// Create a new `FederatedRL` engine with the given configuration.
+    pub fn new(config: FederatedRLConfig) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(FrlInner {
+                policies: HashMap::new(),
+                rounds: HashMap::new(),
+                next_round_number: 1,
+                last_merge_ms: 0,
+                config,
+            })),
+        }
+    }
+
+    // ── Policy management ─────────────────────────────────────────────────
+
+    /// Submit a local policy snapshot.
+    ///
+    /// Returns the generated policy id.
+    pub fn submit_policy(
+        &self,
+        node_id: String,
+        task_type: String,
+        policy_data: String,
+        reward_avg: f64,
+        sample_count: u64,
+    ) -> String {
+        let mut inner = Self::inner_lock(&self.inner);
+        let id = frl_generate_policy_id();
+        let ts = now_millis();
+
+        if inner.policies.len() >= inner.config.max_policies {
+            let oldest_id = inner
+                .policies
+                .iter()
+                .min_by_key(|(_, p)| p.created_ms)
+                .map(|(k, _)| k.clone());
+            if let Some(k) = oldest_id {
+                inner.policies.remove(&k);
+            }
+        }
+
+        let entry = PolicyEntry {
+            id: id.clone(),
+            node_id,
+            task_type,
+            policy_data,
+            reward_avg,
+            sample_count,
+            created_ms: ts,
+            updated_ms: ts,
+        };
+        inner.policies.insert(id.clone(), entry);
+        id
+    }
+
+    /// Get policy details by id.
+    pub fn get_policy(&self, id: &str) -> FederatedResult<PolicyEntry> {
+        let inner = Self::inner_lock(&self.inner);
+        inner
+            .policies
+            .get(id)
+            .cloned()
+            .ok_or_else(|| FederatedError::PolicyNotFound(id.to_string()))
+    }
+
+    /// List policies, optionally filtered by task type.
+    pub fn list_policies(&self, task_type_filter: Option<&str>) -> Vec<PolicyEntry> {
+        let inner = Self::inner_lock(&self.inner);
+        match task_type_filter {
+            Some(tt) => inner
+                .policies
+                .values()
+                .filter(|p| p.task_type == tt)
+                .cloned()
+                .collect(),
+            None => inner.policies.values().cloned().collect(),
+        }
+    }
+
+    /// Get the policy with the highest average reward for a given task type.
+    pub fn best_policy(&self, task_type: &str) -> Option<PolicyEntry> {
+        let inner = Self::inner_lock(&self.inner);
+        inner
+            .policies
+            .values()
+            .filter(|p| p.task_type == task_type)
+            .max_by(|a, b| a.reward_avg.total_cmp(&b.reward_avg))
+            .cloned()
+    }
+
+    // ── Distillation rounds ───────────────────────────────────────────────
+
+    /// Start a new distillation round. Returns the generated round id.
+    pub fn start_distillation_round(&self) -> String {
+        let mut inner = Self::inner_lock(&self.inner);
+        let id = frl_generate_round_id();
+        let rn = inner.next_round_number;
+        inner.next_round_number += 1;
+
+        let round = DistillationRound {
+            id: id.clone(),
+            round_number: rn,
+            start_ms: now_millis(),
+            completed_ms: 0,
+            contributor_count: 0,
+            contributed_policy_ids: Vec::new(),
+            merged_policy: None,
+            status: DistillationStatus::Pending,
+        };
+        inner.rounds.insert(id.clone(), round);
+        id
+    }
+
+    /// Contribute a policy to an active round.
+    pub fn contribute_to_round(&self, round_id: &str, policy_id: &str) -> FederatedResult<()> {
+        let mut inner = Self::inner_lock(&self.inner);
+
+        if !inner.policies.contains_key(policy_id) {
+            return Err(FederatedError::PolicyNotFound(policy_id.to_string()));
+        }
+
+        let round = inner
+            .rounds
+            .get_mut(round_id)
+            .ok_or_else(|| FederatedError::RoundNotFound(round_id.to_string()))?;
+
+        if round.status != DistillationStatus::Pending
+            && round.status != DistillationStatus::InProgress
+        {
+            return Err(FederatedError::RoundNotActive(round_id.to_string()));
+        }
+
+        if round
+            .contributed_policy_ids
+            .contains(&policy_id.to_string())
+        {
+            return Err(FederatedError::PolicyAlreadyContributed(
+                policy_id.to_string(),
+            ));
+        }
+
+        if round.status == DistillationStatus::Pending {
+            round.status = DistillationStatus::InProgress;
+        }
+
+        round.contributed_policy_ids.push(policy_id.to_string());
+        round.contributor_count += 1;
+
+        Ok(())
+    }
+
+    /// Complete a distillation round by merging contributed policies.
+    ///
+    /// Uses reward-weighted averaging to produce a merged policy.
+    pub fn complete_round(&self, round_id: &str) -> FederatedResult<DistillationRound> {
+        let mut inner = Self::inner_lock(&self.inner);
+
+        if !inner.rounds.contains_key(round_id) {
+            return Err(FederatedError::RoundNotFound(round_id.to_string()));
+        }
+
+        {
+            let round = inner.rounds.get(round_id).unwrap();
+            if round.status != DistillationStatus::InProgress
+                && round.status != DistillationStatus::Pending
+            {
+                return Err(FederatedError::RoundNotActive(round_id.to_string()));
+            }
+
+            if round.contributor_count < inner.config.min_contributors {
+                return Err(FederatedError::InsufficientContributors {
+                    have: round.contributor_count,
+                    need: inner.config.min_contributors,
+                });
+            }
+        }
+
+        let contributed_ids: Vec<String> = {
+            let round = inner.rounds.get(round_id).unwrap();
+            round.contributed_policy_ids.clone()
+        };
+
+        let mut total_samples: u64 = 0;
+        let mut policies_to_merge: Vec<PolicyEntry> = Vec::new();
+
+        for pid in &contributed_ids {
+            match inner.policies.get(pid) {
+                Some(p) => {
+                    total_samples += p.sample_count;
+                    policies_to_merge.push(p.clone());
+                }
+                None => {
+                    return Err(FederatedError::MissingPolicyData(pid.clone()));
+                }
+            }
+        }
+
+        if total_samples < inner.config.min_samples_for_merge {
+            return Err(FederatedError::InsufficientContributors {
+                have: policies_to_merge.len() as u32,
+                need: inner.config.min_contributors,
+            });
+        }
+
+        let total_reward: f64 = policies_to_merge
+            .iter()
+            .map(|p| p.reward_avg * p.sample_count as f64)
+            .sum();
+        let weighted_avg_reward = total_reward / total_samples.max(1) as f64;
+
+        let weights: HashMap<String, f64> = policies_to_merge
+            .iter()
+            .map(|p| {
+                let weight = p.sample_count as f64 / total_samples.max(1) as f64;
+                (p.id.clone(), weight)
+            })
+            .collect();
+
+        let merged_payload = serde_json::json!({
+            "weighted_avg_reward": weighted_avg_reward,
+            "total_samples": total_samples,
+            "contributor_count": policies_to_merge.len(),
+            "weights": weights,
+            "policies": policies_to_merge.iter().map(|p| serde_json::json!({
+                "id": p.id,
+                "node_id": p.node_id,
+                "reward_avg": p.reward_avg,
+                "sample_count": p.sample_count,
+            })).collect::<Vec<_>>(),
+        });
+
+        let merged_policy =
+            serde_json::to_string(&merged_payload).unwrap_or_else(|_| "{}".to_string());
+
+        let completed_ms = now_millis();
+        {
+            let round = inner.rounds.get_mut(round_id).unwrap();
+            round.status = DistillationStatus::Completed;
+            round.completed_ms = completed_ms;
+            round.merged_policy = Some(merged_policy);
+        }
+
+        inner.last_merge_ms = completed_ms;
+
+        Ok(inner.rounds.get(round_id).unwrap().clone())
+    }
+
+    // ── Round querying ────────────────────────────────────────────────────
+
+    /// Get distillation round details by id.
+    pub fn get_round(&self, id: &str) -> FederatedResult<DistillationRound> {
+        let inner = Self::inner_lock(&self.inner);
+        inner
+            .rounds
+            .get(id)
+            .cloned()
+            .ok_or_else(|| FederatedError::RoundNotFound(id.to_string()))
+    }
+
+    /// List all distillation rounds, ordered by round number (ascending).
+    pub fn list_rounds(&self) -> Vec<DistillationRound> {
+        let inner = Self::inner_lock(&self.inner);
+        let mut rounds: Vec<DistillationRound> = inner.rounds.values().cloned().collect();
+        rounds.sort_by_key(|r| r.round_number);
+        rounds
+    }
+
+    // ── Profile ───────────────────────────────────────────────────────────
+
+    /// Return a snapshot of runtime metrics.
+    pub fn profile(&self) -> FederatedRLProfile {
+        let inner = Self::inner_lock(&self.inner);
+
+        let total_policies = inner.policies.len();
+        let total_rounds = inner.rounds.len();
+        let completed_rounds = inner
+            .rounds
+            .values()
+            .filter(|r| r.status == DistillationStatus::Completed)
+            .count();
+
+        let mut contributor_nodes: Vec<String> = {
+            let mut nodes: std::collections::BTreeSet<&str> =
+                std::collections::BTreeSet::new();
+            for p in inner.policies.values() {
+                nodes.insert(p.node_id.as_str());
+            }
+            nodes.into_iter().map(String::from).collect()
+        };
+        contributor_nodes.sort();
+
+        let avg_reward_across_policies = if total_policies == 0 {
+            0.0
+        } else {
+            let sum: f64 = inner.policies.values().map(|p| p.reward_avg).sum();
+            sum / total_policies as f64
+        };
+
+        FederatedRLProfile {
+            total_policies,
+            total_rounds,
+            completed_rounds,
+            contributor_nodes,
+            last_merge_ms: inner.last_merge_ms,
+            avg_reward_across_policies,
+        }
+    }
+
+    // ── Internal helpers ──────────────────────────────────────────────────
+
+    fn inner_lock(inner: &Arc<Mutex<FrlInner>>) -> std::sync::MutexGuard<'_, FrlInner> {
+        match inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::warn!("FederatedRL mutex poisoned, recovering");
+                poisoned.into_inner()
+            }
+        }
+    }
+}
+
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod federated_rl_tests {
+    use super::*;
+
+    #[test]
+    fn test_frl_new_empty() {
+        let frl = FederatedRL::new(FederatedRLConfig::default());
+        let profile = frl.profile();
+        assert_eq!(profile.total_policies, 0);
+        assert_eq!(profile.total_rounds, 0);
+    }
+
+    #[test]
+    fn test_frl_submit_policy() {
+        let frl = FederatedRL::new(FederatedRLConfig::default());
+        let id = frl.submit_policy(
+            "node1".into(),
+            "test".into(),
+            "data".into(),
+            0.8,
+            10,
+        );
+        assert!(id.starts_with("policy-"));
+        let policy = frl.get_policy(&id).unwrap();
+        assert_eq!(policy.node_id, "node1");
+        assert_eq!(policy.reward_avg, 0.8);
+    }
+
+    #[test]
+    fn test_frl_round_lifecycle() {
+        let frl = FederatedRL::new(FederatedRLConfig {
+            min_contributors: 2,
+            ..Default::default()
+        });
+
+        let p1 = frl.submit_policy("node1".into(), "t".into(), "d1".into(), 0.9, 10);
+        let p2 = frl.submit_policy("node2".into(), "t".into(), "d2".into(), 0.7, 20);
+
+        let rid = frl.start_distillation_round();
+        assert!(rid.starts_with("round-"));
+
+        frl.contribute_to_round(&rid, &p1).unwrap();
+        frl.contribute_to_round(&rid, &p2).unwrap();
+
+        let round = frl.complete_round(&rid).unwrap();
+        assert_eq!(round.status, DistillationStatus::Completed);
+        assert!(round.merged_policy.is_some());
+    }
+
+    #[test]
+    fn test_frl_insufficient_contributors() {
+        let frl = FederatedRL::new(FederatedRLConfig {
+            min_contributors: 3,
+            ..Default::default()
+        });
+
+        let p1 = frl.submit_policy("node1".into(), "t".into(), "d1".into(), 0.5, 5);
+        let p2 = frl.submit_policy("node2".into(), "t".into(), "d2".into(), 0.6, 5);
+
+        let rid = frl.start_distillation_round();
+        frl.contribute_to_round(&rid, &p1).unwrap();
+        frl.contribute_to_round(&rid, &p2).unwrap();
+
+        let err = frl.complete_round(&rid).unwrap_err();
+        match err {
+            FederatedError::InsufficientContributors { have, need } => {
+                assert_eq!(have, 2);
+                assert_eq!(need, 3);
+            }
+            _ => panic!("expected InsufficientContributors, got {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_frl_best_policy() {
+        let frl = FederatedRL::new(FederatedRLConfig::default());
+        frl.submit_policy("n1".into(), "t".into(), "d1".into(), 0.5, 5);
+        frl.submit_policy("n2".into(), "t".into(), "d2".into(), 0.9, 5);
+        frl.submit_policy("n3".into(), "t".into(), "d3".into(), 0.7, 5);
+
+        let best = frl.best_policy("t").unwrap();
+        assert_eq!(best.reward_avg, 0.9);
+        assert_eq!(best.node_id, "n2");
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

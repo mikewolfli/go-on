@@ -230,12 +230,13 @@ pub(super) async fn handle_cache_clear(
     request_id: Option<Value>,
 ) -> Result<()> {
     let memory_removed = server
+        .cache_deps
         .cache
         .memory_response_cache
         .lock()
         .map(|cache| cache.clear_all())
         .unwrap_or(0);
-    let persistent_removed = if let Some(cache) = server.cache.response_cache.clone() {
+    let persistent_removed = if let Some(cache) = server.cache_deps.cache.response_cache.clone() {
         crate::acp::r#impl::storage::cache_clear(server, cache).await?
     } else {
         0
@@ -262,11 +263,12 @@ pub(super) async fn handle_vector_clear(
     server: &AcpServer,
     request_id: Option<Value>,
 ) -> Result<()> {
-    let (memory_removed, summary_removed) = if let Some(store) = server.cache.vector_store.clone() {
-        store.clear_all()?
-    } else {
-        (0, 0)
-    };
+    let (memory_removed, summary_removed) =
+        if let Some(store) = server.cache_deps.cache.vector_store.clone() {
+            store.clear_all()?
+        } else {
+            (0, 0)
+        };
 
     send_result(
         server,
@@ -308,4 +310,123 @@ pub(super) async fn handle_maintenance_gc(
         }),
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── health_status_label ────────────────────────────────────────────
+
+    #[test]
+    fn health_status_label_healthy() {
+        assert_eq!(
+            health_status_label(crate::failure_prevention::HealthStatus::Healthy),
+            "healthy"
+        );
+    }
+
+    #[test]
+    fn health_status_label_degraded() {
+        assert_eq!(
+            health_status_label(crate::failure_prevention::HealthStatus::Degraded),
+            "degraded"
+        );
+    }
+
+    #[test]
+    fn health_status_label_unhealthy() {
+        assert_eq!(
+            health_status_label(crate::failure_prevention::HealthStatus::Unhealthy),
+            "unhealthy"
+        );
+    }
+
+    // ── circuit_state_label ────────────────────────────────────────────
+
+    #[test]
+    fn circuit_state_label_closed() {
+        assert_eq!(
+            circuit_state_label(crate::failure_prevention::CircuitBreakerState::Closed),
+            "closed"
+        );
+    }
+
+    #[test]
+    fn circuit_state_label_open() {
+        assert_eq!(
+            circuit_state_label(crate::failure_prevention::CircuitBreakerState::Open),
+            "open"
+        );
+    }
+
+    #[test]
+    fn circuit_state_label_half_open() {
+        assert_eq!(
+            circuit_state_label(crate::failure_prevention::CircuitBreakerState::HalfOpen),
+            "half-open"
+        );
+    }
+
+    // ── degradation_level_label ────────────────────────────────────────
+
+    #[test]
+    fn degradation_level_label_all_variants() {
+        use crate::failure_prevention::DegradationLevel;
+        assert_eq!(degradation_level_label(DegradationLevel::None), "none");
+        assert_eq!(
+            degradation_level_label(DegradationLevel::Minimal),
+            "minimal"
+        );
+        assert_eq!(
+            degradation_level_label(DegradationLevel::Moderate),
+            "moderate"
+        );
+        assert_eq!(
+            degradation_level_label(DegradationLevel::Significant),
+            "significant"
+        );
+        assert_eq!(
+            degradation_level_label(DegradationLevel::Critical),
+            "critical"
+        );
+    }
+
+    // ── recovery_action ────────────────────────────────────────────────
+
+    #[test]
+    fn recovery_action_unhealthy_returns_reset() {
+        use crate::failure_prevention::{DegradationLevel, HealthStatus};
+        assert_eq!(
+            recovery_action(HealthStatus::Unhealthy, DegradationLevel::Minimal),
+            "reset_breaker_and_fallback"
+        );
+    }
+
+    #[test]
+    fn recovery_action_critical_level_returns_reset() {
+        use crate::failure_prevention::{DegradationLevel, HealthStatus};
+        assert_eq!(
+            recovery_action(HealthStatus::Degraded, DegradationLevel::Critical),
+            "reset_breaker_and_fallback"
+        );
+    }
+
+    #[test]
+    fn recovery_action_degraded_significant() {
+        use crate::failure_prevention::{DegradationLevel, HealthStatus};
+        assert_eq!(
+            recovery_action(HealthStatus::Degraded, DegradationLevel::Significant),
+            "degrade_to_secondary_agent"
+        );
+    }
+
+    #[test]
+    fn recovery_action_healthy_none_observes() {
+        use crate::failure_prevention::{DegradationLevel, HealthStatus};
+        assert_eq!(
+            recovery_action(HealthStatus::Healthy, DegradationLevel::None),
+            "observe"
+        );
+    }
 }

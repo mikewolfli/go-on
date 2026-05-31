@@ -12,6 +12,22 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
+// ── Corrective result ──────────────────────────────────────────────────────
+
+/// Result of executing a corrective action, capturing root-cause analysis
+/// and preventive measures for future avoidance.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CorrectiveResult {
+    /// Whether the corrective action achieved its goal.
+    pub success: bool,
+    /// Identified root cause of the issue that prompted the action.
+    pub root_cause: String,
+    /// Preventive measures recommended to avoid recurrence.
+    pub preventive_measures: Vec<String>,
+    /// Unix-millisecond timestamp when the result was recorded.
+    pub applied_at: u64,
+}
+
 // ── Reflection level ────────────────────────────────────────────────────────
 
 /// Depth of reflection applied when assessing execution quality.
@@ -85,6 +101,9 @@ pub struct CorrectiveAction {
     /// Unix-millisecond timestamp when the action was resolved (completed /
     /// failed / skipped).  Zero until resolved.
     pub resolved_ms: u64,
+    /// Optional execution result with root-cause analysis and preventive
+    /// measures, populated via `record_corrective_result`.
+    pub result: Option<CorrectiveResult>,
 }
 
 /// A reflection report summarising observations and actions taken for a task.
@@ -177,6 +196,9 @@ const DEFAULT_MAX_REPORTS: usize = 1000;
 struct Inner {
     config: MetacognitiveConfig,
     observations: Vec<ExecutionObservation>,
+    /// O(1) observation lookup index keyed by observation id.
+    /// Must stay in sync with `observations`.
+    observation_index: HashMap<String, ExecutionObservation>,
     actions: Vec<CorrectiveAction>,
     reports: Vec<ReflectionReport>,
     max_reports: usize,
@@ -199,6 +221,7 @@ impl MetacognitiveController {
             inner: Arc::new(Mutex::new(Inner {
                 config,
                 observations: Vec::new(),
+                observation_index: HashMap::new(),
                 actions: Vec::new(),
                 reports: Vec::new(),
                 max_reports: DEFAULT_MAX_REPORTS,
@@ -235,31 +258,44 @@ impl MetacognitiveController {
             is_resolved: false,
         };
 
+        // Insert into both the Vec and the HashMap index.
+        inner.observation_index.insert(id.clone(), obs.clone());
         inner.observations.push(obs);
 
+        // Evict oldest observations FIFO, keeping index in sync.
         let max = inner.config.max_observations;
         if inner.observations.len() > max {
             let drain_end = inner.observations.len() - max;
+            // Collect evicted ids before draining to avoid double borrow.
+            let evicted_ids: Vec<String> = inner.observations[0..drain_end]
+                .iter()
+                .map(|o| o.id.clone())
+                .collect();
             inner.observations.drain(0..drain_end);
+            for evicted_id in &evicted_ids {
+                inner.observation_index.remove(evicted_id);
+            }
         }
 
         Ok(id)
     }
 
-    /// Get a single observation by id.
+    /// Get a single observation by id (O(1) via HashMap index).
     pub fn get_observation(&self, id: &str) -> Result<ExecutionObservation> {
         let inner = lock_guard(&self.inner);
-        inner
-            .observations
-            .iter()
-            .find(|o| o.id == id)
-            .cloned()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "{}",
-                    tf("error.metacognitive.observation_not_found", &[("id", id)])
-                )
-            })
+        inner.observation_index.get(id).cloned().ok_or_else(|| {
+            anyhow::anyhow!(
+                "{}",
+                tf("error.metacognitive.observation_not_found", &[("id", id)])
+            )
+        })
+    }
+
+    /// Get a single observation by id, returning `Option` (O(1) via HashMap
+    /// index).
+    pub fn get_observation_by_id(&self, id: &str) -> Option<ExecutionObservation> {
+        let inner = lock_guard(&self.inner);
+        inner.observation_index.get(id).cloned()
     }
 
     /// List all observations, optionally filtered to unresolved ones only.
@@ -277,20 +313,27 @@ impl MetacognitiveController {
         }
     }
 
-    /// Mark an observation as resolved.
+    /// Mark an observation as resolved (O(1) via HashMap index).
     pub fn resolve_observation(&self, id: &str) -> Result<()> {
         let mut inner = lock_guard(&self.inner);
-        let obs = inner
-            .observations
-            .iter_mut()
-            .find(|o| o.id == id)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "{}",
-                    tf("error.metacognitive.observation_not_found", &[("id", id)])
-                )
-            })?;
-        obs.is_resolved = true;
+        // Mutate in the Vec and then sync to the HashMap index.
+        let resolved = {
+            let obs = inner
+                .observations
+                .iter_mut()
+                .find(|o| o.id == id)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "{}",
+                        tf("error.metacognitive.observation_not_found", &[("id", id)])
+                    )
+                })?;
+            obs.is_resolved = true;
+            obs.clone()
+        };
+        // Sync the index with the updated observation (clone avoids double
+        // borrow of `inner`).
+        inner.observation_index.insert(id.to_string(), resolved);
         Ok(())
     }
 
@@ -308,8 +351,8 @@ impl MetacognitiveController {
     ) -> Result<String> {
         let mut inner = lock_guard(&self.inner);
 
-        // Validate that the observation exists.
-        if !inner.observations.iter().any(|o| o.id == observation_id) {
+        // Validate that the observation exists (O(1) via HashMap index).
+        if !inner.observation_index.contains_key(observation_id) {
             anyhow::bail!(
                 "{}",
                 tf(
@@ -330,6 +373,7 @@ impl MetacognitiveController {
             status: CorrectiveStatus::Pending,
             created_ms: now_ms(),
             resolved_ms: 0,
+            result: None,
         };
 
         inner.actions.push(action);
@@ -767,6 +811,41 @@ impl MetacognitiveController {
             self.fail_action(&action_id, &t("status.metacognitive.rl.failed_outcome"))?;
         }
         Ok(action_id)
+    }
+
+    /// Get historical corrective actions filtered by action type.
+    pub fn get_historical_actions(&self, task_type: &str) -> Vec<CorrectiveAction> {
+        let inner = lock_guard(&self.inner);
+        inner
+            .actions
+            .iter()
+            .filter(|a| a.action_type == task_type)
+            .cloned()
+            .collect()
+    }
+
+    /// Record the execution result of a corrective action.
+    ///
+    /// Attaches a [`CorrectiveResult`] to the action identified by `action_id`.
+    /// Returns an error if the action does not exist.
+    pub fn record_corrective_result(
+        &self,
+        action_id: &str,
+        result: CorrectiveResult,
+    ) -> Result<()> {
+        let mut inner = lock_guard(&self.inner);
+        let action = inner
+            .actions
+            .iter_mut()
+            .find(|a| a.id == action_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}",
+                    tf("error.metacognitive.action_not_found", &[("id", action_id)])
+                )
+            })?;
+        action.result = Some(result);
+        Ok(())
     }
 
     /// Get action effectiveness ratio: completed / (completed + failed).
@@ -1327,5 +1406,172 @@ mod tests {
             (ctrl.action_effectiveness_ratio() - p.action_effectiveness_ratio).abs() < 0.001,
             "direct action_effectiveness_ratio() should match profile"
         );
+    }
+
+    // ── 13. O(1) HashMap lookup via get_observation_by_id ───────────────
+    #[test]
+    fn test_get_observation_by_id_o1() {
+        let ctrl = MetacognitiveController::new(base_config());
+        let id = ctrl
+            .record_observation("task-1", "agent-a", "latency_spike", "high", "Spike")
+            .unwrap();
+
+        // O(1) lookup returns the correct observation.
+        let obs = ctrl
+            .get_observation_by_id(&id)
+            .expect("observation should exist");
+        assert_eq!(obs.task_id, "task-1");
+        assert_eq!(obs.observation_type, "latency_spike");
+        assert_eq!(obs.severity, "high");
+        assert!(!obs.is_resolved);
+
+        // Non-existent id returns None.
+        assert!(ctrl.get_observation_by_id("obs-9999").is_none());
+    }
+
+    // ── 14. Historical actions filtered by task/action type ────────────
+    #[test]
+    fn test_get_historical_actions() {
+        let ctrl = MetacognitiveController::new(base_config());
+        let obs_id = ctrl
+            .record_observation("task-1", "agent-a", "error", "high", "Error")
+            .unwrap();
+
+        // Create actions of different types.
+        let a1 = ctrl.propose_action(&obs_id, "retry", "Retry").unwrap();
+        let a2 = ctrl
+            .propose_action(&obs_id, "retry", "Retry again")
+            .unwrap();
+        let a3 = ctrl
+            .propose_action(&obs_id, "escalate", "Escalate")
+            .unwrap();
+
+        // Execute and complete the actions so they are not Pending.
+        ctrl.execute_action(&a1).unwrap();
+        ctrl.complete_action(&a1).unwrap();
+        ctrl.execute_action(&a2).unwrap();
+        ctrl.fail_action(&a2, "timeout").unwrap();
+        ctrl.execute_action(&a3).unwrap();
+        ctrl.complete_action(&a3).unwrap();
+
+        // Filter by "retry" should return 2 actions.
+        let retry_actions = ctrl.get_historical_actions("retry");
+        assert_eq!(retry_actions.len(), 2);
+        for a in &retry_actions {
+            assert_eq!(a.action_type, "retry");
+        }
+
+        // Filter by "escalate" should return 1 action.
+        let escalate_actions = ctrl.get_historical_actions("escalate");
+        assert_eq!(escalate_actions.len(), 1);
+        assert_eq!(escalate_actions[0].action_type, "escalate");
+
+        // Filter by nonexistent type returns empty.
+        let none = ctrl.get_historical_actions("fallback");
+        assert!(none.is_empty());
+    }
+
+    // ── 15. Record corrective result ────────────────────────────────────
+    #[test]
+    fn test_record_corrective_result() {
+        let ctrl = MetacognitiveController::new(base_config());
+        let obs_id = ctrl
+            .record_observation("task-1", "agent-a", "error", "high", "Timeout error")
+            .unwrap();
+        let action_id = ctrl
+            .propose_action(&obs_id, "retry", "Retry with exponential backoff")
+            .unwrap();
+
+        // Record a corrective result with root-cause analysis.
+        let result = CorrectiveResult {
+            success: true,
+            root_cause: "Network congestion caused timeout".to_string(),
+            preventive_measures: vec![
+                "Increase timeout to 30s".to_string(),
+                "Add circuit breaker".to_string(),
+            ],
+            applied_at: now_ms(),
+        };
+        ctrl.record_corrective_result(&action_id, result.clone())
+            .unwrap();
+
+        // Verify the result is attached to the action.
+        let action = ctrl
+            .list_actions(None)
+            .into_iter()
+            .find(|a| a.id == action_id)
+            .expect("action should exist");
+        let stored = action.result.expect("result should be set");
+        assert!(stored.success);
+        assert_eq!(stored.root_cause, "Network congestion caused timeout");
+        assert_eq!(stored.preventive_measures.len(), 2);
+        assert!(stored.preventive_measures[0].contains("Increase timeout"));
+        assert!(stored.preventive_measures[1].contains("circuit breaker"));
+        assert!(stored.applied_at > 0);
+
+        // Recording on a non-existent action fails.
+        assert!(ctrl
+            .record_corrective_result("action-9999", result)
+            .is_err());
+    }
+
+    // ── 16. Backward compatibility: old get_observation still works ─────
+    #[test]
+    fn test_backward_compatible_get_observation() {
+        let ctrl = MetacognitiveController::new(base_config());
+        let id = ctrl
+            .record_observation("task-1", "agent-a", "latency_spike", "medium", "Slow")
+            .unwrap();
+
+        // Old API via Result.
+        let obs = ctrl.get_observation(&id).unwrap();
+        assert_eq!(obs.id, id);
+
+        // New API via Option.
+        let obs_opt = ctrl.get_observation_by_id(&id).unwrap();
+        assert_eq!(obs_opt.id, id);
+
+        // Both methods return the same data.
+        assert_eq!(obs.description, obs_opt.description);
+    }
+
+    // ── 17. HashMap index stays in sync after eviction ──────────────────
+    #[test]
+    fn test_index_sync_on_eviction() {
+        // Use a very small max_observations so eviction triggers quickly.
+        let config = MetacognitiveConfig {
+            enable_auto_reflection: false,
+            min_observations_for_reflection: 10,
+            max_observations: 3,
+            max_actions: 10,
+        };
+        let ctrl = MetacognitiveController::new(config);
+
+        let id1 = ctrl
+            .record_observation("task-1", "a", "type-a", "low", "A")
+            .unwrap();
+        let id2 = ctrl
+            .record_observation("task-1", "a", "type-b", "low", "B")
+            .unwrap();
+        let id3 = ctrl
+            .record_observation("task-1", "a", "type-c", "low", "C")
+            .unwrap();
+
+        // All 3 available.
+        assert!(ctrl.get_observation_by_id(&id1).is_some());
+        assert!(ctrl.get_observation_by_id(&id2).is_some());
+        assert!(ctrl.get_observation_by_id(&id3).is_some());
+
+        // Adding a 4th evicts the 1st.
+        let id4 = ctrl
+            .record_observation("task-1", "a", "type-d", "low", "D")
+            .unwrap();
+        assert!(ctrl.get_observation_by_id(&id1).is_none()); // evicted
+        assert!(ctrl.get_observation_by_id(&id2).is_some());
+        assert!(ctrl.get_observation_by_id(&id3).is_some());
+        assert!(ctrl.get_observation_by_id(&id4).is_some());
+
+        // Vec length is capped at max_observations.
+        assert_eq!(ctrl.list_observations(false).len(), 3);
     }
 }

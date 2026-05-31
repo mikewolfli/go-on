@@ -8,7 +8,9 @@ use crate::i18n::runtime::tf;
 use crate::intelligence::lock_guard;
 use crate::intelligence::now_ms;
 use anyhow::{bail, Result};
+use tracing::debug;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 // Lock a Mutex, recovering from poison with a log.
@@ -26,6 +28,21 @@ pub struct SelfIdentity {
     pub creator: String,
     pub created_ms: u64,
     pub tags: Vec<String>,
+}
+
+/// Dynamic EMA-based statistics for a capability, updated on each execution.
+#[derive(Debug, Clone)]
+pub struct CapabilityStats {
+    /// EMA of success rate in [0.0, 1.0].
+    pub effectiveness: f64,
+    /// EMA adjusted by sample count; grows toward 1.0 as more samples arrive.
+    pub confidence: f64,
+    /// EMA of observed latency in ms.
+    pub avg_latency_ms: f64,
+    /// Total number of execution samples collected.
+    pub sample_count: u64,
+    /// Timestamp (ms since epoch) of the last recorded execution.
+    pub last_updated: u64,
 }
 
 /// A known capability the system can perform, along with tracked effectiveness
@@ -113,6 +130,16 @@ pub struct SelfModelProfile {
     pub performance_snapshots: usize,
     /// Timestamp (ms) of the last update to the model.
     pub last_update_ms: u64,
+    /// Number of capabilities with dynamic EMA stats.
+    pub capabilities_with_stats: usize,
+    /// Average dynamic effectiveness across all tracked capabilities.
+    pub avg_dynamic_effectiveness: f64,
+    /// Average dynamic confidence across all tracked capabilities.
+    pub avg_dynamic_confidence: f64,
+    /// Total execution samples collected across all capabilities.
+    pub total_samples: u64,
+    /// Average EMA latency (ms) across all tracked capabilities.
+    pub avg_latency_ms: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +153,7 @@ struct Inner {
     capabilities: Vec<SelfCapability>,
     limitations: Vec<SelfLimitation>,
     snapshots: Vec<SelfPerformanceSnapshot>,
+    capability_stats: HashMap<String, CapabilityStats>,
     last_update_ms: u64,
 }
 
@@ -150,6 +178,7 @@ impl SelfModelCore {
                 capabilities: Vec::new(),
                 limitations: Vec::new(),
                 snapshots: Vec::new(),
+                capability_stats: HashMap::new(),
                 last_update_ms: now_ms(),
             })),
         }
@@ -373,9 +402,85 @@ impl SelfModelCore {
         self.record_performance(snapshot);
     }
 
+    // -- Dynamic EMA Statistics -------------------------------------------
+
+    /// Record an execution result for a capability and update EMA-based dynamic
+    /// scoring.
+    ///
+    /// - `capability_name` — the name of the capability that was executed.
+    /// - `success` — whether the execution succeeded.
+    /// - `latency` — observed latency in milliseconds.
+    ///
+    /// EMA formula: `new_score = 0.3 * observed + 0.7 * old_score`.
+    /// If no prior stats exist for the capability, the observed value is used
+    /// directly as the starting point.
+    pub fn record_execution_result(&self, capability_name: &str, success: bool, latency: u64) {
+        const EMA_ALPHA: f64 = 0.3;
+        let observed_success = if success { 1.0 } else { 0.0 };
+        let now = now_ms();
+
+        let mut inner = lock_guard(&self.inner);
+        let stats = inner
+            .capability_stats
+            .entry(capability_name.to_string())
+            .or_insert(CapabilityStats {
+                effectiveness: observed_success,
+                confidence: 0.0,
+                avg_latency_ms: latency as f64,
+                sample_count: 0,
+                last_updated: now,
+            });
+
+        stats.sample_count = stats.sample_count.saturating_add(1);
+        stats.last_updated = now;
+
+        // Effectiveness: EMA of observed success (1.0 / 0.0).
+        stats.effectiveness = EMA_ALPHA * observed_success + (1.0 - EMA_ALPHA) * stats.effectiveness;
+
+        // Confidence: EMA adjusted by sample count.
+        // observed_confidence approaches 1.0 as sample_count grows.
+        let observed_confidence =
+            (stats.sample_count as f64) / (stats.sample_count as f64 + 10.0);
+        stats.confidence = EMA_ALPHA * observed_confidence + (1.0 - EMA_ALPHA) * stats.confidence;
+
+        // Latency: EMA of observed latency.
+        stats.avg_latency_ms =
+            EMA_ALPHA * (latency as f64) + (1.0 - EMA_ALPHA) * stats.avg_latency_ms;
+
+        debug!(
+            capability = %capability_name,
+            effectiveness = stats.effectiveness,
+            confidence = stats.confidence,
+            latency_ms = stats.avg_latency_ms,
+            samples = stats.sample_count,
+            "SelfModel: updated capability stats"
+        );
+    }
+
+    /// Get the dynamic EMA stats for a specific capability, if any.
+    pub fn get_capability_stats(&self, name: &str) -> Option<CapabilityStats> {
+        let inner = lock_guard(&self.inner);
+        inner.capability_stats.get(name).cloned()
+    }
+
+    /// Return the list of capability names whose dynamic effectiveness score
+    /// is below 0.5 — these need improvement or replacement.
+    pub fn capability_gaps(&self) -> Vec<String> {
+        let inner = lock_guard(&self.inner);
+        let mut gaps: Vec<String> = inner
+            .capability_stats
+            .iter()
+            .filter(|(_, s)| s.effectiveness < 0.5)
+            .map(|(name, _)| name.clone())
+            .collect();
+        gaps.sort();
+        gaps
+    }
+
     // -- Profile ----------------------------------------------------------
 
-    /// Return a summary profile of the self-model's current state.
+    /// Return a summary profile of the self-model's current state, including
+    /// live dynamic EMA metrics.
     pub fn profile(&self) -> SelfModelProfile {
         let inner = lock_guard(&self.inner);
 
@@ -386,6 +491,23 @@ impl SelfModelCore {
             .filter(|l| l.is_acknowledged)
             .count();
 
+        let capabilities_with_stats = inner.capability_stats.len();
+        let total_samples: u64 = inner
+            .capability_stats
+            .values()
+            .map(|s| s.sample_count)
+            .sum();
+
+        let (avg_eff, avg_conf, avg_lat) = if capabilities_with_stats > 0 {
+            let count = capabilities_with_stats as f64;
+            let sum_eff: f64 = inner.capability_stats.values().map(|s| s.effectiveness).sum();
+            let sum_conf: f64 = inner.capability_stats.values().map(|s| s.confidence).sum();
+            let sum_lat: f64 = inner.capability_stats.values().map(|s| s.avg_latency_ms).sum();
+            (sum_eff / count, sum_conf / count, sum_lat / count)
+        } else {
+            (0.0, 0.0, 0.0)
+        };
+
         SelfModelProfile {
             identity_set: inner.identity.is_some(),
             capabilities_count: inner.capabilities.len(),
@@ -393,6 +515,11 @@ impl SelfModelCore {
             acknowledged_limitations,
             performance_snapshots: inner.snapshots.len(),
             last_update_ms: inner.last_update_ms,
+            capabilities_with_stats,
+            avg_dynamic_effectiveness: avg_eff,
+            avg_dynamic_confidence: avg_conf,
+            total_samples,
+            avg_latency_ms: avg_lat,
         }
     }
 }
@@ -765,5 +892,171 @@ mod tests {
 
         let all = core.list_capabilities(None);
         assert_eq!(all.len(), 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional: EMA computation for capabilities.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_ema_effectiveness_computation() {
+        let core = SelfModelCore::new(test_config());
+
+        // First call: should initialize with the observed value.
+        core.record_execution_result("cap-a", true, 100);
+        let stats = core.get_capability_stats("cap-a").unwrap();
+        // First sample: effectiveness = 1.0 (direct assignment)
+        assert!((stats.effectiveness - 1.0).abs() < 1e-9);
+        assert_eq!(stats.sample_count, 1);
+
+        // Second call: EMA = 0.3 * 1.0 + 0.7 * 1.0 = 1.0
+        core.record_execution_result("cap-a", true, 100);
+        let stats = core.get_capability_stats("cap-a").unwrap();
+        assert!((stats.effectiveness - 1.0).abs() < 1e-9);
+        assert_eq!(stats.sample_count, 2);
+
+        // Third call: failure → EMA = 0.3 * 0.0 + 0.7 * 1.0 = 0.7
+        core.record_execution_result("cap-a", false, 200);
+        let stats = core.get_capability_stats("cap-a").unwrap();
+        assert!((stats.effectiveness - 0.7).abs() < 1e-9);
+        assert_eq!(stats.sample_count, 3);
+
+        // Fourth call: failure → EMA = 0.3 * 0.0 + 0.7 * 0.7 = 0.49
+        core.record_execution_result("cap-a", false, 200);
+        let stats = core.get_capability_stats("cap-a").unwrap();
+        assert!((stats.effectiveness - 0.49).abs() < 1e-9);
+        assert_eq!(stats.sample_count, 4);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional: EMA latency computation.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_ema_latency_computation() {
+        let core = SelfModelCore::new(test_config());
+
+        core.record_execution_result("cap-b", true, 100);
+        let stats = core.get_capability_stats("cap-b").unwrap();
+        assert!((stats.avg_latency_ms - 100.0).abs() < 1e-9);
+
+        // EMA = 0.3 * 200 + 0.7 * 100 = 60 + 70 = 130
+        core.record_execution_result("cap-b", true, 200);
+        let stats = core.get_capability_stats("cap-b").unwrap();
+        assert!((stats.avg_latency_ms - 130.0).abs() < 1e-9);
+
+        // EMA = 0.3 * 50 + 0.7 * 130 = 15 + 91 = 106
+        core.record_execution_result("cap-b", true, 50);
+        let stats = core.get_capability_stats("cap-b").unwrap();
+        assert!((stats.avg_latency_ms - 106.0).abs() < 1e-9);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional: Confidence grows with sample count.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_confidence_increases_with_samples() {
+        let core = SelfModelCore::new(test_config());
+
+        // Record many successes.
+        for _ in 0..50 {
+            core.record_execution_result("cap-c", true, 50);
+        }
+
+        let stats = core.get_capability_stats("cap-c").unwrap();
+        // After 50 samples, confidence should be close to 1.0.
+        assert!(stats.confidence > 0.95, "confidence={}", stats.confidence);
+        assert!(stats.confidence <= 1.0);
+        assert_eq!(stats.sample_count, 50);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional: capability_gaps returns underperforming capabilities.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_capability_gaps() {
+        let core = SelfModelCore::new(test_config());
+
+        // Record a mix.
+        core.record_execution_result("good", true, 10);
+        core.record_execution_result("good", true, 10);
+        core.record_execution_result("good", true, 10);
+
+        core.record_execution_result("bad", false, 500);
+        core.record_execution_result("bad", false, 500);
+        core.record_execution_result("bad", false, 500); // effectiveness ≈ 0.343
+
+        core.record_execution_result("okay", true, 100);
+        core.record_execution_result("okay", false, 100);
+        core.record_execution_result("okay", true, 100); // effectiveness = ?
+
+        let gaps = core.capability_gaps();
+        assert!(gaps.contains(&"bad".to_string()), "gaps={:?}", gaps);
+        assert!(!gaps.contains(&"good".to_string()), "gaps={:?}", gaps);
+
+        // 'okay' effectiveness after: 1.0, then 0.3*0+0.7*1=0.7, then 0.3*1+0.7*0.7=0.79
+        // Should not be a gap.
+        assert!(!gaps.contains(&"okay".to_string()), "gaps={:?}", gaps);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional: Dynamic profile includes live EMA metrics.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_dynamic_profile_includes_ema_metrics() {
+        let core = SelfModelCore::new(test_config());
+
+        // Profile starts with zero stats.
+        let p0 = core.profile();
+        assert_eq!(p0.capabilities_with_stats, 0);
+        assert_eq!(p0.total_samples, 0);
+        assert!((p0.avg_dynamic_effectiveness - 0.0).abs() < 1e-9);
+        assert!((p0.avg_dynamic_confidence - 0.0).abs() < 1e-9);
+        assert!((p0.avg_latency_ms - 0.0).abs() < 1e-9);
+
+        // Record some execution results.
+        core.record_execution_result("alpha", true, 100);
+        core.record_execution_result("alpha", true, 100);
+        core.record_execution_result("beta", false, 300);
+
+        let p = core.profile();
+        assert_eq!(p.capabilities_with_stats, 2);
+        assert_eq!(p.total_samples, 3);
+        // avg_dynamic_effectiveness = (1.0 + 0.3) / 2 = 0.65
+        assert!((p.avg_dynamic_effectiveness - 0.65).abs() < 1e-9);
+        assert!(p.avg_dynamic_confidence > 0.0);
+        // avg_latency_ms: (100.0 + 300.0) / 2 = 200.0
+        assert!((p.avg_latency_ms - 200.0).abs() < 1e-9);
+        assert!(p.last_update_ms > 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional: capability_gaps is empty when no stats recorded.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_capability_gaps_empty_when_no_stats() {
+        let core = SelfModelCore::new(test_config());
+        let gaps = core.capability_gaps();
+        assert!(gaps.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional: Stats are independent per capability.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_stats_independent_per_capability() {
+        let core = SelfModelCore::new(test_config());
+
+        core.record_execution_result("foo", true, 10);
+        core.record_execution_result("bar", false, 500);
+
+        let foo = core.get_capability_stats("foo").unwrap();
+        let bar = core.get_capability_stats("bar").unwrap();
+
+        assert!((foo.effectiveness - 1.0).abs() < 1e-9);
+        assert!((foo.avg_latency_ms - 10.0).abs() < 1e-9);
+        assert_eq!(foo.sample_count, 1);
+
+        assert!((bar.effectiveness - 0.0).abs() < 1e-9);
+        assert!((bar.avg_latency_ms - 500.0).abs() < 1e-9);
+        assert_eq!(bar.sample_count, 1);
     }
 }

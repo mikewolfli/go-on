@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracing::warn;
 
 /// Rate limit configuration for a tenant
@@ -30,6 +30,7 @@ impl Default for TenantRateLimit {
 struct TokenBucket {
     tokens: f64,
     last_refill: Instant,
+    last_access: Instant,
     capacity: f64,
     refill_rate: f64, // tokens per second
 }
@@ -39,9 +40,14 @@ impl TokenBucket {
         Self {
             tokens: burst as f64,
             last_refill: Instant::now(),
+            last_access: Instant::now(),
             capacity: burst as f64,
             refill_rate: rpm as f64 / 60.0,
         }
+    }
+
+    fn is_idle(&self, idle_timeout: Duration) -> bool {
+        self.last_access.elapsed() >= idle_timeout
     }
 
     fn refill(&mut self) {
@@ -54,6 +60,7 @@ impl TokenBucket {
 
     fn try_consume(&mut self, tokens: f64) -> bool {
         self.refill();
+        self.last_access = Instant::now();
         if self.tokens >= tokens {
             self.tokens -= tokens;
             true
@@ -68,6 +75,7 @@ impl TokenBucket {
 pub struct RateLimitMiddleware {
     buckets: Mutex<HashMap<String, TokenBucket>>,
     default_limit: TenantRateLimit,
+    idle_timeout: Duration,
 }
 
 #[allow(dead_code)] // F-GAP-49 — reserved for generic construction
@@ -82,7 +90,28 @@ impl RateLimitMiddleware {
         Self {
             buckets: Mutex::new(HashMap::new()),
             default_limit,
+            idle_timeout: Duration::from_secs(3600),
         }
+    }
+
+    /// Set the idle timeout for tenant eviction.
+    pub fn with_idle_timeout(mut self, idle_timeout_seconds: u64) -> Self {
+        self.idle_timeout = Duration::from_secs(idle_timeout_seconds);
+        self
+    }
+
+    /// Perform lazy eviction: remove idle tenant entries.
+    fn lazy_evict(&self, buckets: &mut HashMap<String, TokenBucket>) {
+        buckets.retain(|_, bucket| !bucket.is_idle(self.idle_timeout));
+    }
+
+    /// Evict a specific tenant from the rate limiter.
+    pub fn evict_tenant(&self, tenant_id: &str) {
+        let mut buckets = self.buckets.lock().unwrap_or_else(|poisoned| {
+            warn!("rate limit evict lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+        buckets.remove(tenant_id);
     }
 
     /// Check if a request from the given tenant should be allowed.
@@ -92,6 +121,9 @@ impl RateLimitMiddleware {
             warn!("rate limit buckets lock poisoned, recovering");
             poisoned.into_inner()
         });
+
+        // Lazy eviction: remove idle tenants before processing
+        self.lazy_evict(&mut buckets);
 
         let bucket = buckets
             .entry(tenant_id.to_string())

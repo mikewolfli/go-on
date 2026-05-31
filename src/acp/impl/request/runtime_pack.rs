@@ -107,7 +107,10 @@ fn copilot_models_cache() -> &'static CopilotModelsCache {
 }
 
 fn read_copilot_models_cache() -> Option<Vec<String>> {
-    let guard = copilot_models_cache().lock().unwrap_or_else(|poisoned| { tracing::warn!("lock poisoned, recovering"); poisoned.into_inner() });
+    let guard = copilot_models_cache().lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("lock poisoned, recovering");
+        poisoned.into_inner()
+    });
     let (fetched_at, models) = guard.as_ref()?.clone();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -121,12 +124,18 @@ fn read_copilot_models_cache() -> Option<Vec<String>> {
 }
 
 fn read_stale_copilot_models_cache() -> Option<Vec<String>> {
-    let guard = copilot_models_cache().lock().unwrap_or_else(|poisoned| { tracing::warn!("lock poisoned, recovering"); poisoned.into_inner() });
+    let guard = copilot_models_cache().lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("lock poisoned, recovering");
+        poisoned.into_inner()
+    });
     guard.as_ref().map(|(_, models)| models.clone())
 }
 
 fn store_copilot_models_cache(models: Vec<String>) {
-    let mut guard = copilot_models_cache().lock().unwrap_or_else(|poisoned| { tracing::warn!("lock poisoned, recovering"); poisoned.into_inner() });
+    let mut guard = copilot_models_cache().lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("lock poisoned, recovering");
+        poisoned.into_inner()
+    });
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -257,7 +266,10 @@ fn append_metric_window_sample(server: &AcpServer) -> MetricWindowPoint {
             .clamp(0.0, 1.0),
     };
 
-    let mut history = metric_window_history().lock().unwrap_or_else(|poisoned| { tracing::warn!("lock poisoned, recovering"); poisoned.into_inner() });
+    let mut history = metric_window_history().lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("lock poisoned, recovering");
+        poisoned.into_inner()
+    });
     history.push(point.clone());
     let cutoff = point.ts - 3600;
     history.retain(|item| item.ts >= cutoff);
@@ -561,7 +573,7 @@ pub(super) async fn build_debug_panel_payload(server: &AcpServer) -> Value {
                 "execution_cache_bypass_enabled": true,
                 "tool_governance": crate::acp::helpers::tool_governance::tool_governance_counters(),
                 "tool_governance_default_policy": {
-                    "active_when_harness_bus_absent": server.harness_bus.is_none(),
+                    "active_when_harness_bus_absent": server.governance_deps.harness_bus.is_none(),
                     "snapshot": crate::acp::helpers::tool_governance_defaults::default_governance_policy_snapshot(),
                 },
                 "repair_cycle_effective_ratio": repair_cycle_effective_ratio,
@@ -850,14 +862,14 @@ pub(super) async fn handle_autotune_status(
     server: &AcpServer,
     request_id: Option<Value>,
 ) -> Result<()> {
-    let autotune_state = if let Some(autotune) = server.autotune.as_ref() {
+    let autotune_state = if let Some(autotune) = server.cache_deps.autotune.as_ref() {
         let lock = autotune.lock().await;
         Some(lock.clone())
     } else {
         None
     };
 
-    let autotune_config = server.autotune_config.as_ref().cloned();
+    let autotune_config = server.cache_deps.autotune_config.as_ref().cloned();
     let enabled = autotune_config
         .as_ref()
         .map(|cfg| cfg.enabled)
@@ -882,7 +894,7 @@ pub(super) async fn handle_autotune_get(
     server: &AcpServer,
     request_id: Option<Value>,
 ) -> Result<()> {
-    let Some(autotune) = server.autotune.as_ref() else {
+    let Some(autotune) = server.cache_deps.autotune.as_ref() else {
         return send_result(
             server,
             request_id,
@@ -911,6 +923,7 @@ pub(super) async fn handle_selector_status(
     request_id: Option<Value>,
 ) -> Result<()> {
     let snapshot = server
+        .model_deps
         .adaptive_model_selector
         .lock()
         .map(|selector| selector.snapshot())
@@ -1040,9 +1053,10 @@ pub(super) async fn handle_autotune_reset(
     _params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    let (Some(autotune), Some(config)) =
-        (server.autotune.as_ref(), server.autotune_config.as_ref())
-    else {
+    let (Some(autotune), Some(config)) = (
+        server.cache_deps.autotune.as_ref(),
+        server.cache_deps.autotune_config.as_ref(),
+    ) else {
         return send_result(
             server,
             request_id,
@@ -1063,7 +1077,7 @@ pub(super) async fn handle_autotune_reset(
 
     let mut persisted = false;
     let mut warning = None::<String>;
-    if let Some(path) = &server.autotune_state_path {
+    if let Some(path) = &server.cache_deps.autotune_state_path {
         match lock.save(path) {
             Ok(()) => persisted = true,
             Err(err) => {
@@ -1094,6 +1108,7 @@ pub(super) async fn handle_autotune_reset(
 
 fn provider_models_for(server: &AcpServer, provider: &str) -> Vec<crate::agent::ModelInfo> {
     server
+        .model_deps
         .agent_registry
         .as_ref()
         .map(|registry| {

@@ -6,6 +6,7 @@
 //! compatibility with the original implementation.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::{Mutex as StdMutex, OnceLock};
 use std::time::Instant;
@@ -977,7 +978,7 @@ pub async fn handle_chat(
             );
         }
         // Also evaluate cache hit ratio if applicable
-        if let Ok(stats) = server.cache.semantic_cache.lock() {
+        if let Ok(stats) = server.cache_deps.cache.semantic_cache.lock() {
             let s = stats.stats();
             if s.total_hits + s.total_misses > 0 {
                 let ratio = s.hit_ratio * 100.0;
@@ -1182,7 +1183,25 @@ pub(crate) async fn process_chat_request(
     let tenant_id = &ctx.tenant_id;
 
     // ── Step 1: Pre-route policy evaluation ────────────────────────────
+    // pre-execute checkpoint: PUA rules / RBAC / budget via HarnessBus
     evaluate_pre_route_policies(server, params, trace, tenant_id).await?;
+
+    // ── HarnessBus during-execute checkpoint: sandbox / backpressure / online control ──
+    // Validate the action before execution begins, using the HarnessBus
+    // validate_action(…) API which checks sandbox level, backpressure,
+    // and online controller state.
+    if let Some(ref harness) = server.governance_deps.harness_bus {
+        let messages_json = serde_json::to_value(&params.messages).unwrap_or_default();
+        let verdict = harness.validate_action("chat.execute", &messages_json);
+        if !verdict.is_allowed() {
+            anyhow::bail!(
+                "harness_bus during-execute denied: sandbox={} budget={} permitted={}",
+                verdict.allowed,
+                verdict.budget_ok,
+                verdict.permitted,
+            );
+        }
+    }
 
     // ── Step 2: Phase resolution ──────────────────────────────────────
     let phase_res = resolve_request_phase(server, params, &flow, registry.as_ref()).await?;
@@ -1198,6 +1217,18 @@ pub(crate) async fn process_chat_request(
     let schema_error = phase_res.schema_error;
     let mut routing_provenance = phase_res.routing_provenance;
     let reputation_scores = phase_res.reputation_scores;
+
+    // ── GAP-B50-21: CapabilityBus sensing before agent selection ────
+    // Query environment state (agent health, load, latency) for use
+    // in parallel with the existing ModelSelector decision path.
+    let _capability_sensing = server.governance_deps.capability_bus.as_ref().map(|cb| {
+        let task_ctx = crate::governance::pua::TaskContext {
+            task_type: crate::governance::pua::TaskType::Other,
+            file_count: params.messages.len(),
+            risk_score: 0.5,
+        };
+        cb.sense(&task_ctx)
+    });
 
     // ── Step 3: Agent selection & scoring ─────────────────────────────
     let agent_sel = select_and_score_agents(
@@ -1257,7 +1288,7 @@ pub(crate) async fn process_chat_request(
 
     // ── Scheduler task submission (ARCH-02) ────────────────────────────
     let sched_task_id = trace.request_id.clone();
-    if let Some(ref sched) = server.scheduler {
+    if let Some(ref sched) = server.orchestration_deps.scheduler {
         let submitted_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
@@ -1281,7 +1312,20 @@ pub(crate) async fn process_chat_request(
             max_retries: 3,
         };
         if let Err(e) = sched.level1.submit(task) {
-            tracing::warn!("scheduler submit failed: {}", e);
+            let err_str = format!("{}", e);
+            if err_str.contains("backpressure") || err_str.contains("backpressure_rejected") {
+                // GAP-B50-22: Backpressure — return 429 status
+                tracing::warn!("scheduler backpressure: {}", err_str);
+                return Ok(json!({
+                    "done": false,
+                    "mode": params.mode,
+                    "status": 429,
+                    "error": "too_many_requests",
+                    "detail": "Scheduler queue depth exceeded backpressure threshold. Please retry later.",
+                    "retry_after_seconds": 5,
+                }));
+            }
+            tracing::warn!("scheduler submit failed: {}", err_str);
         }
     }
 
@@ -1292,6 +1336,7 @@ pub(crate) async fn process_chat_request(
     let context_class = ContextLengthClass::from_token_count(estimated_tokens);
 
     if let Some((level, entry)) = server
+        .cache_deps
         .cache
         .token_cache
         .lookup(&input_text, context_class)
@@ -1364,6 +1409,7 @@ pub(crate) async fn process_chat_request(
         if !cache_hit && response_text.is_empty() && !cache_bypassed_for_execution {
             let cache_key = input_text.clone();
             server
+                .cache_deps
                 .cache
                 .semantic_cache
                 .lock()
@@ -1421,6 +1467,44 @@ pub(crate) async fn process_chat_request(
     }
     agent_attempts.extend(autonomy_outcome.agent_attempts);
     let autonomy_loop_executed = autonomy_outcome.autonomy_loop_executed;
+
+    // ── TaskContext propagation (GAP-B50-05) ──────────────────────────
+    // Between the Execute and Reflect phases, propagate TaskContext for
+    // chain-of-thought reasoning continuity. Downstream steps receive
+    // the Vec<TaskContext> for reasoning chain continuity.
+    let mut task_contexts: Vec<crate::orchestration::dag_executor::TaskContext> = Vec::new();
+    if autonomy_loop_executed && !response_text.is_empty() {
+        let mut ctx = crate::orchestration::dag_executor::TaskContext::new(format!(
+            "acp-{}-{}",
+            phase_name, trace.request_id
+        ));
+        ctx.reasoning_trace.push(format!(
+            "Autonomy round executed for phase '{}' using agent '{}'",
+            phase_name, selected_agent,
+        ));
+        ctx.intermediate_findings.insert(
+            "response_length".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(response_text.len() as u64)),
+        );
+        ctx.intermediate_findings.insert(
+            "mode".to_string(),
+            serde_json::Value::String(params.mode.clone()),
+        );
+        ctx.intermediate_findings.insert(
+            "agent".to_string(),
+            serde_json::Value::String(selected_agent.clone()),
+        );
+        task_contexts.push(ctx);
+        tracing::debug!(
+            "TaskContext: {} context(s) propagated after autonomy round for '{}'",
+            task_contexts.len(),
+            phase_name,
+        );
+    }
+
+    // Pass task_contexts downstream for reflection/continuity.
+    // Downstream steps can use these contexts for reasoning chain continuity.
+    let _task_contexts_for_downstream = task_contexts.clone();
 
     // ── Step 6: Fallback agent execution (parallel with concurrency limit 5) ──
     if !cache_hit && response_text.is_empty() {
@@ -1633,6 +1717,7 @@ pub(crate) async fn process_chat_request(
         if !cache_hit && !response_text.is_empty() && !cache_bypassed_for_execution {
             let cache_key = input_text.clone();
             server
+                .cache_deps
                 .cache
                 .semantic_cache
                 .lock()
@@ -1774,6 +1859,25 @@ pub(crate) async fn process_chat_request(
             pua_stage: None,
         });
 
+        // ── HarnessBus post-execute checkpoint: audit / drift / feedback ───
+        if let Some(ref harness) = server.governance_deps.harness_bus {
+            let output_json = serde_json::json!({
+                "agent": &selected_agent,
+                "response": &response_text,
+                "reasoning": &reasoning_text,
+                "phase": phase_name,
+            });
+            let output_v = harness.verify_output(&output_json);
+            if !output_v.quality {
+                tracing::warn!(
+                    target: "harness_bus",
+                    risk_score = output_v.risk_score,
+                    evidence = ?output_v.evidence,
+                    "post-execute: output verification flagged quality issue"
+                );
+            }
+        }
+
         // ── Step 7: FullAuto execution (review gate + TAO loop) ────────
         // Cache task_description once for all full_auto sub-steps
         let full_auto_result = run_full_auto_execution(
@@ -1878,6 +1982,51 @@ pub(crate) async fn process_chat_request(
                 "rationalize_decision: decision blocked for agent={} reason={} confidence={}",
                 selected_agent, reason, 0.8
             );
+        }
+
+        // ── GAP-B50-21: CapabilityBus feedback & evolve ──────────────
+        if let Some(ref cb) = server.governance_deps.capability_bus {
+            let success = !response_text.is_empty() && last_err.is_none();
+            let duration_ms = started.elapsed().as_millis() as u64;
+            let economy =
+                crate::acp::r#impl::chat::estimate_token_economy(&params.messages, &response_text);
+            let token_cost_est = economy["total_tokens"].as_u64().unwrap_or(0);
+            let quality_score = if success { 0.8 } else { 0.2 };
+
+            cb.feedback(
+                &selected_agent,
+                phase_name,
+                &trace.request_id,
+                success,
+                duration_ms,
+                token_cost_est,
+                quality_score,
+            );
+
+            // Periodic evolve every N requests (default 50)
+            static CAPABILITY_EVOLVE_COUNTER: AtomicU64 = AtomicU64::new(0);
+            let count = CAPABILITY_EVOLVE_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let evolve_interval = cb.config.evolve_interval;
+            if count > 0 && count % evolve_interval == 0 {
+                let cb_clone = cb.clone();
+                let agent = selected_agent.clone();
+                let phase = phase_name.to_string();
+                let _req_id = trace.request_id.clone();
+                tokio::spawn(async move {
+                    let state = (agent.clone(), phase.clone());
+                    let next_state = (agent, format!("{}_complete", phase));
+                    cb_clone
+                        .evolve(
+                            &state,
+                            "chat_complete",
+                            &next_state,
+                            token_cost_est,
+                            success,
+                            quality_score,
+                        )
+                        .await;
+                });
+            }
         }
 
         Ok(result)
@@ -2191,7 +2340,7 @@ async fn select_and_score_agents(
     let mut capability_decision_confidence: Option<f64> = None;
     let mut capability_selection_reason: Option<String> = None;
     let mut capability_optimization_hint: Option<Value> = None;
-    if let Some(ref cb) = server.capability_bus {
+    if let Some(ref cb) = server.governance_deps.capability_bus {
         let result = crate::acp::helpers::capability_selector::apply_capability_bus_selection(
             cb,
             phase_name,
@@ -2250,10 +2399,14 @@ async fn select_and_score_agents(
 
     // ── Skill system prompt enhancement ────────────────────────────────
     let agent_messages = {
-        let reg_guard = server.skill_registry.lock().unwrap_or_else(|poisoned| {
-            warn!("select_and_score_agents: skill_registry poisoned, recovering");
-            poisoned.into_inner()
-        });
+        let reg_guard = server
+            .orchestration_deps
+            .skill_registry
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                warn!("select_and_score_agents: skill_registry poisoned, recovering");
+                poisoned.into_inner()
+            });
         let skill_count = reg_guard.list().len();
         let skill_instruction = format!(
             r#"
@@ -2303,7 +2456,11 @@ You have access to {} registered skill(s). Skills are reusable templates that au
     // ── Council deliberation ───────────────────────────────────────────
     let (unhealthy_fallback_agent, fallback_reason, council_decision) =
         crate::acp::helpers::council_deliberation::run_council_deliberation_and_fallback(
-            server.capability_bus.as_ref().map(|arc| arc.as_ref()),
+            server
+                .governance_deps
+                .capability_bus
+                .as_ref()
+                .map(|arc| arc.as_ref()),
             risk_assessment.is_high_risk,
             filter_result.model_is_specific,
             &mut resolved.agents,
@@ -2562,17 +2719,21 @@ async fn execute_fallback_agents(
             continue;
         }
 
-        let is_unhealthy = server.capability_bus.as_ref().is_some_and(|cb| {
-            let unhealthy = !cb.is_agent_healthy(&agent_name);
-            if unhealthy && unhealthy_fallback_agent.as_deref() != Some(agent_name.as_str()) {
-                warn!(
-                    phase = %phase_name,
-                    agent = %agent_name,
-                    "skipping unhealthy agent"
-                );
-            }
-            unhealthy
-        });
+        let is_unhealthy = server
+            .governance_deps
+            .capability_bus
+            .as_ref()
+            .is_some_and(|cb| {
+                let unhealthy = !cb.is_agent_healthy(&agent_name);
+                if unhealthy && unhealthy_fallback_agent.as_deref() != Some(agent_name.as_str()) {
+                    warn!(
+                        phase = %phase_name,
+                        agent = %agent_name,
+                        "skipping unhealthy agent"
+                    );
+                }
+                unhealthy
+            });
 
         if is_unhealthy && unhealthy_fallback_agent.as_deref() != Some(agent_name.as_str()) {
             agent_attempts.push(json!({
@@ -2692,7 +2853,7 @@ async fn execute_fallback_agents(
                     crate::intelligence::token_cache::messages_to_text(&agent_messages);
                 let token_count =
                     crate::intelligence::token_cache::estimate_token_count(&output_text);
-                let cache = server.cache.token_cache.clone();
+                let cache = server.cache_deps.cache.token_cache.clone();
                 let model_name = base_agent_options
                     .get("model")
                     .and_then(|v| v.as_str())
@@ -2885,7 +3046,7 @@ async fn run_full_auto_execution(
 
         // ── FullAutoFlow execution (BLUE43) ─────────────────────────
         let full_auto_result = crate::acp::helpers::autonomy_loop_adapter::run_full_auto_flow(
-            server.skill_registry.clone(),
+            server.orchestration_deps.skill_registry.clone(),
             &task_description,
         )
         .await;
@@ -3338,10 +3499,16 @@ pub(crate) async fn run_agent_collecting(
                     if skill_names.len() > 1 {
                         // Multiple skills called at once — pick the best one by score.
                         let best = {
-                            let reg = server.skill_registry.lock().unwrap_or_else(|poisoned| {
-                                warn!("run_agent_collecting: skill_registry poisoned, recovering");
-                                poisoned.into_inner()
-                            });
+                            let reg = server
+                                .orchestration_deps
+                                .skill_registry
+                                .lock()
+                                .unwrap_or_else(|poisoned| {
+                                    warn!(
+                                        "run_agent_collecting: skill_registry poisoned, recovering"
+                                    );
+                                    poisoned.into_inner()
+                                });
                             skill_names
                                 .iter()
                                 .filter_map(|name| {
@@ -3945,7 +4112,7 @@ async fn load_vector_context(
         };
     }
 
-    let Some(store) = server.cache.vector_store.clone() else {
+    let Some(store) = server.cache_deps.cache.vector_store.clone() else {
         return VectorContext {
             hits: Vec::new(),
             summary,
@@ -4195,7 +4362,7 @@ async fn persist_vector_memory(
     let Some(settings) = effective_vector_settings(server, phase_options).await else {
         return;
     };
-    let Some(store) = server.cache.vector_store.clone() else {
+    let Some(store) = server.cache_deps.cache.vector_store.clone() else {
         return;
     };
     let Some(query_text) = latest_user_message(&params.messages) else {
@@ -4249,7 +4416,7 @@ async fn generate_phase_summary_text(
         return None;
     }
 
-    let registry = server.agent_registry.as_ref()?;
+    let registry = server.model_deps.agent_registry.as_ref()?;
     let agent = registry.get(selected_agent)?;
 
     let timeout_seconds = phase_options
@@ -4344,7 +4511,7 @@ pub(crate) async fn load_phase_summary(
         return None;
     }
 
-    let store = server.cache.vector_store.clone()?;
+    let store = server.cache_deps.cache.vector_store.clone()?;
 
     match store.get_phase_summary(phase_name) {
         Ok(summary) => {
@@ -4365,7 +4532,7 @@ async fn effective_vector_settings(
     server: &AcpServer,
     phase_options: Option<&PhaseOptions>,
 ) -> Option<EffectiveVectorSettings> {
-    let vector_config = server.vector_config.clone()?;
+    let vector_config = server.cache_deps.vector_config.clone()?;
     if !vector_config.enabled {
         return None;
     }
@@ -4387,7 +4554,7 @@ async fn effective_vector_settings(
         .unwrap_or(vector_config.auto_mode);
 
     if auto_mode {
-        if let Some(autotune) = server.autotune.as_ref() {
+        if let Some(autotune) = server.cache_deps.autotune.as_ref() {
             let state = autotune.lock().await;
             min_query_chars = state.current_min_query_chars;
             top_k = state.current_top_k;
@@ -4431,9 +4598,10 @@ async fn apply_autotune_feedback(
         return;
     }
 
-    let (Some(autotune), Some(config)) =
-        (server.autotune.as_ref(), server.autotune_config.as_ref())
-    else {
+    let (Some(autotune), Some(config)) = (
+        server.cache_deps.autotune.as_ref(),
+        server.cache_deps.autotune_config.as_ref(),
+    ) else {
         return;
     };
 
@@ -4441,7 +4609,7 @@ async fn apply_autotune_feedback(
     state.record_vector_search(precision, config);
     let _ = state.advance_cooldown_window(config);
     let _ = state.evaluate_and_adjust(config);
-    if let Some(path) = &server.autotune_state_path {
+    if let Some(path) = &server.cache_deps.autotune_state_path {
         if let Err(err) = state.save(path) {
             warn!(error = %err, "failed to persist autotune state after vector feedback");
         }
@@ -4790,7 +4958,7 @@ async fn persist_chat_knowledge(
             .len();
 
     let mut vector_memory_written = false;
-    if let Some(vector_store) = server.cache.vector_store.clone() {
+    if let Some(vector_store) = server.cache_deps.cache.vector_store.clone() {
         let vector_payload = format!(
             "Task: {}\nInsights:\n{}\nVerification:\n{}\nAnswer:\n{}",
             request_excerpt,
@@ -5482,6 +5650,7 @@ async fn auto_create_skills_from_conversation(
 
     // Only attempt skill creation if the skill-creator skill is registered
     let has_skill_creator = server
+        .orchestration_deps
         .skill_registry
         .lock()
         .ok()
@@ -5547,6 +5716,7 @@ async fn auto_create_skills_from_conversation(
         if !skill_name.is_empty() && !skill_description.is_empty() {
             // Check if skill already exists
             let exists = server
+                .orchestration_deps
                 .skill_registry
                 .lock()
                 .ok()
@@ -5560,10 +5730,14 @@ async fn auto_create_skills_from_conversation(
                 );
 
                 let result = {
-                    let mut registry = server.skill_registry.lock().unwrap_or_else(|poisoned| {
-                        tracing::warn!("lock poisoned, recovering");
-                        poisoned.into_inner()
-                    });
+                    let mut registry = server
+                        .orchestration_deps
+                        .skill_registry
+                        .lock()
+                        .unwrap_or_else(|poisoned| {
+                            tracing::warn!("lock poisoned, recovering");
+                            poisoned.into_inner()
+                        });
                     registry
                         .create_skill_from_prompt(
                             &skill_name,

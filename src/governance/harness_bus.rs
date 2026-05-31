@@ -429,6 +429,27 @@ pub enum PolicyVerdict {
     AllowWithConstraints(Vec<Constraint>),
 }
 
+/// Slimmed-down decision enum for HTTP response mapping.
+/// Deny → 403, RequireReview → 449, Escalate → 402, Allow → 200.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum Decision {
+    Allow,
+    Deny(String),
+    RequireReview(String),
+    Escalate(String, u8),
+}
+
+impl From<PolicyVerdict> for Decision {
+    fn from(v: PolicyVerdict) -> Self {
+        match v {
+            PolicyVerdict::Allow | PolicyVerdict::AllowWithConstraints(_) => Decision::Allow,
+            PolicyVerdict::Deny(v) => Decision::Deny(format!("{}: {}", v.kind, v.detail)),
+            PolicyVerdict::Review(r) => Decision::RequireReview(r.reason),
+            PolicyVerdict::Escalate(e) => Decision::Escalate(e.reason, e.suggested_level),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyViolation {
     pub kind: String,
@@ -960,9 +981,7 @@ impl PolicyEvaluator {
                 "harness".to_string(),
                 format!(
                     "quality={}, risk_score={}, evidence_count={}",
-                    quality,
-                    risk_score,
-                    evidence_count
+                    quality, risk_score, evidence_count
                 ),
             );
             self.security_governor.record_audit(audit_entry);
@@ -1204,13 +1223,16 @@ impl HarnessBus {
                 if prev >= 2 {
                     // 3rd consecutive allow (prev is 0-indexed: 0→1, 1→2, 2→3)
                     self.consecutive_allows.store(0, Ordering::SeqCst);
-                    let engine = self.evaluator.rule_engine.lock().unwrap_or_else(|poisoned| {
-                        tracing::warn!("rule_engine lock poisoned in evaluate — de-escalation");
-                        poisoned.into_inner()
-                    });
-                    let level = engine.de_escalate(
-                        "No violations detected for 3 consecutive evaluations",
-                    );
+                    let engine = self
+                        .evaluator
+                        .rule_engine
+                        .lock()
+                        .unwrap_or_else(|poisoned| {
+                            tracing::warn!("rule_engine lock poisoned in evaluate — de-escalation");
+                            poisoned.into_inner()
+                        });
+                    let level =
+                        engine.de_escalate("No violations detected for 3 consecutive evaluations");
                     tracing::info!(
                         new_level = level,
                         "PUA de-escalated after 3 consecutive clean evaluations"
@@ -1301,10 +1323,13 @@ impl HarnessBus {
 
         // Also write to the structured (orchestration) audit trail for
         // unified access, replay, and evidence export.
-        let mut structured = self.structured_audit_trail.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("structured_audit_trail lock poisoned in audit");
-            poisoned.into_inner()
-        });
+        let mut structured = self
+            .structured_audit_trail
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("structured_audit_trail lock poisoned in audit");
+                poisoned.into_inner()
+            });
         {
             use crate::orchestration::audit::AuditEntry as OrchestrationAuditEntry;
             structured.append_entry(OrchestrationAuditEntry::new(
@@ -1367,10 +1392,14 @@ impl HarnessBus {
 
     /// Check a red-line violation directly.
     pub fn check_red_line(&self, action: &str) -> bool {
-        let engine = self.evaluator.rule_engine.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("rule_engine lock poisoned in check_red_line");
-            poisoned.into_inner()
-        });
+        let engine = self
+            .evaluator
+            .rule_engine
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("rule_engine lock poisoned in check_red_line");
+                poisoned.into_inner()
+            });
         engine.check_red_lines(action).is_err()
     }
 
@@ -1398,10 +1427,14 @@ impl HarnessBus {
                 // - None/Basic: allow
                 // - Strict: allow (read is generally safe)
                 // - Isolated: deny (prevent data exfiltration)
-                let level = self.evaluator.sandbox_level.lock().unwrap_or_else(|poisoned| {
-                    tracing::warn!("sandbox_level lock poisoned in enforce_action(Read)");
-                    poisoned.into_inner()
-                });
+                let level = self
+                    .evaluator
+                    .sandbox_level
+                    .lock()
+                    .unwrap_or_else(|poisoned| {
+                        tracing::warn!("sandbox_level lock poisoned in enforce_action(Read)");
+                        poisoned.into_inner()
+                    });
                 if level.eq_ignore_ascii_case("isolated") {
                     return false;
                 }
@@ -1412,10 +1445,14 @@ impl HarnessBus {
                 // - None/Basic: allow
                 // - Strict: deny (search can leak context)
                 // - Isolated: deny
-                let level = self.evaluator.sandbox_level.lock().unwrap_or_else(|poisoned| {
-                    tracing::warn!("sandbox_level lock poisoned in enforce_action(Search)");
-                    poisoned.into_inner()
-                });
+                let level = self
+                    .evaluator
+                    .sandbox_level
+                    .lock()
+                    .unwrap_or_else(|poisoned| {
+                        tracing::warn!("sandbox_level lock poisoned in enforce_action(Search)");
+                        poisoned.into_inner()
+                    });
                 let l = level.to_lowercase();
                 if l == "strict" || l == "isolated" {
                     return false;
@@ -1434,7 +1471,10 @@ impl HarnessBus {
 
     /// Brain loop orchestration profile snapshot.
     pub fn brain_profile(&self) -> BrainLoopProfile {
-        self.brain_loop.profile()
+        let bl = self.brain_loop.clone();
+        tokio::task::block_in_place(move || {
+            tokio::runtime::Handle::current().block_on(bl.profile())
+        })
     }
 
     /// Artifact layer profile snapshot.
@@ -1465,7 +1505,10 @@ impl HarnessBus {
 
     /// Brain loop runner profile snapshot (consolidated flat version).
     pub fn brain_runner_profile(&self) -> BrainLoopProfile {
-        self.brain_runner.profile()
+        let br = self.brain_runner.clone();
+        tokio::task::block_in_place(move || {
+            tokio::runtime::Handle::current().block_on(br.profile())
+        })
     }
 
     /// Hyper-resilience profile snapshot (F-GAP-27)
@@ -1614,6 +1657,39 @@ impl HarnessBus {
     /// Extract an optional `f64` value from a JSON options map.
     pub fn extra_f64(&self, options: &serde_json::Value, key: &str) -> Option<f64> {
         options.get(key).and_then(|v| v.as_f64())
+    }
+
+    /// Start a background tokio task that periodically checks for drift.
+    /// The engine runs `check_for_drift()` every `interval_secs` seconds.
+    /// Any triggered alerts are logged at WARN level.
+    pub fn start_drift_monitor(&self, interval_secs: u64) {
+        let interval = std::time::Duration::from_secs(interval_secs);
+        let engine = self.drift_engine.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                let alerts = engine.check_for_drift();
+                for alert in alerts {
+                    if !alert.resolved {
+                        let alert_id = &alert.id;
+                        let metric_name = &alert.metric_name;
+                        let drift_type = format!("{:?}", alert.drift_type);
+                        let severity = format!("{:?}", alert.severity);
+                        tracing::warn!(
+                            target: "drift_monitor",
+                            alert_id = %alert_id,
+                            metric = %metric_name,
+                            drift_type = %drift_type,
+                            "Drift alert triggered: {} (severity: {})",
+                            alert.message,
+                            severity,
+                        );
+                    }
+                }
+            }
+        });
     }
 }
 

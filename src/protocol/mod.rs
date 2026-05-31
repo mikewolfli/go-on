@@ -1,6 +1,7 @@
 pub mod access_mode;
 pub mod mcp_server;
 pub mod negotiator;
+pub mod session_sync;
 // F-GAP-29 (v2): MultiChannelTransport with richer channel separation, serde_json payloads,
 // QosLevel, priority-based delivery, TTL expiry, and full statistics. This is the enhanced
 // implementation — gated behind `sub-bus-protocol`. When this feature is enabled, both
@@ -16,5 +17,12 @@ pub mod rpc_protocol;
 // When `sub-bus-protocol` is enabled, the v2 `multi_channel_transport` module provides an
 // alternative with richer features. The two struct names are intentionally identical because
 // they live in separate modules, avoiding name collisions.
-pub mod transport;
 pub mod rate_limit;
+pub mod transport;
+pub mod websocket;
+
+// Re-exports
+#[allow(unused_imports)]
+pub use session_sync::*;
+#[allow(unused_imports)]
+pub use websocket::*;

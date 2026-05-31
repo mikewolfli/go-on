@@ -4,10 +4,14 @@
 //! server management functionality.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, Mutex as StdMutex,
+};
 
 use anyhow::Result;
-use tokio::sync::{Mutex, Notify};
+use std::time::Duration;
+use tokio::sync::{Mutex, Notify, Semaphore};
 
 use crate::acp::prelude::RuntimeMetrics;
 use crate::adaptive_selector::AdaptiveModelSelector;
@@ -22,6 +26,7 @@ use crate::acp::r#impl::session::SessionManager;
 use crate::failure_prevention::FailurePrevention;
 use crate::flow::FlowManager;
 use crate::flow_with_models::FlowModelSelector;
+use crate::governance::audit::ThreadSafeAuditLog;
 use crate::governance::harness_bus::HarnessBus;
 use crate::intelligence::capability_bus::core::CapabilityBus;
 use crate::intelligence::token_cache::TokenMultiLevelCache;
@@ -38,6 +43,7 @@ use crate::orchestration::skill::SkillRegistry;
 use crate::orchestration::skill_market::SkillMarketRegistry;
 use crate::orchestration::task_graph_store::TaskGraphStore;
 use crate::orchestration::task_schema::SchemaRegistry;
+use crate::orchestration::tool::ToolRegistry;
 use crate::orchestration::workflow_optimizer::OptimizerRegistry;
 use crate::reinforcement::ArtifactLedger;
 use crate::vector::VectorStore;
@@ -47,6 +53,106 @@ use super::prelude::{
     LifecycleState, MaintenanceTracker, OnlineControllerState, PhaseRateLimiter,
     ReviewTimeoutPolicy, ACP_LOCK_CIRCUIT_BREAKERS, ACP_LOCK_LIFECYCLE, ACP_LOCK_MAINTENANCE,
 };
+
+/// DrainGuard — graceful shutdown state tracking.
+///
+/// When draining is active, new requests are rejected with 503 + Retry-After.
+/// In-flight requests are given `drain_timeout` to complete before force-shutdown.
+pub struct DrainGuard {
+    /// Whether the server is currently draining.
+    pub draining: AtomicBool,
+    /// Semaphore tracking in-flight request count.
+    pub inflight: Arc<Semaphore>,
+    /// Maximum number of in-flight permits (stored separately as Semaphore doesn't expose total_permits).
+    pub max_permits: usize,
+    /// Maximum time to wait for in-flight requests to complete.
+    pub drain_timeout: Duration,
+    /// Monotonic request ID counter for tracing.
+    pub request_seq: AtomicU64,
+}
+
+impl DrainGuard {
+    /// Create a new DrainGuard with the given capacity and timeout.
+    pub fn new(max_inflight: usize, drain_timeout_secs: u64) -> Self {
+        Self {
+            draining: AtomicBool::new(false),
+            inflight: Arc::new(Semaphore::new(max_inflight)),
+            max_permits: max_inflight,
+            drain_timeout: Duration::from_secs(drain_timeout_secs.max(5)),
+            request_seq: AtomicU64::new(0),
+        }
+    }
+
+    /// Begin the drain process: reject new requests.
+    pub fn start_drain(&self) {
+        self.draining.store(true, Ordering::SeqCst);
+        tracing::info!(
+            "DrainGuard: drain started, timeout={:?}",
+            self.drain_timeout
+        );
+    }
+
+    /// Returns true if the server is currently draining.
+    pub fn is_draining(&self) -> bool {
+        self.draining.load(Ordering::SeqCst)
+    }
+
+    /// Wait until all in-flight requests complete or the timeout elapses.
+    pub async fn wait_for_drain(&self) -> bool {
+        let permit_count = self.inflight.available_permits();
+        if permit_count == self.max_permits {
+            tracing::info!("DrainGuard: no in-flight requests, drain complete");
+            return true;
+        }
+        tracing::info!(
+            "DrainGuard: waiting for in-flight requests ({} active of {} max)",
+            self.max_permits.saturating_sub(permit_count),
+            self.max_permits
+        );
+        // Wait for all permits to be released or timeout.
+        let deadline = tokio::time::Instant::now() + self.drain_timeout;
+        loop {
+            if tokio::time::Instant::now() >= deadline {
+                tracing::warn!(
+                    "DrainGuard: drain timeout reached, {} requests still in-flight",
+                    self.max_permits
+                        .saturating_sub(self.inflight.available_permits())
+                );
+                return false;
+            }
+            let current_avail = self.inflight.available_permits();
+            if current_avail == self.max_permits {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// Acquire a permit for an incoming request. Returns None if draining.
+    pub async fn acquire(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        if self.is_draining() {
+            return None;
+        }
+        let permit = Arc::clone(&self.inflight).acquire_owned().await.ok()?;
+        if self.is_draining() {
+            // Race: drain started between our check and acquire.
+            drop(permit);
+            return None;
+        }
+        Some(permit)
+    }
+
+    /// Get the next request sequence number.
+    pub fn next_seq(&self) -> u64 {
+        self.request_seq.fetch_add(1, Ordering::SeqCst)
+    }
+}
+
+impl Default for DrainGuard {
+    fn default() -> Self {
+        Self::new(128, 30)
+    }
+}
 
 /// Cache-related subsystems grouped together
 pub struct CacheLayer {
@@ -60,6 +166,60 @@ pub struct CacheLayer {
     pub token_cache: Arc<TokenMultiLevelCache>,
     /// Semantic response cache for near-duplicate request detection
     pub semantic_cache: Arc<StdMutex<SemanticResponseCache>>,
+}
+
+/// Cache + vector + autotune subsystems grouped together
+pub struct CacheServerDeps {
+    /// Cache-layer subsystems (response cache, vector store, token cache)
+    pub cache: CacheLayer,
+    /// Vector store configuration
+    pub vector_config: Option<VectorConfig>,
+    /// Autotune state for adaptive configuration
+    pub autotune: Option<Arc<Mutex<AutoTuneState>>>,
+    /// Autotune configuration
+    pub autotune_config: Option<AutoTuneConfig>,
+    /// Path to autotune state file
+    pub autotune_state_path: Option<String>,
+}
+
+/// Flow + agent + model selection subsystems grouped together
+pub struct ModelServerDeps {
+    /// Flow manager for handling request routing through phases
+    pub flow_manager: Option<Arc<FlowManager>>,
+    /// Agent registry for managing available agents
+    pub agent_registry: Option<Arc<AgentRegistry>>,
+    /// Adaptive model selector
+    pub adaptive_model_selector: Arc<StdMutex<AdaptiveModelSelector>>,
+    /// Flow model selector
+    pub flow_model_selector: Arc<StdMutex<FlowModelSelector>>,
+}
+
+/// Governance subsystems grouped together (harness + capability + audit + pua + rbac)
+pub struct GovernanceServerDeps {
+    /// HarnessBus strategy engine (BLUE38 ARCH-13)
+    pub harness_bus: Option<Arc<HarnessBus>>,
+    /// CapabilityBus scheduling coordinator (BLUE38 ARCH-13)
+    pub capability_bus: Option<Arc<CapabilityBus>>,
+    /// PUA enforcement plan
+    pub pua_enforcement_plan: Arc<StdMutex<crate::pua::PuaEnforcementPlan>>,
+    /// RBAC enforcer for request-level authorization
+    pub rbac_enforcer: Option<Arc<std::sync::RwLock<crate::governance::rbac::RbacEnforcer>>>,
+    /// Provenance ledger — immutable data lineage tracking
+    pub provenance_ledger: Option<Arc<ProvenanceLedger>>,
+}
+
+/// Orchestration subsystems grouped together (scheduler + planner + executor + skill)
+pub struct OrchestrationServerDeps {
+    /// Dual-level task scheduler for priority queue and worker pool
+    pub scheduler: Option<Arc<AgentWorkerScheduler>>,
+    /// Planner — task decomposition engine (F-GAP-05)
+    pub planner: crate::orchestration::planner_executor::Planner,
+    /// Executor — plan execution engine (F-GAP-05)
+    pub executor: crate::orchestration::planner_executor::Executor,
+    /// Planner-Executor configuration (BLUE47 Step 7)
+    pub planner_executor_config: crate::orchestration::planner_executor::PlannerExecutorConfig,
+    /// Registry for MCP skills
+    pub skill_registry: Arc<StdMutex<SkillRegistry>>,
 }
 
 /// Observability-related subsystems grouped together
@@ -79,21 +239,14 @@ pub struct ObservabilityLayer {
 /// This struct represents the core ACP server that handles incoming requests,
 /// manages agents, and coordinates the overall system flow.
 pub struct AcpServer {
-    /// Flow manager for handling request routing through phases
-    pub flow_manager: Option<Arc<FlowManager>>,
-    /// Agent registry for managing available agents
-    pub agent_registry: Option<Arc<AgentRegistry>>,
-    /// Cache-related subsystems
-    /// Cache-related subsystems (response cache, vector store, token cache)
-    pub cache: CacheLayer,
-    /// Vector store configuration
-    pub vector_config: Option<VectorConfig>,
-    /// Autotune state for adaptive configuration
-    pub autotune: Option<Arc<Mutex<AutoTuneState>>>,
-    /// Autotune configuration
-    pub autotune_config: Option<AutoTuneConfig>,
-    /// Path to autotune state file
-    pub autotune_state_path: Option<String>,
+    /// Cache-related deps (cache + vector + autotune)
+    pub cache_deps: CacheServerDeps,
+    /// Model-related deps (flow_manager + agent_registry + selectors)
+    pub model_deps: ModelServerDeps,
+    /// Governance deps (harness + capability + audit + pua + rbac)
+    pub governance_deps: GovernanceServerDeps,
+    /// Orchestration deps (scheduler + planner + executor + skill)
+    pub orchestration_deps: OrchestrationServerDeps,
     /// Runtime configuration
     pub runtime_config: RuntimeConfig,
     /// Loaded config file path if available
@@ -118,32 +271,15 @@ pub struct AcpServer {
     pub rate_limit_middleware: Option<Arc<crate::protocol::rate_limit::RateLimitMiddleware>>,
     /// Review timeout policy
     pub review_timeout_policy: Arc<StdMutex<ReviewTimeoutPolicy>>,
-    /// Adaptive model selector
-    pub adaptive_model_selector: Arc<StdMutex<AdaptiveModelSelector>>,
     /// Failure prevention system
     pub failure_prevention: Arc<StdMutex<FailurePrevention>>,
-    /// Flow model selector
-    pub flow_model_selector: Arc<StdMutex<FlowModelSelector>>,
     /// Cross-request memory policy store
     pub memory_store: Arc<StdMutex<MemoryStore>>,
-    /// Registry for MCP skills
-    pub skill_registry: Arc<StdMutex<SkillRegistry>>,
-    /// PUA enforcement plan
-    pub pua_enforcement_plan: Arc<StdMutex<crate::pua::PuaEnforcementPlan>>,
     /// Artifact ledger
     pub artifact_ledger: Arc<StdMutex<ArtifactLedger>>,
-    /// HarnessBus strategy engine (BLUE38 ARCH-13)
-    pub harness_bus: Option<Arc<HarnessBus>>,
-    /// CapabilityBus scheduling coordinator (BLUE38 ARCH-13)
-    pub capability_bus: Option<Arc<CapabilityBus>>,
     /// ForkRegistry — sub-agent process isolation (ARCH-05)
     pub fork_registry: Arc<StdMutex<ForkRegistry>>,
-    /// Planner — task decomposition engine (F-GAP-05)
-    pub planner: crate::orchestration::planner_executor::Planner,
-    /// Executor — plan execution engine (F-GAP-05)
-    pub executor: crate::orchestration::planner_executor::Executor,
-    /// Planner-Executor configuration (BLUE47 Step 7)
-    pub planner_executor_config: crate::orchestration::planner_executor::PlannerExecutorConfig,
+
     /// BenchmarkSuite — evaluation suite for agent quality (F-GAP-06)
     pub evaluation_suite: Arc<StdMutex<crate::intelligence::evaluation::BenchmarkSuite>>,
     /// SchemaRegistry — task envelope validation (F-GAP-07)
@@ -168,39 +304,39 @@ pub struct AcpServer {
     pub responses_api_store: Arc<StdMutex<HashMap<String, serde_json::Value>>>,
     /// Persistent task graph store for checkpoints and recovery
     pub task_graph_store: Option<Arc<TaskGraphStore>>,
-    /// Dual-level task scheduler for priority queue and worker pool
-    pub scheduler: Option<Arc<AgentWorkerScheduler>>,
-    /// Provenance ledger — immutable data lineage tracking
-    pub provenance_ledger: Option<Arc<ProvenanceLedger>>,
     /// User session manager for authentication and session lifecycle
     pub session_manager: Option<Arc<SessionManager>>,
     /// Prompt manager for prompt template management
     pub prompt_manager: PromptManager,
-    /// RBAC enforcer for request-level authorization
-    pub rbac_enforcer: Option<Arc<std::sync::RwLock<crate::governance::rbac::RbacEnforcer>>>,
     /// Skill market registry for external skill discovery and installation
     pub skill_market_registry: Option<Arc<SkillMarketRegistry>>,
+    /// DrainGuard for graceful shutdown
+    pub drain_guard: DrainGuard,
+    /// Thread-safe audit log with NDJSON persistence at ~/.goon/audit.ndjson
+    pub audit_log: ThreadSafeAuditLog,
+    /// Tool registry for built-in tool execution
+    pub tool_registry: Arc<ToolRegistry>,
 }
 
 impl AcpServer {
     /// Get the flow manager handle
     pub fn flow_manager(&self) -> Option<Arc<FlowManager>> {
-        self.flow_manager.clone()
+        self.model_deps.flow_manager.clone()
     }
 
     /// Get the agent registry handle
     pub fn agent_registry(&self) -> Option<Arc<AgentRegistry>> {
-        self.agent_registry.clone()
+        self.model_deps.agent_registry.clone()
     }
 
     /// Get the response cache handle
     pub fn response_cache(&self) -> Option<Arc<ResponseCache>> {
-        self.cache.response_cache.clone()
+        self.cache_deps.cache.response_cache.clone()
     }
 
     /// Get the vector store handle
     pub fn vector_store(&self) -> Option<Arc<VectorStore>> {
-        self.cache.vector_store.clone()
+        self.cache_deps.cache.vector_store.clone()
     }
 
     /// Get total requests count
@@ -334,6 +470,19 @@ impl AcpServer {
         &self.observability.metrics
     }
 
+    /// Get a reference to the thread-safe audit log.
+    pub fn audit_log(&self) -> &ThreadSafeAuditLog {
+        &self.audit_log
+    }
+
+    /// Get audit health information: total entries and last write time.
+    pub fn audit_health(&self) -> serde_json::Value {
+        serde_json::json!({
+            "total_entries": self.audit_log.len(),
+            "last_write_time": self.audit_log.last_write_time(),
+        })
+    }
+
     /// Get the artifact ledger handle
     pub fn artifact_ledger(&self) -> Option<Arc<ArtifactLedger>> {
         self.artifact_ledger
@@ -349,13 +498,25 @@ impl AcpServer {
     }
 
     pub fn register_skill(&self, skill: Arc<dyn crate::orchestration::skill::Skill>) {
-        let mut registry = self.skill_registry.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
+        let mut registry = self
+            .orchestration_deps
+            .skill_registry
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
         if let Err(err) = registry.register(skill) {
             tracing::warn!("skill registration failed: {err}");
         }
+    }
+
+    /// Create a `FullAutoFlow` using this server's real skill and tool registries.
+    pub fn full_auto_flow(&self) -> crate::orchestration::full_auto::FullAutoFlow {
+        crate::orchestration::full_auto::FullAutoFlow::new_with_registries(
+            Arc::clone(&self.orchestration_deps.skill_registry) as Arc<std::sync::Mutex<_>>,
+            Arc::clone(&self.tool_registry),
+        )
     }
 }
 
@@ -576,26 +737,48 @@ impl ServerBuilder {
 
         let prompt_manager = PromptManager::new(std::path::PathBuf::from("./prompts"));
 
+        let cache_layer = CacheLayer {
+            response_cache: self.response_cache,
+            memory_response_cache,
+            vector_store: self.vector_store,
+            token_cache: Arc::new(crate::intelligence::token_cache::TokenMultiLevelCache::new(
+                500,
+                200,
+                ".goon/token_cache",
+            )),
+            semantic_cache: Arc::new(StdMutex::new(
+                crate::memory::semantic_cache::SemanticResponseCache::new(Default::default()),
+            )),
+        };
+
         Ok(AcpServer {
-            flow_manager: self.flow_manager,
-            agent_registry: self.agent_registry,
-            cache: CacheLayer {
-                response_cache: self.response_cache,
-                memory_response_cache,
-                vector_store: self.vector_store,
-                token_cache: Arc::new(crate::intelligence::token_cache::TokenMultiLevelCache::new(
-                    500,
-                    200,
-                    ".goon/token_cache",
-                )),
-                semantic_cache: Arc::new(StdMutex::new(
-                    crate::memory::semantic_cache::SemanticResponseCache::new(Default::default()),
-                )),
+            cache_deps: CacheServerDeps {
+                cache: cache_layer,
+                vector_config: None,
+                autotune: None,
+                autotune_config: None,
+                autotune_state_path: None,
             },
-            vector_config: None,
-            autotune: None,
-            autotune_config: None,
-            autotune_state_path: None,
+            model_deps: ModelServerDeps {
+                flow_manager: self.flow_manager,
+                agent_registry: self.agent_registry,
+                adaptive_model_selector,
+                flow_model_selector,
+            },
+            governance_deps: GovernanceServerDeps {
+                harness_bus: self.harness_bus,
+                capability_bus: self.capability_bus,
+                pua_enforcement_plan,
+                rbac_enforcer: None,
+                provenance_ledger: self.provenance_ledger,
+            },
+            orchestration_deps: OrchestrationServerDeps {
+                scheduler: self.scheduler,
+                planner: crate::orchestration::planner_executor::Planner,
+                executor: crate::orchestration::planner_executor::Executor,
+                planner_executor_config: self.planner_executor_config,
+                skill_registry,
+            },
             runtime_config: RuntimeConfig::default(),
             config_path: self.config_path,
             observability: ObservabilityLayer {
@@ -616,20 +799,11 @@ impl ServerBuilder {
             conversation_state,
             phase_rate_limiter,
             review_timeout_policy,
-            adaptive_model_selector,
 
             failure_prevention,
-            flow_model_selector,
             memory_store,
-            skill_registry,
-            pua_enforcement_plan,
             artifact_ledger,
-            harness_bus: self.harness_bus,
-            capability_bus: self.capability_bus,
             fork_registry: Arc::new(StdMutex::new(ForkRegistry::new(ForkConfig::default()))),
-            planner: crate::orchestration::planner_executor::Planner,
-            executor: crate::orchestration::planner_executor::Executor,
-            planner_executor_config: self.planner_executor_config,
             evaluation_suite: Arc::new(StdMutex::new(
                 crate::intelligence::evaluation::BenchmarkSuite::new(),
             )),
@@ -647,13 +821,13 @@ impl ServerBuilder {
             shutdown_notify: Arc::new(Notify::new()),
             responses_api_store,
             task_graph_store: self.task_graph_store,
-            scheduler: self.scheduler,
-            provenance_ledger: self.provenance_ledger,
             session_manager: None,
             prompt_manager,
-            rbac_enforcer: None,
             skill_market_registry: None,
             rate_limit_middleware: None,
+            audit_log: ThreadSafeAuditLog::new_with_default_path(10_000),
+            tool_registry: Arc::new(ToolRegistry::new()),
+            drain_guard: DrainGuard::default(),
         })
     }
 }

@@ -574,8 +574,8 @@ pub fn runtime_pressure_level() -> u8 {
 /// Start a background task that periodically checks system memory.
 ///
 /// Spawns a tokio task that queries `query_system_memory()` every
-/// `MEMORY_MONITOR_INTERVAL_SECS` seconds and logs warnings if
-/// memory is critically low.
+/// `MEMORY_MONITOR_INTERVAL_SECS` seconds, logs warnings if
+/// memory is critically low, and evaluates AlertManager rules.
 // F-GAP-11 — reserved for future runtime monitor integration
 #[allow(dead_code)]
 // F-GAP-49 — reserved for future use
@@ -584,6 +584,9 @@ pub fn start_memory_monitor() {
 
     tokio::spawn(async {
         let mut interval = tokio::time::interval(Duration::from_secs(MEMORY_MONITOR_INTERVAL_SECS));
+        // Get the global AlertManager for threshold-based alerting
+        let alert_manager = crate::observability::alert_manager::alert_manager();
+
         loop {
             interval.tick().await;
             let info = query_system_memory();
@@ -592,11 +595,33 @@ pub fn start_memory_monitor() {
             RUNTIME_MEMORY_TOTAL_MB.store(info.total_mb(), Ordering::Relaxed);
             RUNTIME_PRESSURE_LEVEL.store(info.pressure_level as u64, Ordering::Relaxed);
 
+            // Evaluate memory thresholds against AlertManager rules
+            if let Ok(mut am) = alert_manager.lock() {
+                let _jetsam_threshold = (MEMORY_JETSAM_RISK_MB as f64).max(50.0);
+                let alerts = am.evaluate("memory_free_mb", free_mb as f64);
+                if !alerts.is_empty() {
+                    for alert in &alerts {
+                        tracing::warn!(
+                            alert_rule = %alert.rule,
+                            severity = %alert.severity,
+                            "Memory health alert: {}",
+                            alert.message
+                        );
+                    }
+                }
+
+                // Also check jetsam risk specifically
+                if free_mb < MEMORY_JETSAM_RISK_MB && info.total_bytes > 0 {
+                    let _jetsam_alerts = am.evaluate("memory_jetsam_risk", free_mb as f64);
+                }
+            }
+
             if info.is_critical() {
                 error!(
                     free_mb = %free_mb,
                     total_mb = %info.total_mb(),
                     pressure_level = %info.pressure_level,
+                    trace_id = %uuid::Uuid::new_v4(),
                     "CRITICAL MEMORY PRESSURE — system may OOM kill this process",
                 );
             } else if info.is_warning() {
@@ -604,6 +629,7 @@ pub fn start_memory_monitor() {
                     free_mb = %free_mb,
                     total_mb = %info.total_mb(),
                     pressure_level = %info.pressure_level,
+                    trace_id = %uuid::Uuid::new_v4(),
                     "Low memory — consider reducing load",
                 );
             }

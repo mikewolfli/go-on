@@ -6,7 +6,7 @@
 // F-GAP-49: Module now wired into production observability pipeline.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tracing::warn;
@@ -123,7 +123,12 @@ pub struct AlertManager {
     last_fire: HashMap<String, Instant>,
     webhook: WebhookConfig,
     total_alerts_fired: u64,
+    /// Ring buffer of recent alerts (max 100)
+    recent_alerts: VecDeque<Alert>,
 }
+
+/// Maximum number of recent alerts to retain in the ring buffer.
+const MAX_RECENT_ALERTS: usize = 100;
 
 impl AlertManager {
     pub fn new(rules: Vec<AlertRule>) -> Self {
@@ -132,6 +137,7 @@ impl AlertManager {
             last_fire: HashMap::new(),
             webhook: WebhookConfig::default(),
             total_alerts_fired: 0,
+            recent_alerts: VecDeque::with_capacity(MAX_RECENT_ALERTS),
         }
     }
 
@@ -168,6 +174,12 @@ impl AlertManager {
                     self.last_fire.insert(rule.name.to_string(), now);
                     self.total_alerts_fired += 1;
 
+                    // Push to ring buffer, pop oldest if at capacity
+                    self.recent_alerts.push_front(alert.clone());
+                    while self.recent_alerts.len() > MAX_RECENT_ALERTS {
+                        self.recent_alerts.pop_back();
+                    }
+
                     if self.webhook.enabled && !self.webhook.url.is_empty() {
                         self.fire_webhook(&alert);
                     }
@@ -185,10 +197,19 @@ impl AlertManager {
         self.webhook = config;
     }
 
+    /// Get recent alerts (most recent first)
+    pub fn get_recent_alerts(&self) -> Vec<Alert> {
+        self.recent_alerts.iter().cloned().collect()
+    }
+
     /// Fire webhook notification (non-blocking, logs errors)
     fn fire_webhook(&self, alert: &Alert) {
         let url = self.webhook.url.clone();
-        let payload = serde_json::json!(alert);
+        let recent_alerts_count = self.recent_alerts.len();
+        let payload = serde_json::json!({
+            "alert": alert,
+            "recent_alerts_count": recent_alerts_count
+        });
         // Spawn a background task to send the webhook
         tokio::spawn(async move {
             let client = reqwest::Client::new();

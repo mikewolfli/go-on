@@ -36,6 +36,9 @@ pub struct UiStabilityConfig {
     pub chat_stream_chunk_flush_ms: u64,
     pub chat_repaint_interval_ms: u64,
     pub chat_max_pending_events_per_frame: usize,
+    /// Minimum interval (ms) between token batch flushes to the UI.
+    /// Controls frame rate — e.g. 16ms → ~60fps.
+    pub stream_token_flush_ms: u64,
 }
 
 impl Default for UiStabilityConfig {
@@ -47,6 +50,7 @@ impl Default for UiStabilityConfig {
             chat_stream_chunk_flush_ms: 8,
             chat_repaint_interval_ms: 16,
             chat_max_pending_events_per_frame: 256,
+            stream_token_flush_ms: 16,
         }
     }
 }

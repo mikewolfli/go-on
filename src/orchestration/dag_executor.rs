@@ -5,11 +5,14 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Instant;
+use tokio::sync::Notify;
 use tokio::sync::Semaphore;
 use tracing::{debug, info, warn};
+use uuid::Uuid;
 
 use crate::orchestration::tool::{ToolInput, ToolRegistry};
 
@@ -30,6 +33,73 @@ pub struct DagNode {
     pub error: Option<String>,
     /// Duration in milliseconds.
     pub duration_ms: u64,
+    /// Chain-of-Thought context propagated from upstream nodes.
+    pub context: Option<TaskContext>,
+}
+
+// ---------------------------------------------------------------------------
+// TaskContext — Chain-of-Thought context propagated between DAG nodes
+// ---------------------------------------------------------------------------
+
+/// Chain-of-Thought context propagated between DAG nodes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskContext {
+    pub id: String,
+    pub reasoning_trace: Vec<String>,
+    pub intermediate_findings: HashMap<String, Value>,
+    pub confidence: f64,
+    pub open_questions: Vec<String>,
+    pub assumptions: Vec<String>,
+    pub parent_context_id: Option<String>,
+}
+
+impl TaskContext {
+    /// Create a new TaskContext with the given id.
+    pub fn new(id: String) -> Self {
+        Self {
+            id,
+            reasoning_trace: Vec::new(),
+            intermediate_findings: HashMap::new(),
+            confidence: 1.0,
+            open_questions: Vec::new(),
+            assumptions: Vec::new(),
+            parent_context_id: None,
+        }
+    }
+
+    /// Merge multiple parent contexts into a single child context.
+    /// Generates a new UUID for the merged context's id.
+    pub fn merge(parents: &[TaskContext]) -> Self {
+        let mut reasoning_trace = Vec::new();
+        let mut intermediate_findings = HashMap::new();
+        let mut confidences_sum = 0.0;
+        let mut open_questions = Vec::new();
+        let mut assumptions = Vec::new();
+
+        for parent in parents {
+            reasoning_trace.extend(parent.reasoning_trace.clone());
+            intermediate_findings.extend(parent.intermediate_findings.clone());
+            confidences_sum += parent.confidence;
+            open_questions.extend(parent.open_questions.clone());
+            assumptions.extend(parent.assumptions.clone());
+        }
+
+        let parent_context_id = parents.first().map(|p| p.id.clone());
+
+        Self {
+            id: Uuid::new_v4().to_string(),
+            reasoning_trace,
+            intermediate_findings,
+            confidence: if parents.is_empty() {
+                1.0
+            } else {
+                confidences_sum / parents.len() as f64
+            },
+            open_questions,
+            assumptions,
+            parent_context_id,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -88,6 +158,7 @@ impl DagGraph {
                 output: None,
                 error: None,
                 duration_ms: 0,
+                context: None,
             },
         );
     }
@@ -172,11 +243,31 @@ impl Default for DagGraph {
 }
 
 // ---------------------------------------------------------------------------
+// DagExecutorConfig
+// ---------------------------------------------------------------------------
+
+/// Configuration for the DAG executor.
+#[derive(Debug, Clone)]
+pub struct DagExecutorConfig {
+    pub max_concurrency: usize,
+    pub speculative_execution: bool,
+}
+
+impl Default for DagExecutorConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrency: 10,
+            speculative_execution: true,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // DagExecutor
 // ---------------------------------------------------------------------------
 
 pub struct DagExecutor {
-    max_concurrency: usize,
+    config: DagExecutorConfig,
     semaphore: Arc<Semaphore>,
     tool_registry: Option<Arc<ToolRegistry>>,
 }
@@ -184,8 +275,19 @@ pub struct DagExecutor {
 impl DagExecutor {
     pub fn new(max_concurrency: usize) -> Self {
         Self {
-            max_concurrency,
+            config: DagExecutorConfig {
+                max_concurrency,
+                speculative_execution: true,
+            },
             semaphore: Arc::new(Semaphore::new(max_concurrency)),
+            tool_registry: None,
+        }
+    }
+
+    pub fn with_config(config: DagExecutorConfig) -> Self {
+        Self {
+            semaphore: Arc::new(Semaphore::new(config.max_concurrency)),
+            config,
             tool_registry: None,
         }
     }
@@ -195,22 +297,152 @@ impl DagExecutor {
         self
     }
 
-    /// Execute a DAG graph. Returns the graph with outputs populated.
+    /// Execute a DAG graph. Returns the graph with outputs and contexts populated.
+    /// Dispatches to speculative or level-by-level execution based on config.
     pub async fn execute(&self, graph: &mut DagGraph) {
-        let levels = match graph.topological_sort() {
-            Ok(levels) => levels,
-            Err(e) => {
-                warn!("DAG execution failed: {}", e);
-                // Mark all nodes as failed
-                for node in graph.nodes.values_mut() {
-                    node.error = Some(format!("DAG error: {}", e));
-                }
-                return;
+        // First, detect cycles via topological sort
+        if let Err(e) = graph.topological_sort() {
+            warn!("DAG execution failed: {}", e);
+            for node in graph.nodes.values_mut() {
+                node.error = Some(format!("DAG error: {}", e));
             }
-        };
+            return;
+        }
+
+        if self.config.speculative_execution {
+            self.execute_speculative(graph).await;
+        } else {
+            self.execute_level_by_level(graph).await;
+        }
+    }
+
+    /// Speculative (dataflow) execution: a node starts as soon as all its
+    /// dependencies have completed, without waiting for the rest of its level.
+    async fn execute_speculative(&self, graph: &mut DagGraph) {
+        let node_ids: Vec<String> = graph.nodes.keys().cloned().collect();
+        let total_nodes = node_ids.len();
+
+        if total_nodes == 0 {
+            info!("DAG execution: empty graph — nothing to do");
+            return;
+        }
 
         info!(
-            "DAG execution: {} levels, {} nodes, width={}",
+            "DAG speculative execution: {} nodes, max_concurrency={}",
+            total_nodes, self.config.max_concurrency
+        );
+
+        // Shared state for tracking completion
+        let completed: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+        let notify = Arc::new(Notify::new());
+
+        // Pre-compute dependency lists for each node (as owned strings)
+        let deps_map: HashMap<String, Vec<String>> = graph
+            .nodes
+            .iter()
+            .map(|(id, n)| (id.clone(), n.dependencies.clone()))
+            .collect();
+
+        let mut handles = Vec::with_capacity(total_nodes);
+
+        for node_id in &node_ids {
+            let id = node_id.clone();
+            let deps = deps_map.get(&id).cloned().unwrap_or_default();
+            let completed_clone = completed.clone();
+            let notify_clone = notify.clone();
+            let input = graph.nodes[&id].input.clone();
+            let tool_name = graph.nodes[&id].tool_name.clone();
+            let registry = self.tool_registry.clone();
+            let semaphore = self.semaphore.clone();
+
+            handles.push(tokio::spawn(async move {
+                // Wait until all dependencies are completed
+                loop {
+                    {
+                        let completed_set = completed_clone.lock().unwrap();
+                        let all_deps_met = deps.iter().all(|d| completed_set.contains(d));
+                        if all_deps_met {
+                            break;
+                        }
+                    }
+                    notify_clone.notified().await;
+                }
+
+                let _permit = semaphore.acquire_owned().await;
+                let start = Instant::now();
+
+                let empty_dep_outputs: HashMap<String, Value> = HashMap::new();
+                let result = {
+                    use futures_util::future::FutureExt;
+                    let fut =
+                        execute_tool(registry.as_deref(), &tool_name, &input, &empty_dep_outputs);
+                    match std::panic::AssertUnwindSafe(fut).catch_unwind().await {
+                        Ok(Ok(val)) => Ok(val),
+                        Ok(Err(e)) => Err(e),
+                        Err(panic) => {
+                            let msg = panic
+                                .downcast_ref::<&str>()
+                                .copied()
+                                .or_else(|| panic.downcast_ref::<String>().map(|s| s.as_str()))
+                                .unwrap_or("unknown panic")
+                                .to_string();
+                            Err(format!("task panicked: {}", msg))
+                        }
+                    }
+                };
+
+                let duration_ms = start.elapsed().as_millis() as u64;
+
+                // Mark this node as completed and notify waiters
+                {
+                    let mut completed_set = completed_clone.lock().unwrap();
+                    completed_set.insert(id.clone());
+                }
+                notify_clone.notify_one();
+
+                (id, result, duration_ms)
+            }));
+        }
+
+        // Collect results and update the graph
+        for handle in handles {
+            match handle.await {
+                Ok((id, result, duration_ms)) => {
+                    if let Some(node) = graph.nodes.get_mut(&id) {
+                        node.duration_ms = duration_ms;
+                        match result {
+                            Ok(output) => {
+                                node.output = Some(output);
+                                // Build TaskContext from the node's output
+                                let mut ctx = TaskContext::new(id.clone());
+                                ctx.intermediate_findings.insert(
+                                    "output".to_string(),
+                                    node.output.clone().unwrap_or(Value::Null),
+                                );
+                                ctx.reasoning_trace.push(format!(
+                                    "Executed tool '{}' ({}ms)",
+                                    node.tool_name, duration_ms
+                                ));
+                                node.context = Some(ctx);
+                            }
+                            Err(e) => node.error = Some(e),
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("DAG node task panicked: {}", e);
+                }
+            }
+        }
+    }
+
+    /// Level-by-level (barrier) execution: wait for all nodes in level N
+    /// before starting level N+1. Falls back to this when speculative_execution is false.
+    async fn execute_level_by_level(&self, graph: &mut DagGraph) {
+        let levels = graph.topological_sort().unwrap_or_default();
+
+        info!(
+            "DAG level-by-level execution: {} levels, {} nodes, width={}",
             levels.len(),
             graph.nodes.len(),
             graph.width
@@ -225,8 +457,6 @@ impl DagExecutor {
                 let tool_name = node.tool_name.clone();
                 let id = node_id.clone();
 
-                // Collect dependency outputs — iterate over THIS node's dependencies
-                // to gather outputs from its actual upstream nodes.
                 let node_deps: Vec<String> = node.dependencies.clone();
 
                 // Check if any dependency has errored — if so, propagate the error
@@ -282,14 +512,45 @@ impl DagExecutor {
             }
 
             // Wait for all nodes in this level
-            // Use zip to identify which node panicked if the task itself failed.
             for (node_id, handle) in level.iter().zip(handles) {
                 match handle.await {
                     Ok((id, result, duration_ms)) => {
+                        // Collect dependency contexts BEFORE mutably borrowing graph.nodes.
+                        // We need to know which nodes are dependencies of `id`.
+                        let node_deps: Vec<String> = graph
+                            .nodes
+                            .get(&id)
+                            .map(|n| n.dependencies.clone())
+                            .unwrap_or_default();
+
+                        let dep_contexts: Vec<TaskContext> = graph
+                            .nodes
+                            .iter()
+                            .filter(|(dep_id, _)| node_deps.contains(dep_id))
+                            .filter_map(|(_, n)| n.context.clone())
+                            .collect();
+
                         if let Some(node) = graph.nodes.get_mut(&id) {
                             node.duration_ms = duration_ms;
                             match result {
-                                Ok(output) => node.output = Some(output),
+                                Ok(output) => {
+                                    node.output = Some(output);
+
+                                    let mut ctx = if dep_contexts.is_empty() {
+                                        TaskContext::new(id.clone())
+                                    } else {
+                                        TaskContext::merge(&dep_contexts)
+                                    };
+                                    ctx.intermediate_findings.insert(
+                                        "output".to_string(),
+                                        node.output.clone().unwrap_or(Value::Null),
+                                    );
+                                    ctx.reasoning_trace.push(format!(
+                                        "Executed tool '{}' ({}ms)",
+                                        node.tool_name, duration_ms
+                                    ));
+                                    node.context = Some(ctx);
+                                }
                                 Err(e) => node.error = Some(e),
                             }
                         }
@@ -308,7 +569,7 @@ impl DagExecutor {
 
 impl Default for DagExecutor {
     fn default() -> Self {
-        Self::new(10)
+        Self::with_config(DagExecutorConfig::default())
     }
 }
 
@@ -402,6 +663,10 @@ pub fn build_dag_from_tool_calls(tool_calls: &[(String, Value)]) -> DagGraph {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // -----------------------------------------------------------------------
+    // Existing tests (unchanged)
+    // -----------------------------------------------------------------------
 
     #[test]
     fn test_empty_graph() {
@@ -517,5 +782,136 @@ mod tests {
         let _levels = graph.topological_sort().unwrap();
         assert_eq!(graph.width, 2);
         assert_eq!(graph.depth, 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // New tests for TaskContext
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_task_context_new() {
+        let ctx = TaskContext::new("test-1".to_string());
+        assert_eq!(ctx.id, "test-1");
+        assert!(ctx.reasoning_trace.is_empty());
+        assert!(ctx.intermediate_findings.is_empty());
+        assert_eq!(ctx.confidence, 1.0);
+        assert!(ctx.open_questions.is_empty());
+        assert!(ctx.assumptions.is_empty());
+        assert!(ctx.parent_context_id.is_none());
+    }
+
+    #[test]
+    fn test_task_context_merge_empty() {
+        let merged = TaskContext::merge(&[]);
+        assert!(!merged.id.is_empty());
+        assert_eq!(merged.confidence, 1.0);
+        assert!(merged.parent_context_id.is_none());
+    }
+
+    #[test]
+    fn test_task_context_merge_single() {
+        let parent = TaskContext::new("parent-1".to_string());
+        let merged = TaskContext::merge(&[parent]);
+        assert!(!merged.id.is_empty());
+        assert_eq!(merged.parent_context_id, Some("parent-1".to_string()));
+        assert_eq!(merged.confidence, 1.0);
+    }
+
+    #[test]
+    fn test_task_context_merge_multiple() {
+        let mut p1 = TaskContext::new("p1".to_string());
+        p1.confidence = 0.8;
+        p1.reasoning_trace.push("step 1".to_string());
+        p1.intermediate_findings
+            .insert("key1".to_string(), json!("val1"));
+
+        let mut p2 = TaskContext::new("p2".to_string());
+        p2.confidence = 0.6;
+        p2.reasoning_trace.push("step 2".to_string());
+        p2.intermediate_findings
+            .insert("key2".to_string(), json!("val2"));
+        p2.open_questions.push("why?".to_string());
+        p2.assumptions.push("assume X".to_string());
+
+        let merged = TaskContext::merge(&[p1, p2]);
+
+        assert_eq!(merged.parent_context_id, Some("p1".to_string()));
+        assert!((merged.confidence - 0.7).abs() < f64::EPSILON);
+        assert_eq!(merged.reasoning_trace.len(), 2);
+        assert!(merged.reasoning_trace.contains(&"step 1".to_string()));
+        assert!(merged.reasoning_trace.contains(&"step 2".to_string()));
+        assert_eq!(merged.intermediate_findings.len(), 2);
+        assert_eq!(merged.open_questions, vec!["why?"]);
+        assert_eq!(merged.assumptions, vec!["assume X"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // New tests for DagExecutorConfig and speculative execution config
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_dag_executor_config_default() {
+        let config = DagExecutorConfig::default();
+        assert_eq!(config.max_concurrency, 10);
+        assert!(config.speculative_execution);
+    }
+
+    #[test]
+    fn test_dag_executor_config_custom() {
+        let config = DagExecutorConfig {
+            max_concurrency: 5,
+            speculative_execution: false,
+        };
+        assert_eq!(config.max_concurrency, 5);
+        assert!(!config.speculative_execution);
+    }
+
+    #[test]
+    fn test_dag_executor_with_config_disables_speculative() {
+        let config = DagExecutorConfig {
+            max_concurrency: 4,
+            speculative_execution: false,
+        };
+        let executor = DagExecutor::with_config(config);
+        assert!(!executor.config.speculative_execution);
+        assert_eq!(executor.config.max_concurrency, 4);
+    }
+
+    #[test]
+    fn test_dag_executor_default_has_speculative() {
+        let executor = DagExecutor::default();
+        assert!(executor.config.speculative_execution);
+        assert_eq!(executor.config.max_concurrency, 10);
+    }
+
+    #[test]
+    fn test_dag_executor_new_has_speculative() {
+        let executor = DagExecutor::new(8);
+        assert!(executor.config.speculative_execution);
+        assert_eq!(executor.config.max_concurrency, 8);
+    }
+
+    // -----------------------------------------------------------------------
+    // New tests for DagNode with context
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_dag_node_has_context_field() {
+        let mut graph = DagGraph::new();
+        graph.add_node("a".into(), "tool".into(), json!({}), vec![]);
+        let node = graph.nodes.get("a").unwrap();
+        assert!(node.context.is_none());
+        assert_eq!(node.duration_ms, 0);
+    }
+
+    #[test]
+    fn test_dag_node_context_assignment() {
+        let mut graph = DagGraph::new();
+        graph.add_node("a".into(), "tool".into(), json!({}), vec![]);
+        let node = graph.nodes.get_mut("a").unwrap();
+        let ctx = TaskContext::new("ctx-1".to_string());
+        node.context = Some(ctx);
+        assert!(node.context.is_some());
+        assert_eq!(node.context.as_ref().unwrap().id, "ctx-1");
     }
 }

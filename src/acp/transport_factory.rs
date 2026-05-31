@@ -272,3 +272,159 @@ fn flow_manager(config_path: &Path) -> Arc<FlowManager> {
 
     Arc::new(FlowManager::new(app_config, None))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── resolve_path ──────────────────────────────────────────────────
+
+    #[test]
+    fn resolve_path_absolute_returns_as_is() {
+        let config_path = Path::new("/tmp/config.toml");
+        let resolved = resolve_path(config_path, "/absolute/path/cache.db");
+        assert_eq!(resolved, Path::new("/absolute/path/cache.db"));
+    }
+
+    #[test]
+    fn resolve_path_relative_resolves_relative_to_config_parent() {
+        let config_path = Path::new("/tmp/sub/config.toml");
+        let resolved = resolve_path(config_path, "cache.db");
+        assert_eq!(resolved, Path::new("/tmp/sub/cache.db"));
+    }
+
+    #[test]
+    fn resolve_path_relative_current_dir() {
+        let config_path = Path::new("config.toml");
+        let resolved = resolve_path(config_path, "data/cache.db");
+        assert_eq!(resolved, Path::new("data/cache.db"));
+    }
+
+    // ── flow_manager fallback ──────────────────────────────────────────
+
+    #[test]
+    fn flow_manager_falls_back_on_missing_config() {
+        let missing = Path::new("/nonexistent/path/config.toml");
+        let fm = flow_manager(missing);
+        // Should not panic; returns default FlowManager
+        let _ = fm;
+    }
+
+    #[test]
+    fn flow_manager_returns_arc() {
+        let temp = std::env::temp_dir().join("go-on-test-config.toml");
+        // Config doesn't exist — falls back to default
+        let fm = flow_manager(&temp);
+        assert!(Arc::strong_count(&fm) >= 1);
+    }
+
+    // ── dispatch_server protocol dispatch mapping ─────────────────────
+
+    #[test]
+    fn dispatch_server_unsupported_protocol_returns_error() {
+        // We can't easily run dispatch_server without a full server, but we
+        // can verify that unsupported protocol modes would bail.
+        let result = tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let cache_dir = tempfile::tempdir().unwrap();
+            let config_path = cache_dir.path().join("config.toml");
+
+            let registry = Arc::new(AgentRegistry::new());
+            let client = reqwest::Client::new();
+
+            let outcome = dispatch_server(
+                registry,
+                None,
+                None,
+                &config_path,
+                crate::config::RuntimeConfig::default(),
+                "unsupported_mode",
+                "127.0.0.1:0",
+                None,
+                None,
+                None,
+                client,
+            )
+            .await;
+
+            outcome
+        });
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("unsupported protocol mode"));
+    }
+
+    // ── initialize_cache / initialize_vector_store disabled config ────
+
+    #[tokio::test]
+    async fn initialize_cache_disabled_returns_none() {
+        let config_path = Path::new("/tmp");
+        let result = initialize_cache(config_path, None).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn initialize_cache_not_enabled_returns_none() {
+        let config_path = Path::new("/tmp");
+        let cfg = CacheConfig {
+            enabled: false,
+            path: "cache.db".to_string(),
+            default_ttl_seconds: 3600,
+            max_entries: 1000,
+            connection_string: None,
+        };
+        let result = initialize_cache(config_path, Some(cfg)).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn initialize_vector_store_disabled_returns_none() {
+        let config_path = Path::new("/tmp");
+        let result = initialize_vector_store(config_path, None).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn initialize_vector_store_not_enabled_returns_none() {
+        let config_path = Path::new("/tmp");
+        let cfg = VectorConfig {
+            enabled: false,
+            auto_mode: false,
+            path: "vectors.db".to_string(),
+            connection_string: None,
+            dimensions: 64,
+            min_query_chars: 10,
+            top_k: 5,
+            min_similarity: 0.5,
+            max_snippet_chars: 512,
+            max_entries: 256,
+            summary_enabled: false,
+            summary_trigger_messages: 5,
+            summary_max_chars: 4096,
+        };
+        let result = initialize_vector_store(config_path, Some(cfg))
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    // ── initialize_autotune ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn initialize_autotune_disabled_returns_none() {
+        let config_path = Path::new("/tmp");
+        let (state, cfg, path) = initialize_autotune(config_path, None).await.unwrap();
+        assert!(state.is_none());
+        assert!(cfg.is_none());
+        assert!(path.is_none());
+    }
+
+    #[tokio::test]
+    async fn initialize_autotune_not_enabled_returns_none() {
+        let config_path = Path::new("/tmp");
+        // AutoTuneConfig does not impl Default, so we construct via load_or_default path
+        // by providing a None config which returns (None, None, None)
+        let (state, _, _) = initialize_autotune(config_path, None).await.unwrap();
+        assert!(state.is_none());
+    }
+}

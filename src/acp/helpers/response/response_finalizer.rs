@@ -151,7 +151,7 @@ fn collect_agent_outputs(
     candidate_agents: &[String],
 ) -> AgentExecutionMetrics {
     // ── Request-level routing provenance (BLUE41 Step 7) ──────────────
-    if let Some(ref ledger) = server.provenance_ledger {
+    if let Some(ref ledger) = server.governance_deps.provenance_ledger {
         let route_input = json!({
             "request_id": trace.request_id.clone(),
             "mode": mode,
@@ -190,7 +190,7 @@ fn collect_agent_outputs(
     }
 
     // ── Scheduler task completion (ARCH-02) ────────────────────────────
-    if let Some(ref sched) = server.scheduler {
+    if let Some(ref sched) = server.orchestration_deps.scheduler {
         if let Err(e) = sched.level1.complete(sched_task_id) {
             tracing::warn!("scheduler complete failed: {}", e);
         }
@@ -205,7 +205,7 @@ fn collect_agent_outputs(
     let request_succeeded = !response_text.trim().is_empty();
 
     // ── CapabilityBus feedback on execution outcome ────────────────────
-    if let Some(ref cb) = server.capability_bus {
+    if let Some(ref cb) = server.governance_deps.capability_bus {
         cb.feedback(
             selected_agent,
             phase_name,
@@ -298,7 +298,7 @@ fn build_response_metadata(
             poisoned.into_inner()
         });
         let _historical_success_rate = server
-            .capability_bus
+            .governance_deps.capability_bus
             .as_ref()
             .and_then(|cb| {
                 cb.learning_bus

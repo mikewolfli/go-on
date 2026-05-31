@@ -980,6 +980,22 @@ async fn run() -> Result<()> {
     };
     crate::core::bootstrap::perform_bootstrap(&bootstrap_cfg).await?;
 
+    // GAP-B50-33: Check startup memory and start background memory monitor
+    let memory_health = crate::observability::memory_health::check_startup_memory();
+    tracing::info!(?memory_health, "startup memory check");
+    crate::observability::memory_health::print_memory_health(&memory_health);
+    match &memory_health {
+        crate::observability::memory_health::MemoryHealth::Critical { free_mb, message } => {
+            anyhow::bail!(
+                "Insufficient memory to start server: {} MB free — {}",
+                free_mb,
+                message
+            );
+        }
+        _ => {}
+    }
+    crate::observability::memory_health::start_memory_monitor();
+
     // Handle secret management commands, local model setup, and onboarding
     if handle_secret_commands(&cli, &config_path)? {
         return Ok(());

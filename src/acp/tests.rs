@@ -229,7 +229,7 @@ mod test_suite {
 
         // Note: The config field doesn't exist on the new AcpServer structure
         // This test is simplified for migration
-        assert!(server.flow_manager.is_none());
+        assert!(server.model_deps.flow_manager.is_none());
     }
 
     /// Test checkpoint message character counting

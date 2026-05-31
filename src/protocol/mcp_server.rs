@@ -465,7 +465,7 @@ async fn handle_http_connection(
             // The enforcer guard is NOT `Send`, so we scope the RBAC logic to
             // a synchronous block and drop the guard before any `.await`.
             let required_perm = Permission::Execute;
-            if let Some(ref enforcer) = server.rbac_enforcer {
+            if let Some(ref enforcer) = server.governance_deps.rbac_enforcer {
                 let access_decision = {
                     let enforcer_guard = enforcer
                         .read()

@@ -33,7 +33,10 @@ use crate::acp::r#impl::io::send_error;
 use crate::acp::r#impl::request::{handle_request, inject_platform_profiles_if_absent};
 use crate::i18n::runtime::{t, tf};
 
-use crate::acp::server::{AcpServer, CacheLayer, ObservabilityLayer};
+use crate::acp::server::{
+    AcpServer, CacheLayer, CacheServerDeps, GovernanceServerDeps, ModelServerDeps,
+    ObservabilityLayer, OrchestrationServerDeps,
+};
 use crate::adaptive_selector::AdaptiveModelSelector;
 use crate::agent::AgentRegistry;
 use crate::config::{AutoTuneConfig, AutoTuneState, RuntimeConfig, VectorConfig};
@@ -177,17 +180,17 @@ pub fn new_acp_server(
     match builder.build() {
         Ok(mut server) => {
             // Set fields that aren't available in ServerBuilder yet
-            server.vector_config = vector_config;
-            server.autotune = autotune;
-            server.autotune_config = autotune_config;
-            server.autotune_state_path = autotune_state_path;
+            server.cache_deps.vector_config = vector_config;
+            server.cache_deps.autotune = autotune;
+            server.cache_deps.autotune_config = autotune_config;
+            server.cache_deps.autotune_state_path = autotune_state_path;
             server.config_path = config_path;
             server.runtime_config = runtime_config;
             server.verbose = _verbose;
-            server.harness_bus = Some(harness_bus);
-            server.capability_bus = Some(capability_bus);
-            server.provenance_ledger = Some(provenance_ledger);
-            server.rbac_enforcer = Some(rbac_enforcer);
+            server.governance_deps.harness_bus = Some(harness_bus);
+            server.governance_deps.capability_bus = Some(capability_bus);
+            server.governance_deps.provenance_ledger = Some(provenance_ledger);
+            server.governance_deps.rbac_enforcer = Some(rbac_enforcer);
             server.skill_market_registry = None;
             server.rate_limit_middleware = Some(Arc::new(
                 crate::protocol::rate_limit::RateLimitMiddleware::new(
@@ -230,26 +233,27 @@ pub fn new_acp_server(
                 }
                 s
             };
-            server.scheduler = Some(task_scheduler);
+            server.orchestration_deps.scheduler = Some(task_scheduler);
 
             if server.runtime_config.skills_enabled {
                 server.register_skill(Arc::new(crate::orchestration::skill::EchoSkill));
                 server.register_skill(Arc::new(
                     crate::orchestration::skill::SkillCreatorSkill::new(
-                        server.skill_registry.clone(),
+                        server.orchestration_deps.skill_registry.clone(),
                     ),
                 ));
             }
 
             // Wire the skill registry into the global discovery engine
             crate::acp::r#impl::request::tools_pack::init_skill_discovery(
-                server.skill_registry.clone(),
+                server.orchestration_deps.skill_registry.clone(),
             );
 
             // Wire the new modules' state from CapabilityBus into the server's
             // standalone fields so process_chat_request can access them directly.
             server.schema_registry = Arc::clone(
                 &server
+                    .governance_deps
                     .capability_bus
                     .as_ref()
                     .map(|cb| Arc::clone(&cb.schema_registry))
@@ -257,6 +261,7 @@ pub fn new_acp_server(
             );
             server.tenant_budget = Arc::clone(
                 &server
+                    .governance_deps
                     .capability_bus
                     .as_ref()
                     .map(|cb| Arc::clone(&cb.tenant_budget))
@@ -276,6 +281,7 @@ pub fn new_acp_server(
 
             server.optimizer_registry = Arc::clone(
                 &server
+                    .governance_deps
                     .capability_bus
                     .as_ref()
                     .map(|cb| Arc::clone(&cb.optimizer_registry))
@@ -285,7 +291,7 @@ pub fn new_acp_server(
             // Wire the token cache into the agent registry so that all
             // agents returned by registry.get() are automatically wrapped
             // with CachedAgentWrapper.
-            registry.set_token_cache(Some(Arc::clone(&server.cache.token_cache)));
+            registry.set_token_cache(Some(Arc::clone(&server.cache_deps.cache.token_cache)));
 
             // BLUE48 Step 2: Pre-initialize SSE buffer pool at startup to
             // avoid first-request latency penalty from lazy initialization.
@@ -293,7 +299,7 @@ pub fn new_acp_server(
 
             // BLUE48 Step 1: Initialize global embedding vector store for
             // semantic task classification in the Planner.
-            if let Some(ref vs) = server.cache.vector_store {
+            if let Some(ref vs) = server.cache_deps.cache.vector_store {
                 crate::orchestration::planner_embedding::init_global_task_vector_store(Arc::clone(
                     vs,
                 ));
@@ -321,30 +327,65 @@ pub fn new_acp_server(
                 failure_prevention_state.register_service(&name);
             }
 
+            let cache_layer = CacheLayer {
+                response_cache: cache.clone(),
+                memory_response_cache: Arc::new(StdMutex::new(MemoryResponseCache::default())),
+                vector_store: vector_store.clone(),
+                token_cache: Arc::new(crate::intelligence::token_cache::TokenMultiLevelCache::new(
+                    500,
+                    200,
+                    ".goon/token_cache",
+                )),
+                semantic_cache: Arc::new(StdMutex::new(
+                    crate::memory::semantic_cache::SemanticResponseCache::new(Default::default()),
+                )),
+            };
             let mut fallback_server = AcpServer {
-                flow_manager: Some(flow.clone()),
-                agent_registry: Some(registry.clone()),
-                cache: CacheLayer {
-                    response_cache: cache.clone(),
-                    memory_response_cache: Arc::new(StdMutex::new(MemoryResponseCache::default())),
-                    vector_store: vector_store.clone(),
-                    token_cache: Arc::new(
-                        crate::intelligence::token_cache::TokenMultiLevelCache::new(
-                            500,
-                            200,
-                            ".goon/token_cache",
-                        ),
-                    ),
-                    semantic_cache: Arc::new(StdMutex::new(
-                        crate::memory::semantic_cache::SemanticResponseCache::new(
-                            Default::default(),
-                        ),
-                    )),
+                cache_deps: CacheServerDeps {
+                    cache: cache_layer,
+                    vector_config,
+                    autotune,
+                    autotune_config,
+                    autotune_state_path,
                 },
-                vector_config,
-                autotune,
-                autotune_config,
-                autotune_state_path,
+                model_deps: ModelServerDeps {
+                    flow_manager: Some(flow.clone()),
+                    agent_registry: Some(registry.clone()),
+                    adaptive_model_selector: Arc::new(StdMutex::new(AdaptiveModelSelector::new())),
+                    flow_model_selector: Arc::new(StdMutex::new(FlowModelSelector {})),
+                },
+                governance_deps: GovernanceServerDeps {
+                    harness_bus: Some(Arc::clone(&harness_bus)),
+                    capability_bus: Some(Arc::clone(&capability_bus)),
+                    pua_enforcement_plan: Arc::new(StdMutex::new(crate::pua::PuaEnforcementPlan {
+                        escalation_level: String::new(),
+                        mandatory_roles: Vec::new(),
+                        red_lines: Vec::new(),
+                        quality_compass: Vec::new(),
+                        mandatory_safeguards: Vec::new(),
+                        mandatory_evidence: Vec::new(),
+                        stage_requirements: Vec::new(),
+                    })),
+                    rbac_enforcer: None,
+                    provenance_ledger: Some(provenance_ledger),
+                },
+                orchestration_deps: OrchestrationServerDeps {
+                    scheduler: None,
+                    planner: crate::orchestration::planner_executor::Planner,
+                    executor: crate::orchestration::planner_executor::Executor,
+                    planner_executor_config: Default::default(),
+                    skill_registry: {
+                        let mut registry = SkillRegistry::default();
+                        let prompt_skills_path =
+                            std::path::PathBuf::from(&runtime_config.skills_cache_dir)
+                                .join("prompt_skills.json");
+                        registry.set_persistence_path(prompt_skills_path);
+                        if let Err(e) = registry.load_prompt_skills_from_disk() {
+                            tracing::warn!("Failed to load prompt skills from disk: {}", e);
+                        }
+                        Arc::new(StdMutex::new(registry))
+                    },
+                },
                 config_path: config_path.clone(),
                 runtime_config: runtime_config.clone(),
                 observability: ObservabilityLayer {
@@ -370,45 +411,17 @@ pub fn new_acp_server(
                     timeout_seconds: None,
                     fail_on_timeout: false,
                 })),
-                adaptive_model_selector: Arc::new(StdMutex::new(AdaptiveModelSelector::new())),
                 failure_prevention: Arc::new(StdMutex::new(failure_prevention_state)),
-                flow_model_selector: Arc::new(StdMutex::new(FlowModelSelector {})),
                 memory_store: Arc::new(StdMutex::new(MemoryStore::new(MemoryPolicy::default()))),
-                skill_registry: {
-                    let mut registry = SkillRegistry::default();
-                    let prompt_skills_path =
-                        std::path::PathBuf::from(&runtime_config.skills_cache_dir)
-                            .join("prompt_skills.json");
-                    registry.set_persistence_path(prompt_skills_path);
-                    if let Err(e) = registry.load_prompt_skills_from_disk() {
-                        tracing::warn!("Failed to load prompt skills from disk: {}", e);
-                    }
-                    Arc::new(StdMutex::new(registry))
-                },
-                pua_enforcement_plan: Arc::new(StdMutex::new(crate::pua::PuaEnforcementPlan {
-                    escalation_level: String::new(),
-                    mandatory_roles: Vec::new(),
-                    red_lines: Vec::new(),
-                    quality_compass: Vec::new(),
-                    mandatory_safeguards: Vec::new(),
-                    mandatory_evidence: Vec::new(),
-                    stage_requirements: Vec::new(),
-                })),
                 artifact_ledger: Arc::new(StdMutex::new(ArtifactLedger::new(
                     config_path.as_deref().map(Path::new),
                 ))),
-                verbose: _verbose,
-                harness_bus: Some(Arc::clone(&harness_bus)),
-                capability_bus: Some(Arc::clone(&capability_bus)),
-                provenance_ledger: Some(provenance_ledger),
                 fork_registry: Arc::new(StdMutex::new(
                     crate::orchestration::fork_registry::ForkRegistry::new(
                         crate::orchestration::fork_registry::ForkConfig::default(),
                     ),
                 )),
-                planner: crate::orchestration::planner_executor::Planner,
-                executor: crate::orchestration::planner_executor::Executor,
-                planner_executor_config: Default::default(),
+                verbose: _verbose,
                 evaluation_suite: Arc::new(StdMutex::new(
                     crate::intelligence::evaluation::BenchmarkSuite::new(),
                 )),
@@ -431,14 +444,17 @@ pub fn new_acp_server(
                 shutdown_notify: Arc::new(Notify::new()),
                 responses_api_store: Arc::new(StdMutex::new(std::collections::HashMap::new())),
                 task_graph_store: None,
-                scheduler: None,
                 prompt_manager: crate::acp::r#impl::request::prompts_pack::PromptManager::new(
                     std::path::PathBuf::from("./prompts"),
                 ),
                 session_manager: None,
-                rbac_enforcer: None,
                 skill_market_registry: None,
                 rate_limit_middleware: None,
+                audit_log: crate::governance::audit::ThreadSafeAuditLog::new_with_default_path(
+                    10_000,
+                ),
+                tool_registry: Arc::new(crate::orchestration::tool::ToolRegistry::new()),
+                drain_guard: crate::acp::server::DrainGuard::default(),
             };
 
             // Create session manager if user auth is enabled
@@ -450,7 +466,7 @@ pub fn new_acp_server(
             }
 
             // Wire RBAC enforcer into the fallback server for HTTP-level authorization
-            fallback_server.rbac_enforcer = Some(rbac_enforcer);
+            fallback_server.governance_deps.rbac_enforcer = Some(rbac_enforcer);
 
             // Wire dual-level task scheduler (ARCH-02): create the scheduler and
             // register one worker per known agent so the priority queue has real routing
@@ -479,26 +495,27 @@ pub fn new_acp_server(
                 }
                 s
             };
-            fallback_server.scheduler = Some(task_scheduler);
+            fallback_server.orchestration_deps.scheduler = Some(task_scheduler);
 
             if fallback_server.runtime_config.skills_enabled {
                 fallback_server.register_skill(Arc::new(crate::orchestration::skill::EchoSkill));
                 fallback_server.register_skill(Arc::new(
                     crate::orchestration::skill::SkillCreatorSkill::new(
-                        fallback_server.skill_registry.clone(),
+                        fallback_server.orchestration_deps.skill_registry.clone(),
                     ),
                 ));
             }
 
             // Wire the skill registry into the global discovery engine
             crate::acp::r#impl::request::tools_pack::init_skill_discovery(
-                fallback_server.skill_registry.clone(),
+                fallback_server.orchestration_deps.skill_registry.clone(),
             );
 
             // Wire the new modules' state from CapabilityBus into the fallback server's
             // standalone fields so process_chat_request can access them directly.
             fallback_server.schema_registry = Arc::clone(
                 &fallback_server
+                    .governance_deps
                     .capability_bus
                     .as_ref()
                     .map(|cb| Arc::clone(&cb.schema_registry))
@@ -506,6 +523,7 @@ pub fn new_acp_server(
             );
             fallback_server.tenant_budget = Arc::clone(
                 &fallback_server
+                    .governance_deps
                     .capability_bus
                     .as_ref()
                     .map(|cb| Arc::clone(&cb.tenant_budget))
@@ -528,6 +546,7 @@ pub fn new_acp_server(
 
             fallback_server.optimizer_registry = Arc::clone(
                 &fallback_server
+                    .governance_deps
                     .capability_bus
                     .as_ref()
                     .map(|cb| Arc::clone(&cb.optimizer_registry))
@@ -535,7 +554,9 @@ pub fn new_acp_server(
             );
 
             // Wire the token cache into the agent registry for the fallback path too.
-            registry.set_token_cache(Some(Arc::clone(&fallback_server.cache.token_cache)));
+            registry.set_token_cache(Some(Arc::clone(
+                &fallback_server.cache_deps.cache.token_cache,
+            )));
 
             // BLUE48 Step 19: Initialize intelligence hub in the fallback path too so
             // consensus voting, rationalization, and audit are wired into the request path.
@@ -714,6 +735,11 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
                 break;
             }
             incoming = listener.accept() => {
+                // Check if draining before accepting new connections
+                if server.drain_guard.is_draining() {
+                    drop(incoming);
+                    continue;
+                }
                 let (mut socket, peer_addr) = incoming?;
                 let server_ref = Arc::clone(&server);
                 tokio::spawn(async move {
@@ -725,18 +751,24 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
         }
     }
 
-    // ── Graceful shutdown with drain ────────────────────────────────
-    server.begin_shutdown();
+    // ── Graceful shutdown with DrainGuard ───────────────────────────
+    // Shutdown order: stop_accepting → drain_requests → stop_bg_tasks → close_db → exit
+    tracing::info!("Shutdown phase 1/5: stop_accepting — beginning drain");
+    server.drain_guard.start_drain();
 
-    // Wait for in-flight requests to complete (shutdown drain).
-    let drain_secs = server.runtime_config.shutdown_drain_seconds.max(1);
-    info!(
-        "ACP HTTP server draining connections for {} seconds...",
-        drain_secs
+    tracing::info!(
+        "Shutdown phase 2/5: drain_requests — waiting up to {:?}",
+        server.drain_guard.drain_timeout
     );
-    tokio::time::sleep(std::time::Duration::from_secs(drain_secs)).await;
+    server.drain_guard.wait_for_drain().await;
 
+    tracing::info!("Shutdown phase 3/5: stop_bg_tasks — notifying background tasks");
     server.shutdown_notify.notify_waiters();
+
+    tracing::info!("Shutdown phase 4/5: close_db — closing database connections");
+    // Database connections are closed on drop via SQLite connection lifecycle.
+
+    tracing::info!("Shutdown phase 5/5: exit — server shutdown complete");
     info!("ACP HTTP server shutting down");
     Ok(())
 }
@@ -744,10 +776,12 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
 /// Get routing handles (flow manager and agent registry)
 pub fn routing_handles(server: &AcpServer) -> Result<(Arc<FlowManager>, Arc<AgentRegistry>)> {
     let flow = server
+        .model_deps
         .flow_manager
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("flow manager not initialized"))?;
     let registry = server
+        .model_deps
         .agent_registry
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("agent registry not initialized"))?;
@@ -758,7 +792,7 @@ pub fn routing_handles(server: &AcpServer) -> Result<(Arc<FlowManager>, Arc<Agen
 #[allow(dead_code)] // F-GAP-49 — planned wiring: memory/caching accessor
 #[must_use]
 pub fn cache_handle(server: &AcpServer) -> Option<Arc<crate::cache::ResponseCache>> {
-    server.cache.response_cache.clone()
+    server.cache_deps.cache.response_cache.clone()
 }
 
 /// Get artifact ledger
@@ -778,20 +812,20 @@ pub fn artifact_ledger(_server: &AcpServer) -> crate::reinforcement::ArtifactLed
 #[allow(dead_code)] // F-GAP-49 — planned wiring: learning/intelligence accessor
 #[must_use]
 pub fn vector_store_handle(server: &AcpServer) -> Option<Arc<VectorStore>> {
-    server.cache.vector_store.clone()
+    server.cache_deps.cache.vector_store.clone()
 }
 
 /// Get vector configuration snapshot
 #[allow(dead_code)] // F-GAP-49 — planned wiring: learning/intelligence accessor
 pub fn vector_config_snapshot(server: &AcpServer) -> Option<VectorConfig> {
-    server.vector_config.clone()
+    server.cache_deps.vector_config.clone()
 }
 
 /// Get autotune handle
 #[allow(dead_code)] // F-GAP-49 — planned wiring: learning/intelligence accessor
 #[must_use]
 pub fn autotune_handle(server: &AcpServer) -> Option<Arc<tokio::sync::Mutex<AutoTuneState>>> {
-    server.autotune.clone()
+    server.cache_deps.autotune.clone()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2751,6 +2785,19 @@ async fn route_http_get(
     cors_headers: &str,
 ) -> Result<()> {
     match path {
+        "/metrics" => {
+            let prometheus =
+                crate::observability::metrics_exporter::build_prometheus_metrics(server);
+            // Write Prometheus text format directly
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\nContent-Length: {}\r\n{}\r\n\r\n{}",
+                prometheus.len(),
+                cors_headers,
+                prometheus
+            );
+            use tokio::io::AsyncWriteExt;
+            socket.write_all(response.as_bytes()).await?;
+        }
         "/health" => {
             write_http_json_response_with_context(
                 socket,
@@ -2760,6 +2807,36 @@ async fn route_http_get(
                 cors_headers,
             )
             .await?;
+        }
+        "/health/ready" => {
+            if server.drain_guard.is_draining() {
+                // 503 Service Unavailable during drain
+                write_http_json_response_with_context(
+                    socket,
+                    503,
+                    serde_json::json!({
+                        "ok": false,
+                        "status": "draining",
+                        "message": "Server is shutting down"
+                    }),
+                    "health",
+                    cors_headers,
+                )
+                .await?;
+            } else {
+                write_http_json_response_with_context(
+                    socket,
+                    200,
+                    serde_json::json!({
+                        "ok": true,
+                        "status": "ready",
+                        "healthy": server.is_healthy(),
+                    }),
+                    "health",
+                    cors_headers,
+                )
+                .await?;
+            }
         }
         "/v1/responses" => {
             let data = list_responses_api_payloads(server);
@@ -3347,12 +3424,16 @@ async fn check_http_authorization(
 
     // Resolve permissions from roles (lock is scoped to avoid holding a non-Send
     // guard across .await points)
-    let access_decision = server.rbac_enforcer.as_ref().map(|enforcer| {
-        let guard = enforcer.read().unwrap_or_else(|e| e.into_inner());
-        let mut p = principal.clone();
-        guard.resolve_permissions(&mut p);
-        guard.check_access(&p, &required_perm)
-    });
+    let access_decision = server
+        .governance_deps
+        .rbac_enforcer
+        .as_ref()
+        .map(|enforcer| {
+            let guard = enforcer.read().unwrap_or_else(|e| e.into_inner());
+            let mut p = principal.clone();
+            guard.resolve_permissions(&mut p);
+            guard.check_access(&p, &required_perm)
+        });
 
     if let Some(decision) = access_decision {
         match decision {

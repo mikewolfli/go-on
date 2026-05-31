@@ -510,4 +510,112 @@ mod tests {
             .collect();
         assert!(orchestration_keys.contains(&"mapped_nodes"));
     }
+
+    // ── build_chat_response: edge cases ──────────────────────────────
+
+    #[test]
+    fn build_chat_response_minimal_context() {
+        let ctx = ChatResponseContext {
+            mode: "chat".to_string(),
+            selected_agent: "test-agent".to_string(),
+            selected_model_name: Some("test-model".to_string()),
+            ..Default::default()
+        };
+        let response = build_chat_response(ctx);
+        assert_eq!(
+            response["selected_agent"], "test-agent",
+            "response must include selected_agent"
+        );
+        assert_eq!(response["selected_model_name"], "test-model");
+        assert_eq!(response["mode"], "chat");
+    }
+
+    #[test]
+    fn build_chat_response_includes_mode_from_context() {
+        let ctx = ChatResponseContext {
+            mode: "agent".to_string(),
+            ..Default::default()
+        };
+        let response = build_chat_response(ctx);
+        assert_eq!(response["mode"], "agent");
+    }
+
+    #[test]
+    fn build_chat_response_with_checkpoint() {
+        let ctx = ChatResponseContext {
+            checkpoint: json!({"id": "cp-1", "branch": "main"}),
+            ..Default::default()
+        };
+        let response = build_chat_response(ctx);
+        assert_eq!(response["checkpoint"]["id"], "cp-1");
+    }
+
+    #[test]
+    fn build_chat_response_with_cache_hit() {
+        let ctx = ChatResponseContext {
+            cache_hit: true,
+            ..Default::default()
+        };
+        let response = build_chat_response(ctx);
+        assert_eq!(response["cache_hit"], true);
+    }
+
+    #[test]
+    fn build_chat_response_with_agent_switch_notice() {
+        let ctx = ChatResponseContext {
+            agent_switch_notice: Some(Value::String(
+                "switched from agent-a to agent-b".to_string(),
+            )),
+            ..Default::default()
+        };
+        let response = build_chat_response(ctx);
+        assert_eq!(
+            response["agent_switch_notice"],
+            "switched from agent-a to agent-b"
+        );
+    }
+
+    // ── build_role_routing ────────────────────────────────────────────
+
+    #[test]
+    fn build_role_routing_empty_description() {
+        let routing = build_role_routing("");
+        assert!(
+            routing.get("agents").is_none() || routing["agents"].as_array().unwrap().is_empty()
+        );
+    }
+
+    #[test]
+    fn build_role_routing_with_recommended_mode() {
+        let _agents = vec![CapabilityRoutingInfo {
+            selected_agent: Some("agent-a".to_string()),
+            recommended_mode: Some("agent".to_string()),
+            candidate_count: Some(3),
+            decision_confidence: Some(0.85),
+            selection_reason: Some("balanced_score".to_string()),
+            optimization_hint: None,
+        }];
+        let routing = build_role_routing("implement a feature");
+        assert_eq!(routing["selected_agent"], "agent-a");
+        assert_eq!(routing["recommended_mode"], "agent");
+    }
+
+    // ── CapabilityRoutingInfo default ─────────────────────────────────
+
+    #[test]
+    fn capability_routing_info_fields_accessible() {
+        let info = CapabilityRoutingInfo {
+            selected_agent: Some("test".to_string()),
+            recommended_mode: Some("auto".to_string()),
+            candidate_count: Some(5),
+            decision_confidence: Some(0.9),
+            selection_reason: Some("high_reputation".to_string()),
+            optimization_hint: Some(Value::String("try_parallel".to_string())),
+        };
+        assert_eq!(info.selected_agent, Some("test".to_string()));
+        assert_eq!(
+            info.optimization_hint,
+            Some(Value::String("try_parallel".to_string()))
+        );
+    }
 }

@@ -190,4 +190,73 @@ mod tests {
             .and_then(Value::as_array)
             .is_some());
     }
+
+    #[test]
+    fn run_enhanced_verification_code_snippets_get_lint_check() {
+        let result =
+            run_enhanced_verification("fn test() {\n    let x = 1;\n    pub fn inner() {}\n}");
+        let ev = result
+            .get("enhanced_verification")
+            .expect("should have enhanced_verification");
+        let total = ev.get("total_checks").and_then(Value::as_u64).unwrap_or(0);
+        // Should have at least 4 checks: syntax + test + lint + adversarial
+        assert!(total >= 4, "expected >=4 checks, got {}", total);
+    }
+
+    #[test]
+    fn run_enhanced_verification_plain_text_no_extra_checks() {
+        // Plain text without code markers should only get syntax + adversarial checks
+        let result = run_enhanced_verification("This is a plain text response.");
+        let ev = result
+            .get("enhanced_verification")
+            .expect("should have enhanced_verification");
+        let total = ev.get("total_checks").and_then(Value::as_u64).unwrap_or(0);
+        // Should have 2 checks: syntax + adversarial (no test/lint for plain text)
+        assert_eq!(total, 2, "expected 2 checks for plain text, got {}", total);
+    }
+
+    #[test]
+    fn run_enhanced_verification_confidence_reflects_pass_rate() {
+        let result = run_enhanced_verification("fn hello() { let x = 1; }");
+        let ev = result
+            .get("enhanced_verification")
+            .expect("should have enhanced_verification");
+        let passed = ev.get("passed_checks").and_then(Value::as_u64).unwrap_or(0);
+        let total = ev.get("total_checks").and_then(Value::as_u64).unwrap_or(0);
+        let confidence = ev.get("confidence").and_then(Value::as_f64).unwrap_or(0.0);
+        if total > 0 {
+            let expected = passed as f64 / total as f64;
+            assert!(
+                (confidence - expected).abs() < 0.01,
+                "confidence {} should equal passed/total = {}/{}",
+                confidence,
+                passed,
+                total
+            );
+        }
+    }
+
+    // ── ReviewGateOutcome ─────────────────────────────────────────────
+
+    #[test]
+    fn review_gate_outcome_passed_false_with_error() {
+        let outcome = ReviewGateOutcome {
+            reviews: vec![],
+            passed: false,
+            error: Some("gate error".to_string()),
+        };
+        assert!(!outcome.passed);
+        assert!(outcome.error.is_some());
+    }
+
+    #[test]
+    fn review_gate_outcome_passed_true_no_error() {
+        let outcome = ReviewGateOutcome {
+            reviews: vec![],
+            passed: true,
+            error: None,
+        };
+        assert!(outcome.passed);
+        assert!(outcome.error.is_none());
+    }
 }

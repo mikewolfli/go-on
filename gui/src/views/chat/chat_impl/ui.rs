@@ -135,6 +135,7 @@ impl ChatView {
             runtime_config.repaint_interval_ms,
             runtime_config.stream_chunk_flush_ms,
             runtime_config.max_pending_events_per_frame,
+            runtime_config.stream_token_flush_ms,
         );
 
         // Process any pending async responses — triggers ctx.request_repaint()
@@ -1929,6 +1930,35 @@ impl ChatView {
                     });
                 }
             }
+        }
+
+        // GAP-B50-01: Token-level streaming progress indicator
+        if self.sending && self.stream_progress.tokens_received > 0 {
+            ui.horizontal(|ui| {
+                ui.add_space(36.0);
+                let prog = &self.stream_progress;
+                let detail = format!(
+                    "📨 {} tokens · {} KB received{}",
+                    prog.tokens_received,
+                    prog.bytes_processed / 1024,
+                    if prog.total_tokens > 0 {
+                        format!(
+                            " · {}/{} output tokens",
+                            prog.output_tokens, prog.total_tokens
+                        )
+                    } else {
+                        String::new()
+                    },
+                );
+                ui.colored_label(
+                    if ui.visuals().dark_mode {
+                        egui::Color32::from_rgb(100, 180, 255)
+                    } else {
+                        egui::Color32::from_rgb(0, 80, 180)
+                    },
+                    detail,
+                );
+            });
         }
     }
 

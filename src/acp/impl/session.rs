@@ -330,12 +330,20 @@ impl SessionManager {
         }
     }
 
-    /// Attempt to extract a Bearer token from the `Authorization` header and
-    /// authenticate it.
+    /// Attempt to extract authentication from request headers and authenticate.
+    ///
+    /// Supports three auth methods in order of preference:
+    /// 1. Bearer token (`Authorization: Bearer <token>`)
+    /// 2. API Key (`X-API-Key: <key>` or `x-api-key: <key>`)
+    /// 3. Session cookie (`Cookie: session=<token>`)
     pub fn extract_user_from_request(&self, headers: &str) -> Option<UserSession> {
-        // Look for "Authorization: Bearer <token>" – we do a simple scan.
+        // Collect all potential tokens from headers
+        let mut tokens: Vec<String> = Vec::new();
+
         for line in headers.lines() {
             let trimmed = line.trim();
+
+            // Method 1: Bearer token
             if let Some(token) = trimmed
                 .strip_prefix("Authorization:")
                 .or_else(|| trimmed.strip_prefix("authorization:"))
@@ -345,13 +353,51 @@ impl SessionManager {
                     .strip_prefix("Bearer ")
                     .or_else(|| token.strip_prefix("bearer "))
                 {
-                    let result = self.authenticate(bearer_token);
-                    if result.valid {
-                        return result.session;
+                    tokens.push(bearer_token.to_string());
+                    continue;
+                }
+            }
+
+            // Method 2: API Key header
+            if let Some(key_val) = trimmed
+                .strip_prefix("X-API-Key:")
+                .or_else(|| trimmed.strip_prefix("x-api-key:"))
+            {
+                let api_key = key_val.trim().to_string();
+                if !api_key.is_empty() {
+                    tokens.push(api_key);
+                    continue;
+                }
+            }
+
+            // Method 3: Session cookie
+            if let Some(cookie_val) = trimmed
+                .strip_prefix("Cookie:")
+                .or_else(|| trimmed.strip_prefix("cookie:"))
+            {
+                for cookie_part in cookie_val.split(';') {
+                    let kv = cookie_part.trim();
+                    if let Some(session_val) = kv
+                        .strip_prefix("session=")
+                        .or_else(|| kv.strip_prefix("Session="))
+                    {
+                        if !session_val.is_empty() {
+                            tokens.push(session_val.to_string());
+                            break;
+                        }
                     }
                 }
             }
         }
+
+        // Try each token in order until one authenticates successfully
+        for token in &tokens {
+            let result = self.authenticate(token);
+            if result.valid {
+                return result.session;
+            }
+        }
+
         None
     }
 

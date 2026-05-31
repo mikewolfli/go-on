@@ -200,10 +200,14 @@ pub(crate) fn build_mcp_tool_descriptors(server: Option<&AcpServer>) -> Vec<Valu
     }));
 
     if let Some(server) = server {
-        let registry = server.skill_registry.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
+        let registry = server
+            .orchestration_deps
+            .skill_registry
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
         tools.extend(registry.list().into_iter().map(|skill| {
             json!({
                 "name": skill.name,
@@ -275,7 +279,7 @@ pub(crate) async fn execute_mcp_tool_call(
     name: &str,
     arguments: &Value,
 ) -> Result<Value> {
-    if let Some(harness_bus) = server.harness_bus.as_ref() {
+    if let Some(harness_bus) = server.governance_deps.harness_bus.as_ref() {
         let verdict = harness_bus.evaluator.check_tool_call(name, arguments);
         if !verdict.allowed {
             record_tool_harness_sandbox_denied();
@@ -316,7 +320,7 @@ pub(crate) async fn execute_mcp_tool_call(
     let policy = policy_bundle_for_target(server.runtime_config.deployment_target.as_deref());
     let budget_scope = budget_scope_key(name, arguments);
     let estimated_tokens = estimate_argument_tokens(arguments);
-    let pua_engine = PuaRuleEngine::new(server.pua_enforcement_plan.clone());
+    let pua_engine = PuaRuleEngine::new(server.governance_deps.pua_enforcement_plan.clone());
     let remaining_tokens = {
         let mut trackers = tool_budget_trackers()
             .lock()
@@ -419,10 +423,14 @@ pub(crate) async fn execute_mcp_tool_call(
                 .min(20) as usize;
 
             let mut results: Vec<Value> = Vec::new();
-            let registry = server.skill_registry.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("lock poisoned, recovering");
-                poisoned.into_inner()
-            });
+            let registry = server
+                .orchestration_deps
+                .skill_registry
+                .lock()
+                .unwrap_or_else(|poisoned| {
+                    tracing::warn!("lock poisoned, recovering");
+                    poisoned.into_inner()
+                });
             for skill in registry.list().iter().take(top_k) {
                 let score = registry.score_of(&skill.name).unwrap_or(0.5);
                 // Simple TF-like match: score higher when query tokens appear in
@@ -595,10 +603,14 @@ pub(crate) async fn execute_mcp_tool_call(
             }
 
             let resolved_skill_name = {
-                let registry = server.skill_registry.lock().unwrap_or_else(|poisoned| {
-                    tracing::warn!("lock poisoned, recovering");
-                    poisoned.into_inner()
-                });
+                let registry = server
+                    .orchestration_deps
+                    .skill_registry
+                    .lock()
+                    .unwrap_or_else(|poisoned| {
+                        tracing::warn!("lock poisoned, recovering");
+                        poisoned.into_inner()
+                    });
                 if registry.get(name).is_some() {
                     Some(name.to_string())
                 } else {
@@ -606,10 +618,14 @@ pub(crate) async fn execute_mcp_tool_call(
                 }
             };
             let skill = resolved_skill_name.as_ref().and_then(|resolved| {
-                let registry = server.skill_registry.lock().unwrap_or_else(|poisoned| {
-                    tracing::warn!("lock poisoned, recovering");
-                    poisoned.into_inner()
-                });
+                let registry = server
+                    .orchestration_deps
+                    .skill_registry
+                    .lock()
+                    .unwrap_or_else(|poisoned| {
+                        tracing::warn!("lock poisoned, recovering");
+                        poisoned.into_inner()
+                    });
                 registry.get(resolved)
             });
             match skill {
@@ -617,10 +633,14 @@ pub(crate) async fn execute_mcp_tool_call(
                     let started = Instant::now();
                     let outcome = skill.execute(arguments).await;
                     let skill_name = resolved_skill_name.as_deref().unwrap_or(name);
-                    let mut registry = server.skill_registry.lock().unwrap_or_else(|poisoned| {
-                        tracing::warn!("lock poisoned, recovering");
-                        poisoned.into_inner()
-                    });
+                    let mut registry = server
+                        .orchestration_deps
+                        .skill_registry
+                        .lock()
+                        .unwrap_or_else(|poisoned| {
+                            tracing::warn!("lock poisoned, recovering");
+                            poisoned.into_inner()
+                        });
                     registry.record_outcome(skill_name, outcome.is_ok(), started.elapsed());
                     outcome
                 }
@@ -718,4 +738,177 @@ pub(super) fn local_tool_descriptor(name: &'static str) -> Value {
 
 pub(super) fn validate_tool_arguments(tool_name: &str, tool_input: &Value) -> Result<()> {
     crate::shared::tool_descriptors::validate_required_arguments(tool_name, tool_input)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── build_mcp_tool_descriptors baseline ────────────────────────────
+
+    #[test]
+    fn build_mcp_tool_descriptors_returns_baseline_tools() {
+        let tools = build_mcp_tool_descriptors(None);
+        assert!(!tools.is_empty(), "must return at least baseline tools");
+
+        // Should include core tools
+        let names: Vec<&str> = tools
+            .iter()
+            .filter_map(|t| t.get("name").and_then(Value::as_str))
+            .collect();
+        assert!(names.contains(&"acp_trace_get"));
+        assert!(names.contains(&"acp_debug_panel_get"));
+        assert!(names.contains(&"goon_workflow_run_list"));
+        assert!(names.contains(&"prompts_list"));
+        assert!(names.contains(&"prompts_get"));
+        assert!(names.contains(&"builtin.echo"));
+    }
+
+    #[test]
+    fn build_mcp_tool_descriptors_all_have_input_schema() {
+        let tools = build_mcp_tool_descriptors(None);
+        for tool in &tools {
+            let name = tool.get("name").and_then(Value::as_str).unwrap_or("?");
+            assert!(
+                tool.get("input_schema").is_some(),
+                "tool '{}' missing input_schema",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn build_mcp_tool_descriptors_no_duplicate_names() {
+        let tools = build_mcp_tool_descriptors(None);
+        let mut seen = std::collections::HashSet::new();
+        for tool in &tools {
+            let name = tool.get("name").and_then(Value::as_str).unwrap_or("?");
+            assert!(
+                seen.insert(name.to_string()),
+                "duplicate tool name: {}",
+                name
+            );
+        }
+    }
+
+    // ── budget_scope_key ──────────────────────────────────────────────
+
+    #[test]
+    fn budget_scope_key_uses_task_id() {
+        let key = budget_scope_key("tool_x", &json!({"task_id": "abc"}));
+        assert_eq!(key, "task:abc");
+    }
+
+    #[test]
+    fn budget_scope_key_uses_conversation_id() {
+        let key = budget_scope_key("tool_x", &json!({"conversation_id": "conv-1"}));
+        assert_eq!(key, "conversation:conv-1");
+    }
+
+    #[test]
+    fn budget_scope_key_falls_back_to_tool_name() {
+        let key = budget_scope_key("my_tool", &json!({}));
+        assert_eq!(key, "tool:my_tool");
+    }
+
+    // ── estimate_argument_tokens ───────────────────────────────────────
+
+    #[test]
+    fn estimate_argument_tokens_returns_at_least_one() {
+        let tokens = estimate_argument_tokens(&Value::Null);
+        assert!(tokens >= 1);
+    }
+
+    #[test]
+    fn estimate_argument_tokens_scales_with_payload_size() {
+        let small = estimate_argument_tokens(&json!("a"));
+        let large = estimate_argument_tokens(&json!("a".repeat(400)));
+        assert!(large > small);
+    }
+
+    // ── governance_action_for_tool ─────────────────────────────────────
+
+    #[test]
+    fn governance_action_for_tool_shell() {
+        assert_eq!(
+            governance_action_for_tool("shell_exec"),
+            crate::governance::hardening::GovernanceAction::Shell
+        );
+    }
+
+    #[test]
+    fn governance_action_for_tool_write() {
+        assert_eq!(
+            governance_action_for_tool("write_file"),
+            crate::governance::hardening::GovernanceAction::Write
+        );
+    }
+
+    #[test]
+    fn governance_action_for_tool_search() {
+        assert_eq!(
+            governance_action_for_tool("search_files"),
+            crate::governance::hardening::GovernanceAction::Search
+        );
+    }
+
+    #[test]
+    fn governance_action_for_tool_default_read() {
+        assert_eq!(
+            governance_action_for_tool("read_file"),
+            crate::governance::hardening::GovernanceAction::Read
+        );
+    }
+
+    // ── skill-finder matching (extracted logic) ────────────────────────
+
+    #[test]
+    fn skill_finder_empty_query_returns_zero_score() {
+        let query_lower = "";
+        let name_lower = "code_review";
+        let desc_lower = "review code changes";
+        let score = 0.5;
+
+        let match_score = if query_lower.is_empty() {
+            0.0
+        } else if name_lower.contains(&query_lower) || desc_lower.contains(&query_lower) {
+            ((score * 0.7 + 0.3) as f64).max(0.0).min(1.0)
+        } else {
+            let query_words: Vec<&str> = query_lower.split_whitespace().collect();
+            let name_words: Vec<&str> = name_lower.split_whitespace().collect();
+            let desc_words: Vec<&str> = desc_lower.split_whitespace().collect();
+            let all_words: Vec<&str> = name_words
+                .iter()
+                .chain(desc_words.iter())
+                .copied()
+                .collect();
+            let matches = query_words.iter().filter(|w| all_words.contains(w)).count();
+            if matches > 0 {
+                let ratio = matches as f64 / query_words.len() as f64;
+                ((score * 0.5 + ratio * 0.5).max(0.0)).min(1.0)
+            } else {
+                score * 0.3
+            }
+        };
+
+        assert!((match_score - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn skill_finder_direct_match_gets_boost() {
+        let query_lower = "code";
+        let name_lower = "code_review";
+        let desc_lower = "review code changes";
+        let score = 0.5;
+
+        let match_score = if query_lower.is_empty() {
+            0.0
+        } else if name_lower.contains(&query_lower) || desc_lower.contains(&query_lower) {
+            ((score * 0.7 + 0.3) as f64).max(0.0).min(1.0)
+        } else {
+            score * 0.3
+        };
+
+        assert!(match_score > 0.5);
+    }
 }

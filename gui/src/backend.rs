@@ -1,7 +1,8 @@
 use futures_util::Stream;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -14,6 +15,186 @@ const MODELS_CACHE_TTL_SECS: u64 = 300;
 type ProviderModels = std::collections::HashMap<String, Vec<String>>;
 type ModelsCacheState = (Option<ProviderModels>, std::time::Instant);
 type ModelsCache = Arc<std::sync::Mutex<ModelsCacheState>>;
+
+// ── StreamProcessor ────────────────────────────────────────────────────────
+
+const MAX_SSE_LINE_LENGTH: usize = 1024 * 1024; // 1 MB per SSE line
+
+/// Incrementally parses an SSE byte stream frame-by-frame, extracting `data:`
+/// payloads as JSON values.  Tracks token count and total bytes processed
+/// for progress reporting in the UI.
+pub struct StreamProcessor {
+    buffer: String,
+    max_buffer_size: usize,
+    /// Number of JSON tokens (events) parsed so far.
+    pub token_count: usize,
+    /// Total bytes consumed from the wire.
+    pub total_bytes_processed: usize,
+}
+
+impl StreamProcessor {
+    pub fn new() -> Self {
+        Self {
+            buffer: String::with_capacity(16_384),
+            max_buffer_size: MAX_SSE_LINE_LENGTH,
+            token_count: 0,
+            total_bytes_processed: 0,
+        }
+    }
+
+    /// Feed a chunk of raw bytes into the processor.
+    /// Returns a batch of parsed results (Ok(values) or Err(errors)).
+    pub fn push_chunk(&mut self, chunk: &[u8]) -> Vec<Result<Value, String>> {
+        let mut events: Vec<Result<Value, String>> = Vec::new();
+
+        // Overflow guard
+        if self.buffer.len() + chunk.len() > self.max_buffer_size {
+            events.push(Err("SSE buffer overflow (exceeded 1 MB)".to_string()));
+            return events;
+        }
+
+        self.total_bytes_processed += chunk.len();
+
+        // Normalise CRLF → LF for consistent frame splitting
+        let part = String::from_utf8_lossy(chunk);
+        self.buffer.push_str(&part.replace('\r', ""));
+
+        // Consume complete SSE frames (delimited by \n\n, fallback \n)
+        loop {
+            let (delim, delim_len) = if self.buffer.contains("\n\n") {
+                ("\n\n", 2usize)
+            } else {
+                ("\n", 1usize)
+            };
+
+            let pos = match self.buffer.find(delim) {
+                Some(p) => p,
+                None => break,
+            };
+
+            let segment = self.buffer[..pos].to_string();
+            self.buffer = self.buffer[pos + delim_len..].to_string();
+
+            // Safety: reject unbounded lines
+            if segment.len() > MAX_SSE_LINE_LENGTH {
+                events.push(Err("SSE line exceeds maximum length (1 MB)".to_string()));
+                return events;
+            }
+
+            // Collect lines from the segment.
+            // When using \n\n delimiter the segment may contain embedded \n
+            // (multi-line SSE data), so split further on single \n.
+            let sub_lines: Vec<&str> = if delim_len == 2 {
+                segment.split('\n').collect()
+            } else {
+                vec![&segment]
+            };
+
+            for line in sub_lines {
+                if let Some(data) = line.strip_prefix("data: ") {
+                    let trimmed = data.trim();
+                    if trimmed == "[DONE]" {
+                        events.push(Ok(Value::String("[DONE]".to_string())));
+                        continue;
+                    }
+                    match serde_json::from_str::<Value>(trimmed) {
+                        Ok(val) => {
+                            self.token_count += 1;
+                            events.push(Ok(val));
+                        }
+                        Err(e) => {
+                            events.push(Err(format!("JSON parse error: {}", e)));
+                        }
+                    }
+                }
+            }
+        }
+
+        events
+    }
+
+    /// Drain any remaining partial segment from the buffer.
+    /// Returns `None` if the buffer is empty.
+    #[allow(dead_code)]
+    pub fn drain_remaining(&mut self) -> Option<String> {
+        if self.buffer.is_empty() {
+            None
+        } else {
+            Some(std::mem::take(&mut self.buffer))
+        }
+    }
+
+    /// Reset all counters and clear the buffer for a new stream.
+    #[allow(dead_code)]
+    pub fn reset(&mut self) {
+        self.buffer.clear();
+        self.token_count = 0;
+        self.total_bytes_processed = 0;
+    }
+}
+
+impl Default for StreamProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ── AbortController ────────────────────────────────────────────────────────
+
+/// Shared cancellation signal for in-progress SSE streams.
+/// Cloning produces another handle to the same underlying signal.
+#[derive(Clone)]
+pub struct AbortController {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl AbortController {
+    pub fn new() -> Self {
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Signal abort.  Idempotent — safe to call multiple times.
+    #[allow(dead_code)]
+    pub fn abort(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+    }
+
+    /// Returns `true` if abort has been signalled.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// Reset the signal for reuse.
+    #[allow(dead_code)]
+    pub fn reset(&self) {
+        self.cancelled.store(false, Ordering::SeqCst);
+    }
+}
+
+impl Default for AbortController {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ── TokenProgress ───────────────────────────────────────────────────────────
+
+/// Lightweight snapshot of streaming progress for the UI.
+#[derive(Debug, Clone, Default)]
+pub struct TokenProgress {
+    /// Number of tokens (SSE events) received so far.
+    pub tokens_received: usize,
+    /// Total bytes processed from the wire.
+    pub bytes_processed: usize,
+    /// Input token count reported by telemetry.
+    pub input_tokens: usize,
+    /// Output token count reported by telemetry.
+    pub output_tokens: usize,
+    /// Total token count reported by telemetry.
+    pub total_tokens: usize,
+}
 
 #[derive(Clone)]
 pub struct BackendClient {
@@ -726,11 +907,10 @@ impl BackendClient {
 
     /// Send a streaming chat request via SSE and return a [`Stream`] of events.
     ///
-    /// Uses the `/acp/chat` endpoint with `"stream": true` in the request body.
+    /// Uses `/chat/stream` with `"stream": true` in the request body.
     /// Each SSE `data:` line is parsed as a JSON value and yielded via the stream.
-    #[allow(dead_code)] // F-GAP-48: Reserved for future SSE streaming chat integration
-    /// Reserved for future SSE streaming chat integration. Currently unused
-    /// while the GUI uses `chat_with_options` for non-streaming requests.
+    /// Internally uses a `StreamProcessor` for structured parsing and token tracking.
+    #[allow(dead_code)]
     pub async fn chat_stream(
         &self,
         message: &str,
@@ -740,8 +920,47 @@ impl BackendClient {
         options_extra: Option<Value>,
         history: Option<Vec<Value>>,
     ) -> Result<impl Stream<Item = Result<Value, String>>, String> {
-        use futures_util::StreamExt;
+        self.chat_stream_inner(message, mode, phase, model, options_extra, history, None)
+            .await
+    }
 
+    /// Like `chat_stream`, but accepts an `AbortController` for cancellation.
+    #[allow(dead_code)]
+    pub async fn chat_stream_with_abort(
+        &self,
+        message: &str,
+        mode: &str,
+        phase: &str,
+        model: Option<&str>,
+        options_extra: Option<Value>,
+        history: Option<Vec<Value>>,
+        abort_controller: AbortController,
+    ) -> Result<impl Stream<Item = Result<Value, String>>, String> {
+        self.chat_stream_inner(
+            message,
+            mode,
+            phase,
+            model,
+            options_extra,
+            history,
+            Some(abort_controller),
+        )
+        .await
+    }
+
+    /// Internal impl shared by `chat_stream` and `chat_stream_with_abort`.
+    /// Uses `StreamProcessor` for SSE parsing and `AbortController` for cancellation.
+    #[allow(dead_code)]
+    async fn chat_stream_inner(
+        &self,
+        message: &str,
+        mode: &str,
+        phase: &str,
+        model: Option<&str>,
+        options_extra: Option<Value>,
+        history: Option<Vec<Value>>,
+        abort_controller: Option<AbortController>,
+    ) -> Result<impl Stream<Item = Result<Value, String>>, String> {
         let phase_val = if phase.is_empty() {
             serde_json::Value::Null
         } else {
@@ -800,69 +1019,34 @@ impl BackendClient {
 
         let (tx, rx) = mpsc::channel::<Result<Value, String>>(64);
         let mut byte_stream = response.bytes_stream();
+        let mut processor = StreamProcessor::new();
 
         tokio::spawn(async move {
-            const MAX_LINE_LENGTH: usize = 1024 * 1024; // 1MB guard
-            let mut buf = String::new();
             while let Some(chunk_result) = byte_stream.next().await {
+                // Check for cancellation at the top of each chunk
+                if let Some(ref ctrl) = abort_controller {
+                    if ctrl.is_cancelled() {
+                        return;
+                    }
+                }
+
                 match chunk_result {
                     Ok(chunk) => {
-                        buf.push_str(&String::from_utf8_lossy(&chunk));
-
-                        // Consume complete SSE events from the buffer.
-                        // Prefer \n\n (SSE spec) delimiter, then fall back to \n.
-                        loop {
-                            // Check for \n\n first, then \n
-                            let (delim, delim_len) = if buf.contains("\n\n") {
-                                ("\n\n", 2usize)
-                            } else {
-                                ("\n", 1usize)
-                            };
-
-                            let pos = match buf.find(delim) {
-                                Some(p) => p,
-                                None => break,
-                            };
-
-                            let segment = buf[..pos].to_string();
-                            buf = buf[pos + delim_len..].to_string();
-
-                            // Max line length check — prevent OOM on malformed responses
-                            if segment.len() > MAX_LINE_LENGTH {
-                                let _ = tx
-                                    .send(Err("SSE line exceeds maximum length (1MB)".to_string()))
-                                    .await;
-                                return;
-                            }
-
-                            // Collect lines from the segment.
-                            // When using \n\n delimiter the segment may contain embedded \n
-                            // (multi-line SSE data), so split further on single \n.
-                            let sub_lines: Vec<&str> = if delim_len == 2 {
-                                segment.split('\n').collect()
-                            } else {
-                                vec![&segment]
-                            };
-
-                            for line in sub_lines {
-                                if let Some(data) = line.strip_prefix("data: ") {
-                                    let trimmed = data.trim();
-                                    if trimmed == "[DONE]" {
+                        let events = processor.push_chunk(&chunk);
+                        for event in events {
+                            match event {
+                                Ok(val) => {
+                                    // Detect [DONE] sentinel
+                                    if val.as_str() == Some("[DONE]") {
                                         return;
                                     }
-                                    match serde_json::from_str::<Value>(trimmed) {
-                                        Ok(val) => {
-                                            if tx.send(Ok(val)).await.is_err() {
-                                                return;
-                                            }
-                                        }
-                                        Err(e) => {
-                                            let _ = tx
-                                                .send(Err(format!("JSON parse error: {}", e)))
-                                                .await;
-                                            return;
-                                        }
+                                    if tx.send(Ok(val)).await.is_err() {
+                                        return;
                                     }
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(Err(e)).await;
+                                    return;
                                 }
                             }
                         }

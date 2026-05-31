@@ -4,6 +4,15 @@
 use crate::schema::Meta;
 use serde::{Deserialize, Serialize};
 
+/// Convert an ad-hoc agent `Message` (role + content string) into a
+/// schema-compliant `ContentBlock::Text`.  This bridges the legacy agent
+/// message format used in `acp/impl/chat` with the ACP v1 content model.
+impl From<crate::agent::Message> for ContentBlock {
+    fn from(msg: crate::agent::Message) -> Self {
+        ContentBlock::Text(TextContent::new(msg.content))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {

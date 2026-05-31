@@ -33,7 +33,7 @@ pub(crate) async fn evaluate_pre_route_policies(
 ) -> Result<PreRoutePolicyResult> {
     // ── HarnessBus pre-route policy evaluation ─────────────────────────
     // Reset budget clock so long-running backends don't exceed wall clock budget.
-    if let Some(ref harness) = server.harness_bus {
+    if let Some(ref harness) = server.governance_deps.harness_bus {
         let mut budget = harness.evaluator.budget.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("budget lock poisoned in pre_route_policy");
             poisoned.into_inner()
@@ -69,7 +69,7 @@ pub(crate) async fn evaluate_pre_route_policies(
     // exposed in governance.status as layered_token_trigger_profile.  A
     // Reject verdict from L0 stops processing immediately; other verdicts
     // are informational and do not block execution.
-    if let Some(ref harness) = server.harness_bus {
+    if let Some(ref harness) = server.governance_deps.harness_bus {
         let input_chars: usize = params.messages.iter().map(|m| m.content.len()).sum();
         let estimated_input = (input_chars / 4).max(1) as u64;
         let gate_ctx = crate::orchestration::token_layers::GateContext {

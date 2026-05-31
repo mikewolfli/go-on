@@ -26,13 +26,14 @@ pub fn lock_mutex<T>(mtx: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> 
 
 pub mod live_performance;
 
+pub mod alert_manager;
 pub mod memory_health;
+pub mod metrics_exporter;
 pub mod observability;
 pub mod performance;
 pub mod provenance;
 pub mod telemetry;
 pub mod telemetry_enhanced;
-pub mod alert_manager;
 
 // Re-exports are not needed; consumers use full crate paths.
 // See main.rs for usage: crate::observability::memory_health::*

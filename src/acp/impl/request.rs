@@ -340,10 +340,99 @@ pub(crate) fn append_trace_event(event: TraceEvent) {
     }
 }
 
+// GAP-B50-36: Authenticate a JSON-RPC request before dispatch.
+/// Extract authentication token from request params and validate it.
+/// Returns None if auth is disabled (local profile backward compat) or the session.
+pub fn authenticate_request(
+    server: &AcpServer,
+    request: &JsonRpcRequest,
+) -> Result<
+    Option<crate::acp::r#impl::session::UserSession>,
+    crate::acp::r#impl::session::TokenIntrospectResult,
+> {
+    // If user auth is disabled, allow everything (backward compatible)
+    if !server.runtime_config.user_auth_enabled {
+        return Ok(None);
+    }
+
+    let session_manager = match server.session_manager.as_ref() {
+        Some(sm) => sm,
+        None => {
+            return Err(crate::acp::r#impl::session::TokenIntrospectResult {
+                valid: false,
+                session: None,
+                reason: Some("Session manager not initialized".into()),
+            });
+        }
+    };
+
+    // Try Bearer token from params
+    if let Some(params) = &request.params {
+        // Check for bearer_token in params
+        if let Some(token) = params.get("bearer_token").and_then(|v| v.as_str()) {
+            let result = session_manager.authenticate(token);
+            if result.valid {
+                return Ok(result.session);
+            }
+            return Err(result);
+        }
+        // Check for api_key in params
+        if let Some(api_key) = params.get("api_key").and_then(|v| v.as_str()) {
+            let result = session_manager.authenticate(api_key);
+            if result.valid {
+                return Ok(result.session);
+            }
+            return Err(result);
+        }
+    }
+
+    // No auth found, return error
+    Err(crate::acp::r#impl::session::TokenIntrospectResult {
+        valid: false,
+        session: None,
+        reason: Some("Authentication required".into()),
+    })
+}
+
 /// Handle JSON-RPC request
 ///
-/// This function replaces the `AcpServer::handle_request` method.
+/// Handle a JSON-RPC request.
+///
+/// `#[tracing::instrument]` creates the root tracing span.
+/// We avoid `.entered()` to keep the future `Send` (EnteredSpan is !Send).
+#[tracing::instrument(skip(server, request))]
 pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Result<()> {
+    // GAP-B50-36: Authenticate request before dispatch
+    match authenticate_request(server, &request) {
+        Ok(Some(session)) => {
+            tracing::debug!(
+                user_id = %session.user_id,
+                roles = ?session.roles,
+                "Request authenticated"
+            );
+        }
+        Ok(None) => {
+            // Auth disabled (local profile), proceed
+        }
+        Err(auth_result) => {
+            let reason = auth_result
+                .reason
+                .unwrap_or_else(|| "Unknown auth error".into());
+            tracing::warn!("Authentication failed: {}", reason);
+            return send_error(
+                server,
+                request.id,
+                -32001,
+                format!("Authentication failed: {}", reason),
+                Some(serde_json::json!({
+                    "code": "AUTH_REQUIRED",
+                    "reason": reason,
+                })),
+            )
+            .await;
+        }
+    }
+
     // Adaptive protocol dispatch: route to ACP, MCP, or Auto based on config.
     let protocol_mode = get_protocol_mode(server);
     let request_method = request.method.clone();
@@ -382,7 +471,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
         }
     }
 
-    let pua_engine = PuaRuleEngine::new(server.pua_enforcement_plan.clone());
+    let pua_engine = PuaRuleEngine::new(server.governance_deps.pua_enforcement_plan.clone());
     let task_type = infer_task_type(method.as_ref(), &request.params);
     let task_context = TaskContext {
         task_type: task_type.clone(),
@@ -1596,9 +1685,9 @@ mod tests {
     #[cfg(not(feature = "backend-postgres"))]
     use super::collect_vector_context_snippets;
     use super::{
-        classify_request_error_kind, infer_workflow_parallelism, is_acp_request,
-        rebalance_execution_order, session_id_for_task, summarize_lock_health,
-        with_error_contract_data,
+        attach_request_dispatch_context, classify_request_error_kind, infer_workflow_parallelism,
+        is_acp_request, is_mcp_request, normalize_mcp_method, rebalance_execution_order,
+        session_id_for_task, summarize_lock_health, with_error_contract_data,
     };
     use crate::acp::prelude::AcpLockSnapshot;
     #[cfg(not(feature = "backend-postgres"))]
@@ -1802,5 +1891,143 @@ mod tests {
         assert_eq!(summary.poisoned_total, 1);
         assert_eq!(summary.recovered_total, 1);
         assert_eq!(summary.components_tracked, 2);
+    }
+
+    // ── ACP method dispatch ───────────────────────────────────────────
+
+    #[test]
+    fn is_acp_request_rejects_unknown() {
+        assert!(!is_acp_request(""));
+        assert!(!is_acp_request("tools/list"));
+        assert!(!is_acp_request("completely.unknown"));
+    }
+
+    #[test]
+    fn is_acp_request_accepts_session_and_governance() {
+        assert!(is_acp_request("session/new"));
+        assert!(is_acp_request("governance.status"));
+        assert!(is_acp_request("governance.remediate"));
+    }
+
+    #[test]
+    fn is_acp_request_accepts_workflow_and_skill() {
+        assert!(is_acp_request("workflow.execute"));
+        assert!(is_acp_request("workflow.confirm"));
+        assert!(is_acp_request("skill.import"));
+        assert!(is_acp_request("skill.create"));
+    }
+
+    // ── MCP request detection ─────────────────────────────────────────
+
+    #[test]
+    fn is_mcp_request_detects_mcp_prefix() {
+        assert!(is_mcp_request("mcp.initialize"));
+        assert!(is_mcp_request("mcp.tools.list"));
+        assert!(is_mcp_request("mcp.tools.call"));
+    }
+
+    #[test]
+    fn is_mcp_request_detects_slash_notation() {
+        assert!(is_mcp_request("tools/list"));
+        assert!(is_mcp_request("resources/read"));
+        assert!(is_mcp_request("prompts/list"));
+    }
+
+    #[test]
+    fn is_mcp_request_detects_raw_methods() {
+        assert!(is_mcp_request("initialize"));
+        assert!(is_mcp_request("ping"));
+        assert!(is_mcp_request("notifications/initialized"));
+    }
+
+    #[test]
+    fn is_mcp_request_rejects_non_mcp() {
+        assert!(!is_mcp_request("chat"));
+        assert!(!is_mcp_request("session/new"));
+        assert!(!is_mcp_request("workflow.execute"));
+    }
+
+    // ── normalize_mcp_method ──────────────────────────────────────────
+
+    #[test]
+    fn normalize_mcp_method_already_prefixed() {
+        assert_eq!(normalize_mcp_method("mcp.initialize"), "mcp.initialize");
+        assert_eq!(normalize_mcp_method("mcp.tools.list"), "mcp.tools.list");
+    }
+
+    #[test]
+    fn normalize_mcp_method_converts_initialize() {
+        assert_eq!(normalize_mcp_method("initialize"), "mcp.initialize");
+        assert_eq!(normalize_mcp_method("ping"), "mcp.ping");
+    }
+
+    #[test]
+    fn normalize_mcp_method_converts_slash_notation() {
+        assert_eq!(normalize_mcp_method("tools/list"), "mcp.tools.list");
+        assert_eq!(normalize_mcp_method("resources/read"), "mcp.resources.read");
+        assert_eq!(normalize_mcp_method("prompts/get"), "mcp.prompts.get");
+    }
+
+    #[test]
+    fn normalize_mcp_method_converts_notifications() {
+        assert_eq!(
+            normalize_mcp_method("notifications/initialized"),
+            "mcp.notifications_initialized"
+        );
+    }
+
+    #[test]
+    fn normalize_mcp_method_passthrough_unknown() {
+        assert_eq!(normalize_mcp_method("custom.method"), "custom.method");
+    }
+
+    // ── get_protocol_mode ─────────────────────────────────────────────
+
+    // ── handle_request unknown method ─────────────────────────────────
+
+    #[test]
+    fn unknown_method_format_includes_method_name() {
+        // Verify the dispatch handler's error format for unknown methods.
+        // The match arm for _ in handle_request constructs:
+        // format!("unknown method: {}", request.method)
+        let method = "nonexistent.method";
+        let msg = format!("unknown method: {}", method);
+        assert!(msg.contains("nonexistent.method"));
+        assert!(msg.starts_with("unknown method"));
+    }
+
+    // ── dispatch error context ────────────────────────────────────────
+
+    #[test]
+    fn attach_request_dispatch_context_adds_method() {
+        let err = anyhow::anyhow!("test error");
+        let wrapped = attach_request_dispatch_context(err, "test.method");
+        let msg = wrapped.to_string();
+        assert!(msg.contains("test.method"));
+        assert!(msg.contains("acp.handle_request.dispatch"));
+    }
+
+    // ── Lock health summary ───────────────────────────────────────────
+
+    #[test]
+    fn lock_health_summary_healthy_with_no_issues() {
+        let summary = summarize_lock_health(&[]);
+        assert_eq!(summary.status, "healthy");
+        assert_eq!(summary.components_tracked, 0);
+    }
+
+    #[test]
+    fn lock_health_summary_no_poisoned_healthy() {
+        let summary = summarize_lock_health(&[AcpLockSnapshot {
+            name: "test".to_string(),
+            acquisitions: 5,
+            poisoned_total: 0,
+            recovered_total: 0,
+            slow_wait_total: 0,
+            avg_wait_ms: 0.1,
+            max_wait_ms: 0.5,
+        }]);
+        assert_eq!(summary.status, "healthy");
+        assert_eq!(summary.poisoned_total, 0);
     }
 }

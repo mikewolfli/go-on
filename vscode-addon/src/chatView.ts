@@ -14,6 +14,57 @@ interface ChatMessage {
   timestamp: string;
 }
 
+/**
+ * Manages an in-flight streaming request with abort control and token tracking.
+ */
+class StreamProcessor {
+  private abortController: AbortController | null = null;
+  private _tokenCount = 0;
+  private manager: RuntimeManagerLike;
+
+  constructor(_manager: RuntimeManagerLike) {
+    this.manager = _manager;
+  }
+
+  get isActive(): boolean {
+    return this.abortController !== null;
+  }
+
+  get tokenCount(): number {
+    return this._tokenCount;
+  }
+
+  /** Start a new streaming session and return the AbortSignal. */
+  start(): AbortSignal {
+    this.abortController = new AbortController();
+    this._tokenCount = 0;
+    return this.abortController.signal;
+  }
+
+  /** Abort an in-flight stream and send a cancel request to the backend. */
+  stop(): void {
+    if (this.abortController) {
+      this.abortController.abort();
+      this.abortController = null;
+    }
+    if (this.manager.sendCancelRequest) {
+      void this.manager.sendCancelRequest();
+    }
+  }
+
+  /** Increment token count and return the new value. */
+  incrementTokens(): number {
+    this._tokenCount++;
+    return this._tokenCount;
+  }
+
+  /** Reset state. */
+  reset(): void {
+    this.abortController = null;
+    this._tokenCount = 0;
+  }
+}
+
 export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "go-on-chat";
   private _view?: vscode.WebviewView;
@@ -27,6 +78,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
   private readonly manager: RuntimeManagerLike;
   private readonly context: vscode.ExtensionContext;
   private readonly onViewResolved?: () => void | Promise<void>;
+  private readonly streamProcessor: StreamProcessor;
 
   constructor(
     private readonly _extensionUri: vscode.Uri,
@@ -37,6 +89,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     this.manager = _manager;
     this.context = _context;
     this.onViewResolved = _onViewResolved;
+    this.streamProcessor = new StreamProcessor(_manager);
     this._loadSessions();
     this.context.subscriptions.push(
       new vscode.Disposable(() => this._messageSubscription?.dispose()),
@@ -92,6 +145,10 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
 
   private _getErrorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
+  }
+
+  private _handleStopGeneration(): void {
+    this.streamProcessor.stop();
   }
 
   public resolveWebviewView(
@@ -185,6 +242,9 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
             case "getSessions":
               this._sendSessionsList();
               break;
+            case "stopGeneration":
+              this._handleStopGeneration();
+              break;
           }
         } catch (error: unknown) {
           const message_text =
@@ -269,25 +329,166 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
         messagesPayload = [{ role: "user", content }];
       }
 
-      // Send to Go-On
-      const result = await this.manager.sendRequest("chat", {
-        messages: messagesPayload,
-      });
-      const responseText = this._extractResponseText(result);
+      // Send to Go-On — attempt streaming first, fall back to sendRequest
+      let responseText: string | undefined;
 
-      // Add response to current session
-      const assistantMessage = {
-        role: "assistant",
-        content: responseText || JSON.stringify(result),
-        timestamp: new Date().toISOString(),
-      } as ChatMessage;
-      await this._addMessageToCurrentSession(assistantMessage);
+      if (typeof this.manager.sendStreamingRequest === "function") {
+        // Streaming path
+        const tokenAccumulator: string[] = [];
 
-      // Send response to UI
-      this._view.webview.postMessage({
-        type: "addMessage",
-        ...assistantMessage,
-      });
+        // Send a placeholder assistant message to the UI immediately
+        this._view.webview.postMessage({
+          type: "streamStart",
+        });
+
+        const signal = this.streamProcessor.start();
+
+        try {
+          responseText = await this.manager.sendStreamingRequest(
+            "chat",
+            { messages: messagesPayload },
+            {
+              signal,
+              callbacks: {
+                onToken: (token: string) => {
+                  tokenAccumulator.push(token);
+                  const count = this.streamProcessor.incrementTokens();
+                  // Send incremental token to webview
+                  this._view?.webview.postMessage({
+                    type: "streamToken",
+                    token,
+                    tokenCount: count,
+                  });
+                },
+                onDone: () => {
+                  this.streamProcessor.reset();
+                },
+                onError: (error: Error) => {
+                  this.streamProcessor.reset();
+                  // If we had partial content, keep it; otherwise propagate
+                  if (tokenAccumulator.length > 0) {
+                    responseText = tokenAccumulator.join("");
+                  }
+                  throw error;
+                },
+              },
+            },
+          );
+          // Ensure the stream processor is reset on success
+          this.streamProcessor.reset();
+        } catch (streamError: unknown) {
+          this.streamProcessor.reset();
+          // Only re-throw if we have no accumulated content
+          const streamErrMsg = this._getErrorMessage(streamError);
+          if (streamErrMsg === "Request aborted") {
+            // User stopped — don't add an error message, just return
+            this._view?.webview.postMessage({
+              type: "streamDone",
+              aborted: true,
+              content: tokenAccumulator.join(""),
+              tokenCount: this.streamProcessor.tokenCount,
+            });
+            // Still persist whatever was accumulated
+            if (tokenAccumulator.length > 0) {
+              const partialMessage = {
+                role: "assistant" as ChatRole,
+                content: tokenAccumulator.join(""),
+                timestamp: new Date().toISOString(),
+              };
+              await this._addMessageToCurrentSession(partialMessage);
+            }
+            return;
+          }
+          // Check for provider-not-ready errors
+          if (
+            streamErrMsg.includes("No runtime-ready AI provider") ||
+            streamErrMsg.includes("providerNotReady")
+          ) {
+            this._view?.webview.postMessage({
+              type: "streamError",
+              message: streamErrMsg,
+            });
+            const systemMessage = {
+              role: "system" as ChatRole,
+              content:
+                "⚠️ No API key configured. Please set up an AI provider API key in Go-On Settings to start chatting.",
+              timestamp: new Date().toISOString(),
+            };
+            await this._addMessageToCurrentSession(systemMessage);
+            this._view?.webview.postMessage({
+              type: "addMessage",
+              ...systemMessage,
+            });
+            const action = await vscode.window.showWarningMessage(
+              "Go-On needs an AI provider API key to process your request. Open Settings to configure one?",
+              "Open Settings",
+              "Later",
+            );
+            if (action === "Open Settings") {
+              vscode.commands.executeCommand("go-on.openSettings");
+            }
+            return;
+          }
+          // Other streaming error — fall through to the bottom error handler
+          // by throwing again so the outer catch block handles it uniformly
+          if (tokenAccumulator.length > 0) {
+            // We have partial content, save it with the error note
+            const partialContent = tokenAccumulator.join("");
+            this._view?.webview.postMessage({
+              type: "streamError",
+              message: streamErrMsg,
+              content: partialContent,
+              tokenCount: this.streamProcessor.tokenCount,
+            });
+            const partialMessage = {
+              role: "assistant" as ChatRole,
+              content:
+                partialContent + `\n\n*⚠️ Stream interrupted: ${streamErrMsg}*`,
+              timestamp: new Date().toISOString(),
+            };
+            await this._addMessageToCurrentSession(partialMessage);
+            return;
+          }
+          // No content at all — fall through to the outer catch
+          throw streamError;
+        }
+
+        // Finalize streaming in the UI
+        if (responseText !== undefined) {
+          this._view?.webview.postMessage({
+            type: "streamDone",
+            content: responseText,
+            tokenCount: this.streamProcessor.tokenCount,
+          });
+
+          const assistantMessage = {
+            role: "assistant",
+            content: responseText,
+            timestamp: new Date().toISOString(),
+          } as ChatMessage;
+          await this._addMessageToCurrentSession(assistantMessage);
+        }
+      } else {
+        // Non-streaming fallback path
+        const result = await this.manager.sendRequest("chat", {
+          messages: messagesPayload,
+        });
+        responseText = this._extractResponseText(result);
+
+        // Add response to current session
+        const assistantMessage = {
+          role: "assistant",
+          content: responseText || JSON.stringify(result),
+          timestamp: new Date().toISOString(),
+        } as ChatMessage;
+        await this._addMessageToCurrentSession(assistantMessage);
+
+        // Send response to UI
+        this._view.webview.postMessage({
+          type: "addMessage",
+          ...assistantMessage,
+        });
+      }
     } catch (error: unknown) {
       const errorMsg = this._getErrorMessage(error);
 
@@ -747,6 +948,12 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
                         border: 1px solid var(--vscode-panel-border);
                         margin-right: 20px;
                     }
+                    .message.streaming {
+                        background: var(--vscode-editor-background);
+                        border: 1px solid var(--vscode-panel-border);
+                        margin-right: 20px;
+                        border-left: 3px solid var(--vscode-progressBar-background);
+                    }
                     .message.error {
                         background: var(--vscode-notificationsErrorIcon-foreground);
                         color: white;
@@ -903,6 +1110,36 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
                         display: flex;
                         gap: 5px;
                     }
+                    .stop-generating-container {
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        gap: 8px;
+                        padding: 6px 0;
+                    }
+                    .stop-generating-btn {
+                        padding: 6px 16px;
+                        background: var(--vscode-errorForeground);
+                        color: white;
+                        border: none;
+                        border-radius: 3px;
+                        cursor: pointer;
+                        font-size: 0.9em;
+                        display: flex;
+                        align-items: center;
+                        gap: 4px;
+                    }
+                    .stop-generating-btn:hover {
+                        opacity: 0.85;
+                    }
+                    .token-counter {
+                        font-size: 0.8em;
+                        color: var(--vscode-descriptionForeground);
+                        font-family: var(--vscode-editor-font-family);
+                    }
+                    .stop-generating-container.hidden {
+                        display: none;
+                    }
                     .chat-attach {
                         padding: 8px 10px;
                         background: var(--vscode-button-secondaryBackground);
@@ -1048,6 +1285,10 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
                         <button class="session-btn" id="exportSessionBtn" title="${t(MessageKeys.export)}">📤</button>
                     </div>
                     <div class="chat-messages" id="messages"></div>
+                        <div class="stop-generating-container hidden" id="stopGenerationContainer">
+                            <button class="stop-generating-btn" id="stopGenerationBtn">■ Stop Generating</button>
+                            <span class="token-counter" id="tokenCounter">0 tokens</span>
+                        </div>
                         <div class="attachment-preview" id="attachmentPreview" style="display:none">
                             <div class="attachment-list" id="attachmentList"></div>
                             <button class="attachment-clear" id="clearAttachmentsBtn">✕</button>

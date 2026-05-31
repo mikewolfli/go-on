@@ -418,11 +418,11 @@ pub async fn start_background_tasks(
 ) -> Result<()> {
     let lock_monitor = Arc::clone(&server.observability.lock_monitor);
     let runtime_config = Arc::new(std::sync::Mutex::new(server.runtime_config.clone()));
-    let memory_cache = Arc::clone(&server.cache.memory_response_cache);
+    let memory_cache = Arc::clone(&server.cache_deps.cache.memory_response_cache);
     let memory_store = Arc::clone(&server.memory_store);
 
-    let cache = Arc::new(std::sync::Mutex::new(server.cache.response_cache.clone()));
-    let vector_store = Arc::new(std::sync::Mutex::new(server.cache.vector_store.clone()));
+    let cache = Arc::new(std::sync::Mutex::new(server.cache_deps.cache.response_cache.clone()));
+    let vector_store = Arc::new(std::sync::Mutex::new(server.cache_deps.cache.vector_store.clone()));
 
     let maintenance = Arc::clone(&server.maintenance_tracker);
     let lifecycle = Arc::clone(&server.lifecycle_state);
@@ -464,11 +464,11 @@ pub async fn run_maintenance_cycle(
 ) -> Result<MaintenanceCycleResult> {
     let lock_monitor = Arc::clone(&server.observability.lock_monitor);
     let runtime_config = Arc::new(std::sync::Mutex::new(server.runtime_config.clone()));
-    let memory_cache = Arc::clone(&server.cache.memory_response_cache);
+    let memory_cache = Arc::clone(&server.cache_deps.cache.memory_response_cache);
     let memory_store = Arc::clone(&server.memory_store);
 
-    let cache = Arc::new(std::sync::Mutex::new(server.cache.response_cache.clone()));
-    let vector_store = Arc::new(std::sync::Mutex::new(server.cache.vector_store.clone()));
+    let cache = Arc::new(std::sync::Mutex::new(server.cache_deps.cache.response_cache.clone()));
+    let vector_store = Arc::new(std::sync::Mutex::new(server.cache_deps.cache.vector_store.clone()));
 
     let maintenance = Arc::clone(&server.maintenance_tracker);
 
@@ -488,10 +488,10 @@ pub async fn run_maintenance_cycle(
 /// Run a single health check on demand
 pub async fn run_health_check(server: &super::server::AcpServer) -> Result<()> {
     let lock_monitor = Arc::clone(&server.observability.lock_monitor);
-    let memory_cache = Arc::clone(&server.cache.memory_response_cache);
+    let memory_cache = Arc::clone(&server.cache_deps.cache.memory_response_cache);
 
-    let cache = Arc::new(std::sync::Mutex::new(server.cache.response_cache.clone()));
-    let vector_store = Arc::new(std::sync::Mutex::new(server.cache.vector_store.clone()));
+    let cache = Arc::new(std::sync::Mutex::new(server.cache_deps.cache.response_cache.clone()));
+    let vector_store = Arc::new(std::sync::Mutex::new(server.cache_deps.cache.vector_store.clone()));
 
     let circuit_breakers = Arc::clone(&server.circuit_breakers);
     let lifecycle = Arc::clone(&server.lifecycle_state);

@@ -783,4 +783,141 @@ mod tests {
         assert!(is_supported_optimization_module("failure_prevention"));
         assert!(!is_supported_optimization_module("unknown_module"));
     }
+
+    // ── resolve_review_policy: edge cases ─────────────────────────────
+
+    #[test]
+    fn test_resolve_review_policy_no_options_returns_standard() {
+        let policy = resolve_review_policy(None, None, false, false);
+        assert_eq!(policy.min_review_level, "standard");
+        assert_eq!(policy.required_reviews, 1);
+        assert!(!policy.enforce_dual_review);
+    }
+
+    #[test]
+    fn test_resolve_review_policy_workflow_execute_enhances() {
+        let policy = resolve_review_policy(None, None, true, false);
+        assert_eq!(policy.min_review_level, "enhanced");
+        assert!(policy.enforce_action_gates);
+    }
+
+    #[test]
+    fn test_action_check_kinds_from_policy_returns_checks() {
+        let checks = action_check_kinds_from_policy(&["syntax".to_string(), "test".to_string()]);
+        assert!(checks.contains(&crate::reinforcement::ActionCheckKind::parse("syntax").unwrap()));
+        assert!(checks.contains(&crate::reinforcement::ActionCheckKind::parse("test").unwrap()));
+    }
+
+    #[test]
+    fn test_action_check_kinds_from_policy_empty_returns_empty() {
+        let checks = action_check_kinds_from_policy(&[]);
+        assert!(checks.is_empty());
+    }
+
+    #[test]
+    fn test_action_check_kinds_from_policy_unknown_skipped() {
+        let checks = action_check_kinds_from_policy(&["unknown_check".to_string()]);
+        assert!(checks.is_empty());
+    }
+
+    // ── decide_work_grade: edge cases ─────────────────────────────────
+
+    #[test]
+    fn test_decide_work_grade_complex_workflow_promotes() {
+        let plan = make_task_plan(4, false, true, 0.7);
+        let decision = decide_work_grade(Some("agent"), &plan, true, true, false);
+        assert!(
+            decision.decided == WorkGrade::FullAuto || decision.decided == WorkGrade::Safeguard,
+            "complex workflow with multi-modules should promote, got {:?}",
+            decision.decided
+        );
+    }
+
+    #[test]
+    fn test_decide_work_grade_simple_task_same_level() {
+        let plan = make_task_plan(1, false, false, 0.95);
+        let decision = decide_work_grade(Some("edit"), &plan, false, true, false);
+        assert_eq!(decision.decided, WorkGrade::Edit);
+    }
+
+    // ── OptimizationPolicy tests ───────────────────────────────────────
+
+    #[test]
+    fn test_is_supported_optimization_module_batch() {
+        let supported = [
+            "workflow_optimizer",
+            "adaptive_selector",
+            "cost_optimizer",
+            "failure_prevention",
+        ];
+        for name in &supported {
+            assert!(
+                is_supported_optimization_module(name),
+                "{} should be supported",
+                name
+            );
+        }
+    }
+
+    // ── evaluate_optimization_policy ───────────────────────────────────
+
+    #[test]
+    fn test_evaluate_optimization_policy_returns_report() {
+        let plan = make_task_plan(2, false, false, 0.9);
+        let ledger = crate::reinforcement::ArtifactLedger::new(None);
+        let outcome = evaluate_optimization_policy(&ledger, "test task", &plan, None, true, false);
+        assert!(!outcome.force_fail_fast);
+        assert!(outcome.phase_parallelism_cap.unwrap_or(0) >= 1);
+    }
+
+    #[test]
+    fn test_work_grade_action_detects_promote() {
+        let action = work_grade_action(WorkGrade::Safeguard, WorkGrade::FullAuto);
+        assert!(action == "promote" || action == "approve");
+    }
+
+    #[test]
+    fn test_work_grade_action_detects_demote() {
+        let action = work_grade_action(WorkGrade::FullAuto, WorkGrade::Safeguard);
+        assert!(action == "demote" || action == "restrict");
+    }
+
+    #[test]
+    fn test_work_grade_action_no_change() {
+        let action = work_grade_action(WorkGrade::Edit, WorkGrade::Edit);
+        assert_eq!(action, "unchanged");
+    }
+
+    // ── rank_execution_agents: edge cases ─────────────────────────────
+
+    #[test]
+    fn test_rank_execution_agents_with_roles() {
+        let agents = vec![
+            ("dev".to_string(), "developer".to_string()),
+            ("rev".to_string(), "reviewer".to_string()),
+        ];
+        let ranked = rank_execution_agents(
+            &agents.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
+            Some("developer"),
+            0,
+            0,
+        );
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].agent, "dev");
+    }
+
+    #[test]
+    fn test_rank_execution_agents_all_roles_filtered() {
+        let agents = vec![
+            ("dev".to_string(), "developer".to_string()),
+            ("qa".to_string(), "tester".to_string()),
+        ];
+        let ranked = rank_execution_agents(
+            &agents.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
+            Some("nobody"),
+            0,
+            0,
+        );
+        assert!(ranked.is_empty());
+    }
 }

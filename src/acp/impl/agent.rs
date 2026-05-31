@@ -130,20 +130,9 @@ pub async fn run_dual_review_gate(
     let results = future::join_all(review_futures).await;
 
     // ── Phase 3: Aggregate results and apply gate timeout handling ────
-    let result = aggregate_review_results(
-        &ctx,
-        &results,
-        started,
-        &ctx.reviewers,
-    );
+    let result = aggregate_review_results(&ctx, &results, started, &ctx.reviewers);
 
-    record_and_finalize(
-        server,
-        started,
-        &ctx,
-        result,
-    )
-    .await
+    record_and_finalize(server, started, &ctx, result).await
 }
 
 /// Prepare data for dual review: resolve routing, score reviewers, and
@@ -192,7 +181,9 @@ fn build_review_context(
 
     let reviewer_scores = {
         let state = server.online_controller.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("Agent online_controller lock poisoned in run_dual_review_gate, recovering");
+            tracing::warn!(
+                "Agent online_controller lock poisoned in run_dual_review_gate, recovering"
+            );
             poisoned.into_inner()
         });
         state.rank_agent_names_for_phase(&review_phase_name, &reviewer_names)
@@ -417,6 +408,7 @@ async fn run_single_review(
     // review prompt sourced from HarnessBus when available.
     let mut review_messages = messages.to_vec();
     let review_prompt = server
+        .governance_deps
         .harness_bus
         .as_ref()
         .map(|hb| hb.review_gate_prompt())
@@ -495,11 +487,13 @@ fn routing_handles(
     server: &AcpServer,
 ) -> Result<(Arc<FlowManager>, Arc<crate::agent::AgentRegistry>)> {
     let flow = server
+        .model_deps
         .flow_manager
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("Flow manager not available"))?;
 
     let registry = server
+        .model_deps
         .agent_registry
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("Agent registry not available"))?;

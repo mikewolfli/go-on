@@ -70,6 +70,7 @@ pub(super) async fn handle_governance_status(
     let runtime_snapshot = server.observability.metrics.snapshot();
 
     let pua_plan = server
+        .governance_deps
         .pua_enforcement_plan
         .lock()
         .map(|guard| guard.clone())
@@ -559,6 +560,7 @@ pub(super) async fn handle_governance_status(
         .filter(|record| record.enabled)
         .count();
     let registered_skill_total = server
+        .orchestration_deps
         .skill_registry
         .lock()
         .map(|registry| registry.list().len())
@@ -1456,7 +1458,7 @@ pub(super) async fn handle_governance_status(
                     "ready": multi_priority_scheduler_ready,
                     "dual_level_scheduler_profile": {
                         "l1_queue_depth": server
-                            .scheduler
+                            .orchestration_deps.scheduler
                             .as_ref()
                             .map(|s| s.profile().l1_queue_depth)
                             .unwrap_or(0),
@@ -1792,6 +1794,7 @@ pub(super) async fn handle_governance_plan_get(
     request_id: Option<Value>,
 ) -> Result<()> {
     let plan = server
+        .governance_deps
         .pua_enforcement_plan
         .lock()
         .map(|guard| guard.clone())
@@ -1809,7 +1812,7 @@ pub(super) async fn handle_governance_plan_update(
     params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
-    let plan = match server.pua_enforcement_plan.lock() {
+    let plan = match server.governance_deps.pua_enforcement_plan.lock() {
         Ok(mut guard) => {
             if let Some(level) = params.get("escalation_level").and_then(Value::as_str) {
                 guard.escalation_level = level.to_string();
@@ -1921,7 +1924,7 @@ pub(super) async fn handle_governance_remediate(
                 risk_id = %risk_id,
                 "governance.remediate: resetting PUA counters"
             );
-            let mut plan = server.pua_enforcement_plan.lock().unwrap_or_else(|poisoned| {
+            let mut plan = server.governance_deps.pua_enforcement_plan.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("PUA enforcement plan lock poisoned in handle_governance_remediate, recovering");
                 poisoned.into_inner()
             });
@@ -2023,13 +2026,13 @@ pub(super) async fn handle_governance_config_save(
     let mut applied: Vec<&str> = Vec::new();
 
     if auto_mask_sensitive {
-        if server.harness_bus.is_some() {
+        if server.governance_deps.harness_bus.is_some() {
             tracing::info!("governance.config.save: autoMaskSensitive enabled");
         }
         applied.push("autoMaskSensitive");
     }
 
-    if server.harness_bus.is_some() {
+    if server.governance_deps.harness_bus.is_some() {
         tracing::info!(
             audit_enabled = audit_enabled,
             "governance.config.save: audit toggled"

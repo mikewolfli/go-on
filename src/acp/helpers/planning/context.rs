@@ -169,8 +169,11 @@ mod tests {
     use std::collections::HashMap;
     use std::time::Duration;
 
-    use super::{probe_agent_runtime_readiness, run_with_optional_timeout, AgentRuntimeReadiness};
-    use crate::config::{AgentConfig, AppConfig, FlowConfig};
+    use super::{
+        extract_host_port, probe_agent_runtime_readiness, request_timeout, review_timeout,
+        run_with_optional_timeout, AgentRuntimeReadiness, EndpointProbeResult,
+    };
+    use crate::config::{AgentConfig, AppConfig, FlowConfig, PhaseOptions};
     use crate::i18n::runtime::tf;
 
     #[tokio::test]
@@ -251,5 +254,148 @@ mod tests {
         assert_eq!(readiness, AgentRuntimeReadiness::Ready);
 
         drop(listener);
+    }
+
+    // ── request_timeout / review_timeout ─────────────────────────────
+
+    #[test]
+    fn request_timeout_returns_some_when_options_provided() {
+        let opts = PhaseOptions {
+            request_timeout_seconds: Some(30),
+            ..Default::default()
+        };
+        let timeout = request_timeout(Some(&opts));
+        assert_eq!(timeout, Some(Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn request_timeout_returns_none_when_no_options() {
+        assert!(request_timeout(None).is_none());
+    }
+
+    #[test]
+    fn request_timeout_returns_none_when_value_absent() {
+        let opts = PhaseOptions::default();
+        assert!(request_timeout(Some(&opts)).is_none());
+    }
+
+    #[test]
+    fn review_timeout_uses_explicit_value() {
+        let opts = PhaseOptions {
+            review_timeout_seconds: Some(15),
+            request_timeout_seconds: Some(30),
+            ..Default::default()
+        };
+        let timeout = review_timeout(Some(&opts));
+        assert_eq!(timeout, Some(Duration::from_secs(15)));
+    }
+
+    #[test]
+    fn review_timeout_falls_back_to_request_timeout() {
+        let opts = PhaseOptions {
+            review_timeout_seconds: None,
+            request_timeout_seconds: Some(60),
+            ..Default::default()
+        };
+        let timeout = review_timeout(Some(&opts));
+        assert_eq!(timeout, Some(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn review_timeout_returns_none_when_both_absent() {
+        let opts = PhaseOptions::default();
+        assert!(review_timeout(Some(&opts)).is_none());
+    }
+
+    #[test]
+    fn review_timeout_returns_none_when_no_options() {
+        assert!(review_timeout(None).is_none());
+    }
+
+    // ── run_with_optional_timeout ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn run_with_optional_timeout_completes() {
+        let result = run_with_optional_timeout(
+            Some(Duration::from_secs(5)),
+            async { Ok::<_, anyhow::Error>(42) },
+            |_| anyhow::anyhow!("timeout"),
+        )
+        .await;
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    #[tokio::test]
+    async fn run_with_optional_timeout_no_timeout_passes_through() {
+        let result = run_with_optional_timeout::<_, _, _>(
+            None,
+            async { Ok::<_, anyhow::Error>("done") },
+            |_| anyhow::anyhow!("timeout"),
+        )
+        .await;
+        assert_eq!(result.unwrap(), "done");
+    }
+
+    // ── EndpointProbeResult equality ──────────────────────────────────
+
+    #[test]
+    fn endpoint_probe_result_eq() {
+        assert_eq!(
+            EndpointProbeResult::Reachable,
+            EndpointProbeResult::Reachable
+        );
+        assert_eq!(
+            EndpointProbeResult::Unreachable,
+            EndpointProbeResult::Unreachable
+        );
+        assert_eq!(EndpointProbeResult::TimedOut, EndpointProbeResult::TimedOut);
+        assert_eq!(EndpointProbeResult::Skipped, EndpointProbeResult::Skipped);
+        assert_ne!(
+            EndpointProbeResult::Reachable,
+            EndpointProbeResult::Unreachable
+        );
+    }
+
+    // ── AgentRuntimeReadiness equality ────────────────────────────────
+
+    #[test]
+    fn agent_runtime_readiness_eq() {
+        assert_eq!(AgentRuntimeReadiness::Ready, AgentRuntimeReadiness::Ready);
+        assert_eq!(
+            AgentRuntimeReadiness::MissingSecret,
+            AgentRuntimeReadiness::MissingSecret
+        );
+        assert!(AgentRuntimeReadiness::Ready != AgentRuntimeReadiness::MissingSecret);
+    }
+
+    // ── extract_host_port ─────────────────────────────────────────────
+
+    #[test]
+    fn extract_host_port_simple() {
+        let result = extract_host_port("http://127.0.0.1:8080/path");
+        assert_eq!(result, Some(("127.0.0.1".to_string(), 8080u16)));
+    }
+
+    #[test]
+    fn extract_host_port_default_port_80() {
+        let result = extract_host_port("http://localhost/path");
+        assert_eq!(result, Some(("localhost".to_string(), 80u16)));
+    }
+
+    #[test]
+    fn extract_host_port_no_scheme() {
+        let result = extract_host_port("127.0.0.1:3000");
+        assert_eq!(result, Some(("127.0.0.1".to_string(), 3000u16)));
+    }
+
+    #[test]
+    fn extract_host_port_ipv6() {
+        let result = extract_host_port("http://[::1]:9090/path");
+        assert_eq!(result, Some(("::1".to_string(), 9090u16)));
+    }
+
+    #[test]
+    fn extract_host_port_empty_returns_none() {
+        assert_eq!(extract_host_port(""), None);
     }
 }

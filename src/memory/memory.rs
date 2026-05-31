@@ -5,7 +5,7 @@
 //! to be integrated into the execution flow once promotion logic is wired.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Memory class types
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -76,6 +76,12 @@ const MAX_ENTRIES: usize = 500;
 pub struct MemoryStore {
     entries: HashMap<String, MemoryEntry>,
     policy: MemoryPolicy,
+    /// O(1) count of entries per class
+    class_counts: HashMap<MemoryClass, usize>,
+    /// O(log n) timestamp index per class: timestamp → entry_id
+    entries_by_class: HashMap<MemoryClass, BTreeMap<u64, String>>,
+    /// Monotonically increasing sequence for ordering entries
+    store_sequence: u64,
 }
 
 impl MemoryStore {
@@ -83,6 +89,9 @@ impl MemoryStore {
         Self {
             entries: HashMap::new(),
             policy,
+            class_counts: HashMap::new(),
+            entries_by_class: HashMap::new(),
+            store_sequence: 0,
         }
     }
 
@@ -101,44 +110,115 @@ impl MemoryStore {
     ///
     /// If the class already has `max_size` entries, the oldest entry
     /// (by timestamp) is evicted to make room for the new one.
+    ///
+    /// Uses O(log n) lookup via class index trees.
     pub fn store(&mut self, entry: MemoryEntry) {
         let class = entry.class.clone();
         let max_size = self.class_max_size(&class);
+        let seq = self.store_sequence;
+        self.store_sequence += 1;
 
         // If an entry with the same id already exists, update it without eviction.
-        if self.entries.contains_key(&entry.id) {
+        if let Some(existing) = self.entries.get(&entry.id) {
+            if existing.class != class {
+                // Class changed — remove old class index entries
+                if let Some(tree) = self.entries_by_class.get_mut(&existing.class) {
+                    let old_seq = tree.iter().find(|(_, v)| *v == &entry.id).map(|(k, _)| *k);
+                    if let Some(k) = old_seq {
+                        tree.remove(&k);
+                    }
+                }
+                *self.class_counts.entry(existing.class.clone()).or_insert(0) = self
+                    .class_counts
+                    .get(&existing.class)
+                    .copied()
+                    .unwrap_or(1)
+                    .saturating_sub(1);
+                // Add to new class
+                self.class_counts
+                    .entry(class.clone())
+                    .and_modify(|c| *c += 1)
+                    .or_insert(1);
+                self.entries_by_class
+                    .entry(class.clone())
+                    .or_default()
+                    .insert(seq, entry.id.clone());
+            } else {
+                // Same class — update sequence to reflect refresh
+                if let Some(tree) = self.entries_by_class.get_mut(&class) {
+                    let old_seq = tree.iter().find(|(_, v)| *v == &entry.id).map(|(k, _)| *k);
+                    if let Some(k) = old_seq {
+                        tree.remove(&k);
+                    }
+                    tree.insert(seq, entry.id.clone());
+                }
+            }
             self.entries.insert(entry.id.clone(), entry);
             return;
         }
 
-        // Count existing entries of this class.
-        let class_count = self.entries.values().filter(|e| e.class == class).count();
+        // O(1) class count check
+        let class_count = self.class_counts.get(&class).copied().unwrap_or(0);
 
         if class_count >= max_size {
-            // Evict the oldest entry of this class.
-            let oldest_id: Option<String> = self
-                .entries
-                .values()
-                .filter(|e| e.class == class)
-                .min_by(|a, b| a.timestamp.cmp(&b.timestamp))
-                .map(|e| e.id.clone());
-
+            // O(log n) oldest lookup via BTreeMap, then remove with index cleanup
+            let oldest_id = self
+                .entries_by_class
+                .get(&class)
+                .and_then(|tree| tree.first_key_value().map(|(_, id)| id.clone()));
             if let Some(id) = oldest_id {
-                self.entries.remove(&id);
+                self.remove_entry(&id);
             }
         }
 
-        self.entries.insert(entry.id.clone(), entry);
+        let id = entry.id.clone();
+        self.entries.insert(id.clone(), entry);
+        self.class_counts
+            .entry(class.clone())
+            .and_modify(|c| *c += 1)
+            .or_insert(1);
+        self.entries_by_class
+            .entry(class)
+            .or_default()
+            .insert(seq, id.clone());
 
         // Enforce total capacity safety net across all classes.
         if self.entries.len() > MAX_ENTRIES {
-            let oldest_id = self
-                .entries
-                .values()
-                .min_by(|a, b| a.timestamp.cmp(&b.timestamp))
-                .map(|e| e.id.clone());
-            if let Some(id) = oldest_id {
-                self.entries.remove(&id);
+            // O(log n) global min across all class trees
+            let oldest = self
+                .entries_by_class
+                .iter()
+                .filter_map(|(_, tree)| tree.first_key_value())
+                .min_by_key(|(seq, _)| *seq)
+                .map(|(_, id)| id.clone());
+            if let Some(id) = oldest {
+                self.remove_entry(&id);
+            }
+        }
+    }
+
+    /// Remove an entry and update indexes.
+    fn remove_entry(&mut self, id: &str) {
+        if let Some(entry) = self.entries.remove(id) {
+            let class = &entry.class;
+            if let Some(count) = self.class_counts.get_mut(class) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    self.class_counts.remove(class);
+                }
+            }
+            if let Some(tree) = self.entries_by_class.get_mut(class) {
+                let seq_to_remove: Vec<u64> = tree
+                    .iter()
+                    .filter(|(_, v)| *v == id)
+                    .map(|(k, _)| *k)
+                    .collect();
+                for seq in seq_to_remove {
+                    tree.remove(&seq);
+                }
+                if tree.is_empty() {
+                    self.entries_by_class.remove(class);
+                }
             }
         }
     }
@@ -154,7 +234,15 @@ impl MemoryStore {
 
     /// Run garbage collection: remove entries that fail `should_retain`.
     pub fn gc(&mut self) {
-        self.entries.retain(|_, e| self.policy.should_retain(e));
+        let ids_to_remove: Vec<String> = self
+            .entries
+            .iter()
+            .filter(|(_, e)| !self.policy.should_retain(e))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in ids_to_remove {
+            self.remove_entry(&id);
+        }
     }
 
     /// Enforce capacity limits across all classes after bulk operations.
@@ -169,17 +257,15 @@ impl MemoryStore {
         ];
         for class in classes {
             let max_size = self.class_max_size(&class);
-            // Collect ids sorted by timestamp (oldest first).
-            let mut entries: Vec<(String, String)> = self
-                .entries
-                .iter()
-                .filter(|(_, e)| e.class == class)
-                .map(|(id, e)| (id.clone(), e.timestamp.clone()))
-                .collect();
-            entries.sort_by(|a, b| a.1.cmp(&b.1));
-            if entries.len() > max_size {
-                for (id, _) in entries.iter().take(entries.len() - max_size) {
-                    self.entries.remove(id);
+            let class_count = self.class_counts.get(&class).copied().unwrap_or(0);
+            if class_count > max_size {
+                let excess = class_count - max_size;
+                if let Some(tree) = self.entries_by_class.get(&class) {
+                    let to_remove: Vec<String> =
+                        tree.iter().take(excess).map(|(_, id)| id.clone()).collect();
+                    for id in to_remove {
+                        self.remove_entry(&id);
+                    }
                 }
             }
         }

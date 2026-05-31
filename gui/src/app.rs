@@ -1689,6 +1689,7 @@ impl eframe::App for GoOnApp {
                                         stream_chunk_flush_ms: stability.chat_stream_chunk_flush_ms,
                                         max_pending_events_per_frame: stability
                                             .chat_max_pending_events_per_frame,
+                                        stream_token_flush_ms: stability.stream_token_flush_ms,
                                     },
                                 );
                                 // Keep standalone Risk Decision tab in sync with the latest

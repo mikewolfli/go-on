@@ -260,8 +260,14 @@ impl ChatView {
                     }));
                 }
             }
+            // Create and store an abort controller for this generation
+            let abort_ctrl = AbortController::new();
+            self.abort_controller = Some(abort_ctrl.clone());
+            self.stream_processor = Some(StreamProcessor::new());
+            self.stream_progress = TokenProgress::default();
             let active_gen_guard = ActiveGenerationGuard::new(active_gen_count.clone());
             let sc = stream_client.clone();
+            let abort_ctrl_task = abort_ctrl.clone();
             let handle = tokio::spawn(async move {
                 // Guard ensures active_generations is decremented when this task exits
                 let _guard = active_gen_guard;
@@ -499,6 +505,11 @@ impl ChatView {
                                     },
                                 )
                                 .await;
+                                return;
+                            }
+
+                            // Check for abort before processing the chunk
+                            if abort_ctrl_task.is_cancelled() {
                                 return;
                             }
 
@@ -839,6 +850,12 @@ impl ChatView {
                     token,
                     reasoning,
                 } => {
+                    // Update streaming progress counters
+                    if !token.is_empty() {
+                        self.stream_progress.tokens_received += 1;
+                        self.stream_progress.bytes_processed += token.len();
+                    }
+
                     if let Some(idx) = self.generation_msg_idx(generation_id) {
                         if let Some(session) = self.sessions.get_mut(self.active_session) {
                             if let Some(m) = session.messages.get_mut(idx) {
@@ -874,6 +891,10 @@ impl ChatView {
                     self.input_token_estimate = input_tokens;
                     self.output_token_estimate = output_tokens;
                     self.last_token_estimate = total_tokens;
+                    // Sync stream progress with telemetry data
+                    self.stream_progress.input_tokens = input_tokens;
+                    self.stream_progress.output_tokens = output_tokens;
+                    self.stream_progress.total_tokens = total_tokens;
                 }
                 PendingResponse::ChatCompleted {
                     generation_id,
@@ -966,6 +987,10 @@ impl ChatView {
                     self.remove_generation(generation_id);
                     self.stop_requested = false;
                     self.save_sessions_to_disk();
+                    // Reset streaming progress on completion
+                    self.stream_progress = TokenProgress::default();
+                    self.stream_processor = None;
+                    self.abort_controller = None;
                 }
                 PendingResponse::Error {
                     generation_id,
@@ -1001,6 +1026,10 @@ impl ChatView {
                     self.sending = !self.generation_states.is_empty();
                     self.ai_status = AiStatus::Error;
                     self.stop_requested = false;
+                    // Reset streaming progress on error
+                    self.stream_progress = TokenProgress::default();
+                    self.stream_processor = None;
+                    self.abort_controller = None;
                 }
                 PendingResponse::UiMessage(msg) => {
                     self.success_message = Some(msg);

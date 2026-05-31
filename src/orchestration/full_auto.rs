@@ -217,15 +217,25 @@ pub struct FullAutoConfig {
     pub min_match_score: f64,
     /// Maximum number of skills to execute in a single run.
     pub max_skills_to_execute: usize,
+    /// Maximum number of skills to execute per task (alias for max_skills_to_execute).
+    #[serde(default = "default_max_skills_per_task")]
+    pub max_skills_per_task: usize,
     /// Maximum total execution steps before the flow stops.
     pub max_execution_steps: usize,
     /// Whether to perform environment preparation checks.
     pub enable_env_check: bool,
+    /// Whether to fall back to universal tools when no skills match.
+    #[serde(default)]
+    pub fallback_to_universal_tools: bool,
     /// Maximum number of skills to execute in parallel.
     /// Skills that require write locks on the same resource are serialized.
     /// Default: 3 (balances speed vs. resource contention).
     #[serde(default = "default_max_concurrency")]
     pub max_concurrency: usize,
+}
+
+fn default_max_skills_per_task() -> usize {
+    5
 }
 
 fn default_max_concurrency() -> usize {
@@ -237,8 +247,10 @@ impl Default for FullAutoConfig {
         Self {
             min_match_score: DEFAULT_MIN_MATCH_SCORE,
             max_skills_to_execute: 5,
+            max_skills_per_task: 5,
             max_execution_steps: 20,
             enable_env_check: true,
+            fallback_to_universal_tools: true,
             max_concurrency: default_max_concurrency(),
         }
     }
@@ -311,6 +323,17 @@ impl FullAutoFlow {
             skill_market: None,
             semaphore: Arc::new(tokio::sync::Semaphore::new(max_concurrency)),
         }
+    }
+
+    /// Create a new `FullAutoFlow` with explicit skill and tool registries.
+    ///
+    /// This is an alias for `new()` with an explicit name that makes it clear
+    /// real registries are being injected (as opposed to default/empty ones).
+    pub fn new_with_registries(
+        skill_registry: Arc<Mutex<SkillRegistry>>,
+        tool_registry: Arc<ToolRegistry>,
+    ) -> Self {
+        Self::new(skill_registry, tool_registry)
     }
 
     /// Attach a threshold learner for dynamic skill-match threshold tuning.
@@ -413,7 +436,7 @@ impl FullAutoFlow {
     /// Caller-available builder method — callers should invoke
     /// `enable_skill_market()` before `run()` for external skill discovery.
     #[allow(dead_code)]
-// F-GAP-49 — reserved for future use
+    // F-GAP-49 — reserved for future use
     pub fn enable_skill_market(&mut self) {
         let cache_dir = std::env::temp_dir().join("go-on-skill-market");
         let import_policy = SkillImportPolicy {
@@ -811,6 +834,25 @@ impl FullAutoFlow {
 
             if matched_skills.is_empty() {
                 warn!("No skills matched the task; flow will produce an empty execution log");
+                // Fallback to universal tools when no skills match
+                if self.config.fallback_to_universal_tools {
+                    let universal_tools = vec![
+                        "read_file",
+                        "write_file",
+                        "list_directory",
+                        "grep",
+                        "search_files",
+                    ];
+                    info!("Falling back to {} universal tools", universal_tools.len());
+                    for tool_name in &universal_tools {
+                        matched_skills.push(SkillMatch {
+                            name: tool_name.to_string(),
+                            description: format!("Universal fallback tool: {}", tool_name),
+                            score: 0.5,
+                            reason: "universal tool fallback (no skill match)".into(),
+                        });
+                    }
+                }
             }
 
             (intent, matched_skills)
@@ -1083,6 +1125,7 @@ impl FullAutoFlow {
                     } else {
                         String::new()
                     },
+                    context: None,
                     started_ms: s.timestamp_ms,
                     completed_ms: s.timestamp_ms + s.duration_ms,
                     duration_ms: s.duration_ms,
@@ -1098,7 +1141,7 @@ impl FullAutoFlow {
                 Ok(plan_id) => {
                     debug!("BrainLoop plan `{plan_id}` started for task");
                     if let Some(ref output) = final_output {
-                        if let Err(e) = bl.execute_step(&plan_id, "bl-step-0", output) {
+                        if let Err(e) = bl.execute_step(&plan_id, "bl-step-0", output).await {
                             warn!("BrainLoop step execution failed: {e}");
                         }
                     }
@@ -1353,8 +1396,10 @@ mod tests {
             FullAutoConfig {
                 min_match_score: 5.0, // unreachable
                 max_skills_to_execute: 5,
+                max_skills_per_task: 5,
                 max_execution_steps: 20,
                 enable_env_check: true,
+                fallback_to_universal_tools: true,
                 max_concurrency: 3,
             },
         );

@@ -176,10 +176,10 @@ mod unit_tests {
         let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
 
         let mut server = ServerBuilder::new().build().expect("server should build");
-        server.flow_manager = Some(flow);
-        server.agent_registry = Some(Arc::new(registry));
-        server.cache.vector_store = Some(Arc::clone(&vector_store));
-        server.vector_config = config.vector.clone();
+        server.model_deps.flow_manager = Some(flow);
+        server.model_deps.agent_registry = Some(Arc::new(registry));
+        server.cache_deps.cache.vector_store = Some(Arc::clone(&vector_store));
+        server.cache_deps.vector_config = config.vector.clone();
         let config_path = temp.path().join("config.toml");
         std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
         server.config_path = Some(config_path.display().to_string());
@@ -382,12 +382,12 @@ mod unit_tests {
         );
 
         let mut server = ServerBuilder::new().build().expect("server should build");
-        server.flow_manager = Some(flow);
-        server.agent_registry = Some(Arc::new(registry));
-        server.cache.vector_store = Some(Arc::clone(&vector_store));
-        server.vector_config = config.vector.clone();
-        server.harness_bus = Some(Arc::clone(&harness_bus));
-        server.capability_bus = Some(Arc::clone(&capability_bus));
+        server.model_deps.flow_manager = Some(flow);
+        server.model_deps.agent_registry = Some(Arc::new(registry));
+        server.cache_deps.cache.vector_store = Some(Arc::clone(&vector_store));
+        server.cache_deps.vector_config = config.vector.clone();
+        server.governance_deps.harness_bus = Some(Arc::clone(&harness_bus));
+        server.governance_deps.capability_bus = Some(Arc::clone(&capability_bus));
         let config_path = temp.path().join("e2e_config.toml");
         std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
         server.config_path = Some(config_path.display().to_string());
@@ -476,9 +476,9 @@ mod unit_tests {
         let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
 
         let mut server = ServerBuilder::new().build().expect("server should build");
-        server.flow_manager = Some(flow);
-        server.agent_registry = Some(Arc::new(registry));
-        server.vector_config = config.vector.clone();
+        server.model_deps.flow_manager = Some(flow);
+        server.model_deps.agent_registry = Some(Arc::new(registry));
+        server.cache_deps.vector_config = config.vector.clone();
         let config_path = temp.path().join("config.toml");
         std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
         server.config_path = Some(config_path.display().to_string());
@@ -552,9 +552,9 @@ mod unit_tests {
         let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
 
         let mut server = ServerBuilder::new().build().expect("server should build");
-        server.flow_manager = Some(flow);
-        server.agent_registry = Some(Arc::new(registry));
-        server.vector_config = config.vector.clone();
+        server.model_deps.flow_manager = Some(flow);
+        server.model_deps.agent_registry = Some(Arc::new(registry));
+        server.cache_deps.vector_config = config.vector.clone();
         let config_path = temp.path().join("config.toml");
         std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
         server.config_path = Some(config_path.display().to_string());
@@ -608,9 +608,9 @@ mod unit_tests {
         let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
 
         let mut server = ServerBuilder::new().build().expect("server should build");
-        server.flow_manager = Some(flow);
-        server.agent_registry = Some(Arc::new(registry));
-        server.vector_config = config.vector.clone();
+        server.model_deps.flow_manager = Some(flow);
+        server.model_deps.agent_registry = Some(Arc::new(registry));
+        server.cache_deps.vector_config = config.vector.clone();
         let config_path = temp.path().join("config.toml");
         std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
         server.config_path = Some(config_path.display().to_string());
@@ -695,11 +695,11 @@ mod unit_tests {
         );
 
         let mut server = ServerBuilder::new().build().expect("server should build");
-        server.flow_manager = Some(flow);
-        server.agent_registry = Some(Arc::new(registry));
-        server.vector_config = config.vector.clone();
-        server.harness_bus = Some(Arc::clone(&harness_bus));
-        server.capability_bus = Some(Arc::clone(&capability_bus));
+        server.model_deps.flow_manager = Some(flow);
+        server.model_deps.agent_registry = Some(Arc::new(registry));
+        server.cache_deps.vector_config = config.vector.clone();
+        server.governance_deps.harness_bus = Some(Arc::clone(&harness_bus));
+        server.governance_deps.capability_bus = Some(Arc::clone(&capability_bus));
         let config_path = temp.path().join("config.toml");
         std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
         server.config_path = Some(config_path.display().to_string());
@@ -764,9 +764,9 @@ mod unit_tests {
         let flow = Arc::new(FlowManager::new(Arc::clone(&config), None));
 
         let mut server = ServerBuilder::new().build().expect("server should build");
-        server.flow_manager = Some(flow);
-        server.agent_registry = Some(Arc::new(registry));
-        server.vector_config = config.vector.clone();
+        server.model_deps.flow_manager = Some(flow);
+        server.model_deps.agent_registry = Some(Arc::new(registry));
+        server.cache_deps.vector_config = config.vector.clone();
         let config_path = temp.path().join("config.toml");
         std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
         server.config_path = Some(config_path.display().to_string());

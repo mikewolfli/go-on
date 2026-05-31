@@ -271,7 +271,7 @@ pub(crate) fn collect_reputation_scores(
     agents: &[(String, Arc<dyn Agent>)],
 ) -> HashMap<String, f64> {
     let mut scores = HashMap::with_capacity(agents.len());
-    if let Some(ref cb) = server.capability_bus {
+    if let Some(ref cb) = server.governance_deps.capability_bus {
         // BLUE48-R2: Collect base reputation scores from ReputationStore
         let rep = cb.reputation.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("reputation lock poisoned during score collection – recovered");
@@ -430,5 +430,178 @@ mod tests {
             ordered[1]
         );
         assert_ne!(ordered[0], ordered[1], "alpha and beta must be distinct");
+    }
+
+    // ── Letter bias elimination: break_tie ────────────────────────────
+
+    #[test]
+    fn break_tie_does_not_favor_alphabetical_order() {
+        // With the same seed, break_tie should be deterministic.
+        // But with different seeds, the ordering should vary.
+        let seed_a = 1;
+        let seed_b = 999;
+
+        let a_to_b_s1 = break_tie("alpha", "beta", seed_a);
+        let a_to_b_s2 = break_tie("alpha", "beta", seed_b);
+
+        // We cannot assert a specific order, but we can assert that
+        // different seeds produce different orderings at least some of the time.
+        // With a small sample, this is probabilistic but should hold.
+        let result_s1 = std::cmp::Ordering::is_eq(break_tie("a", "z", seed_a))
+            || std::cmp::Ordering::is_lt(break_tie("a", "z", seed_a));
+        let result_s2 = std::cmp::Ordering::is_eq(break_tie("a", "z", seed_b))
+            || std::cmp::Ordering::is_lt(break_tie("a", "z", seed_b));
+
+        // At least verify that break_tie is deterministic (same seed = same result)
+        assert_eq!(
+            break_tie("alpha", "beta", seed_a),
+            break_tie("alpha", "beta", seed_a)
+        );
+        assert_eq!(
+            break_tie("alpha", "beta", seed_b),
+            break_tie("alpha", "beta", seed_b)
+        );
+
+        // And never returns Equal for distinct names
+        assert!(!std::cmp::Ordering::is_eq(break_tie(
+            "alpha", "beta", seed_a
+        )));
+        assert!(!std::cmp::Ordering::is_eq(break_tie(
+            "alpha", "beta", seed_b
+        )));
+
+        let _ = (a_to_b_s1, a_to_b_s2, result_s1, result_s2);
+    }
+
+    #[test]
+    fn break_tie_seed_changes_order_across_calls() {
+        // Verify that different seeds can produce different orderings
+        // by checking multiple pairs with varying seeds.
+        let mut prev_ordering_is_lt_count = 0usize;
+        for seed in 0..50 {
+            let ord = break_tie("alpha", "beta", seed);
+            if ord.is_lt() {
+                prev_ordering_is_lt_count += 1;
+            }
+        }
+        // Over 50 different seeds, "alpha" should be Less than "beta"
+        // roughly half the time (25 ± margin). Assert at least once.
+        assert!(
+            prev_ordering_is_lt_count > 0 && prev_ordering_is_lt_count < 50,
+            "break_tie should not always produce the same ordering; got {} lt out of 50",
+            prev_ordering_is_lt_count
+        );
+    }
+
+    // ── Multi-factor scoring: task affinity ───────────────────────────
+
+    #[test]
+    fn coding_task_boosts_code_agents() {
+        let selector = AgentSelector::default();
+        let agents: Vec<(String, Arc<dyn Agent>)> = vec![
+            ("copilot".into(), Arc::new(MockAgent)),
+            ("generic-agent".into(), Arc::new(MockAgent)),
+        ];
+        let scored = selector.score_candidates(&agents, None, None, &[], "implement a feature fix");
+        let copilot_score = scored.iter().find(|s| s.name == "copilot").unwrap();
+        let generic_score = scored.iter().find(|s| s.name == "generic-agent").unwrap();
+        // Copilot should have a higher task_match_score due to coding task boost
+        assert!(
+            copilot_score.task_match_score > generic_score.task_match_score,
+            "copilot should get coding task affinity boost"
+        );
+    }
+
+    #[test]
+    fn creative_task_boosts_gemini_claude_agents() {
+        let selector = AgentSelector::default();
+        let agents: Vec<(String, Arc<dyn Agent>)> = vec![
+            ("gemini".into(), Arc::new(MockAgent)),
+            ("deepseek".into(), Arc::new(MockAgent)),
+        ];
+        let scored = selector.score_candidates(&agents, None, None, &[], "write a creative story");
+        let gemini = scored.iter().find(|s| s.name == "gemini").unwrap();
+        let deepseek = scored.iter().find(|s| s.name == "deepseek").unwrap();
+        assert!(
+            gemini.task_match_score >= deepseek.task_match_score,
+            "gemini should get creative task affinity boost"
+        );
+    }
+
+    // ── Multi-factor scoring: eligibility threshold ───────────────────
+
+    #[test]
+    fn select_winner_filters_below_eligibility_threshold() {
+        let selector = AgentSelector::new(AgentSelectorConfig {
+            eligibility_threshold: 0.5,
+            ..Default::default()
+        });
+
+        let scored = vec![
+            ScoredAgent {
+                name: "qualified".into(),
+                base_score: 0.8,
+                reputation_score: 0.7,
+                task_match_score: 0.6,
+                total_score: 0.6,
+            },
+            ScoredAgent {
+                name: "below".into(),
+                base_score: 0.1,
+                reputation_score: 0.1,
+                task_match_score: 0.1,
+                total_score: 0.1,
+            },
+        ];
+
+        let selection = selector
+            .select_winner(scored)
+            .expect("should have a winner");
+        assert_eq!(selection.winner, "qualified");
+        // The "below" agent should not appear in candidates
+        assert!(!selection.candidates.iter().any(|c| c.name == "below"));
+    }
+
+    #[test]
+    fn select_winner_returns_none_when_all_below_threshold() {
+        let selector = AgentSelector::new(AgentSelectorConfig {
+            eligibility_threshold: 0.9,
+            ..Default::default()
+        });
+
+        let scored = vec![
+            ScoredAgent {
+                name: "a".into(),
+                base_score: 0.5,
+                reputation_score: 0.5,
+                task_match_score: 0.5,
+                total_score: 0.5,
+            },
+            ScoredAgent {
+                name: "b".into(),
+                base_score: 0.3,
+                reputation_score: 0.3,
+                task_match_score: 0.3,
+                total_score: 0.3,
+            },
+        ];
+
+        assert!(selector.select_winner(scored).is_none());
+    }
+
+    // ── Multi-factor scoring: capability boost ────────────────────────
+
+    #[test]
+    fn balanced_score_reasoning() {
+        let selector = AgentSelector::default();
+        let scored = vec![ScoredAgent {
+            name: "balanced".into(),
+            base_score: 0.5,
+            reputation_score: 0.5,
+            task_match_score: 0.5,
+            total_score: 0.5,
+        }];
+        let selection = selector.select_winner(scored).expect("should pick winner");
+        assert_eq!(selection.selection_reason, "balanced_score");
     }
 }

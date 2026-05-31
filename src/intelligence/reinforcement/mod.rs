@@ -92,7 +92,9 @@ pub use action_check::{
 };
 pub use federated::{
     AggregationMethod, ContributionWeight, FederatedClientState, FederatedConfig,
-    FederatedLearning, FederatedProfile, FederatedRound, ModelWeights, SharedFederatedLearning,
+    FederatedError, FederatedLearning, FederatedProfile, FederatedRL, FederatedRLConfig,
+    FederatedRLProfile, FederatedResult, FederatedRound, ModelWeights, PolicyEntry,
+    DistillationRound, DistillationStatus, SharedFederatedLearning,
 };
 pub use health::{
     aggregate_status, build_runtime_healthcheck_report, persist_runtime_healthcheck, CheckStatus,

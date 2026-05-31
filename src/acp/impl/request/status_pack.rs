@@ -408,7 +408,7 @@ pub(super) async fn handle_release_readiness(
         .filter(|record| record.enabled)
         .count();
     let registered_skill_total = server
-        .skill_registry
+        .orchestration_deps.skill_registry
         .lock()
         .map(|registry| registry.list().len())
         .unwrap_or(0);

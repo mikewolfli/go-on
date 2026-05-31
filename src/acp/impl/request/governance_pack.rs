@@ -962,3 +962,355 @@ pub(crate) fn inject_platform_profiles_if_absent(mut result: Value, method: &str
     }
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── infer_task_type ───────────────────────────────────────────────
+
+    #[test]
+    fn infer_task_type_security_text() {
+        let params = Some(json!({"task": "find vulnerabilities in auth"}));
+        assert_eq!(infer_task_type("chat", &params), TaskType::SecurityPatch);
+    }
+
+    #[test]
+    fn infer_task_type_workflow_generate() {
+        assert_eq!(
+            infer_task_type("workflow.generate", &None),
+            TaskType::FeatureAdd
+        );
+    }
+
+    #[test]
+    fn infer_task_type_task_execute() {
+        assert_eq!(
+            infer_task_type("task.execute", &None),
+            TaskType::BugFix
+        );
+    }
+
+    #[test]
+    fn infer_task_type_mcp_tools_call() {
+        assert_eq!(
+            infer_task_type("mcp.tools.call", &None),
+            TaskType::Refactor
+        );
+    }
+
+    #[test]
+    fn infer_task_type_unknown_method() {
+        assert_eq!(
+            infer_task_type("unknown.method", &None),
+            TaskType::Other
+        );
+    }
+
+    // ── infer_file_count ──────────────────────────────────────────────
+
+    #[test]
+    fn infer_file_count_from_changed_files() {
+        let params = Some(json!({"changed_files": ["a.rs", "b.rs"]}));
+        assert_eq!(infer_file_count(&params), 2);
+    }
+
+    #[test]
+    fn infer_file_count_from_files() {
+        let params = Some(json!({"files": ["x.rs"]}));
+        assert_eq!(infer_file_count(&params), 1);
+    }
+
+    #[test]
+    fn infer_file_count_defaults_to_one() {
+        assert_eq!(infer_file_count(&None), 1);
+    }
+
+    #[test]
+    fn infer_file_count_empty_array_defaults_to_one() {
+        let params = Some(json!({"changed_files": []}));
+        assert_eq!(infer_file_count(&params), 1);
+    }
+
+    // ── infer_risk_score ──────────────────────────────────────────────
+
+    #[test]
+    fn infer_risk_score_security_patch_is_high() {
+        assert!((infer_risk_score("chat", &TaskType::SecurityPatch) - 0.9).abs() < 1e-6);
+    }
+
+    #[test]
+    fn infer_risk_score_mcp_tools_call() {
+        assert!((infer_risk_score("mcp.tools.call", &TaskType::Refactor) - 0.7).abs() < 1e-6);
+    }
+
+    #[test]
+    fn infer_risk_score_default_low() {
+        assert!(
+            (infer_risk_score("session/new", &TaskType::Other) - 0.3).abs() < 1e-6
+        );
+    }
+
+    // ── classify_request_error_kind ───────────────────────────────────
+
+    #[test]
+    fn classify_request_error_kind_pua() {
+        let err = anyhow::anyhow!("PUA violation: blocked");
+        assert_eq!(classify_request_error_kind(&err), "PuaViolation");
+    }
+
+    #[test]
+    fn classify_request_error_kind_budget() {
+        let err = anyhow::anyhow!("budget denied tool 'x' in scope 'y': budget exceeded");
+        assert_eq!(classify_request_error_kind(&err), "BudgetExceeded");
+    }
+
+    #[test]
+    fn classify_request_error_kind_sandbox() {
+        let err = anyhow::anyhow!("hardening policy denied tool: sandbox strict");
+        assert_eq!(classify_request_error_kind(&err), "SandboxBlocked");
+    }
+
+    #[test]
+    fn classify_request_error_kind_general() {
+        let err = anyhow::anyhow!("something went wrong");
+        assert_eq!(classify_request_error_kind(&err), "GeneralError");
+    }
+
+    // ── infer_error_contract_kind ──────────────────────────────────────
+
+    #[test]
+    fn infer_error_contract_kind_explicit_overrides() {
+        assert_eq!(
+            infer_error_contract_kind(0, "msg", Some("CustomKind")),
+            "CustomKind"
+        );
+    }
+
+    #[test]
+    fn infer_error_contract_kind_method_not_found() {
+        assert_eq!(
+            infer_error_contract_kind(-32601, "not found", None),
+            "MethodNotFound"
+        );
+    }
+
+    #[test]
+    fn infer_error_contract_kind_invalid_params() {
+        assert_eq!(
+            infer_error_contract_kind(-32602, "invalid", None),
+            "InvalidParams"
+        );
+    }
+
+    #[test]
+    fn infer_error_contract_kind_rate_limited_code() {
+        assert_eq!(
+            infer_error_contract_kind(-32029, "too many", None),
+            "RateLimited"
+        );
+    }
+
+    #[test]
+    fn infer_error_contract_kind_empty_explicit_falls_through() {
+        assert_eq!(
+            infer_error_contract_kind(-32603, "internal", Some("")),
+            "InternalError"
+        );
+    }
+
+    // ── build_retry_policy_for_kind ────────────────────────────────────
+
+    #[test]
+    fn build_retry_policy_for_kind_rate_limited_is_retryable() {
+        let policy = build_retry_policy_for_kind("RateLimited");
+        assert_eq!(policy["retryable"], true);
+        assert_eq!(policy["max_retries"], 3);
+    }
+
+    #[test]
+    fn build_retry_policy_for_kind_general_not_retryable() {
+        let policy = build_retry_policy_for_kind("GeneralError");
+        assert_eq!(policy["retryable"], false);
+        assert_eq!(policy["max_retries"], 0);
+    }
+
+    // ── resolve_platform_mode ──────────────────────────────────────────
+
+    #[test]
+    fn resolve_platform_mode_universal() {
+        let params = json!({"platform_mode": "universal"});
+        assert_eq!(resolve_platform_mode(&params), "universal");
+    }
+
+    #[test]
+    fn resolve_platform_mode_defaults_to_phase_compat() {
+        let params = json!({});
+        assert_eq!(resolve_platform_mode(&params), "phase_compat");
+    }
+
+    // ── build_capability_profile ───────────────────────────────────────
+
+    #[test]
+    fn build_capability_profile_has_schema_version() {
+        let profile = build_capability_profile("chat", "hello", &json!({}));
+        assert_eq!(profile["schema_version"], "blue23-capability-profile-v1");
+        assert_eq!(profile["intent"], "analyze");
+    }
+
+    #[test]
+    fn build_capability_profile_execute_intent() {
+        let profile = build_capability_profile("workflow.execute", "task", &json!({}));
+        assert_eq!(profile["intent"], "execute");
+    }
+
+    // ── build_sandbox_profile ──────────────────────────────────────────
+
+    #[test]
+    fn build_sandbox_profile_execute_uses_workspace_exec() {
+        let cap = build_capability_profile("execute", "x", &json!({}));
+        let sandbox = build_sandbox_profile("execute", &json!({}), &cap);
+        assert_eq!(sandbox["selected"], "workspace_exec");
+    }
+
+    #[test]
+    fn build_sandbox_profile_research_uses_read_only() {
+        let cap = build_capability_profile("research", "x", &json!({}));
+        let sandbox = build_sandbox_profile("research", &json!({}), &cap);
+        assert_eq!(sandbox["selected"], "read_only");
+    }
+
+    #[test]
+    fn build_sandbox_profile_explicit_overrides() {
+        let cap = build_capability_profile("chat", "x", &json!({}));
+        let sandbox = build_sandbox_profile("chat", &json!({"sandbox_profile": "elevated"}), &cap);
+        assert_eq!(sandbox["selected"], "elevated");
+    }
+
+    // ── build_approval_checkpoint ──────────────────────────────────────
+
+    #[test]
+    fn build_approval_checkpoint_critical_risk_requires_approval() {
+        let bundle = json!({"risk": {"level": "critical"}});
+        let checkpoint = build_approval_checkpoint("workflow.execute", &bundle, &json!({}));
+        assert_eq!(checkpoint["required"], true);
+        assert_eq!(checkpoint["state"], "pending");
+    }
+
+    #[test]
+    fn build_approval_checkpoint_low_risk_no_approval() {
+        let bundle = json!({"risk": {"level": "low"}});
+        let checkpoint = build_approval_checkpoint("chat", &bundle, &json!({}));
+        assert_eq!(checkpoint["required"], false);
+        assert_eq!(checkpoint["state"], "not_required");
+    }
+
+    #[test]
+    fn build_approval_checkpoint_explicit_force_required() {
+        let bundle = json!({"risk": {"level": "low"}});
+        let checkpoint =
+            build_approval_checkpoint("chat", &bundle, &json!({"approval_required": true}));
+        assert_eq!(checkpoint["required"], true);
+    }
+
+    // ── build_change_bundle ────────────────────────────────────────────
+
+    #[test]
+    fn build_change_bundle_includes_file_roles() {
+        let bundle = build_change_bundle(
+            "execution",
+            "fix bug".to_string(),
+            "medium",
+            "passed",
+            "commit msg".to_string(),
+            vec!["src/main.rs".to_string(), "README.md".to_string(), "latest-output.json".to_string()],
+        );
+        assert_eq!(bundle["kind"], "execution");
+        assert_eq!(bundle["risk"]["level"], "medium");
+        assert_eq!(bundle["status"], "passed");
+        assert!(!bundle["rollback_recommendation"]["recommended"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn build_change_bundle_failed_status_recommends_rollback() {
+        let bundle = build_change_bundle(
+            "analysis",
+            "failed".to_string(),
+            "high",
+            "failed",
+            "error".to_string(),
+            vec![],
+        );
+        assert_eq!(bundle["status"], "failed");
+        assert!(bundle["rollback_recommendation"]["recommended"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn build_change_bundle_empty_files() {
+        let bundle = build_change_bundle(
+            "analysis",
+            "description".to_string(),
+            "low",
+            "passed",
+            "msg".to_string(),
+            vec![],
+        );
+        assert!(bundle["files"].as_array().unwrap().is_empty());
+    }
+
+    // ── build_universal_governance_profile ─────────────────────────────
+
+    #[test]
+    fn build_universal_governance_profile_execute_high_risk() {
+        let cap = build_capability_profile("workflow.execute", "t", &json!({}));
+        let profile = build_universal_governance_profile("workflow.execute", &cap, &json!({}));
+        assert_eq!(profile["risk_band"], "high");
+        assert_eq!(profile["budget"]["token_budget"], 6000);
+    }
+
+    #[test]
+    fn build_universal_governance_profile_low_risk_default_params() {
+        let cap = build_capability_profile("chat", "t", &json!({}));
+        let profile = build_universal_governance_profile("chat", &cap, &json!({}));
+        assert_eq!(profile["risk_band"], "low");
+        assert_eq!(profile["budget"]["token_budget"], 3000);
+    }
+
+    // ── map_phase_to_capability_profile ────────────────────────────────
+
+    #[test]
+    fn map_phase_to_capability_profile_planning() {
+        let profile = map_phase_to_capability_profile(Some("coding"), "workflow.generate");
+        assert_eq!(profile["capability"], "planning");
+    }
+
+    #[test]
+    fn map_phase_to_capability_profile_execution() {
+        let profile = map_phase_to_capability_profile(Some("coding"), "task.execute");
+        assert_eq!(profile["capability"], "execution");
+    }
+
+    #[test]
+    fn map_phase_to_capability_profile_default_to_governance() {
+        let profile = map_phase_to_capability_profile(None, "chat");
+        assert_eq!(profile["capability"], "governance");
+    }
+
+    // ── build_gate_matrix ─────────────────────────────────────────────
+
+    #[test]
+    fn build_gate_matrix_includes_check() {
+        let req_gate = json!({"required": true});
+        let gates = build_gate_matrix(req_gate, "open", "pass", "fail", Some(("custom", "ok")));
+        assert_eq!(gates["gate"], "open");
+        assert_eq!(gates["custom"], "ok");
+    }
+
+    #[test]
+    fn build_gate_matrix_no_check() {
+        let req_gate = json!({"required": false});
+        let gates = build_gate_matrix(req_gate, "closed", "pass", "fail", None);
+        assert_eq!(gates["requirement"]["required"], false);
+        assert!(gates.get("custom").is_none());
+    }
+}

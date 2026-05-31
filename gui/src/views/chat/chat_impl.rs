@@ -1,4 +1,4 @@
-use crate::backend::BackendClient;
+use crate::backend::{AbortController, BackendClient, StreamProcessor, TokenProgress};
 use crate::i18n::I18n;
 use crate::views::autotune::AutoTuneView;
 use crate::views::risk_decision::RiskDecisionDraft;
@@ -21,6 +21,9 @@ pub struct ChatUiRuntimeConfig {
     pub repaint_interval_ms: u64,
     pub stream_chunk_flush_ms: u64,
     pub max_pending_events_per_frame: usize,
+    /// Minimum interval (ms) between flushing buffered tokens to the UI.
+    /// 16ms → ~60fps; higher values reduce repaint frequency.
+    pub stream_token_flush_ms: u64,
 }
 
 use super::types::{
@@ -127,6 +130,12 @@ pub struct ChatView {
     /// Per-message content hash cache: skips re-parsing unchanged messages.
     /// Key = message index, value = hash of content last rendered.
     rendered_content_hashes: Vec<u64>,
+    /// Shared abort controller for cancelling in-progress streaming generations.
+    abort_controller: Option<AbortController>,
+    /// Token-level progress tracking for the active generation.
+    pub stream_progress: TokenProgress,
+    /// SSE processor for the current streaming generation.
+    stream_processor: Option<StreamProcessor>,
 }
 
 impl ChatView {
@@ -490,6 +499,9 @@ impl ChatView {
                         .unwrap_or_else(|_| reqwest::Client::new())
                 }),
             rendered_content_hashes: Vec::new(),
+            abort_controller: None,
+            stream_progress: TokenProgress::default(),
+            stream_processor: None,
         }
     }
 
@@ -498,11 +510,20 @@ impl ChatView {
         repaint_ms: u64,
         flush_ms: u64,
         max_pending_events_per_frame: usize,
+        token_flush_ms: u64,
     ) {
         self.stream_repaint_interval = std::time::Duration::from_millis(repaint_ms.clamp(16, 200));
         self.stream_chunk_flush_interval =
             std::time::Duration::from_millis(flush_ms.clamp(16, 200));
         self.max_pending_events_per_frame = max_pending_events_per_frame.clamp(16, 4096);
+        // Token flush rate controls how frequently buffered tokens are
+        // flushed to the UI for frame-rate-smooth rendering.
+        // 16ms = ~60fps; clamped to [8, 200].
+        self.stream_chunk_flush_interval = std::time::Duration::from_millis(
+            self.stream_chunk_flush_interval
+                .as_millis()
+                .min(token_flush_ms.clamp(8, 200) as u128) as u64,
+        );
     }
 
     fn session(&mut self) -> &mut Session {
@@ -919,12 +940,19 @@ impl ChatView {
 
     pub fn stop_sending(&mut self) {
         self.stop_requested = true;
+        // Signal abort to any in-progress stream via the abort controller
+        if let Some(ref ctrl) = self.abort_controller {
+            ctrl.abort();
+        }
+        // Abort all generation task handles
         for state in self.generation_states.drain(..) {
             state.handle.abort();
         }
         self.sending = false;
         self.ai_status = AiStatus::Idle;
         self.set_phase_record_status("stopped");
+        self.stream_progress = TokenProgress::default();
+        self.stream_processor = None;
     }
 }
 
@@ -1028,6 +1056,9 @@ mod tests {
             model_stats: std::collections::HashMap::new(),
             stream_client: reqwest::Client::new(),
             rendered_content_hashes: Vec::new(),
+            abort_controller: None,
+            stream_progress: TokenProgress::default(),
+            stream_processor: None,
         }
     }
 

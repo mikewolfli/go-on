@@ -60,18 +60,21 @@ pub(super) fn take_error_response_mark(request_id: &str) -> bool {
 #[allow(dead_code)] // F-GAP-49 — reserved for runtime gauge snapshot collection
 pub(super) fn build_runtime_gauge_snapshot(server: &AcpServer) -> RuntimeGaugeSnapshot {
     let memory_cache_entries = server
+        .cache_deps
         .cache
         .memory_response_cache
         .lock()
         .map(|cache| cache.active_entries() as u64)
         .unwrap_or(0);
     let sqlite_cache_entries = server
+        .cache_deps
         .cache
         .response_cache
         .as_ref()
         .and_then(|cache| cache.entry_count().ok())
         .unwrap_or(0);
     let (vector_memory_entries, vector_summary_entries) = server
+        .cache_deps
         .cache
         .vector_store
         .as_ref()

@@ -15,6 +15,11 @@
   const attachmentPreview = document.getElementById("attachmentPreview");
   const attachmentList = document.getElementById("attachmentList");
   const clearAttachmentsBtn = document.getElementById("clearAttachmentsBtn");
+  const stopGenerationContainer = document.getElementById(
+    "stopGenerationContainer",
+  );
+  const stopGenerationBtn = document.getElementById("stopGenerationBtn");
+  const tokenCounter = document.getElementById("tokenCounter");
 
   if (!vscode) {
     console.error("Go-On: VS Code API not available");
@@ -26,6 +31,11 @@
   let messageHistory = [];
   let currentSession = "default";
   let availableSessions = ["default"];
+
+  // Streaming state
+  let streamingMessageEl = null;
+  let streamingContent = "";
+  let isStreaming = false;
 
   // Load existing chat history
   const state = vscode.getState();
@@ -434,6 +444,11 @@
     vscode.postMessage({ type: "exportChat" });
   });
 
+  // Stop generation button
+  stopGenerationBtn.addEventListener("click", () => {
+    vscode.postMessage({ type: "stopGeneration" });
+  });
+
   // Handle messages from extension
   window.addEventListener("message", (event) => {
     const message = event.data;
@@ -491,6 +506,81 @@
         break;
       case "error":
         showError(message.message);
+        break;
+      // === Streaming events ===
+      case "streamStart":
+        hideTypingIndicator();
+        // Create placeholder streaming message
+        isStreaming = true;
+        streamingContent = "";
+        streamingMessageEl = document.createElement("div");
+        streamingMessageEl.className = "message assistant streaming";
+        const streamHeader = document.createElement("div");
+        streamHeader.className = "message-header";
+        streamHeader.textContent = "Go-On (streaming)";
+        const streamContent = document.createElement("div");
+        streamContent.id = "streaming-content";
+        streamContent.innerHTML = "";
+        streamingMessageEl.appendChild(streamHeader);
+        streamingMessageEl.appendChild(streamContent);
+        messagesContainer.appendChild(streamingMessageEl);
+        // Show stop button
+        if (stopGenerationContainer) {
+          stopGenerationContainer.classList.remove("hidden");
+        }
+        if (tokenCounter) {
+          tokenCounter.textContent = "0 tokens";
+        }
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        break;
+      case "streamToken":
+        if (!isStreaming || !streamingMessageEl) break;
+        streamingContent += message.token;
+        const contentDiv =
+          streamingMessageEl.querySelector("#streaming-content");
+        if (contentDiv) {
+          contentDiv.innerHTML = renderMarkdown(streamingContent);
+        }
+        if (tokenCounter && message.tokenCount !== undefined) {
+          tokenCounter.textContent = `${message.tokenCount} tokens`;
+        }
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        break;
+      case "streamDone":
+        isStreaming = false;
+        // Hide stop button
+        if (stopGenerationContainer) {
+          stopGenerationContainer.classList.add("hidden");
+        }
+        if (streamingMessageEl) {
+          // Add the final message to history
+          const finalContent = message.content || streamingContent || "";
+          addMessage("assistant", finalContent, new Date().toISOString());
+          // Remove the streaming placeholder (addMessage already rendered it)
+          streamingMessageEl.remove();
+          streamingMessageEl = null;
+          streamingContent = "";
+        }
+        break;
+      case "streamError":
+        isStreaming = false;
+        if (stopGenerationContainer) {
+          stopGenerationContainer.classList.add("hidden");
+        }
+        // If we have partial content, show it with the error note
+        const partialContent = message.content || streamingContent;
+        if (partialContent && streamingMessageEl) {
+          const finalText =
+            partialContent + `\n\n*⚠️ Error: ${message.message}*`;
+          addMessage("assistant", finalText, new Date().toISOString());
+          streamingMessageEl.remove();
+        } else {
+          // No content — show error message
+          hideTypingIndicator();
+          showError(message.message || "Stream error");
+        }
+        streamingMessageEl = null;
+        streamingContent = "";
         break;
     }
   });

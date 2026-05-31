@@ -51,11 +51,11 @@ use crate::intelligence::continuous_learning::ContinuousLearningCenter;
 use crate::intelligence::discovery::DiscoveryCenter;
 use crate::intelligence::evolution_graph::{EvolutionGraph, EvolutionStage, TrendDirection};
 
-use crate::intelligence::federated_rl::FederatedRL;
 use crate::intelligence::lock_guard;
 use crate::intelligence::matcher::ScenarioMatcher;
 use crate::intelligence::metacognitive::MetacognitiveController;
 use crate::intelligence::now_ms;
+use crate::intelligence::reinforcement::federated::FederatedRL;
 use crate::intelligence::reinforcement::learning::{
     ExperienceKnowledgeBase, QLearningAgent, RewardFunction, RlTaskExecutionMetrics, SuccessCase,
 };
@@ -486,6 +486,24 @@ impl Default for CapabilityBusProfile {
     }
 }
 
+/// Configuration for CapabilityBus lifecycle and behavior (GAP-B50-21).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapabilityBusConfig {
+    /// How many requests between evolve() calls. Default: 50.
+    pub evolve_interval: u64,
+    /// Whether the capability bus is enabled. Default: false.
+    pub enable_capability_bus: bool,
+}
+
+impl Default for CapabilityBusConfig {
+    fn default() -> Self {
+        Self {
+            evolve_interval: 50,
+            enable_capability_bus: false,
+        }
+    }
+}
+
 /// CapabilityBus aggregates all sub-bus references and orchestrates the
 /// 5-stage lifecycle: sense → decide → act → feedback → evolve.
 /// This is the scheduling coordinator for all 14 sub-buses (BLUE38 ARCH-13).
@@ -598,6 +616,9 @@ pub struct CapabilityBus {
 
     /// Multi-channel message transport — protocol layer (F-GAP-29)
     pub transport: Arc<Mutex<MultiChannelTransport>>,
+
+    /// Configuration for capability bus lifecycle (GAP-B50-21)
+    pub config: CapabilityBusConfig,
 }
 
 impl CapabilityBus {
@@ -699,6 +720,7 @@ impl CapabilityBus {
                 Default::default(),
             ))),
             transport: Arc::new(Mutex::new(MultiChannelTransport::new(Default::default()))),
+            config: CapabilityBusConfig::default(),
         }
     }
 
@@ -779,6 +801,12 @@ impl CapabilityBus {
     #[cfg(feature = "sub-bus-distributed-memory")]
     pub fn with_distributed_memory_bus(mut self, bus: DistributedMemoryBus) -> Self {
         self.distributed_memory_bus = bus;
+        self
+    }
+
+    /// Set configuration for the CapabilityBus (GAP-B50-21)
+    pub fn with_config(mut self, config: CapabilityBusConfig) -> Self {
+        self.config = config;
         self
     }
 

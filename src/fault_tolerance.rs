@@ -6,7 +6,8 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 // ---------------------------------------------------------------------------
 // Core data types
@@ -205,15 +206,14 @@ struct Inner {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Acquire a mutex lock, recovering from a poisoned mutex if necessary.
-fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
-    match mtx.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            tracing::error!("fault_tolerance mutex poisoned, recovering");
-            poisoned.into_inner()
-        }
-    }
+/// Acquire a write lock on the RwLock, logging if contention is high.
+fn write_guard<T>(lock: &RwLock<T>) -> tokio::sync::RwLockWriteGuard<'_, T> {
+    lock.blocking_write()
+}
+
+/// Acquire a read lock on the RwLock.
+fn read_guard<T>(lock: &RwLock<T>) -> tokio::sync::RwLockReadGuard<'_, T> {
+    lock.blocking_read()
 }
 
 /// Compute cluster health from raw counts (shared by `profile` and `cluster_health`).
@@ -246,9 +246,11 @@ fn cluster_health_from_counts(
 
 /// Thread-safe engine that monitors node health, detects faults, and manages
 /// isolation / recovery.
+///
+/// Uses `tokio::sync::RwLock` for read-heavy workloads (GAP-B50-41).
 #[derive(Clone)]
 pub struct FaultToleranceEngine {
-    inner: Arc<Mutex<Inner>>,
+    inner: Arc<RwLock<Inner>>,
 }
 
 impl FaultToleranceEngine {
@@ -265,13 +267,13 @@ impl FaultToleranceEngine {
             plan_counter: 0,
         };
         Self {
-            inner: Arc::new(Mutex::new(inner)),
+            inner: Arc::new(RwLock::new(inner)),
         }
     }
 
     /// Register a node for heartbeat monitoring.
     pub fn register_node(&self, node_id: &str) -> Result<()> {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = write_guard(&self.inner);
         let node_id = node_id.to_string();
         if inner.heartbeats.contains_key(&node_id) {
             return Err(anyhow!("node '{}' is already registered", node_id));
@@ -302,7 +304,7 @@ impl FaultToleranceEngine {
 
     /// Unregister a node, removing it from monitoring entirely.
     pub fn unregister_node(&self, node_id: &str) -> Result<()> {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = write_guard(&self.inner);
         let node_id = node_id.to_string();
         if inner.heartbeats.remove(&node_id).is_none() {
             return Err(anyhow!("node '{}' is not registered", node_id));
@@ -334,7 +336,7 @@ impl FaultToleranceEngine {
     /// Report a heartbeat from a node. Resets the missed-beat counter and
     /// moves the node back to Online if it was recovering.
     pub fn report_heartbeat(&self, node_id: &str) -> Result<()> {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = write_guard(&self.inner);
         let node_id = node_id.to_string();
         let record = inner
             .heartbeats
@@ -357,7 +359,7 @@ impl FaultToleranceEngine {
         severity: u8,
         description: &str,
     ) -> Result<String> {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = write_guard(&self.inner);
         let node_id = node_id.to_string();
         if !inner.heartbeats.contains_key(&node_id) {
             return Err(anyhow!("node '{}' is not registered", node_id));
@@ -408,7 +410,7 @@ impl FaultToleranceEngine {
 
     /// Resolve an active fault by its id.
     pub fn resolve_fault(&self, fault_id: &str) -> Result<()> {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = write_guard(&self.inner);
         let fault_id = fault_id.to_string();
         let event = inner
             .faults
@@ -426,7 +428,7 @@ impl FaultToleranceEngine {
     /// Isolate a node under a specific isolation level. Creates or updates
     /// an isolation group containing the node.
     pub fn isolate_node(&self, node_id: &str, level: IsolationLevel) -> Result<()> {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = write_guard(&self.inner);
         let node_id = node_id.to_string();
         if !inner.heartbeats.contains_key(&node_id) {
             return Err(anyhow!("node '{}' is not registered", node_id));
@@ -480,7 +482,7 @@ impl FaultToleranceEngine {
 
     /// Reintegrate a previously isolated node back into the cluster.
     pub fn reintegrate_node(&self, node_id: &str) -> Result<()> {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = write_guard(&self.inner);
         let node_id = node_id.to_string();
         if !inner.heartbeats.contains_key(&node_id) {
             return Err(anyhow!("node '{}' is not registered", node_id));
@@ -549,7 +551,7 @@ impl FaultToleranceEngine {
     /// Check all heartbeats and return a list of node ids that have missed
     /// too many heartbeats (exceeded max_missed_beats).
     pub fn check_heartbeats(&self) -> Vec<String> {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = write_guard(&self.inner);
         let now = now_millis();
         let timeout = inner.config.heartbeat_timeout_ms;
         let max_missed = inner.config.max_missed_beats;
@@ -584,7 +586,7 @@ impl FaultToleranceEngine {
 
     /// Return all active (unresolved) faults.
     pub fn active_faults(&self) -> Vec<FaultEvent> {
-        let inner = lock_guard(&self.inner);
+        let inner = read_guard(&self.inner);
         inner
             .faults
             .values()
@@ -595,7 +597,7 @@ impl FaultToleranceEngine {
 
     /// Return a snapshot profile of the cluster state.
     pub fn profile(&self) -> FaultToleranceProfile {
-        let inner = lock_guard(&self.inner);
+        let inner = read_guard(&self.inner);
         let total_nodes = inner.heartbeats.len();
         let online_nodes = inner
             .heartbeats
@@ -650,7 +652,7 @@ impl FaultToleranceEngine {
     /// Create a recovery plan for a failed node.
     /// Determines appropriate recovery actions based on fault type and severity.
     pub fn create_recovery_plan(&self, node_id: &str) -> Result<String> {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = write_guard(&self.inner);
         let node_id = node_id.to_string();
         if !inner.heartbeats.contains_key(&node_id) {
             return Err(anyhow!("node '{}' is not registered", node_id));
@@ -741,7 +743,7 @@ impl FaultToleranceEngine {
 
     /// Execute a recovery plan — transitions it to InProgress.
     pub fn execute_recovery_plan(&self, plan_id: &str) -> Result<()> {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = write_guard(&self.inner);
         let plan = inner
             .recovery_plans
             .get_mut(plan_id)
@@ -758,7 +760,7 @@ impl FaultToleranceEngine {
 
     /// Complete a recovery plan with a result.
     pub fn complete_recovery_plan(&self, plan_id: &str, result: &str) -> Result<()> {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = write_guard(&self.inner);
         let plan = inner
             .recovery_plans
             .get_mut(plan_id)
@@ -783,7 +785,7 @@ impl FaultToleranceEngine {
 
     /// Fail a recovery plan.
     pub fn fail_recovery_plan(&self, plan_id: &str, error: &str) -> Result<()> {
-        let mut inner = lock_guard(&self.inner);
+        let mut inner = write_guard(&self.inner);
         let plan = inner
             .recovery_plans
             .get_mut(plan_id)
@@ -796,7 +798,7 @@ impl FaultToleranceEngine {
 
     /// Get active recovery plans.
     pub fn active_recovery_plans(&self) -> Vec<RecoveryPlan> {
-        let inner = lock_guard(&self.inner);
+        let inner = read_guard(&self.inner);
         inner
             .recovery_plans
             .values()
@@ -807,7 +809,7 @@ impl FaultToleranceEngine {
 
     /// Assess the escalation level for a given node.
     pub fn escalation_level(&self, node_id: &str) -> EscalationLevel {
-        let inner = lock_guard(&self.inner);
+        let inner = read_guard(&self.inner);
         let node_id = node_id.to_string();
         let record = match inner.heartbeats.get(&node_id) {
             Some(r) => r,
@@ -869,7 +871,7 @@ impl FaultToleranceEngine {
         for node_id in &offenders {
             // Check if a plan already exists for this node
             let existing = {
-                let inner = lock_guard(&self.inner);
+                let inner = read_guard(&self.inner);
                 inner
                     .recovery_plans
                     .values()
@@ -901,6 +903,349 @@ impl FaultToleranceEngine {
             active_faults: profile.active_faults as u32,
             isolated_groups: profile.isolated_groups as u32,
         }
+    }
+
+    // GAP-B50-34: Persistence — save state to SQLite
+    /// Save all fault tolerance state to the configured SQLite database.
+    /// Creates the necessary tables if they don't exist.
+    #[cfg(feature = "backend-sqlite")]
+    pub fn save_to_db(&self, conn: &rusqlite::Connection) -> anyhow::Result<()> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS faults (
+                id TEXT PRIMARY KEY,
+                node_id TEXT NOT NULL,
+                fault_type TEXT NOT NULL,
+                severity INTEGER NOT NULL,
+                description TEXT NOT NULL,
+                detected_ms INTEGER NOT NULL,
+                resolved_ms INTEGER,
+                recovered INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS recovery_plans (
+                plan_id TEXT PRIMARY KEY,
+                node_id TEXT NOT NULL,
+                actions TEXT NOT NULL,
+                state TEXT NOT NULL,
+                created_ms INTEGER NOT NULL,
+                completed_ms INTEGER,
+                result TEXT
+            );
+            CREATE TABLE IF NOT EXISTS isolation_groups (
+                group_id TEXT PRIMARY KEY,
+                nodes TEXT NOT NULL,
+                isolation_level TEXT NOT NULL,
+                created_ms INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS heartbeat_records (
+                node_id TEXT PRIMARY KEY,
+                last_heartbeat_ms INTEGER NOT NULL,
+                missed_beats INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL
+            );",
+        )?;
+
+        let inner = write_guard(&self.inner);
+
+        // Clear existing data for idempotent save
+        conn.execute("DELETE FROM faults", [])?;
+        conn.execute("DELETE FROM recovery_plans", [])?;
+        conn.execute("DELETE FROM isolation_groups", [])?;
+        conn.execute("DELETE FROM heartbeat_records", [])?;
+
+        // Insert faults
+        for fault in inner.faults.values() {
+            conn.execute(
+                "INSERT INTO faults (id, node_id, fault_type, severity, description, detected_ms, resolved_ms, recovered)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                rusqlite::params![
+                    fault.id,
+                    fault.node_id,
+                    format!("{:?}", fault.fault_type),
+                    fault.severity as i64,
+                    fault.description,
+                    fault.detected_ms as i64,
+                    fault.resolved_ms.map(|v| v as i64),
+                    fault.recovered as i64,
+                ],
+            )?;
+        }
+
+        // Insert recovery plans
+        for plan in inner.recovery_plans.values() {
+            let actions_json = serde_json::to_string(&plan.actions)?;
+            conn.execute(
+                "INSERT INTO recovery_plans (plan_id, node_id, actions, state, created_ms, completed_ms, result)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    plan.plan_id,
+                    plan.node_id,
+                    actions_json,
+                    format!("{:?}", plan.state),
+                    plan.created_ms as i64,
+                    plan.completed_ms.map(|v| v as i64),
+                    plan.result,
+                ],
+            )?;
+        }
+
+        // Insert isolation groups
+        for group in inner.isolation_groups.values() {
+            let nodes_json = serde_json::to_string(&group.nodes)?;
+            conn.execute(
+                "INSERT INTO isolation_groups (group_id, nodes, isolation_level, created_ms)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![
+                    group.group_id,
+                    nodes_json,
+                    format!("{:?}", group.isolation_level),
+                    group.created_ms as i64,
+                ],
+            )?;
+        }
+
+        // Insert heartbeat records
+        for hb in inner.heartbeats.values() {
+            conn.execute(
+                "INSERT OR REPLACE INTO heartbeat_records (node_id, last_heartbeat_ms, missed_beats, status)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![
+                    hb.node_id,
+                    hb.last_heartbeat_ms as i64,
+                    hb.missed_beats as i64,
+                    format!("{:?}", hb.status),
+                ],
+            )?;
+        }
+
+        tracing::info!(
+            "FaultToleranceEngine: saved {} faults, {} plans, {} groups, {} heartbeats to DB",
+            inner.faults.len(),
+            inner.recovery_plans.len(),
+            inner.isolation_groups.len(),
+            inner.heartbeats.len()
+        );
+        Ok(())
+    }
+
+    /// Non-SQLite fallback: no-op
+    #[cfg(not(feature = "backend-sqlite"))]
+    pub fn save_to_db(&self, _conn: &()) -> anyhow::Result<()> {
+        tracing::warn!("FaultToleranceEngine: save_to_db requires backend-sqlite feature");
+        Ok(())
+    }
+
+    // GAP-B50-34: Persistence — load state from SQLite
+    /// Load all fault tolerance state from the configured SQLite database.
+    /// Returns the number of faults, plans, groups, and heartbeats restored.
+    #[cfg(feature = "backend-sqlite")]
+    pub fn load_from_db(
+        &self,
+        conn: &rusqlite::Connection,
+    ) -> anyhow::Result<(usize, usize, usize, usize)> {
+        let mut inner = write_guard(&self.inner);
+
+        // Load faults
+        let mut stmt = conn.prepare(
+            "SELECT id, node_id, fault_type, severity, description, detected_ms, resolved_ms, recovered FROM faults"
+        )?;
+        let fault_rows = stmt.query_map([], |row| {
+            let id: String = row.get(0)?;
+            let node_id: String = row.get(1)?;
+            let fault_type_str: String = row.get(2)?;
+            let severity: i64 = row.get(3)?;
+            let description: String = row.get(4)?;
+            let detected_ms: i64 = row.get(5)?;
+            let resolved_ms: Option<i64> = row.get(6)?;
+            let recovered: bool = row.get::<_, i64>(7)? != 0;
+            Ok((
+                id,
+                node_id,
+                fault_type_str,
+                severity as u8,
+                description,
+                detected_ms as u64,
+                resolved_ms.map(|v| v as u64),
+                recovered,
+            ))
+        })?;
+
+        // Clear faults and reload
+        inner.faults.clear();
+        for row in fault_rows {
+            let (
+                id,
+                node_id,
+                fault_type_str,
+                severity,
+                description,
+                detected_ms,
+                resolved_ms,
+                recovered,
+            ) = row?;
+            let fault_type = match fault_type_str.as_str() {
+                "Crash" => FaultType::Crash,
+                "Hang" => FaultType::Hang,
+                "Oom" => FaultType::Oom,
+                "NetworkSplit" => FaultType::NetworkSplit,
+                "DataCorruption" => FaultType::DataCorruption,
+                "ResourceExhaustion" => FaultType::ResourceExhaustion,
+                _ => continue,
+            };
+            inner.faults.insert(
+                id.clone(),
+                FaultEvent {
+                    id,
+                    node_id,
+                    fault_type,
+                    severity,
+                    description,
+                    detected_ms,
+                    resolved_ms,
+                    recovered,
+                },
+            );
+        }
+
+        // Load recovery plans
+        let mut stmt = conn.prepare(
+            "SELECT plan_id, node_id, actions, state, created_ms, completed_ms, result FROM recovery_plans"
+        )?;
+        let plan_rows = stmt.query_map([], |row| {
+            let plan_id: String = row.get(0)?;
+            let node_id: String = row.get(1)?;
+            let actions_json: String = row.get(2)?;
+            let state_str: String = row.get(3)?;
+            let created_ms: i64 = row.get(4)?;
+            let completed_ms: Option<i64> = row.get(5)?;
+            let result: Option<String> = row.get(6)?;
+            Ok((
+                plan_id,
+                node_id,
+                actions_json,
+                state_str,
+                created_ms as u64,
+                completed_ms.map(|v| v as u64),
+                result,
+            ))
+        })?;
+
+        inner.recovery_plans.clear();
+        for row in plan_rows {
+            let (plan_id, node_id, actions_json, state_str, created_ms, completed_ms, result) =
+                row?;
+            let actions: Vec<RecoveryAction> = serde_json::from_str(&actions_json)?;
+            let state = match state_str.as_str() {
+                "Pending" => RecoveryState::Pending,
+                "InProgress" => RecoveryState::InProgress,
+                "Completed" => RecoveryState::Completed,
+                "Failed" => RecoveryState::Failed,
+                _ => continue,
+            };
+            inner.recovery_plans.insert(
+                plan_id.clone(),
+                RecoveryPlan {
+                    plan_id,
+                    node_id,
+                    actions,
+                    state,
+                    created_ms,
+                    completed_ms,
+                    result,
+                },
+            );
+        }
+
+        // Load isolation groups
+        let mut stmt = conn
+            .prepare("SELECT group_id, nodes, isolation_level, created_ms FROM isolation_groups")?;
+        let group_rows = stmt.query_map([], |row| {
+            let group_id: String = row.get(0)?;
+            let nodes_json: String = row.get(1)?;
+            let level_str: String = row.get(2)?;
+            let created_ms: i64 = row.get(3)?;
+            Ok((group_id, nodes_json, level_str, created_ms as u64))
+        })?;
+
+        inner.isolation_groups.clear();
+        for row in group_rows {
+            let (group_id, nodes_json, level_str, created_ms) = row?;
+            let nodes: Vec<String> = serde_json::from_str(&nodes_json)?;
+            let isolation_level = match level_str.as_str() {
+                "Monitor" => IsolationLevel::Monitor,
+                "Quarantine" => IsolationLevel::Quarantine,
+                "Shutdown" => IsolationLevel::Shutdown,
+                _ => continue,
+            };
+            inner.isolation_groups.insert(
+                group_id.clone(),
+                IsolationGroup {
+                    group_id,
+                    nodes,
+                    isolation_level,
+                    created_ms,
+                },
+            );
+        }
+
+        // Load heartbeat records
+        let mut stmt = conn.prepare(
+            "SELECT node_id, last_heartbeat_ms, missed_beats, status FROM heartbeat_records",
+        )?;
+        let hb_rows = stmt.query_map([], |row| {
+            let node_id: String = row.get(0)?;
+            let last_heartbeat_ms: i64 = row.get(1)?;
+            let missed_beats: i64 = row.get(2)?;
+            let status_str: String = row.get(3)?;
+            Ok((
+                node_id,
+                last_heartbeat_ms as u64,
+                missed_beats as u32,
+                status_str,
+            ))
+        })?;
+
+        inner.heartbeats.clear();
+        for row in hb_rows {
+            let (node_id, last_heartbeat_ms, missed_beats, status_str) = row?;
+            let status = match status_str.as_str() {
+                "Online" => NodeStatus::Online,
+                "Degraded" => NodeStatus::Degraded,
+                "Offline" => NodeStatus::Offline,
+                "Recovering" => NodeStatus::Recovering,
+                _ => continue,
+            };
+            inner.heartbeats.insert(
+                node_id.clone(),
+                HeartbeatRecord {
+                    node_id,
+                    last_heartbeat_ms,
+                    missed_beats,
+                    status,
+                },
+            );
+        }
+
+        let faults_count = inner.faults.len();
+        let plans_count = inner.recovery_plans.len();
+        let groups_count = inner.isolation_groups.len();
+        let hb_count = inner.heartbeats.len();
+
+        tracing::info!(
+            "FaultToleranceEngine: loaded {} faults, {} plans, {} groups, {} heartbeats from DB",
+            faults_count,
+            plans_count,
+            groups_count,
+            hb_count
+        );
+
+        Ok((faults_count, plans_count, groups_count, hb_count))
+    }
+
+    /// Non-SQLite fallback: no-op
+    #[cfg(not(feature = "backend-sqlite"))]
+    pub fn load_from_db(&self, _conn: &()) -> anyhow::Result<(usize, usize, usize, usize)> {
+        tracing::warn!("FaultToleranceEngine: load_from_db requires backend-sqlite feature");
+        Ok((0, 0, 0, 0))
     }
 }
 

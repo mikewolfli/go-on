@@ -56,7 +56,6 @@ pub mod self_model;
 pub mod continuous_learning;
 
 pub mod evolution_graph;
-pub mod federated_rl;
 
 pub mod hub;
 pub mod world_model;

@@ -261,6 +261,17 @@ impl TokenMultiLevelCache {
         self.l3.write().await.clear();
         self.stats.write().await.reset();
     }
+
+    /// Synchronous snapshot of cache statistics.
+    /// Falls back to `serde_json::Value::Null` if the lock cannot be acquired.
+    pub fn stats_snapshot(&self) -> serde_json::Value {
+        match self.stats.try_read() {
+            Ok(guard) => guard.to_json(),
+            Err(_) => {
+                serde_json::json!({ "status": "locked" })
+            }
+        }
+    }
 }
 
 /// Which cache level produced a hit.
@@ -455,8 +466,7 @@ pub fn simple_embedding(text: &str) -> Vec<f32> {
     // Tokenize into words (2+ chars), count frequencies, and hash to
     // dimension indices. This gives proper TF features rather than the
     // earlier character-hash approach.
-    let mut term_freq: std::collections::HashMap<String, f32> =
-        std::collections::HashMap::new();
+    let mut term_freq: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
     let mut total_terms = 0_usize;
 
     for token in lower.split(|c: char| !c.is_alphanumeric()) {

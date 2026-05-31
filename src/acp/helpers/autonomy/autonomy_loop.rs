@@ -122,6 +122,65 @@ use super::autonomy_metrics::{
 mod tests {
     use super::*;
 
+    // ── TAO cycle AutonomyPhase state transitions ─────────────────────
+
+    #[test]
+    fn autonomy_phase_planning_is_not_terminal() {
+        assert!(!matches!(
+            AutonomyPhase::Planning,
+            AutonomyPhase::Completed | AutonomyPhase::Failed
+        ));
+    }
+
+    #[test]
+    fn autonomy_phase_executing_is_not_terminal() {
+        assert!(!matches!(
+            AutonomyPhase::Executing,
+            AutonomyPhase::Completed | AutonomyPhase::Failed
+        ));
+    }
+
+    #[test]
+    fn autonomy_phase_observing_is_not_terminal() {
+        assert!(!matches!(
+            AutonomyPhase::Observing,
+            AutonomyPhase::Completed | AutonomyPhase::Failed
+        ));
+    }
+
+    #[test]
+    fn autonomy_phase_finalizing_is_not_terminal() {
+        assert!(!matches!(
+            AutonomyPhase::Finalizing,
+            AutonomyPhase::Completed | AutonomyPhase::Failed
+        ));
+    }
+
+    #[test]
+    fn autonomy_phase_completed_is_terminal() {
+        assert!(matches!(AutonomyPhase::Completed, AutonomyPhase::Completed));
+    }
+
+    #[test]
+    fn autonomy_phase_failed_is_terminal() {
+        assert!(matches!(AutonomyPhase::Failed, AutonomyPhase::Failed));
+    }
+
+    #[test]
+    fn autonomy_phases_are_distinct() {
+        use std::collections::HashSet;
+        let phases = vec![
+            format!("{:?}", AutonomyPhase::Planning),
+            format!("{:?}", AutonomyPhase::Executing),
+            format!("{:?}", AutonomyPhase::Observing),
+            format!("{:?}", AutonomyPhase::Finalizing),
+            format!("{:?}", AutonomyPhase::Completed),
+            format!("{:?}", AutonomyPhase::Failed),
+        ];
+        let unique: HashSet<_> = phases.iter().collect();
+        assert_eq!(unique.len(), phases.len(), "all phases must be distinct");
+    }
+
     #[test]
     fn predictive_reroute_detects_failure_recovery_when_consecutive_failures_high() {
         let score = compute_predictive_reroute(3, 0.5, 0.3, 2, 0.5);

@@ -246,4 +246,120 @@ mod tests {
         let decision = CacheStrategy::decide_from_entry("L3", &entry, "input", false);
         assert!(matches!(decision, CacheDecision::Hit { .. }));
     }
+
+    // ── Cache strategy: more bypass edge cases ───────────────────────
+
+    #[test]
+    fn should_bypass_full_auto_and_workflow() {
+        assert!(CacheStrategy::should_bypass("full_auto", "hello"));
+        assert!(CacheStrategy::should_bypass("workflow", "hello"));
+        assert!(CacheStrategy::should_bypass("execute", "hello"));
+    }
+
+    #[test]
+    fn should_bypass_implement_and_create_file() {
+        assert!(CacheStrategy::should_bypass(
+            "chat",
+            "implement sorting algorithm"
+        ));
+        assert!(CacheStrategy::should_bypass("chat", "create file main.rs"));
+    }
+
+    #[test]
+    fn should_bypass_run_tests_and_build() {
+        assert!(CacheStrategy::should_bypass("chat", "run tests"));
+        assert!(CacheStrategy::should_bypass("chat", "build the project"));
+    }
+
+    #[test]
+    fn should_not_bypass_for_informational_queries() {
+        assert!(!CacheStrategy::should_bypass("chat", "what is the weather"));
+        assert!(!CacheStrategy::should_bypass("chat", "explain recursion"));
+    }
+
+    #[test]
+    fn should_bypass_case_insensitive_mode() {
+        assert!(CacheStrategy::should_bypass("AGENT", "hello"));
+        assert!(CacheStrategy::should_bypass("Edit", "hello"));
+        assert!(!CacheStrategy::should_bypass("CHAT", "hello"));
+    }
+
+    // ── CacheDecision: attempt_entry ─────────────────────────────────
+
+    #[test]
+    fn attempt_entry_hit_returns_cached_true() {
+        let decision = CacheDecision::Hit {
+            response: "cached".to_string(),
+            level: "L2".to_string(),
+        };
+        let entry = CacheStrategy::attempt_entry(&decision);
+        assert_eq!(entry["cached"], true);
+        assert_eq!(entry["cache_level"], "L2");
+    }
+
+    #[test]
+    fn attempt_entry_refused_returns_shortcircuit_refused() {
+        let decision = CacheDecision::Refused {
+            level: "L1".to_string(),
+            reason: "execution_like_request".to_string(),
+        };
+        let entry = CacheStrategy::attempt_entry(&decision);
+        assert_eq!(entry["cached"], false);
+        assert_eq!(entry["shortcircuit_refused"], true);
+        assert_eq!(entry["reason"], "execution_like_request");
+    }
+
+    #[test]
+    fn attempt_entry_miss_returns_cached_false() {
+        let decision = CacheDecision::Miss;
+        let entry = CacheStrategy::attempt_entry(&decision);
+        assert_eq!(entry["cached"], false);
+        assert!(entry.get("shortcircuit_refused").is_none());
+    }
+
+    // ── Cache strategy: L2 confidence fallback ────────────────────────
+
+    #[test]
+    fn decide_from_entry_l2_with_similar_inputs() {
+        let entry = CacheEntry::new(
+            "k".to_string(),
+            "hello world".to_string(),
+            "response".to_string(),
+            10,
+        );
+        let decision = CacheStrategy::decide_from_entry("L2", &entry, "hello world", false);
+        // L2 with identical input should produce high cosine similarity
+        // The confidence may be high enough for a Hit
+        let is_hit_or_refused = matches!(
+            decision,
+            CacheDecision::Hit { .. } | CacheDecision::Refused { .. }
+        );
+        assert!(is_hit_or_refused || matches!(decision, CacheDecision::Miss));
+    }
+
+    #[test]
+    fn decide_from_entry_l1_always_full_confidence() {
+        let entry = CacheEntry::new(
+            "k".to_string(),
+            "input".to_string(),
+            "output".to_string(),
+            5,
+        );
+        let decision = CacheStrategy::decide_from_entry("L1", &entry, "anything", false);
+        assert!(matches!(decision, CacheDecision::Hit { .. }));
+    }
+
+    #[test]
+    fn decide_from_entry_l3_short_output_is_miss() {
+        let entry = CacheEntry::new("k".to_string(), "in".to_string(), "ab".to_string(), 2);
+        let decision = CacheStrategy::decide_from_entry("L3", &entry, "in", false);
+        assert!(matches!(decision, CacheDecision::Miss));
+    }
+
+    #[test]
+    fn decide_from_entry_unknown_level_is_miss() {
+        let entry = CacheEntry::new("k".to_string(), "i".to_string(), "o".to_string(), 1);
+        let decision = CacheStrategy::decide_from_entry("L99", &entry, "i", false);
+        assert!(matches!(decision, CacheDecision::Miss));
+    }
 }

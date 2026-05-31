@@ -85,7 +85,7 @@ pub(super) async fn build_debug_panel_payload(server: &AcpServer) -> Value {
                 "execution_cache_bypass_enabled": true,
                 "tool_governance": crate::acp::helpers::tool_governance::tool_governance_counters(),
                 "tool_governance_default_policy": {
-                    "active_when_harness_bus_absent": server.harness_bus.is_none(),
+                    "active_when_harness_bus_absent": server.governance_deps.harness_bus.is_none(),
                     "snapshot": crate::acp::helpers::tool_governance_defaults::default_governance_policy_snapshot(),
                 },
                 "repair_cycle_effective_ratio": repair_cycle_effective_ratio,

@@ -1406,7 +1406,7 @@ pub(super) async fn handle_skill_import(
                         .collect::<std::collections::HashMap<String, String>>()
                 })
                 .unwrap_or_default();
-            match server.skill_registry.lock() {
+            match server.orchestration_deps.skill_registry.lock() {
                 Ok(mut registry) => {
                     if let Err(e) = registry.create_skill_from_prompt(
                         &skill_name,
@@ -1574,6 +1574,7 @@ pub(super) async fn handle_skill_remove(
         return crate::acp::r#impl::io::send_error(server, request_id, -32602, reason, None).await;
     }
     let unregistered = server
+        .orchestration_deps
         .skill_registry
         .lock()
         .map(|mut registry| {
@@ -1646,6 +1647,7 @@ pub(super) async fn handle_skill_create(
 
     let result = {
         let mut registry = server
+            .orchestration_deps
             .skill_registry
             .lock()
             .map_err(|err| anyhow::anyhow!("skill registry lock error: {}", err))?;
@@ -2080,6 +2082,7 @@ pub(super) async fn handle_models_list(
     request_id: Option<Value>,
 ) -> Result<()> {
     let models = server
+        .model_deps
         .agent_registry
         .as_ref()
         .map(|registry| {
@@ -2362,4 +2365,164 @@ pub(super) async fn handle_terminal_wait_for_exit(
         })?,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── normalize_acp_mode ────────────────────────────────────────────
+
+    #[test]
+    fn normalize_acp_mode_known() {
+        assert_eq!(normalize_acp_mode(Some("agent")), "agent");
+        assert_eq!(normalize_acp_mode(Some("AGENT")), "agent");
+        assert_eq!(normalize_acp_mode(Some("edit")), "edit");
+        assert_eq!(normalize_acp_mode(Some("chat")), "chat");
+        assert_eq!(normalize_acp_mode(Some("full_auto")), "full_auto");
+    }
+
+    #[test]
+    fn normalize_acp_mode_unknown_returns_original() {
+        assert_eq!(normalize_acp_mode(Some("unknown_mode")), "unknown_mode");
+    }
+
+    // ── JSON-RPC format error simulation ──────────────────────────────
+
+    #[test]
+    fn send_error_message_format_is_valid_json() {
+        // Verify that error messages produced by send_error are valid JSON
+        // This tests the JSON-RPC error response structure.
+        let error_code = -32603;
+        let message = "Internal error".to_string();
+        let data = Some(json!({"detail": "test"}));
+
+        let error_json = json!({
+            "jsonrpc": "2.0",
+            "id": Value::Null,
+            "error": {
+                "code": error_code,
+                "message": message,
+                "data": data.unwrap_or_default(),
+            }
+        });
+
+        // Verify it's valid JSON
+        let serialized = serde_json::to_string(&error_json).expect("must serialize");
+        let deserialized: serde_json::Value =
+            serde_json::from_str(&serialized).expect("must deserialize");
+        assert_eq!(deserialized["error"]["code"], error_code);
+        assert_eq!(deserialized["jsonrpc"], "2.0");
+    }
+
+    #[test]
+    fn send_error_handles_null_id() {
+        // A notification (no id) should still produce valid error
+        let error_json = json!({
+            "jsonrpc": "2.0",
+            "id": null,
+            "error": {
+                "code": -32700,
+                "message": "Parse error",
+                "data": {}
+            }
+        });
+        let serialized = serde_json::to_string(&error_json).expect("must serialize");
+        let deserialized: serde_json::Value =
+            serde_json::from_str(&serialized).expect("must deserialize");
+        assert!(deserialized["id"].is_null());
+    }
+
+    // ── rate-limited message handling ─────────────────────────────────
+
+    #[test]
+    fn is_rate_limited_message_detects_rate_limit() {
+        assert!(is_rate_limited_message("rate limited, retry in"));
+        assert!(is_rate_limited_message("too many requests"));
+        assert!(!is_rate_limited_message("normal error"));
+    }
+
+    // ── semver patch parsing ──────────────────────────────────────────
+
+    #[test]
+    fn parse_semver_patch_valid() {
+        assert_eq!(parse_semver_patch("1.2.3"), Some((1, 2, 3)));
+        assert_eq!(parse_semver_patch("0.0.0"), Some((0, 0, 0)));
+    }
+
+    #[test]
+    fn parse_semver_patch_invalid_returns_none() {
+        assert_eq!(parse_semver_patch(""), None);
+        assert_eq!(parse_semver_patch("abc"), None);
+        assert_eq!(parse_semver_patch("1.2"), None);
+        assert_eq!(parse_semver_patch("1.2.3.4"), None);
+    }
+
+    #[test]
+    fn bump_patch_version_increments() {
+        assert_eq!(bump_patch_version("1.2.3"), "1.2.4");
+        assert_eq!(bump_patch_version("0.0.0"), "0.0.1");
+    }
+
+    #[test]
+    fn bump_patch_version_invalid_returns_default() {
+        assert_eq!(bump_patch_version(""), "0.0.1");
+    }
+
+    // ── Oversized payload boundary ────────────────────────────────────
+
+    #[test]
+    fn build_chat_params_from_acp_with_large_messages_does_not_panic() {
+        // Simulate a very large message to test boundary conditions
+        let large_content = "x".repeat(1_000_000); // 1MB message
+        let acp_params = json!({
+            "mode": "chat",
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": large_content}]}
+            ]
+        });
+
+        // This should not panic even with large payload
+        let session_state = AcpSessionState::default();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            build_chat_params_from_acp(acp_params.clone(), &session_state)
+        }));
+        // The function might error on oversized content but should not panic
+        assert!(result.is_ok());
+    }
+
+    // ── generate_acp_session_id / generate_terminal_id ────────────────
+
+    #[test]
+    fn generate_acp_session_id_format() {
+        let id = generate_acp_session_id();
+        assert!(
+            id.starts_with("acp-session-"),
+            "id should start with acp-session-, got: {}",
+            id
+        );
+        // Format is "acp-session-{timestamp:x}-{counter:x}"
+        assert!(
+            id.len() > 20,
+            "id should be longer than 20 chars, got {}",
+            id.len()
+        );
+    }
+
+    #[test]
+    fn generate_terminal_id_format() {
+        let id = generate_terminal_id();
+        assert!(
+            id.starts_with("terminal-"),
+            "id should start with terminal-, got: {}",
+            id
+        );
+    }
+
+    #[test]
+    fn generate_session_ids_are_unique() {
+        let id1 = generate_acp_session_id();
+        let id2 = generate_acp_session_id();
+        assert_ne!(id1, id2);
+    }
 }

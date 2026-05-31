@@ -16,6 +16,8 @@ pub mod council; // F-GAP-15
 pub mod dag_driver; // BLUE42: DAG execution driver for autonomy loop
 pub mod dag_execution; // AUTON-07: DAG-driven execution adapter
 pub mod dag_executor; // GAP-46-02: Real topological DAG executor
+#[allow(unused_imports)]
+pub use dag_executor::TaskContext; // GAP-B50-05: TaskContext re-export for chain-of-thought propagation
 pub mod diagnostic_feedback;
 pub mod distributed_tx; // BLUE45 item 4: Two-Phase Commit (2PC) over multiple nodes
 pub mod execution_graph;

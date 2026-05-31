@@ -35,12 +35,12 @@ pub(super) async fn handle_health(server: &AcpServer, request_id: Option<Value>)
     let metrics = server.observability.metrics.snapshot();
 
     // Snapshot token cache statistics for observability.
-    let token_cache_stats = server.cache.token_cache.stats.read().await;
+    let token_cache_stats = server.cache_deps.cache.token_cache.stats.read().await;
     let token_cache_report = token_cache_stats.to_json();
 
     // Module-level health profiles — read from harness_bus and capability_bus.
     let harness_profile = server
-        .harness_bus
+        .governance_deps.harness_bus
         .as_ref()
         .map(|hb| {
             json!({
@@ -58,7 +58,7 @@ pub(super) async fn handle_health(server: &AcpServer, request_id: Option<Value>)
         .unwrap_or(json!({"enabled": false}));
 
     let capability_profile = server
-        .capability_bus
+        .governance_deps.capability_bus
         .as_ref()
         .map(|cb| {
             json!({
@@ -149,11 +149,11 @@ fn build_health_probes_payload(server: &AcpServer) -> Result<Value> {
     let config_path = server.config_path.as_deref().map(Path::new);
     let report = build_runtime_healthcheck_report(
         config_path,
-        server.cache.response_cache.as_deref(),
-        server.cache.vector_store.as_deref(),
+        server.cache_deps.cache.response_cache.as_deref(),
+        server.cache_deps.cache.vector_store.as_deref(),
     )?;
 
-    let token_cache_stats = match server.cache.token_cache.stats.try_read() {
+    let token_cache_stats = match server.cache_deps.cache.token_cache.stats.try_read() {
         Ok(guard) => guard.clone(),
         Err(_) => {
             tracing::warn!("token cache stats lock contended, using empty stats");
@@ -362,7 +362,7 @@ pub(super) async fn handle_capabilities_list(
     request_id: Option<Value>,
 ) -> Result<()> {
     let capability_profile = server
-        .capability_bus
+        .governance_deps.capability_bus
         .as_ref()
         .map(|cb| {
             let p = cb.capability_bus_profile();
@@ -431,8 +431,8 @@ pub(super) fn build_runtime_stability_payload(server: &AcpServer) -> Result<Valu
     let config_path = server.config_path.as_deref().map(Path::new);
     let report = build_runtime_healthcheck_report(
         config_path,
-        server.cache.response_cache.as_deref(),
-        server.cache.vector_store.as_deref(),
+        server.cache_deps.cache.response_cache.as_deref(),
+        server.cache_deps.cache.vector_store.as_deref(),
     )?;
 
     let mut config_warnings = Vec::new();
@@ -799,8 +799,8 @@ pub(super) fn build_provider_status_payload(server: &AcpServer) -> Result<Value>
     let config_path = server.config_path.as_deref().map(Path::new);
     let report = build_runtime_healthcheck_report(
         config_path,
-        server.cache.response_cache.as_deref(),
-        server.cache.vector_store.as_deref(),
+        server.cache_deps.cache.response_cache.as_deref(),
+        server.cache_deps.cache.vector_store.as_deref(),
     )?;
 
     let provider_component = report
@@ -906,11 +906,11 @@ pub(super) async fn handle_runtime_features(
         json!({
             "ok": true,
             "features": {
-                "harness_bus": server.harness_bus.is_some(),
-                "capability_bus": server.capability_bus.is_some(),
-                "vector_store": server.cache.vector_store.is_some(),
-                "response_cache": server.cache.response_cache.is_some(),
-                "autotune": server.autotune.is_some(),
+                "harness_bus": server.governance_deps.harness_bus.is_some(),
+                "capability_bus": server.governance_deps.capability_bus.is_some(),
+                "vector_store": server.cache_deps.cache.vector_store.is_some(),
+                "response_cache": server.cache_deps.cache.response_cache.is_some(),
+                "autotune": server.cache_deps.autotune.is_some(),
                 "skills_enabled": server.runtime_config.skills_enabled,
                 "skills_import": server.runtime_config.skills_import_enabled,
                 "entry_auth": server.runtime_config.entry_auth_enabled,

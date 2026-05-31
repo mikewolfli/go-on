@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::VecDeque;
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -189,6 +189,33 @@ impl ThreadSafeAuditLog {
         })
     }
 
+    /// Return the number of entries currently in the buffer.
+    pub fn len(&self) -> usize {
+        let inner = self.audit_lock_guard();
+        inner.entries.len()
+    }
+
+    /// Return `true` if the buffer is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Return the timestamp of the most recently recorded entry, if any.
+    pub fn last_write_time(&self) -> Option<String> {
+        let inner = self.audit_lock_guard();
+        inner.entries.back().map(|e| e.timestamp.clone())
+    }
+
+    /// Create a new thread-safe audit log with NDJSON persistence at `~/.goon/audit.ndjson`.
+    ///
+    /// The home directory is expanded at runtime. If the home directory cannot
+    /// be determined, the path defaults to `.goon/audit.ndjson` relative to the
+    /// current working directory.
+    pub fn new_with_default_path(max_entries: usize) -> Self {
+        let path = dirs_or_fallback();
+        Self::new_with_path(max_entries, path)
+    }
+
     /// Share the same underlying audit log by cloning the `Arc`.
     ///
     /// All clones share the same inner buffer and file path.
@@ -203,19 +230,69 @@ impl ThreadSafeAuditLog {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /// Append a single entry as a JSON line (NDJSON) to the given file.
-#[allow(dead_code)] // F-GAP-49 — reserved for Phase 2 NDJSON persistence
+///
+/// If the file exceeds 100 MB, it is automatically compressed into a gzip
+/// archive (`<filename>.1.gz`) and a fresh file is started.
 fn append_ndjson_entry(
     path: &Path,
     entry: &AuditLogEntry,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // File rotation: compress+gzip archive when >100 MB
+    if path.exists() && fs::metadata(path)?.len() > 100 * 1024 * 1024 {
+        rotate_file(path)?;
+    }
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     let line = serde_json::to_string(entry)?;
     writeln!(file, "{line}")?;
     Ok(())
 }
 
+/// Rotate a file by compressing it to a gzip archive and starting fresh.
+fn rotate_file(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Read;
+
+    let archive_path = path.with_extension("ndjson.1.gz");
+    let mut original = fs::File::open(path)?;
+    let mut data = Vec::new();
+    original.read_to_end(&mut data)?;
+
+    let compressed = {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&data)?;
+        encoder.finish()?
+    };
+
+    let compressed_len = compressed.len();
+    fs::write(&archive_path, &compressed)?;
+    tracing::info!(
+        "Audit log rotated: {} -> {} ({} bytes compressed)",
+        path.display(),
+        archive_path.display(),
+        compressed_len,
+    );
+
+    // Truncate the original file
+    fs::write(path, b"")?;
+    Ok(())
+}
+
+/// Resolve `~/.goon/audit.ndjson` or fall back to `.goon/audit.ndjson`.
+fn dirs_or_fallback() -> PathBuf {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default();
+    let base = if home.is_empty() {
+        PathBuf::from(".goon")
+    } else {
+        PathBuf::from(home).join(".goon")
+    };
+    base.join("audit.ndjson")
+}
+
 /// Redact sensitive fields from a JSON value.
-fn redact_sensitive(value: &serde_json::Value) -> serde_json::Value {
+pub fn redact_sensitive(value: &serde_json::Value) -> serde_json::Value {
     match value {
         Value::Object(map) => {
             let mut redacted = serde_json::Map::new();

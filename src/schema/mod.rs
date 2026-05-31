@@ -71,9 +71,9 @@ impl From<&str> for SessionId {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProtocolVersion(u16);
+#[allow(dead_code)]
 impl ProtocolVersion {
     pub const V1: Self = Self(1);
-    #[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
     pub const LATEST: Self = Self::V1;
 }
 
@@ -100,7 +100,6 @@ impl Implementation {
     }
 }
 
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvVariable {
@@ -109,7 +108,7 @@ pub struct EnvVariable {
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
 }
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
+#[allow(dead_code)]
 impl EnvVariable {
     pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
@@ -120,7 +119,6 @@ impl EnvVariable {
     }
 }
 
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpHeader {
@@ -129,7 +127,7 @@ pub struct HttpHeader {
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
 }
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
+#[allow(dead_code)]
 impl HttpHeader {
     pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
@@ -146,9 +144,9 @@ impl HttpHeader {
 //   - session/request_permission — permission response handler
 //   - terminal/create, terminal/output, terminal/release, terminal/kill,
 //     terminal/wait_for_exit — full terminal process management
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
+#[allow(dead_code)]
 pub struct AcpMethodNames;
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
+#[allow(dead_code)]
 impl AcpMethodNames {
     pub const INITIALIZE: &'static str = "initialize";
     pub const AUTHENTICATE: &'static str = "authenticate";

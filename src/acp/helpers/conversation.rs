@@ -345,3 +345,468 @@ pub fn normalize_trace_attributes(
 
     Value::Object(attrs)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── validate_storage_key ──────────────────────────────────────────
+
+    #[test]
+    fn validate_storage_key_accepts_valid_keys() {
+        let result = validate_storage_key("my-key_1/abc:def", "test", 256);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "my-key_1/abc:def");
+    }
+
+    #[test]
+    fn validate_storage_key_rejects_empty() {
+        let result = validate_storage_key("  ", "field", 256);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("cannot be empty"));
+    }
+
+    #[test]
+    fn validate_storage_key_rejects_oversized() {
+        let long = "a".repeat(300);
+        let result = validate_storage_key(&long, "field", 10);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("exceeds maximum length"));
+    }
+
+    #[test]
+    fn validate_storage_key_rejects_invalid_chars() {
+        let result = validate_storage_key("hello world!", "field", 256);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid characters"));
+    }
+
+    // ── ApprovalStrategy ──────────────────────────────────────────────
+
+    #[test]
+    fn approval_strategy_dual_needs_dual_review() {
+        assert!(ApprovalStrategy::Dual.needs_dual_review());
+    }
+
+    #[test]
+    fn approval_strategy_none_does_not_need_dual_review() {
+        assert!(!ApprovalStrategy::None.needs_dual_review());
+    }
+
+    #[test]
+    fn approval_strategy_single_does_not_need_dual_review() {
+        assert!(!ApprovalStrategy::Single.needs_dual_review());
+    }
+
+    // ── stream limits ─────────────────────────────────────────────────
+
+    #[test]
+    fn stream_would_exceed_limits_chunk_boundary() {
+        assert!(stream_would_exceed_limits(MAX_STREAM_CHUNKS, 0, 0));
+        assert!(!stream_would_exceed_limits(MAX_STREAM_CHUNKS - 1, 0, 10));
+    }
+
+    #[test]
+    fn stream_would_exceed_limits_char_boundary() {
+        assert!(stream_would_exceed_limits(0, MAX_STREAM_CHARS, 1));
+        assert!(!stream_would_exceed_limits(0, MAX_STREAM_CHARS - 100, 50));
+    }
+
+    #[test]
+    fn stream_would_exceed_limits_zero_chars_ok() {
+        assert!(!stream_would_exceed_limits(0, 0, 0));
+    }
+
+    // ── extract_task_description ──────────────────────────────────────
+
+    #[test]
+    fn extract_task_description_finds_last_user_message() {
+        let msgs = vec![
+            Message {
+                role: "user".to_string(),
+                content: "first".to_string(),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: "response".to_string(),
+            },
+            Message {
+                role: "user".to_string(),
+                content: "second".to_string(),
+            },
+        ];
+        assert_eq!(extract_task_description(&msgs), "second");
+    }
+
+    #[test]
+    fn extract_task_description_falls_back_to_last_message() {
+        let msgs = vec![
+            Message {
+                role: "assistant".to_string(),
+                content: "hello".to_string(),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: "world".to_string(),
+            },
+        ];
+        assert_eq!(extract_task_description(&msgs), "world");
+    }
+
+    #[test]
+    fn extract_task_description_empty_messages_returns_general_task() {
+        assert_eq!(extract_task_description(&[]), "general task");
+    }
+
+    // ── repair_conversation_branch_heads ───────────────────────────────
+
+    #[test]
+    fn repair_conversation_branch_heads_removes_stale_heads_and_falls_back() {
+        let mut state = ConversationState {
+            conversation_id: "conv-1".to_string(),
+            checkpoints: vec![
+                crate::acp::ConversationCheckpoint {
+                    checkpoint_id: "cp-1".to_string(),
+                    branch_id: "main".to_string(),
+                    conversation_id: "conv-1".to_string(),
+                    parent_checkpoint_id: None,
+                    created_at: 0,
+                    note: None,
+                    metacognitive_loop: None,
+                    messages: vec![],
+                },
+                crate::acp::ConversationCheckpoint {
+                    checkpoint_id: "cp-2".to_string(),
+                    branch_id: "main".to_string(),
+                    conversation_id: "conv-1".to_string(),
+                    parent_checkpoint_id: None,
+                    created_at: 0,
+                    note: None,
+                    metacognitive_loop: None,
+                    messages: vec![],
+                },
+            ],
+            branch_heads: vec![
+                ("main".to_string(), "cp-2".to_string()),
+                ("stale".to_string(), "cp-3".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            last_touched_at: 0,
+        };
+
+        repair_conversation_branch_heads(&mut state);
+
+        // stale branch should be dropped (no checkpoint with cp-3)
+        assert!(!state.branch_heads.contains_key("stale"));
+        // main branch should still point to cp-2
+        assert_eq!(state.branch_heads.get("main").unwrap(), "cp-2");
+    }
+
+    // ── enforce_checkpoint_capacity ────────────────────────────────────
+
+    #[test]
+    fn enforce_checkpoint_capacity_evicts_oldest_when_over_limit() {
+        let mut state = ConversationState {
+            conversation_id: "conv-1".to_string(),
+            checkpoints: (0..MAX_CHECKPOINTS_PER_CONVERSATION)
+                .map(|i| crate::acp::ConversationCheckpoint {
+                    checkpoint_id: format!("cp-{}", i),
+                    branch_id: "main".to_string(),
+                    conversation_id: "conv-1".to_string(),
+                    parent_checkpoint_id: None,
+                    created_at: 0,
+                    note: None,
+                    metacognitive_loop: None,
+                    messages: vec![],
+                })
+                .collect(),
+            branch_heads: [(
+                "main".to_string(),
+                format!("cp-{}", MAX_CHECKPOINTS_PER_CONVERSATION - 1),
+            )]
+            .into_iter()
+            .collect(),
+            last_touched_at: 0,
+        };
+
+        enforce_checkpoint_capacity(&mut state, 2, None);
+        assert_eq!(state.checkpoints.len(), MAX_CHECKPOINTS_PER_CONVERSATION);
+        // Should have removed cp-0 and cp-1 (oldest first)
+        assert!(!state.checkpoints.iter().any(|c| c.checkpoint_id == "cp-0"));
+        assert!(!state.checkpoints.iter().any(|c| c.checkpoint_id == "cp-1"));
+    }
+
+    #[test]
+    fn enforce_checkpoint_capacity_protects_rollback_checkpoint() {
+        let mut state = ConversationState {
+            conversation_id: "conv-1".to_string(),
+            checkpoints: (0..MAX_CHECKPOINTS_PER_CONVERSATION)
+                .map(|i| crate::acp::ConversationCheckpoint {
+                    checkpoint_id: format!("cp-{}", i),
+                    branch_id: "main".to_string(),
+                    conversation_id: "conv-1".to_string(),
+                    parent_checkpoint_id: None,
+                    created_at: 0,
+                    note: None,
+                    metacognitive_loop: None,
+                    messages: vec![],
+                })
+                .collect(),
+            branch_heads: [(
+                "main".to_string(),
+                format!("cp-{}", MAX_CHECKPOINTS_PER_CONVERSATION - 1),
+            )]
+            .into_iter()
+            .collect(),
+            last_touched_at: 0,
+        };
+
+        // Protect cp-5 — it should survive eviction
+        enforce_checkpoint_capacity(&mut state, 2, Some("cp-5"));
+        assert!(state.checkpoints.iter().any(|c| c.checkpoint_id == "cp-5"));
+    }
+
+    #[test]
+    fn enforce_checkpoint_capacity_noop_when_under_limit() {
+        let mut state = ConversationState {
+            conversation_id: "conv-1".to_string(),
+            checkpoints: (0..3)
+                .map(|i| crate::acp::ConversationCheckpoint {
+                    checkpoint_id: format!("cp-{}", i),
+                    branch_id: "main".to_string(),
+                    conversation_id: "conv-1".to_string(),
+                    parent_checkpoint_id: None,
+                    created_at: 0,
+                    note: None,
+                    metacognitive_loop: None,
+                    messages: vec![],
+                })
+                .collect(),
+            branch_heads: [("main".to_string(), "cp-2".to_string())]
+                .into_iter()
+                .collect(),
+            last_touched_at: 0,
+        };
+        let len_before = state.checkpoints.len();
+        enforce_checkpoint_capacity(&mut state, 1, None);
+        assert_eq!(state.checkpoints.len(), len_before);
+    }
+
+    // ── pipeline_gate_violation ───────────────────────────────────────
+
+    fn make_characteristics(
+        complexity: u8,
+        needs_verification: bool,
+        involves_multiple_modules: bool,
+        has_safety_concerns: bool,
+    ) -> TaskCharacteristics {
+        TaskCharacteristics {
+            complexity,
+            needs_verification,
+            involves_multiple_modules,
+            has_safety_concerns,
+            description: "generic".to_string(),
+            task_type: crate::orchestration::task_router::TaskType::Unknown,
+            required_capabilities: vec![],
+            is_time_critical: false,
+        }
+    }
+
+    #[test]
+    fn pipeline_gate_violation_non_trivial_missing_roles() {
+        let task = make_characteristics(5, true, true, false);
+        let routing = RoutingDecision {
+            roles: vec![],
+            requirements: vec![],
+            predicted_success_rate: 0.5,
+            estimated_duration_seconds: 30,
+            can_parallelize: vec![],
+            risk_factors: vec![],
+            recommended_safeguards: vec![],
+            pua_enforcement: crate::governance::pua::PuaEnforcementPlan {
+                mandatory_roles: vec![],
+                mandatory_safeguards: vec!["test".to_string()],
+                escalation_level: "L1".to_string(),
+                red_lines: vec![],
+                quality_compass: vec![],
+                mandatory_evidence: vec![],
+                stage_requirements: vec![],
+            },
+        };
+        let violation = pipeline_gate_violation(&task, &routing, ApprovalStrategy::None);
+        assert!(violation.is_some());
+        assert!(violation.unwrap().contains("no roles"));
+    }
+
+    #[test]
+    fn pipeline_gate_violation_missing_dual_review_for_reviewer_role() {
+        let task = make_characteristics(3, false, false, false);
+        let routing = RoutingDecision {
+            roles: vec![AgentRole::Reviewer],
+            requirements: vec![],
+            predicted_success_rate: 0.5,
+            estimated_duration_seconds: 30,
+            can_parallelize: vec![],
+            risk_factors: vec![],
+            recommended_safeguards: vec![],
+            pua_enforcement: crate::governance::pua::PuaEnforcementPlan {
+                mandatory_roles: vec![],
+                mandatory_safeguards: vec!["test".to_string()],
+                escalation_level: "L1".to_string(),
+                red_lines: vec![],
+                quality_compass: vec![],
+                mandatory_evidence: vec![],
+                stage_requirements: vec![],
+            },
+        };
+        let violation = pipeline_gate_violation(&task, &routing, ApprovalStrategy::None);
+        assert!(violation.is_some());
+        assert!(violation.unwrap().contains("dual review"));
+    }
+
+    #[test]
+    fn pipeline_gate_violation_missing_safeguards() {
+        let task = make_characteristics(3, true, true, true);
+        let routing = RoutingDecision {
+            roles: vec![AgentRole::Coder],
+            requirements: vec![],
+            predicted_success_rate: 0.5,
+            estimated_duration_seconds: 30,
+            can_parallelize: vec![],
+            risk_factors: vec![],
+            recommended_safeguards: vec![],
+            pua_enforcement: crate::governance::pua::PuaEnforcementPlan {
+                mandatory_roles: vec![],
+                mandatory_safeguards: vec![],
+                escalation_level: "L1".to_string(),
+                red_lines: vec![],
+                quality_compass: vec![],
+                mandatory_evidence: vec![],
+                stage_requirements: vec![],
+            },
+        };
+        let violation = pipeline_gate_violation(&task, &routing, ApprovalStrategy::Dual);
+        assert!(violation.is_some());
+        assert!(violation.unwrap().contains("safeguards"));
+    }
+
+    #[test]
+    fn pipeline_gate_violation_trivial_task_no_violation() {
+        let task = make_characteristics(1, false, false, false);
+        let routing = RoutingDecision {
+            roles: vec![AgentRole::Coder],
+            requirements: vec![],
+            predicted_success_rate: 0.5,
+            estimated_duration_seconds: 30,
+            can_parallelize: vec![],
+            risk_factors: vec![],
+            recommended_safeguards: vec![],
+            pua_enforcement: crate::governance::pua::PuaEnforcementPlan {
+                mandatory_roles: vec![],
+                mandatory_safeguards: vec!["safeguard-1".to_string()],
+                escalation_level: "L1".to_string(),
+                red_lines: vec![],
+                quality_compass: vec![],
+                mandatory_evidence: vec![],
+                stage_requirements: vec![],
+            },
+        };
+        assert!(pipeline_gate_violation(&task, &routing, ApprovalStrategy::None).is_none());
+    }
+
+    // ── branch_head_adjustment_counts ──────────────────────────────────
+
+    #[test]
+    fn branch_head_adjustment_counts_tracks_repaired_and_dropped() {
+        let mut before = HashMap::new();
+        before.insert("a".to_string(), "cp-1".to_string());
+        before.insert("b".to_string(), "cp-2".to_string());
+        before.insert("c".to_string(), "cp-3".to_string());
+
+        let mut after = HashMap::new();
+        after.insert("a".to_string(), "cp-1".to_string()); // unchanged
+        after.insert("b".to_string(), "cp-4".to_string()); // repaired
+                                                           // c is dropped
+
+        let (repaired, dropped) = branch_head_adjustment_counts(&before, &after);
+        assert_eq!(repaired, 1);
+        assert_eq!(dropped, 1);
+    }
+
+    // ── evict_oldest_conversation ──────────────────────────────────────
+
+    #[test]
+    fn evict_oldest_conversation_removes_oldest_entry() {
+        let mut store = HashMap::new();
+        store.insert(
+            "conv-1".to_string(),
+            ConversationState {
+                conversation_id: "conv-1".to_string(),
+                checkpoints: vec![],
+                branch_heads: HashMap::new(),
+                last_touched_at: 100,
+            },
+        );
+        store.insert(
+            "conv-2".to_string(),
+            ConversationState {
+                conversation_id: "conv-2".to_string(),
+                checkpoints: vec![],
+                branch_heads: HashMap::new(),
+                last_touched_at: 200,
+            },
+        );
+
+        let order = StdMutex::new(vec!["conv-1".to_string(), "conv-2".to_string()]);
+        let evicted = evict_oldest_conversation(&mut store, &order);
+        assert_eq!(evicted, Some("conv-1".to_string()));
+        assert!(!store.contains_key("conv-1"));
+    }
+
+    #[test]
+    fn evict_oldest_conversation_skips_missing_entries() {
+        let mut store = HashMap::new();
+        store.insert(
+            "conv-2".to_string(),
+            ConversationState {
+                conversation_id: "conv-2".to_string(),
+                checkpoints: vec![],
+                branch_heads: HashMap::new(),
+                last_touched_at: 0,
+            },
+        );
+
+        let order = StdMutex::new(vec!["conv-1".to_string(), "conv-2".to_string()]);
+        // conv-1 is not in store, should be skipped
+        let evicted = evict_oldest_conversation(&mut store, &order);
+        assert_eq!(evicted, Some("conv-2".to_string()));
+    }
+
+    // ── normalize_trace_attributes ─────────────────────────────────────
+
+    #[test]
+    fn normalize_trace_attributes_adds_default_fields() {
+        let result = normalize_trace_attributes("phase.start", "coding", "ok", Value::Null);
+        let obj = result.as_object().unwrap();
+        assert_eq!(obj["event_type"], "phase.start");
+        assert_eq!(obj["phase"], "coding");
+        assert_eq!(obj["policy_status"], "pass");
+    }
+
+    #[test]
+    fn normalize_trace_attributes_preserves_input_object() {
+        let input = json!({"existing": "value"});
+        let result = normalize_trace_attributes("test", "phase-1", "error", input);
+        let obj = result.as_object().unwrap();
+        assert_eq!(obj["existing"], "value");
+        assert_eq!(obj["policy_status"], "error");
+    }
+
+    #[test]
+    fn normalize_trace_attributes_maps_unknown_status() {
+        let result = normalize_trace_attributes("x", "y", "unknown_status", Value::Null);
+        assert_eq!(result["policy_status"], "unknown");
+    }
+}

@@ -570,12 +570,20 @@ impl TaskScheduler {
     /// The caller should drop the `TaskPermitGuard` (which releases the
     /// semaphore permits automatically). On requeue the permits are released
     /// (via drop) and the task is re-enqueued.
+    ///
+    /// # TOCTOU fix (GAP-B50-22)
+    /// Merges task_map read + queues write into a single lock scope to prevent
+    /// a concurrent `complete()` from removing the task between the read and
+    /// the re-enqueue.
     pub fn fail(&self, task_id: &str, requeue: bool) -> Result<()> {
         // Note: The TaskPermitGuard should be dropped by the caller to
         // release semaphore permits. This method only handles task_map
         // and stat bookkeeping.
 
         if requeue {
+            // ── Single lock scope: task_map read + queues write ────────────
+            // Holding task_map prevents a concurrent complete() from removing
+            // the task while we re-enqueue it.
             let mut task_map = self.task_map.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("lock poisoned, recovering");
                 poisoned.into_inner()
@@ -585,17 +593,17 @@ impl TaskScheduler {
                     task.retries += 1;
                     let updated_task = task.clone();
                     let role = task.role.clone();
-                    // Re-push into role-specific queue
-                    self.queues
-                        .lock()
-                        .map_err(|e| anyhow!("Lock error: {}", e))?
-                        .entry(role)
-                        .or_default()
-                        .push(updated_task);
-                    self.stats
-                        .lock()
-                        .map_err(|e| anyhow!("Lock error: {}", e))?
-                        .total_failed += 1;
+                    // While still holding task_map lock, push to queues
+                    let mut queues = self.queues.lock().unwrap_or_else(|poisoned| {
+                        tracing::warn!("lock poisoned, recovering");
+                        poisoned.into_inner()
+                    });
+                    queues.entry(role).or_default().push(updated_task);
+                    let mut stats = self.stats.lock().unwrap_or_else(|poisoned| {
+                        tracing::warn!("lock poisoned, recovering");
+                        poisoned.into_inner()
+                    });
+                    stats.total_failed += 1;
                     warn!(
                         "{}",
                         tf(
@@ -610,22 +618,21 @@ impl TaskScheduler {
                     return Ok(());
                 }
             }
+            // Drop task_map lock before the permanent-removal path below
+            drop(task_map);
         }
 
-        // Read max_retries before removing
-        let max_retries = self
-            .task_map
-            .lock()
-            .map_err(|e| anyhow!("Lock error: {}", e))?
-            .get(task_id)
-            .map(|t| t.max_retries)
-            .unwrap_or(0);
-
-        // Permanently remove
-        self.task_map
-            .lock()
-            .map_err(|e| anyhow!("Lock error: {}", e))?
-            .remove(task_id);
+        // ── Single lock scope: read + remove from task_map ─────────────
+        // Prevents a concurrent modification between the read and remove.
+        let max_retries = {
+            let mut task_map = self
+                .task_map
+                .lock()
+                .map_err(|e| anyhow!("Lock error: {}", e))?;
+            let max_r = task_map.get(task_id).map(|t| t.max_retries).unwrap_or(0);
+            task_map.remove(task_id);
+            max_r
+        };
         self.stats
             .lock()
             .map_err(|e| anyhow!("Lock error: {}", e))?
@@ -649,6 +656,11 @@ impl TaskScheduler {
     ///
     /// Should be called periodically (e.g. every 1-2 seconds) by a background
     /// timer task, not synchronously on every dequeue call.
+    ///
+    /// # Double-lock fix (GAP-B50-22)
+    /// Uses snapshot-then-rebuild pattern: reads all tasks and the active set
+    /// in a single lock scope, then rebuilds queues in a single lock scope.
+    /// Eliminates the double-lock of task_map (update → release → re-read).
     #[allow(dead_code)] // BLUE48 — public API for external background timer
                         // F-GAP-49 — reserved for future use
     pub fn apply_aging(&self) {
@@ -674,20 +686,38 @@ impl TaskScheduler {
         // Aging threshold for starvation prevention tracking
         let starvation_threshold = 2.0;
 
-        let mut task_map = self.task_map.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        let mut starvation_events = 0u64;
-        for task in task_map.values_mut() {
-            let old_bonus = task.aging_bonus;
-            let bonus = (task.aging_bonus + aging_rate * elapsed_secs).min(max_bonus);
-            task.aging_bonus = bonus;
-            // Check if aging crossed the starvation threshold
-            if old_bonus < starvation_threshold && bonus >= starvation_threshold {
-                starvation_events += 1;
+        // ── Snapshot phase: single task_map + active lock scope ────────
+        // Update aging_bonus in place AND snapshot pending tasks atomically.
+        let (pending_tasks, starvation_events) = {
+            let mut task_map = self.task_map.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            let active = self.active.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+
+            let mut starvation_events = 0u64;
+            for task in task_map.values_mut() {
+                let old_bonus = task.aging_bonus;
+                let bonus = (task.aging_bonus + aging_rate * elapsed_secs).min(max_bonus);
+                task.aging_bonus = bonus;
+                // Check if aging crossed the starvation threshold
+                if old_bonus < starvation_threshold && bonus >= starvation_threshold {
+                    starvation_events += 1;
+                }
             }
-        }
+
+            // Snapshot non-active tasks while still holding the locks
+            let pending: Vec<ScheduledTask> = task_map
+                .values()
+                .filter(|t| !active.contains_key(&t.task_id))
+                .cloned()
+                .collect();
+
+            (pending, starvation_events)
+        }; // task_map and active locks released here
 
         // Update stats
         if starvation_events > 0 {
@@ -702,24 +732,7 @@ impl TaskScheduler {
             );
         }
 
-        // Collect non-active tasks from task_map (briefly holds task_map lock).
-        let pending_tasks: Vec<ScheduledTask> = {
-            let task_map = self.task_map.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("lock poisoned, recovering");
-                poisoned.into_inner()
-            });
-            let active = self.active.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("lock poisoned, recovering");
-                poisoned.into_inner()
-            });
-            task_map
-                .values()
-                .filter(|t| !active.contains_key(&t.task_id))
-                .cloned()
-                .collect()
-        };
-
-        // Rebuild per-role BinaryHeaps — only needs queues lock now.
+        // ── Rebuild phase: single queues lock scope ───────────────────
         let mut queues = self.queues.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("lock poisoned, recovering");
             poisoned.into_inner()

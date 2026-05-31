@@ -7,8 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::cell::Cell;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
@@ -43,7 +43,7 @@ pub struct TenantBudgetEnforcer {
     api_call_usage: std::sync::Mutex<HashMap<String, usize>>,
     active_tasks: HashMap<String, usize>,
     /// The "day number" (unix_ts / 86400) last observed, used to reset daily counters.
-    current_day: Cell<i64>,
+    current_day: AtomicI64,
 }
 
 impl TenantBudgetEnforcer {
@@ -53,7 +53,7 @@ impl TenantBudgetEnforcer {
             token_usage: std::sync::Mutex::new(HashMap::new()),
             api_call_usage: std::sync::Mutex::new(HashMap::new()),
             active_tasks: HashMap::new(),
-            current_day: Cell::new(Self::today()),
+            current_day: AtomicI64::new(Self::today()),
         }
     }
 
@@ -65,7 +65,7 @@ impl TenantBudgetEnforcer {
     /// Reset daily counters if the day has changed.
     fn reset_daily_if_day_changed(&self) {
         let today = Self::today();
-        if today != self.current_day.get() {
+        if today != self.current_day.load(Ordering::Relaxed) {
             match self.token_usage.lock() {
                 Ok(mut tu) => tu.clear(),
                 Err(poisoned) => {
@@ -80,7 +80,7 @@ impl TenantBudgetEnforcer {
                     poisoned.into_inner().clear();
                 }
             }
-            self.current_day.set(today);
+            self.current_day.store(today, Ordering::Relaxed);
         }
     }
 

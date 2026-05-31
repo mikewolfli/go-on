@@ -509,6 +509,22 @@ pub trait Agent: Send + Sync {
     }
 }
 
+/// Configuration for the agent registry's token caching behavior.
+#[derive(Debug, Clone, Copy)]
+pub struct AgentRegistryConfig {
+    /// When true, all agents registered via `register_arc()` are automatically
+    /// wrapped with `CachedAgentWrapper` if a token cache is set.
+    pub enable_token_cache: bool,
+}
+
+impl Default for AgentRegistryConfig {
+    fn default() -> Self {
+        Self {
+            enable_token_cache: true,
+        }
+    }
+}
+
 /// Agent registry for managing and accessing agents
 #[allow(missing_debug_implementations)]
 pub struct AgentRegistry {
@@ -668,6 +684,18 @@ impl AgentRegistry {
                 self.agents.remove(&oldest);
             }
         }
+        // When enable_token_cache is true and a token cache is configured,
+        // auto-wrap the agent with CachedAgentWrapper so that all chat()
+        // calls go through the multi-level token cache.
+        let agent = if let Ok(guard) = self.token_cache.read() {
+            if let Some(ref cache) = *guard {
+                Arc::new(CachedAgentWrapper::new(agent, Arc::clone(cache))) as Arc<dyn Agent>
+            } else {
+                agent
+            }
+        } else {
+            agent
+        };
         self.agents.insert(name, agent);
     }
 
@@ -748,6 +776,19 @@ impl AgentRegistry {
 impl Default for AgentRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl AgentRegistry {
+    /// Return a JSON-serializable snapshot of token cache statistics.
+    /// Returns `null` when no token cache is configured.
+    pub fn cache_stats_json(&self) -> serde_json::Value {
+        if let Ok(guard) = self.token_cache.read() {
+            if let Some(ref cache) = *guard {
+                return cache.stats_snapshot();
+            }
+        }
+        serde_json::Value::Null
     }
 }
 
