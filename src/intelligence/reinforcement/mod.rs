@@ -165,7 +165,7 @@ impl FederatedRLAdapter {
             let budget = PrivacyBudget::new(
                 4.0 * 100.0, // enough for ~100 rounds at ε=4.0/round
                 100,
-                dp_config.clone(),
+                dp_config,
             );
             fl = fl.with_privacy(dp_config, Some(budget));
             info!("FederatedRLAdapter: differential privacy enabled");

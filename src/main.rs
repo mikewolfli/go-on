@@ -62,6 +62,7 @@ mod i18n;
 mod intelligence;
 mod mcp;
 mod memory;
+mod multimodal;
 mod observability;
 mod optimization;
 mod orchestration;

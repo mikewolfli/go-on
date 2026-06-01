@@ -53,7 +53,8 @@ impl ReviewTimeoutPolicy {
             .and_then(|opts| opts.extra.get("review_timeout_policy"))
             .and_then(|value| value.as_str())
             .unwrap_or("reject");
-        let fail_on_timeout = !timeout_policy.eq_ignore_ascii_case("degrade_single");
+        let fail_on_timeout = !timeout_policy.eq_ignore_ascii_case("degrade_single")
+            && !timeout_policy.eq_ignore_ascii_case("warn");
 
         Self {
             timeout_seconds,

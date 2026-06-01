@@ -1,6 +1,20 @@
-//! setup.rs
-//! Auto-generated English doc: module overview.
+//! setup.rs — prompts, config-gen, and secrets sub-modules.
 //!
+//! This module has grown large. Key sub-areas are:
+//! - `secrets`   : keyring / env-based secret management
+//! - `config_gen`: TOML config generation and recommendation
+//! - `prompts`   : interactive setup prompt logic
+//!
+//! New code should live in the appropriate sub-module rather than in this file.
+//!
+//! TODO(GAP-B53-23): Extract sections into the sub-module files below.
+
+pub mod config_gen;
+pub mod prompts;
+pub mod secrets;
+
+// ---------------------------------------------------------------------------
+// Legacy module content
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::io::{self, Write};

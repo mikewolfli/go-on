@@ -63,7 +63,6 @@ pub mod tool_lock; // BLUE44: Tool lock manager for concurrent file access
 pub mod tool_native; // BLUE44: Native function call bridge for OpenAI/Anthropic
 pub mod tool_pipeline; // BLUE44: Tool pipeline for composing multi-step workflows
 pub mod tool_recommender; // BLUE44: Dynamic tool recommendation engine
-pub mod tool_transaction; // BLUE43 Step 15: Tool call transactional semantics
 pub mod workflow_optimizer;
 pub mod workflow_registry;
 

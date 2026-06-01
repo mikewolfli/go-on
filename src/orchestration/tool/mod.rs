@@ -4,6 +4,14 @@
 //! Tool trait, registry, and implementations will be connected to the execution flow
 //! once orchestration logic integrates them.
 
+// ── Sub-modules (moved from orchestration/ for cohesion) ───────────────────
+pub mod extended;
+pub mod lock;
+pub mod native;
+pub mod pipeline;
+pub mod recommender;
+pub mod transaction;
+
 use crate::governance::pua::{tool_execution_report, PuaExecutionReport};
 use crate::i18n::runtime::{t, tf};
 use anyhow::{Context, Result};

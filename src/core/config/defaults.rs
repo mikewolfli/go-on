@@ -215,6 +215,8 @@ impl Default for RuntimeConfig {
             enable_dag_execution: false,
             enable_agent_reroute: true,
             enable_metacognitive_feedback: true,
+            governance_enabled: true,
+            governance_policy_mode: String::new(),
             // Security (GAP-B52)
             request_signing_enabled: false,
             request_signing_public_key: String::new(),

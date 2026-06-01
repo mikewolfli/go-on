@@ -10,7 +10,9 @@
 
 #![allow(clippy::module_inception)]
 
+pub mod agent_memory_bus;
 pub mod cache;
+pub mod embedding_provider;
 pub mod memory;
 pub mod memory_persistence;
 pub mod memory_response_cache;

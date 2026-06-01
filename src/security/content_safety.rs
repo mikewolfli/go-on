@@ -34,6 +34,7 @@ pub enum SafetyError {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum SafetyCategory {
     HateSpeech,
+    #[allow(clippy::upper_case_acronyms)]
     PII,
     Misinformation,
     CodeInjection,

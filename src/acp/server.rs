@@ -871,6 +871,7 @@ impl ServerBuilder {
     /// `data:` URIs, and `file://` references through the multimodal sub-processors
     /// (document parser, audio/video processor, repo analyzer).
     /// When `None` (the default), the system falls back to text-only processing.
+    #[allow(dead_code)]
     pub fn with_multimodal_processor(
         mut self,
         processor: crate::multimodal::MultimodalProcessor,

@@ -4,6 +4,7 @@
 //! # Sub-modules
 //!
 //! | Module | Description |
+#![allow(unused_imports)]
 //! |--------|-------------|
 //! | [`document_parser`] | Extracts text, images, tables, and metadata from PDF, DOCX, HTML, Markdown |
 //! | [`audio_processor`] | Speech-to-text transcription with speaker diarization support |

@@ -227,6 +227,16 @@ pub struct RuntimeConfig {
     /// Number of slow requests to keep in top-N trace metrics
     #[serde(default = "super::defaults::default_runtime_trace_slow_top_n")]
     pub trace_slow_top_n: usize,
+    /// Enable governance subsystem (policy enforcement, RBAC, budget, etc.).
+    /// When disabled, governance-related initialization is skipped at startup.
+    #[serde(default = "super::defaults::default_true")]
+    pub governance_enabled: bool,
+
+    /// Governance policy mode: "active" (enforce), "audit" (log-only), "disabled".
+    /// Controls how governance policies are applied during request processing.
+    #[serde(default)]
+    pub governance_policy_mode: String,
+
     /// Enable builtin skills (e.g. `builtin.echo`) at server startup.
     /// Default is `true` for development; set to `false` in production (`config.production.toml`).
     #[serde(default = "super::defaults::default_runtime_skills_enabled")]

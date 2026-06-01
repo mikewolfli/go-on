@@ -435,6 +435,7 @@ pub async fn start_background_tasks(
     let phase_rate_limiter = Arc::clone(&server.phase_rate_limiter);
     let inflight_limiter = Arc::clone(&server.inflight_limiter);
 
+    let shutdown_notify_clone = shutdown_notify.clone();
     tokio::spawn(async move {
         let bg_ctx = BackgroundContext {
             lock_monitor,
@@ -448,7 +449,7 @@ pub async fn start_background_tasks(
             circuit_breakers,
             phase_rate_limiter,
             inflight_limiter,
-            shutdown_notify: shutdown_notify.clone(),
+            shutdown_notify: shutdown_notify_clone,
         };
         run_background_maintenance_loop(bg_ctx).await;
     });
@@ -506,15 +507,17 @@ pub async fn start_background_tasks(
 
                 info!("Security scan: starting secret exposure scan");
                 let result = detector.scan_directory(std::path::Path::new(".")).await;
-                if let Some(ref advisor) = advisor {
-                    if let Err(e) = advisor.alert_from_secret_scan(&result).await {
-                        warn!("Failed to alert from secret scan: {}", e);
+                if let Ok(ref scan_result) = result {
+                    if let Some(ref advisor) = advisor {
+                        if let Err(e) = advisor.alert_from_secret_scan(scan_result).await {
+                            warn!("Failed to alert from secret scan: {}", e);
+                        }
                     }
+                    info!(
+                        "Security scan: secret scan complete (matches: {})",
+                        scan_result.total()
+                    );
                 }
-                info!(
-                    "Security scan: secret scan complete (matches: {})",
-                    result.total()
-                );
             }
         });
     }

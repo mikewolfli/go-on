@@ -724,7 +724,9 @@ fn validate_phase_options(phase_name: &str, options: &PhaseOptions) -> Result<()
         .get("review_timeout_policy")
         .and_then(|value| value.as_str())
     {
-        if !policy.eq_ignore_ascii_case("reject") && !policy.eq_ignore_ascii_case("degrade_single")
+        if !policy.eq_ignore_ascii_case("reject")
+            && !policy.eq_ignore_ascii_case("degrade_single")
+            && !policy.eq_ignore_ascii_case("warn")
         {
             anyhow::bail!(
                 "{}",

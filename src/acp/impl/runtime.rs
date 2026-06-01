@@ -295,7 +295,7 @@ pub fn new_acp_server(
     }
 
     // Wire security advisor agent
-    let security_advisor = {
+    let _security_advisor = {
         use crate::security::security_advisor::{SecurityAdvisorAgent, SecurityAdvisorConfig};
         let advisor = Arc::new(SecurityAdvisorAgent::new(SecurityAdvisorConfig::default()));
         builder = builder.with_security_advisor(Arc::clone(&advisor));
@@ -327,14 +327,15 @@ pub fn new_acp_server(
             wire_server(&mut server, &registry);
 
             // GAP-B52-30: Register security advisor alert channel with the alert manager.
-            // Security alerts (dependency vulns, secret exposures, permit issues) are
-            // forwarded from the advisor's internal notification system to the main
-            // observability pipeline for webhook delivery and dashboard visibility.
+            // Forward security alerts to the observability pipeline.
+            // Use spawn to circumvent the non-async context of new_acp_server.
             if let Some(ref advisor) = server.governance_deps.security_advisor {
                 let (alert_tx, mut alert_rx) = tokio::sync::mpsc::unbounded_channel();
-                if let Err(e) = advisor.register_ws_sender(alert_tx).await {
-                    tracing::warn!("Failed to register security advisor alert sender: {}", e);
-                }
+                let alert_tx_clone = alert_tx.clone();
+                let advisor_clone = Arc::clone(advisor);
+                tokio::spawn(async move {
+                    advisor_clone.register_ws_sender(alert_tx_clone).await;
+                });
                 let alert_manager = Arc::clone(&server.observability.alert_manager);
                 tokio::spawn(async move {
                     use crate::observability::alert_manager::AlertSeverity;
@@ -1818,14 +1819,20 @@ fn degraded_openai_message(err: &anyhow::Error) -> String {
 /// Returns an error if the write times out or the connection is broken.
 /// Write data to a TcpStream with a 30-second timeout.
 /// Returns an error if the write times out or the connection is broken.
-async fn tcp_write_timeout(socket: &mut TcpStream, data: &[u8]) -> Result<()> {
+async fn tcp_write_timeout(
+    socket: &mut (impl tokio::io::AsyncWrite + Unpin),
+    data: &[u8],
+) -> Result<()> {
     tokio::time::timeout(std::time::Duration::from_secs(30), socket.write_all(data))
         .await
         .map_err(|_| anyhow::anyhow!("timeout writing to socket"))?
         .map_err(|e| anyhow::anyhow!("socket write error: {e}"))
 }
 
-async fn write_openai_sse_data(socket: &mut TcpStream, payload: &serde_json::Value) -> Result<()> {
+async fn write_openai_sse_data(
+    socket: &mut (impl tokio::io::AsyncWrite + Unpin),
+    payload: &serde_json::Value,
+) -> Result<()> {
     let json_str = serde_json::to_string(payload)?;
     // Pre-allocate: "data: " (6) + json + "\n\n" (2)
     let mut frame = String::with_capacity(6 + json_str.len() + 2);
@@ -1840,7 +1847,7 @@ async fn write_openai_sse_data(socket: &mut TcpStream, payload: &serde_json::Val
     Ok(())
 }
 
-async fn write_openai_sse_done(socket: &mut TcpStream) -> Result<()> {
+async fn write_openai_sse_done(socket: &mut (impl tokio::io::AsyncWrite + Unpin)) -> Result<()> {
     tcp_write_timeout(socket, b"data: [DONE]\n\n").await?;
     tokio::time::timeout(std::time::Duration::from_secs(30), socket.flush())
         .await
@@ -3797,9 +3804,7 @@ async fn route_rpc_over_tls(server: &AcpServer, request: JsonRpcRequest) -> serd
     // For the mTLS path, we delegate to the existing handle_request function
     // which sends responses through server.output. To capture the response,
     // we temporarily replace the output with a buffer.
-    use crate::acp::r#impl::io::send_error;
     use crate::acp::r#impl::request::handle_request;
-    use crate::rpc_protocol::JsonRpcRequest;
 
     // We use a capture mechanism: the handle_request writes to server.output.
     // For mTLS, we can't intercept this easily, so we return a placeholder
@@ -3809,18 +3814,19 @@ async fn route_rpc_over_tls(server: &AcpServer, request: JsonRpcRequest) -> serd
     // The request is processed through the standard path; errors/notifications
     // are written to server.output as usual. For the mTLS HTTP response, we
     // return a minimal JSON-RPC envelope.
+    let method = request.method.clone();
     match handle_request(server, request).await {
         Ok(()) => {
             serde_json::json!({
                 "ok": true,
-                "method": request.method,
+                "method": method,
             })
         }
         Err(e) => {
             serde_json::json!({
                 "ok": false,
                 "error": format!("{:#}", e),
-                "method": request.method,
+                "method": method,
             })
         }
     }
@@ -3944,22 +3950,94 @@ async fn handle_mtls_http_connection(
         return Ok(());
     }
 
-    // Reject SSE-streaming endpoints over mTLS (not yet supported)
+    // ── SSE streaming endpoints over mTLS ──────────────────────────
+    // Wrap the TlsStream and pass it through the same SSE path used by
+    // handle_http_connection (GAP-B54-025).
     if parsed.path == "/chat/stream"
         || parsed.path == "/v1/chat/completions"
         || parsed.path == "/v1/responses"
     {
-        tls_write_http_json(
-            &mut tls_stream,
-            501,
-            serde_json::json!({
-                "error": "Not Implemented",
-                "message": "SSE streaming over mTLS is not yet supported. Use plain HTTP or a TLS-terminating proxy.",
-                "code": "MTLS_SSE_NOT_SUPPORTED",
-            }),
-            &cors_headers,
-        )
-        .await?;
+        // Parse body for SSE streaming
+        let body_value: serde_json::Value = match serde_json::from_str(parsed.body_initial_part) {
+            Ok(v) => v,
+            Err(_) => {
+                tls_write_http_json(
+                    &mut tls_stream,
+                    400,
+                    serde_json::json!({"error": "Invalid JSON body"}),
+                    &cors_headers,
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+
+        // Write SSE headers through the TLS stream
+        write_sse_headers(&mut tls_stream, &cors_headers).await?;
+
+        let params: crate::acp::r#impl::chat::ChatParams = match serde_json::from_value(body_value)
+        {
+            Ok(p) => p,
+            Err(e) => {
+                write_sse_event(
+                    &mut tls_stream,
+                    "error",
+                    &serde_json::json!({"message": format!("Invalid chat params: {}", e)}),
+                )
+                .await?;
+                let _ = tls_stream.shutdown().await;
+                return Ok(());
+            }
+        };
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+        let trace = http_trace_context("chat.stream");
+        let server_ref = Arc::clone(&server);
+        let task = tokio::spawn(async move {
+            crate::acp::r#impl::chat::process_chat_request(
+                server_ref.as_ref(),
+                &params,
+                Some(crate::acp::r#impl::chat::StreamObserver::sse(tx)),
+                &trace,
+                None,
+                None,
+            )
+            .await
+        });
+
+        while let Some(frame) = rx.recv().await {
+            if let Err(err) = write_sse_event(&mut tls_stream, frame.event, &frame.payload).await {
+                task.abort();
+                warn!("mTLS SSE write error: {}", err);
+                let _ = tls_stream.shutdown().await;
+                return Ok(());
+            }
+        }
+
+        match task.await {
+            Ok(Ok(result)) => {
+                let result = inject_platform_profiles_if_absent(result, "chat");
+                write_sse_event(&mut tls_stream, "result", &result).await?;
+            }
+            Ok(Err(err)) => {
+                write_sse_event(
+                    &mut tls_stream,
+                    "error",
+                    &serde_json::json!({"message": err.to_string()}),
+                )
+                .await?;
+            }
+            Err(err) => {
+                write_sse_event(
+                    &mut tls_stream,
+                    "error",
+                    &serde_json::json!({"message": format!("task panicked: {}", err)}),
+                )
+                .await?;
+            }
+        }
+
+        let _ = tls_stream.shutdown().await;
         return Ok(());
     }
 
@@ -4322,7 +4400,10 @@ async fn write_http_json_response(
     Ok(())
 }
 
-async fn write_sse_headers(socket: &mut TcpStream, extra_headers: &str) -> Result<()> {
+async fn write_sse_headers(
+    socket: &mut (impl tokio::io::AsyncWrite + Unpin),
+    extra_headers: &str,
+) -> Result<()> {
     let header_bytes = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\nX-Accel-Buffering: no\r\n{}\r\n",
         extra_headers
@@ -4332,7 +4413,7 @@ async fn write_sse_headers(socket: &mut TcpStream, extra_headers: &str) -> Resul
 }
 
 async fn write_sse_event(
-    socket: &mut TcpStream,
+    socket: &mut (impl tokio::io::AsyncWrite + Unpin),
     event: &str,
     payload: &serde_json::Value,
 ) -> Result<()> {

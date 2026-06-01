@@ -1272,7 +1272,7 @@ pub(crate) async fn process_chat_request(
                                 );
                                 let mut enriched = String::from("[Processed content]:");
                                 if !processed.text.is_empty() {
-                                    enriched.push_str("\n");
+                                    enriched.push('\n');
                                     enriched.push_str(&processed.text);
                                 }
                                 for (i, img_b64) in processed.images.iter().enumerate() {
@@ -1303,15 +1303,11 @@ pub(crate) async fn process_chat_request(
                     if let Ok(bytes) = tokio::fs::read(path).await {
                         let ext_lower = ext.to_lowercase();
                         let input = match ext_lower.as_str() {
-                            e if matches!(e, "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp") => {
+                            "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" => {
                                 MultimodalInput::Image(bytes)
                             }
-                            e if matches!(e, "mp3" | "wav" | "flac" | "ogg" | "m4a") => {
-                                MultimodalInput::Audio(bytes)
-                            }
-                            e if matches!(e, "mp4" | "avi" | "mkv" | "mov" | "webm") => {
-                                MultimodalInput::Video(bytes)
-                            }
+                            "mp3" | "wav" | "flac" | "ogg" | "m4a" => MultimodalInput::Audio(bytes),
+                            "mp4" | "avi" | "mkv" | "mov" | "webm" => MultimodalInput::Video(bytes),
                             _ => MultimodalInput::Document(bytes, ext_lower),
                         };
                         let processed = mp.process_input(&input).await;
@@ -1324,7 +1320,7 @@ pub(crate) async fn process_chat_request(
                             let mut enriched = String::from("[Processed file content]:");
                             enriched.push_str(&format!(" file={}", file_path));
                             if !processed.text.is_empty() {
-                                enriched.push_str("\n");
+                                enriched.push('\n');
                                 enriched.push_str(&processed.text);
                             }
                             for (i, img_b64) in processed.images.iter().enumerate() {
@@ -1432,6 +1428,7 @@ pub(crate) async fn process_chat_request(
     )
     .await?;
 
+    let _agent_sel_name = agent_sel.capability_selected_agent.clone();
     let capability_info = crate::acp::helpers::response_assembler::CapabilityRoutingInfo {
         selected_agent: agent_sel.capability_selected_agent,
         recommended_mode: agent_sel.capability_recommended_mode,
@@ -1458,6 +1455,30 @@ pub(crate) async fn process_chat_request(
             "MultimodalProcessor: injected context as system message"
         );
     }
+
+    // ── GAP-B54-014: AgentMemoryBus — inject relevant memories into context ──
+    if let Some(memory_ctx) = {
+        use crate::memory::agent_memory_bus::{AgentMemoryBus, AGENT_MEMORY_BUS};
+        let bus = AGENT_MEMORY_BUS.get_or_init(AgentMemoryBus::new_default);
+        let task_desc = extract_task_description(&params.messages);
+        bus.retrieve_context_for_agent(
+            _agent_sel_name.as_deref().unwrap_or("unknown"),
+            phase_name,
+            &task_desc,
+            5,
+        )
+    } {
+        let ctx_msg = crate::agent::Message {
+            role: "system".to_string(),
+            content: format!("[AgentMemoryBus context]\n{}", memory_ctx),
+        };
+        agent_messages.insert(0, ctx_msg);
+        tracing::info!(
+            "AgentMemoryBus: injected {} bytes of memory context",
+            memory_ctx.len()
+        );
+    }
+
     let layered_prompt_segments = agent_sel.layered_prompt_segments;
     let base_agent_options = agent_sel.base_agent_options;
     let risk_policy = agent_sel.risk_policy;
@@ -1721,6 +1742,7 @@ pub(crate) async fn process_chat_request(
             unhealthy_fallback_agent,
             enable_high_risk_multi_agent_vote,
             max_vote_agents,
+            tenant_id,
         )
         .await;
 
@@ -2234,6 +2256,22 @@ pub(crate) async fn process_chat_request(
                         )
                         .await;
                 });
+            }
+        }
+
+        // ── GAP-B54-014: AgentMemoryBus — store agent completion insights ──
+        {
+            use crate::memory::agent_memory_bus::AGENT_MEMORY_BUS;
+            if let Some(bus) = AGENT_MEMORY_BUS.get() {
+                let success = !response_text.is_empty() && last_err.is_none();
+                let task_desc = extract_task_description(&params.messages);
+                bus.store_agent_completion(
+                    &selected_agent,
+                    phase_name,
+                    &task_desc,
+                    &response_text,
+                    success,
+                );
             }
         }
 
@@ -2889,6 +2927,7 @@ async fn execute_fallback_agents(
     unhealthy_fallback_agent: Option<String>,
     enable_high_risk_multi_agent_vote: bool,
     max_vote_agents: usize,
+    tenant_id: &str,
 ) -> FallbackExecutionResult {
     let mut selected_agent = String::new();
     let mut response_text = String::new();
@@ -2961,6 +3000,7 @@ async fn execute_fallback_agents(
         let msg_clone = agent_messages.clone();
         let principles = phase.principles.clone();
         let timeout = request_timeout(phase.options.as_ref());
+        let tenant_id_owned = tenant_id.to_string();
 
         let fut = async move {
             let _permit = sem_clone.acquire().await.map_err(|_| {
@@ -2983,6 +3023,26 @@ async fn execute_fallback_agents(
                 phase_name,
                 trace_id: &trace.trace_id,
             };
+
+            // ── Tenant budget check before LLM call (B54-075) ─────────
+            {
+                let budget_guard = server.tenant_budget.lock().unwrap_or_else(|poisoned| {
+                    warn!("execute_fallback_agents: tenant_budget poisoned, recovering");
+                    poisoned.into_inner()
+                });
+                if let Err(e) = budget_guard.check_can_start(&tenant_id_owned) {
+                    return (
+                        agent_name_owned,
+                        attempt_started,
+                        Err(anyhow::anyhow!(
+                            "tenant '{}' token budget exceeded: {}",
+                            tenant_id_owned,
+                            e
+                        )),
+                    );
+                }
+            }
+
             let result = run_agent_collecting(
                 server,
                 stream_ctx,
@@ -3202,7 +3262,9 @@ async fn run_full_auto_execution(
                 .as_ref()
                 .map(|agents| agents.len() > 1)
                 .unwrap_or(false);
-            dual_review_enabled && review_timeout_policy.eq_ignore_ascii_case("degrade_single")
+            dual_review_enabled
+                && (review_timeout_policy.eq_ignore_ascii_case("degrade_single")
+                    || review_timeout_policy.eq_ignore_ascii_case("warn"))
         })
         .unwrap_or(false);
 

@@ -63,7 +63,7 @@ impl ReviewTimeoutPolicyKind {
             .and_then(|v| v.as_str())
             .unwrap_or("reject");
 
-        if value.eq_ignore_ascii_case("degrade_single") {
+        if value.eq_ignore_ascii_case("degrade_single") || value.eq_ignore_ascii_case("warn") {
             Self::DegradeSingle
         } else {
             Self::Reject
