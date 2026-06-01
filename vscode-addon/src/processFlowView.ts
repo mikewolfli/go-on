@@ -215,66 +215,29 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
     });
 
     try {
-      for (let i = 0; i < process.stages.length; i++) {
-        const stage = process.stages[i];
+      // B51-24: Delegate workflow execution to backend via RPC
+      const result = await this.manager.sendRequest("workflow.execute", {
+        workflowId: processId,
+        name: process.name,
+        stages: process.stages,
+      });
 
-        this._view?.webview.postMessage({
-          type: "stageStatusUpdate",
-          processId,
-          stageIndex: i,
-          status: "running",
-        });
-
-        // Execute stage based on type
-        switch (stage.type) {
-          case "chat": {
-            const result = await this.manager.sendRequest("chat", {
-              messages: [{ role: "user", content: stage.prompt }],
-            });
-            stage.result = this._extractResponseText(result) || "";
-            break;
+      // Update local stages with results from backend
+      if (
+        result &&
+        typeof result === "object" &&
+        Array.isArray((result as Record<string, unknown>).stages)
+      ) {
+        const backendStages = (result as Record<string, unknown>)
+          .stages as ProcessStage[];
+        for (let i = 0; i < backendStages.length; i++) {
+          const backendStage = backendStages[i];
+          if (i < process.stages.length) {
+            process.stages[i].status = backendStage.status ?? "completed";
+            process.stages[i].result = backendStage.result;
+            process.stages[i].completedAt = backendStage.completedAt;
           }
-          case "code": {
-            const codeNotSupported = i18n.getMessage(
-              MessageKeys.processFlowCodeExecutionNotSupported,
-            );
-            this._view?.webview.postMessage({
-              type: "stageResult",
-              processId,
-              stageIndex: i,
-              result: codeNotSupported,
-            });
-            stage.result = codeNotSupported;
-            break;
-          }
-          case "delay":
-            await new Promise((resolve) =>
-              setTimeout(resolve, Number(stage.delay || 0) * 1000),
-            );
-            break;
-          case "manual":
-            // Wait for manual confirmation
-            await vscode.window.showInformationMessage(
-              i18n.getMessage(MessageKeys.processFlowManualStagePrompt, [
-                process.name,
-                String(i + 1),
-                stage.name ?? "-",
-              ]),
-              i18n.getMessage(MessageKeys.processFlowContinueButton),
-            );
-            break;
         }
-
-        stage.status = "completed";
-        stage.completedAt = new Date().toISOString();
-
-        this._view?.webview.postMessage({
-          type: "stageStatusUpdate",
-          processId,
-          stageIndex: i,
-          status: "completed",
-          result: stage.result,
-        });
       }
 
       process.status = "completed";

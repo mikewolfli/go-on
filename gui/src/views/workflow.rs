@@ -17,12 +17,10 @@ thread_local! {
 ///
 /// This is a static estimate — NOT derived from actual run history.
 /// It serves as an upper bound for the progress bar and remaining-time
-/// display. A more accurate approach would store `workflow_durations:
-/// Vec<f64>` in the view struct, recording actual durations on completion
-/// and using the median of past N runs as the estimate.
-///
-/// Tune this constant to match your typical workflow runtime.
-const ESTIMATED_WORKFLOW_SECS: f64 = 300.0;
+/// display. When workflows report real `completed_steps` / `total_steps` in
+/// the future, that data will be used directly. Currently, since the backend
+/// does not expose step-level progress, an indeterminate pulsing bar is shown
+/// for active runs.
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WorkflowStep {
@@ -78,25 +76,24 @@ pub struct WorkflowView {
 }
 
 impl WorkflowView {
-    fn estimated_progress(run: &WorkflowRunRecord) -> f32 {
+    /// Returns progress in [0, 1] if real step data is available, or
+    /// `None` to signal an indeterminate (pulsing) state.
+    fn estimated_progress(run: &WorkflowRunRecord) -> Option<f32> {
         match run.status.as_str() {
-            "queued" => 0.05,
+            "queued" => Some(0.05),
             "running" | "paused" => {
-                let elapsed = Self::run_duration_secs(run).unwrap_or(0) as f32;
-                (elapsed / ESTIMATED_WORKFLOW_SECS as f32).clamp(0.08, 0.92)
+                // No real completed_steps / total_steps from backend yet.
+                // Return None to indicate indeterminate progress.
+                None
             }
-            "succeeded" | "failed" | "cancelled" => 1.0,
-            _ => 0.0,
+            "succeeded" | "failed" | "cancelled" => Some(1.0),
+            _ => Some(0.0),
         }
     }
 
-    fn estimated_remaining_secs(run: &WorkflowRunRecord) -> Option<i64> {
-        if !matches!(run.status.as_str(), "queued" | "running" | "paused") {
-            return None;
-        }
-
-        let elapsed = Self::run_duration_secs(run).unwrap_or(0);
-        Some((ESTIMATED_WORKFLOW_SECS as i64 - elapsed).max(0))
+    fn estimated_remaining_secs(_run: &WorkflowRunRecord) -> Option<i64> {
+        // No real step data from backend; cannot estimate remaining time.
+        None
     }
 
     fn format_local_ts(ts: i64) -> String {
@@ -762,14 +759,23 @@ impl WorkflowView {
 
                                     if let Some(run) = &self.selected_run_detail {
                                         ui.add_space(6.0);
-                                        let estimated_progress = Self::estimated_progress(run);
+                                        let progress_opt = Self::estimated_progress(run);
                                         egui::Frame::group(ui.style()).show(ui, |ui| {
                                             ui.label(i18n.t("workflow.activeSummary"));
-                                            ui.add(
-                                                egui::ProgressBar::new(estimated_progress)
-                                                    .desired_width(ui.available_width())
-                                                    .show_percentage(),
-                                            );
+                                            if let Some(progress) = progress_opt {
+                                                ui.add(
+                                                    egui::ProgressBar::new(progress)
+                                                        .desired_width(ui.available_width())
+                                                        .show_percentage(),
+                                                );
+                                            } else {
+                                                // Indeterminate (pulsing) bar when no real step data
+                                                ui.add(
+                                                    egui::ProgressBar::new(0.5)
+                                                        .desired_width(ui.available_width())
+                                                        .animate(true),
+                                                );
+                                            }
                                             ui.horizontal_wrapped(|ui| {
                                                 if let Some(duration_secs) =
                                                     Self::run_duration_secs(run)

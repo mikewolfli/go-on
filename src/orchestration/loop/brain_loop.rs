@@ -23,7 +23,7 @@
 //! the [`ToolRegistry`], but new code should prefer the CapabilityBus path.
 
 // Deprecated module — retained for backward-compatible serialized data (GAP-46-07).
-#![cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))]
+// F-GAP-51: dead_code allowed on items below when sub-bus-tool-future is disabled
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -49,6 +49,7 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// The phase of the brain loop at a given point in time.
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum BrainLoopState {
     #[default]
@@ -60,6 +61,7 @@ pub enum BrainLoopState {
     Failed,
 }
 
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 impl BrainLoopState {
     /// Returns `true` for terminal (non-recoverable) states.
     pub fn is_terminal(self) -> bool {
@@ -72,6 +74,7 @@ impl BrainLoopState {
 // ---------------------------------------------------------------------------
 
 /// A single atomic step in the brain loop.
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrainLoopStep {
     pub id: String,
@@ -85,6 +88,7 @@ pub struct BrainLoopStep {
 }
 
 /// Configuration that tunes the behaviour of the brain loop.
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 #[derive(Debug, Clone)]
 pub struct BrainLoopConfig {
     /// Maximum number of Plan→Execute→Reflect→Replan iterations.
@@ -110,7 +114,8 @@ impl Default for BrainLoopConfig {
 }
 
 /// Reflection produced after analysing a plan + result pair.
-#[derive(Debug, Clone)]
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Reflection {
     pub score: f64,
     pub issues: Vec<String>,
@@ -119,6 +124,7 @@ pub struct Reflection {
 }
 
 /// Summary report returned by [`BrainLoop::run`].
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrainLoopReport {
     pub iterations: usize,
@@ -128,6 +134,7 @@ pub struct BrainLoopReport {
 }
 
 /// Runtime metrics snapshot.
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BrainLoopProfile {
     pub state: BrainLoopState,
@@ -158,12 +165,14 @@ struct BrainLoopInner {
 ///
 /// All mutable state is behind `Arc<Mutex<…>>` so the struct can be
 /// cloned and shared across threads.
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 #[derive(Clone)]
 pub struct BrainLoop {
     inner: Arc<Mutex<BrainLoopInner>>,
     next_step_id: Arc<AtomicU64>,
 }
 
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 impl BrainLoop {
     /// Create a new brain loop with the given configuration.
     ///

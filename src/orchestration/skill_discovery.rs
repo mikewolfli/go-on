@@ -16,7 +16,7 @@
 //!   matching with scoring, ranking, and result caching.
 //!
 //! Types are consumed through a global OnceLock static in tools_pack.rs.
-#![cfg_attr(not(test), allow(dead_code))]
+// F-GAP-51: dead_code allowed on items below in non-test builds (consumed via OnceLock)
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -56,6 +56,7 @@ const MAX_CACHE_ENTRIES: usize = 200;
 /// A single entry in the skill index, holding all metadata needed for
 /// semantic search and scoring.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(not(test), allow(dead_code))] // F-GAP-51 — consumed via OnceLock in tools_pack.rs
 pub struct SkillIndexEntry {
     pub name: String,
     pub description: String,
@@ -146,6 +147,7 @@ struct CachedResult {
 
 /// A scored skill match returned from discovery.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(not(test), allow(dead_code))] // F-GAP-51 — consumed via OnceLock
 pub struct ScoredSkill {
     pub name: String,
     pub description: String,
@@ -163,11 +165,13 @@ pub struct ScoredSkill {
 
 /// In-memory index of registered skills with token-based similarity search.
 #[derive(Debug, Clone)]
+#[cfg_attr(not(test), allow(dead_code))] // F-GAP-51 — consumed via OnceLock
 pub struct SkillIndex {
     entries: Vec<SkillIndexEntry>,
     last_built: Instant,
 }
 
+#[cfg_attr(not(test), allow(dead_code))] // F-GAP-51 — consumed via OnceLock
 impl SkillIndex {
     /// Create an empty index.
     pub fn new() -> Self {
@@ -240,6 +244,7 @@ impl SkillIndex {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))] // F-GAP-51 — consumed via OnceLock
 impl Default for SkillIndex {
     fn default() -> Self {
         Self::new()
@@ -255,6 +260,7 @@ impl Default for SkillIndex {
 /// Maintains a result cache keyed by query text. Cache entries expire
 /// after `CACHE_TTL` (5 minutes). The index is lazily rebuilt from the
 /// registry when `discover()` is called and the index is empty or stale.
+#[cfg_attr(not(test), allow(dead_code))] // F-GAP-51 — consumed via OnceLock
 pub struct SkillDiscovery {
     index: SkillIndex,
     cache: HashMap<String, CachedResult>,
@@ -266,6 +272,7 @@ pub struct SkillDiscovery {
     registry_ref: Option<Arc<Mutex<SkillRegistry>>>,
 }
 
+#[cfg_attr(not(test), allow(dead_code))] // F-GAP-51 — consumed via OnceLock
 impl SkillDiscovery {
     /// Create a new discovery engine.
     pub fn new() -> Self {
@@ -346,7 +353,7 @@ impl SkillDiscovery {
 
     /// Invalidate all cached results (e.g., after skill registry changes).
     #[allow(dead_code)]
-// F-GAP-49 — reserved for future use
+    // F-GAP-49 — reserved for future use
     pub fn invalidate_cache(&mut self) {
         self.cache.clear();
         self.insertion_order.clear();
@@ -365,6 +372,7 @@ impl SkillDiscovery {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))] // F-GAP-51 — consumed via OnceLock
 impl Default for SkillDiscovery {
     fn default() -> Self {
         Self::new()

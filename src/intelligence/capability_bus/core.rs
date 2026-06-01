@@ -51,7 +51,6 @@ use crate::intelligence::continuous_learning::ContinuousLearningCenter;
 use crate::intelligence::discovery::DiscoveryCenter;
 use crate::intelligence::evolution_graph::{EvolutionGraph, EvolutionStage, TrendDirection};
 
-use crate::intelligence::lock_guard;
 use crate::intelligence::matcher::ScenarioMatcher;
 use crate::intelligence::metacognitive::MetacognitiveController;
 use crate::intelligence::now_ms;
@@ -62,6 +61,7 @@ use crate::intelligence::reinforcement::learning::{
 use crate::intelligence::reputation::ReputationStore;
 use crate::intelligence::self_model::SelfModelCore;
 use crate::intelligence::world_model::WorldModel;
+use crate::intelligence::{lock_guard, read_guard, write_guard};
 use crate::observability::provenance::{make_entry, ProvenanceLedger};
 #[cfg(any(
     feature = "sub-bus-tool",
@@ -78,7 +78,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::VecDeque;
 use std::env;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use tokio::time::{timeout, Duration};
 use tracing::warn;
@@ -512,10 +512,10 @@ pub struct CapabilityBus {
     pub harness: Arc<HarnessBus>,
 
     /// Workflow learning bus — historical execution outcomes
-    pub learning_bus: Arc<Mutex<WorkflowLearningBus>>,
+    pub learning_bus: Arc<RwLock<WorkflowLearningBus>>,
 
     /// Knowledge bus — reusable solution insights
-    pub knowledge_bus: Arc<Mutex<KnowledgeBus>>,
+    pub knowledge_bus: Arc<RwLock<KnowledgeBus>>,
 
     /// Reputation store — per-agent EMA reliability scores
     pub reputation: Arc<Mutex<ReputationStore>>,
@@ -533,10 +533,10 @@ pub struct CapabilityBus {
     pub reward_fn: Arc<Mutex<RewardFunction>>,
 
     /// Bus event history (for observability / tracing)
-    pub event_history: Arc<Mutex<VecDeque<BusEvent>>>,
+    pub event_history: Arc<RwLock<VecDeque<BusEvent>>>,
 
     /// Capability bus profile (for governance.status)
-    pub profile: Arc<Mutex<CapabilityBusProfile>>,
+    pub profile: Arc<RwLock<CapabilityBusProfile>>,
 
     /// Workflow registry — named workflow presets for workflow-based routing
     workflow_registry: Option<Arc<Mutex<WorkflowRegistry>>>,
@@ -659,15 +659,15 @@ impl CapabilityBus {
     ) -> Self {
         Self {
             harness,
-            learning_bus: Arc::new(Mutex::new(WorkflowLearningBus::new(1000))),
-            knowledge_bus: Arc::new(Mutex::new(KnowledgeBus::default())),
+            learning_bus: Arc::new(RwLock::new(WorkflowLearningBus::new(1000))),
+            knowledge_bus: Arc::new(RwLock::new(KnowledgeBus::default())),
             reputation: Arc::new(Mutex::new(reputation)),
             capability_graph: Arc::new(Mutex::new(capability_graph)),
             q_learning: Arc::new(Mutex::new(q_learning)),
             experience: Arc::new(Mutex::new(experience)),
             reward_fn: Arc::new(Mutex::new(reward_fn)),
-            event_history: Arc::new(Mutex::new(VecDeque::with_capacity(100))),
-            profile: Arc::new(Mutex::new(CapabilityBusProfile::default())),
+            event_history: Arc::new(RwLock::new(VecDeque::with_capacity(100))),
+            profile: Arc::new(RwLock::new(CapabilityBusProfile::default())),
             workflow_registry: None,
             provenance_ledger,
             schema_registry: Arc::new(Mutex::new(SchemaRegistry::new())),
@@ -827,7 +827,7 @@ impl CapabilityBus {
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
 
-        let mut history = lock_guard(&self.event_history);
+        let mut history = write_guard(&self.event_history);
         history.push_back(BusEvent {
             timestamp_ms: now_ms,
             stage: stage.to_string(),
@@ -901,14 +901,14 @@ impl CapabilityBus {
         let cap_agents = lock_guard(&self.capability_graph).total_agents();
         let rep_snapshot = lock_guard(&self.reputation).snapshot();
         let _learning_rates = {
-            let agents: Vec<String> = lock_guard(&self.learning_bus)
+            let agents: Vec<String> = read_guard(&self.learning_bus)
                 .snapshot()
                 .iter()
                 .map(|e| e.agent.clone())
                 .collect();
             agents
         };
-        let learning_snapshot = lock_guard(&self.learning_bus).snapshot();
+        let learning_snapshot = read_guard(&self.learning_bus).snapshot();
 
         // Phase 4: Query ObservabilityBus for healthy agents
         #[cfg(feature = "sub-bus-observability")]
@@ -1063,6 +1063,20 @@ impl CapabilityBus {
                         .collect();
                     candidates = all;
                 }
+
+                // Exclude agents that are degrading according to EvolutionGraph
+                let degrading_agents: Vec<String> = self
+                    .evolution_graph
+                    .lock()
+                    .map(|eg| {
+                        eg.find_degrading_capabilities()
+                            .into_iter()
+                            .map(|(agent, _, _)| agent)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                candidates.retain(|name| !degrading_agents.contains(name));
+
                 candidates
             })
             .unwrap_or_default();
@@ -1200,7 +1214,7 @@ impl CapabilityBus {
         let _healthy_agents_count = sensing.healthy_agents.len();
 
         {
-            let mut p = lock_guard(&self.profile);
+            let mut p = write_guard(&self.profile);
             p.routing_count = p.routing_count.saturating_add(1);
             p.last_route_duration_ms = start.elapsed().as_millis() as u64;
         }
@@ -1422,7 +1436,7 @@ impl CapabilityBus {
 
         // 1. Write to learning bus
         {
-            let mut lb = lock_guard(&self.learning_bus);
+            let mut lb = write_guard(&self.learning_bus);
             lb.push(WorkflowLearningEvent {
                 task_type: task_type.to_string(),
                 agent: agent.to_string(),
@@ -1520,6 +1534,10 @@ impl CapabilityBus {
             &serde_json::json!({"success": success, "duration_ms": duration_ms}),
             vec![],
         ));
+
+        // 7. Record execution result in SelfModel for per-capability EMA tracking
+        self.self_model
+            .record_execution_result(agent, success, duration_ms);
 
         // `complete_flow` is called automatically by `FlowGuard` RAII guard.
     }
@@ -1662,6 +1680,9 @@ impl CapabilityBus {
     }
 
     /// Consolidate experience into continuous learning center.
+    ///
+    /// Periodically triggers forgetting detection and experience replay
+    /// to close the online learning loop (F-GAP-51).
     fn evolve_continuous_learning(
         &self,
         state: &(String, String),
@@ -1687,9 +1708,74 @@ impl CapabilityBus {
                 e
             );
         }
+
+        // ── Periodic maintenance: detect forgetting & replay (every 10th call) ──
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static CL_MAINTENANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
+        let count = CL_MAINTENANCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+
+        if count.is_multiple_of(10) {
+            // 1. Detect forgetting and reinforce forgotten memories
+            let forgotten = {
+                let cl = lock_guard(&self.continuous_learning);
+                cl.detect_forgetting()
+            };
+            for curve in &forgotten {
+                if let Err(e) =
+                    lock_guard(&self.continuous_learning).reinforce_memory(&curve.memory_id)
+                {
+                    warn!("evolve: reinforce_memory failed: {}", e);
+                }
+            }
+            if !forgotten.is_empty() {
+                tracing::info!(
+                    "evolve: continuous_learning reinforced {} forgotten memories",
+                    forgotten.len()
+                );
+            }
+
+            // 2. Replay important memories and feed into Q-learning
+            let replayed = {
+                let cl = lock_guard(&self.continuous_learning);
+                cl.replay_important_memories(3)
+            };
+            for mem in &replayed {
+                if let Ok(data) = serde_json::from_str::<serde_json::Value>(&mem.data) {
+                    // Parse the stored (state, action, reward) triple
+                    let state_arr = data["state"].as_array();
+                    let action_str = data["action"].as_str();
+                    let replay_reward = data["reward"].as_f64();
+
+                    if let (Some(arr), Some(action_str), Some(replay_reward)) =
+                        (state_arr, action_str, replay_reward)
+                    {
+                        if arr.len() >= 2 {
+                            if let (Some(s0), Some(s1)) = (arr[0].as_str(), arr[1].as_str()) {
+                                let replayed_state = (s0.to_string(), s1.to_string());
+                                // Perform a mini Q-learning update with
+                                // replayed experience using the current
+                                // state as the next_state placeholder.
+                                lock_guard(&self.q_learning).update(
+                                    &replayed_state,
+                                    action_str,
+                                    replay_reward,
+                                    state,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            if !replayed.is_empty() {
+                tracing::info!(
+                    "evolve: continuous_learning replayed {} memories into Q-learning",
+                    replayed.len()
+                );
+            }
+        }
     }
 
-    /// Record observation in metacognitive controller.
+    /// Record observation in metacognitive controller and feed feedback into Q-learning.
     fn evolve_metacognitive(
         &self,
         state: &(String, String),
@@ -1706,6 +1792,35 @@ impl CapabilityBus {
             &format!("reward={}, quality={}", reward, quality_score),
         ) {
             warn!("evolve: metacognitive.record_observation failed: {}", e);
+        }
+
+        // ── Generate metacognitive feedback and feed into Q-learning (F-GAP-51) ──
+        let feedback = self.metacognitive.generate_evolve_feedback();
+        let reward_multiplier = feedback["reward_multiplier"].as_f64().unwrap_or(1.0);
+        let suggested_exploration_rate = feedback["suggested_exploration_rate"]
+            .as_f64()
+            .unwrap_or(0.1);
+
+        // Apply suggested exploration rate to Q-learning agent for future decisions.
+        {
+            let mut ql = lock_guard(&self.q_learning);
+            ql.exploration_rate = suggested_exploration_rate;
+        }
+
+        // Scale the Q-value for this (state, action) pair by the reward_multiplier
+        // to retroactively incorporate metacognitive insight into the Q-table.
+        if (reward_multiplier - 1.0).abs() > 0.001 {
+            let mut ql = lock_guard(&self.q_learning);
+            if let Some(state_actions) = ql.q_table.get_mut(state) {
+                if let Some(q_val) = state_actions.get_mut(action) {
+                    *q_val *= reward_multiplier;
+                }
+            }
+            if let Some(state_actions) = ql.q_table_2.get_mut(state) {
+                if let Some(q_val) = state_actions.get_mut(action) {
+                    *q_val *= reward_multiplier;
+                }
+            }
         }
     }
 
@@ -2068,6 +2183,21 @@ impl CapabilityBus {
             use std::sync::atomic::{AtomicU64, Ordering};
             static EVOLVE_COUNTER: AtomicU64 = AtomicU64::new(0);
             let evolve_count = EVOLVE_COUNTER.fetch_add(1, Ordering::Relaxed);
+
+            // Periodic world_model causal pattern discovery (every 100 cycles)
+            if evolve_count.is_multiple_of(100) {
+                let discoveries = self.world_model.discover_causal_patterns(60_000);
+                if !discoveries.is_empty() {
+                    tracing::info!(
+                        "evolve: world_model discovered {} causal pattern(s)",
+                        discoveries.len()
+                    );
+                    for d in &discoveries {
+                        tracing::debug!("evolve: causal discovery: {}", d);
+                    }
+                }
+            }
+
             if evolve_count.is_multiple_of(50) && quality_score > 0.5 {
                 let insights = self.discovery.abstract_knowledge();
                 if !insights.is_empty() {
@@ -2201,15 +2331,15 @@ impl CapabilityBus {
     // ------------------------------------------------------------------
 
     pub fn snapshot_events(&self) -> Vec<BusEvent> {
-        lock_guard(&self.event_history).iter().cloned().collect()
+        read_guard(&self.event_history).iter().cloned().collect()
     }
 
     pub fn capability_bus_profile(&self) -> CapabilityBusProfile {
-        let mut p = lock_guard(&self.profile);
-        p.learning_events_count = lock_guard(&self.learning_bus).len();
+        let mut p = write_guard(&self.profile);
+        p.learning_events_count = read_guard(&self.learning_bus).len();
         p.reputation_agents_count = lock_guard(&self.reputation).tracked_agent_count();
         p.capability_graph_agents = lock_guard(&self.capability_graph).total_agents();
-        p.knowledge_insights_count = lock_guard(&self.knowledge_bus).snapshot().len();
+        p.knowledge_insights_count = read_guard(&self.knowledge_bus).snapshot().len();
         p.q_learning_table_size = lock_guard(&self.q_learning)
             .q_table
             .values()
@@ -2219,7 +2349,7 @@ impl CapabilityBus {
             let exp = lock_guard(&self.experience);
             p.experience_case_count = exp.success_cases.len() + exp.failure_patterns.len();
         }
-        p.event_history_len = lock_guard(&self.event_history).len();
+        p.event_history_len = read_guard(&self.event_history).len();
         p.workflow_presets_count = self
             .workflow_registry
             .as_ref()

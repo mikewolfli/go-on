@@ -10,6 +10,7 @@ use crate::i18n::{t, tf};
 use crate::intelligence::now_ms;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -124,6 +125,36 @@ pub struct ForgettingCurve {
     pub decay_rate: f64,
 }
 
+/// Tracks consecutive low retention scores for forgetting risk detection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForgettingRiskRecord {
+    /// The memory ID this risk record belongs to.
+    pub memory_id: String,
+    /// Number of consecutive checks where retention_score < 0.1.
+    pub consecutive_critical: u32,
+    /// Number of consecutive checks where retention_score < 0.3 (but >= 0.1).
+    pub consecutive_low: u32,
+    /// The last recorded retention score.
+    pub last_score: f64,
+    /// Unix millisecond timestamp of the last assessment.
+    pub last_assessed_ms: u64,
+    /// Whether this memory has been flagged for fast eviction.
+    pub flagged_for_eviction: bool,
+}
+
+impl ForgettingRiskRecord {
+    fn new(memory_id: String) -> Self {
+        Self {
+            memory_id,
+            consecutive_critical: 0,
+            consecutive_low: 0,
+            last_score: 1.0,
+            last_assessed_ms: now_ms(),
+            flagged_for_eviction: false,
+        }
+    }
+}
+
 /// A stage in the curriculum schedule.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CurriculumStage {
@@ -221,6 +252,7 @@ struct CenterState {
     tasks: HashMap<String, LearningTask>,
     memories: HashMap<String, ConsolidatedMemory>,
     forgetting_curves: HashMap<String, ForgettingCurve>,
+    forgetting_risks: HashMap<String, ForgettingRiskRecord>,
     curriculum: Vec<CurriculumStage>,
     next_task_id: u64,
     next_memory_id: u64,
@@ -248,6 +280,7 @@ impl ContinuousLearningCenter {
                 tasks: HashMap::new(),
                 memories: HashMap::new(),
                 forgetting_curves: HashMap::new(),
+                forgetting_risks: HashMap::new(),
                 curriculum,
                 next_task_id: 1,
                 next_memory_id: 1,
@@ -527,6 +560,192 @@ impl ContinuousLearningCenter {
             }
             None => 0.0,
         }
+    }
+
+    // ── Retention scoring (GAP-B52-14) ────────────────────────────────────
+
+    /// Compute the retention score for a given memory entry using the
+    /// **Ebbinghaus forgetting curve** formula at a given point in time.
+    ///
+    /// The formula is derived from the exponential decay model:
+    ///
+    /// ```text
+    /// S(t) = I * exp(-d * Δt)
+    /// ```
+    ///
+    /// where:
+    /// - `I` = original strength (importance)
+    /// - `d` = decay rate (per hour)
+    /// - `Δt` = hours elapsed since last reinforcement
+    ///
+    /// Returns a value in `[0.0, 1.0]`.
+    pub fn retention_score(&self, entry: &ConsolidatedMemory, now: u64) -> f64 {
+        let state = lock_guard(&self.state);
+        match state.forgetting_curves.get(&entry.id) {
+            Some(curve) => {
+                let elapsed_ms = now.saturating_sub(curve.last_reinforced_ms);
+                let elapsed_hours = elapsed_ms as f64 / 3_600_000.0;
+                // Ebbinghaus: R = e^(-Δt/S) where S = 1/decay_rate (stability)
+                // We model as: score = importance * exp(-decay_rate * elapsed_hours)
+                entry.importance * (-curve.decay_rate * elapsed_hours).exp()
+            }
+            None => {
+                // No curve → score based purely on recency of consolidation.
+                let elapsed_ms = now.saturating_sub(entry.consolidated_ms);
+                let elapsed_hours = elapsed_ms as f64 / 3_600_000.0;
+                let default_decay = self.config.default_decay_rate;
+                entry.importance * (-default_decay * elapsed_hours).exp()
+            }
+        }
+    }
+
+    /// Detect memories at risk of being forgotten (retention score < 0.3)
+    /// and update their `ForgettingRiskRecord`.
+    ///
+    /// Memories with score < 0.3 are returned for replay consideration.
+    /// Memories with score < 0.1 for 3 consecutive checks are flagged for
+    /// fast eviction.
+    ///
+    /// Returns the list of `ForgettingRiskRecord` entries that are currently
+    /// at risk (score < 0.3).
+    pub fn detect_forgetting_risk(&self) -> Vec<ForgettingRiskRecord> {
+        let mut state = lock_guard(&self.state);
+        let now = now_ms();
+        let mut at_risk = Vec::new();
+
+        // Collect memory IDs to assess.
+        let memory_ids: Vec<String> = state.memories.keys().cloned().collect();
+
+        for id in memory_ids {
+            let (importance, consolidated_ms) = match state.memories.get(&id) {
+                Some(m) => (m.importance, m.consolidated_ms),
+                None => continue,
+            };
+
+            // Compute retention score using the Ebbinghaus formula.
+            let score = match state.forgetting_curves.get(&id) {
+                Some(c) => {
+                    let elapsed_ms = now.saturating_sub(c.last_reinforced_ms);
+                    let elapsed_hours = elapsed_ms as f64 / 3_600_000.0;
+                    importance * (-c.decay_rate * elapsed_hours).exp()
+                }
+                None => {
+                    let elapsed_ms = now.saturating_sub(consolidated_ms);
+                    let elapsed_hours = elapsed_ms as f64 / 3_600_000.0;
+                    importance * (-self.config.default_decay_rate * elapsed_hours).exp()
+                }
+            };
+
+            // Update or create the forgetting risk record.
+            let record = state
+                .forgetting_risks
+                .entry(id.clone())
+                .or_insert_with(|| ForgettingRiskRecord::new(id.clone()));
+
+            // Update consecutive counters.
+            if score < 0.1 {
+                record.consecutive_critical += 1;
+                record.consecutive_low = 0;
+            } else if score < 0.3 {
+                record.consecutive_low += 1;
+                record.consecutive_critical = 0;
+            } else {
+                // Score is healthy; reset counters.
+                record.consecutive_critical = 0;
+                record.consecutive_low = 0;
+            }
+
+            record.last_score = score;
+            record.last_assessed_ms = now;
+
+            // Flag for fast eviction if < 0.1 for 3 consecutive checks.
+            if record.consecutive_critical >= 3 {
+                record.flagged_for_eviction = true;
+            }
+
+            // Collect if at risk (score < 0.3).
+            if score < 0.3 {
+                at_risk.push(record.clone());
+            }
+        }
+
+        at_risk
+    }
+
+    /// Returns the IDs of memories that should be fast-evicted.
+    ///
+    /// A memory is a candidate for fast eviction when its retention score
+    /// has been < 0.1 for 3 consecutive assessments.
+    pub fn fast_evict_candidates(&self) -> Vec<String> {
+        let state = lock_guard(&self.state);
+        state
+            .forgetting_risks
+            .values()
+            .filter(|r| r.flagged_for_eviction)
+            .map(|r| r.memory_id.clone())
+            .collect()
+    }
+
+    /// Schedule a review for a memory entry, returning the `Instant` at which
+    /// the review should occur.
+    ///
+    /// The review interval is calculated from the retention score:
+    /// - Score < 0.1 → review immediately (now)
+    /// - Score < 0.3 → review within 1 hour
+    /// - Score < 0.5 → review within 6 hours
+    /// - Score >= 0.5 → review within 24 hours
+    ///
+    /// This uses an **Expanding Retrieval Practice** schedule similar to
+    /// SuperMemo / Anki spaced-repetition algorithms.
+    pub fn schedule_review(&self, entry: &ConsolidatedMemory) -> Instant {
+        let score = self.retention_score(entry, now_ms());
+        let delay_secs = if score < 0.1 {
+            0
+        } else if score < 0.3 {
+            3600 // 1 hour
+        } else if score < 0.5 {
+            21_600 // 6 hours
+        } else {
+            86_400 // 24 hours
+        };
+        Instant::now() + Duration::from_secs(delay_secs)
+    }
+
+    /// Perform a forgetting review cycle:
+    /// 1. Detect forgetting risks.
+    /// 2. Replay memories at risk (score < 0.3).
+    /// 3. Fast-evict memories with 3 consecutive critical scores.
+    /// 4. Reinforce the replayed memories.
+    ///
+    /// Returns the number of memories replayed and evicted.
+    pub fn review_cycle(&self) -> (usize, usize) {
+        // Step 1: Detect forgetting risks.
+        let at_risk = self.detect_forgetting_risk();
+
+        // Step 2: Replay important at-risk memories.
+        let mut replayed = 0usize;
+        for record in &at_risk {
+            if record.flagged_for_eviction {
+                continue; // Will be evicted instead.
+            }
+            if self.reinforce_memory(&record.memory_id).is_ok() {
+                replayed += 1;
+            }
+        }
+
+        // Step 3: Fast-evict memories flagged for eviction.
+        let evict_ids = self.fast_evict_candidates();
+        let evicted = evict_ids.len();
+        {
+            let mut state = lock_guard(&self.state);
+            for id in &evict_ids {
+                state.memories.remove(id);
+                state.forgetting_curves.remove(id);
+                state.forgetting_risks.remove(id);
+            }
+        }
+
+        (replayed, evicted)
     }
 
     // ── Profile ────────────────────────────────────────────────────────────

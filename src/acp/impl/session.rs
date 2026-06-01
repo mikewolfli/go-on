@@ -152,24 +152,23 @@ impl SessionManager {
     // ------------------------------------------------------------------
 
     /// Authenticate a bearer token and return a [`TokenIntrospectResult`].
-    ///
-    /// When `user_auth_enabled` is `false`, a default admin session is
-    /// returned without any token verification.  This maintains backward
-    /// compatibility for single-user deployments.
+    /// When `user_auth_enabled` is `false`, a default user-level session is
+    /// returned without any token verification.  This degrades security level
+    /// to user permissions (not admin+wildcard) for safer local deploys.
     pub fn authenticate(&self, token: &str) -> TokenIntrospectResult {
         if !self.auth_cfg.user_auth_enabled {
-            let admin_session = UserSession {
-                user_id: "admin".into(),
-                roles: vec!["admin".into()],
+            let user_session = UserSession {
+                user_id: "local-user".into(),
+                roles: vec!["user".into()],
                 tenant_id: None,
-                permissions: vec!["*".into()],
+                permissions: vec!["read".into(), "write".into(), "execute".into()],
                 issued_at: now_ms(),
                 expires_at: now_ms() + 86_400_000,
                 token_type: "bearer".into(),
             };
             return TokenIntrospectResult {
                 valid: true,
-                session: Some(admin_session),
+                session: Some(user_session),
                 reason: None,
             };
         }
@@ -568,19 +567,21 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn test_default_admin_session_when_auth_disabled() {
+    fn test_default_user_session_when_auth_disabled() {
         let auth_cfg = AuthConfig {
             user_auth_enabled: false,
             ..Default::default()
         };
         let mgr = SessionManager::with_auth_config(auth_cfg);
 
-        // Any token (even garbage) should yield an admin session.
+        // Any token (even garbage) should yield a user-level session (not admin+wildcard).
         let result = mgr.authenticate("some-random-token");
         assert!(result.valid, "should be valid when auth disabled");
         let session = result.session.expect("should have a session");
-        assert_eq!(session.user_id, "admin");
-        assert_eq!(session.roles, vec!["admin"]);
+        assert_eq!(session.user_id, "local-user");
+        assert_eq!(session.roles, vec!["user"]);
+        assert_ne!(session.permissions, vec!["*"]);
+        assert!(!session.permissions.is_empty());
     }
 
     // ------------------------------------------------------------------

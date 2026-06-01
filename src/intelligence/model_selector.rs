@@ -128,6 +128,7 @@ pub struct ModelCharacteristics {
 }
 
 /// Model selector that implements automatic selection strategies
+#[derive(Debug)]
 pub struct ModelSelector;
 
 impl ModelSelector {

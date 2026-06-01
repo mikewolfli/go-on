@@ -19,7 +19,7 @@
 //! Results are cached for 5 minutes.
 //!
 //! Types consumed via global OnceLock static in tools_pack.rs.
-#![cfg_attr(not(test), allow(dead_code))]
+// F-GAP-51: dead_code allowed on items below in non-test builds (consumed via OnceLock)
 
 use std::collections::HashMap;
 use std::fs;
@@ -56,6 +56,7 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// A single skill fetched from a remote URL.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(not(test), allow(dead_code))] // F-GAP-51 — consumed via OnceLock
 pub struct RemoteSkill {
     pub name: String,
     pub description: String,
@@ -89,11 +90,12 @@ struct CachedSource {
 /// Index of all skills fetched from URLs listed in the `skills/` folder.
 ///
 /// Consumed via global OnceLock static in tools_pack.rs.
+#[cfg_attr(not(test), allow(dead_code))] // F-GAP-51 — consumed via OnceLock
 pub struct SkillsFolderIndex {
     skills: HashMap<String, RemoteSkill>,
     /// Known source URLs (keyed by URL string).
     #[allow(dead_code)]
-// F-GAP-49 — reserved for future use
+    // F-GAP-49 — reserved for future use
     sources: HashMap<String, CachedSource>,
     /// Directory path.
     skills_dir: PathBuf,
@@ -101,7 +103,7 @@ pub struct SkillsFolderIndex {
     last_scan: Instant,
     /// Last fetch time.
     #[allow(dead_code)]
-// F-GAP-49 — reserved for future use
+    // F-GAP-49 — reserved for future use
     last_fetch: Instant,
 }
 
@@ -130,6 +132,7 @@ async fn fetch_skills_from_url(url: &str) -> Result<serde_json::Value, String> {
     Ok(body)
 }
 
+#[cfg_attr(not(test), allow(dead_code))] // F-GAP-51 — consumed via OnceLock
 impl SkillsFolderIndex {
     /// Create a new index targeting `{config_dir}/skills/`.
     pub fn new(config_dir: Option<&Path>) -> Self {
@@ -152,7 +155,7 @@ impl SkillsFolderIndex {
 
     /// Refresh: rescan folder + re-fetch if stale.
     #[allow(dead_code)]
-// F-GAP-49 — reserved for future use
+    // F-GAP-49 — reserved for future use
     pub fn refresh(&mut self) {
         if self.last_scan.elapsed() >= RESCAN_INTERVAL {
             self.scan_folder();
@@ -237,7 +240,7 @@ impl SkillsFolderIndex {
 
     /// Fetch all URLs that haven't been fetched recently.
     #[allow(dead_code)]
-// F-GAP-49 — reserved for future use
+    // F-GAP-49 — reserved for future use
     fn fetch_all(&mut self) {
         let now = Instant::now();
         let stale_urls: Vec<String> = self
@@ -256,7 +259,7 @@ impl SkillsFolderIndex {
 
     /// Fetch a single URL and parse skills.
     #[allow(dead_code)]
-// F-GAP-49 — reserved for future use
+    // F-GAP-49 — reserved for future use
     fn fetch_url(&mut self, url: &str) {
         debug!("fetching skills from: {}", url);
 
@@ -414,7 +417,7 @@ impl SkillsFolderIndex {
 
     /// Total indexed skills.
     #[allow(dead_code)]
-// F-GAP-49 — reserved for future use
+    // F-GAP-49 — reserved for future use
     pub fn len(&self) -> usize {
         self.skills.len()
     }

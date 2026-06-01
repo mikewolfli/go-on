@@ -1,4 +1,5 @@
 import { ChildProcess, spawn } from "child_process";
+import * as crypto from "crypto";
 import * as http from "http";
 import * as os from "os";
 import * as vscode from "vscode";
@@ -80,9 +81,9 @@ interface ReadableStreamDefaultReaderLike<R = unknown> {
 }
 
 interface FramedReaderCallbacks {
-  onMessage: (msg: FramedMessage) => void;
+  onMessage: (_msg: FramedMessage) => void;
   onPong?: () => void;
-  onError?: (err: Error) => void;
+  onError?: (_err: Error) => void;
 }
 
 /**
@@ -292,12 +293,14 @@ class FramedReader {
  * buffer is full (backpressure).
  */
 class FramedWriter {
-  private writeFn: (data: Uint8Array) => boolean;
+  private writeFn: (_data: Uint8Array) => boolean;
   private queue: Uint8Array[] = [];
   private messageCounter = 0;
+  private sessionId: string;
 
-  constructor(writeFn: (data: Uint8Array) => boolean) {
+  constructor(writeFn: (_data: Uint8Array) => boolean) {
     this.writeFn = writeFn;
+    this.sessionId = `session-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
   }
 
   /**
@@ -306,7 +309,7 @@ class FramedWriter {
    */
   writeMessage(msg: unknown): boolean {
     const enriched: FramedMessage = {
-      message_id: `msg-${++this.messageCounter}-${Date.now()}`,
+      message_id: `msg-${this.sessionId}-${++this.messageCounter}`,
       ...(msg as Record<string, unknown>),
     };
     const json = JSON.stringify(enriched);
@@ -372,6 +375,7 @@ export class GoOnManager {
   private _outputChannel?: vscode.OutputChannel;
   private stdoutBuffer = "";
   private lineBuffer = "";
+  private _droppedBytes = 0;
   private _reconnectAttempts = 0;
   private readonly maxReconnectAttempts = 3;
   private _shutdownInProgress = false;
@@ -395,7 +399,7 @@ export class GoOnManager {
   private useFramedProtocol = false;
   private framedReader: FramedReader | null = null;
   private framedWriter: FramedWriter | null = null;
-  private writerWriteFn: ((data: Uint8Array) => boolean) | null = null;
+  private writerWriteFn: ((_data: Uint8Array) => boolean) | null = null;
 
   // ── Heartbeat ──
   private readonly HEARTBEAT_INTERVAL_MS = 30000;
@@ -463,12 +467,15 @@ export class GoOnManager {
     if (this._shutdownInProgress) {
       throw new Error("Go-On is shutting down. Please wait and try again.");
     }
-    // If an operation is already in flight, await it instead of dropping.
+    // B51-20: If process already exists, resolve immediately.
+    if (this.process) {
+      return Promise.resolve();
+    }
+    // B51-20: If _operationPromise was a failed start, allow new attempt.
+    // The .finally() on the start promise clears _operationPromise on completion.
+    // If it's still set, another start() is in-flight — await it.
     if (this._operationPromise) {
       return this._operationPromise;
-    }
-    if (this.process) {
-      throw new Error("Go-On is already running");
     }
 
     // Store config for potential reconnection
@@ -505,14 +512,23 @@ export class GoOnManager {
         args.push("--protocol-mode", normalizedProtocolMode);
       }
 
-      // Prune known API key env vars — keys should only flow through keyring://
-      const {
-        ANTHROPIC_API_KEY: _ANTHROPIC_API_KEY,
-        OPENAI_API_KEY: _OPENAI_API_KEY,
-        DEEPSEEK_API_KEY: _DEEPSEEK_API_KEY,
-        GITHUB_COPILOT_TOKEN: _GITHUB_COPILOT_TOKEN,
-        ...safeEnv
-      } = process.env;
+      // B51-21: Dynamically detect and prune sensitive env vars
+      // Keys should only flow through keyring://
+      const sensitiveSuffixes = [
+        "_API_KEY",
+        "_SECRET",
+        "_TOKEN",
+        "_SECRET_KEY",
+      ];
+      const safeEnv: Record<string, string | undefined> = {};
+      for (const key of Object.keys(process.env)) {
+        if (
+          sensitiveSuffixes.some((suffix) => key.toUpperCase().endsWith(suffix))
+        ) {
+          continue; // skip sensitive vars — they should only flow through keyring://
+        }
+        safeEnv[key] = process.env[key];
+      }
 
       this.process = spawn(executablePath, args, {
         cwd,
@@ -543,7 +559,18 @@ export class GoOnManager {
           this.stdoutBuffer += output;
           // Cap buffer at 1MB to prevent memory leak
           if (this.stdoutBuffer.length > 1024 * 1024) {
-            this.stdoutBuffer = this.stdoutBuffer.slice(-1024 * 1024);
+            const excess = this.stdoutBuffer.length - 1024 * 1024;
+            // Cut at line boundary to avoid truncating mid-line
+            const cutPoint = this.stdoutBuffer.length - 1024 * 1024;
+            const lastNewline = this.stdoutBuffer.lastIndexOf("\n", cutPoint);
+            if (lastNewline >= 0) {
+              // Cut at the last complete line boundary before the cut point
+              this.stdoutBuffer = this.stdoutBuffer.slice(lastNewline + 1);
+            } else {
+              // No newline found — cut at boundary and note the dropped bytes
+              this.stdoutBuffer = this.stdoutBuffer.slice(cutPoint);
+            }
+            this._droppedBytes += excess;
           }
           const lines = this.stdoutBuffer.split("\n");
           // Keep the last (potentially incomplete) fragment in the buffer
@@ -610,11 +637,14 @@ export class GoOnManager {
                 resolve();
               }
             },
-            reject: () => {
+            reject: (err: unknown) => {
               // Health probe failed via stdin. The process may be running
               // in HTTP mode (acp_http, mcp_http, or adaptive→http) where
               // stdin is not consumed. We fall through — the HTTP probe
               // below will handle this case.
+              this._outputChannel?.appendLine(
+                `[health] stdin health probe rejected: ${err instanceof Error ? err.message : String(err)}`,
+              );
             },
           });
           this.process.stdin.write(JSON.stringify(healthRequest) + "\n");
@@ -633,8 +663,11 @@ export class GoOnManager {
           }
           res.resume();
         });
-        healthReq.on("error", () => {
+        healthReq.on("error", (err: Error) => {
           if (!settled) {
+            this._outputChannel?.appendLine(
+              `[health] HTTP health probe failed: ${err.message}`,
+            );
             // HTTP health check failed — the server may be running in
             // stdio mode instead. The health monitoring loop will pick
             // up any connectivity issues later.
@@ -704,9 +737,26 @@ export class GoOnManager {
       });
     });
 
-    return startPromise.finally(() => {
-      this._operationPromise = null;
-    });
+    return startPromise
+      .finally(() => {
+        this._operationPromise = null;
+      })
+      .then(() => {
+        // B51-03a: Register persistent close listener for normal operation.
+        // The inner close listener inside the start() promise only monitors
+        // the process while the promise is pending. Once startup succeeds,
+        // this listener ensures crashes during normal operation are caught.
+        if (this.process) {
+          this.process.on("close", (code: number) => {
+            if (this._shutdownInProgress) return;
+            if (!this._startupConfig) return;
+            this._outputChannel?.appendLine(
+              `[exit] code ${code} (post-startup)`,
+            );
+            this._handleProcessExit();
+          });
+        }
+      });
   }
 
   private async forceKillProcess(proc: ChildProcess): Promise<void> {
@@ -1106,7 +1156,11 @@ export class GoOnManager {
         if (done) break;
 
         buffer += decoder.decode(value as Uint8Array, { stream: true });
-        const lines = buffer.split("\n");
+        // Normalize line endings before splitting (handle \r\n and \r)
+        const normalizedBuffer = buffer
+          .replace(/\r\n/g, "\n")
+          .replace(/\r/g, "\n");
+        const lines = normalizedBuffer.split("\n");
         buffer = lines.pop() || "";
 
         for (const line of lines) {
@@ -1235,7 +1289,10 @@ export class GoOnManager {
   private _startHeartbeat(): void {
     this._clearHeartbeat();
 
-    // Send the first ping after a short delay
+    // Send first heartbeat immediately (not after 30s interval)
+    this._sendHeartbeatPing();
+
+    // Schedule subsequent pings
     this._scheduleHeartbeatPing();
 
     // Set heartbeat timeout: if no pong within 90s, reconnect
@@ -1421,9 +1478,9 @@ export class GoOnManager {
     // Create a ReadableStream from the Node.js Readable stream
     const rs: ReadableStreamLike<Uint8Array> = new ReadableStreamCtor({
       start(controller: {
-        enqueue: (chunk: Uint8Array) => void;
+        enqueue: (_chunk: Uint8Array) => void;
         close: () => void;
-        error: (err: Error) => void;
+        error: (_err: Error) => void;
       }) {
         nodeStdout.on("data", (chunk: Buffer) => {
           controller.enqueue(new Uint8Array(chunk));
@@ -1664,6 +1721,22 @@ export class GoOnManager {
             template: "config.toml.autopilot-adaptive",
           },
         );
+      }
+
+      // B51-19: After saving API keys, reload the backend config so it picks up the changes
+      // without requiring a full restart.
+      if (this.isRunning()) {
+        try {
+          await this.sendRequest("runtime.reload_config");
+        } catch (reloadError: unknown) {
+          const reloadMsg =
+            reloadError instanceof Error
+              ? reloadError.message
+              : String(reloadError);
+          this._outputChannel?.appendLine(
+            `[setup] runtime.reload_config failed: ${reloadMsg}`,
+          );
+        }
       }
 
       vscode.window.showInformationMessage(

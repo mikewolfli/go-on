@@ -1,6 +1,27 @@
 #[path = "../src/i18n/mod.rs"]
 #[allow(dead_code)]
 mod i18n;
+
+// Stub for approval_engine types used by pua.rs when compiled via #[path].
+// The real approval_engine is part of the go_on library crate.
+pub mod approval_engine {
+    #[derive(Debug)]
+    pub enum ApprovalStatus {
+        Pending,
+        Approved { approver: String, comment: String },
+        Rejected { approver: String, reason: String },
+        AutoDenied { reason: String, escalated: bool },
+        EscalatedToManager { escalated_at_ms: u64 },
+    }
+    #[derive(Debug)]
+    pub struct ApprovalRequest {
+        pub id: String,
+        pub user: String,
+        pub action: String,
+        pub status: ApprovalStatus,
+    }
+}
+
 #[path = "../src/governance/pua.rs"]
 mod pua;
 #[allow(dead_code)]

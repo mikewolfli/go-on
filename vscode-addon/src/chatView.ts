@@ -133,6 +133,18 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     messages.push(message);
     this._sessions.set(this._currentSession, messages);
     await this._saveSessions();
+
+    // B51-23: After each assistant response, sync checkpoint to backend
+    if (message.role === "assistant" && this.manager.isRunning()) {
+      try {
+        await this.manager.sendRequest("checkpoint.create", {
+          session: this._currentSession,
+          messages: [message],
+        });
+      } catch {
+        // Non-critical — local save is sufficient; backend sync is best-effort
+      }
+    }
   }
 
   private _extractResponseText(result: unknown): string | undefined {
@@ -853,7 +865,27 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     this._currentSession = sessionName;
-    const messages = this._getCurrentSessionMessages();
+    let messages = this._getCurrentSessionMessages();
+
+    // B51-23: Try to load messages from backend checkpoint and merge
+    if (this.manager.isRunning()) {
+      try {
+        const remote = await this.manager.sendRequest("checkpoint.load", {
+          session: sessionName,
+        });
+        if (remote && Array.isArray(remote)) {
+          const remoteMessages = remote as ChatMessage[];
+          // Merge: prefer local messages not yet on the backend
+          // If remote has more messages, extend local state
+          if (remoteMessages.length > messages.length) {
+            messages = remoteMessages;
+            this._sessions.set(sessionName, messages);
+          }
+        }
+      } catch {
+        // Non-critical — local state is sufficient
+      }
+    }
 
     this._view?.webview.postMessage({
       type: "switchSession",

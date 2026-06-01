@@ -76,6 +76,7 @@ impl std::fmt::Display for PuaViolation {
 
 impl std::error::Error for PuaViolation {}
 
+#[derive(Debug)]
 pub struct PuaRuleEngine {
     plan: Arc<StdMutex<PuaEnforcementPlan>>,
 }
@@ -327,6 +328,34 @@ impl DynamicQualityCompass {
 impl PuaRuleEngine {
     pub fn new(plan: Arc<StdMutex<PuaEnforcementPlan>>) -> Self {
         Self { plan }
+    }
+
+    /// Evaluate approval feedback from the ApprovalEngine.
+    /// This allows the PUA rule engine to adjust enforcement plans based on
+    /// approval outcomes (e.g., auto-deny patterns, escalation frequency).
+    pub fn evaluate_approval_feedback(
+        &self,
+        request: &super::approval_engine::ApprovalRequest,
+    ) -> Result<(), PuaViolation> {
+        use super::approval_engine::ApprovalStatus;
+        match &request.status {
+            ApprovalStatus::AutoDenied { reason, .. } => {
+                // Auto-deny is a strong signal — escalate the PUA level
+                self.escalate(&format!("auto-deny for {}: {}", request.action, reason));
+                Ok(())
+            }
+            ApprovalStatus::Rejected { reason, .. } => {
+                // Rejection triggers a moderate escalation
+                self.escalate(&format!("rejected {}: {}", request.action, reason));
+                Ok(())
+            }
+            ApprovalStatus::Approved { .. } => {
+                // Approval may allow de-escalation if the action completed safely
+                self.de_escalate(&format!("approved {}", request.action));
+                Ok(())
+            }
+            _ => Ok(()),
+        }
     }
 
     pub fn check_red_lines(&self, action: &str) -> Result<(), PuaViolation> {

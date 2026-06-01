@@ -587,7 +587,7 @@ mod tests {
 
     #[test]
     fn build_role_routing_with_recommended_mode() {
-        let _agents = vec![CapabilityRoutingInfo {
+        let _agents = [CapabilityRoutingInfo {
             selected_agent: Some("agent-a".to_string()),
             recommended_mode: Some("agent".to_string()),
             candidate_count: Some(3),

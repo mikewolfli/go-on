@@ -571,16 +571,16 @@
 
 | Step | GAP | 状态 | 完成日期 | 备注 |
 |:----:|:---:|:----:|:--------:|------|
-| 1 | B52-01 ~ B52-05 | ⬜ Pending | - | 自举管线基础设施 |
-| 2 | B52-06 ~ B52-10 | ⬜ Pending | - | 联邦学习网络传输 |
-| 3 | B52-11 ~ B52-14 | ⬜ Pending | - | 三层记忆持久化 |
-| 4 | B52-15 ~ B52-18 | ⬜ Pending | - | 多模态输入管线 |
-| 5 | B52-19 ~ B52-20 | ⬜ Pending | - | 人机审批引擎 |
-| 6 | B52-21 ~ B52-22 | ⬜ Pending | - | 分布式DAG |
-| 7 | B52-23 ~ B52-28 | ⬜ Pending | - | 生产安全加固 |
-| 8 | B52-29 ~ B52-32 | ⬜ Pending | - | 视频+代码+记忆可视化+自举增强 |
-| 9 | B52-33 ~ B52-36 | ⬜ Pending | - | 审批链+偏好学习+安全联邦+主动安全 |
-| 10 | B52-37 | ⬜ Pending | - | 7大差距端到端集成测试套件 |
+| 1 | B52-01 ~ B52-05 | ✅ Complete | 2026-06-01 | 自举管线基础设施 (sandbox+loop+history+agent) |
+| 2 | B52-06 ~ B52-10 | ✅ Complete | 2026-06-01 | 联邦学习网络传输 (transport+discovery+privacy+versioning) |
+| 3 | B52-11 ~ B52-14 | ✅ Complete | 2026-06-01 | 三层记忆持久化 (persistence+retrieval+compress+forgetting) |
+| 4 | B52-15 ~ B52-18 | ✅ Complete | 2026-06-01 | 多模态输入管线 (doc parser+audio processor) |
+| 5 | B52-19 ~ B52-20 | ✅ Complete | 2026-06-01 | 人机审批引擎 (approval_engine) |
+| 6 | B52-21 ~ B52-22 | ✅ Complete | 2026-06-01 | 分布式DAG (remote_executor+dag_coordinator) |
+| 7 | B52-23 ~ B52-28 | ✅ Complete | 2026-06-01 | 生产安全加固 (signing+mtls+injection+secret+audit+content) |
+| 8 | B52-29 ~ B52-32 | ✅ Complete | 2026-06-01 | 视频处理+代码分析 (video+coderepo) |
+| 9 | B52-33 ~ B52-36 | ✅ Complete | 2026-06-01 | 审批学习+主动安全 (approval_learner+vuln_scan+advisor) |
+| 10 | B52-37 | ✅ Complete | 2026-06-01 | 7大差距端到端集成测试套件 (e2e tests) |
 
 ---
 

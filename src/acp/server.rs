@@ -206,6 +206,39 @@ pub struct GovernanceServerDeps {
     pub rbac_enforcer: Option<Arc<std::sync::RwLock<crate::governance::rbac::RbacEnforcer>>>,
     /// Provenance ledger — immutable data lineage tracking
     pub provenance_ledger: Option<Arc<ProvenanceLedger>>,
+    /// Approval engine for HITL workflow (GAP-B52-19)
+    pub approval_engine:
+        Option<Arc<std::sync::RwLock<crate::governance::approval_engine::ApprovalEngine>>>,
+    /// Prompt injection detector (GAP-B52-25)
+    pub injection_detector: Option<Arc<crate::security::prompt_injection::InjectionDetector>>,
+    /// Content safety checker (GAP-B52-28)
+    pub safety_checker: Option<Arc<crate::security::content_safety::SafetyChecker>>,
+    /// Hash chain audit integrity protector (GAP-B52-27)
+    pub hash_chain_auditor:
+        Option<Arc<std::sync::Mutex<crate::security::audit_integrity::HashChainAuditor>>>,
+    /// Secret manager with auto-rotation (GAP-B52-26)
+    pub secret_manager: Option<Arc<crate::security::secret_rotation::SecretManager>>,
+    /// Memory persistence manager (GAP-B52-11)
+    pub memory_persistence: Option<Arc<crate::memory::memory_persistence::MemoryPersistence>>,
+    /// Self-evolution loop handle (GAP-B52-02)
+    pub evolution_loop: Option<
+        Arc<
+            tokio::sync::Mutex<crate::orchestration::self_evolution::evolution_loop::EvolutionLoop>,
+        >,
+    >,
+
+    // ── Security scanning (GAP-B52) ──────────────────────────────────────
+    /// Dependency vulnerability scanner (GAP-B52-24)
+    pub dependency_vulnerability_scanner:
+        Option<Arc<crate::security::vulnerability_scan::DependencyVulnerabilityScanner>>,
+    /// Secret exposure detector (GAP-B52-24)
+    pub secret_exposure_detector:
+        Option<Arc<crate::security::vulnerability_scan::SecretExposureDetector>>,
+    /// Permit/mode exposure analyzer (GAP-B52-24)
+    pub permit_exposure_analyzer:
+        Option<Arc<crate::security::vulnerability_scan::PermitExposureAnalyzer>>,
+    /// Security advisor agent (GAP-B52-30)
+    pub security_advisor: Option<Arc<crate::security::security_advisor::SecurityAdvisorAgent>>,
 }
 
 /// Orchestration subsystems grouped together (scheduler + planner + executor + skill)
@@ -316,6 +349,13 @@ pub struct AcpServer {
     pub audit_log: ThreadSafeAuditLog,
     /// Tool registry for built-in tool execution
     pub tool_registry: Arc<ToolRegistry>,
+    /// Session registry for cross-client state synchronization
+    pub session_registry: Option<Arc<crate::protocol::session_sync::SessionRegistry>>,
+    /// WebSocket hub for real-time push to connected clients
+    pub websocket_hub: Option<Arc<crate::protocol::websocket::WebSocketHub>>,
+    /// Optional multimodal processor for document, audio, video, and repo analysis.
+    /// When `None`, the chat pipeline falls back to text-only processing.
+    pub multimodal_processor: Option<crate::multimodal::MultimodalProcessor>,
 }
 
 impl AcpServer {
@@ -518,6 +558,74 @@ impl AcpServer {
             Arc::clone(&self.tool_registry),
         )
     }
+
+    // ── B51-25: Key subsystem accessors ────────────────────────────────────
+
+    /// Get the capability bus handle
+    pub fn capability_bus(
+        &self,
+    ) -> Option<Arc<crate::intelligence::capability_bus::core::CapabilityBus>> {
+        self.governance_deps.capability_bus.clone()
+    }
+
+    /// Get the harness bus handle
+    pub fn harness_bus(&self) -> Option<Arc<crate::governance::harness_bus::HarnessBus>> {
+        self.governance_deps.harness_bus.clone()
+    }
+
+    /// Get the session manager handle
+    pub fn session_manager(&self) -> Option<Arc<crate::acp::r#impl::session::SessionManager>> {
+        self.session_manager.clone()
+    }
+
+    /// Get the session registry handle
+    pub fn session_registry(&self) -> Option<Arc<crate::protocol::session_sync::SessionRegistry>> {
+        self.session_registry.clone()
+    }
+
+    /// Get the WebSocket hub handle
+    pub fn websocket_hub(&self) -> Option<Arc<crate::protocol::websocket::WebSocketHub>> {
+        self.websocket_hub.clone()
+    }
+
+    /// Get the tool registry reference
+    pub fn tool_registry(&self) -> &Arc<crate::orchestration::tool::ToolRegistry> {
+        &self.tool_registry
+    }
+
+    /// Get lifecycle state reference
+    pub fn lifecycle_state(&self) -> &Arc<StdMutex<crate::acp::prelude::LifecycleState>> {
+        &self.lifecycle_state
+    }
+
+    /// Get conversation state reference
+    pub fn conversation_state(
+        &self,
+    ) -> &Arc<tokio::sync::Mutex<crate::acp::prelude::ConversationState>> {
+        &self.conversation_state
+    }
+
+    /// Get runtime config reference
+    pub fn runtime_config(&self) -> &crate::config::RuntimeConfig {
+        &self.runtime_config
+    }
+
+    /// Get rate limit middleware reference
+    pub fn rate_limit_middleware(
+        &self,
+    ) -> Option<&crate::protocol::rate_limit::RateLimitMiddleware> {
+        self.rate_limit_middleware.as_deref()
+    }
+
+    /// Get prompt manager reference
+    pub fn prompt_manager(&self) -> &crate::acp::r#impl::request::prompts_pack::PromptManager {
+        &self.prompt_manager
+    }
+
+    /// Get the drain guard reference
+    pub fn drain_guard(&self) -> &DrainGuard {
+        &self.drain_guard
+    }
 }
 
 /// Server builder for constructing AcpServer instances
@@ -536,6 +644,29 @@ pub struct ServerBuilder {
     scheduler: Option<Arc<AgentWorkerScheduler>>,
     provenance_ledger: Option<Arc<ProvenanceLedger>>,
     planner_executor_config: crate::orchestration::planner_executor::PlannerExecutorConfig,
+    approval_engine:
+        Option<Arc<std::sync::RwLock<crate::governance::approval_engine::ApprovalEngine>>>,
+    injection_detector: Option<Arc<crate::security::prompt_injection::InjectionDetector>>,
+    safety_checker: Option<Arc<crate::security::content_safety::SafetyChecker>>,
+    hash_chain_auditor:
+        Option<Arc<std::sync::Mutex<crate::security::audit_integrity::HashChainAuditor>>>,
+    secret_manager: Option<Arc<crate::security::secret_rotation::SecretManager>>,
+    memory_persistence: Option<Arc<crate::memory::memory_persistence::MemoryPersistence>>,
+    evolution_loop: Option<
+        Arc<
+            tokio::sync::Mutex<crate::orchestration::self_evolution::evolution_loop::EvolutionLoop>,
+        >,
+    >,
+    // ── Security scanning (GAP-B52) ──────────────────────────────────────
+    dependency_vulnerability_scanner:
+        Option<Arc<crate::security::vulnerability_scan::DependencyVulnerabilityScanner>>,
+    secret_exposure_detector:
+        Option<Arc<crate::security::vulnerability_scan::SecretExposureDetector>>,
+    permit_exposure_analyzer:
+        Option<Arc<crate::security::vulnerability_scan::PermitExposureAnalyzer>>,
+    security_advisor: Option<Arc<crate::security::security_advisor::SecurityAdvisorAgent>>,
+    /// Optional multimodal processor for document, audio, video, and repo analysis.
+    multimodal_processor: Option<crate::multimodal::MultimodalProcessor>,
 }
 
 impl ServerBuilder {
@@ -556,6 +687,18 @@ impl ServerBuilder {
             scheduler: None,
             provenance_ledger: None,
             planner_executor_config: Default::default(),
+            approval_engine: None,
+            injection_detector: None,
+            safety_checker: None,
+            hash_chain_auditor: None,
+            secret_manager: None,
+            memory_persistence: None,
+            evolution_loop: None,
+            dependency_vulnerability_scanner: None,
+            secret_exposure_detector: None,
+            permit_exposure_analyzer: None,
+            security_advisor: None,
+            multimodal_processor: None,
         }
     }
 
@@ -654,6 +797,121 @@ impl ServerBuilder {
         config: crate::orchestration::planner_executor::PlannerExecutorConfig,
     ) -> Self {
         self.planner_executor_config = config;
+        self
+    }
+
+    /// Set the approval engine
+    pub fn with_approval_engine(
+        mut self,
+        engine: Arc<std::sync::RwLock<crate::governance::approval_engine::ApprovalEngine>>,
+    ) -> Self {
+        self.approval_engine = Some(engine);
+        self
+    }
+
+    /// Set the injection detector
+    pub fn with_injection_detector(
+        mut self,
+        detector: Arc<crate::security::prompt_injection::InjectionDetector>,
+    ) -> Self {
+        self.injection_detector = Some(detector);
+        self
+    }
+
+    /// Set the safety checker
+    pub fn with_safety_checker(
+        mut self,
+        checker: Arc<crate::security::content_safety::SafetyChecker>,
+    ) -> Self {
+        self.safety_checker = Some(checker);
+        self
+    }
+
+    /// Set the hash chain auditor
+    pub fn with_hash_chain_auditor(
+        mut self,
+        auditor: Arc<std::sync::Mutex<crate::security::audit_integrity::HashChainAuditor>>,
+    ) -> Self {
+        self.hash_chain_auditor = Some(auditor);
+        self
+    }
+
+    /// Set the secret manager
+    pub fn with_secret_manager(
+        mut self,
+        manager: Arc<crate::security::secret_rotation::SecretManager>,
+    ) -> Self {
+        self.secret_manager = Some(manager);
+        self
+    }
+
+    /// Set the memory persistence manager
+    pub fn with_memory_persistence(
+        mut self,
+        mp: Arc<crate::memory::memory_persistence::MemoryPersistence>,
+    ) -> Self {
+        self.memory_persistence = Some(mp);
+        self
+    }
+
+    /// Set the evolution loop
+    pub fn with_evolution_loop(
+        mut self,
+        evolution_loop: Arc<
+            tokio::sync::Mutex<crate::orchestration::self_evolution::evolution_loop::EvolutionLoop>,
+        >,
+    ) -> Self {
+        self.evolution_loop = Some(evolution_loop);
+        self
+    }
+
+    /// Set the multimodal processor.
+    ///
+    /// When configured, the chat pipeline will route `repo:`-prefixed messages,
+    /// `data:` URIs, and `file://` references through the multimodal sub-processors
+    /// (document parser, audio/video processor, repo analyzer).
+    /// When `None` (the default), the system falls back to text-only processing.
+    pub fn with_multimodal_processor(
+        mut self,
+        processor: crate::multimodal::MultimodalProcessor,
+    ) -> Self {
+        self.multimodal_processor = Some(processor);
+        self
+    }
+
+    /// Set the dependency vulnerability scanner
+    pub fn with_dependency_vulnerability_scanner(
+        mut self,
+        scanner: Arc<crate::security::vulnerability_scan::DependencyVulnerabilityScanner>,
+    ) -> Self {
+        self.dependency_vulnerability_scanner = Some(scanner);
+        self
+    }
+
+    /// Set the secret exposure detector
+    pub fn with_secret_exposure_detector(
+        mut self,
+        detector: Arc<crate::security::vulnerability_scan::SecretExposureDetector>,
+    ) -> Self {
+        self.secret_exposure_detector = Some(detector);
+        self
+    }
+
+    /// Set the permit exposure analyzer
+    pub fn with_permit_exposure_analyzer(
+        mut self,
+        analyzer: Arc<crate::security::vulnerability_scan::PermitExposureAnalyzer>,
+    ) -> Self {
+        self.permit_exposure_analyzer = Some(analyzer);
+        self
+    }
+
+    /// Set the security advisor agent
+    pub fn with_security_advisor(
+        mut self,
+        advisor: Arc<crate::security::security_advisor::SecurityAdvisorAgent>,
+    ) -> Self {
+        self.security_advisor = Some(advisor);
         self
     }
 
@@ -771,6 +1029,17 @@ impl ServerBuilder {
                 pua_enforcement_plan,
                 rbac_enforcer: None,
                 provenance_ledger: self.provenance_ledger,
+                approval_engine: self.approval_engine,
+                injection_detector: self.injection_detector,
+                safety_checker: self.safety_checker,
+                hash_chain_auditor: self.hash_chain_auditor,
+                secret_manager: self.secret_manager,
+                memory_persistence: self.memory_persistence,
+                evolution_loop: self.evolution_loop,
+                dependency_vulnerability_scanner: self.dependency_vulnerability_scanner,
+                secret_exposure_detector: self.secret_exposure_detector,
+                permit_exposure_analyzer: self.permit_exposure_analyzer,
+                security_advisor: self.security_advisor,
             },
             orchestration_deps: OrchestrationServerDeps {
                 scheduler: self.scheduler,
@@ -828,6 +1097,9 @@ impl ServerBuilder {
             audit_log: ThreadSafeAuditLog::new_with_default_path(10_000),
             tool_registry: Arc::new(ToolRegistry::new()),
             drain_guard: DrainGuard::default(),
+            session_registry: None,
+            websocket_hub: None,
+            multimodal_processor: self.multimodal_processor,
         })
     }
 }

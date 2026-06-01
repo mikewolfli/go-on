@@ -3,7 +3,7 @@
 //! Thread-safe hub for managing WebSocket connections with topic-based pub/sub,
 //! heartbeat keep-alive, and auto-reconnection support.
 
-#![allow(dead_code)]
+// F-GAP-51: dead_code allowed on specific items below (reserved for WebSocket integration)
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -32,6 +32,7 @@ pub type ConnectionId = String;
 ///
 /// The `type` field identifies the kind of payload and follows a structured
 /// naming convention for topic-based filtering.
+#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WsMessage {
     /// Message type — see module docs for known type strings.
@@ -43,6 +44,7 @@ pub struct WsMessage {
     pub timestamp: u64,
 }
 
+#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
 impl WsMessage {
     /// Create a new `WsMessage` with the current system timestamp.
     pub fn new(msg_type: impl Into<String>, payload: Value) -> Self {
@@ -63,6 +65,7 @@ impl WsMessage {
 // ---------------------------------------------------------------------------
 
 /// Metadata attached to each registered connection.
+#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionMetadata {
     /// Timestamp (Unix seconds) when the connection was established.
@@ -73,6 +76,7 @@ pub struct ConnectionMetadata {
     pub user_agent: String,
 }
 
+#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
 impl Default for ConnectionMetadata {
     fn default() -> Self {
         let connected_at = SystemTime::now()
@@ -92,6 +96,7 @@ impl Default for ConnectionMetadata {
 // ---------------------------------------------------------------------------
 
 /// Channel wrapper for sending messages to a single WebSocket connection.
+#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
 #[derive(Debug)]
 pub struct WsSender {
     /// The unbounded sender used to push messages into the connection's task.
@@ -104,6 +109,7 @@ pub struct WsSender {
     pub last_heartbeat: Instant,
 }
 
+#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
 impl WsSender {
     /// Create a new `WsSender` wrapping the given channel sender.
     pub fn new(sender: UnboundedSender<WsMessage>, metadata: ConnectionMetadata) -> Self {
@@ -132,6 +138,7 @@ impl WsSender {
 // ---------------------------------------------------------------------------
 
 /// Configuration for the WebSocket hub.
+#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
 #[derive(Debug, Clone)]
 pub struct WebSocketConfig {
     /// Maximum number of concurrent connections (default 1000).
@@ -142,6 +149,7 @@ pub struct WebSocketConfig {
     pub message_buffer_size: usize,
 }
 
+#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
 impl Default for WebSocketConfig {
     fn default() -> Self {
         Self {
@@ -157,6 +165,7 @@ impl Default for WebSocketConfig {
 // ---------------------------------------------------------------------------
 
 /// Hint sent to a client about recommended reconnection timing.
+#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReconnectHint {
     /// Backoff delay in seconds that the client should wait before retrying.
@@ -170,6 +179,7 @@ pub struct ReconnectHint {
 /// Compute exponential backoff delay (seconds) for the given reconnection count.
 ///
 /// Uses the formula: `min(base * 2^attempt, max_delay)` with ±25% jitter.
+#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
 pub fn exponential_backoff(attempt: u64, base_secs: u64, max_secs: u64) -> u64 {
     use std::cmp::min;
 
@@ -186,6 +196,7 @@ pub fn exponential_backoff(attempt: u64, base_secs: u64, max_secs: u64) -> u64 {
     }
 }
 
+#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
 impl ReconnectHint {
     /// Build a hint for a client that has attempted reconnection `reconnect_count` times.
     pub fn new(reconnect_count: u64) -> Self {
@@ -203,6 +214,7 @@ impl ReconnectHint {
 // ---------------------------------------------------------------------------
 
 /// Message sent from the hub to a connection to check liveness.
+#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeartbeatPing {
     /// Monotonically increasing ping sequence number.
@@ -212,6 +224,7 @@ pub struct HeartbeatPing {
 }
 
 /// Expected response from a connection acknowledging a heartbeat ping.
+#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeartbeatPong {
     /// Echoed ping sequence number.
@@ -226,6 +239,7 @@ pub struct HeartbeatPong {
 
 /// Thread-safe, clonable hub that manages WebSocket connections,
 /// topic subscriptions, heartbeats, and message broadcasting.
+#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
 #[derive(Debug, Clone)]
 pub struct WebSocketHub {
     inner: Arc<WebSocketHubInner>,
@@ -245,6 +259,7 @@ struct WebSocketHubInner {
     heartbeat_seq: RwLock<u64>,
 }
 
+#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
 impl WebSocketHub {
     /// Create a new hub with the given configuration.
     ///
@@ -261,17 +276,20 @@ impl WebSocketHub {
             }),
         }
     }
+}
 
-    /// Create a new hub with default configuration.
-    pub fn default() -> Self {
+impl Default for WebSocketHub {
+    fn default() -> Self {
         Self::new(WebSocketConfig::default())
     }
+}
 
+impl WebSocketHub {
     /// Start the background heartbeat task if it isn't already running.
     ///
     /// The task will ping all connections at the configured interval and
     /// remove any that have been unresponsive for more than one interval.
-    pub async fn start_heartbeat(self: &Self) {
+    pub async fn start_heartbeat(&self) {
         let mut handle_lock = self.inner.heartbeat_handle.write().await;
         if handle_lock.is_some() {
             debug!("heartbeat task already running");
@@ -307,8 +325,7 @@ impl WebSocketHub {
                 );
 
                 let mut conns = inner.connections.write().await;
-                let stale_threshold = Instant::now()
-                    - Duration::from_secs(stale_timeout);
+                let stale_threshold = Instant::now() - Duration::from_secs(stale_timeout);
 
                 // Separate stale connections for removal.
                 let stale_ids: Vec<ConnectionId> = conns
@@ -346,7 +363,7 @@ impl WebSocketHub {
     }
 
     /// Gracefully shut down the heartbeat task.
-    pub async fn stop_heartbeat(self: &Self) {
+    pub async fn stop_heartbeat(&self) {
         let mut handle_lock = self.inner.heartbeat_handle.write().await;
         if let Some(handle) = handle_lock.take() {
             handle.abort();
@@ -363,7 +380,7 @@ impl WebSocketHub {
     ///
     /// Returns an error if the maximum number of connections has been reached.
     pub async fn register(
-        self: &Self,
+        &self,
         metadata: ConnectionMetadata,
     ) -> Result<(ConnectionId, UnboundedReceiver<WsMessage>), WebSocketError> {
         let mut conns = self.inner.connections.write().await;
@@ -395,7 +412,7 @@ impl WebSocketHub {
     }
 
     /// Unregister a connection and remove all its topic subscriptions.
-    pub async fn unregister(self: &Self, connection_id: &str) {
+    pub async fn unregister(&self, connection_id: &str) {
         let mut conns = self.inner.connections.write().await;
         conns.remove(connection_id);
         drop(conns);
@@ -418,7 +435,7 @@ impl WebSocketHub {
     ///
     /// After subscribing, the connection will receive all messages published
     /// to the given topic.
-    pub async fn subscribe(self: &Self, connection_id: &str, topic: &str) {
+    pub async fn subscribe(&self, connection_id: &str, topic: &str) {
         let mut subs = self.inner.topic_subscriptions.write().await;
         let members = subs.entry(topic.to_string()).or_default();
         if !members.contains(&connection_id.to_string()) {
@@ -432,7 +449,7 @@ impl WebSocketHub {
     }
 
     /// Unsubscribe a connection from a topic.
-    pub async fn unsubscribe(self: &Self, connection_id: &str, topic: &str) {
+    pub async fn unsubscribe(&self, connection_id: &str, topic: &str) {
         let mut subs = self.inner.topic_subscriptions.write().await;
         if let Some(members) = subs.get_mut(topic) {
             members.retain(|id| id != connection_id);
@@ -451,7 +468,7 @@ impl WebSocketHub {
     ///
     /// Also publishes to connections that subscribed via wildcard prefixes
     /// (e.g. a subscription to `task.*` will match `task.abc.progress`).
-    pub async fn publish(self: &Self, topic: &str, message: WsMessage) {
+    pub async fn publish(&self, topic: &str, message: WsMessage) {
         let subs = self.inner.topic_subscriptions.read().await;
         let conns = self.inner.connections.read().await;
 
@@ -510,7 +527,7 @@ impl WebSocketHub {
     /// Send a message directly to a specific connection.
     ///
     /// Returns `true` if the connection exists and the message was enqueued.
-    pub async fn send(self: &Self, connection_id: &str, message: WsMessage) -> bool {
+    pub async fn send(&self, connection_id: &str, message: WsMessage) -> bool {
         let conns = self.inner.connections.read().await;
         if let Some(sender) = conns.get(connection_id) {
             sender.send(message)
@@ -520,7 +537,7 @@ impl WebSocketHub {
     }
 
     /// Broadcast a message to every connected client.
-    pub async fn broadcast(self: &Self, message: WsMessage) {
+    pub async fn broadcast(&self, message: WsMessage) {
         let conns = self.inner.connections.read().await;
         let count = conns.len();
         for (_conn_id, sender) in conns.iter() {
@@ -531,12 +548,12 @@ impl WebSocketHub {
     }
 
     /// Return the number of active connections.
-    pub async fn get_connection_count(self: &Self) -> usize {
+    pub async fn get_connection_count(&self) -> usize {
         self.inner.connections.read().await.len()
     }
 
     /// Return a list of all topics that currently have subscribers.
-    pub async fn get_active_topics(self: &Self) -> Vec<String> {
+    pub async fn get_active_topics(&self) -> Vec<String> {
         self.inner
             .topic_subscriptions
             .read()
@@ -547,14 +564,14 @@ impl WebSocketHub {
     }
 
     /// Return metadata for a specific connection, if it exists.
-    pub async fn get_connection_metadata(self: &Self, connection_id: &str) -> Option<ConnectionMetadata> {
+    pub async fn get_connection_metadata(&self, connection_id: &str) -> Option<ConnectionMetadata> {
         let conns = self.inner.connections.read().await;
         conns.get(connection_id).map(|s| s.metadata.clone())
     }
 
     /// Update the reconnect count for a connection (used when a client
     /// re-establishes a dropped connection with the same logical identity).
-    pub async fn record_reconnect(self: &Self, connection_id: &str) {
+    pub async fn record_reconnect(&self, connection_id: &str) {
         let mut conns = self.inner.connections.write().await;
         if let Some(sender) = conns.get_mut(connection_id) {
             sender.record_reconnect();
@@ -563,16 +580,34 @@ impl WebSocketHub {
 
     /// Get a reconnection hint for the given connection, based on its
     /// current reconnect count.
-    pub async fn get_reconnect_hint(self: &Self, connection_id: &str) -> Option<ReconnectHint> {
+    pub async fn get_reconnect_hint(&self, connection_id: &str) -> Option<ReconnectHint> {
         let conns = self.inner.connections.read().await;
-        conns.get(connection_id).map(|sender| {
-            ReconnectHint::new(sender.reconnect_count)
-        })
+        conns
+            .get(connection_id)
+            .map(|sender| ReconnectHint::new(sender.reconnect_count))
     }
 
     /// Check if a connection is currently registered.
-    pub async fn is_connected(self: &Self, connection_id: &str) -> bool {
-        self.inner.connections.read().await.contains_key(connection_id)
+    pub async fn is_connected(&self, connection_id: &str) -> bool {
+        self.inner
+            .connections
+            .read()
+            .await
+            .contains_key(connection_id)
+    }
+
+    /// Create a broadcast function that publishes messages to all WebSocket connections.
+    /// Used to wire SessionRegistry changes to WebSocket clients.
+    pub fn create_broadcast_fn(self: &Arc<Self>) -> crate::protocol::session_sync::BroadcastFn {
+        let hub = self.clone();
+        Arc::new(move |msg: &str| {
+            let hub = hub.clone();
+            let payload: serde_json::Value = serde_json::from_str(msg).unwrap_or_default();
+            tokio::spawn(async move {
+                let ws_msg = WsMessage::new("session.sync", payload);
+                hub.broadcast(ws_msg).await;
+            });
+        })
     }
 }
 
@@ -629,7 +664,10 @@ mod tests {
         let (_id1, _rx1) = hub.register(ConnectionMetadata::default()).await.unwrap();
         let (_id2, _rx2) = hub.register(ConnectionMetadata::default()).await.unwrap();
 
-        let err = hub.register(ConnectionMetadata::default()).await.unwrap_err();
+        let err = hub
+            .register(ConnectionMetadata::default())
+            .await
+            .unwrap_err();
         assert!(matches!(err, WebSocketError::MaxConnectionsReached(2)));
     }
 
@@ -787,14 +825,14 @@ mod tests {
     fn test_exponential_backoff_base() {
         // attempt 0 → base = 1
         let delay = exponential_backoff(0, 1, 60);
-        assert!(delay >= 1 && delay <= 2, "delay was {delay}");
+        assert!((1..=2).contains(&delay), "delay was {delay}");
     }
 
     #[test]
     fn test_exponential_backoff_capped() {
         // attempt 8 → 1 * 2^8 = 256, capped at max 60
         let delay = exponential_backoff(8, 1, 60);
-        assert!(delay >= 60 && delay <= 75, "delay was {delay}");
+        assert!((60..=75).contains(&delay), "delay was {delay}");
     }
 
     #[test]

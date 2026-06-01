@@ -4,12 +4,11 @@
 use std::sync::Mutex;
 use tracing;
 
-#[cfg(test)]
 use crate::agent::StreamingSender;
-#[cfg(test)]
 use flate2::write::GzEncoder;
-#[cfg(test)]
 use flate2::Compression;
+use std::io::Write;
+
 #[cfg(test)]
 use std::collections::VecDeque;
 #[cfg(test)]
@@ -21,13 +20,11 @@ use std::time::{Duration, Instant};
 
 /// A pool of pre-allocated byte buffers for SSE event serialization.
 /// Avoids allocation churn during high-frequency streaming.
-#[allow(dead_code)] // F-GAP-49 — reserved for SSE streaming optimization
 pub struct SseBufferPool {
     buffers: Mutex<Vec<Vec<u8>>>,
     max_capacity: usize,
 }
 
-#[allow(dead_code)] // F-GAP-49 — reserved for SSE streaming optimization
 impl SseBufferPool {
     pub fn new(pool_size: usize, buffer_capacity: usize) -> Self {
         let mut buffers = Vec::with_capacity(pool_size);
@@ -167,24 +164,19 @@ impl TokenExtractionCache {
 }
 
 // ---------------------------------------------------------------------------
-// Brotli stream wrapper
+// Compressed SSE send helper
 // ---------------------------------------------------------------------------
 
-/// Compress SSE data using brotli encoding and send via the sender.
-/// Falls back to uncompressed when brotli would expand the data.
-#[cfg(test)]
-#[allow(dead_code)]
-// F-GAP-49 — reserved for future use
-pub fn compress_and_send_brotli(
+/// Compress SSE data using gzip encoding and send via the sender.
+/// Falls back to uncompressed when gzip would expand the data.
+#[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
+pub fn compress_and_send_sse(
     data: &str,
     sender: &StreamingSender,
     buffer: &mut Vec<u8>,
 ) -> std::io::Result<()> {
-    use std::io::Write;
-
     buffer.clear();
-    // Use a simple fast compression approach: try deflate-like compression
-    // with minimal overhead. For truly small payloads (< 128 bytes), send raw.
+    // For small payloads (< 128 bytes), send raw to avoid overhead.
     if data.len() < 128 {
         let _ = sender.send(data.to_string());
         return Ok(());
@@ -210,7 +202,7 @@ pub fn compress_and_send_brotli(
 
 /// Metrics collected during streaming for adaptive tuning.
 #[derive(Debug, Clone, Default)]
-#[cfg(test)]
+#[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
 pub struct StreamingMetrics {
     pub total_bytes_sent: u64,
     #[allow(dead_code)]
@@ -227,8 +219,8 @@ pub struct StreamingMetrics {
     pub cache_misses: u64,
 }
 
-#[cfg(test)]
 impl StreamingMetrics {
+    #[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
     pub fn cache_hit_rate(&self) -> f64 {
         let total = self.cache_hits + self.cache_misses;
         if total == 0 {
@@ -238,6 +230,7 @@ impl StreamingMetrics {
         }
     }
 
+    #[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
     pub fn compression_ratio(&self) -> f64 {
         if self.total_bytes_sent == 0 {
             0.0

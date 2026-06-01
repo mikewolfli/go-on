@@ -177,6 +177,131 @@ pub fn new_acp_server(
         .with_provenance_ledger(Arc::clone(&provenance_ledger)),
     );
 
+    // ── Governance dependency wiring ──────────────────────────────────────
+    // Wire approval engine
+    {
+        use crate::governance::approval_engine::{ApprovalEngine, TimeoutPolicy};
+        use crate::governance::pua::PuaRuleEngine;
+        let pua_plan = Arc::new(std::sync::Mutex::new(
+            crate::pua::PuaEnforcementPlan::default(),
+        ));
+        let pua_rule_engine = Arc::new(tokio::sync::Mutex::new(PuaRuleEngine::new(pua_plan)));
+        let engine = Arc::new(std::sync::RwLock::new(ApprovalEngine::new(
+            pua_rule_engine,
+            TimeoutPolicy::default(),
+        )));
+        builder = builder.with_approval_engine(engine);
+    }
+
+    // Wire injection detector
+    {
+        use crate::security::prompt_injection::{DetectionConfig, InjectionDetector};
+        let detector = Arc::new(InjectionDetector::new(DetectionConfig::default()));
+        builder = builder.with_injection_detector(detector);
+    }
+
+    // Wire safety checker
+    {
+        use crate::security::content_safety::{ContentSafetyConfig, SafetyChecker};
+        let checker = Arc::new(
+            SafetyChecker::new(ContentSafetyConfig::default())
+                .expect("Failed to create SafetyChecker"),
+        );
+        builder = builder.with_safety_checker(checker);
+    }
+
+    // Wire hash chain auditor (requires config path)
+    if let Some(ref path) = config_path {
+        let auditor_path = std::path::Path::new(path)
+            .parent()
+            .map(|p| p.join("audit_chain.ndjson"));
+        if let Some(auditor_path) = auditor_path {
+            use crate::security::audit_integrity::HashChainAuditor;
+            match HashChainAuditor::new(auditor_path) {
+                Ok(auditor) => {
+                    builder =
+                        builder.with_hash_chain_auditor(Arc::new(std::sync::Mutex::new(auditor)));
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to create HashChainAuditor: {}", e);
+                }
+            }
+        }
+    }
+
+    // Wire secret manager
+    {
+        use crate::security::secret_rotation::{MemoryRotator, RotationPolicy, SecretManager};
+        let rotator = Arc::new(MemoryRotator::new());
+        let manager = Arc::new(SecretManager::new(RotationPolicy::default(), rotator));
+        builder = builder.with_secret_manager(manager);
+    }
+
+    // Wire memory persistence
+    {
+        use crate::memory::memory_persistence::MemoryPersistence;
+        let db_path = std::path::Path::new(".goon/memory/warm.db");
+        let cold_path = std::path::Path::new(".goon/memory/cold");
+        if let Ok(mp) = MemoryPersistence::new(db_path, cold_path, None) {
+            builder = builder.with_memory_persistence(Arc::new(mp));
+        } else {
+            tracing::warn!("Failed to create MemoryPersistence");
+        }
+    }
+
+    // Wire evolution loop
+    {
+        use crate::orchestration::self_evolution::evolution_loop::EvolutionLoop;
+        let workdir = std::path::PathBuf::from(".goon/evolution");
+        let evolution_loop = Arc::new(tokio::sync::Mutex::new(EvolutionLoop::new(workdir)));
+        builder = builder.with_evolution_loop(evolution_loop);
+    }
+
+    // ── Security scanning (GAP-B52-24, GAP-B52-30) ──────────────────────
+    // Wire dependency vulnerability scanner
+    {
+        use crate::security::vulnerability_scan::DependencyVulnerabilityScanner;
+        let scanner = DependencyVulnerabilityScanner::new()
+            .with_min_severity(crate::security::vulnerability_scan::Severity::Medium);
+        if let Some(ref path) = config_path {
+            if let Some(parent) = std::path::Path::new(path).parent() {
+                if let Some(project_root) = parent.to_str() {
+                    builder = builder.with_dependency_vulnerability_scanner(Arc::new(
+                        scanner.with_scan_path(project_root),
+                    ));
+                } else {
+                    builder = builder.with_dependency_vulnerability_scanner(Arc::new(scanner));
+                }
+            } else {
+                builder = builder.with_dependency_vulnerability_scanner(Arc::new(scanner));
+            }
+        } else {
+            builder = builder.with_dependency_vulnerability_scanner(Arc::new(scanner));
+        }
+    };
+
+    // Wire secret exposure detector
+    {
+        use crate::security::vulnerability_scan::SecretExposureDetector;
+        let detector = SecretExposureDetector::default();
+        builder = builder.with_secret_exposure_detector(Arc::new(detector));
+    }
+
+    // Wire permit exposure analyzer
+    {
+        use crate::security::vulnerability_scan::PermitExposureAnalyzer;
+        let analyzer = PermitExposureAnalyzer::default();
+        builder = builder.with_permit_exposure_analyzer(Arc::new(analyzer));
+    }
+
+    // Wire security advisor agent
+    let security_advisor = {
+        use crate::security::security_advisor::{SecurityAdvisorAgent, SecurityAdvisorConfig};
+        let advisor = Arc::new(SecurityAdvisorAgent::new(SecurityAdvisorConfig::default()));
+        builder = builder.with_security_advisor(Arc::clone(&advisor));
+        advisor
+    };
+
     match builder.build() {
         Ok(mut server) => {
             // Set fields that aren't available in ServerBuilder yet
@@ -198,100 +323,56 @@ pub fn new_acp_server(
                 ),
             ));
 
-            // Create session manager if user auth is enabled
-            if server.runtime_config.user_auth_enabled {
-                use crate::acp::r#impl::session::{AuthConfig, SessionManager};
-                let auth_config = AuthConfig::from(&server.runtime_config);
-                server.session_manager =
-                    Some(Arc::new(SessionManager::with_auth_config(auth_config)));
-            }
+            // B51-26: Shared wiring extracted to wire_server()
+            wire_server(&mut server, &registry);
 
-            // Wire dual-level task scheduler (ARCH-02): create the scheduler and
-            // register one worker per known agent so the priority queue has real routing
-            // targets.  The scheduler tracks queue depth and active-worker counts that
-            // are surfaced in governance.status.
-            let task_scheduler = {
-                // Use persistent scheduler when backend-sqlite is available.
-                let db_path = server
-                    .runtime_config
-                    .sqlite_vacuum_interval_cycles
-                    .checked_add(1)
-                    .map(|_| std::path::PathBuf::from("scheduler_queue.db"));
-                let _persistent =
-                    crate::orchestration::scheduler::create_persistent_scheduler(db_path);
-                let config = crate::orchestration::scheduler::SchedulerConfig::default();
-                let s = Arc::new(crate::orchestration::scheduler::AgentWorkerScheduler::new(
-                    config,
-                ));
-                for agent_name in registry.names() {
-                    if let Err(e) = s.register_worker(&agent_name, &agent_name) {
-                        warn!(
-                            "failed to register worker for agent '{}': {}",
-                            agent_name, e
+            // GAP-B52-30: Register security advisor alert channel with the alert manager.
+            // Security alerts (dependency vulns, secret exposures, permit issues) are
+            // forwarded from the advisor's internal notification system to the main
+            // observability pipeline for webhook delivery and dashboard visibility.
+            if let Some(ref advisor) = server.governance_deps.security_advisor {
+                let (alert_tx, mut alert_rx) = tokio::sync::mpsc::unbounded_channel();
+                if let Err(e) = advisor.register_ws_sender(alert_tx).await {
+                    tracing::warn!("Failed to register security advisor alert sender: {}", e);
+                }
+                let alert_manager = Arc::clone(&server.observability.alert_manager);
+                tokio::spawn(async move {
+                    use crate::observability::alert_manager::AlertSeverity;
+                    while let Some(security_alert) = alert_rx.recv().await {
+                        let _severity = match &security_alert.severity {
+                            crate::security::vulnerability_scan::Severity::Critical => {
+                                AlertSeverity::Critical
+                            }
+                            crate::security::vulnerability_scan::Severity::High => {
+                                AlertSeverity::Warning
+                            }
+                            _ => AlertSeverity::Info,
+                        };
+                        let mut mgr = alert_manager.lock().unwrap_or_else(|poisoned| {
+                            tracing::warn!("alert_manager lock poisoned");
+                            poisoned.into_inner()
+                        });
+                        // Map AlertSource to a string label
+                        let source_label = match &security_alert.source {
+                            crate::security::security_advisor::AlertSource::DependencyVulnerability => "dependency",
+                            crate::security::security_advisor::AlertSource::SecretExposure => "secret",
+                            crate::security::security_advisor::AlertSource::PermitExposure => "permit",
+                            crate::security::security_advisor::AlertSource::SecurityAdvisor => "advisor",
+                            crate::security::security_advisor::AlertSource::UserReported => "user",
+                        };
+                        mgr.evaluate(
+                            &format!("security.{}", source_label),
+                            match security_alert.severity {
+                                crate::security::vulnerability_scan::Severity::Critical => 9.0,
+                                crate::security::vulnerability_scan::Severity::High => 7.0,
+                                crate::security::vulnerability_scan::Severity::Medium => 5.0,
+                                crate::security::vulnerability_scan::Severity::Low => 2.0,
+                                crate::security::vulnerability_scan::Severity::Unknown => 0.0,
+                            },
                         );
                     }
-                }
-                s
-            };
-            server.orchestration_deps.scheduler = Some(task_scheduler);
-
-            if server.runtime_config.skills_enabled {
-                server.register_skill(Arc::new(crate::orchestration::skill::EchoSkill));
-                server.register_skill(Arc::new(
-                    crate::orchestration::skill::SkillCreatorSkill::new(
-                        server.orchestration_deps.skill_registry.clone(),
-                    ),
-                ));
-            }
-
-            // Wire the skill registry into the global discovery engine
-            crate::acp::r#impl::request::tools_pack::init_skill_discovery(
-                server.orchestration_deps.skill_registry.clone(),
-            );
-
-            // Wire the new modules' state from CapabilityBus into the server's
-            // standalone fields so process_chat_request can access them directly.
-            server.schema_registry = Arc::clone(
-                &server
-                    .governance_deps
-                    .capability_bus
-                    .as_ref()
-                    .map(|cb| Arc::clone(&cb.schema_registry))
-                    .unwrap_or_default(),
-            );
-            server.tenant_budget = Arc::clone(
-                &server
-                    .governance_deps
-                    .capability_bus
-                    .as_ref()
-                    .map(|cb| Arc::clone(&cb.tenant_budget))
-                    .unwrap_or_default(),
-            );
-
-            // Auto-provision a default tenant quota when user auth is enabled so
-            // the budget enforcer does not reject every request with "no quota
-            // configured for tenant 'default-tenant'" (F-GAP-08).
-            if server.runtime_config.user_auth_enabled {
-                let mut budget = server.tenant_budget.lock().unwrap_or_else(|poisoned| {
-                    tracing::warn!("tenant_budget lock poisoned in new_acp_server");
-                    poisoned.into_inner()
                 });
-                budget.auto_provision_default(&server.runtime_config);
             }
-
-            server.optimizer_registry = Arc::clone(
-                &server
-                    .governance_deps
-                    .capability_bus
-                    .as_ref()
-                    .map(|cb| Arc::clone(&cb.optimizer_registry))
-                    .unwrap_or_default(),
-            );
-
-            // Wire the token cache into the agent registry so that all
-            // agents returned by registry.get() are automatically wrapped
-            // with CachedAgentWrapper.
-            registry.set_token_cache(Some(Arc::clone(&server.cache_deps.cache.token_cache)));
 
             // BLUE48 Step 2: Pre-initialize SSE buffer pool at startup to
             // avoid first-request latency penalty from lazy initialization.
@@ -304,10 +385,6 @@ pub fn new_acp_server(
                     vs,
                 ));
             }
-
-            // BLUE48 Step 19: Initialize intelligence hub at startup so consensus
-            // voting, rationalization, and audit are wired into the request path.
-            crate::intelligence::hub::init_intel_hub();
 
             server
         }
@@ -368,6 +445,17 @@ pub fn new_acp_server(
                     })),
                     rbac_enforcer: None,
                     provenance_ledger: Some(provenance_ledger),
+                    approval_engine: None,
+                    injection_detector: None,
+                    safety_checker: None,
+                    hash_chain_auditor: None,
+                    secret_manager: None,
+                    memory_persistence: None,
+                    evolution_loop: None,
+                    dependency_vulnerability_scanner: None,
+                    secret_exposure_detector: None,
+                    permit_exposure_analyzer: None,
+                    security_advisor: None,
                 },
                 orchestration_deps: OrchestrationServerDeps {
                     scheduler: None,
@@ -455,114 +543,164 @@ pub fn new_acp_server(
                 ),
                 tool_registry: Arc::new(crate::orchestration::tool::ToolRegistry::new()),
                 drain_guard: crate::acp::server::DrainGuard::default(),
+                session_registry: None,
+                websocket_hub: None,
+                multimodal_processor: None,
             };
-
-            // Create session manager if user auth is enabled
-            if fallback_server.runtime_config.user_auth_enabled {
-                use crate::acp::r#impl::session::{AuthConfig, SessionManager};
-                let auth_config = AuthConfig::from(&fallback_server.runtime_config);
-                fallback_server.session_manager =
-                    Some(Arc::new(SessionManager::with_auth_config(auth_config)));
-            }
 
             // Wire RBAC enforcer into the fallback server for HTTP-level authorization
             fallback_server.governance_deps.rbac_enforcer = Some(rbac_enforcer);
 
-            // Wire dual-level task scheduler (ARCH-02): create the scheduler and
-            // register one worker per known agent so the priority queue has real routing
-            // targets.  The scheduler tracks queue depth and active-worker counts that
-            // are surfaced in governance.status.
-            let task_scheduler = {
-                // Use persistent scheduler when backend-sqlite is available.
-                let db_path = fallback_server
-                    .runtime_config
-                    .sqlite_vacuum_interval_cycles
-                    .checked_add(1)
-                    .map(|_| std::path::PathBuf::from("scheduler_queue.db"));
-                let _persistent =
-                    crate::orchestration::scheduler::create_persistent_scheduler(db_path);
-                let config = crate::orchestration::scheduler::SchedulerConfig::default();
-                let s = Arc::new(crate::orchestration::scheduler::AgentWorkerScheduler::new(
-                    config,
-                ));
-                for agent_name in registry.names() {
-                    if let Err(e) = s.register_worker(&agent_name, &agent_name) {
-                        warn!(
-                            "failed to register worker for agent '{}': {}",
-                            agent_name, e
-                        );
-                    }
-                }
-                s
-            };
-            fallback_server.orchestration_deps.scheduler = Some(task_scheduler);
-
-            if fallback_server.runtime_config.skills_enabled {
-                fallback_server.register_skill(Arc::new(crate::orchestration::skill::EchoSkill));
-                fallback_server.register_skill(Arc::new(
-                    crate::orchestration::skill::SkillCreatorSkill::new(
-                        fallback_server.orchestration_deps.skill_registry.clone(),
-                    ),
-                ));
-            }
-
-            // Wire the skill registry into the global discovery engine
-            crate::acp::r#impl::request::tools_pack::init_skill_discovery(
-                fallback_server.orchestration_deps.skill_registry.clone(),
-            );
-
-            // Wire the new modules' state from CapabilityBus into the fallback server's
-            // standalone fields so process_chat_request can access them directly.
-            fallback_server.schema_registry = Arc::clone(
-                &fallback_server
-                    .governance_deps
-                    .capability_bus
-                    .as_ref()
-                    .map(|cb| Arc::clone(&cb.schema_registry))
-                    .unwrap_or_default(),
-            );
-            fallback_server.tenant_budget = Arc::clone(
-                &fallback_server
-                    .governance_deps
-                    .capability_bus
-                    .as_ref()
-                    .map(|cb| Arc::clone(&cb.tenant_budget))
-                    .unwrap_or_default(),
-            );
-
-            // Auto-provision a default tenant quota when user auth is enabled so
-            // the budget enforcer does not reject every request with "no quota
-            // configured for tenant 'default-tenant'" (F-GAP-08).
-            if fallback_server.runtime_config.user_auth_enabled {
-                let mut budget = fallback_server
-                    .tenant_budget
-                    .lock()
-                    .unwrap_or_else(|poisoned| {
-                        tracing::warn!("tenant_budget lock poisoned in new_acp_server (fallback)");
-                        poisoned.into_inner()
-                    });
-                budget.auto_provision_default(&fallback_server.runtime_config);
-            }
-
-            fallback_server.optimizer_registry = Arc::clone(
-                &fallback_server
-                    .governance_deps
-                    .capability_bus
-                    .as_ref()
-                    .map(|cb| Arc::clone(&cb.optimizer_registry))
-                    .unwrap_or_default(),
-            );
-
-            // Wire the token cache into the agent registry for the fallback path too.
-            registry.set_token_cache(Some(Arc::clone(
-                &fallback_server.cache_deps.cache.token_cache,
-            )));
-
-            // BLUE48 Step 19: Initialize intelligence hub in the fallback path too so
-            // consensus voting, rationalization, and audit are wired into the request path.
-            crate::intelligence::hub::init_intel_hub();
+            // B51-26: Shared wiring extracted to wire_server()
+            wire_server(&mut fallback_server, &registry);
 
             fallback_server
+        }
+    }
+}
+
+/// Shared wiring applied after AcpServer construction in both the primary builder
+/// success path and the fallback path.  Extracted to eliminate ~250 lines of
+/// duplicated code between the two branches (B51-26).
+fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
+    // Create session manager if user auth is enabled
+    if server.runtime_config.user_auth_enabled {
+        use crate::acp::r#impl::session::{AuthConfig, SessionManager};
+        let auth_config = AuthConfig::from(&server.runtime_config);
+        server.session_manager = Some(Arc::new(SessionManager::with_auth_config(auth_config)));
+    }
+
+    // Wire dual-level task scheduler (ARCH-02): create the scheduler and
+    // register one worker per known agent so the priority queue has real routing
+    // targets.  The scheduler tracks queue depth and active-worker counts that
+    // are surfaced in governance.status.
+    {
+        let db_path = server
+            .runtime_config
+            .sqlite_vacuum_interval_cycles
+            .checked_add(1)
+            .map(|_| std::path::PathBuf::from("scheduler_queue.db"));
+        let _persistent = crate::orchestration::scheduler::create_persistent_scheduler(db_path);
+        let config = crate::orchestration::scheduler::SchedulerConfig::default();
+        let s = Arc::new(crate::orchestration::scheduler::AgentWorkerScheduler::new(
+            config,
+        ));
+        for agent_name in registry.names() {
+            if let Err(e) = s.register_worker(&agent_name, &agent_name) {
+                tracing::warn!(
+                    "failed to register worker for agent '{}': {}",
+                    agent_name,
+                    e
+                );
+            }
+        }
+        // Start the aging timer so queued tasks receive periodic priority
+        // boosts and don't starve (B51-09).
+        s.level1
+            .start_aging_timer(std::time::Duration::from_secs(5));
+        server.orchestration_deps.scheduler = Some(s);
+    }
+
+    if server.runtime_config.skills_enabled {
+        server.register_skill(Arc::new(crate::orchestration::skill::EchoSkill));
+        server.register_skill(Arc::new(
+            crate::orchestration::skill::SkillCreatorSkill::new(
+                server.orchestration_deps.skill_registry.clone(),
+            ),
+        ));
+    }
+
+    // Wire the skill registry into the global discovery engine
+    crate::acp::r#impl::request::tools_pack::init_skill_discovery(
+        server.orchestration_deps.skill_registry.clone(),
+    );
+
+    // Wire the new modules' state from CapabilityBus into the server's
+    // standalone fields so process_chat_request can access them directly.
+    server.schema_registry = Arc::clone(
+        &server
+            .governance_deps
+            .capability_bus
+            .as_ref()
+            .map(|cb| Arc::clone(&cb.schema_registry))
+            .unwrap_or_default(),
+    );
+    server.tenant_budget = Arc::clone(
+        &server
+            .governance_deps
+            .capability_bus
+            .as_ref()
+            .map(|cb| Arc::clone(&cb.tenant_budget))
+            .unwrap_or_default(),
+    );
+
+    // Auto-provision a default tenant quota when user auth is enabled so
+    // the budget enforcer does not reject every request with "no quota
+    // configured for tenant 'default-tenant'" (F-GAP-08).
+    if server.runtime_config.user_auth_enabled {
+        let mut budget = server.tenant_budget.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("tenant_budget lock poisoned in wire_server");
+            poisoned.into_inner()
+        });
+        budget.auto_provision_default(&server.runtime_config);
+    }
+
+    server.optimizer_registry = Arc::clone(
+        &server
+            .governance_deps
+            .capability_bus
+            .as_ref()
+            .map(|cb| Arc::clone(&cb.optimizer_registry))
+            .unwrap_or_default(),
+    );
+
+    // Wire the token cache into the agent registry so that all
+    // agents returned by registry.get() are automatically wrapped
+    // with CachedAgentWrapper.
+    registry.set_token_cache(Some(Arc::clone(&server.cache_deps.cache.token_cache)));
+
+    // BLUE48 Step 19: Initialize intelligence hub at startup so consensus
+    // voting, rationalization, and audit are wired into the request path.
+    crate::intelligence::hub::init_intel_hub();
+
+    // BLUE51 Step 1: Wire WebSocket hub to SessionRegistry for real-time sync
+    let session_registry = Arc::new(crate::protocol::session_sync::SessionRegistry::new());
+    let ws_hub = Arc::new(crate::protocol::websocket::WebSocketHub::new(
+        crate::protocol::websocket::WebSocketConfig::default(),
+    ));
+
+    // Start WebSocket heartbeat and wire broadcast fn.
+    // new_acp_server is sync, so use Handle::block_on for the one-time async setup.
+    {
+        let handle = tokio::runtime::Handle::current();
+        let ws = ws_hub.clone();
+        let sr = session_registry.clone();
+        handle.block_on(async {
+            ws.start_heartbeat().await;
+            let broadcast_fn = ws.create_broadcast_fn();
+            sr.set_broadcast_fn(broadcast_fn).await;
+        });
+    }
+
+    server.session_registry = Some(session_registry);
+    server.websocket_hub = Some(ws_hub);
+
+    // ── Federated learning initializer (BLUE2 / F-GAP-19) ────────────
+    // If FEDERATED_PEERS is set, initialize the FederatedRLAdapter with
+    // differential privacy and model versioning enabled.
+    {
+        use crate::intelligence::reinforcement::FederatedRLAdapter;
+        use std::sync::OnceLock;
+
+        static FEDERATED_ADAPTER: OnceLock<FederatedRLAdapter> = OnceLock::new();
+
+        if std::env::var("FEDERATED_PEERS").is_ok() {
+            let adapter = FederatedRLAdapter::new(true, true);
+            if FEDERATED_ADAPTER.set(adapter).is_ok() {
+                info!("wire_server: FederatedRLAdapter initialized with privacy + versioning");
+            }
+        } else {
+            debug!("wire_server: FEDERATED_PEERS not set, federated learning disabled");
         }
     }
 }
@@ -703,6 +841,62 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
         Err(_) => TcpListener::bind(&bind_addr).await?,
     };
 
+    // GAP-B52-24: Configure mTLS acceptor when enabled
+    // The acceptor wraps each accepted TCP stream with TLS before passing
+    // to the HTTP connection handler.
+    let mtls_acceptor: Option<tokio_rustls::TlsAcceptor> = {
+        if server.runtime_config.mtls_enabled
+            && !server.runtime_config.mtls_server_cert_path.is_empty()
+            && !server.runtime_config.mtls_server_key_path.is_empty()
+        {
+            #[cfg(feature = "profile-multi-users-server")]
+            {
+                use crate::security::mtls::MtlsConfig;
+                let mut mtls_config = MtlsConfig::new(
+                    &server.runtime_config.mtls_server_cert_path,
+                    &server.runtime_config.mtls_server_key_path,
+                );
+                if !server.runtime_config.mtls_ca_cert_path.is_empty() {
+                    mtls_config =
+                        mtls_config.with_client_cert(&server.runtime_config.mtls_ca_cert_path);
+                }
+                if !server.runtime_config.mtls_allowed_cns.is_empty() {
+                    let allowed: Vec<String> = server
+                        .runtime_config
+                        .mtls_allowed_cns
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    mtls_config = mtls_config.with_allowed_cns(allowed);
+                }
+
+                match crate::security::mtls::MtlsAcceptor::new(mtls_config) {
+                    Ok(acceptor) => {
+                        tracing::info!("mTLS enabled for ACP HTTP server");
+                        Some(tokio_rustls::TlsAcceptor::from(acceptor.into_inner()))
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to create mTLS acceptor: {} — falling back to plain TCP",
+                            e
+                        );
+                        None
+                    }
+                }
+            }
+            #[cfg(not(feature = "profile-multi-users-server"))]
+            {
+                tracing::warn!(
+                    "mTLS is configured but requires profile-multi-users-server feature"
+                );
+                None
+            }
+        } else {
+            None
+        }
+    };
+
     // Set up signal watchers for graceful shutdown
     let mut sigterm = std::pin::pin!(async {
         #[cfg(unix)]
@@ -740,13 +934,35 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
                     drop(incoming);
                     continue;
                 }
-                let (mut socket, peer_addr) = incoming?;
+                let (socket, peer_addr) = incoming?;
                 let server_ref = Arc::clone(&server);
-                tokio::spawn(async move {
-                    if let Err(err) = handle_http_connection(&mut socket, server_ref, peer_addr).await {
-                        warn!("ACP HTTP connection {} failed: {}", peer_addr, err);
-                    }
-                });
+                if let Some(ref acceptor) = mtls_acceptor {
+                    // mTLS path: perform TLS handshake, then handle through
+                    // the dedicated mTLS HTTP handler.
+                    let acceptor_clone = acceptor.clone();
+                    tokio::spawn(async move {
+                        if let Err(err) = handle_mtls_http_connection(
+                            &acceptor_clone,
+                            socket,
+                            server_ref,
+                            peer_addr,
+                        )
+                        .await
+                        {
+                            warn!("ACP mTLS connection {} failed: {}", peer_addr, err);
+                        }
+                    });
+                } else {
+                    // Plain TCP path
+                    tokio::spawn(async move {
+                        let mut socket = socket;
+                        if let Err(err) =
+                            handle_http_connection(&mut socket, server_ref, peer_addr).await
+                        {
+                            warn!("ACP HTTP connection {} failed: {}", peer_addr, err);
+                        }
+                    });
+                }
             }
         }
     }
@@ -1598,6 +1814,8 @@ fn degraded_openai_message(err: &anyhow::Error) -> String {
     )
 }
 
+/// Write data to a TcpStream with a 30-second timeout.
+/// Returns an error if the write times out or the connection is broken.
 /// Write data to a TcpStream with a 30-second timeout.
 /// Returns an error if the write times out or the connection is broken.
 async fn tcp_write_timeout(socket: &mut TcpStream, data: &[u8]) -> Result<()> {
@@ -3566,6 +3784,279 @@ async fn handle_http_connection(
     .await?;
 
     Ok(())
+}
+
+// ── mTLS helper: route JSON-RPC request over TLS ────────────────────────
+// Processes a JSON-RPC request in-memory and returns the response value,
+// bypassing the stdio output path used by the stdio-mode `handle_request`.
+
+/// Process a JSON-RPC request over an mTLS connection and return the
+/// JSON-RPC response value. This is a simplified handler that supports
+/// the core RPC methods used over mTLS connections.
+async fn route_rpc_over_tls(server: &AcpServer, request: JsonRpcRequest) -> serde_json::Value {
+    // For the mTLS path, we delegate to the existing handle_request function
+    // which sends responses through server.output. To capture the response,
+    // we temporarily replace the output with a buffer.
+    use crate::acp::r#impl::io::send_error;
+    use crate::acp::r#impl::request::handle_request;
+    use crate::rpc_protocol::JsonRpcRequest;
+
+    // We use a capture mechanism: the handle_request writes to server.output.
+    // For mTLS, we can't intercept this easily, so we return a placeholder
+    // indicating the request was processed. Full JSON-RPC response capture
+    // over mTLS requires a generalized in-memory response pipeline.
+    //
+    // The request is processed through the standard path; errors/notifications
+    // are written to server.output as usual. For the mTLS HTTP response, we
+    // return a minimal JSON-RPC envelope.
+    match handle_request(server, request).await {
+        Ok(()) => {
+            serde_json::json!({
+                "ok": true,
+                "method": request.method,
+            })
+        }
+        Err(e) => {
+            serde_json::json!({
+                "ok": false,
+                "error": format!("{:#}", e),
+                "method": request.method,
+            })
+        }
+    }
+}
+
+// ── mTLS HTTP connection handler ────────────────────────────────────────
+// GAP-B52-24: TLS-enabled HTTP handler. Since the existing
+// `handle_http_connection` is tightly coupled to `TcpStream` (used in SSE
+// streaming, write_http_json_response, and many route functions), this
+// dedicated handler performs TLS handshake first, then reads the full HTTP
+// request through the TLS stream and delegates to shared request-processing
+// logic that works on parsed HTTP data rather than raw sockets.
+//
+// SSE streaming over mTLS is not supported in the initial implementation;
+// requests to SSE endpoints (/chat/stream, /v1/chat/completions?stream=true)
+// receive a 501 Not Implemented response.
+
+/// Write an HTTP JSON response through a generic async writer.
+async fn tls_write_http_json<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut W,
+    status: u16,
+    value: serde_json::Value,
+    extra_headers: &str,
+) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let status_text = match status {
+        200 => "OK",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        429 => "Too Many Requests",
+        500 => "Internal Server Error",
+        501 => "Not Implemented",
+        _ => "OK",
+    };
+    let body = serde_json::to_vec(&value)?;
+    let headers = format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n",
+        status,
+        status_text,
+        body.len(),
+        extra_headers
+    );
+    writer.write_all(headers.as_bytes()).await?;
+    writer.write_all(&body).await?;
+    writer.shutdown().await?;
+    Ok(())
+}
+
+/// Handle an HTTP connection secured by mTLS.
+///
+/// Performs TLS handshake, reads the HTTP request, processes it through
+/// the shared route logic, and writes the response back through TLS.
+async fn handle_mtls_http_connection(
+    tls_acceptor: &tokio_rustls::TlsAcceptor,
+    socket: TcpStream,
+    server: Arc<AcpServer>,
+    peer_addr: SocketAddr,
+) -> Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // Perform TLS handshake
+    let mut tls_stream = match tls_acceptor.accept(socket).await {
+        Ok(stream) => stream,
+        Err(e) => {
+            warn!("mTLS handshake failed for {}: {}", peer_addr, e);
+            return Ok(());
+        }
+    };
+
+    // Read the HTTP request through the TLS stream
+    let mut buffer = vec![0u8; 64 * 1024];
+    let bytes_read = match tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        tls_stream.read(&mut buffer),
+    )
+    .await
+    {
+        Ok(Ok(n)) => n,
+        Ok(Err(e)) => {
+            warn!("mTLS read error from {}: {}", peer_addr, e);
+            return Ok(());
+        }
+        Err(_) => {
+            warn!("mTLS read timeout from {}", peer_addr);
+            return Ok(());
+        }
+    };
+
+    if bytes_read == 0 {
+        return Ok(());
+    }
+
+    let request_text = String::from_utf8_lossy(&buffer[..bytes_read]);
+    let parsed = match parse_http_request(&request_text) {
+        Ok(p) => p,
+        Err(e) => {
+            tls_write_http_json(
+                &mut tls_stream,
+                400,
+                serde_json::json!({"error": format!("Invalid HTTP request: {}", e)}),
+                "",
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+
+    // Compute CORS headers
+    let cors_headers = compute_cors_response_headers(parsed.header_part, server.as_ref());
+
+    // Route the request
+    if parsed.method == "OPTIONS" {
+        tls_write_http_json(
+            &mut tls_stream,
+            200,
+            serde_json::json!({"ok": true}),
+            &cors_headers,
+        )
+        .await?;
+        return Ok(());
+    }
+
+    // Reject SSE-streaming endpoints over mTLS (not yet supported)
+    if parsed.path == "/chat/stream"
+        || parsed.path == "/v1/chat/completions"
+        || parsed.path == "/v1/responses"
+    {
+        tls_write_http_json(
+            &mut tls_stream,
+            501,
+            serde_json::json!({
+                "error": "Not Implemented",
+                "message": "SSE streaming over mTLS is not yet supported. Use plain HTTP or a TLS-terminating proxy.",
+                "code": "MTLS_SSE_NOT_SUPPORTED",
+            }),
+            &cors_headers,
+        )
+        .await?;
+        return Ok(());
+    }
+
+    // GET requests: health and root capabilities
+    if parsed.method == "GET" {
+        match parsed.path {
+            "/health" => {
+                tls_write_http_json(
+                    &mut tls_stream,
+                    200,
+                    serde_json::json!({"status": "ok"}),
+                    &cors_headers,
+                )
+                .await?;
+            }
+            "/" | "/capabilities" => {
+                let caps = build_root_capabilities_response();
+                tls_write_http_json(&mut tls_stream, 200, caps, &cors_headers).await?;
+            }
+            _ => {
+                tls_write_http_json(
+                    &mut tls_stream,
+                    404,
+                    serde_json::json!({"error": "Not Found"}),
+                    &cors_headers,
+                )
+                .await?;
+            }
+        }
+        return Ok(());
+    }
+
+    // POST requests: route to the appropriate handler
+    if parsed.method == "POST" {
+        if parsed.path == "/rpc" {
+            let body = parsed.body_initial_part;
+            match serde_json::from_str::<JsonRpcRequest>(body) {
+                Ok(request) => {
+                    // Process the request through a dedicated in-memory handler
+                    // that returns JSON-RPC responses as serialized bytes.
+                    let response_value = route_rpc_over_tls(server.as_ref(), request).await;
+                    let response_bytes = serde_json::to_vec(&response_value).unwrap_or_default();
+                    let status_text = "OK";
+                    let headers = format!(
+                        "HTTP/1.1 200 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n{}\r\n",
+                        status_text,
+                        response_bytes.len(),
+                        cors_headers
+                    );
+                    tls_stream.write_all(headers.as_bytes()).await?;
+                    tls_stream.write_all(&response_bytes).await?;
+                    let _ = tls_stream.shutdown().await;
+                }
+                Err(e) => {
+                    tls_write_http_json(
+                        &mut tls_stream,
+                        400,
+                        serde_json::json!({
+                            "error": "Invalid JSON-RPC request",
+                            "detail": e.to_string(),
+                        }),
+                        &cors_headers,
+                    )
+                    .await?;
+                }
+            }
+        } else if parsed.path == "/chat" {
+            tls_write_http_json(
+                &mut tls_stream,
+                501,
+                serde_json::json!({
+                    "error": "Not Implemented",
+                    "message": "Chat endpoint over mTLS is not yet fully supported.",
+                    "code": "MTLS_CHAT_NOT_SUPPORTED",
+                }),
+                &cors_headers,
+            )
+            .await?;
+        } else {
+            tls_write_http_json(
+                &mut tls_stream,
+                404,
+                serde_json::json!({"error": "Not Found"}),
+                &cors_headers,
+            )
+            .await?;
+        }
+        return Ok(());
+    }
+
+    tls_write_http_json(
+        &mut tls_stream,
+        405,
+        serde_json::json!({"error": "Method Not Allowed"}),
+        &cors_headers,
+    )
+    .await
 }
 
 fn infer_adaptive_signal(method: &str, path: &str, headers: &str) -> &'static str {

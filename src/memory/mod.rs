@@ -12,6 +12,8 @@
 
 pub mod cache;
 pub mod memory;
+pub mod memory_persistence;
 pub mod memory_response_cache;
+pub mod memory_retrieval;
 pub mod semantic_cache;
 pub mod vector;

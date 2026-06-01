@@ -187,8 +187,8 @@ impl MemoryStore {
             // O(log n) global min across all class trees
             let oldest = self
                 .entries_by_class
-                .iter()
-                .filter_map(|(_, tree)| tree.first_key_value())
+                .values()
+                .filter_map(|tree| tree.first_key_value())
                 .min_by_key(|(seq, _)| *seq)
                 .map(|(_, id)| id.clone());
             if let Some(id) = oldest {

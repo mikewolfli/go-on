@@ -16,12 +16,14 @@ pub mod i18n;
 pub mod intelligence;
 pub mod mcp;
 pub mod memory;
+pub mod multimodal;
 pub mod observability;
 pub mod optimization;
 pub mod orchestration;
 pub mod protocol;
 pub mod resilience;
 pub mod schema;
+pub mod security;
 pub mod shared;
 
 // ── Re-exports (mirrors main.rs so `crate::agent::*` etc. resolve) ────────

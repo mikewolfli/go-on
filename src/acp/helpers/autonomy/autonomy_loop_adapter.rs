@@ -17,6 +17,9 @@ use super::autonomy::is_execution_like_request;
 use super::autonomy_loop::{
     run_autonomy_loop, AutonomyLoopConfig, AutonomyLoopReport, AutonomyLoopResult,
 };
+use crate::orchestration::brain_loop::{
+    BrainLoop, BrainLoopConfig, BrainLoopPhase, BrainLoopProfile, BrainLoopStep, StepStatus,
+};
 use crate::orchestration::full_auto::FullAutoFlow;
 use crate::orchestration::skill::SkillRegistry;
 use crate::orchestration::tool::ToolRegistry;
@@ -60,17 +63,22 @@ pub(crate) async fn run_acp_autonomy_loop(
         enable_execution_intelligence: option_bool("enable_metacognitive_feedback", true),
         recovery_orchestrator: Some(crate::orchestration::recovery::RecoveryOrchestrator::new()),
         max_messages: 200,
+        use_brain_loop: option_bool("use_brain_loop", false),
     };
 
-    let result = run_autonomy_loop(
-        agent,
-        tool_registry,
-        &objective,
-        messages,
-        config,
-        timeout_duration,
-    )
-    .await?;
+    let result = if config.use_brain_loop {
+        run_acp_autonomy_loop_with_brain_loop(agent, &objective, &messages, config).await?
+    } else {
+        run_autonomy_loop(
+            agent,
+            tool_registry,
+            &objective,
+            messages,
+            config,
+            timeout_duration,
+        )
+        .await?
+    };
 
     // Stream the final response if a channel was provided
     if let Some(tx) = stream_tx {
@@ -83,6 +91,106 @@ pub(crate) async fn run_acp_autonomy_loop(
     }
 
     Ok(result)
+}
+
+/// Run the autonomy loop via BrainLoop orchestrator (B51-07).
+///
+/// Converts the ACP messages and objective into a `BrainLoop` plan,
+/// runs the plan → execute → reflect → replan cycle, then converts the
+/// resulting [`BrainLoopProfile`] back into [`AutonomyLoopResult`] format.
+async fn run_acp_autonomy_loop_with_brain_loop(
+    _agent: Arc<dyn Agent>,
+    objective: &str,
+    messages: &[Message],
+    _config: AutonomyLoopConfig,
+) -> Result<AutonomyLoopResult> {
+    // ── Convert messages into BrainLoop steps ────────────────────────
+    let steps: Vec<BrainLoopStep> = messages
+        .iter()
+        .enumerate()
+        .map(|(i, msg)| BrainLoopStep {
+            id: format!("msg-{}-{}", msg.role, i),
+            phase: BrainLoopPhase::Planning,
+            description: format!(
+                "{} message: {}",
+                msg.role,
+                msg.content.chars().take(120).collect::<String>()
+            ),
+            input: msg.content.clone(),
+            output: String::new(),
+            started_ms: 0,
+            completed_ms: 0,
+            duration_ms: 0,
+            status: StepStatus::Pending,
+            context: None,
+        })
+        .collect();
+
+    // ── Run the BrainLoop ────────────────────────────────────────────
+    let brain_config = BrainLoopConfig::default();
+    let brain_loop = BrainLoop::new(brain_config);
+    let profile: BrainLoopProfile = brain_loop.run_async(objective, steps).await?;
+
+    // ── Convert profile back to AutonomyLoopResult ───────────────────
+    Ok(brain_loop_profile_to_result(&profile, objective))
+}
+
+/// Convert a [`BrainLoopProfile`] to an [`AutonomyLoopResult`].
+fn brain_loop_profile_to_result(profile: &BrainLoopProfile, objective: &str) -> AutonomyLoopResult {
+    let response = serde_json::json!({
+        "brain_loop": true,
+        "objective": objective,
+        "total_plans": profile.total_plans,
+        "active_plans": profile.active_plans,
+        "completed_plans": profile.completed_plans,
+        "failed_plans": profile.failed_plans,
+        "total_cycles": profile.total_cycles,
+        "total_steps": profile.total_steps,
+        "avg_cycles_per_plan": profile.avg_cycles_per_plan,
+        "avg_step_score": profile.avg_step_score,
+        "convergence_info": profile.convergence_info,
+    });
+
+    let converged = profile
+        .convergence_info
+        .to_lowercase()
+        .contains("converged");
+    let reasoning = format!(
+        "BrainLoop: {} plan(s), {} cycle(s), {} step(s), converged={}",
+        profile.total_plans,
+        profile.total_cycles,
+        profile.total_steps,
+        if converged { "yes" } else { "no" },
+    );
+
+    AutonomyLoopResult {
+        response: response.to_string(),
+        reasoning,
+        selected_model: None,
+        report: AutonomyLoopReport {
+            total_rounds: profile.total_cycles as usize,
+            total_tools: profile.total_steps as usize,
+            final_phase: if profile.failed_plans > 0 {
+                super::autonomy_loop::AutonomyPhase::Failed
+            } else if profile.completed_plans > 0 {
+                super::autonomy_loop::AutonomyPhase::Completed
+            } else {
+                super::autonomy_loop::AutonomyPhase::Planning
+            },
+            rounds: Vec::new(),
+            planner_guidance_used: false,
+            trace_alignment_coverage: 0.0,
+            total_duration_ms: 0,
+            corrective_actions_applied_total: 0,
+            corrective_action_effectiveness_ratio: 0.0,
+            audit_trail: None,
+            stop_reason: if profile.failed_plans > 0 {
+                "failed".to_string()
+            } else {
+                "completed".to_string()
+            },
+        },
+    }
 }
 
 /// Run the FullAutoFlow orchestrator for `full_auto` mode.

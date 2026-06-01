@@ -98,6 +98,225 @@ pub trait Plugin: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
+// Built-in plugins
+// ---------------------------------------------------------------------------
+
+/// Built-in plugin that provides tool execution capabilities.
+pub struct ToolPlugin {
+    manifest: PluginManifest,
+    state: PluginState,
+}
+
+impl ToolPlugin {
+    pub fn new() -> Self {
+        Self {
+            manifest: PluginManifest {
+                id: "builtin:tool".to_string(),
+                name: "Tool Plugin".to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on core".to_string(),
+                description: "Provides tool execution capabilities for the agent runtime"
+                    .to_string(),
+                min_go_on_version: "1.0.0".to_string(),
+                provides: vec!["tool".to_string()],
+                dependencies: HashMap::new(),
+            },
+            state: PluginState::Registered,
+        }
+    }
+}
+
+#[async_trait]
+impl Plugin for ToolPlugin {
+    fn manifest(&self) -> &PluginManifest {
+        &self.manifest
+    }
+
+    async fn initialize(&mut self) -> anyhow::Result<()> {
+        self.state = PluginState::Active;
+        tracing::info!("ToolPlugin initialized");
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> anyhow::Result<()> {
+        self.state = PluginState::Unloaded;
+        tracing::info!("ToolPlugin shut down");
+        Ok(())
+    }
+
+    fn state(&self) -> PluginState {
+        self.state
+    }
+}
+
+impl Default for ToolPlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Built-in plugin that provides skill discovery and execution.
+pub struct SkillPlugin {
+    manifest: PluginManifest,
+    state: PluginState,
+}
+
+impl SkillPlugin {
+    pub fn new() -> Self {
+        Self {
+            manifest: PluginManifest {
+                id: "builtin:skill".to_string(),
+                name: "Skill Plugin".to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on core".to_string(),
+                description: "Provides skill discovery and execution for agent workflows"
+                    .to_string(),
+                min_go_on_version: "1.0.0".to_string(),
+                provides: vec!["skill".to_string()],
+                dependencies: HashMap::new(),
+            },
+            state: PluginState::Registered,
+        }
+    }
+}
+
+#[async_trait]
+impl Plugin for SkillPlugin {
+    fn manifest(&self) -> &PluginManifest {
+        &self.manifest
+    }
+
+    async fn initialize(&mut self) -> anyhow::Result<()> {
+        self.state = PluginState::Active;
+        tracing::info!("SkillPlugin initialized");
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> anyhow::Result<()> {
+        self.state = PluginState::Unloaded;
+        tracing::info!("SkillPlugin shut down");
+        Ok(())
+    }
+
+    fn state(&self) -> PluginState {
+        self.state
+    }
+}
+
+impl Default for SkillPlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Built-in plugin that handles protocol mode selection.
+pub struct ModePlugin {
+    manifest: PluginManifest,
+    state: PluginState,
+}
+
+impl ModePlugin {
+    pub fn new() -> Self {
+        Self {
+            manifest: PluginManifest {
+                id: "builtin:mode".to_string(),
+                name: "Mode Plugin".to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on core".to_string(),
+                description: "Handles protocol mode selection and runtime mode switching"
+                    .to_string(),
+                min_go_on_version: "1.0.0".to_string(),
+                provides: vec!["mode".to_string()],
+                dependencies: HashMap::new(),
+            },
+            state: PluginState::Registered,
+        }
+    }
+}
+
+#[async_trait]
+impl Plugin for ModePlugin {
+    fn manifest(&self) -> &PluginManifest {
+        &self.manifest
+    }
+
+    async fn initialize(&mut self) -> anyhow::Result<()> {
+        self.state = PluginState::Active;
+        tracing::info!("ModePlugin initialized");
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> anyhow::Result<()> {
+        self.state = PluginState::Unloaded;
+        tracing::info!("ModePlugin shut down");
+        Ok(())
+    }
+
+    fn state(&self) -> PluginState {
+        self.state
+    }
+}
+
+impl Default for ModePlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Built-in plugin that enforces governance policies.
+pub struct PolicyPlugin {
+    manifest: PluginManifest,
+    state: PluginState,
+}
+
+impl PolicyPlugin {
+    pub fn new() -> Self {
+        Self {
+            manifest: PluginManifest {
+                id: "builtin:policy".to_string(),
+                name: "Policy Plugin".to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on core".to_string(),
+                description: "Enforces governance policies across agent operations".to_string(),
+                min_go_on_version: "1.0.0".to_string(),
+                provides: vec!["policy".to_string()],
+                dependencies: HashMap::new(),
+            },
+            state: PluginState::Registered,
+        }
+    }
+}
+
+#[async_trait]
+impl Plugin for PolicyPlugin {
+    fn manifest(&self) -> &PluginManifest {
+        &self.manifest
+    }
+
+    async fn initialize(&mut self) -> anyhow::Result<()> {
+        self.state = PluginState::Active;
+        tracing::info!("PolicyPlugin initialized");
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> anyhow::Result<()> {
+        self.state = PluginState::Unloaded;
+        tracing::info!("PolicyPlugin shut down");
+        Ok(())
+    }
+
+    fn state(&self) -> PluginState {
+        self.state
+    }
+}
+
+impl Default for PolicyPlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // PluginRegistry
 // ---------------------------------------------------------------------------
 
@@ -113,8 +332,25 @@ impl PluginRegistry {
         }
     }
 
+    /// Register the 4 built-in plugins (Tool, Skill, Mode, Policy).
+    /// This should be called once at startup after creating the registry.
+    pub fn register_builtin_plugins(&self) {
+        let builtins: Vec<Box<dyn Plugin>> = vec![
+            Box::new(ToolPlugin::new()),
+            Box::new(SkillPlugin::new()),
+            Box::new(ModePlugin::new()),
+            Box::new(PolicyPlugin::new()),
+        ];
+        for plugin in builtins {
+            let id = plugin.manifest().id.clone();
+            match self.register(plugin) {
+                Ok(()) => tracing::info!("Registered built-in plugin: {id}"),
+                Err(e) => tracing::warn!("Failed to register built-in plugin {id}: {e}"),
+            }
+        }
+    }
+
     /// Register a new plugin.
-    #[allow(dead_code)] // F-GAP-12 — reserved for plugin system integration
     pub fn register(&self, plugin: Box<dyn Plugin>) -> Result<(), String> {
         let id = plugin.manifest().id.clone();
         let mut plugins = self.plugins.lock().map_err(|e| e.to_string())?;

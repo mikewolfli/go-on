@@ -871,8 +871,8 @@ mod tests {
 
         let match_score = if query_lower.is_empty() {
             0.0
-        } else if name_lower.contains(&query_lower) || desc_lower.contains(&query_lower) {
-            ((score * 0.7 + 0.3) as f64).max(0.0).min(1.0)
+        } else if name_lower.contains(query_lower) || desc_lower.contains(query_lower) {
+            ((score * 0.7 + 0.3)).max(0.0).min(1.0)
         } else {
             let query_words: Vec<&str> = query_lower.split_whitespace().collect();
             let name_words: Vec<&str> = name_lower.split_whitespace().collect();
@@ -903,8 +903,8 @@ mod tests {
 
         let match_score = if query_lower.is_empty() {
             0.0
-        } else if name_lower.contains(&query_lower) || desc_lower.contains(&query_lower) {
-            ((score * 0.7 + 0.3) as f64).max(0.0).min(1.0)
+        } else if name_lower.contains(query_lower) || desc_lower.contains(query_lower) {
+            ((score * 0.7 + 0.3)).max(0.0).min(1.0)
         } else {
             score * 0.3
         };

@@ -38,6 +38,7 @@ pub mod qianfan;
 pub mod replicate;
 pub mod siliconflow;
 pub mod skywork;
+pub mod self_evolution_agent; // GAP-B52-03: Self-Evolution Agent
 pub mod sse_compressor;
 pub mod sse_optimizer;
 pub mod stepfun;
@@ -121,7 +122,7 @@ pub use xai::XaiAgent;
 pub use xihu::XihuAgent;
 pub use yi::YiAgent;
 
-pub use sse_compressor::{SseCompressor, StreamingConfig};
+pub use sse_compressor::{SseDecompressor, StreamingConfig};
 
 /// Convert principles to text format
 ///
@@ -463,16 +464,16 @@ pub async fn stream_sse_to_sender_compressed(
     }
 
     let cfg = config.clone();
-    let mut compressor = SseCompressor::new(&cfg);
+    let mut decompressor = SseDecompressor::new(&cfg);
 
     // Verify compression is active and track buffer state
-    if !compressor.is_enabled() {
+    if !decompressor.is_enabled() {
         return stream_sse_to_sender(response, sender).await;
     }
     debug!(
         "SSE compression active, buffer threshold={}, initial_size={}",
         config.compression_threshold,
-        compressor.buffered_bytes()
+        decompressor.buffered_bytes()
     );
 
     let mut stream = response.bytes_stream();
@@ -480,8 +481,8 @@ pub async fn stream_sse_to_sender_compressed(
 
     while let Some(chunk_result) = stream.next().await {
         let chunk = chunk_result?;
-        let compressed = compressor.compress_chunk(&chunk);
-        let chunk_text = String::from_utf8_lossy(&compressed);
+        let decompressed = decompressor.decompress_chunk(&chunk);
+        let chunk_text = String::from_utf8_lossy(&decompressed);
         match parser.push_chunk(&chunk_text) {
             Ok(events) => {
                 for event in events {
@@ -505,7 +506,7 @@ pub async fn stream_sse_to_sender_compressed(
     }
 
     // Flush any remaining decompressed data and parse it
-    let tail = compressor.flush();
+    let tail = decompressor.flush();
     if !tail.is_empty() {
         let tail_text = String::from_utf8_lossy(&tail);
         // Parse decompressed tail data through a fresh parser

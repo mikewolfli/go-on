@@ -1,14 +1,18 @@
-//! SSE streaming decompression using gzip/deflate.
+//! SSE streaming decompression using gzip/deflate, plus compression utilities.
 //!
 //! Provides optional gzip decompression for SSE event streams to handle
-//! gzip-compressed streaming responses from LLM APIs.
+//! gzip-compressed streaming responses from LLM APIs, and gzip compression
+//! for outgoing SSE payloads.
 //!
-//! Uses `flate2` for gzip decompression with a configurable buffer threshold.
-//! When the internal buffer exceeds the threshold, the accumulated data is
-//! decompressed and emitted. Any remaining data can be flushed at stream end.
+//! Uses `flate2` for gzip compression/decompression with a configurable
+//! buffer threshold for decompression. When the internal buffer exceeds the
+//! threshold, the accumulated data is decompressed and emitted. Any remaining
+//! data can be flushed at stream end.
 
 use flate2::read::MultiGzDecoder;
-use std::io::Read;
+use flate2::write::GzEncoder;
+use flate2::Compression;
+use std::io::{Read, Write};
 
 /// Configuration for SSE streaming behavior
 #[derive(Debug, Clone)]
@@ -30,14 +34,17 @@ impl Default for StreamingConfig {
 
 /// Buffers raw bytes and emits gzip-decompressed chunks when the
 /// accumulated size reaches or exceeds the configured threshold.
-pub struct SseCompressor {
+///
+/// Despite its name, this is a **decompressor** — it decompresses
+/// gzip-encoded streaming data.
+pub struct SseDecompressor {
     buffer: Vec<u8>,
     threshold: usize,
     enabled: bool,
 }
 
-impl SseCompressor {
-    /// Create a new compressor with the given configuration.
+impl SseDecompressor {
+    /// Create a new decompressor with the given configuration.
     pub fn new(config: &StreamingConfig) -> Self {
         Self {
             buffer: Vec::new(),
@@ -52,7 +59,7 @@ impl SseCompressor {
     /// the threshold, the buffered data is gzip-decompressed and returned
     /// as a single decompressed chunk. Otherwise, the raw data is
     /// returned as-is (passthrough mode).
-    pub fn compress_chunk(&mut self, data: &[u8]) -> Vec<u8> {
+    pub fn decompress_chunk(&mut self, data: &[u8]) -> Vec<u8> {
         if !self.enabled {
             return data.to_vec();
         }
@@ -107,6 +114,40 @@ impl SseCompressor {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Compression helper for outgoing SSE payloads
+// ---------------------------------------------------------------------------
+
+/// Compress a byte slice using gzip.
+///
+/// Returns `None` when compression would expand the data (payload too small),
+/// allowing callers to fall back to uncompressed output.
+#[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
+pub fn compress_sse_payload(data: &[u8]) -> Option<Vec<u8>> {
+    if data.len() < 128 {
+        return None;
+    }
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+    if encoder.write_all(data).is_err() {
+        return None;
+    }
+    let compressed = encoder.finish().ok()?;
+    // Only return compressed if it actually saves space
+    if compressed.len() < data.len() {
+        Some(compressed)
+    } else {
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Deprecated aliases for backward compatibility
+// ---------------------------------------------------------------------------
+
+#[allow(dead_code)] // F-GAP-51 — deprecated alias kept for backward compat
+#[deprecated(since = "0.1.0", note = "renamed to SseDecompressor")]
+pub type SseCompressor = SseDecompressor;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,9 +158,9 @@ mod tests {
             enable_compression: false,
             compression_threshold: 64,
         };
-        let mut comp = SseCompressor::new(&config);
+        let mut comp = SseDecompressor::new(&config);
         let data = b"data: hello\n\n";
-        let result = comp.compress_chunk(data);
+        let result = comp.decompress_chunk(data);
         // Returns uncompressed data as-is
         assert_eq!(result, data);
     }
@@ -130,8 +171,8 @@ mod tests {
             enable_compression: true,
             compression_threshold: 1024,
         };
-        let mut comp = SseCompressor::new(&config);
-        let result = comp.compress_chunk(b"hello");
+        let mut comp = SseDecompressor::new(&config);
+        let result = comp.decompress_chunk(b"hello");
         // Below threshold, nothing emitted yet
         assert!(result.is_empty());
         assert_eq!(comp.buffered_bytes(), 5);
@@ -143,7 +184,7 @@ mod tests {
             enable_compression: true,
             compression_threshold: 10,
         };
-        let mut comp = SseCompressor::new(&config);
+        let mut comp = SseDecompressor::new(&config);
         // First we manually compress some data to feed to the decompressor
         use flate2::write::GzEncoder;
         use flate2::Compression;
@@ -154,10 +195,10 @@ mod tests {
         let compressed = encoder.finish().unwrap();
 
         // First chunk below threshold
-        let r1 = comp.compress_chunk(&compressed[..5]);
+        let r1 = comp.decompress_chunk(&compressed[..5]);
         assert!(r1.is_empty());
         // Second chunk pushes past threshold
-        let r2 = comp.compress_chunk(&compressed[5..]);
+        let r2 = comp.decompress_chunk(&compressed[5..]);
         assert!(!r2.is_empty());
         // Should contain the decompressed text
         let output = String::from_utf8_lossy(&r2);
@@ -171,7 +212,7 @@ mod tests {
             enable_compression: true,
             compression_threshold: 1024,
         };
-        let mut comp = SseCompressor::new(&config);
+        let mut comp = SseDecompressor::new(&config);
         // Small gzip data below threshold, flush should decompress
         use flate2::write::GzEncoder;
         use flate2::Compression;
@@ -181,7 +222,7 @@ mod tests {
         encoder.write_all(data).unwrap();
         let compressed = encoder.finish().unwrap();
 
-        comp.compress_chunk(&compressed);
+        comp.decompress_chunk(&compressed);
         let flushed = comp.flush();
         assert!(!flushed.is_empty());
         let output = String::from_utf8_lossy(&flushed);
@@ -195,9 +236,9 @@ mod tests {
             enable_compression: false,
             compression_threshold: 1024,
         };
-        let mut comp = SseCompressor::new(&config);
-        // When disabled, compress_chunk returns data immediately
-        let chunk = comp.compress_chunk(b"raw bytes");
+        let mut comp = SseDecompressor::new(&config);
+        // When disabled, decompress_chunk returns data immediately
+        let chunk = comp.decompress_chunk(b"raw bytes");
         assert_eq!(chunk, b"raw bytes");
         // Flush has nothing left
         let flushed = comp.flush();
@@ -210,7 +251,7 @@ mod tests {
             enable_compression: true,
             compression_threshold: 5,
         };
-        let mut comp = SseCompressor::new(&config);
+        let mut comp = SseDecompressor::new(&config);
         let original = b"Hello, World! This is a test of SSE decompression.";
         // Manually compress the original
         use flate2::write::GzEncoder;
@@ -221,7 +262,28 @@ mod tests {
         let compressed = encoder.finish().unwrap();
 
         // Feed compressed data to the decompressor
-        let decompressed = comp.compress_chunk(&compressed);
+        let decompressed = comp.decompress_chunk(&compressed);
         assert_eq!(decompressed, original);
+    }
+
+    #[test]
+    fn compress_sse_payload_small_data_returns_none() {
+        let small = b"hello";
+        assert!(compress_sse_payload(small).is_none());
+    }
+
+    #[test]
+    fn compress_sse_payload_large_data_compresses() {
+        let large = b"The quick brown fox jumps over the lazy dog. ".repeat(10);
+        let large_slice: &[u8] = &large;
+        let compressed = compress_sse_payload(large_slice);
+        assert!(compressed.is_some());
+        let compressed = compressed.unwrap();
+        assert!(compressed.len() < large_slice.len());
+        // Verify roundtrip
+        let mut decoder = MultiGzDecoder::new(&compressed[..]);
+        let mut result = Vec::new();
+        decoder.read_to_end(&mut result).unwrap();
+        assert_eq!(result, large_slice);
     }
 }

@@ -189,6 +189,7 @@ impl BenchHarness {
 struct StreamChunk {
     timestamp: Instant,
     data: Value,
+    #[allow(dead_code)]
     is_final: bool,
 }
 

@@ -298,11 +298,12 @@ fn build_response_metadata(
             poisoned.into_inner()
         });
         let _historical_success_rate = server
-            .governance_deps.capability_bus
+            .governance_deps
+            .capability_bus
             .as_ref()
             .and_then(|cb| {
                 cb.learning_bus
-                    .lock()
+                    .read()
                     .ok()
                     .and_then(|lb| lb.agent_success_rate(selected_agent))
             })

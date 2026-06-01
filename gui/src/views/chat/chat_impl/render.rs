@@ -246,7 +246,10 @@ fn render_node<'a>(
             } else {
                 label
             };
-            let _ = ui.link(display).clicked();
+            if ui.link(display).clicked() {
+                let url = link.url.to_string();
+                let _ = webbrowser::open(&url);
+            }
         }
 
         // ── Image: render with egui Image widget, fallback to alt text ──

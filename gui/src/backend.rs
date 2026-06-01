@@ -1,12 +1,8 @@
-use futures_util::Stream;
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
 
 const QUICK_RPC_ATTEMPTS: usize = 2;
 const FULL_RPC_ATTEMPTS: usize = 3;
@@ -23,6 +19,7 @@ const MAX_SSE_LINE_LENGTH: usize = 1024 * 1024; // 1 MB per SSE line
 /// Incrementally parses an SSE byte stream frame-by-frame, extracting `data:`
 /// payloads as JSON values.  Tracks token count and total bytes processed
 /// for progress reporting in the UI.
+#[allow(dead_code)] // F-GAP-51 — fields reserved for future use
 pub struct StreamProcessor {
     buffer: String,
     max_buffer_size: usize,
@@ -44,6 +41,7 @@ impl StreamProcessor {
 
     /// Feed a chunk of raw bytes into the processor.
     /// Returns a batch of parsed results (Ok(values) or Err(errors)).
+    #[allow(dead_code)] // F-GAP-51 — reserved for future use
     pub fn push_chunk(&mut self, chunk: &[u8]) -> Vec<Result<Value, String>> {
         let mut events: Vec<Result<Value, String>> = Vec::new();
 
@@ -122,14 +120,6 @@ impl StreamProcessor {
         } else {
             Some(std::mem::take(&mut self.buffer))
         }
-    }
-
-    /// Reset all counters and clear the buffer for a new stream.
-    #[allow(dead_code)]
-    pub fn reset(&mut self) {
-        self.buffer.clear();
-        self.token_count = 0;
-        self.total_bytes_processed = 0;
     }
 }
 
@@ -903,163 +893,6 @@ impl BackendClient {
         } else {
             Ok((response_text, thinking_text, agent_text, selected_model))
         }
-    }
-
-    /// Send a streaming chat request via SSE and return a [`Stream`] of events.
-    ///
-    /// Uses `/chat/stream` with `"stream": true` in the request body.
-    /// Each SSE `data:` line is parsed as a JSON value and yielded via the stream.
-    /// Internally uses a `StreamProcessor` for structured parsing and token tracking.
-    #[allow(dead_code)]
-    pub async fn chat_stream(
-        &self,
-        message: &str,
-        mode: &str,
-        phase: &str,
-        model: Option<&str>,
-        options_extra: Option<Value>,
-        history: Option<Vec<Value>>,
-    ) -> Result<impl Stream<Item = Result<Value, String>>, String> {
-        self.chat_stream_inner(message, mode, phase, model, options_extra, history, None)
-            .await
-    }
-
-    /// Like `chat_stream`, but accepts an `AbortController` for cancellation.
-    #[allow(dead_code)]
-    pub async fn chat_stream_with_abort(
-        &self,
-        message: &str,
-        mode: &str,
-        phase: &str,
-        model: Option<&str>,
-        options_extra: Option<Value>,
-        history: Option<Vec<Value>>,
-        abort_controller: AbortController,
-    ) -> Result<impl Stream<Item = Result<Value, String>>, String> {
-        self.chat_stream_inner(
-            message,
-            mode,
-            phase,
-            model,
-            options_extra,
-            history,
-            Some(abort_controller),
-        )
-        .await
-    }
-
-    /// Internal impl shared by `chat_stream` and `chat_stream_with_abort`.
-    /// Uses `StreamProcessor` for SSE parsing and `AbortController` for cancellation.
-    #[allow(dead_code)]
-    async fn chat_stream_inner(
-        &self,
-        message: &str,
-        mode: &str,
-        phase: &str,
-        model: Option<&str>,
-        options_extra: Option<Value>,
-        history: Option<Vec<Value>>,
-        abort_controller: Option<AbortController>,
-    ) -> Result<impl Stream<Item = Result<Value, String>>, String> {
-        let phase_val = if phase.is_empty() {
-            serde_json::Value::Null
-        } else {
-            serde_json::Value::String(phase.to_string())
-        };
-
-        let messages = if let Some(hist) = history {
-            let mut msgs = hist;
-            msgs.push(serde_json::json!({ "role": "user", "content": message }));
-            msgs
-        } else {
-            vec![serde_json::json!({ "role": "user", "content": message })]
-        };
-
-        let mut body = serde_json::json!({
-            "messages": messages,
-            "mode": mode,
-            "phase": phase_val,
-            "stream": true,
-        });
-
-        if let Some(selected_model) = model.filter(|m| !m.trim().is_empty() && *m != "auto") {
-            body["options"] = serde_json::json!({
-                "model": selected_model,
-            });
-        }
-
-        if let Some(ref extra) = options_extra {
-            if body.get("options").is_none() {
-                body["options"] = serde_json::json!({});
-            }
-            if let Some(obj) = extra.as_object() {
-                for (k, v) in obj {
-                    body["options"][k] = v.clone();
-                }
-            }
-            if let Some(cid) = extra.get("conversation_id").and_then(|v| v.as_str()) {
-                body["conversation_id"] = serde_json::json!(cid);
-            }
-            if let Some(bid) = extra.get("branch_id").and_then(|v| v.as_str()) {
-                body["branch_id"] = serde_json::json!(bid);
-            }
-        }
-
-        let response = self
-            .long_client
-            .post(format!("{}/chat/stream", self.base_url))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("HTTP error: {}", e))?;
-
-        let response = response
-            .error_for_status()
-            .map_err(|e| format!("HTTP error: {}", e))?;
-
-        let (tx, rx) = mpsc::channel::<Result<Value, String>>(64);
-        let mut byte_stream = response.bytes_stream();
-        let mut processor = StreamProcessor::new();
-
-        tokio::spawn(async move {
-            while let Some(chunk_result) = byte_stream.next().await {
-                // Check for cancellation at the top of each chunk
-                if let Some(ref ctrl) = abort_controller {
-                    if ctrl.is_cancelled() {
-                        return;
-                    }
-                }
-
-                match chunk_result {
-                    Ok(chunk) => {
-                        let events = processor.push_chunk(&chunk);
-                        for event in events {
-                            match event {
-                                Ok(val) => {
-                                    // Detect [DONE] sentinel
-                                    if val.as_str() == Some("[DONE]") {
-                                        return;
-                                    }
-                                    if tx.send(Ok(val)).await.is_err() {
-                                        return;
-                                    }
-                                }
-                                Err(e) => {
-                                    let _ = tx.send(Err(e)).await;
-                                    return;
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Err(format!("Stream error: {}", e))).await;
-                        return;
-                    }
-                }
-            }
-        });
-
-        Ok(ReceiverStream::new(rx))
     }
 
     pub async fn configure_provider(

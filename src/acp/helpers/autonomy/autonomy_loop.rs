@@ -169,14 +169,12 @@ mod tests {
     #[test]
     fn autonomy_phases_are_distinct() {
         use std::collections::HashSet;
-        let phases = vec![
-            format!("{:?}", AutonomyPhase::Planning),
+        let phases = [format!("{:?}", AutonomyPhase::Planning),
             format!("{:?}", AutonomyPhase::Executing),
             format!("{:?}", AutonomyPhase::Observing),
             format!("{:?}", AutonomyPhase::Finalizing),
             format!("{:?}", AutonomyPhase::Completed),
-            format!("{:?}", AutonomyPhase::Failed),
-        ];
+            format!("{:?}", AutonomyPhase::Failed)];
         let unique: HashSet<_> = phases.iter().collect();
         assert_eq!(unique.len(), phases.len(), "all phases must be distinct");
     }
@@ -456,6 +454,9 @@ pub struct AutonomyLoopConfig {
     /// BLUE48-06: Maximum messages retained in the conversation window.
     /// When exceeded, the oldest messages are evicted (FIFO).
     pub max_messages: usize,
+    /// B51-07: Use BrainLoop orchestrator instead of the inline autonomy loop.
+    /// When `true`, `run_acp_autonomy_loop` delegates to `BrainLoop::run_async()`.
+    pub use_brain_loop: bool,
 }
 
 impl Default for AutonomyLoopConfig {
@@ -475,6 +476,7 @@ impl Default for AutonomyLoopConfig {
             enable_execution_intelligence: true,
             recovery_orchestrator: None,
             max_messages: 200,
+            use_brain_loop: false,
         }
     }
 }

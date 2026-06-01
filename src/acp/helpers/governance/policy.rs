@@ -892,10 +892,8 @@ mod tests {
 
     #[test]
     fn test_rank_execution_agents_with_roles() {
-        let agents = vec![
-            ("dev".to_string(), "developer".to_string()),
-            ("rev".to_string(), "reviewer".to_string()),
-        ];
+        let agents = [("dev".to_string(), "developer".to_string()),
+            ("rev".to_string(), "reviewer".to_string())];
         let ranked = rank_execution_agents(
             &agents.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
             Some("developer"),
@@ -908,10 +906,8 @@ mod tests {
 
     #[test]
     fn test_rank_execution_agents_all_roles_filtered() {
-        let agents = vec![
-            ("dev".to_string(), "developer".to_string()),
-            ("qa".to_string(), "tester".to_string()),
-        ];
+        let agents = [("dev".to_string(), "developer".to_string()),
+            ("qa".to_string(), "tester".to_string())];
         let ranked = rank_execution_agents(
             &agents.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
             Some("nobody"),

@@ -1,7 +1,7 @@
 //! Real DAG Executor — topological dependency resolution, parallel group
 //! identification, node output propagation, and failure isolation.
 
-#![cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code, unused_imports))]
+// F-GAP-51: dead_code allowed on items below when sub-bus-tool-future is disabled
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -20,6 +20,7 @@ use crate::orchestration::tool::{ToolInput, ToolRegistry};
 // DagNode
 // ---------------------------------------------------------------------------
 
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DagNode {
     pub id: String,
@@ -42,6 +43,7 @@ pub struct DagNode {
 // ---------------------------------------------------------------------------
 
 /// Chain-of-Thought context propagated between DAG nodes.
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskContext {
     pub id: String,
@@ -53,6 +55,7 @@ pub struct TaskContext {
     pub parent_context_id: Option<String>,
 }
 
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 impl TaskContext {
     /// Create a new TaskContext with the given id.
     pub fn new(id: String) -> Self {
@@ -106,6 +109,7 @@ impl TaskContext {
 // DagGraph
 // ---------------------------------------------------------------------------
 
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DagGraph {
     pub nodes: HashMap<String, DagNode>,
@@ -114,6 +118,7 @@ pub struct DagGraph {
     pub depth: usize,
 }
 
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 impl DagGraph {
     pub fn new() -> Self {
         Self {
@@ -236,6 +241,7 @@ impl DagGraph {
     }
 }
 
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 impl Default for DagGraph {
     fn default() -> Self {
         Self::new()
@@ -247,12 +253,14 @@ impl Default for DagGraph {
 // ---------------------------------------------------------------------------
 
 /// Configuration for the DAG executor.
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 #[derive(Debug, Clone)]
 pub struct DagExecutorConfig {
     pub max_concurrency: usize,
     pub speculative_execution: bool,
 }
 
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 impl Default for DagExecutorConfig {
     fn default() -> Self {
         Self {
@@ -266,12 +274,14 @@ impl Default for DagExecutorConfig {
 // DagExecutor
 // ---------------------------------------------------------------------------
 
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 pub struct DagExecutor {
     config: DagExecutorConfig,
     semaphore: Arc<Semaphore>,
     tool_registry: Option<Arc<ToolRegistry>>,
 }
 
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 impl DagExecutor {
     pub fn new(max_concurrency: usize) -> Self {
         Self {
@@ -336,6 +346,10 @@ impl DagExecutor {
         let completed: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
         let notify = Arc::new(Notify::new());
 
+        // Shared map for propagating outputs between speculatively executed nodes
+        let shared_outputs: Arc<Mutex<HashMap<String, Value>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+
         // Pre-compute dependency lists for each node (as owned strings)
         let deps_map: HashMap<String, Vec<String>> = graph
             .nodes
@@ -350,6 +364,7 @@ impl DagExecutor {
             let deps = deps_map.get(&id).cloned().unwrap_or_default();
             let completed_clone = completed.clone();
             let notify_clone = notify.clone();
+            let shared_outputs_clone = shared_outputs.clone();
             let input = graph.nodes[&id].input.clone();
             let tool_name = graph.nodes[&id].tool_name.clone();
             let registry = self.tool_registry.clone();
@@ -371,11 +386,18 @@ impl DagExecutor {
                 let _permit = semaphore.acquire_owned().await;
                 let start = Instant::now();
 
-                let empty_dep_outputs: HashMap<String, Value> = HashMap::new();
+                // Build dependency outputs from shared state (actual propagated outputs)
+                let dep_outputs = {
+                    let outputs = shared_outputs_clone.lock().unwrap();
+                    deps.iter()
+                        .filter_map(|dep_id| {
+                            outputs.get(dep_id).map(|o| (dep_id.clone(), o.clone()))
+                        })
+                        .collect::<HashMap<String, Value>>()
+                };
                 let result = {
                     use futures_util::future::FutureExt;
-                    let fut =
-                        execute_tool(registry.as_deref(), &tool_name, &input, &empty_dep_outputs);
+                    let fut = execute_tool(registry.as_deref(), &tool_name, &input, &dep_outputs);
                     match std::panic::AssertUnwindSafe(fut).catch_unwind().await {
                         Ok(Ok(val)) => Ok(val),
                         Ok(Err(e)) => Err(e),
@@ -392,6 +414,14 @@ impl DagExecutor {
                 };
 
                 let duration_ms = start.elapsed().as_millis() as u64;
+
+                // Propagate output to dependent nodes
+                if let Ok(ref output) = result {
+                    shared_outputs_clone
+                        .lock()
+                        .unwrap()
+                        .insert(id.clone(), output.clone());
+                }
 
                 // Mark this node as completed and notify waiters
                 {
@@ -567,6 +597,7 @@ impl DagExecutor {
     }
 }
 
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 impl Default for DagExecutor {
     fn default() -> Self {
         Self::with_config(DagExecutorConfig::default())
@@ -578,6 +609,7 @@ impl Default for DagExecutor {
 /// Looks up the tool in the registry (if available) and dispatches execution.
 /// If no registry is provided, returns an error indicating the tool is unavailable.
 /// Dependency outputs are injected into the evidence field of ToolInput.
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 async fn execute_tool(
     registry: Option<&ToolRegistry>,
     tool_name: &str,
@@ -648,6 +680,7 @@ async fn execute_tool(
 
 /// Build a DagGraph from the old flat tool call list.
 /// This is the replacement for `build_tool_execution_dag()`.
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 pub fn build_dag_from_tool_calls(tool_calls: &[(String, Value)]) -> DagGraph {
     let mut graph = DagGraph::new();
     for (i, (name, input)) in tool_calls.iter().enumerate() {

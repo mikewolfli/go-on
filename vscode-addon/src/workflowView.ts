@@ -182,45 +182,12 @@ export class GoOnWorkflowViewProvider implements vscode.WebviewViewProvider {
     });
 
     try {
-      // Execute workflow steps
-      for (let i = 0; i < workflow.steps.length; i++) {
-        const step = workflow.steps[i];
-
-        this._view?.webview.postMessage({
-          type: "stepStatusUpdate",
-          workflowId,
-          stepIndex: i,
-          status: "running",
-        });
-
-        // Execute step based on type
-        switch (step.type) {
-          case "chat":
-            await this.manager.sendRequest("chat", {
-              messages: [{ role: "user", content: step.prompt }],
-            });
-            break;
-          case "code":
-            this._view?.webview.postMessage({
-              type: "stepResult",
-              stepId: step.prompt || `step-${i}`,
-              result: t(MessageKeys.workflowCodeNotSupported),
-            });
-            break;
-          case "delay":
-            await new Promise((resolve) =>
-              setTimeout(resolve, Number(step.delay || 0) * 1000),
-            );
-            break;
-        }
-
-        this._view?.webview.postMessage({
-          type: "stepStatusUpdate",
-          workflowId,
-          stepIndex: i,
-          status: "completed",
-        });
-      }
+      // B51-24: Delegate workflow execution to backend via RPC
+      await this.manager.sendRequest("workflow.execute", {
+        workflowId,
+        name: workflow.name,
+        steps: workflow.steps,
+      });
 
       workflow.status = "completed";
       await this.context.workspaceState.update("go-on-workflows", workflows);

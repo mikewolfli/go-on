@@ -1186,6 +1186,194 @@ pub(crate) async fn process_chat_request(
     // pre-execute checkpoint: PUA rules / RBAC / budget via HarnessBus
     evaluate_pre_route_policies(server, params, trace, tenant_id).await?;
 
+    // ── GAP-B52-25: Prompt injection detection ────────────────────────
+    if let Some(ref detector) = server.governance_deps.injection_detector {
+        let user_input: String = params
+            .messages
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<&str>>()
+            .join("\n");
+        let warnings = detector.detect(&user_input);
+        if !warnings.violations.is_empty() {
+            let severities: Vec<String> = warnings
+                .violations
+                .iter()
+                .map(|w| format!("{:?}: {:?}", w.category, w.severity))
+                .collect();
+            info!(injection_warnings = ?severities, "prompt injection detected");
+            // Log injection attempt to hash chain audit
+            if let Some(ref auditor) = server.governance_deps.hash_chain_auditor {
+                if let Ok(mut auditor) = auditor.lock() {
+                    let payload = serde_json::json!({
+                        "event": "prompt_injection",
+                        "warnings": &warnings.violations,
+                    });
+                    let _ = auditor.append(payload);
+                }
+            }
+        }
+    }
+
+    // ── GAP-B52-15: Multimodal input detection & processing ───────────
+    // When a MultimodalProcessor is configured on the server, check every
+    // user message for `repo:`-prefixed repo-analysis queries, `data:` URIs
+    // (base64-encoded binary content), and `file://` local-file references.
+    //
+    // Processed content is injected as an additional system-context message
+    // so the rest of the pipeline sees enriched context (transcriptions,
+    // parsed documents, repo answers, etc.) without mutating params in place.
+    let multimodal_context: Option<String> = if let Some(ref mp) = server.multimodal_processor {
+        use crate::multimodal::MultimodalInput;
+        let mut contexts: Vec<String> = Vec::new();
+
+        for msg in &params.messages {
+            if msg.role != "user" {
+                continue;
+            }
+            let content = msg.content.trim();
+
+            // ── repo: prefix → code repository analysis ──────────────
+            if mp.repo_analyzer.is_some() && content.starts_with(crate::multimodal::REPO_PREFIX) {
+                let input = MultimodalInput::Text(content.to_owned());
+                let processed = mp.process_input(&input).await;
+                if !processed.is_empty() && processed.text != content {
+                    tracing::info!(
+                        original_len = content.len(),
+                        processed_len = processed.text.len(),
+                        "MultimodalProcessor: repo analysis result"
+                    );
+                    contexts.push(format!("[Repository analysis result]:\n{}", processed.text));
+                }
+                continue;
+            }
+
+            // ── data: URI (base64-encoded binary content) ────────────
+            if content.starts_with("data:") {
+                if let Some(rest) = content.strip_prefix("data:") {
+                    if let Some((_mime, b64_part)) = rest.split_once(";base64,") {
+                        if let Ok(bytes) = crate::multimodal::base64_decode(b64_part) {
+                            let mime_lower = _mime.to_lowercase();
+                            let input = if mime_lower.contains("image") {
+                                MultimodalInput::Image(bytes)
+                            } else if mime_lower.contains("audio") {
+                                MultimodalInput::Audio(bytes)
+                            } else if mime_lower.contains("video") {
+                                MultimodalInput::Video(bytes)
+                            } else {
+                                let ext = crate::multimodal::mime_to_extension(&mime_lower);
+                                MultimodalInput::Document(bytes, ext)
+                            };
+                            let processed = mp.process_input(&input).await;
+                            if !processed.is_empty() {
+                                tracing::info!(
+                                    modality = ?input.modality(),
+                                    "MultimodalProcessor: processed data: URI"
+                                );
+                                let mut enriched = String::from("[Processed content]:");
+                                if !processed.text.is_empty() {
+                                    enriched.push_str("\n");
+                                    enriched.push_str(&processed.text);
+                                }
+                                for (i, img_b64) in processed.images.iter().enumerate() {
+                                    enriched.push_str(&format!(
+                                        "\n![extracted-image-{}](data:image/unknown;base64,{})",
+                                        i, img_b64
+                                    ));
+                                }
+                                if !processed.audio_transcriptions.is_empty() {
+                                    enriched.push_str(&format!(
+                                        "\n[Audio transcription]:\\n{}",
+                                        processed.joined_audio()
+                                    ));
+                                }
+                                contexts.push(enriched);
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // ── file:// URI (local file reference) ───────────────────
+            if content.starts_with("file://") {
+                let file_path = content.strip_prefix("file://").unwrap_or("");
+                let path = std::path::Path::new(file_path);
+                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                    if let Ok(bytes) = tokio::fs::read(path).await {
+                        let ext_lower = ext.to_lowercase();
+                        let input = match ext_lower.as_str() {
+                            e if matches!(e, "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp") => {
+                                MultimodalInput::Image(bytes)
+                            }
+                            e if matches!(e, "mp3" | "wav" | "flac" | "ogg" | "m4a") => {
+                                MultimodalInput::Audio(bytes)
+                            }
+                            e if matches!(e, "mp4" | "avi" | "mkv" | "mov" | "webm") => {
+                                MultimodalInput::Video(bytes)
+                            }
+                            _ => MultimodalInput::Document(bytes, ext_lower),
+                        };
+                        let processed = mp.process_input(&input).await;
+                        if !processed.is_empty() {
+                            tracing::info!(
+                                path = %file_path,
+                                modality = ?input.modality(),
+                                "MultimodalProcessor: processed file:// URI"
+                            );
+                            let mut enriched = String::from("[Processed file content]:");
+                            enriched.push_str(&format!(" file={}", file_path));
+                            if !processed.text.is_empty() {
+                                enriched.push_str("\n");
+                                enriched.push_str(&processed.text);
+                            }
+                            for (i, img_b64) in processed.images.iter().enumerate() {
+                                enriched.push_str(&format!(
+                                    "\n![extracted-image-{}](data:image/unknown;base64,{})",
+                                    i, img_b64
+                                ));
+                            }
+                            if !processed.audio_transcriptions.is_empty() {
+                                enriched.push_str(&format!(
+                                    "\n[Audio transcription]:\\n{}",
+                                    processed.joined_audio()
+                                ));
+                            }
+                            contexts.push(enriched);
+                        }
+                    } else {
+                        tracing::warn!(
+                            path = %file_path,
+                            "MultimodalProcessor: could not read file:// path"
+                        );
+                    }
+                }
+                continue;
+            }
+        }
+
+        if contexts.is_empty() {
+            None
+        } else {
+            Some(contexts.join("\n---\n"))
+        }
+    } else {
+        // No MultimodalProcessor configured — legacy fallback: just log detected URIs.
+        for msg in &params.messages {
+            if msg.content.starts_with("data:") || msg.content.starts_with("file://") {
+                debug!(
+                    content_prefix = %msg.content.chars().take(20).collect::<String>(),
+                    "multimodal content detected but no MultimodalProcessor configured"
+                );
+            }
+        }
+        None
+    };
+
+    // Multimodal context will be injected into agent_messages after
+    // select_and_score_agents returns (see below).
+    let _multimodal_context = multimodal_context;
+
     // ── HarnessBus during-execute checkpoint: sandbox / backpressure / online control ──
     // Validate the action before execution begins, using the HarnessBus
     // validate_action(…) API which checks sandbox level, backpressure,
@@ -1256,7 +1444,20 @@ pub(crate) async fn process_chat_request(
     let _preferred_agent_from_request = agent_sel.preferred_agent_from_request;
     let conversation_id = agent_sel.conversation_id;
     let branch_id = agent_sel.branch_id;
-    let agent_messages = agent_sel.agent_messages;
+    let mut agent_messages = agent_sel.agent_messages;
+    // Inject multimodal context (repo analysis, document parsing, transcriptions, etc.)
+    // as a system-level message so downstream agents see the enriched input.
+    if let Some(ctx_text) = _multimodal_context {
+        let ctx_msg = crate::agent::Message {
+            role: "system".to_string(),
+            content: ctx_text,
+        };
+        agent_messages.insert(0, ctx_msg);
+        tracing::info!(
+            total_messages = agent_messages.len(),
+            "MultimodalProcessor: injected context as system message"
+        );
+    }
     let layered_prompt_segments = agent_sel.layered_prompt_segments;
     let base_agent_options = agent_sel.base_agent_options;
     let risk_policy = agent_sel.risk_policy;
@@ -2007,12 +2208,19 @@ pub(crate) async fn process_chat_request(
             static CAPABILITY_EVOLVE_COUNTER: AtomicU64 = AtomicU64::new(0);
             let count = CAPABILITY_EVOLVE_COUNTER.fetch_add(1, Ordering::Relaxed);
             let evolve_interval = cb.config.evolve_interval;
-            if count > 0 && count % evolve_interval == 0 {
+            if count > 0 && count.is_multiple_of(evolve_interval) {
                 let cb_clone = cb.clone();
                 let agent = selected_agent.clone();
                 let phase = phase_name.to_string();
-                let _req_id = trace.request_id.clone();
+                // Propagate trace context into the spawned task so that
+                // the evolve operation is visible in the trace tree.
+                let child_span = crate::rpc_protocol::child_trace_context(trace, "evolve");
                 tokio::spawn(async move {
+                    tracing::info!(
+                        trace_id = %child_span.trace_id,
+                        span_id = %child_span.span_id,
+                        "evolve: background capability evolution"
+                    );
                     let state = (agent.clone(), phase.clone());
                     let next_state = (agent, format!("{}_complete", phase));
                     cb_clone

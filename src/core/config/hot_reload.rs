@@ -23,6 +23,7 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 
 use crate::core::config::AppConfig;
+use crate::core::config_validation::ConfigValidator;
 
 use anyhow::Result;
 use tracing::{info, warn};
@@ -229,6 +230,24 @@ impl WatchDog {
 
         match AppConfig::load(path) {
             Ok(new_config) => {
+                // B51-35: Validate the new config before applying. If the config
+                // has critical validation errors, reject the reload entirely.
+                let validator = ConfigValidator::new(path, new_config.clone());
+                let validation = validator.validate();
+                if validation.has_critical_errors() {
+                    let error_details: Vec<String> = validation
+                        .critical_errors()
+                        .iter()
+                        .map(|e| format!("[{}] {}", e.section, e.message))
+                        .collect();
+                    let err_msg = format!("Config validation failed: {}", error_details.join("; "));
+                    warn!("Config hot-reload REJECTED for {:?}: {}", path, err_msg);
+                    for observer in &self.observers {
+                        observer.on_reload_failed(path, &anyhow::anyhow!(err_msg.clone()));
+                    }
+                    return;
+                }
+
                 info!("Config hot-reloaded successfully from: {:?}", path);
                 let mut guard = self.active_config.write().await;
                 *guard = new_config.clone();

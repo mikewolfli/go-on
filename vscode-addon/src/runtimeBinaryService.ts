@@ -1,3 +1,4 @@
+import * as crypto from "crypto";
 import * as vscode from "vscode";
 import { i18n, MessageKeys } from "./i18n";
 import * as fs from "fs";
@@ -94,7 +95,56 @@ function attachDownloadTimeout(request: ClientRequest, url: string) {
   });
 }
 
-// F-GAP-49: Re-enable archive integrity verification when trusted SHA256 is available
+/**
+ * Download checksums.txt from the same release and verify the downloaded archive's SHA-256.
+ */
+async function verifyArchiveChecksum(
+  archivePath: string,
+  repository: string,
+  tag: string,
+  assetName: string,
+): Promise<void> {
+  const checksumsUrl = buildReleaseAssetUrl(repository, tag, "checksums.txt");
+  const checksumsPath = archivePath + ".checksums.txt";
+
+  try {
+    await downloadFile(checksumsUrl, checksumsPath);
+    const checksumsContent = await fsPromises.readFile(checksumsPath, "utf8");
+
+    // Parse checksums.txt — format: "<sha256>  <filename>"
+    let expectedChecksum: string | undefined;
+    for (const line of checksumsContent.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      // Split on two or more spaces to separate hash from filename
+      const parts = trimmed.split(/\s{2,}/);
+      if (parts.length >= 2 && parts[1].trim() === assetName) {
+        expectedChecksum = parts[0].trim();
+        break;
+      }
+    }
+
+    if (!expectedChecksum) {
+      throw new Error(`Checksum for ${assetName} not found in checksums.txt`);
+    }
+
+    // Compute SHA-256 of the downloaded archive
+    const archiveBuffer = await fsPromises.readFile(archivePath);
+    const hash = crypto
+      .createHash("sha256")
+      .update(archiveBuffer)
+      .digest("hex");
+
+    if (hash.toLowerCase() !== expectedChecksum.toLowerCase()) {
+      throw new Error(
+        `Checksum mismatch for ${assetName}: expected ${expectedChecksum}, got ${hash}`,
+      );
+    }
+  } finally {
+    // Clean up checksums.txt regardless
+    await fsPromises.unlink(checksumsPath).catch(() => undefined);
+  }
+}
 
 async function downloadFile(
   url: string,
@@ -421,6 +471,15 @@ export async function ensureGoOnBinary(
   );
   try {
     await downloadFile(downloadUrl, archivePath);
+
+    // Verify the downloaded archive against checksums.txt
+    await verifyArchiveChecksum(
+      archivePath,
+      releaseRepository,
+      releaseTag,
+      assetName,
+    );
+
     await extractArchive(archivePath, runtimeDir);
   } catch (error: unknown) {
     return await promptForManualBinaryPath(

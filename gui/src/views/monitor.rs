@@ -404,6 +404,55 @@ impl MonitorView {
                                         last.success_rate
                                     ));
                                 });
+
+                                // Trend series table: show last 5-10 points with timestamps
+                                if self.trend_series.len() > 1 {
+                                    ui.add_space(4.0);
+                                    ui.label(i18n.t("monitor.trendSeries"));
+                                    egui::ScrollArea::horizontal()
+                                        .id_salt("trend_table_scroll")
+                                        .show(ui, |ui| {
+                                            egui::Grid::new("trend_grid")
+                                                .striped(true)
+                                                .min_col_width(60.0)
+                                                .show(ui, |ui| {
+                                                    // Header row
+                                                    ui.strong(i18n.t("monitor.time"));
+                                                    ui.strong(i18n.t("monitor.qps"));
+                                                    ui.strong(i18n.t("monitor.p95"));
+                                                    ui.strong(i18n.t("monitor.errorRate"));
+                                                    ui.strong(i18n.t("monitor.successRate"));
+                                                    ui.end_row();
+
+                                                    // Data rows (last 10 points)
+                                                    let start =
+                                                        self.trend_series.len().saturating_sub(10);
+                                                    for point in &self.trend_series[start..] {
+                                                        let ts_secs = point.ts;
+                                                        let naive =
+                                                            chrono::DateTime::from_timestamp(
+                                                                ts_secs, 0,
+                                                            )
+                                                            .map(|dt| {
+                                                                dt.format("%H:%M:%S").to_string()
+                                                            })
+                                                            .unwrap_or_else(|| ts_secs.to_string());
+                                                        ui.label(&naive);
+                                                        ui.label(format!("{:.2}", point.qps));
+                                                        ui.label(format!("{:.2}ms", point.p95));
+                                                        ui.label(format!(
+                                                            "{:.3}",
+                                                            point.error_rate
+                                                        ));
+                                                        ui.label(format!(
+                                                            "{:.3}",
+                                                            point.success_rate
+                                                        ));
+                                                        ui.end_row();
+                                                    }
+                                                });
+                                        });
+                                }
                             }
 
                             if !self.error_groups.is_empty() {

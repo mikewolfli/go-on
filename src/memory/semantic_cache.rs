@@ -23,6 +23,7 @@
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
@@ -40,10 +41,12 @@ struct CacheEntry {
     created_at: Instant,
     /// Time-to-live
     ttl: Duration,
-    /// Access count (for LRU eviction)
+    /// Access count
     access_count: u64,
     /// Hit count
     hits: u64,
+    /// When this entry was last accessed (for LRU eviction)
+    last_accessed: Instant,
 }
 
 /// Semantic response cache configuration
@@ -114,38 +117,40 @@ fn jaccard_similarity(a: &str, b: &str) -> f64 {
 /// Semantic response cache
 #[derive(Debug)]
 pub struct SemanticResponseCache {
-    entries: HashMap<u64, Vec<CacheEntry>>,
+    entries: Arc<RwLock<HashMap<u64, Vec<CacheEntry>>>>,
     config: SemanticCacheConfig,
-    total_hits: u64,
-    total_misses: u64,
-    total_warmups: u64,
-    expired_count: u64,
+    total_hits: AtomicU64,
+    total_misses: AtomicU64,
+    total_warmups: AtomicU64,
+    expired_count: AtomicU64,
     cancellation_token: Option<CancellationToken>,
 }
 
 impl SemanticResponseCache {
     pub fn new(config: SemanticCacheConfig) -> Self {
         Self {
-            entries: HashMap::new(),
+            entries: Arc::new(RwLock::new(HashMap::new())),
             config,
-            total_hits: 0,
-            total_misses: 0,
-            total_warmups: 0,
-            expired_count: 0,
+            total_hits: AtomicU64::new(0),
+            total_misses: AtomicU64::new(0),
+            total_warmups: AtomicU64::new(0),
+            expired_count: AtomicU64::new(0),
             cancellation_token: None,
         }
     }
 
     /// Get a cached response if available
-    pub fn get(&mut self, request: &str) -> Option<&Value> {
+    pub fn get(&self, request: &str) -> Option<Value> {
         let hash = simple_request_hash(request, self.config.max_request_hash_len);
         let now = Instant::now();
 
-        if let Some(bucket) = self.entries.get_mut(&hash) {
+        let mut guard = self.entries.write().unwrap();
+        if let Some(bucket) = guard.get_mut(&hash) {
             // First, remove expired entries
             let before = bucket.len();
             bucket.retain(|e| now.duration_since(e.created_at) < e.ttl);
-            self.expired_count += (before - bucket.len()) as u64;
+            self.expired_count
+                .fetch_add((before - bucket.len()) as u64, Ordering::Relaxed);
 
             // Find matching entry index — try exact match first, then similarity
             let match_idx = bucket
@@ -165,65 +170,82 @@ impl SemanticResponseCache {
                 let entry = &mut bucket[idx];
                 entry.access_count += 1;
                 entry.hits += 1;
-                self.total_hits += 1;
-                return Some(&entry.response);
+                entry.last_accessed = now;
+                self.total_hits.fetch_add(1, Ordering::Relaxed);
+                return Some(entry.response.clone());
             }
         }
 
-        self.total_misses += 1;
+        self.total_misses.fetch_add(1, Ordering::Relaxed);
         None
     }
 
     /// Cache a response
     pub fn put(&mut self, request: &str, response: Value) {
         let hash = simple_request_hash(request, self.config.max_request_hash_len);
+        let now = Instant::now();
+
+        let guard = self.entries.write().unwrap();
 
         // LRU eviction if over max entries
-        if self.entries.len() >= self.config.max_entries {
+        if guard.len() >= self.config.max_entries {
+            drop(guard);
             self.evict_lru();
+        } else {
+            drop(guard);
         }
 
         let entry = CacheEntry {
             response,
             request_hash: hash,
-            created_at: Instant::now(),
+            created_at: now,
             ttl: Duration::from_secs(self.config.default_ttl_seconds),
             access_count: 1,
             hits: 0,
+            last_accessed: now,
         };
 
-        self.entries.entry(hash).or_default().push(entry);
+        self.entries
+            .write()
+            .unwrap()
+            .entry(hash)
+            .or_default()
+            .push(entry);
     }
 
     /// Warm up the cache with known entries
     pub fn warmup(&mut self, requests: Vec<(String, Value)>) {
         for (request, response) in requests {
             self.put(&request, response);
-            self.total_warmups += 1;
+            self.total_warmups.fetch_add(1, Ordering::Relaxed);
         }
     }
 
-    /// Evict least recently used entry (by lowest access count)
+    /// Evict least recently used entry (by oldest last_accessed)
     fn evict_lru(&mut self) {
         let mut lru_key = None;
         let mut lru_idx = 0;
-        let mut min_access = u64::MAX;
+        let mut oldest = Instant::now();
 
-        for (key, bucket) in &self.entries {
-            for (i, entry) in bucket.iter().enumerate() {
-                if entry.access_count < min_access {
-                    min_access = entry.access_count;
-                    lru_key = Some(*key);
-                    lru_idx = i;
+        {
+            let guard = self.entries.read().unwrap();
+            for (key, bucket) in guard.iter() {
+                for (i, entry) in bucket.iter().enumerate() {
+                    if entry.last_accessed < oldest {
+                        oldest = entry.last_accessed;
+                        lru_key = Some(*key);
+                        lru_idx = i;
+                    }
                 }
             }
         }
 
         if let Some(key) = lru_key {
-            if let Some(bucket) = self.entries.get_mut(&key) {
+            let mut guard = self.entries.write().unwrap();
+            if let Some(bucket) = guard.get_mut(&key) {
                 bucket.remove(lru_idx);
                 if bucket.is_empty() {
-                    self.entries.remove(&key);
+                    guard.remove(&key);
                 }
             }
         }
@@ -231,25 +253,36 @@ impl SemanticResponseCache {
 
     /// Clear all entries
     pub fn clear(&mut self) {
-        self.entries.clear();
-        self.total_hits = 0;
-        self.total_misses = 0;
+        self.entries.write().unwrap().clear();
+        self.total_hits.store(0, Ordering::Relaxed);
+        self.total_misses.store(0, Ordering::Relaxed);
     }
 
     /// Get cache statistics
     pub fn stats(&self) -> SemanticCacheStats {
-        let total = self.total_hits + self.total_misses;
+        let total_hits = self.total_hits.load(Ordering::Relaxed);
+        let total_misses = self.total_misses.load(Ordering::Relaxed);
+        let total_warmups = self.total_warmups.load(Ordering::Relaxed);
+        let expired_count = self.expired_count.load(Ordering::Relaxed);
+        let total = total_hits + total_misses;
+        let total_entries: u64 = self
+            .entries
+            .read()
+            .unwrap()
+            .values()
+            .map(|v| v.len() as u64)
+            .sum();
         SemanticCacheStats {
-            entries: self.entries.len() as u64,
-            total_hits: self.total_hits,
-            total_misses: self.total_misses,
+            entries: total_entries,
+            total_hits,
+            total_misses,
             hit_ratio: if total == 0 {
                 0.0
             } else {
-                self.total_hits as f64 / total as f64
+                total_hits as f64 / total as f64
             },
-            total_warmups: self.total_warmups,
-            expired_count: self.expired_count,
+            total_warmups,
+            expired_count,
         }
     }
 
@@ -259,19 +292,16 @@ impl SemanticResponseCache {
         let token_clone = token.clone();
         let interval = self.config.background_cleanup_interval;
 
-        // For background cleanup we store the entries in an Arc<Mutex<...>>
-        // so the spawned task can access them.
-        let entries = Arc::new(Mutex::new(std::mem::take(&mut self.entries)));
-        self.entries = HashMap::new();
+        // Clone the Arc so the background task shares the same entries map.
+        let entries = self.entries.clone();
 
-        let entries_clone = entries.clone();
         tokio::spawn(async move {
             let mut interval_timer = tokio::time::interval(interval);
             loop {
                 tokio::select! {
                     _ = interval_timer.tick() => {
                         let now = Instant::now();
-                        if let Ok(mut guard) = entries_clone.lock() {
+                        if let Ok(mut guard) = entries.write() {
                             for bucket in guard.values_mut() {
                                 bucket.retain(|e| now.duration_since(e.created_at) < e.ttl);
                             }
@@ -312,21 +342,16 @@ pub struct SemanticCacheStats {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Cache mode for embedding-based semantic cache
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 #[allow(dead_code)]
 pub enum CacheMode {
     /// Simple TF-IDF fallback (zero external dependencies)
+    #[default]
     Simple,
     /// Proper embedding-based similarity (character-hash embedding)
     Embedding,
     /// Remote MCP-based embedding service
     Remote,
-}
-
-impl Default for CacheMode {
-    fn default() -> Self {
-        Self::Simple
-    }
 }
 
 /// Configuration for the embedding-based semantic cache
@@ -1136,7 +1161,7 @@ mod tests {
 
     #[test]
     fn test_cache_miss() {
-        let mut cache = SemanticResponseCache::new(SemanticCacheConfig::default());
+        let cache = SemanticResponseCache::new(SemanticCacheConfig::default());
         let result = cache.get("never cached");
         assert!(result.is_none());
     }
@@ -1160,14 +1185,14 @@ mod tests {
         cache.put("a", json!("1"));
         cache.put("b", json!("2"));
         cache.put("c", json!("3"));
-        assert_eq!(cache.entries.len(), 2);
+        assert_eq!(cache.entries.read().unwrap().len(), 2);
     }
 
     #[test]
     fn test_warmup() {
         let mut cache = SemanticResponseCache::new(SemanticCacheConfig::default());
         cache.warmup(vec![("q1".into(), json!("a1")), ("q2".into(), json!("a2"))]);
-        assert_eq!(cache.total_warmups, 2);
+        assert_eq!(cache.total_warmups.load(Ordering::Relaxed), 2);
         assert!(cache.get("q1").is_some());
         assert!(cache.get("q2").is_some());
     }

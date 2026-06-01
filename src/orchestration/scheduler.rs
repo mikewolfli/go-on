@@ -7,7 +7,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, error, info, warn};
 
@@ -384,7 +384,7 @@ impl TaskScheduler {
     ///
     /// Returns a `SemaphorePermit` that must be held while the task
     /// is executing. Drop the permit to release the slot.
-    #[allow(dead_code)] // F-GAP-12 — reserved for task scheduling integration
+    #[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
     pub async fn acquire_permit(&self) -> Result<tokio::sync::OwnedSemaphorePermit> {
         self.concurrency_limiter
             .clone()
@@ -657,12 +657,28 @@ impl TaskScheduler {
     /// Should be called periodically (e.g. every 1-2 seconds) by a background
     /// timer task, not synchronously on every dequeue call.
     ///
-    /// # Double-lock fix (GAP-B50-22)
+    /// Start a background timer that periodically applies aging to all
+    /// queued tasks, preventing starvation by boosting the priority of
+    /// long-waiting tasks.
+    ///
+    /// The timer runs until the scheduler is dropped (tokio task is
+    /// cancelled). Errors from `apply_aging` are logged as warnings.
+    pub fn start_aging_timer(self: &Arc<Self>, interval: Duration) {
+        let sched = self.clone();
+        tokio::spawn(async move {
+            let mut timer = tokio::time::interval(interval);
+            loop {
+                timer.tick().await;
+                sched.apply_aging();
+            }
+        });
+    }
+
+    /// Apply aging bonus to all pending (non-active) tasks.
+    ///
     /// Uses snapshot-then-rebuild pattern: reads all tasks and the active set
     /// in a single lock scope, then rebuilds queues in a single lock scope.
     /// Eliminates the double-lock of task_map (update → release → re-read).
-    #[allow(dead_code)] // BLUE48 — public API for external background timer
-                        // F-GAP-49 — reserved for future use
     pub fn apply_aging(&self) {
         let now = Instant::now();
         let elapsed = {

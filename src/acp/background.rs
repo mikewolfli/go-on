@@ -421,8 +421,12 @@ pub async fn start_background_tasks(
     let memory_cache = Arc::clone(&server.cache_deps.cache.memory_response_cache);
     let memory_store = Arc::clone(&server.memory_store);
 
-    let cache = Arc::new(std::sync::Mutex::new(server.cache_deps.cache.response_cache.clone()));
-    let vector_store = Arc::new(std::sync::Mutex::new(server.cache_deps.cache.vector_store.clone()));
+    let cache = Arc::new(std::sync::Mutex::new(
+        server.cache_deps.cache.response_cache.clone(),
+    ));
+    let vector_store = Arc::new(std::sync::Mutex::new(
+        server.cache_deps.cache.vector_store.clone(),
+    ));
 
     let maintenance = Arc::clone(&server.maintenance_tracker);
     let lifecycle = Arc::clone(&server.lifecycle_state);
@@ -444,10 +448,81 @@ pub async fn start_background_tasks(
             circuit_breakers,
             phase_rate_limiter,
             inflight_limiter,
-            shutdown_notify,
+            shutdown_notify: shutdown_notify.clone(),
         };
         run_background_maintenance_loop(bg_ctx).await;
     });
+
+    // ── Security scanning background tasks (GAP-B52-24, GAP-B52-30) ─────
+
+    // Schedule dependency vulnerability scan every 24 hours
+    if let Some(ref scanner) = server.governance_deps.dependency_vulnerability_scanner {
+        let scanner = Arc::clone(scanner);
+        let advisor = server.governance_deps.security_advisor.clone();
+        let shutdown = shutdown_notify.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            // First tick fires immediately
+            ticker.tick().await;
+
+            loop {
+                tokio::select! {
+                    _ = shutdown.notified() => break,
+                    _ = ticker.tick() => {}
+                }
+
+                info!("Security scan: starting dependency vulnerability scan");
+                let result = scanner.scan(std::path::Path::new(".")).await;
+                if let Some(ref advisor) = advisor {
+                    if let Err(e) = advisor.alert_from_dependency_scan(&result).await {
+                        warn!("Failed to alert from dependency scan: {}", e);
+                    }
+                }
+                info!(
+                    "Security scan: dependency scan complete (vulnerabilities: {})",
+                    result.total()
+                );
+            }
+        });
+    }
+
+    // Schedule secret exposure scan every 1 hour
+    if let Some(ref detector) = server.governance_deps.secret_exposure_detector {
+        let detector = Arc::clone(detector);
+        let advisor = server.governance_deps.security_advisor.clone();
+        let shutdown = shutdown_notify.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Duration::from_secs(60 * 60));
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            // Skip first tick, start after one interval
+            ticker.tick().await;
+
+            loop {
+                tokio::select! {
+                    _ = shutdown.notified() => break,
+                    _ = ticker.tick() => {}
+                }
+
+                info!("Security scan: starting secret exposure scan");
+                let result = detector.scan_directory(std::path::Path::new(".")).await;
+                if let Some(ref advisor) = advisor {
+                    if let Err(e) = advisor.alert_from_secret_scan(&result).await {
+                        warn!("Failed to alert from secret scan: {}", e);
+                    }
+                }
+                info!(
+                    "Security scan: secret scan complete (matches: {})",
+                    result.total()
+                );
+            }
+        });
+    }
+
+    // Start security advisor daily digest schedule
+    if let Some(ref advisor) = server.governance_deps.security_advisor {
+        advisor.start_digest_schedule();
+    }
 
     Ok(())
 }
@@ -467,8 +542,12 @@ pub async fn run_maintenance_cycle(
     let memory_cache = Arc::clone(&server.cache_deps.cache.memory_response_cache);
     let memory_store = Arc::clone(&server.memory_store);
 
-    let cache = Arc::new(std::sync::Mutex::new(server.cache_deps.cache.response_cache.clone()));
-    let vector_store = Arc::new(std::sync::Mutex::new(server.cache_deps.cache.vector_store.clone()));
+    let cache = Arc::new(std::sync::Mutex::new(
+        server.cache_deps.cache.response_cache.clone(),
+    ));
+    let vector_store = Arc::new(std::sync::Mutex::new(
+        server.cache_deps.cache.vector_store.clone(),
+    ));
 
     let maintenance = Arc::clone(&server.maintenance_tracker);
 
@@ -490,8 +569,12 @@ pub async fn run_health_check(server: &super::server::AcpServer) -> Result<()> {
     let lock_monitor = Arc::clone(&server.observability.lock_monitor);
     let memory_cache = Arc::clone(&server.cache_deps.cache.memory_response_cache);
 
-    let cache = Arc::new(std::sync::Mutex::new(server.cache_deps.cache.response_cache.clone()));
-    let vector_store = Arc::new(std::sync::Mutex::new(server.cache_deps.cache.vector_store.clone()));
+    let cache = Arc::new(std::sync::Mutex::new(
+        server.cache_deps.cache.response_cache.clone(),
+    ));
+    let vector_store = Arc::new(std::sync::Mutex::new(
+        server.cache_deps.cache.vector_store.clone(),
+    ));
 
     let circuit_breakers = Arc::clone(&server.circuit_breakers);
     let lifecycle = Arc::clone(&server.lifecycle_state);

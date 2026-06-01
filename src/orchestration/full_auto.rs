@@ -954,23 +954,25 @@ impl FullAutoFlow {
             }
         }
 
-        // Execute skills in parallel with bounded concurrency via Semaphore
+        // Execute skills in parallel with bounded concurrency via Semaphore.
+        // Permits are acquired inside each spawned task so the loop can
+        // dispatch all tasks immediately — they'll compete for permits
+        // asynchronously rather than serializing on sequential acquisition.
         let mut handles = Vec::with_capacity(skills_to_run.len());
 
-        for (_skill_match, skill, input) in skills_to_run {
-            let permit = match semaphore.clone().acquire_owned().await {
-                Ok(p) => p,
-                Err(_) => {
-                    warn!("Semaphore closed — skipping skill execution");
-                    errors.push(tf(
-                        "error.full_auto.semaphore_closed",
-                        &[("skill_name", &_skill_match.name)],
-                    ));
-                    continue;
-                }
-            };
-            // Wrapper function that forces the returned future to be Send
-            handles.push(tokio::spawn(execute_skill(skill, input, permit)));
+        for (skill_match, skill, input) in skills_to_run {
+            let skill_name = skill_match.name.clone(); // clone before move
+            let sem_clone = semaphore.clone();
+            handles.push(tokio::spawn(async move {
+                let _permit = match sem_clone.acquire_owned().await {
+                    Ok(p) => p,
+                    Err(_) => {
+                        warn!("Semaphore closed — skipping skill '{}'", skill_name);
+                        return (Err(anyhow::anyhow!("semaphore closed")), Duration::ZERO);
+                    }
+                };
+                execute_skill(skill, input, _permit).await
+            }));
         }
 
         // Collect results via join_all on the JoinHandles

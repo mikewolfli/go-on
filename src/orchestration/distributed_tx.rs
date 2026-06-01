@@ -17,7 +17,7 @@
 //! - Uses `crate::orchestration::tool_transaction::CompensateAction` for rollback
 //! - Stores transaction state in the existing WAL mechanism
 
-#![cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code, unused_imports))]
+// F-GAP-51: dead_code allowed on items below when sub-bus-tool-future is disabled
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -31,6 +31,7 @@ use tracing::{error, info, warn};
 // ---------------------------------------------------------------------------
 
 /// Status of a distributed transaction.
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DistributedTxStatus {
     /// Transaction has been created but not yet started.
@@ -75,6 +76,7 @@ impl DistributedTxStatus {
 // ---------------------------------------------------------------------------
 
 /// A participant in a distributed transaction.
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionParticipant {
     /// Unique identifier for this participant.
@@ -92,6 +94,7 @@ pub struct TransactionParticipant {
 // ---------------------------------------------------------------------------
 
 /// A distributed transaction managed via two-phase commit.
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DistributedTransaction {
     /// Unique transaction ID.
@@ -149,6 +152,7 @@ impl DistributedTransaction {
 
     /// Count participants by their acknowledge status.
     #[cfg(test)]
+    #[allow(dead_code)]
     pub fn count_acknowledgements(&self) -> (usize, usize) {
         let acked = self.participants.iter().filter(|p| p.acknowledged).count();
         let total = self.participants.len();
@@ -168,6 +172,7 @@ pub struct PhaseTimeoutConfig {
     /// Timeout for the commit phase in milliseconds.
     pub commit_timeout_ms: u64,
     /// Timeout for the abort phase in milliseconds.
+    #[allow(dead_code)] // F-GAP-51 — reserved for future use
     pub abort_timeout_ms: u64,
 }
 
@@ -205,6 +210,7 @@ impl TwoPhaseCoordinator {
     }
 
     /// Create a new coordinator with custom timeouts.
+    #[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
     pub fn with_timeouts(timeouts: PhaseTimeoutConfig) -> Self {
         Self {
             active_transactions: Arc::new(RwLock::new(HashMap::new())),
@@ -428,11 +434,13 @@ impl TwoPhaseCoordinator {
     }
 
     /// Get a transaction by ID.
+    #[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
     pub async fn get_transaction(&self, tx_id: &str) -> Option<DistributedTransaction> {
         self.active_transactions.read().await.get(tx_id).cloned()
     }
 
     /// Get all completed transactions.
+    #[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
     pub fn get_completed_transactions(&self) -> Vec<DistributedTransaction> {
         let guard = self
             .completed_transactions

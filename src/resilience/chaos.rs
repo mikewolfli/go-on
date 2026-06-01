@@ -19,8 +19,8 @@ pub const RECOVERY_FAILURE_RATE: f64 = 0.1;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 
 use tracing::{info, warn};
 
@@ -154,7 +154,8 @@ pub struct ChaosEngine {
     /// Active fault injections.
     injections: Arc<RwLock<Vec<FaultInjection>>>,
     /// Counter for tracking number of times each injection has been applied.
-    injection_counts: Arc<RwLock<HashMap<String, u64>>>,
+    /// Each key gets its own `AtomicU64` so counter increments are lock-free.
+    injection_counts: Arc<Mutex<HashMap<String, Arc<AtomicU64>>>>,
     /// Whether chaos mode is enabled.
     enabled: Arc<AtomicBool>,
 }
@@ -164,7 +165,7 @@ impl ChaosEngine {
     pub fn new() -> Self {
         Self {
             injections: Arc::new(RwLock::new(Vec::new())),
-            injection_counts: Arc::new(RwLock::new(HashMap::new())),
+            injection_counts: Arc::new(Mutex::new(HashMap::new())),
             enabled: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -210,7 +211,7 @@ impl ChaosEngine {
             })
             .clear();
         self.injection_counts
-            .write()
+            .lock()
             .unwrap_or_else(|poisoned| {
                 warn!("chaos counts lock poisoned, recovering");
                 poisoned.into_inner()
@@ -240,18 +241,30 @@ impl ChaosEngine {
                 continue;
             }
 
-            // Check max injections
+            // Check max injections — lock-free atomic counter per key
             if injection.max_injections > 0 {
-                let mut counts = self.injection_counts.write().unwrap_or_else(|poisoned| {
-                    warn!("chaos counts lock poisoned, recovering");
-                    poisoned.into_inner()
-                });
                 let key = format!("{}:{}", injection.fault_type.label(), tool_name);
-                let count = counts.entry(key.clone()).or_insert(0);
-                if *count >= injection.max_injections {
+                let counter = {
+                    let counts = self.injection_counts.lock().unwrap_or_else(|poisoned| {
+                        warn!("chaos counts lock poisoned, recovering");
+                        poisoned.into_inner()
+                    });
+                    counts.get(&key).cloned()
+                };
+                let counter = counter.unwrap_or_else(|| {
+                    let mut counts = self.injection_counts.lock().unwrap_or_else(|poisoned| {
+                        warn!("chaos counts lock poisoned, recovering");
+                        poisoned.into_inner()
+                    });
+                    counts
+                        .entry(key)
+                        .or_insert_with(|| Arc::new(AtomicU64::new(0)))
+                        .clone()
+                });
+                let prev = counter.fetch_add(1, Ordering::Relaxed);
+                if prev >= injection.max_injections {
                     continue;
                 }
-                *count += 1;
             }
 
             warn!(

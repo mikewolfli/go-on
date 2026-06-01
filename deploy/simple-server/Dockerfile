@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY Cargo.toml Cargo.lock* ./
+COPY config/ config/
 COPY src/ src/
 
 RUN cargo build --release --no-default-features -F profile-simple-server && \

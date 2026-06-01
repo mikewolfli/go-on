@@ -1,3 +1,25 @@
+/// JSON-RPC standard error codes and ACP custom error codes.
+///
+/// Standard codes follow the JSON-RPC 2.0 specification.
+/// Custom codes use the server-error range (-32000 to -32099).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AcpErrorCode {
+    /// Invalid JSON was received by the server (-32700).
+    #[allow(dead_code)] // F-GAP-51 — standard code, reserved for future use
+    ParseError = -32700,
+    /// The JSON sent is not a valid Request object (-32600).
+    #[allow(dead_code)] // F-GAP-51 — standard code, reserved for future use
+    InvalidRequest = -32600,
+    /// The method does not exist / is not available (-32601).
+    MethodNotFound = -32601,
+    /// Invalid method parameter(s) (-32602).
+    InvalidParams = -32602,
+    /// Internal JSON-RPC error (-32603).
+    InternalError = -32603,
+    /// Authentication is required (-32001).
+    AuthRequired = -32001,
+}
+
 use crate::protocol::access_mode::{request_dispatch_mode, RequestDispatchMode};
 
 /// Read protocol mode from config.toml / runtime_config.
@@ -280,6 +302,7 @@ use crate::vector::VectorStore;
 
 use crate::rpc_protocol::{value_to_id, JsonRpcRequest, RequestTraceContext};
 
+mod auth_middleware;
 mod chat_pack;
 mod checkpoint_pack;
 mod config_handlers;
@@ -293,6 +316,7 @@ mod health_pack;
 mod learning_pack;
 mod lifecycle_handlers;
 mod lifecycle_pack;
+mod method_router;
 mod metrics_pack;
 mod ops_pack;
 pub mod prompts_pack;
@@ -348,50 +372,26 @@ pub fn authenticate_request(
     request: &JsonRpcRequest,
 ) -> Result<
     Option<crate::acp::r#impl::session::UserSession>,
-    crate::acp::r#impl::session::TokenIntrospectResult,
+    Box<crate::acp::r#impl::session::TokenIntrospectResult>,
 > {
-    // If user auth is disabled, allow everything (backward compatible)
-    if !server.runtime_config.user_auth_enabled {
-        return Ok(None);
-    }
+    // B51-29: Use AuthMiddleware with JsonRpcAuthProvider
+    use auth_middleware::{AuthMiddleware, JsonRpcAuthProvider};
 
-    let session_manager = match server.session_manager.as_ref() {
-        Some(sm) => sm,
-        None => {
-            return Err(crate::acp::r#impl::session::TokenIntrospectResult {
+    match AuthMiddleware::authenticate(
+        &JsonRpcAuthProvider {
+            params: &request.params,
+        },
+        server,
+    ) {
+        Ok(session) => Ok(session),
+        Err(reason) => Err(Box::new(
+            crate::acp::r#impl::session::TokenIntrospectResult {
                 valid: false,
                 session: None,
-                reason: Some("Session manager not initialized".into()),
-            });
-        }
-    };
-
-    // Try Bearer token from params
-    if let Some(params) = &request.params {
-        // Check for bearer_token in params
-        if let Some(token) = params.get("bearer_token").and_then(|v| v.as_str()) {
-            let result = session_manager.authenticate(token);
-            if result.valid {
-                return Ok(result.session);
-            }
-            return Err(result);
-        }
-        // Check for api_key in params
-        if let Some(api_key) = params.get("api_key").and_then(|v| v.as_str()) {
-            let result = session_manager.authenticate(api_key);
-            if result.valid {
-                return Ok(result.session);
-            }
-            return Err(result);
-        }
+                reason: Some(reason),
+            },
+        )),
     }
-
-    // No auth found, return error
-    Err(crate::acp::r#impl::session::TokenIntrospectResult {
-        valid: false,
-        session: None,
-        reason: Some("Authentication required".into()),
-    })
 }
 
 /// Handle JSON-RPC request
@@ -422,11 +422,110 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             return send_error(
                 server,
                 request.id,
-                -32001,
+                AcpErrorCode::AuthRequired as i64,
                 format!("Authentication failed: {}", reason),
                 Some(serde_json::json!({
                     "code": "AUTH_REQUIRED",
                     "reason": reason,
+                })),
+            )
+            .await;
+        }
+    }
+
+    // GAP-B52-23: Request signature verification
+    if server.runtime_config.request_signing_enabled {
+        let signing_key = if !server.runtime_config.request_signing_public_key.is_empty() {
+            use base64::Engine;
+            let b64_engine = base64::engine::general_purpose::STANDARD;
+            match b64_engine.decode(&server.runtime_config.request_signing_public_key) {
+                Ok(key) => Some((key, crate::security::request_signing::SigningAlgorithm::Ed25519)),
+                Err(_) => {
+                    tracing::warn!("request_signing: invalid base64 public key, falling back to HMAC");
+                    if !server.runtime_config.request_signing_hmac_secret.is_empty() {
+                        Some((
+                            server.runtime_config.request_signing_hmac_secret.as_bytes().to_vec(),
+                            crate::security::request_signing::SigningAlgorithm::HmacSha256,
+                        ))
+                    } else {
+                        None
+                    }
+                }
+            }
+        } else if !server.runtime_config.request_signing_hmac_secret.is_empty() {
+            Some((
+                server.runtime_config.request_signing_hmac_secret.as_bytes().to_vec(),
+                crate::security::request_signing::SigningAlgorithm::HmacSha256,
+            ))
+        } else {
+            None
+        };
+
+        if let Some((ref key, _algo)) = signing_key {
+            // Extract the _signature field from request params
+            let sig_from_params = request.params.as_ref().and_then(|params| {
+                params.get("_signature").and_then(|s| {
+                    serde_json::from_value::<crate::security::request_signing::RequestSignature>(s.clone()).ok()
+                })
+            });
+
+            match sig_from_params {
+                Some(ref request_sig) => {
+                    // Serialize the params without the _signature field for body verification
+                    let body_for_verification = request.params.as_ref().map(|params| {
+                        let mut params_copy = params.clone();
+                        if let serde_json::Value::Object(ref mut map) = params_copy {
+                            map.remove("_signature");
+                        }
+                        serde_json::to_vec(&params_copy).unwrap_or_default()
+                    }).unwrap_or_default();
+
+                    match crate::security::request_signing::verify_request(key, &body_for_verification, request_sig) {
+                        Ok(true) => {
+                            tracing::debug!("Request signature verified (key_id={})", request_sig.key_id);
+                        }
+                        Ok(false) | Err(_) => {
+                            tracing::warn!("Request signature verification failed");
+                            return send_error(
+                                server,
+                                request.id,
+                                AcpErrorCode::AuthRequired as i64,
+                                "Request signature verification failed".into(),
+                                Some(serde_json::json!({
+                                    "code": "SIGNATURE_INVALID",
+                                    "reason": "The request signature is invalid or the body has been tampered with",
+                                })),
+                            )
+                            .await;
+                        }
+                    }
+                }
+                None => {
+                    // Signature required but missing
+                    tracing::warn!("request_signing: missing _signature in request params");
+                    return send_error(
+                        server,
+                        request.id,
+                        AcpErrorCode::AuthRequired as i64,
+                        "Request signature required but not provided".into(),
+                        Some(serde_json::json!({
+                            "code": "SIGNATURE_REQUIRED",
+                            "reason": "This endpoint requires signed requests. Include a `_signature` parameter with a valid Ed25519 or HMAC-SHA256 signature.",
+                        })),
+                    )
+                    .await;
+                }
+            }
+        } else {
+            tracing::warn!("request_signing: enabled but no signing key configured");
+            return send_error(
+                server,
+                request.id,
+                -32000,
+                "Request signing is enabled but no verification key is configured".into(),
+                Some(serde_json::json!({
+                    "code": "SIGNING_CONFIG_ERROR",
+                    "reason": "Server has request signing enabled but no Ed25519 public key or HMAC secret configured",
                 })),
             )
             .await;
@@ -443,7 +542,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                 return send_error(
                     server,
                     request.id,
-                    -32601,
+                    AcpErrorCode::MethodNotFound as i64,
                     tf("error.acp_mode_unsupported", &[("method", method.as_ref())]),
                     None,
                 )
@@ -455,7 +554,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                 return send_error(
                     server,
                     request.id,
-                    -32601,
+                    AcpErrorCode::MethodNotFound as i64,
                     tf("error.mcp_mode_unsupported", &[("method", method.as_ref())]),
                     None,
                 )
@@ -583,13 +682,28 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
     // Use the potentially normalized method for dispatch.
     let result = DISPATCH_REQUEST_METHOD
         .scope(method.to_string(), async {
+            // B51-28: Try the MethodRouter first; fall through to legacy match
+            // if no handler is registered.
+            if let Some(router_result) = method_router::global_method_router()
+                .dispatch(
+                    method.as_ref(),
+                    server,
+                    request.params.clone().unwrap_or_default(),
+                    request_id.clone(),
+                    &trace,
+                )
+                .await
+            {
+                return router_result;
+            }
+
             match method.as_ref() {
                 "initialize" => protocol_pack::handle_initialize(server, request_id).await,
                 // Standard ACP session lifecycle methods
                 "session/new" => {
                     protocol_pack::handle_session_new(
                         server,
-                        request.params.unwrap_or_default(),
+                        request.params.clone().unwrap_or_default(),
                         request_id,
                     )
                     .await
@@ -805,7 +919,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                             send_error(
                                 server,
                                 request_id,
-                                -32603,
+                                AcpErrorCode::InternalError as i64,
                                 tf(
                                     "error.request.prompts_list_failed",
                                     &[("error", &e.to_string())],
@@ -838,7 +952,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                             send_error(
                                 server,
                                 request_id,
-                                -32603,
+                                AcpErrorCode::InternalError as i64,
                                 tf(
                                     "error.request.prompts_search_failed",
                                     &[("error", &e.to_string())],
@@ -867,8 +981,14 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                             {
                                 Ok(v) => send_result(server, request_id, v).await,
                                 Err(e) => {
-                                    send_error(server, request_id, -32602, format!("{}", e), None)
-                                        .await
+                                    send_error(
+                                        server,
+                                        request_id,
+                                        AcpErrorCode::InvalidParams as i64,
+                                        format!("{}", e),
+                                        None,
+                                    )
+                                    .await
                                 }
                             }
                         }
@@ -876,7 +996,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                             send_error(
                                 server,
                                 request_id,
-                                -32602,
+                                AcpErrorCode::InvalidParams as i64,
                                 tf("error.request.missing_field_id", &[]),
                                 None,
                             )
@@ -899,7 +1019,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                             send_error(
                                 server,
                                 request_id,
-                                -32603,
+                                AcpErrorCode::InternalError as i64,
                                 tf(
                                     "error.request.prompts_create_failed",
                                     &[("error", &e.to_string())],
@@ -925,7 +1045,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                             send_error(
                                 server,
                                 request_id,
-                                -32603,
+                                AcpErrorCode::InternalError as i64,
                                 tf(
                                     "error.request.prompts_update_failed",
                                     &[("error", &e.to_string())],
@@ -951,7 +1071,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                             send_error(
                                 server,
                                 request_id,
-                                -32603,
+                                AcpErrorCode::InternalError as i64,
                                 tf(
                                     "error.request.prompts_delete_failed",
                                     &[("error", &e.to_string())],
@@ -1552,7 +1672,7 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
                     send_error(
                         server,
                         request_id,
-                        -32601,
+                        AcpErrorCode::MethodNotFound as i64,
                         if localized.contains("unknown method")
                             || localized.contains("method not found")
                         {
@@ -1687,7 +1807,7 @@ mod tests {
     use super::{
         attach_request_dispatch_context, classify_request_error_kind, infer_workflow_parallelism,
         is_acp_request, is_mcp_request, normalize_mcp_method, rebalance_execution_order,
-        session_id_for_task, summarize_lock_health, with_error_contract_data,
+        session_id_for_task, summarize_lock_health, with_error_contract_data, AcpErrorCode,
     };
     use crate::acp::prelude::AcpLockSnapshot;
     #[cfg(not(feature = "backend-postgres"))]
@@ -1851,7 +1971,7 @@ mod tests {
     #[test]
     fn with_error_contract_data_preserves_explicit_kind_and_detail() {
         let data = with_error_contract_data(
-            -32603,
+            AcpErrorCode::InternalError as i64,
             "generic failure",
             Some(json!({"kind": "PuaViolation", "detail": "acp.handle_request.dispatch"})),
         )

@@ -39,6 +39,7 @@
 //! a single runner that CapabilityBus calls.
 
 use crate::fault_tolerance::{FaultToleranceConfig, FaultToleranceEngine, FaultToleranceProfile};
+use crate::governance::audit::{AuditLogEntry, ThreadSafeAuditLog};
 use crate::governance::drift::drift_protection::{
     DriftProfile, DriftProtectionConfig, DriftProtectionEngine,
 };
@@ -54,8 +55,8 @@ use crate::governance::review_controls::{
 };
 use crate::governance::runtime_controls::OnlineControllerState;
 use crate::governance::security_governor::{
-    ConditionOperator, PolicyAction, PolicyComposition, PolicyCondition, PolicySeverity,
-    SecurityGovernor, SecurityGovernorConfig, SecurityPolicy,
+    AuditEntry as SgAuditEntry, ConditionOperator, PolicyAction, PolicyComposition,
+    PolicyCondition, PolicySeverity, SecurityGovernor, SecurityGovernorConfig, SecurityPolicy,
 };
 use crate::orchestration::artifact::{ArtifactLayer, ArtifactProfile};
 use crate::orchestration::brain_loop::{BrainLoop, BrainLoopConfig, BrainLoopProfile};
@@ -833,10 +834,53 @@ impl PolicyEvaluator {
         ]
         .into_iter()
         .collect();
-        match self
+        let sg_result = self
             .security_governor
-            .evaluate(&task_type_str, &actor, &context)
+            .evaluate(&task_type_str, &actor, &context);
+
+        // B51-33: Record security governor audit entry after evaluation.
         {
+            use crate::governance::security_governor::PolicyVerdict as SgPolicyVerdict;
+            let sg_entry = SgAuditEntry::new(
+                sg_result
+                    .as_ref()
+                    .ok()
+                    .and_then(|v| v.matched_policy.clone())
+                    .unwrap_or_else(|| "none".to_string()),
+                SgPolicyVerdict {
+                    allowed: sg_result.as_ref().ok().map(|v| v.allowed).unwrap_or(false),
+                    required_review: sg_result
+                        .as_ref()
+                        .ok()
+                        .map(|v| v.required_review)
+                        .unwrap_or(false),
+                    escalation_level: sg_result
+                        .as_ref()
+                        .ok()
+                        .map(|v| v.escalation_level.clone())
+                        .unwrap_or_else(|| "normal".to_string()),
+                    matched_policy: sg_result
+                        .as_ref()
+                        .ok()
+                        .and_then(|v| v.matched_policy.clone()),
+                    reasons: sg_result
+                        .as_ref()
+                        .ok()
+                        .map(|v| v.reasons.clone())
+                        .unwrap_or_default(),
+                },
+                task_type_str.clone(),
+                actor.clone(),
+                sg_result
+                    .as_ref()
+                    .ok()
+                    .map(|v| v.reasons.join("; "))
+                    .unwrap_or_else(|| "evaluation_error".to_string()),
+            );
+            self.security_governor.record_audit(sg_entry);
+        }
+
+        match sg_result {
             Ok(sg_verdict) => {
                 if !sg_verdict.allowed {
                     return PolicyVerdict::Deny(PolicyViolation {
@@ -1107,6 +1151,8 @@ pub struct HarnessBus {
     pub fault_tolerance: Arc<FaultToleranceEngine>,
     /// Structured audit trail for replay and evidence export (dual system integration).
     pub structured_audit_trail: Arc<std::sync::Mutex<crate::orchestration::audit::AuditTrail>>,
+    /// Canonical thread-safe audit log with NDJSON persistence (canonical sink).
+    pub audit_log: Arc<ThreadSafeAuditLog>,
     /// Consecutive allow-count for PUA de-escalation.
     /// When this reaches 3, `de_escalate` is called on the PUA rule engine
     /// to allow recovery from escalated states after sustained clean evaluations.
@@ -1116,6 +1162,7 @@ pub struct HarnessBus {
 impl HarnessBus {
     /// Construct a HarnessBus with default policies and the provided governance
     /// components.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         rule_engine: Arc<Mutex<PuaRuleEngine>>,
         sandbox_level: Arc<Mutex<String>>,
@@ -1124,6 +1171,7 @@ impl HarnessBus {
         runtime_control: Arc<Mutex<OnlineControllerState>>,
         guard: Arc<Mutex<SelfRationalizationGuard>>,
         storage_path: Option<PathBuf>,
+        audit_log: Arc<ThreadSafeAuditLog>,
     ) -> Self {
         let feedback_collector = storage_path.map(PuaFeedbackCollector::new);
         let bus = HarnessBus {
@@ -1150,6 +1198,7 @@ impl HarnessBus {
             structured_audit_trail: Arc::new(std::sync::Mutex::new(
                 crate::orchestration::audit::AuditTrail::new("harness-bus", 1000),
             )),
+            audit_log,
             consecutive_allows: AtomicU32::new(0),
         };
 
@@ -1178,7 +1227,27 @@ impl HarnessBus {
             PolicyVerdict::Deny(v) => {
                 p.deny_count = p.deny_count.saturating_add(1);
                 match v.kind.as_str() {
-                    "red_line" => p.red_line_blocks = p.red_line_blocks.saturating_add(1),
+                    "red_line" => {
+                        p.red_line_blocks = p.red_line_blocks.saturating_add(1);
+                        // B51-34: PUA auto-escalation on red-line violation
+                        let engine = self
+                            .evaluator
+                            .rule_engine
+                            .lock()
+                            .unwrap_or_else(|poisoned| {
+                                tracing::warn!(
+                                    "rule_engine lock poisoned in evaluate — escalation"
+                                );
+                                poisoned.into_inner()
+                            });
+                        let level =
+                            engine.escalate(&format!("Red-line violation detected: {}", v.detail));
+                        tracing::info!(
+                            new_level = level,
+                            detail = %v.detail,
+                            "PUA auto-escalated due to red-line violation"
+                        );
+                    }
                     "budget" => p.budget_violations = p.budget_violations.saturating_add(1),
                     _ => p.other_denials = p.other_denials.saturating_add(1),
                 }
@@ -1245,6 +1314,32 @@ impl HarnessBus {
             }
         }
 
+        // B51-32: Record evaluation outcome to the canonical ThreadSafeAuditLog (NDJSON persistent).
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let audit_entry = AuditLogEntry {
+            timestamp: format!("{}", now_ms),
+            task_id: format!("{:?}", ctx.task_type),
+            phase: "pre_route".to_string(),
+            agent: None,
+            tool: None,
+            decision: format!("{:?}", verdict),
+            inputs: serde_json::json!({
+                "task_type": format!("{:?}", ctx.task_type),
+                "file_count": ctx.file_count,
+                "risk_score": ctx.risk_score,
+            }),
+            outputs: None,
+            error: None,
+            confidence: None,
+            data_classification: None,
+            compliance_tags: vec![],
+            retention_policy: None,
+        };
+        self.audit_log.record(audit_entry);
+
         verdict
     }
 
@@ -1307,10 +1402,37 @@ impl HarnessBus {
 
     /// Record an audit entry.
     ///
-    /// Writes to both the local HarnessAuditTrail (for governance-specific
-    /// queries) and the unified structured_audit_trail (for replay/evidence
-    /// export via the orchestration audit trail).
+    /// Writes to the canonical ThreadSafeAuditLog (NDJSON persistent) as the
+    /// primary sink, and also to the local HarnessAuditTrail and structured
+    /// orchestration audit trail for compatibility.
     pub fn audit(&self, entry: AuditEntry) {
+        // B51-32: Write to the canonical ThreadSafeAuditLog (NDJSON persistent).
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        self.audit_log.record(AuditLogEntry {
+            timestamp: format!("{}", now_ms),
+            task_id: entry.request_id.clone(),
+            phase: format!("harness_audit:{}", entry.stage),
+            agent: None,
+            tool: None,
+            decision: entry.verdict.clone(),
+            inputs: serde_json::json!({
+                "dispatch_policy": &entry.dispatch_policy,
+                "execution_policy": &entry.execution_policy,
+                "governance_policy": &entry.governance_policy,
+                "violations": &entry.violations,
+                "context_snapshot": &entry.context_snapshot,
+            }),
+            outputs: None,
+            error: None,
+            confidence: None,
+            data_classification: None,
+            compliance_tags: vec![],
+            retention_policy: None,
+        });
+
         // Write to local governance audit trail.
         match self.audit_trail.lock() {
             Ok(mut trail) => trail.entries.push(entry.clone()),
@@ -1716,6 +1838,7 @@ pub fn default_harness_bus(storage_path: Option<PathBuf>) -> HarnessBus {
     )));
     let runtime_control = Arc::new(Mutex::new(OnlineControllerState::default()));
     let guard = Arc::new(Mutex::new(SelfRationalizationGuard::new(0.6)));
+    let audit_log = Arc::new(ThreadSafeAuditLog::new_with_default_path(10_000));
 
     HarnessBus::new(
         rule_engine,
@@ -1725,6 +1848,7 @@ pub fn default_harness_bus(storage_path: Option<PathBuf>) -> HarnessBus {
         runtime_control,
         guard,
         storage_path,
+        audit_log,
     )
 }
 
@@ -1796,6 +1920,7 @@ pub fn config_aware_harness_bus(
     let runtime_control = Arc::new(Mutex::new(OnlineControllerState::default()));
 
     let guard = Arc::new(Mutex::new(SelfRationalizationGuard::new(0.6)));
+    let audit_log = Arc::new(ThreadSafeAuditLog::new_with_default_path(10_000));
 
     HarnessBus::new(
         rule_engine,
@@ -1805,5 +1930,6 @@ pub fn config_aware_harness_bus(
         runtime_control,
         guard,
         storage_path,
+        audit_log,
     )
 }

@@ -441,6 +441,8 @@ pub fn all() -> &'static [(&'static str, &'static str)] {
         ("monitor.successRate", "成功率"),
         ("monitor.errorTopGroups", "錯誤分組 Top"),
         ("monitor.sampleFailures", "失敗樣本數: {count}"),
+        ("monitor.trendSeries", "趨勢序列 (最近10條)"),
+        ("monitor.time", "時間"),
         ("monitor.timeWindow", "時間窗口"),
         ("monitor.refreshInterval", "刷新間隔"),
         ("monitor.retryIn", "{seconds}秒後重試"),

@@ -30,6 +30,28 @@ pub fn lock_guard<T>(mtx: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> 
     }
 }
 
+/// Acquire a read lock on an `RwLock`, recovering from a poisoned state with a warning.
+pub fn read_guard<T>(rw: &std::sync::RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
+    match rw.read() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("intelligence RwLock poisoned (read), recovering");
+            poisoned.into_inner()
+        }
+    }
+}
+
+/// Acquire a write lock on an `RwLock`, recovering from a poisoned state with a warning.
+pub fn write_guard<T>(rw: &std::sync::RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
+    match rw.write() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("intelligence RwLock poisoned (write), recovering");
+            poisoned.into_inner()
+        }
+    }
+}
+
 pub mod adaptive_selector;
 pub mod consensus;
 pub mod discovery;

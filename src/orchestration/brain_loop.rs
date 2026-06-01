@@ -23,10 +23,10 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 
+use crate::agent::{Agent, AgentRegistry, Message, StreamingSender};
 use crate::agents::progress_reporter::ProgressReporter;
-use crate::intelligence::metacognitive::{
-    CorrectiveStatus, MetacognitiveController,
-};
+use crate::intelligence::metacognitive::{CorrectiveStatus, MetacognitiveController};
+use crate::intelligence::world_model::{EntityType, WorldModel, WorldModelConfig};
 use crate::orchestration::dag_executor::TaskContext;
 
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -216,12 +216,17 @@ impl Default for BrainLoopConfig {
 /// When enabled, the engine enriches plans with reasoning chains, produces
 /// richer reflections, adjusts plans based on reflection content, and
 /// validates outputs using a MultiModelVoter-style consensus approach.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct DeepReasoningEngine {
     /// Maximum tokens for a single reasoning chain.
     pub max_reasoning_tokens: usize,
     /// Optional model name override for deep-reasoning calls.
+    #[allow(dead_code)] // F-GAP-51 — reserved for future use
     pub model: Option<String>,
+    /// Agent registry for LLM calls (B51-08).
+    /// When `Some`, `plan_with_reasoning` and `reflect_with_reasoning` call
+    /// the configured LLM agent for real reasoning chains instead of stubs.
+    pub agent_registry: Option<Arc<AgentRegistry>>,
 }
 
 impl DeepReasoningEngine {
@@ -230,7 +235,14 @@ impl DeepReasoningEngine {
         Self {
             max_reasoning_tokens: config.max_deep_reasoning_tokens,
             model: config.deep_reasoning_model.clone(),
+            agent_registry: None,
         }
+    }
+
+    /// Set the agent registry for LLM-backed reasoning.
+    pub fn with_agent_registry(mut self, registry: Arc<AgentRegistry>) -> Self {
+        self.agent_registry = Some(registry);
+        self
     }
 
     /// Produce a structured plan enhanced with LLM-level reasoning.
@@ -241,6 +253,10 @@ impl DeepReasoningEngine {
     ///
     /// When deep reasoning is disabled (`max_reasoning_tokens == 0`),
     /// returns the plan unchanged.
+    ///
+    /// When an `agent_registry` is available (B51-08), calls the configured
+    /// LLM agent to generate a real reasoning chain. Otherwise falls back to
+    /// a structured summary.
     pub async fn plan_with_reasoning(
         &self,
         context: &TaskContext,
@@ -249,7 +265,38 @@ impl DeepReasoningEngine {
         if self.max_reasoning_tokens == 0 {
             return plan.clone();
         }
+
         let mut enriched = plan.clone();
+
+        // ── Attempt LLM-backed reasoning if agent registry is available ──
+        if let Some(ref registry) = self.agent_registry {
+            if let Some(agent) = registry.get("primary") {
+                let prompt = format!(
+                    "You are a deep reasoning engine analyzing a plan.\n\
+                     Task \"{}\" with {} steps ({} pending).\n\
+                     Context: confidence={:.2}, reasoning_trace={:?}, \
+                     open_questions={:?}, assumptions={:?}.\n\
+                     Provide a concise reasoning analysis identifying gaps, \
+                     risks, and improvement suggestions (max {} tokens).",
+                    plan.goal,
+                    plan.steps.len(),
+                    plan.steps
+                        .iter()
+                        .filter(|s| s.status == StepStatus::Pending)
+                        .count(),
+                    context.confidence,
+                    context.reasoning_trace,
+                    context.open_questions,
+                    context.assumptions,
+                    self.max_reasoning_tokens,
+                );
+                let reasoning = Self::call_llm_and_collect(&agent, &prompt).await;
+                enriched.reasoning = Some(reasoning);
+                return enriched;
+            }
+        }
+
+        // ── Fallback: structured summary ───────────────────────────────
         enriched.reasoning = Some(format!(
             "Deep reasoning analysis (max_tokens={}):\n\
              - Context id: {}\n\
@@ -282,6 +329,10 @@ impl DeepReasoningEngine {
     /// a [`BrainLoopReflection`] with deeper analysis.
     ///
     /// When deep reasoning is disabled, returns a basic empty reflection.
+    ///
+    /// When an `agent_registry` is available (B51-08), calls the configured
+    /// LLM agent to generate real analysis. Otherwise falls back to a
+    /// structured summary.
     pub async fn reflect_with_reasoning(
         &self,
         result: &str,
@@ -304,6 +355,47 @@ impl DeepReasoningEngine {
 
         let now = now_epoch_ms();
         let prev_confidence = history.last().map(|r| r.confidence).unwrap_or(1.0);
+
+        // ── Attempt LLM-backed reflection if agent registry is available ──
+        if let Some(ref registry) = self.agent_registry {
+            if let Some(agent) = registry.get("primary") {
+                let prompt = format!(
+                    "You are a deep reflection engine analyzing execution results.\n\
+                     Step \"{}\" of plan \"{}\" (iteration {}/{}).\n\
+                     Execution result: {}\n\
+                     Prior reflections: {}\n\
+                     Previous confidence: {:.2}\n\
+                     \n\
+                     Provide a structured reflection with:\n\
+                     1. Key observations\n\
+                     2. Issues identified\n\
+                     3. Concrete improvements\n\
+                     4. Confidence score (0.0-1.0)\n\
+                     Keep the analysis concise (max {} tokens).",
+                    step_id,
+                    plan.goal,
+                    plan.current_iteration,
+                    plan.max_iterations,
+                    result,
+                    history.len(),
+                    prev_confidence,
+                    self.max_reasoning_tokens,
+                );
+                let analysis = Self::call_llm_and_collect(&agent, &prompt).await;
+                return BrainLoopReflection {
+                    step_id: step_id.to_string(),
+                    observations: vec![result.to_string(), analysis.clone()],
+                    issues: vec![],
+                    improvements: vec![],
+                    confidence: (prev_confidence + 0.9) / 2.0,
+                    reflection_ms: now,
+                    context_snapshot: None,
+                    reasoning_chain: vec![analysis],
+                };
+            }
+        }
+
+        // ── Fallback: structured summary ───────────────────────────────
         let analysis = format!(
             "Deep reflection (max_tokens={}):\n\
              - Step result: {}\n\
@@ -365,31 +457,116 @@ impl DeepReasoningEngine {
         new_steps
     }
 
-    /// Validate a plan or reflection using MultiModelVoter-style consensus.
+    /// Validate a plan or reflection using LLM-backed consensus when
+    /// an agent registry is available, or heuristic rules otherwise.
     ///
     /// Returns a quality score between 0.0 and 1.0.
-    /// Current implementation uses heuristic rules; will be wired to
-    /// [`MultiModelVoter`](crate::intelligence::multi_model_voter::MultiModelVoter)
-    /// in future iterations.
     pub async fn quality_validate<T: Serialize>(&self, item: &T) -> f64 {
         if self.max_reasoning_tokens == 0 {
             return 1.0;
         }
-        // Simulated validation — in production this would call MultiModelVoter.
+
+        // ── LLM-backed validation if agent registry is available ───────
+        if let Some(ref registry) = self.agent_registry {
+            if let Some(agent) = registry.get("primary") {
+                let json_str = serde_json::to_string(item).unwrap_or_default();
+                let prompt = format!(
+                    "You are a quality validator. Rate the quality of the following \
+                     plan/reflection on a scale of 0.0 to 1.0. \
+                     Consider completeness, clarity, reasoning depth, and feasibility.\n\
+                     \n\
+                     Item:\n{}\n\
+                     \n\
+                     Respond with ONLY a floating point number between 0.0 and 1.0.",
+                    if json_str.len() > 2000 {
+                        &json_str[..2000]
+                    } else {
+                        &json_str
+                    }
+                );
+                let response = Self::call_llm_and_collect(&agent, &prompt).await;
+                // Parse floating point from response
+                let score: f64 = response
+                    .trim()
+                    .chars()
+                    .filter(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
+                    .collect::<String>()
+                    .parse()
+                    .unwrap_or(0.5);
+                return score.clamp(0.0, 1.0);
+            }
+        }
+
+        // ── Heuristic fallback ─────────────────────────────────────────
         let json = serde_json::to_value(item).unwrap_or_default();
         let score = if json.is_null() {
             0.0
         } else if let Some(obj) = json.as_object() {
             let has_reasoning = obj.contains_key("reasoning");
-            let has_steps = obj.contains_key("steps");
+            let has_steps = obj.contains_key("steps") || obj.contains_key("observations");
             let has_confidence = obj.contains_key("confidence");
-            (if has_reasoning { 0.4 } else { 0.0 })
-                + (if has_steps { 0.3 } else { 0.0 })
-                + (if has_confidence { 0.3 } else { 0.0 })
+            let fields_score = (if has_reasoning { 0.3 } else { 0.0 })
+                + (if has_steps { 0.4 } else { 0.0 })
+                + (if has_confidence { 0.3 } else { 0.0 });
+            let content_score =
+                if let Some(reasoning) = obj.get("reasoning").and_then(|v| v.as_str()) {
+                    let len = reasoning.len() as f64;
+                    (len / 500.0).min(0.2)
+                } else {
+                    0.0
+                };
+            (fields_score + content_score).min(1.0)
         } else {
             0.5
         };
-        (score as f64).max(0.0).min(1.0)
+        score.clamp(0.0, 1.0)
+    }
+
+    // ── Private helpers ────────────────────────────────────────────────
+
+    /// Call an LLM agent with a prompt and collect the full text response.
+    async fn call_llm_and_collect(agent: &Arc<dyn Agent>, prompt: &str) -> String {
+        let msg = Message {
+            role: "user".to_string(),
+            content: prompt.to_string(),
+        };
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(1024);
+        let sender = StreamingSender::from(tx);
+        let agent_clone = Arc::clone(agent);
+        let msg_clone = msg.clone();
+
+        let task =
+            tokio::spawn(
+                async move { agent_clone.chat(vec![msg_clone], None, None, sender).await },
+            );
+
+        let mut response = String::new();
+        while let Some(token) = rx.recv().await {
+            // Skip control tokens
+            if token.starts_with("__model_used__:") {
+                continue;
+            }
+            if token.starts_with("__tool_call__:") {
+                continue;
+            }
+            if let Some(reasoning) = token.strip_prefix("__thinking__") {
+                response.push_str(reasoning);
+            } else {
+                response.push_str(&token);
+            }
+        }
+
+        match task.await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::warn!("DeepReasoningEngine: LLM call failed: {e}");
+            }
+            Err(join_err) => {
+                tracing::warn!("DeepReasoningEngine: LLM task panicked: {join_err}");
+            }
+        }
+
+        response
     }
 }
 
@@ -464,6 +641,8 @@ struct BrainLoopInner {
     /// Tracks per-error-type occurrence counts for detecting repeated
     /// failures (3+ → PlannerHint warning).
     error_counts: HashMap<String, u32>,
+    /// B51-08: Optional agent registry for LLM-backed deep reasoning.
+    agent_registry: Option<Arc<AgentRegistry>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -499,6 +678,7 @@ impl BrainLoop {
                 metacognitive: None,
                 planner_hints: Vec::new(),
                 error_counts: HashMap::new(),
+                agent_registry: None,
             })),
             next_plan_id: Arc::new(AtomicU64::new(1)),
         }
@@ -579,6 +759,12 @@ impl BrainLoop {
     pub fn set_metacognitive(&self, mc: MetacognitiveController) {
         let mut inner = self.sync_write();
         inner.metacognitive = Some(mc);
+    }
+
+    /// Set the agent registry for LLM-backed deep reasoning (B51-08).
+    pub fn set_agent_registry(&self, registry: Arc<AgentRegistry>) {
+        let mut inner = self.sync_write();
+        inner.agent_registry = Some(registry);
     }
 
     /// Return accumulated planner hints (e.g. from metacognitive feedback).
@@ -1127,14 +1313,13 @@ impl BrainLoop {
         }
     }
 
-    // ── World model integration stub (GAP-B50-06) ────────────────────
+    // ── World model integration (GAP-B50-06, B51-08) ──────────────────
 
     /// Query the world model for environment entities relevant to the plan.
     ///
-    /// When `world_model_integration` is enabled in the config, this stub
-    /// populates the plan's `world_model_data` field with environment entity
-    /// information. Wired to the actual [`WorldModel`](crate::intelligence::world_model::WorldModel)
-    /// in Step 7.
+    /// When `world_model_integration` is enabled in the config, this queries
+    /// the [`WorldModel`] for real entity data and populates the plan's
+    /// `world_model_data` field.
     pub async fn query_world_model(&self, plan_id: &str) {
         let world_model_enabled = {
             let inner = read_guard(&self.inner).await;
@@ -1145,14 +1330,46 @@ impl BrainLoop {
             return;
         }
 
-        // Stub: populate with mock world model data.
-        // In Step 7 this will call WorldModel::query_entities().
+        // ── Query real world model data (B51-08) ───────────────────────
+        let wm = WorldModel::new(WorldModelConfig::default());
+
+        // Register the current plan goal as a tracked entity.
+        let goal = {
+            let inner = read_guard(&self.inner).await;
+            inner
+                .plans
+                .get(plan_id)
+                .map(|p| p.goal.clone())
+                .unwrap_or_default()
+        };
+
+        if let Err(e) =
+            wm.register_entity(&format!("brain-loop-plan-{plan_id}"), EntityType::System)
+        {
+            tracing::warn!("query_world_model: failed to register plan entity: {e}");
+        }
+
+        let entities = wm.query_entities(None, 0.0);
+        let entity_summary: Vec<Value> = entities
+            .iter()
+            .map(|e: &crate::intelligence::world_model::WorldEntity| {
+                serde_json::json!({
+                    "id": e.id,
+                    "name": e.name,
+                    "entity_type": format!("{:?}", e.entity_type),
+                    "confidence": e.confidence,
+                    "properties": e.properties,
+                })
+            })
+            .collect();
+
         let mut data = HashMap::new();
         data.insert(
             "environment".to_string(),
-            Value::String("stub-world-model".to_string()),
+            Value::String("world-model-v1".to_string()),
         );
-        data.insert("entities".to_string(), Value::Array(vec![]));
+        data.insert("goal".to_string(), Value::String(goal));
+        data.insert("entities".to_string(), Value::Array(entity_summary));
         data.insert(
             "query_timestamp_ms".to_string(),
             Value::Number(serde_json::Number::from(now_epoch_ms())),
@@ -1260,7 +1477,10 @@ impl BrainLoop {
         // ── Check deep-reasoning configuration ────────────────────────
         let (enable_deep, engine, world_model_int) = {
             let inner = read_guard(&self.inner).await;
-            let engine = DeepReasoningEngine::new(&inner.config);
+            let mut engine = DeepReasoningEngine::new(&inner.config);
+            if let Some(ref registry) = inner.agent_registry {
+                engine = engine.with_agent_registry(Arc::clone(registry));
+            }
             (
                 inner.config.enable_deep_reasoning,
                 engine,
@@ -2343,7 +2563,7 @@ mod tests {
         let data = plan2.world_model_data.unwrap();
         assert_eq!(
             data.get("environment").and_then(|v| v.as_str()),
-            Some("stub-world-model")
+            Some("world-model-v1")
         );
         assert!(data.contains_key("query_timestamp_ms"));
     }

@@ -68,6 +68,7 @@ mod orchestration;
 mod protocol;
 mod resilience;
 mod schema;
+mod security;
 mod shared;
 
 pub use crate::agents::agent;
@@ -120,11 +121,11 @@ pub use crate::protocol::rpc_protocol;
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use clap::{ArgAction, Parser, Subcommand};
+use tokio::sync::Notify;
 use tracing::{debug, error, info, warn};
 
 use crate::agent::AgentRegistry;
@@ -949,6 +950,12 @@ async fn run() -> Result<()> {
     // The registry is lazily populated with built-in plugin manifests
     // and is available for runtime plugin discovery.
     let plugin_registry = crate::orchestration::plugin_system::PluginRegistry::new();
+
+    // Register built-in plugins (Tool, Skill, Mode, Policy) at startup.
+    // This ensures the registry is always populated with core plugins
+    // without requiring an external registration step (B51-11).
+    plugin_registry.register_builtin_plugins();
+
     let plugin_count = plugin_registry.count();
     tracing::info!(
         "PluginRegistry initialized with {} registered plugins",
@@ -984,15 +991,14 @@ async fn run() -> Result<()> {
     let memory_health = crate::observability::memory_health::check_startup_memory();
     tracing::info!(?memory_health, "startup memory check");
     crate::observability::memory_health::print_memory_health(&memory_health);
-    match &memory_health {
-        crate::observability::memory_health::MemoryHealth::Critical { free_mb, message } => {
-            anyhow::bail!(
-                "Insufficient memory to start server: {} MB free — {}",
-                free_mb,
-                message
-            );
-        }
-        _ => {}
+    if let crate::observability::memory_health::MemoryHealth::Critical { free_mb, message } =
+        &memory_health
+    {
+        anyhow::bail!(
+            "Insufficient memory to start server: {} MB free — {}",
+            free_mb,
+            message
+        );
     }
     crate::observability::memory_health::start_memory_monitor();
 
@@ -1024,6 +1030,15 @@ async fn run() -> Result<()> {
         }
     });
 
+    // ── Graceful shutdown notify (shared with all background tasks) ──
+    let shutdown_notify = Arc::new(Notify::new());
+    let sig_shutdown = shutdown_notify.clone();
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.ok();
+        info!("Received SIGINT, initiating top-level graceful shutdown");
+        sig_shutdown.notify_waiters();
+    });
+
     // Initialize the CacheWarmingEngine for post-execution cache hit tracking.
     // The engine is pre-warmed at startup if PreWarmConfig::warm_at_startup is true.
     let cache_engine = crate::orchestration::orchestrator::init_cache_warming();
@@ -1040,7 +1055,14 @@ async fn run() -> Result<()> {
     };
     if crate::core::onboarding::run_onboarding(&onboarding_cfg, &config_path).await? {
         let config = Arc::new(AppConfig::load(&config_path)?);
-        start_server(config, &cli, &config_path).await?;
+        tokio::select! {
+            result = start_server(config, &cli, &config_path) => {
+                result?;
+            }
+            _ = shutdown_notify.notified() => {
+                info!("Top-level shutdown signal received during onboarding server start");
+            }
+        }
         crate::orchestration::orchestrator::warm_cache_after_success(&cache_engine);
         return Ok(());
     }
@@ -1050,8 +1072,15 @@ async fn run() -> Result<()> {
         return handle_chat_mode(config, &cli, &config_path).await;
     }
 
-    // Start the server
-    start_server(config, &cli, &config_path).await?;
+    // Start the server with top-level graceful shutdown signal handling
+    tokio::select! {
+        result = start_server(config, &cli, &config_path) => {
+            result?;
+        }
+        _ = shutdown_notify.notified() => {
+            info!("Top-level shutdown signal received, server exiting");
+        }
+    }
 
     // Warm cache after successful server execution.
     crate::orchestration::orchestrator::warm_cache_after_success(&cache_engine);

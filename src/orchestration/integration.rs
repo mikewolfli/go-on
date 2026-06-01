@@ -1,6 +1,6 @@
 //! Integration Hub — reserved for future wiring.
 //! Gated behind `sub-bus-tool-future` feature.
-#![cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code, unused_imports))]
+// F-GAP-51: dead_code allowed on items when sub-bus-tool-future is disabled
 
 use crate::orchestration::cache_warming::CacheWarmingEngine;
 use crate::orchestration::complexity_estimator::ComplexityEstimator;
@@ -10,6 +10,7 @@ use crate::orchestration::tool_lock::ToolLockManager;
 use crate::orchestration::tool_recommender::ToolRecommender;
 
 /// Initializes all subsystems during application startup.
+#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
 pub struct SystemIntegration {
     pub session_context: SessionContextManager,
     pub cache_warming: CacheWarmingEngine,
@@ -20,6 +21,7 @@ pub struct SystemIntegration {
 }
 
 impl SystemIntegration {
+    #[allow(dead_code)] // F-GAP-51 — gated behind sub-bus-tool-future
     pub fn new() -> Self {
         Self {
             session_context: SessionContextManager::default(),

@@ -15,6 +15,7 @@ use crate::i18n::runtime::tf;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
@@ -75,6 +76,8 @@ pub enum FusionMethod {
     BestOfN,
     /// Full fusion — merge all responses with contradiction detection.
     Fusion,
+    /// Concatenation — merge unique content when no majority and no fusion model.
+    Concatenation,
 }
 
 /// The aggregated outcome of a multi-model vote.
@@ -109,30 +112,26 @@ pub struct VotingOutcome {
 // ── VotingConfig ────────────────────────────────────────────────────────────
 
 /// Configuration for the voting system.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct VotingConfig {
     /// Whether to use response fusion (contradiction detection + merging).
     /// When `true`, the Fusion strategy is preferred if available;
     /// contradiction detection can still run even when `false`.
+    #[serde(default)]
     pub use_fusion: bool,
-}
-
-impl Default for VotingConfig {
-    fn default() -> Self {
-        Self { use_fusion: false }
-    }
 }
 
 // ── FusionEngine ────────────────────────────────────────────────────────────
 
 /// Engine for fusing multiple model responses into a single coherent output,
 /// detecting contradictions, and computing per-model contribution weights.
-#[derive(Debug, Clone)]
 pub struct FusionEngine {
     /// If enabled, attempts advanced fusion via an aggregator model.
     pub fusion_model_enabled: bool,
     /// Model weights (same key space as [`MultiModelVoter::model_weights`]).
     pub model_weights: HashMap<String, f64>,
+    /// Optional fusion agent for LLM-level synthesis when no clear majority exists.
+    pub fusion_agent: Option<Box<dyn Agent>>,
 }
 
 impl FusionEngine {
@@ -141,6 +140,7 @@ impl FusionEngine {
         Self {
             fusion_model_enabled: false,
             model_weights: HashMap::new(),
+            fusion_agent: None,
         }
     }
 
@@ -195,9 +195,11 @@ impl FusionEngine {
         }
 
         // Sort clusters by size descending
+        #[allow(clippy::unnecessary_sort_by)]
         clusters.sort_by(|a, b| b.len().cmp(&a.len()));
 
-        let fused_text = if !clusters.is_empty() && clusters[0].len() > n / 2 {
+        let has_majority = !clusters.is_empty() && clusters[0].len() > n / 2;
+        let fused_text = if has_majority {
             // Clear majority — use the most representative response
             let rep_idx = clusters[0][0];
             responses[rep_idx].response.clone()
@@ -206,6 +208,15 @@ impl FusionEngine {
             Self::merge_unique_content(&responses)
         } else {
             responses[0].response.clone()
+        };
+
+        // Determine the fusion method used
+        let fusion_method = if has_majority {
+            FusionMethod::Fusion
+        } else if n > 0 {
+            FusionMethod::Concatenation
+        } else {
+            FusionMethod::Fusion
         };
 
         // Winner model is the one closest to the fused text
@@ -228,7 +239,165 @@ impl FusionEngine {
             final_response: fused_text,
             contradictions,
             model_contributions: contributions,
-            fusion_method: FusionMethod::Fusion,
+            fusion_method,
+        }
+    }
+
+    /// Fuse responses with optional LLM-level synthesis when no clear majority exists.
+    ///
+    /// When a `fusion_agent` is configured and no clear majority is found, the agent is
+    /// called with the original prompt and all responses to synthesize a coherent answer.
+    /// Falls back to `fuse()` when the fusion agent is not available.
+    pub async fn fuse_with_llm(
+        &self,
+        responses: Vec<ModelVoteResult>,
+        prompt: &str,
+    ) -> VotingOutcome {
+        let n = responses.len();
+        let contradictions = Self::detect_contradictions(&responses);
+        let contributions = self.compute_contributions(&responses);
+
+        if n == 0 {
+            return VotingOutcome {
+                winning_response: String::new(),
+                winner_model: "fusion".into(),
+                consensus_level: 0.0,
+                all_votes: vec![],
+                strategy_used: VotingStrategy::Fusion,
+                total_duration_ms: 0,
+                tie_breaker_used: false,
+                final_response: String::new(),
+                contradictions,
+                model_contributions: contributions,
+                fusion_method: FusionMethod::Fusion,
+            };
+        }
+
+        // ── Majority-fusion: group by similarity ─────────────────────────
+        let mut clusters: Vec<Vec<usize>> = Vec::new();
+        let mut assigned = vec![false; n];
+
+        for i in 0..n {
+            if assigned[i] {
+                continue;
+            }
+            let mut cluster = vec![i];
+            assigned[i] = true;
+            for j in (i + 1)..n {
+                if !assigned[j]
+                    && MultiModelVoter::similar_responses(
+                        &responses[i].response,
+                        &responses[j].response,
+                    )
+                {
+                    cluster.push(j);
+                    assigned[j] = true;
+                }
+            }
+            clusters.push(cluster);
+        }
+
+        // Sort clusters by size descending
+        #[allow(clippy::unnecessary_sort_by)]
+        clusters.sort_by(|a, b| b.len().cmp(&a.len()));
+
+        let has_majority = !clusters.is_empty() && clusters[0].len() > n / 2;
+
+        let (fused_text, fusion_method) = if has_majority {
+            // Clear majority — use the most representative response
+            let rep_idx = clusters[0][0];
+            (responses[rep_idx].response.clone(), FusionMethod::Fusion)
+        } else if let Some(ref agent) = self.fusion_agent {
+            // No clear majority but fusion agent available — synthesize via LLM
+            let synthesis = self.synthesize_via_llm(&**agent, prompt, &responses).await;
+            (synthesis, FusionMethod::Fusion)
+        } else if !responses.is_empty() {
+            // No clear majority, no fusion agent — concatenate
+            (
+                Self::merge_unique_content(&responses),
+                FusionMethod::Concatenation,
+            )
+        } else {
+            (responses[0].response.clone(), FusionMethod::Fusion)
+        };
+
+        // Winner model is the one closest to the fused text
+        let winner_model = contributions
+            .iter()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(name, _)| name.clone())
+            .unwrap_or_else(|| "fusion".to_string());
+
+        let consensus = MultiModelVoter::consensus_score(&responses);
+
+        VotingOutcome {
+            winning_response: fused_text.clone(),
+            winner_model,
+            consensus_level: consensus,
+            all_votes: responses,
+            strategy_used: VotingStrategy::Fusion,
+            total_duration_ms: 0,
+            tie_breaker_used: false,
+            final_response: fused_text,
+            contradictions,
+            model_contributions: contributions,
+            fusion_method,
+        }
+    }
+
+    /// Call the fusion agent to synthesize a single response from multiple model outputs.
+    async fn synthesize_via_llm(
+        &self,
+        agent: &dyn Agent,
+        prompt: &str,
+        responses: &[ModelVoteResult],
+    ) -> String {
+        let mut synthesis_prompt = String::new();
+        synthesis_prompt.push_str("You are a fusion engine. Given the original prompt and multiple model responses, synthesize a single coherent, accurate answer that captures the best elements of each response.\n\n");
+        synthesis_prompt.push_str("## Original Prompt\n");
+        synthesis_prompt.push_str(prompt);
+        synthesis_prompt.push_str("\n\n## Model Responses\n");
+
+        for (i, r) in responses.iter().enumerate() {
+            synthesis_prompt.push_str(&format!(
+                "--- Model {} ({}) ---\n{}\n\n",
+                i + 1,
+                r.model_name,
+                r.response
+            ));
+        }
+
+        synthesis_prompt.push_str("\n## Instructions\n\n");
+        synthesis_prompt.push_str("Synthesize a single, coherent response that:\n");
+        synthesis_prompt.push_str("1. Resolves any contradictions between the model responses\n");
+        synthesis_prompt.push_str("2. Captures the most accurate and comprehensive information\n");
+        synthesis_prompt.push_str("3. Presents the answer clearly and concisely\n");
+        synthesis_prompt.push_str("4. References areas of disagreement honestly\n");
+
+        let (tx, mut rx) = mpsc::channel::<String>(256);
+        let sender = StreamingSender::new(tx);
+
+        let messages = vec![Message {
+            role: "user".to_string(),
+            content: synthesis_prompt,
+        }];
+
+        if let Err(e) = agent.chat(messages, None, None, sender).await {
+            warn!("fusion_engine: LLM synthesis failed: {}", e);
+            // Fall back to concatenation
+            return Self::merge_unique_content(responses);
+        }
+
+        let mut result = String::new();
+        while let Some(token) = rx.recv().await {
+            result.push_str(&token);
+        }
+
+        if result.is_empty() {
+            warn!("fusion_engine: LLM synthesis returned empty response; falling back to concatenation");
+            Self::merge_unique_content(responses)
+        } else {
+            result
         }
     }
 
@@ -273,12 +442,12 @@ impl FusionEngine {
 
                 // Look for sentences that share a topic but take opposite stances
                 let sentences_i: Vec<&str> = resp_i
-                    .split(|c: char| c == '.' || c == '!' || c == '?')
+                    .split(['.', '!', '?'])
                     .map(|s| s.trim())
                     .filter(|s| !s.is_empty())
                     .collect();
                 let sentences_j: Vec<&str> = resp_j
-                    .split(|c: char| c == '.' || c == '!' || c == '?')
+                    .split(['.', '!', '?'])
                     .map(|s| s.trim())
                     .filter(|s| !s.is_empty())
                     .collect();
@@ -441,10 +610,7 @@ impl FusionEngine {
         let base_lower = fused.to_lowercase();
 
         for resp in &responses[1..] {
-            for sentence in resp
-                .response
-                .split(|c: char| c == '.' || c == '!' || c == '?')
-            {
+            for sentence in resp.response.split(['.', '!', '?']) {
                 let s = sentence.trim();
                 if s.is_empty() {
                     continue;
@@ -462,9 +628,32 @@ impl FusionEngine {
     }
 }
 
+impl fmt::Debug for FusionEngine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FusionEngine")
+            .field("fusion_model_enabled", &self.fusion_model_enabled)
+            .field("model_weights", &self.model_weights)
+            .field(
+                "fusion_agent",
+                &self.fusion_agent.as_ref().map(|_| "<agent>"),
+            )
+            .finish()
+    }
+}
+
 impl Default for FusionEngine {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Clone for FusionEngine {
+    fn clone(&self) -> Self {
+        Self {
+            fusion_model_enabled: self.fusion_model_enabled,
+            model_weights: self.model_weights.clone(),
+            fusion_agent: None, // Agents are not cloneable; fusion_agent must be re-set
+        }
     }
 }
 
@@ -485,6 +674,8 @@ pub struct MultiModelVoter {
     pub model_weights: HashMap<String, f64>,
     /// Max models to retain in model_weights before evicting the oldest.
     pub max_models: usize,
+    /// Optional fusion agent for LLM-level synthesis when no clear majority exists.
+    pub fusion_agent: Option<Box<dyn Agent>>,
 }
 
 impl MultiModelVoter {
@@ -500,6 +691,7 @@ impl MultiModelVoter {
             per_model_timeout_ms: 30_000,
             model_weights: HashMap::new(),
             max_models: Self::DEFAULT_MAX_MODELS,
+            fusion_agent: None,
         }
     }
 
@@ -676,10 +868,15 @@ impl MultiModelVoter {
     ) -> Result<VotingOutcome> {
         let responses = self.collect_votes(prompt, agents).await?;
         let engine = FusionEngine {
-            fusion_model_enabled: false,
+            fusion_model_enabled: self.fusion_agent.is_some(),
             model_weights: self.model_weights.clone(),
+            fusion_agent: None,
         };
-        Ok(engine.fuse(responses))
+        if self.fusion_agent.is_some() {
+            Ok(engine.fuse_with_llm(responses, prompt).await)
+        } else {
+            Ok(engine.fuse(responses))
+        }
     }
 
     /// Vote with fusion and return detected contradictions separately.
@@ -694,6 +891,14 @@ impl MultiModelVoter {
         let outcome = self.vote_with_fusion(prompt, agents).await?;
         let contradictions = FusionEngine::detect_contradictions(&outcome.all_votes);
         Ok((outcome, contradictions))
+    }
+
+    /// Set the optional fusion agent for LLM-level synthesis.
+    /// When configured, `vote_with_fusion` will call the LLM to synthesize
+    /// responses when no clear majority exists.
+    pub fn with_fusion_agent(mut self, agent: Box<dyn Agent>) -> Self {
+        self.fusion_agent = Some(agent);
+        self
     }
 
     /// Internal helper: collect votes from all agents (same core as `vote`).
@@ -816,8 +1021,9 @@ impl MultiModelVoter {
             VotingStrategy::Fusion => {
                 // Use FusionEngine to fuse responses
                 let engine = FusionEngine {
-                    fusion_model_enabled: false,
+                    fusion_model_enabled: self.fusion_agent.is_some(),
                     model_weights: self.model_weights.clone(),
+                    fusion_agent: None,
                 };
                 engine.fuse(votes)
             }
@@ -1074,6 +1280,19 @@ impl MultiModelVoter {
 impl Default for MultiModelVoter {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Clone for MultiModelVoter {
+    fn clone(&self) -> Self {
+        Self {
+            min_voters: self.min_voters,
+            strategy: self.strategy,
+            per_model_timeout_ms: self.per_model_timeout_ms,
+            model_weights: self.model_weights.clone(),
+            max_models: self.max_models,
+            fusion_agent: None, // Agents are not cloneable; must be re-set
+        }
     }
 }
 

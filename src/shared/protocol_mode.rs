@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProtocolMode {
     Adaptive,
     AcpStdio,
@@ -15,6 +17,39 @@ pub enum ProtocolModeError {
 }
 
 impl ProtocolMode {
+    /// Priority order for negotiation (higher = more preferred).
+    pub fn priority(self) -> u32 {
+        match self {
+            ProtocolMode::Adaptive => 5,
+            ProtocolMode::AcpHttp => 4,
+            ProtocolMode::AcpStdio => 3,
+            ProtocolMode::McpHttp => 2,
+            ProtocolMode::McpStdio => 1,
+        }
+    }
+
+    /// Fallback chain: if current protocol fails, what to try next.
+    pub fn fallback(self) -> Option<ProtocolMode> {
+        match self {
+            ProtocolMode::AcpHttp => Some(ProtocolMode::AcpStdio),
+            ProtocolMode::AcpStdio => Some(ProtocolMode::McpHttp),
+            ProtocolMode::McpHttp => Some(ProtocolMode::McpStdio),
+            ProtocolMode::McpStdio | ProtocolMode::Adaptive => None,
+        }
+    }
+
+    /// Returns true if this mode uses HTTP transport.
+    #[allow(dead_code)] // F-GAP-51 — reserved for future use
+    pub fn is_http(self) -> bool {
+        matches!(self, ProtocolMode::AcpHttp | ProtocolMode::McpHttp)
+    }
+
+    /// Returns true if this mode uses stdio transport.
+    #[allow(dead_code)] // F-GAP-51 — reserved for future use
+    pub fn is_stdio(self) -> bool {
+        matches!(self, ProtocolMode::AcpStdio | ProtocolMode::McpStdio)
+    }
+
     pub const CANONICAL_MODES: [&'static str; 5] =
         ["adaptive", "acp_stdio", "acp_http", "mcp_stdio", "mcp_http"];
 
@@ -90,6 +125,18 @@ impl ProtocolMode {
 
     pub fn parse_canonical(value: &str) -> Option<&'static str> {
         Self::from_str(value).ok().map(Self::to_cli_arg)
+    }
+}
+
+impl std::fmt::Display for ProtocolMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProtocolMode::Adaptive => write!(f, "adaptive"),
+            ProtocolMode::AcpStdio => write!(f, "acp-stdio"),
+            ProtocolMode::AcpHttp => write!(f, "acp-http"),
+            ProtocolMode::McpStdio => write!(f, "mcp-stdio"),
+            ProtocolMode::McpHttp => write!(f, "mcp-http"),
+        }
     }
 }
 

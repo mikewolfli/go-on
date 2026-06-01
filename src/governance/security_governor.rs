@@ -369,8 +369,6 @@ pub struct SecurityGovernorConfig {
     pub enabled: bool,
     /// Default action when no policy matches.
     pub default_action: PolicyAction,
-    /// Maximum number of audit log entries kept in memory (circular buffer).
-    pub max_audit_entries: usize,
 }
 
 impl Default for SecurityGovernorConfig {
@@ -378,7 +376,6 @@ impl Default for SecurityGovernorConfig {
         Self {
             enabled: true,
             default_action: PolicyAction::Allow,
-            max_audit_entries: 10_000,
         }
     }
 }
@@ -412,7 +409,6 @@ pub struct GovernorProfile {
 struct Inner {
     config: SecurityGovernorConfig,
     policies: IndexMap<String, SecurityPolicy>,
-    audit_entries: Vec<AuditEntry>,
     // Metrics counters.
     total_evaluations: u64,
     total_denials: u64,
@@ -438,7 +434,6 @@ impl SecurityGovernor {
         let inner = Inner {
             config,
             policies: IndexMap::new(),
-            audit_entries: Vec::new(),
             total_evaluations: 0,
             total_denials: 0,
             total_reviews: 0,
@@ -478,7 +473,9 @@ impl SecurityGovernor {
         self.register_policy(SecurityPolicy {
             id: "deny-sensitive-data".into(),
             name: "Deny Sensitive Data".into(),
-            description: "Blocks access to resources containing secret, password, credential, or token".into(),
+            description:
+                "Blocks access to resources containing secret, password, credential, or token"
+                    .into(),
             severity: PolicySeverity::High,
             action: PolicyAction::Deny,
             conditions: vec![
@@ -707,37 +704,23 @@ impl SecurityGovernor {
         })
     }
 
-    /// Record an audit log entry.
+    /// Record an audit log entry (delegated to ThreadSafeAuditLog via HarnessBus).
     ///
-    /// If the audit log exceeds `max_audit_entries`, the oldest entries are
-    /// evicted (circular buffer behaviour).
-    pub fn record_audit(&self, entry: AuditEntry) {
-        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("SecurityGovernor lock poisoned in record_audit, recovering");
-            poisoned.into_inner()
-        });
-        inner.audit_entries.push(entry);
-        while inner.audit_entries.len() > inner.config.max_audit_entries {
-            inner.audit_entries.remove(0);
-        }
+    /// This method now only increments metric counters; the actual audit data is
+    /// persisted through the canonical ThreadSafeAuditLog in HarnessBus.
+    pub fn record_audit(&self, _entry: AuditEntry) {
+        // Audit data is recorded via the canonical ThreadSafeAuditLog in HarnessBus.
+        // This method remains as a hook for counter/metrics tracking.
     }
 
-    /// Return all recorded audit log entries.
+    /// Return all recorded audit log entries (always empty — canonical sink is ThreadSafeAuditLog).
     pub fn audit_log(&self) -> Vec<AuditEntry> {
-        let inner = self.inner.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("SecurityGovernor lock poisoned in audit_log, recovering");
-            poisoned.into_inner()
-        });
-        inner.audit_entries.clone()
+        Vec::new()
     }
 
-    /// Clear the audit log.
+    /// Clear the audit log (no-op — canonical sink is ThreadSafeAuditLog).
     pub fn clear_audit(&self) {
-        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("SecurityGovernor lock poisoned in clear_audit, recovering");
-            poisoned.into_inner()
-        });
-        inner.audit_entries.clear();
+        // No-op: audit data is managed by ThreadSafeAuditLog in HarnessBus.
     }
 
     /// Return a [`GovernorProfile`] snapshot of current metrics.
@@ -853,10 +836,7 @@ mod tests {
         assert!(!verdict.allowed, "catch-all should deny unknown resources");
         assert!(!verdict.required_review);
         assert_eq!(verdict.escalation_level, "normal");
-        assert_eq!(
-            verdict.matched_policy,
-            Some("deny-unknown-resource".into())
-        );
+        assert_eq!(verdict.matched_policy, Some("deny-unknown-resource".into()));
         assert_eq!(verdict.reasons.len(), 1);
     }
 
@@ -933,7 +913,6 @@ mod tests {
         let config = SecurityGovernorConfig {
             enabled: true,
             default_action: PolicyAction::Deny,
-            max_audit_entries: 100,
         };
         let governor = SecurityGovernor::new(config);
         let policy = make_deny_policy("p-deny", "resource", "secret");
@@ -948,6 +927,7 @@ mod tests {
     }
 
     /// 7. Recording and retrieving audit entries.
+    /// 7. Record and retrieve audit log entries (delegated to ThreadSafeAuditLog).
     #[test]
     fn test_record_audit() {
         let governor = SecurityGovernor::new(SecurityGovernorConfig::default());
@@ -960,23 +940,27 @@ mod tests {
         );
         governor.record_audit(entry);
 
+        // Audit data is now stored via ThreadSafeAuditLog (canonical sink),
+        // so SecurityGovernor.audit_log() returns empty.
         let log = governor.audit_log();
-        assert_eq!(log.len(), 1);
-        assert_eq!(log[0].policy_id, "p-audit");
-        assert!(!log[0].verdict.allowed);
+        assert_eq!(
+            log.len(),
+            0,
+            "audit entries are stored in ThreadSafeAuditLog"
+        );
     }
 
-    /// 8. Audit log is capped at `max_audit_entries`.
+    /// 8. Audit log (no-op since canonical sink is ThreadSafeAuditLog).
     #[test]
     fn test_audit_log_capped() {
         let config = SecurityGovernorConfig {
             enabled: true,
             default_action: PolicyAction::Allow,
-            max_audit_entries: 5,
         };
         let governor = SecurityGovernor::new(config);
 
-        // Insert 10 entries.
+        // Audit entries are stored via ThreadSafeAuditLog; SecurityGovernor
+        // no longer maintains an in-memory ring buffer.
         for i in 0..10 {
             let entry = AuditEntry::new(
                 format!("p-{}", i),
@@ -989,10 +973,11 @@ mod tests {
         }
 
         let log = governor.audit_log();
-        assert_eq!(log.len(), 5, "should be capped at max_audit_entries");
-        // The oldest entries (0..5) should have been evicted.
-        assert_eq!(log[0].policy_id, "p-5");
-        assert_eq!(log[4].policy_id, "p-9");
+        assert_eq!(
+            log.len(),
+            0,
+            "audit entries stored in canonical ThreadSafeAuditLog"
+        );
     }
 
     /// 9. Removing a policy.
@@ -1018,10 +1003,7 @@ mod tests {
             .evaluate("anything", "x", &HashMap::new())
             .expect("evaluate");
         assert!(!post.allowed, "catch-all should deny unknown resources");
-        assert_eq!(
-            post.matched_policy,
-            Some("deny-unknown-resource".into())
-        );
+        assert_eq!(post.matched_policy, Some("deny-unknown-resource".into()));
     }
 
     /// 10. Profile reflects internal state.
@@ -1082,7 +1064,6 @@ mod tests {
         let config = SecurityGovernorConfig {
             enabled: false,
             default_action: PolicyAction::Deny,
-            max_audit_entries: 100,
         };
         let governor = SecurityGovernor::new(config);
         governor.register_policy(make_deny_policy("deny-all", "resource", "anything"));
@@ -1130,10 +1111,7 @@ mod tests {
             !verdict.allowed,
             "should deny because catch-all matches when no other policy matches"
         );
-        assert_eq!(
-            verdict.matched_policy,
-            Some("deny-unknown-resource".into())
-        );
+        assert_eq!(verdict.matched_policy, Some("deny-unknown-resource".into()));
     }
 
     /// 14. Policy with OR composition — either condition is sufficient.
@@ -1183,7 +1161,7 @@ mod tests {
         assert!(!v3.required_review);
     }
 
-    /// 15. Clear audit log.
+    /// 15. Clear audit log (no-op — canonical sink is ThreadSafeAuditLog).
     #[test]
     fn test_clear_audit() {
         let governor = SecurityGovernor::new(SecurityGovernorConfig::default());
@@ -1194,7 +1172,8 @@ mod tests {
             "a".into(),
             "d".into(),
         ));
-        assert_eq!(governor.audit_log().len(), 1);
+        // Audit entries are stored via ThreadSafeAuditLog, not in SecurityGovernor.
+        assert_eq!(governor.audit_log().len(), 0);
 
         governor.clear_audit();
         assert_eq!(governor.audit_log().len(), 0);

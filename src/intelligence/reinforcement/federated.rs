@@ -14,6 +14,12 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use tracing::{debug, info, warn};
+
+use super::federated_privacy::{
+    add_gaussian_noise, clip_gradients, DifferentialPrivacyConfig, PrivacyBudget,
+};
+use super::federated_versioning::{migrate_weights, ModelVersion};
 
 // ── Core data types ───────────────────────────────────────────────────────
 
@@ -88,6 +94,9 @@ pub struct FederatedProfile {
     pub total_rounds: u64,
     pub avg_improvement: f64,
     pub last_round_ms: u64,
+    pub privacy_enabled: bool,
+    pub privacy_budget_remaining_pct: f64,
+    pub model_version: Option<String>,
 }
 
 // ── FederatedLearning ─────────────────────────────────────────────────────
@@ -108,6 +117,12 @@ pub struct FederatedLearning {
     max_clients: usize,
     /// Maximum number of pending weight submissions before FIFO eviction
     max_pending: usize,
+    /// Optional differential privacy configuration (enables DP if set)
+    privacy_config: Option<DifferentialPrivacyConfig>,
+    /// Optional privacy budget tracker
+    privacy_budget: Option<PrivacyBudget>,
+    /// Optional model version for compatibility checks
+    model_version: Option<ModelVersion>,
 }
 
 impl FederatedLearning {
@@ -122,7 +137,41 @@ impl FederatedLearning {
             total_improvement_sum: 0.0,
             max_clients: 100,
             max_pending: 100,
+            privacy_config: None,
+            privacy_budget: None,
+            model_version: None,
         }
+    }
+
+    /// Configure differential privacy for this federated learning instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The differential privacy configuration.
+    /// * `budget` - Optional privacy budget tracker for multi-round accounting.
+    pub fn with_privacy(
+        mut self,
+        config: DifferentialPrivacyConfig,
+        budget: Option<PrivacyBudget>,
+    ) -> Self {
+        info!(
+            "FederatedLearning: enabling DP with ε={}, δ={}, clip_norm={}",
+            config.epsilon, config.delta, config.clip_norm
+        );
+        self.privacy_config = Some(config);
+        self.privacy_budget = budget;
+        self
+    }
+
+    /// Configure model versioning for this federated learning instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `version` - The canonical model version for compatibility checks.
+    pub fn with_versioning(mut self, version: ModelVersion) -> Self {
+        info!("FederatedLearning: enabling versioning with {}", version);
+        self.model_version = Some(version);
+        self
     }
 
     /// Register a new client with an optional weight (e.g. relative compute
@@ -198,9 +247,17 @@ impl FederatedLearning {
     /// Aggregate all pending client weights into a new global model using the
     /// configured aggregation method. Returns the resulting `FederatedRound`.
     ///
+    /// # Integration
+    ///
+    /// * If **privacy** is enabled, each client's weights are clipped before
+    ///   aggregation and Gaussian noise is added to the aggregate afterwards.
+    /// * If **versioning** is enabled, the aggregated weights are checked for
+    ///   compatibility with the active `model_version` and migrated if needed.
+    ///
     /// # Errors
     ///
-    /// Returns an error if fewer than `min_clients` have submitted weights.
+    /// Returns an error if fewer than `min_clients` have submitted weights,
+    /// or if the privacy budget is exhausted.
     pub fn aggregate_round(&mut self) -> Result<FederatedRound> {
         let num_clients = self.pending_weights.len();
         if num_clients < self.config.min_clients {
@@ -211,11 +268,67 @@ impl FederatedLearning {
             );
         }
 
-        let aggregated = match self.config.aggregation_method {
+        // ── Pre-aggregation: differential privacy clipping ──────────────
+        // Clip each client's weights before aggregation to bound sensitivity.
+        if let Some(ref dp_config) = self.privacy_config {
+            for (_, (weights, _)) in self.pending_weights.iter_mut() {
+                clip_gradients(weights, dp_config.clip_norm);
+            }
+            info!(
+                "aggregate_round: clipped {} client weight sets (clip_norm={})",
+                num_clients, dp_config.clip_norm
+            );
+        }
+
+        let mut aggregated = match self.config.aggregation_method {
             AggregationMethod::FedAvg => self.aggregate_fed_avg(),
             AggregationMethod::FedWeighted => self.aggregate_fed_weighted(),
             AggregationMethod::FedMedian => self.aggregate_fed_median(),
         };
+
+        // ── Post-aggregation: Gaussian noise ─────────────────────────────
+        // Add calibrated noise to the aggregate for (ε, δ)-DP guarantee.
+        if let Some(ref dp_config) = self.privacy_config {
+            add_gaussian_noise(
+                &mut aggregated,
+                dp_config.epsilon,
+                dp_config.delta,
+                dp_config.clip_norm,
+            );
+            info!(
+                "aggregate_round: added Gaussian noise to aggregate (ε={}, δ={})",
+                dp_config.epsilon, dp_config.delta
+            );
+
+            // Spend one round of the privacy budget.
+            if let Some(ref mut budget) = self.privacy_budget {
+                budget.spend_round()?;
+                info!(
+                    "aggregate_round: privacy budget {:.1}% consumed",
+                    budget.fraction_consumed() * 100.0
+                );
+            }
+        }
+
+        // ── Post-aggregation: version compatibility check ────────────────
+        // Verify the aggregated weights are compatible with the active
+        // model version; attempt migration if needed.
+        if let Some(ref model_ver) = self.model_version {
+            let agg_ver =
+                ModelVersion::new(aggregated.version as u32, 0, 0, &model_ver.schema_hash);
+            if !model_ver.is_compatible_with(&agg_ver) {
+                info!(
+                    "aggregate_round: version mismatch — aggregated v{} incompatible with model {}; attempting migration",
+                    aggregated.version, model_ver
+                );
+                aggregated =
+                    migrate_weights(&aggregated, &agg_ver, model_ver).with_context(|| {
+                        "failed to migrate aggregated weights to current model version"
+                    })?;
+                // Update the version to reflect the migration.
+                aggregated.version = model_ver.major as u64;
+            }
+        }
 
         let improvement_score = self
             .clients
@@ -305,7 +418,94 @@ impl FederatedLearning {
                 .as_ref()
                 .map(|_| elapsed_ms())
                 .unwrap_or(0),
+            privacy_enabled: self.privacy_config.is_some(),
+            privacy_budget_remaining_pct: self
+                .privacy_budget
+                .as_ref()
+                .map(|b| (1.0 - b.fraction_consumed()) * 100.0)
+                .unwrap_or(100.0),
+            model_version: self.model_version.as_ref().map(|v| v.to_string()),
         }
+    }
+
+    // ── Network transport integration ────────────────────────────────────
+
+    /// Run a full federated aggregation round: submit pending weights to the
+    /// coordinator (via the provided transport), then pull the updated global
+    /// model back.
+    ///
+    /// This is a synchronous wrapper that pairs `submit_local_weights` with
+    /// `sync_global_model`. It is intended for worker nodes that participate
+    /// in a multi-node topology.
+    ///
+    /// # Arguments
+    ///
+    /// * `client_id` - The local client identifier.
+    /// * `local_weights` - The locally-trained model weights to submit.
+    /// * `improvement` - Observed improvement since last contribution.
+    /// * `coordinator` - The `PeerInfo` of the coordinator node.
+    /// * `transport` - The federated transport to use.
+    ///
+    /// # Returns
+    ///
+    /// The updated global `ModelWeights` after aggregation, if available.
+    pub async fn run_round(
+        &mut self,
+        client_id: &str,
+        local_weights: &ModelWeights,
+        improvement: f64,
+        coordinator: &crate::intelligence::reinforcement::federated_transport::PeerInfo,
+        transport: &dyn crate::intelligence::reinforcement::federated_transport::FederatedTransport,
+    ) -> Result<Option<ModelWeights>> {
+        // Ensure the client is registered.
+        if !self.clients.contains_key(client_id) {
+            bail!("client '{}' is not registered for run_round", client_id);
+        }
+
+        // Submit local weights locally (buffer for aggregation).
+        self.submit_local_weights(client_id, local_weights.clone(), improvement)?;
+
+        // Submit weights to the remote coordinator via transport.
+        let accepted = transport.submit_weights(coordinator, local_weights).await?;
+
+        if !accepted {
+            warn!(
+                "run_round: coordinator {} rejected weight submission",
+                coordinator.id
+            );
+        }
+
+        // Sync the global model from the coordinator.
+        self.sync_global_model(coordinator, transport).await
+    }
+
+    /// Pull the latest global model from a coordinator peer and update the
+    /// local `global_weights` state.
+    ///
+    /// # Arguments
+    ///
+    /// * `coordinator` - The `PeerInfo` of the coordinator node.
+    /// * `transport` - The federated transport to use.
+    ///
+    /// # Returns
+    ///
+    /// The synced global `ModelWeights`, or `None` if none is available yet.
+    pub async fn sync_global_model(
+        &mut self,
+        coordinator: &crate::intelligence::reinforcement::federated_transport::PeerInfo,
+        transport: &dyn crate::intelligence::reinforcement::federated_transport::FederatedTransport,
+    ) -> Result<Option<ModelWeights>> {
+        let pulled = transport.pull_global_model(coordinator).await?;
+
+        if let Some(ref weights) = pulled {
+            debug!(
+                "sync_global_model: pulled weights version {} from {}",
+                weights.version, coordinator.id
+            );
+            self.global_weights = Some(weights.clone());
+        }
+
+        Ok(pulled)
     }
 
     // ── Private helpers ───────────────────────────────────────────────────
@@ -457,6 +657,18 @@ impl FederatedLearning {
             policy_params: p_median,
             version: max_version,
         }
+    }
+
+    // ── Helper methods used by FederatedRLAdapter ────────────────────────
+
+    /// Return the number of pending weight submissions.
+    pub fn pending_weights_count(&self) -> usize {
+        self.pending_weights.len()
+    }
+
+    /// Return the minimum number of clients required for aggregation.
+    pub fn min_clients_required(&self) -> usize {
+        self.config.min_clients
     }
 }
 
@@ -937,8 +1149,7 @@ impl FederatedRL {
             .count();
 
         let mut contributor_nodes: Vec<String> = {
-            let mut nodes: std::collections::BTreeSet<&str> =
-                std::collections::BTreeSet::new();
+            let mut nodes: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
             for p in inner.policies.values() {
                 nodes.insert(p.node_id.as_str());
             }
@@ -998,13 +1209,7 @@ mod federated_rl_tests {
     #[test]
     fn test_frl_submit_policy() {
         let frl = FederatedRL::new(FederatedRLConfig::default());
-        let id = frl.submit_policy(
-            "node1".into(),
-            "test".into(),
-            "data".into(),
-            0.8,
-            10,
-        );
+        let id = frl.submit_policy("node1".into(), "test".into(), "data".into(), 0.8, 10);
         assert!(id.starts_with("policy-"));
         let policy = frl.get_policy(&id).unwrap();
         assert_eq!(policy.node_id, "node1");
@@ -1068,6 +1273,11 @@ mod federated_rl_tests {
         assert_eq!(best.node_id, "n2");
     }
 }
+
+// =========================================================================
+// Sub-modules for GAP-B52 federated network transport, discovery, privacy,
+// and versioning.
+// =========================================================================
 
 // ── Tests ─────────────────────────────────────────────────────────────────
 

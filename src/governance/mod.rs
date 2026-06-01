@@ -3,6 +3,9 @@
 //! All governance components are wired through the `HarnessBus` strategy engine
 //! which provides a single evaluate/validate/verify entry point for CapabilityBus.
 
+#![allow(dead_code)]
+
+pub mod approval_engine;
 pub mod audit;
 pub mod drift;
 pub mod hardening;

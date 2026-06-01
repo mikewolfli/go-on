@@ -914,10 +914,10 @@ impl ChatView {
                                     if let Ok(edited) = std::fs::read_to_string(&p_clone) {
                                         let trimmed = edited.trim().to_string();
                                         if !trimmed.is_empty() {
-                                            // Non-blocking send; if the channel is full, the result is dropped gracefully.
-                                            let _ = tx.send(PendingResponse::ExternalEditorResult(
-                                                trimmed,
-                                            ));
+                                            // Non-blocking try_send; if the channel is full, the result is dropped gracefully.
+                                            let _ = tx.try_send(
+                                                PendingResponse::ExternalEditorResult(trimmed),
+                                            );
                                         }
                                     }
                                 });

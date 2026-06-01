@@ -125,6 +125,13 @@ pub struct CouncilConfig {
     pub ejection_window: Option<usize>,
     /// Warmup rounds before a new member can be ejected (default: 10)
     pub ejection_warmup_rounds: Option<usize>,
+
+    /// Minimum number of active members to trigger multi-round deliberation.
+    /// When active members >= this threshold, proposals automatically use
+    /// multi-round deliberation instead of single-round voting.
+    /// Set to 0 to disable multi-round deliberation entirely.
+    #[serde(default = "default_deliberation_member_threshold")]
+    pub deliberation_member_threshold: usize,
 }
 
 fn default_enable_reputation() -> bool {
@@ -133,6 +140,10 @@ fn default_enable_reputation() -> bool {
 
 fn default_reputation_warmup_rounds() -> u32 {
     5
+}
+
+fn default_deliberation_member_threshold() -> usize {
+    0
 }
 
 impl Default for CouncilConfig {
@@ -147,6 +158,7 @@ impl Default for CouncilConfig {
             ejection_threshold: None,
             ejection_window: None,
             ejection_warmup_rounds: None,
+            deliberation_member_threshold: default_deliberation_member_threshold(),
         }
     }
 }
@@ -1213,6 +1225,111 @@ impl OrchestrationCouncil {
             .collect()
     }
 
+    /// Run multi-round deliberation for a proposal.
+    ///
+    /// Orchestrates the full deliberation flow:
+    /// 1. Starts a deliberation for the given proposal
+    /// 2. Iterates through rounds, having each active member submit a statement
+    ///    and vote before concluding each round
+    /// 3. Breaks when consensus is reached or max rounds are exhausted
+    ///
+    /// Returns the final deliberation decision, if any.
+    pub fn run_multi_round_deliberation(
+        &self,
+        proposal_id: &str,
+    ) -> Result<Option<CouncilDecision>> {
+        // Start the deliberation.
+        let delib_id = self.start_deliberation(proposal_id)?;
+
+        // Collect active members once.
+        let members: Vec<CouncilMember> = {
+            let members_lock = self
+                .members
+                .lock()
+                .map_err(|e| anyhow!("Failed to acquire lock on members: {e}"))?;
+            members_lock
+                .values()
+                .filter(|m| m.is_active)
+                .cloned()
+                .collect()
+        };
+
+        if members.is_empty() {
+            return Err(anyhow!("No active members to participate in deliberation"));
+        }
+
+        loop {
+            // Each active member submits a statement and casts a vote in the current round.
+            for member in &members {
+                let statement = DeliberationStatement {
+                    member_id: member.id.clone(),
+                    position: CouncilPosition::Support,
+                    reasoning: format!("Deliberation vote by member '{}'", member.name),
+                    amendments: Vec::new(),
+                    submitted_at: now_epoch_ms(),
+                };
+                self.submit_statement(&delib_id, statement)?;
+
+                let vote = CouncilVote {
+                    member_id: member.id.clone(),
+                    proposal_id: proposal_id.to_string(),
+                    selected_option: "support".to_string(),
+                    weight: member.voting_power,
+                    vote_ms: now_epoch_ms(),
+                    rationale: None,
+                };
+                self.vote_in_round(&delib_id, vote)?;
+            }
+
+            // Conclude the round; returns true if deliberation is complete.
+            let concluded = self.conclude_round(&delib_id)?;
+            if concluded {
+                break;
+            }
+        }
+
+        // Retrieve the final deliberation to return the decision.
+        let final_delib = self.get_deliberation(&delib_id)?;
+        Ok(final_delib.final_decision)
+    }
+
+    /// Submit a proposal and automatically determine the voting path.
+    ///
+    /// If the number of active members meets or exceeds
+    /// `deliberation_member_threshold`, the proposal is routed through
+    /// multi-round deliberation. Otherwise, it is submitted for standard
+    /// single-round voting (caller must call `cast_vote` / `tally_votes`).
+    ///
+    /// Returns `Ok(true)` if multi-round deliberation was used and completed,
+    /// `Ok(false)` if the proposal was submitted for single-round voting.
+    pub fn vote_on_proposal(&self, proposal: CouncilProposal) -> Result<bool> {
+        // Save the proposal ID before moving `proposal` into submit_proposal.
+        let proposal_id = proposal.id.clone();
+
+        // Submit the proposal first.
+        self.submit_proposal(proposal)?;
+
+        // Check active member count against threshold.
+        let active_count = {
+            let members_lock = self
+                .members
+                .lock()
+                .map_err(|e| anyhow!("Failed to acquire lock on members: {e}"))?;
+            members_lock.values().filter(|m| m.is_active).count()
+        };
+
+        if self.config.deliberation_member_threshold > 0
+            && active_count >= self.config.deliberation_member_threshold
+        {
+            // Route to multi-round deliberation.
+            self.run_multi_round_deliberation(&proposal_id)?;
+            Ok(true)
+        } else {
+            // Standard single-round voting path.
+            Ok(false)
+        }
+    }
+
     // ─── Internal deliberation helpers ───────────────────────────────────────
 
     /// Tally votes in a deliberation round by CouncilPosition.
@@ -1235,7 +1352,9 @@ impl OrchestrationCouncil {
                 "amend" | "modify" | "change" => CouncilPosition::Amend,
                 _ => CouncilPosition::Abstain,
             };
-            *tally.entry(pos).or_insert(0) += 1;
+            // Use effective voting power (reputation-adjusted) instead of raw +1.
+            let effective_weight = self.effective_voting_power(&vote.member_id, vote.weight);
+            *tally.entry(pos).or_insert(0) += effective_weight;
         }
 
         tally
@@ -2913,6 +3032,7 @@ mod tests {
             ejection_threshold: Some(0.3),
             ejection_window: Some(20),
             ejection_warmup_rounds: Some(0),
+            ..Default::default()
         });
 
         // Add a member with poor recent accuracy

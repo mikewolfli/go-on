@@ -286,6 +286,51 @@ pub struct RuntimeConfig {
     /// BLUE42 Step 8: Enable metacognitive + world-model feedback hooks (default: true)
     #[serde(default = "super::defaults::default_true")]
     pub enable_metacognitive_feedback: bool,
+
+    // ── Security (GAP-B52) ───────────────────────────────────────────────
+    /// Enable request signature verification for incoming JSON-RPC requests.
+    /// When enabled, requests must include a `_signature` param with a valid
+    /// Ed25519 or HMAC-SHA256 signature (GAP-B52-23).
+    #[serde(default)]
+    pub request_signing_enabled: bool,
+
+    /// Base64-encoded Ed25519 public key (32 bytes) for request signature
+    /// verification. Only used when `request_signing_enabled` is true and
+    /// the signing algorithm is Ed25519.
+    #[serde(default)]
+    pub request_signing_public_key: String,
+
+    /// HMAC shared secret for request signature verification (plaintext).
+    /// Only used when `request_signing_enabled` is true and the signing
+    /// algorithm is HMAC-SHA256.
+    #[serde(default)]
+    pub request_signing_hmac_secret: String,
+
+    /// Enable mTLS for the ACP HTTP listener.
+    /// Requires paths to CA cert, server cert, and server key.
+    #[serde(default)]
+    pub mtls_enabled: bool,
+
+    /// Path to the CA certificate file for mTLS.
+    #[serde(default)]
+    pub mtls_ca_cert_path: String,
+
+    /// Path to the server certificate file for mTLS.
+    #[serde(default)]
+    pub mtls_server_cert_path: String,
+
+    /// Path to the server private key file for mTLS.
+    #[serde(default)]
+    pub mtls_server_key_path: String,
+
+    /// Whether to require client certificates in mTLS handshake.
+    #[serde(default)]
+    pub mtls_require_client_cert: bool,
+
+    /// Comma-separated list of allowed client certificate CNs.
+    /// Empty means any valid client cert is accepted.
+    #[serde(default)]
+    pub mtls_allowed_cns: String,
 }
 
 impl RuntimeConfig {

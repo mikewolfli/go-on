@@ -1,7 +1,7 @@
 //! ProtocolNegotiator — auto-detect and negotiate protocol mode
 //!
 //! Handles the 5 protocol modes:
-//! - auto (adaptive)
+//! - adaptive (auto)
 //! - acp stdio
 //! - acp http
 //! - mcp stdio
@@ -10,79 +10,9 @@
 // F-GAP-49: Module wired into production protocol pipeline.
 
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
 use tracing::warn;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ProtocolMode {
-    Auto,
-    AcpStdio,
-    AcpHttp,
-    McpStdio,
-    McpHttp,
-}
-
-impl ProtocolMode {
-    /// Priority order for negotiation (higher = more preferred)
-    fn priority(self) -> u32 {
-        match self {
-            ProtocolMode::Auto => 5,
-            ProtocolMode::AcpHttp => 4,
-            ProtocolMode::AcpStdio => 3,
-            ProtocolMode::McpHttp => 2,
-            ProtocolMode::McpStdio => 1,
-        }
-    }
-
-    /// Fallback chain: if current protocol fails, what to try next
-    #[allow(dead_code)] // F-GAP-49 — reserved for fallback orchestration
-    pub fn fallback(self) -> Option<ProtocolMode> {
-        match self {
-            ProtocolMode::AcpHttp => Some(ProtocolMode::AcpStdio),
-            ProtocolMode::AcpStdio => Some(ProtocolMode::McpHttp),
-            ProtocolMode::McpHttp => Some(ProtocolMode::McpStdio),
-            ProtocolMode::McpStdio | ProtocolMode::Auto => None,
-        }
-    }
-
-    /// Returns true if this mode uses HTTP transport
-    #[allow(dead_code)] // F-GAP-49 — reserved for transport dispatch
-    pub fn is_http(self) -> bool {
-        matches!(self, ProtocolMode::AcpHttp | ProtocolMode::McpHttp)
-    }
-
-    /// Returns true if this mode uses stdio transport
-    #[allow(dead_code)] // F-GAP-49 — reserved for transport dispatch
-    pub fn is_stdio(self) -> bool {
-        matches!(self, ProtocolMode::AcpStdio | ProtocolMode::McpStdio)
-    }
-}
-
-impl FromStr for ProtocolMode {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "auto" | "adaptive" => Ok(ProtocolMode::Auto),
-            "acp_stdio" | "acp-stdio" | "acp stdio" => Ok(ProtocolMode::AcpStdio),
-            "acp_http" | "acp-http" | "acp http" => Ok(ProtocolMode::AcpHttp),
-            "mcp_stdio" | "mcp-stdio" | "mcp stdio" => Ok(ProtocolMode::McpStdio),
-            "mcp_http" | "mcp-http" | "mcp http" => Ok(ProtocolMode::McpHttp),
-            _ => Err(format!("unknown protocol mode: {s}")),
-        }
-    }
-}
-
-impl std::fmt::Display for ProtocolMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ProtocolMode::Auto => write!(f, "auto"),
-            ProtocolMode::AcpStdio => write!(f, "acp-stdio"),
-            ProtocolMode::AcpHttp => write!(f, "acp-http"),
-            ProtocolMode::McpStdio => write!(f, "mcp-stdio"),
-            ProtocolMode::McpHttp => write!(f, "mcp-http"),
-        }
-    }
-}
+pub use crate::shared::protocol_mode::ProtocolMode;
 
 /// Result of protocol negotiation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,7 +38,7 @@ pub struct ProtocolNegotiator {
 impl Default for ProtocolNegotiator {
     fn default() -> Self {
         Self {
-            active: ProtocolMode::Auto,
+            active: ProtocolMode::Adaptive,
             auto_detect: true,
         }
     }
@@ -118,7 +48,7 @@ impl ProtocolNegotiator {
     pub fn new(mode: ProtocolMode) -> Self {
         Self {
             active: mode,
-            auto_detect: mode == ProtocolMode::Auto,
+            auto_detect: mode == ProtocolMode::Adaptive,
         }
     }
 
@@ -264,14 +194,17 @@ mod tests {
 
     #[test]
     fn test_display() {
-        assert_eq!(ProtocolMode::Auto.to_string(), "auto");
+        assert_eq!(ProtocolMode::Adaptive.to_string(), "adaptive");
         assert_eq!(ProtocolMode::AcpHttp.to_string(), "acp-http");
         assert_eq!(ProtocolMode::McpStdio.to_string(), "mcp-stdio");
     }
 
     #[test]
     fn test_from_str() {
-        assert_eq!("auto".parse::<ProtocolMode>().unwrap(), ProtocolMode::Auto);
+        assert_eq!(
+            "auto".parse::<ProtocolMode>().unwrap(),
+            ProtocolMode::Adaptive
+        );
         assert_eq!(
             "acp-http".parse::<ProtocolMode>().unwrap(),
             ProtocolMode::AcpHttp

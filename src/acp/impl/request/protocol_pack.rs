@@ -43,18 +43,20 @@ struct InternalChatParams {
 // Phase / Models response types
 // ═══════════════════════════════════════════════════════════════════════════════
 
-static ACP_SESSION_STATE: OnceLock<StdMutex<HashMap<String, AcpSessionState>>> = OnceLock::new();
+static ACP_SESSION_STATE: OnceLock<tokio::sync::Mutex<HashMap<String, AcpSessionState>>> =
+    OnceLock::new();
 
-fn acp_session_state() -> &'static StdMutex<HashMap<String, AcpSessionState>> {
-    ACP_SESSION_STATE.get_or_init(|| StdMutex::new(HashMap::new()))
+fn acp_session_state() -> &'static tokio::sync::Mutex<HashMap<String, AcpSessionState>> {
+    ACP_SESSION_STATE.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
 }
 
 static ACP_PERMISSION_STATE: OnceLock<
-    StdMutex<HashMap<String, crate::schema::PermissionOptionId>>,
+    tokio::sync::Mutex<HashMap<String, crate::schema::PermissionOptionId>>,
 > = OnceLock::new();
 
-fn acp_permission_state() -> &'static StdMutex<HashMap<String, crate::schema::PermissionOptionId>> {
-    ACP_PERMISSION_STATE.get_or_init(|| StdMutex::new(HashMap::new()))
+fn acp_permission_state(
+) -> &'static tokio::sync::Mutex<HashMap<String, crate::schema::PermissionOptionId>> {
+    ACP_PERMISSION_STATE.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
 }
 
 /// Tracks a spawned terminal process.
@@ -111,10 +113,8 @@ fn extract_additional_directories(params: &Value) -> Vec<String> {
 fn session_state_for_prompt(params: &Value) -> AcpSessionState {
     let session_id = params.get("sessionId").and_then(Value::as_str);
     let stored = session_id.and_then(|session_id| {
-        acp_session_state()
-            .lock()
-            .ok()
-            .and_then(|state| state.get(session_id).cloned())
+        let state = acp_session_state().blocking_lock();
+        state.get(session_id).cloned()
     });
 
     let mut state = stored.unwrap_or_default();
@@ -370,10 +370,7 @@ pub(super) async fn handle_session_new(
     modes.current_mode_id = crate::schema::SessionModeId::new(current_mode.clone());
 
     {
-        let mut state = acp_session_state().lock().unwrap_or_else(|poisoned| {
-            warn!("ACP session state lock poisoned in handle_session_new, recovering");
-            poisoned.into_inner()
-        });
+        let mut state = acp_session_state().lock().await;
         state.insert(
             session_id.clone(),
             AcpSessionState {
@@ -413,11 +410,10 @@ pub(super) async fn handle_session_load(
         .get("sessionId")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let stored = acp_session_state()
-        .lock()
-        .ok()
-        .and_then(|state| state.get(session_id).cloned())
-        .unwrap_or_default();
+    let stored = {
+        let state = acp_session_state().lock().await;
+        state.get(session_id).cloned().unwrap_or_default()
+    };
     let current_mode = normalize_acp_mode(Some(stored.mode.as_str()));
     let mut modes = build_default_modes();
     modes.current_mode_id = crate::schema::SessionModeId::new(current_mode);
@@ -727,10 +723,7 @@ pub(super) async fn handle_session_set_mode(
     let mode_id = normalize_acp_mode(params.get("modeId").and_then(Value::as_str));
     if !session_id.is_empty() {
         {
-            let mut state = acp_session_state().lock().unwrap_or_else(|poisoned| {
-                warn!("ACP session state lock poisoned in handle_session_set_mode, recovering");
-                poisoned.into_inner()
-            });
+            let mut state = acp_session_state().lock().await;
             state.entry(session_id.to_string()).or_default().mode = mode_id.clone();
         }
         // Send session/update notification with CurrentModeUpdate so the
@@ -774,10 +767,7 @@ pub(super) async fn handle_session_resume(
         .map(ToString::to_string);
 
     let (current_mode, _additional_dirs) = if !session_id.is_empty() {
-        let mut state = acp_session_state().lock().unwrap_or_else(|poisoned| {
-            warn!("ACP session state lock poisoned in handle_session_resume, recovering");
-            poisoned.into_inner()
-        });
+        let mut state = acp_session_state().lock().await;
         let entry = state.entry(session_id.to_string()).or_default();
         if let Some(ref new_cwd) = cwd {
             entry.cwd = Some(new_cwd.clone());
@@ -814,11 +804,12 @@ pub(super) async fn handle_session_close(
         .and_then(Value::as_str)
         .unwrap_or_default();
     if !session_id.is_empty() {
-        let mut state = acp_session_state().lock().unwrap_or_else(|poisoned| {
-            warn!("ACP session state lock poisoned in handle_session_close, recovering");
-            poisoned.into_inner()
-        });
+        let mut state = acp_session_state().lock().await;
         state.remove(session_id);
+        // B51-36: Evict tenant rate limiter state on session close.
+        if let Some(ref limiter) = server.rate_limit_middleware {
+            limiter.evict_tenant(session_id);
+        }
     }
     crate::acp::r#impl::io::send_typed(
         server,
@@ -851,10 +842,7 @@ pub(super) async fn handle_session_request_permission(
 
     if !session_id.is_empty() && !option_id.is_empty() {
         // Store the permission decision so the waiting tool execution can pick it up.
-        let mut permissions = acp_permission_state().lock().unwrap_or_else(|poisoned| {
-            warn!("ACP permission state lock poisoned in handle_session_request_permission, recovering");
-            poisoned.into_inner()
-        });
+        let mut permissions = acp_permission_state().lock().await;
         permissions.insert(
             session_id.to_string(),
             PermissionOptionId::new(option_id.to_string()),
@@ -885,12 +873,7 @@ pub(super) async fn handle_session_set_config_option(
     let value = params.get("value").cloned().unwrap_or(Value::Null);
 
     if !session_id.is_empty() && !config_id.is_empty() {
-        let mut state = acp_session_state().lock().unwrap_or_else(|poisoned| {
-            warn!(
-                "ACP session state lock poisoned in handle_session_set_config_option, recovering"
-            );
-            poisoned.into_inner()
-        });
+        let mut state = acp_session_state().lock().await;
         let session = state.entry(session_id.to_string()).or_default();
         session
             .config_options
@@ -1004,9 +987,18 @@ pub(super) async fn handle_authenticate(
 /// Handle `logout` — terminates the current authenticated session.
 pub(super) async fn handle_logout(
     server: &AcpServer,
-    _params: Value,
+    params: Value,
     request_id: Option<Value>,
 ) -> Result<()> {
+    // B51-36: Evict tenant rate limiter state on logout if session info is present.
+    if let Some(session_id) = params.get("sessionId").and_then(Value::as_str) {
+        if !session_id.is_empty() {
+            if let Some(ref limiter) = server.rate_limit_middleware {
+                limiter.evict_tenant(session_id);
+            }
+        }
+    }
+
     crate::acp::r#impl::io::send_typed(
         server,
         request_id,

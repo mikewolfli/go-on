@@ -1,0 +1,533 @@
+//! Multimodal input module — unified types and processors for handling text, image,
+//! audio, video, and document inputs within the go-on agent orchestration runtime.
+//!
+//! # Sub-modules
+//!
+//! | Module | Description |
+//! |--------|-------------|
+//! | [`document_parser`] | Extracts text, images, tables, and metadata from PDF, DOCX, HTML, Markdown |
+//! | [`audio_processor`] | Speech-to-text transcription with speaker diarization support |
+//!
+//! # Re-exports
+//!
+//! This module re-exports the principal types from each sub-module so that
+//! consumers can import everything from `go_on::multimodal::*`.
+
+pub mod audio_processor;
+pub mod code_repo_analyzer;
+pub mod document_parser;
+pub mod video_processor;
+
+// ── Re-exports from document_parser ────────────────────────────────────────
+pub use document_parser::DocumentParser;
+pub use document_parser::DocumentParserError;
+pub use document_parser::ParsedContent;
+pub use document_parser::Table;
+
+// ── Re-exports from audio_processor ────────────────────────────────────────
+pub use audio_processor::AudioFormat;
+pub use audio_processor::AudioProcessor;
+pub use audio_processor::AudioProcessorConfig;
+pub use audio_processor::AudioProcessorError;
+pub use audio_processor::SttBackend;
+pub use audio_processor::TranscriptSegment;
+pub use audio_processor::Transcription;
+
+// ── Re-exports from code_repo_analyzer ──────────────────────────────────────
+pub use code_repo_analyzer::Answer;
+pub use code_repo_analyzer::AnswerCoverage;
+pub use code_repo_analyzer::RepoAnalyzer;
+pub use code_repo_analyzer::RepoAnalyzerError;
+pub use code_repo_analyzer::RepoContext;
+pub use code_repo_analyzer::RepoMap;
+pub use code_repo_analyzer::SourceRef;
+pub use code_repo_analyzer::SymbolKind;
+pub use code_repo_analyzer::TypeEntry;
+pub use code_repo_analyzer::TypeIndex;
+pub use code_repo_analyzer::REPO_PREFIX;
+
+// ── Re-exports from video_processor ─────────────────────────────────────────
+pub use video_processor::Frame;
+pub use video_processor::FullVideoResult;
+pub use video_processor::SceneDescription;
+pub use video_processor::VideoFormat;
+pub use video_processor::VideoProcessor;
+pub use video_processor::VideoProcessorConfig;
+pub use video_processor::VideoProcessorError;
+pub use video_processor::VideoProgress;
+pub use video_processor::MAX_DURATION_SECS;
+pub use video_processor::MAX_FILE_SIZE_MB;
+
+/// Represents a multimodal input payload that can be routed to an appropriate
+/// processor (document parser, ASR pipeline, vision model, etc.).
+///
+/// ## Variants
+///
+/// | Variant | Contents | Typical use |
+/// |---------|----------|-------------|
+/// | `Text` | UTF-8 string | Direct LLM prompt, chat message |
+/// | `Image` | Raw image bytes (PNG, JPEG, WebP, etc.) | Vision model input |
+/// | `Audio` | Raw audio bytes (WAV, MP3, FLAC, etc.) | ASR / STT pipeline |
+/// | `Video` | Raw video bytes (MP4, AVI, etc.) | Video analysis pipeline |
+/// | `Document` | Raw bytes + file extension | Document parsing pipeline |
+#[derive(Debug, Clone)]
+pub enum MultimodalInput {
+    /// Plain text content.
+    Text(String),
+    /// Raw encoded image bytes (PNG, JPEG, WebP, etc.).
+    Image(Vec<u8>),
+    /// Raw encoded audio bytes (WAV, MP3, FLAC, etc.).
+    Audio(Vec<u8>),
+    /// Raw encoded video bytes (MP4, AVI, MKV, etc.).
+    Video(Vec<u8>),
+    /// Raw document bytes accompanied by a file-extension hint (e.g. `"pdf"`, `"docx"`).
+    Document(Vec<u8>, String),
+}
+
+impl MultimodalInput {
+    /// Returns a human-readable modality label.
+    ///
+    /// ```
+    /// # use go_on::multimodal::MultimodalInput;
+    /// assert_eq!(MultimodalInput::Text("hi".into()).modality(), "text");
+    /// assert_eq!(MultimodalInput::Image(vec![0u8; 4]).modality(), "image");
+    /// ```
+    pub fn modality(&self) -> &'static str {
+        match self {
+            Self::Text(_) => "text",
+            Self::Image(_) => "image",
+            Self::Audio(_) => "audio",
+            Self::Video(_) => "video",
+            Self::Document(_, _) => "document",
+        }
+    }
+
+    /// Returns the approximate size in bytes of the contained payload.
+    pub fn byte_size(&self) -> usize {
+        match self {
+            Self::Text(t) => t.len(),
+            Self::Image(b) | Self::Audio(b) | Self::Video(b) | Self::Document(b, _) => b.len(),
+        }
+    }
+
+    /// For `Document` variants, returns the file-extension hint (lowercased).
+    pub fn document_extension(&self) -> Option<&str> {
+        match self {
+            Self::Document(_, ext) => Some(ext.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Returns `true` if this input is a document type.
+    pub fn is_document(&self) -> bool {
+        matches!(self, Self::Document(_, _))
+    }
+
+    /// Returns `true` if this input is audio.
+    pub fn is_audio(&self) -> bool {
+        matches!(self, Self::Audio(_))
+    }
+
+    /// Returns `true` if this input is an image.
+    pub fn is_image(&self) -> bool {
+        matches!(self, Self::Image(_))
+    }
+
+    /// Returns `true` if this input is video.
+    pub fn is_video(&self) -> bool {
+        matches!(self, Self::Video(_))
+    }
+
+    /// Returns `true` if this input is plain text.
+    pub fn is_text(&self) -> bool {
+        matches!(self, Self::Text(_))
+    }
+
+    /// Provide the inner bytes (or string bytes) as a `&[u8]` slice, regardless
+    /// of variant. Useful for hashing, serialisation, or size checks.
+    pub fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::Text(t) => t.as_bytes(),
+            Self::Image(b) | Self::Audio(b) | Self::Video(b) | Self::Document(b, _) => b.as_slice(),
+        }
+    }
+
+    /// Consume `self` and return the contained bytes together with any
+    /// extension hint. Text is converted into UTF-8 bytes.
+    pub fn into_bytes(self) -> (Vec<u8>, Option<String>) {
+        match self {
+            Self::Text(t) => (t.into_bytes(), None),
+            Self::Image(b) => (b, None),
+            Self::Audio(b) => (b, None),
+            Self::Video(b) => (b, None),
+            Self::Document(b, ext) => (b, Some(ext)),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Conversions from common types
+// ---------------------------------------------------------------------------
+
+impl From<String> for MultimodalInput {
+    fn from(s: String) -> Self {
+        Self::Text(s)
+    }
+}
+
+impl From<&str> for MultimodalInput {
+    fn from(s: &str) -> Self {
+        Self::Text(s.to_owned())
+    }
+}
+
+impl From<Vec<u8>> for MultimodalInput {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self::Image(bytes)
+    }
+}
+
+// ── MultimodalProcessor orchestrator ───────────────────────────────────────
+
+/// Unified result produced by processing any multimodal input.
+///
+/// This is consumed by the chat pipeline as the primary source of enriched
+/// context. If no processing was needed, `text` carries the original input
+/// verbatim.
+#[derive(Debug, Clone, Default)]
+pub struct ProcessedContent {
+    /// The primary text extracted / transcribed / forwarded.
+    pub text: String,
+    /// Base64-encoded image data (PNG/JPEG) that should be injected into
+    /// the LLM's vision context.
+    pub images: Vec<String>,
+    /// Audio transcription segments (aggregated into text for downstream).
+    pub audio_transcriptions: Vec<String>,
+}
+
+impl ProcessedContent {
+    /// True when absolutely nothing was produced (no text, no images, no audio).
+    pub fn is_empty(&self) -> bool {
+        self.text.is_empty() && self.images.is_empty() && self.audio_transcriptions.is_empty()
+    }
+
+    /// Returns the joined transcription text (empty string if none).
+    pub fn joined_audio(&self) -> String {
+        self.audio_transcriptions.join("\n")
+    }
+}
+
+/// Central orchestrator for multimodal processing.
+///
+/// Holds sub-processors as `Option` so that each one can be omitted when its
+/// backend feature is disabled. When a processor is `None`, the corresponding
+/// input modality is passed through as plain text (or skipped entirely for
+/// binary formats).
+#[derive(Debug, Default)]
+pub struct MultimodalProcessor {
+    /// Document parser (PDF, DOCX, HTML, Markdown).
+    pub document_parser: Option<DocumentParser>,
+    /// Audio / speech-to-text processor.
+    pub audio_processor: Option<AudioProcessor>,
+    /// Video frame / scene extractor.
+    pub video_processor: Option<VideoProcessor>,
+    /// Code repository analyzer.
+    pub repo_analyzer: Option<RepoAnalyzer>,
+}
+
+impl MultimodalProcessor {
+    /// Create a new `MultimodalProcessor` with all sub-processors disabled
+    /// (i.e. `None`). Use the builder-style setters to enable them.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Convenience constructor that wires a pre-built `DocumentParser`.
+    pub fn with_document_parser(mut self, parser: DocumentParser) -> Self {
+        self.document_parser = Some(parser);
+        self
+    }
+
+    /// Convenience constructor that wires a pre-built `AudioProcessor`.
+    pub fn with_audio_processor(mut self, processor: AudioProcessor) -> Self {
+        self.audio_processor = Some(processor);
+        self
+    }
+
+    /// Convenience constructor that wires a pre-built `VideoProcessor`.
+    pub fn with_video_processor(mut self, processor: VideoProcessor) -> Self {
+        self.video_processor = Some(processor);
+        self
+    }
+
+    /// Convenience constructor that wires a pre-built `RepoAnalyzer`.
+    pub fn with_repo_analyzer(mut self, analyzer: RepoAnalyzer) -> Self {
+        self.repo_analyzer = Some(analyzer);
+        self
+    }
+
+    /// Returns `true` if any sub-processor is configured.
+    pub fn is_configured(&self) -> bool {
+        self.document_parser.is_some()
+            || self.audio_processor.is_some()
+            || self.video_processor.is_some()
+            || self.repo_analyzer.is_some()
+    }
+
+    /// Route a single multimodal input to the appropriate sub-processor.
+    ///
+    /// When the relevant processor is `None` (or the modality is plain text
+    /// without special prefixes), the input is passed through as-is in
+    /// `ProcessedContent.text`.
+    pub async fn process_input(&self, input: &MultimodalInput) -> ProcessedContent {
+        match input {
+            MultimodalInput::Text(text) => self.process_text(text).await,
+            MultimodalInput::Image(data) => self.process_image(data).await,
+            MultimodalInput::Audio(data) => self.process_audio(data).await,
+            MultimodalInput::Video(data) => self.process_video(data).await,
+            MultimodalInput::Document(data, ext) => self.process_document(data, ext).await,
+        }
+    }
+
+    /// Process a text input — checks for `repo:` prefix and delegates to
+    /// the `RepoAnalyzer` when present.
+    async fn process_text(&self, text: &str) -> ProcessedContent {
+        if RepoAnalyzer::has_repo_prefix(text) {
+            if let Some(ref analyzer) = self.repo_analyzer {
+                if let Some((url, question)) = RepoAnalyzer::parse_repo_input(text) {
+                    tracing::info!(
+                        repo_url = %url,
+                        question = %question,
+                        "MultimodalProcessor: delegating to RepoAnalyzer"
+                    );
+                    match analyzer.clone(&url).await {
+                        Ok(repo) => {
+                            let question = if question.is_empty() {
+                                "Describe this repository.".to_string()
+                            } else {
+                                question
+                            };
+                            match analyzer.answer_code_question(&question, &repo).await {
+                                Ok(answer) => {
+                                    return ProcessedContent {
+                                        text: answer.text,
+                                        images: Vec::new(),
+                                        audio_transcriptions: Vec::new(),
+                                    };
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        error = %e,
+                                        "MultimodalProcessor: RepoAnalyzer failed to answer"
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "MultimodalProcessor: RepoAnalyzer failed to clone repo"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        // Fall through — return the original text.
+        ProcessedContent {
+            text: text.to_owned(),
+            images: Vec::new(),
+            audio_transcriptions: Vec::new(),
+        }
+    }
+
+    /// Process an image input — base64-encodes the raw bytes and stores them
+    /// in `images` for downstream vision-model injection.
+    async fn process_image(&self, data: &[u8]) -> ProcessedContent {
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(data);
+        ProcessedContent {
+            text: String::new(),
+            images: vec![b64],
+            audio_transcriptions: Vec::new(),
+        }
+    }
+
+    /// Process an audio input — delegates to the `AudioProcessor` when
+    /// configured, otherwise returns an empty result.
+    async fn process_audio(&self, data: &[u8]) -> ProcessedContent {
+        if let Some(ref processor) = self.audio_processor {
+            // AudioProcessor::transcribe is synchronous — no .await.
+            // Use AudioFormat::Wav as a reasonable default; callers with more
+            // information should parse the format beforehand.
+            let format = crate::multimodal::audio_processor::AudioFormat::Wav;
+            match processor.transcribe(data, format) {
+                Ok(transcription) => {
+                    return ProcessedContent {
+                        text: transcription.text.clone(),
+                        images: Vec::new(),
+                        audio_transcriptions: vec![transcription.text],
+                    };
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "MultimodalProcessor: AudioProcessor failed to transcribe"
+                    );
+                }
+            }
+        }
+        ProcessedContent {
+            text: String::new(),
+            images: Vec::new(),
+            audio_transcriptions: Vec::new(),
+        }
+    }
+
+    /// Process a video input — delegates to the `VideoProcessor` when
+    /// configured, otherwise returns an empty result.
+    ///
+    /// Raw video bytes are written to a temporary file so the
+    /// `VideoProcessor` can read them (its API requires a `Path`).
+    async fn process_video(&self, data: &[u8]) -> ProcessedContent {
+        if let Some(ref processor) = self.video_processor {
+            // Write bytes to a temp file because VideoProcessor works with paths.
+            let tmp_dir = match tempfile::TempDir::new() {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "MultimodalProcessor: failed to create temp dir for video"
+                    );
+                    return ProcessedContent {
+                        text: String::new(),
+                        images: Vec::new(),
+                        audio_transcriptions: Vec::new(),
+                    };
+                }
+            };
+            let video_path = tmp_dir.path().join("input.mp4");
+            if let Err(e) = tokio::fs::write(&video_path, data).await {
+                tracing::warn!(
+                    error = %e,
+                    "MultimodalProcessor: failed to write video temp file"
+                );
+                return ProcessedContent {
+                    text: String::new(),
+                    images: Vec::new(),
+                    audio_transcriptions: Vec::new(),
+                };
+            }
+
+            let interval = processor.config().frame_interval_secs;
+            match processor.process_full(&video_path, interval).await {
+                Ok(full_result) => {
+                    let text = full_result
+                        .scenes
+                        .iter()
+                        .map(|s| {
+                            format!(
+                                "[{}s-{}s] {} (conf: {:.2})",
+                                s.start_sec, s.end_sec, s.label, s.confidence
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let images: Vec<String> = full_result
+                        .frames
+                        .iter()
+                        .map(|f| {
+                            use base64::Engine;
+                            base64::engine::general_purpose::STANDARD.encode(&f.data)
+                        })
+                        .collect();
+                    return ProcessedContent {
+                        text,
+                        images,
+                        audio_transcriptions: Vec::new(),
+                    };
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "MultimodalProcessor: VideoProcessor failed to process video"
+                    );
+                }
+            }
+        }
+        ProcessedContent {
+            text: String::new(),
+            images: Vec::new(),
+            audio_transcriptions: Vec::new(),
+        }
+    }
+
+    /// Process a document input — delegates to the `DocumentParser` when
+    /// configured.
+    async fn process_document(&self, data: &[u8], ext: &str) -> ProcessedContent {
+        if self.document_parser.is_some() {
+            match DocumentParser::parse_bytes(data, ext) {
+                Ok(parsed) => {
+                    let images: Vec<String> = parsed
+                        .images
+                        .iter()
+                        .map(|img| {
+                            use base64::Engine;
+                            base64::engine::general_purpose::STANDARD.encode(img)
+                        })
+                        .collect();
+                    return ProcessedContent {
+                        text: parsed.text_content,
+                        images,
+                        audio_transcriptions: Vec::new(),
+                    };
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "MultimodalProcessor: DocumentParser failed to parse"
+                    );
+                }
+            }
+        }
+        ProcessedContent {
+            text: String::new(),
+            images: Vec::new(),
+            audio_transcriptions: Vec::new(),
+        }
+    }
+}
+
+// ProcessedContent and MultimodalProcessor are defined publicly above;
+// no separate `pub use` needed since they're already `pub struct`.
+
+// ---------------------------------------------------------------------------
+// Helper functions
+// ---------------------------------------------------------------------------
+
+/// Decode a base64 string (standard or URL-safe) into raw bytes.
+pub fn base64_decode(input: &str) -> Result<Vec<u8>, base64::DecodeError> {
+    use base64::Engine;
+    // Try standard padding first, then URL-safe.
+    base64::engine::general_purpose::STANDARD
+        .decode(input)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(input))
+}
+
+/// Map a MIME type string to a file extension for document processing.
+///
+/// Falls back to `"bin"` when the MIME type is unrecognised.
+pub fn mime_to_extension(mime: &str) -> String {
+    match mime {
+        m if m.contains("pdf") => "pdf".to_string(),
+        m if m.contains("word") || m.contains("docx") || m.contains("doc") => "docx".to_string(),
+        m if m.contains("html") || m.contains("xhtml") => "html".to_string(),
+        m if m.contains("markdown") || m.contains("md") => "md".to_string(),
+        m if m.contains("text/plain") || m.contains("text") => "txt".to_string(),
+        m if m.contains("json") => "json".to_string(),
+        m if m.contains("csv") => "csv".to_string(),
+        m if m.contains("xml") => "xml".to_string(),
+        m if m.contains("yaml") || m.contains("yml") => "yaml".to_string(),
+        _ => "bin".to_string(),
+    }
+}

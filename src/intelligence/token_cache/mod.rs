@@ -1006,43 +1006,59 @@ impl Agent for CachedAgentWrapper {
         }
 
         // --- Cache miss – delegate to the inner agent ---
-        let output = {
-            // Collect the streaming output into a single String.
-            let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(2048);
-            let inner_sender = StreamingSender::from(tx);
+        //
+        // Use a tee/broadcast pattern: tokens are streamed to the caller
+        // immediately while a background task collects the full response
+        // for asynchronous cache storage. This avoids blocking the caller
+        // on cache write and eliminates unnecessary intermediate channels.
+        let (collect_tx, mut collect_rx) = tokio::sync::mpsc::channel::<String>(2048);
+        let inner_sender = StreamingSender::from(collect_tx);
 
-            let inner = self.inner.clone();
-            let handle = tokio::spawn(async move {
-                inner
-                    .chat(messages, principles, options, inner_sender)
-                    .await
-            });
+        let inner = self.inner.clone();
+        let inner_handle = tokio::spawn(async move {
+            inner
+                .chat(messages, principles, options, inner_sender)
+                .await
+        });
 
+        // Spawn a task that forwards each token to the caller's sender
+        // while simultaneously collecting the full response for caching.
+        let fwd_sender = sender.clone();
+        let collect_handle = tokio::spawn(async move {
             let mut response = String::new();
-            while let Some(token) = rx.recv().await {
-                // Forward the token to the caller's sender.
-                if sender.send(token.clone()).is_err() {
-                    // The caller dropped the receiver – stop forwarding.
+            while let Some(token) = collect_rx.recv().await {
+                // Forward each token to the caller immediately.
+                if fwd_sender.send(token.clone()).is_err() {
+                    // The caller dropped the receiver – stop collecting.
                     break;
                 }
                 response.push_str(&token);
             }
+            response
+        });
 
-            // Await the inner agent's completion.
-            match handle.await {
-                Ok(Ok(())) => response,
-                Ok(Err(err)) => return Err(err),
-                Err(join_err) => {
-                    return Err(crate::core::error::AppError::Proxy(
-                        crate::core::error::ProxyError::Internal(format!(
-                            "cached agent wrapper: inner agent panicked: {join_err}"
-                        )),
-                    ))
-                }
+        // Await the inner agent's completion.
+        match inner_handle.await {
+            Ok(Ok(())) => {
+                // Inner agent finished; the channel sender is dropped,
+                // so collect_rx will drain and collect_handle completes.
             }
-        };
+            Ok(Err(err)) => {
+                return Err(err);
+            }
+            Err(join_err) => {
+                return Err(crate::core::error::AppError::Proxy(
+                    crate::core::error::ProxyError::Internal(format!(
+                        "cached agent wrapper: inner agent panicked: {join_err}"
+                    )),
+                ))
+            }
+        }
 
-        // --- Store result in cache ---
+        // Collect the full response (channel is drained by the collect task).
+        let output = collect_handle.await.unwrap_or_default();
+
+        // --- Store result in cache asynchronously ---
         let token_count = estimate_token_count(&output);
         let cache = self.cache.clone();
         let input_text = input_text.clone();
