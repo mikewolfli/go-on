@@ -2,7 +2,7 @@
 
 `go-on` is a three-surface runtime around a Rust backend:
 
-- **Backend**: the executable owns config loading, provider selection, routing, setup, health checks, protocol negotiation, HTTP or stdio transport, and a 14-bus capability architecture with 21 F-GAP modules.
+- **Backend**: the executable owns config loading, provider selection, routing, setup, health checks, protocol negotiation, HTTP or stdio transport, and a 14-bus capability architecture with cognitive modules.
 - **GUI**: the EGUI (Rust native) desktop app manages backend discovery, process lifecycle, integration probes, monitoring, chat, and configuration management.
 - **VS Code addon**: the extension launches or probes the runtime, exposes RPC-backed commands, and can override protocol mode per workspace.
 
@@ -29,21 +29,25 @@ Key features:
 
 ## Build Profiles
 
-Three build profiles support different deployment scenarios:
+Three build profiles support different deployment scenarios, plus a `profile-full` for CI:
 
-| Profile | Backend | Target | Build Command |
-|---------|---------|--------|---------------|
+| Profile | Backend | Use Case | Build Command |
+|:--------|:--------|:---------|:--------------|
 | `profile-local` | SQLite + sqlite-vec | Single-user local tool | `cargo build` (default) |
 | `profile-simple-server` | SQLite + sqlite-vec | Single-server deployment | `cargo build --no-default-features -F profile-simple-server` |
 | `profile-multi-users-server` | PostgreSQL + pgvector | Multi-user production | `cargo build --no-default-features -F profile-multi-users-server` |
+| `profile-full` | SQLite (all features) | CI / development | `cargo build --no-default-features -F profile-full` |
 
-## Verification Status (Phase 4+ — 26 Rounds of Deep Scan Complete, GUI 7 Rounds)
+## Verification Status
 
-| Profile | `cargo check` | `cargo clippy -D warnings` | `cargo test` |
-|---------|:-----------:|:------------------------:|:----------:|
-| **profile-local** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **781 passed** |
-| **profile-simple-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **827 passed** |
-| **profile-multi-users-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **890 passed** |
+| Profile | `cargo clippy -D warnings` | Tests |
+|:--------|:--------------------------:|:-----:|
+| **profile-local** | ✅ **Zero warnings** | **4699** |
+| **profile-simple-server** | ✅ **Zero warnings** | **3400+** |
+| **profile-full** | ✅ **Zero warnings** | **4000+** |
+| **profile-multi-users-server** | ✅ **Zero warnings** | **3800+** |
+
+All 19 test binaries compile and pass. E2e tests (23, requiring infrastructure) are marked `#[ignore]` for local runs.
 
 ## Runtime Protocol Modes
 
@@ -106,70 +110,27 @@ evolve()  →  Update Q-tables, record consensus votes, send evolution events
 execute_tool() → HarnessBus evaluate() → ToolBus execute() → ObservabilityBus record()
 ```
 
-## F-GAP Modules (Phase 4 — 21/21 Complete ✅)
+## Security Features
 
-go-on implements 21 FutureDesign modules across six capability domains:
+| Feature | Description |
+|:--------|:------------|
+| **mTLS** | Mutual TLS for ACP HTTP listener with cert-pinning and expiry monitoring |
+| **Request signing** | Ed25519 or HMAC-SHA256 for JSON-RPC request authentication |
+| **Vault integration** | HashiCorp Vault for secret lifecycle management and rotation |
+| **System keyring** | macOS Keychain, Linux Secret Service, Windows Credential Manager |
+| **Content safety** | Runtime content scanning with configurable policies (SafeGuard mode) |
+| **Prompt injection detection** | Runtime scanning for injection patterns with configurable threshold |
 
-### Orchestration & Execution (F-GAP-09, 10, 15, 17)
-- **OmnipotentMode** (F-GAP-09): Escalation token, RAII session guard, audit logging
-- **ArtifactLayer** (F-GAP-10): Artifact schema registration, storage, TTL pruning
-- **RemoteSkill** (F-GAP-10): Remote MCP endpoint as Skill trait
-- **OrchestrationCouncil** (F-GAP-15): Multi-agent coordination committee
-- **BrainLoop** (F-GAP-17): Plan→Execute→Reflect→Replan full cycle
+## Observability
 
-### Intelligence & Learning (F-GAP-11, 12, 16, 18, 19, 21, 22, 23, 24, 25)
-- **DiscoveryCenter** (F-GAP-11): Solution pattern registry and search
-- **ScenarioMatcher** (F-GAP-12): Multi-dimension scenario matching
-- **ConsensusEngine** (F-GAP-16): Distributed voting and consensus
-- **EvolutionGraph** (F-GAP-18): 6-stage capability evolution lifecycle
-- **FederatedRL** (F-GAP-19): FedAvg/FedWeighted/FedMedian aggregation
-- **SelfModelCore** (F-GAP-21): Self-capability assessment and confidence
-- **MetacognitiveController** (F-GAP-22): 6-stage thinking trace, stuck detection
-- **WorldModel** (F-GAP-23): World model pipeline
-- **ContinuousLearningCenter** (F-GAP-24): Continuous learning orchestration
-- **ConsciousnessMetrics** (F-GAP-25): 5-dimension awareness metrics
+go-on provides production-grade observability:
 
-### Governance & Security (F-GAP-14, 26)
-- **SecurityGovernor** (F-GAP-14): Security policy governance
-- **DriftProtection** (F-GAP-26): 5 drift types, 4 severity levels, trend detection
-
-### Resilience & Fault Tolerance (F-GAP-27, 28)
-- **HyperResilienceEngine** (F-GAP-27): Circuit breaker, failover, self-healing
-- **FaultToleranceEngine** (F-GAP-28): Node heartbeat, isolation, auto-recovery, cluster health scoring
-
-### Protocol & Transport (F-GAP-29)
-- **MultiChannelTransport** (F-GAP-29): 6 channels, 4 priority levels, QoS, dedup, peek
-
-### Agent Infrastructure (F-GAP-13)
-- **AgentFactory** (F-GAP-13): Feature-gated agent instantiation
-
-## 38-Dimension Star Rating
-
-```
-Governance & Compliance (5/5):    ★★★★★ ProvenanceLedger, DriftProtection, PolicyEvaluator, TokenLayerChain, SecurityGovernor
-Resilience & Fault Tolerance (2/2):★★★★★ HyperResilienceEngine, FaultToleranceEngine
-Orchestration & Execution (6/6):  ★★★★★ OrchestrationBus, TaskScheduler, ExecutionGraph, OmnipotentMode, ArtifactLayer, BrainLoop
-Routing & Scheduling (7/7):       ★★★★★ CapabilityGraph, ReputationStore, QLearningAgent, ScenarioMatcher, DiscoveryCenter, WorkflowRegistry, AgentFactory
-Protocol & Transport (2/2):       ★★★★★ ProtocolBus, MultiChannelTransport
-Memory & Cache (2/2):             ★★★★★ MemoryBus, DistributedMemoryBus
-Observability & Optimization (3/3):★★★★★ ObservabilityBus, OptimizationBus, ToolBus
-Intelligent Cognition (5/5):      ★★★★★ Knowledge Distillation, Deep RL, Skill Retention, AI Evolution, Self-built Skills
-Self-Cognition (5/5):             ★★★★★ SelfModelCore, ConsciousnessMetrics, MetacognitiveController, WorldModel, ConsensusEngine
-Total (38/38):                    100% ★★★★★
-```
-
-## Overall Completion Rate
-
-```
-Phase 0: Core Dual Buses         ████████████████████ 100%
-Phase 1: Sub-Bus Integration     ████████████████████ 100%
-Phase 2: Remaining Fixes         ████████████████████ 100%
-Phase 3: ARCH Extension Points   ████████████████████ 100%
-Phase 4: FutureDesign (F-GAP)    ████████████████████ 100% (21/21)
-Phase 5: Production Hardening    ████████████████████ 100%
-────────────────────────────────────────────────────────
-Overall:                         ████████████████████ 100%
-```
+| Capability | Details |
+|:-----------|:--------|
+| **Prometheus `/metrics` endpoint** | 16+ metrics including latency, throughput, cache hit rates |
+| **OpenTelemetry tracing** | OTLP export (default endpoint `localhost:4317`), spans for routing, execution, selection |
+| **Governance status endpoint** | Real-time p95 latency, DAG metrics, cache stats via `governance.status` JSON-RPC |
+| **OTel stdout exporter** | Fallback trace export when no OTLP collector is available |
 
 ## Internationalization (i18n)
 
@@ -181,13 +142,13 @@ go-on provides full i18n coverage (~95%) across the Rust backend:
 | Chinese (Simplified) | `languages/zh_CN.json` | 448+ |
 | Chinese (Traditional) | `languages/zh_TW.json` | 448+ |
 
-Covered layers: ACP/MCP HTTP errors (100%), agent provider modules (100%, 37+ providers), config validation (100%), CLI setup (100%), API handler errors (100%), orchestration (100%), GUI (~98%), VS Code addon (70+ keys).
+Covered layers: ACP/MCP HTTP errors (100%), agent provider modules (100%, 35 providers), config validation (100%), CLI setup (100%), API handler errors (100%), orchestration (100%), GUI (~98%), VS Code addon (70+ keys).
 
 ## Repository areas that map to the architecture
 
 - `src/`: backend runtime, CLI, setup, ACP and MCP implementation.
   - `src/acp/`: ACP server, request routing, workflow/task/chat/checkpoint
-  - `src/agents/`: Provider adapters (OpenAI, Anthropic, DeepSeek, Gemini, xAI Grok, SiliconFlow, and 32+ more), AgentFactory
+  - `src/agents/`: Provider adapters (OpenAI, Anthropic, DeepSeek, Gemini, xAI Grok, SiliconFlow, and 30+ more), AgentFactory
   - `src/core/`: Config, setup, readiness, error model
   - `src/governance/`: Policy/rule governance, audit, security governor, drift protection
   - `src/intelligence/`: Selectors, RL, capability bus, discovery, consensus, evolution

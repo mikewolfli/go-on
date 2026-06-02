@@ -27,11 +27,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates libsqlite3-0 libpq5 curl && \
     rm -rf /var/lib/apt/lists/*
 
-RUN groupadd -r goon && useradd -r -g goon -d /opt/go-on -s /sbin/nologin goon
+RUN groupadd -r go-on && useradd -r -g go-on -d /opt/go-on -s /sbin/nologin go-on
 
-COPY --from=builder --chown=goon:goon /go-on /usr/local/bin/go-on
+COPY --from=builder --chown=go-on:go-on /go-on /usr/local/bin/go-on
 
-USER goon
+USER go-on
 WORKDIR /opt/go-on
 
 EXPOSE 8090

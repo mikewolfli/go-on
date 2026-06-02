@@ -170,26 +170,44 @@ impl Default for StreamProcessor {
 
 /// Shared cancellation signal for in-progress SSE streams.
 /// Cloning produces another handle to the same underlying signal.
+/// Uses a `tokio::sync::Notify` so callers can `tokio::select!` on the
+/// abort signal and cancel the actual in-flight HTTP request.
 #[derive(Clone)]
 pub struct AbortController {
     cancelled: Arc<AtomicBool>,
+    notify: Arc<tokio::sync::Notify>,
 }
 
 impl AbortController {
     pub fn new() -> Self {
         Self {
             cancelled: Arc::new(AtomicBool::new(false)),
+            notify: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
     /// Signal abort.  Idempotent — safe to call multiple times.
     pub fn abort(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
+        self.notify.notify_waiters();
     }
 
     /// Returns `true` if abort has been signalled.
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// Returns a future that resolves when `abort()` is called.
+    /// Use with `tokio::select!` to cancel in-flight HTTP requests:
+    ///
+    /// ```ignore
+    /// tokio::select! {
+    ///     result = http_request => { … },
+    ///     _ = abort_ctrl.wait_for_abort() => { … },
+    /// }
+    /// ```
+    pub async fn wait_for_abort(&self) {
+        self.notify.notified().await;
     }
 
     /// Reset the signal for reuse.
@@ -801,6 +819,7 @@ impl BackendClient {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn chat_with_options(
         &self,
         message: &str,
@@ -809,6 +828,7 @@ impl BackendClient {
         model: Option<&str>,
         options_extra: Option<Value>,
         history: Option<Vec<Value>>,
+        abort_ctrl: Option<AbortController>,
     ) -> Result<(String, String, String, Option<String>), String> {
         let phase_val = if phase.is_empty() {
             serde_json::Value::Null
@@ -860,7 +880,7 @@ impl BackendClient {
         for attempt in 1..=3 {
             match self
                 .long_client
-                .post(format!("{}/chat", self.base_url))
+                .post(format!("{}/chat/stream", self.base_url))
                 .json(&body)
                 .send()
                 .await
@@ -884,40 +904,106 @@ impl BackendClient {
         let resp = resp
             .error_for_status()
             .map_err(|e| format!("HTTP error: {}", e))?;
-        let value: Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("JSON parse error: {}", e))?;
 
-        if let Some(err_msg) = value.get("error").and_then(|e| e.as_str()) {
-            return Err(format!("Chat error: {}", err_msg));
+        // Race the response body against abort signal so the user can cancel
+        // an in-flight HTTP request during the response-read phase.
+        // Create the futures outside select! to avoid ownership conflicts:
+        // `resp.text()` consumes `resp`, so we move it into a pinned future.
+        let resp_body = if let Some(abort_ctrl) = abort_ctrl {
+            let text_fut = resp.text();
+            let abort_fut = abort_ctrl.wait_for_abort();
+            tokio::pin!(text_fut);
+            tokio::pin!(abort_fut);
+            tokio::select! {
+                body = &mut text_fut => {
+                    body.map_err(|e| format!("SSE body read error: {}", e))?
+                }
+                _ = &mut abort_fut => {
+                    // Dropping text_fut will drop `resp` and close the connection.
+                    return Err("Request cancelled by user".to_string());
+                }
+            }
+        } else {
+            resp.text()
+                .await
+                .map_err(|e| format!("SSE body read error: {}", e))?
+        };
+
+        // Parse SSE events from the response body
+        let mut response_text = String::new();
+        let mut thinking_text = String::new();
+        let mut agent_text = String::new();
+        let mut selected_model: Option<String> = None;
+
+        for frame in resp_body.split("\n\n") {
+            let mut event_name = String::new();
+            let mut data_payload = String::new();
+            for line in frame.lines() {
+                let stripped = line
+                    .strip_prefix("data: ")
+                    .or_else(|| line.strip_prefix("data:"));
+                if let Some(data) = stripped {
+                    data_payload = data.to_string();
+                }
+                if let Some(rest) = line
+                    .strip_prefix("event: ")
+                    .or_else(|| line.strip_prefix("event:"))
+                {
+                    event_name = rest.trim().to_string();
+                }
+            }
+
+            if data_payload.is_empty() {
+                continue;
+            }
+
+            let data = data_payload.trim();
+            if data == "[DONE]" {
+                break;
+            }
+
+            if let Ok(val) = serde_json::from_str::<Value>(data) {
+                match event_name.as_str() {
+                    "chunk" | "" => {
+                        if let Some(text) = val
+                            .get("token")
+                            .or_else(|| val.get("text"))
+                            .and_then(|v| v.as_str())
+                        {
+                            response_text.push_str(text);
+                        }
+                        if let Some(r) = val.get("reasoning").and_then(|v| v.as_str()) {
+                            thinking_text.push_str(r);
+                        }
+                        // agent field may appear on the first event or the done event
+                        if let Some(agent) = val
+                            .get("agent")
+                            .or_else(|| val.get("selected_agent"))
+                            .and_then(|v| v.as_str())
+                        {
+                            if !agent.is_empty() {
+                                agent_text = agent.to_string();
+                            }
+                        }
+                        if let Some(model) = val.get("selected_model").and_then(|v| v.as_str()) {
+                            if !model.is_empty() {
+                                selected_model = Some(model.to_string());
+                            }
+                        }
+                    }
+                    "error" => {
+                        if let Some(err_msg) = val
+                            .get("error")
+                            .or_else(|| val.get("message"))
+                            .and_then(|v| v.as_str())
+                        {
+                            return Err(format!("Chat error: {}", err_msg));
+                        }
+                    }
+                    _ => {}
+                }
+            }
         }
-
-        let response_text = value
-            .get("response")
-            .and_then(|r| r.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        let thinking_text = value
-            .get("thinking")
-            .and_then(|r| r.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        let agent_text = value
-            .get("agent")
-            .or_else(|| value.get("selected_agent"))
-            .or_else(|| value.pointer("/capability_routing/selected_agent"))
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-
-        let selected_model = value
-            .get("selected_model")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(String::from);
 
         if response_text.is_empty() && thinking_text.is_empty() {
             Ok((
@@ -929,108 +1015,6 @@ impl BackendClient {
         } else {
             Ok((response_text, thinking_text, agent_text, selected_model))
         }
-    }
-
-    /// Send a chat message via SSE streaming (`POST /chat/stream`).
-    /// Returns a tuple of (response_text, reasoning_text, conversation_id, branch_id).
-    /// Processes the SSE stream incrementally.
-    #[allow(dead_code)] // Available for app.rs migration to streaming
-    pub async fn chat_streaming(
-        &self,
-        message: &str,
-        mode: &str,
-        phase: &str,
-        model: Option<&str>,
-        options_extra: Option<Value>,
-        history: Option<Vec<Value>>,
-    ) -> Result<(String, String, String, Option<String>), String> {
-        let phase_val = if phase.is_empty() {
-            serde_json::Value::Null
-        } else {
-            serde_json::Value::String(phase.to_string())
-        };
-
-        let messages = if let Some(hist) = history {
-            let mut msgs = hist;
-            msgs.push(serde_json::json!({ "role": "user", "content": message }));
-            msgs
-        } else {
-            vec![serde_json::json!({ "role": "user", "content": message })]
-        };
-
-        let mut body = serde_json::json!({
-            "messages": messages,
-            "mode": mode,
-            "phase": phase_val,
-            "stream": true,
-        });
-
-        if let Some(selected_model) = model.filter(|m| !m.trim().is_empty() && *m != "auto") {
-            body["options"] = serde_json::json!({ "model": selected_model });
-        }
-
-        if let Some(ref extra) = options_extra {
-            if let Some(obj) = extra.as_object() {
-                for (k, v) in obj {
-                    body["options"][k] = v.clone();
-                }
-            }
-        }
-
-        let resp = self
-            .long_client
-            .post(format!("{}/chat/stream", self.base_url))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("SSE request failed: {}", e))?;
-
-        let resp_body = resp
-            .text()
-            .await
-            .map_err(|e| format!("SSE body read failed: {}", e))?;
-
-        let mut response_text = String::new();
-        let mut reasoning_text = String::new();
-        let mut conversation_id = String::new();
-        let mut branch_id: Option<String> = None;
-
-        // Parse SSE events from the full response body
-        for frame in resp_body.split("\n\n") {
-            let mut current_data: Option<String> = None;
-            for line in frame.lines() {
-                let stripped = line
-                    .strip_prefix("data: ")
-                    .or_else(|| line.strip_prefix("data:"))
-                    .or_else(|| line.strip_prefix("event: "));
-                if let Some(data) = stripped {
-                    current_data = Some(data.to_string());
-                }
-            }
-
-            if let Some(data) = current_data {
-                let data = data.trim();
-                if data == "[DONE]" {
-                    break;
-                }
-                if let Ok(val) = serde_json::from_str::<Value>(data) {
-                    if let Some(text) = val.get("text").and_then(|v| v.as_str()) {
-                        response_text.push_str(text);
-                    }
-                    if let Some(r) = val.get("reasoning").and_then(|v| v.as_str()) {
-                        reasoning_text.push_str(r);
-                    }
-                    if let Some(cid) = val.get("conversation_id").and_then(|v| v.as_str()) {
-                        conversation_id = cid.to_string();
-                    }
-                    if let Some(bid) = val.get("branch_id").and_then(|v| v.as_str()) {
-                        branch_id = Some(bid.to_string());
-                    }
-                }
-            }
-        }
-
-        Ok((response_text, reasoning_text, conversation_id, branch_id))
     }
 
     pub async fn configure_provider(
@@ -1066,45 +1050,6 @@ impl BackendClient {
 
     pub async fn restart_backend(&self) -> Result<Value, String> {
         self.rpc_call("runtime.restart", None).await
-    }
-
-    /// F-GAP-48: Reserved for future config reload feature
-    /// DEPRECATED: Unused. Config reload is handled by backend restart + config.toml rewrite.
-    /// Retained for reference; remove in a future cleanup round.
-    #[allow(dead_code)]
-    pub async fn reload_config(&self) -> Result<Value, String> {
-        self.rpc_call("config.reload", None).await
-    }
-
-    /// F-GAP-48: Reserved for future device code auth flow
-    /// DEPRECATED: Copilot OAuth is handled via direct HTTP polling in providers.rs, not this RPC.
-    /// Retained for reference; remove in a future cleanup round.
-    #[allow(dead_code)]
-    pub async fn copilot_device_code_request(&self, client_id: &str) -> Result<Value, String> {
-        self.rpc_call(
-            "provider.copilot_device_code",
-            Some(serde_json::json!({"client_id": client_id})),
-        )
-        .await
-    }
-
-    /// F-GAP-48: Reserved for future device code auth flow
-    /// DEPRECATED: Copilot OAuth is handled via direct HTTP polling in providers.rs, not this RPC.
-    /// Retained for reference; remove in a future cleanup round.
-    #[allow(dead_code)]
-    pub async fn copilot_device_code_poll(
-        &self,
-        device_code: &str,
-        client_id: &str,
-    ) -> Result<Value, String> {
-        self.rpc_call(
-            "provider.copilot_device_code_poll",
-            Some(serde_json::json!({
-                "device_code": device_code,
-                "client_id": client_id,
-            })),
-        )
-        .await
     }
 
     pub async fn create_skill(

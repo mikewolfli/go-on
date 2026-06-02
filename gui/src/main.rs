@@ -231,6 +231,8 @@ fn load_cjk_font(fonts: &mut egui::FontDefinitions) -> bool {
     cjk_found
 }
 
+/// `GO_ON_PROXY_URL` env var takes precedence over auto-detection and the
+/// default fallback list. Set it to a `http://host:port` value to skip probing.
 async fn auto_detect_proxy() {
     if std::env::var("HTTPS_PROXY").is_ok()
         || std::env::var("https_proxy").is_ok()
@@ -241,6 +243,25 @@ async fn auto_detect_proxy() {
     {
         return;
     }
+
+    // `GO_ON_PROXY_URL` takes precedence over the fallback probe list.
+    if let Ok(proxy_url) = std::env::var("GO_ON_PROXY_URL") {
+        let proxy_url = proxy_url.trim().to_string();
+        if !proxy_url.is_empty() {
+            std::env::set_var("HTTPS_PROXY", &proxy_url);
+            std::env::set_var("https_proxy", &proxy_url);
+            std::env::set_var("HTTP_PROXY", &proxy_url);
+            std::env::set_var("http_proxy", &proxy_url);
+            std::env::set_var("ALL_PROXY", &proxy_url);
+            std::env::set_var("all_proxy", &proxy_url);
+            eprintln!("auto_detect_proxy: using GO_ON_PROXY_URL={proxy_url}");
+            return;
+        }
+    }
+
+    // Fallback: probe common local proxy ports in parallel.
+    // These cover typical defaults for Clash (15732, 7890, 25519),
+    // v2ray/xray (10809, 10808), and general SOCKS/HTTP proxies (1087, 1080).
     let proxies: &[&str] = &[
         "http://127.0.0.1:15732",
         "http://127.0.0.1:7890",

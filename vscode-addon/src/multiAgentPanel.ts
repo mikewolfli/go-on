@@ -11,14 +11,14 @@ interface AgentInfo {
   lastUpdated?: string;
 }
 
-const STATUS_ICONS: Record<AgentInfo["status"], string> = {
+const _STATUS_ICONS: Record<AgentInfo["status"], string> = {
   thinking: "$(sync~spin)",
   working: "$(tools)",
   idle: "$(circle-outline)",
   error: "$(error)",
 };
 
-const STATUS_CLASSES: Record<AgentInfo["status"], string> = {
+const _STATUS_CLASSES: Record<AgentInfo["status"], string> = {
   thinking: "status-thinking",
   working: "status-working",
   idle: "status-idle",

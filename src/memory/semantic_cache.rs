@@ -441,6 +441,21 @@ fn request_hash(request: &str) -> u64 {
 ///
 /// This is deterministic, dependency-free, and produces vectors suitable for
 /// cosine similarity comparisons.
+///
+/// # Embedding provider integration path
+///
+/// In production, the [`EmbeddingSemanticCache`] and [`SimpleEmbeddingCache`]
+/// caches should use a real embedding provider (e.g.
+/// [`ConfigurableEmbeddingProvider`]) instead of this simple hash-based
+/// embedding. The intended upgrade path is:
+///
+/// 1. Configure an [`OpenAiEmbeddingProvider`], [`Qwen3EmbeddingProvider`], or
+///    [`OllamaEmbeddingProvider`] via environment config.
+/// 2. Replace calls to `compute_embedding_inner()` with the provider's `embed()`.
+/// 3. Remove this hash-based fallback once the provider is stable.
+///
+/// Until then, this function provides a deterministic, zero-dependency
+/// embedding suitable for development and testing.
 fn compute_embedding_inner(text: &str, dim: usize) -> Vec<f64> {
     if text.is_empty() || dim == 0 {
         return vec![0.0; dim.max(1)];

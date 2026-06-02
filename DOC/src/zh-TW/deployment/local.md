@@ -11,7 +11,7 @@
 - **SQLite 存儲**：基於本地文件的緩存和向量存儲
 - **自適應向量存儲**：當 `sqlite-vec` 可用時使用，否則回退到 JSON 嵌入
 - **零外部依賴**：無需數據庫服務器
-- **所有 14 條能力總線和 21 個 F-GAP 模塊已包含**：本地配置文件擁有完整的 Phase 4 功能
+- **所有 14 條能力總線已包含**：完整的工具、編排、可觀測、優化、內存和協議子總線支持
 
 ### 存儲架構
 ```
@@ -27,27 +27,52 @@
 本地模式使用 `config/config.toml` 作為默認配置：
 
 ```toml
-# config/config.toml（本地模式默認配置）
-default_phase = "coding"
+# config/config.toml（profile-local 默認配置）
+schema_version = "1.0.0"
+default_phase = "think"
 model_selection_mode = "adaptive"
 
 [protocol]
-mode = "adaptive"
+mode = "acp_http"
 
 [cache]
 enabled = true
 path = "acp_cache.sqlite3"
-default_ttl_seconds = 3600
-max_entries = 5000
+default_ttl_seconds = 1800
+max_entries = 2000
 
 [vector]
 enabled = true
 auto_mode = true
 path = "acp_vector.sqlite3"
-dimensions = 192
-min_query_chars = 80
+dimensions = 128
+min_query_chars = 120
 top_k = 2
 min_similarity = 0.82
+max_snippet_chars = 600
+max_entries = 3000
+summary_trigger_messages = 4
+summary_max_chars = 800
+
+[runtime]
+acp_http_bind_addr = "127.0.0.1:8090"
+maintenance_interval_seconds = 60
+health_interval_seconds = 120
+shutdown_drain_seconds = 30
+entry_auth_enabled = false
+entry_rate_limit_rpm = 240
+entry_rate_limit_burst = 60
+i18n_enabled = true
+i18n_default_language = "en-US"
+governance_enabled = true
+governance_policy_mode = "advisory"
+skills_enabled = true
+skills_cache_dir = "skills_cache"
+
+# OpenTelemetry
+otel_enabled = true
+otel_exporter = "otlp"
+otel_endpoint = "http://localhost:4317"
 ```
 
 ### 特性標誌

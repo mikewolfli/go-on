@@ -2120,7 +2120,14 @@ pub(crate) async fn process_chat_request(
                 role: selected_agent.clone(),
                 objective: extract_task_description(&params.messages),
                 constraints: None,
-                evidence: Some(params.messages.iter().map(|m| format!("{}: {}", m.role, m.content)).collect::<Vec<_>>().join("\n")),
+                evidence: Some(
+                    params
+                        .messages
+                        .iter()
+                        .map(|m| format!("{}: {}", m.role, m.content))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ),
                 input: serde_json::json!({
                     "response_text": response_text,
                     "reasoning_text": reasoning_text,
@@ -2145,20 +2152,29 @@ pub(crate) async fn process_chat_request(
                             .duration_since(std::time::UNIX_EPOCH)
                             .map(|d| d.as_millis() as u64)
                             .unwrap_or(0);
-                        let consolidated = crate::intelligence::continuous_learning::ConsolidatedMemory {
-                            id: format!("chat-{}-{}", phase_name, trace.request_id),
-                            pattern_key: format!("chat:{}:{}", params.mode, extract_task_description(&params.messages).chars().take(50).collect::<String>()),
-                            data: serde_json::json!({
-                                "task": extract_task_description(&params.messages),
-                                "agent": &selected_agent,
-                                "response_length": response_text.len(),
-                                "mode": &params.mode,
-                            }).to_string(),
-                            importance: 0.5,
-                            consolidated_ms: now_ms,
-                            last_accessed_ms: now_ms,
-                            access_count: 1,
-                        };
+                        let consolidated =
+                            crate::intelligence::continuous_learning::ConsolidatedMemory {
+                                id: format!("chat-{}-{}", phase_name, trace.request_id),
+                                pattern_key: format!(
+                                    "chat:{}:{}",
+                                    params.mode,
+                                    extract_task_description(&params.messages)
+                                        .chars()
+                                        .take(50)
+                                        .collect::<String>()
+                                ),
+                                data: serde_json::json!({
+                                    "task": extract_task_description(&params.messages),
+                                    "agent": &selected_agent,
+                                    "response_length": response_text.len(),
+                                    "mode": &params.mode,
+                                })
+                                .to_string(),
+                                importance: 0.5,
+                                consolidated_ms: now_ms,
+                                last_accessed_ms: now_ms,
+                                access_count: 1,
+                            };
                         if let Ok(clc) = cb.continuous_learning.lock() {
                             clc.schedule_review(&consolidated);
                             tracing::debug!(target: "continuous_learning", "scheduled review after chat execution");
@@ -2171,26 +2187,22 @@ pub(crate) async fn process_chat_request(
             }
         }
 
-        if matches!(mode_runtime.kind(), ModeKind::Agent)
-            && resolved.agents.len() > 1
-            && !cache_hit
+        if matches!(mode_runtime.kind(), ModeKind::Agent) && resolved.agents.len() > 1 && !cache_hit
         {
             let task_chars = TaskCharacteristics {
                 description: extract_task_description(&params.messages),
                 task_type: TaskType::FeatureImplementation, // default — can be refined
                 complexity: 3,
-                required_capabilities: vec![
-                    "coding".to_string(),
-                ],
+                required_capabilities: vec!["coding".to_string()],
                 involves_multiple_modules: false,
                 is_time_critical: false,
                 needs_verification: true,
                 has_safety_concerns: false,
             };
 
-            let registry = server.agent_registry().unwrap_or_else(|| {
-                Arc::new(crate::agent::AgentRegistry::new())
-            });
+            let registry = server
+                .agent_registry()
+                .unwrap_or_else(|| Arc::new(crate::agent::AgentRegistry::new()));
             let assignment = AgentAssignment::RoundRobin;
             let pipeline = MultiAgentPipeline::new(registry, assignment);
 
@@ -2215,15 +2227,20 @@ pub(crate) async fn process_chat_request(
                 );
 
                 // BLUE56-B04: MultiModelVoter voting on multi-agent results
+                #[cfg(feature = "sub-bus-voter-future")]
                 {
                     use crate::intelligence::multi_model_voter::MultiModelVoter;
                     let voter = MultiModelVoter::new();
-                    let agents: Vec<Arc<dyn crate::agent::Agent>> = resolved.agents
+                    let agents: Vec<Arc<dyn crate::agent::Agent>> = resolved
+                        .agents
                         .iter()
                         .map(|(_, agent)| agent.clone())
                         .collect();
                     if agents.len() > 1 {
-                        match voter.vote(&extract_task_description(&params.messages), &agents).await {
+                        match voter
+                            .vote(&extract_task_description(&params.messages), &agents)
+                            .await
+                        {
                             Ok(outcome) => {
                                 tracing::info!(
                                     target: "multi_model_voter",
@@ -3259,21 +3276,20 @@ async fn execute_fallback_agents(
                         let mut payload = std::collections::HashMap::new();
                         payload.insert("status".to_string(), "failure".to_string());
                         payload.insert("phase".to_string(), phase_name.to_string());
-                        payload.insert("duration_ms".to_string(), attempt_started.elapsed().as_millis().to_string());
-                        let _ = cb.world_model.record_event(
-                            "agent_execution",
-                            &agent_name,
-                            payload,
+                        payload.insert(
+                            "duration_ms".to_string(),
+                            attempt_started.elapsed().as_millis().to_string(),
                         );
+                        let _ =
+                            cb.world_model
+                                .record_event("agent_execution", &agent_name, payload);
                         // BLUE56-B09: Run TripleFusion fusion cycle after execution
                         let fusion_bridge =
                             crate::intelligence::triple_fusion::TripleFusionBridge::new(
                                 Default::default(),
                             );
-                        let triggers = fusion_bridge.run_fusion_cycle(
-                            &cb.metacognitive,
-                            &cb.consciousness,
-                        );
+                        let triggers =
+                            fusion_bridge.run_fusion_cycle(&cb.metacognitive, &cb.consciousness);
                         if !triggers.is_empty() {
                             tracing::info!(
                                 target: "triple_fusion",
@@ -3330,21 +3346,19 @@ async fn execute_fallback_agents(
                     let mut payload = std::collections::HashMap::new();
                     payload.insert("status".to_string(), "success".to_string());
                     payload.insert("phase".to_string(), phase_name.to_string());
-                    payload.insert("duration_ms".to_string(), attempt_started.elapsed().as_millis().to_string());
-                    let _ = cb.world_model.record_event(
-                        "agent_execution",
-                        &agent_name,
-                        payload,
+                    payload.insert(
+                        "duration_ms".to_string(),
+                        attempt_started.elapsed().as_millis().to_string(),
                     );
+                    let _ = cb
+                        .world_model
+                        .record_event("agent_execution", &agent_name, payload);
                     // BLUE56-B09: Run TripleFusion fusion cycle after execution
-                    let fusion_bridge =
-                        crate::intelligence::triple_fusion::TripleFusionBridge::new(
-                            Default::default(),
-                        );
-                    let triggers = fusion_bridge.run_fusion_cycle(
-                        &cb.metacognitive,
-                        &cb.consciousness,
+                    let fusion_bridge = crate::intelligence::triple_fusion::TripleFusionBridge::new(
+                        Default::default(),
                     );
+                    let triggers =
+                        fusion_bridge.run_fusion_cycle(&cb.metacognitive, &cb.consciousness);
                     if !triggers.is_empty() {
                         tracing::info!(
                             target: "triple_fusion",
@@ -3353,7 +3367,7 @@ async fn execute_fallback_agents(
                         );
                     }
                 }
-            // BLUE56-GAP-C04: Record success in HyperResilienceEngine
+                // BLUE56-GAP-C04: Record success in HyperResilienceEngine
                 let _ = server.hyper_resilience.record_success(&agent_name);
 
                 agent_attempts.push(json!({

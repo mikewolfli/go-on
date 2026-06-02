@@ -437,6 +437,7 @@ impl ChatView {
                                     Some(&model_clone),
                                     request_options.clone(),
                                     None, // history not available in this scope
+                                    Some(abort_ctrl_task.clone()),
                                 )
                                 .await
                                 .map(|(content, thinking, agent, selected_model)| {
@@ -762,6 +763,7 @@ impl ChatView {
                                 Some(&model_clone),
                                 request_options.clone(),
                                 None, // history not available in this scope
+                                Some(abort_ctrl_task.clone()),
                             )
                             .await
                             .map(|(content, thinking, agent, selected_model)| {

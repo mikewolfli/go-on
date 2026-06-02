@@ -12,7 +12,7 @@ Local mode (`profile-local`) is the default build profile for go-on, designed fo
 - **Adaptive vector store**: Uses `sqlite-vec` when available, falls back to JSON embeddings
 - **Zero external dependencies**: No database servers required
 - **Quick setup**: Minimal configuration needed
-- **All 14 capability buses and 21 F-GAP modules included**: Local profile has full Phase 4 functionality
+- **All 14 capability buses included**: Full tool, orchestration, observability, optimization, memory, and protocol sub-bus support
 
 ### Storage Architecture
 ```
@@ -28,27 +28,52 @@ Local Mode Storage:
 The local mode uses `config/config.toml` as the default configuration:
 
 ```toml
-# config/config.toml (Local Mode Default)
-default_phase = "coding"
+# config/config.toml (profile-local default)
+schema_version = "1.0.0"
+default_phase = "think"
 model_selection_mode = "adaptive"
 
 [protocol]
-mode = "adaptive"
+mode = "acp_http"
 
 [cache]
 enabled = true
 path = "acp_cache.sqlite3"
-default_ttl_seconds = 3600
-max_entries = 5000
+default_ttl_seconds = 1800
+max_entries = 2000
 
 [vector]
 enabled = true
 auto_mode = true
 path = "acp_vector.sqlite3"
-dimensions = 192
-min_query_chars = 80
+dimensions = 128
+min_query_chars = 120
 top_k = 2
 min_similarity = 0.82
+max_snippet_chars = 600
+max_entries = 3000
+summary_trigger_messages = 4
+summary_max_chars = 800
+
+[runtime]
+acp_http_bind_addr = "127.0.0.1:8090"
+maintenance_interval_seconds = 60
+health_interval_seconds = 120
+shutdown_drain_seconds = 30
+entry_auth_enabled = false
+entry_rate_limit_rpm = 240
+entry_rate_limit_burst = 60
+i18n_enabled = true
+i18n_default_language = "en-US"
+governance_enabled = true
+governance_policy_mode = "advisory"
+skills_enabled = true
+skills_cache_dir = "skills_cache"
+
+# OpenTelemetry
+otel_enabled = true
+otel_exporter = "otlp"
+otel_endpoint = "http://localhost:4317"
 ```
 
 ### Feature Flags

@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 /**
  * Configuration Manager for Go-On
  *

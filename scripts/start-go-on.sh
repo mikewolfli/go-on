@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Start go-on service on port 8090
 set -eu
 

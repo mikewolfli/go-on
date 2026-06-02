@@ -15,6 +15,7 @@ pub mod rpc_protocol;
 // they live in separate modules, avoiding name collisions.
 pub mod rate_limit;
 pub mod transport;
+pub mod grpc;
 pub mod websocket;
 
 // Re-exports

@@ -47,6 +47,7 @@ summary_max_chars = 1200
 maintenance_interval_seconds = 120
 health_interval_seconds = 60
 shutdown_drain_seconds = 60
+sqlite_vacuum_interval_cycles = 120
 acp_http_bind_addr = "0.0.0.0:8090"
 production_strict = true
 
@@ -60,6 +61,7 @@ entry_rate_limit_burst = 1000
 user_auth_enabled = true
 user_auth_token_secret_env = "GO_ON_USER_AUTH_TOKEN_SECRET"
 user_auth_token_ttl_seconds = 86400
+request_signing_enabled = false
 
 # ── Cross-Origin Resource Sharing (CORS) ──────────────────────────────
 # Comma-separated list of allowed origins.
@@ -76,6 +78,7 @@ tenant_default_daily_api_calls = 10000
 # ── Observability ─────────────────────────────────────────────────────
 otel_enabled = true
 otel_exporter = "otlp"
+otel_endpoint = "http://localhost:4317"
 otel_service_name = "go-on-multi"
 otel_sample_ratio = 0.5
 trace_slow_top_n = 50
@@ -85,6 +88,7 @@ skills_enabled = false
 skills_import_enabled = false
 skills_allowed_sources = []
 skills_require_sha256 = true
+skills_allow_floating_ref = false
 skills_cache_dir = "skills_cache"
 
 # ── Governance ────────────────────────────────────────────────────────

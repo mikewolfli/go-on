@@ -3,12 +3,12 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Local Mode - go-on Documentation</title>
+        <title>Local Mode - go-on Documentation — AI Agent Orchestration System</title>
 
 
         <!-- Custom HTML head -->
 
-        <meta name="description" content="">
+        <meta name="description" content="Complete documentation for go-on: ACP/MCP agent orchestration runtime with 35 AI provider integrations, 14-bus architecture, autonomous agent orchestration, governance, and observability">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
@@ -35,7 +35,7 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-a7ab1419.js";
+            window.path_to_searchindex_js = "../../searchindex-ebcb8906.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../../toc-ee19d562.js"></script>
@@ -137,7 +137,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title">go-on Documentation</h1>
+                    <h1 class="menu-title">go-on Documentation — AI Agent Orchestration System</h1>
 
                     <div class="right-buttons">
                         <a href="../../print.html" title="Print this book" aria-label="Print this book">
@@ -191,7 +191,7 @@
 <li><strong>Adaptive vector store</strong>: Uses <code>sqlite-vec</code> when available, falls back to JSON embeddings</li>
 <li><strong>Zero external dependencies</strong>: No database servers required</li>
 <li><strong>Quick setup</strong>: Minimal configuration needed</li>
-<li><strong>All 14 capability buses and 21 F-GAP modules included</strong>: Local profile has full Phase 4 functionality</li>
+<li><strong>All 14 capability buses included</strong>: Full tool, orchestration, observability, optimization, memory, and protocol sub-bus support</li>
 </ul>
 <h3 id="storage-architecture"><a class="header" href="#storage-architecture">Storage Architecture</a></h3>
 <pre><code>Local Mode Storage:
@@ -202,27 +202,52 @@
 <h2 id="configuration"><a class="header" href="#configuration">Configuration</a></h2>
 <h3 id="default-configuration"><a class="header" href="#default-configuration">Default Configuration</a></h3>
 <p>The local mode uses <code>config/config.toml</code> as the default configuration:</p>
-<pre><code class="language-toml"># config/config.toml (Local Mode Default)
-default_phase = "coding"
+<pre><code class="language-toml"># config/config.toml (profile-local default)
+schema_version = "1.0.0"
+default_phase = "think"
 model_selection_mode = "adaptive"
 
 [protocol]
-mode = "adaptive"
+mode = "acp_http"
 
 [cache]
 enabled = true
 path = "acp_cache.sqlite3"
-default_ttl_seconds = 3600
-max_entries = 5000
+default_ttl_seconds = 1800
+max_entries = 2000
 
 [vector]
 enabled = true
 auto_mode = true
 path = "acp_vector.sqlite3"
-dimensions = 192
-min_query_chars = 80
+dimensions = 128
+min_query_chars = 120
 top_k = 2
 min_similarity = 0.82
+max_snippet_chars = 600
+max_entries = 3000
+summary_trigger_messages = 4
+summary_max_chars = 800
+
+[runtime]
+acp_http_bind_addr = "127.0.0.1:8090"
+maintenance_interval_seconds = 60
+health_interval_seconds = 120
+shutdown_drain_seconds = 30
+entry_auth_enabled = false
+entry_rate_limit_rpm = 240
+entry_rate_limit_burst = 60
+i18n_enabled = true
+i18n_default_language = "en-US"
+governance_enabled = true
+governance_policy_mode = "advisory"
+skills_enabled = true
+skills_cache_dir = "skills_cache"
+
+# OpenTelemetry
+otel_enabled = true
+otel_exporter = "otlp"
+otel_endpoint = "http://localhost:4317"
 </code></pre>
 <h3 id="feature-flags"><a class="header" href="#feature-flags">Feature Flags</a></h3>
 <p>Local mode (<code>profile-local</code>) enables the following Cargo features:</p>

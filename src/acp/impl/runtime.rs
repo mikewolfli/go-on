@@ -106,7 +106,7 @@ pub fn new_acp_server(
     // SchemaRegistry, TenantBudgetEnforcer, OptimizerRegistry, PromptAssembler, and
     // PromotionRegistry with sensible defaults.
     // Create HarnessBus and CapabilityBus to wire into the server
-    let mut harness_bus = {
+    let harness_bus = {
         let config_path_ref = config_path.as_deref().map(Path::new);
         let storage_path = config_path_ref
             .and_then(|p| p.parent())
@@ -157,10 +157,8 @@ pub fn new_acp_server(
         }
         // Clone the enforcer for harness bus injection
         let bus_enforcer = enforcer.clone();
-        // The Arc has strong count 1 at this point, so get_mut succeeds
-        if let Some(bus) = Arc::get_mut(&mut harness_bus) {
-            bus.set_rbac_enforcer(bus_enforcer);
-        }
+        // Use the RwLock-backed setter which works through Arc without requiring unique ownership.
+        harness_bus.set_rbac_enforcer(bus_enforcer);
         Arc::new(std::sync::RwLock::new(enforcer))
     };
 
@@ -170,7 +168,8 @@ pub fn new_acp_server(
     // Create a shared provenance ledger
     let provenance_ledger = Arc::new(crate::observability::provenance::ProvenanceLedger::default());
     // BLUE56-GAP-B02: Inject first available LLM agent into MetacognitiveController
-    let first_agent: Option<Arc<dyn crate::agent::Agent>> = registry.get("coder")
+    let first_agent: Option<Arc<dyn crate::agent::Agent>> = registry
+        .get("coder")
         .or_else(|| registry.get("assistant"))
         .or_else(|| {
             let names = registry.names();
@@ -434,11 +433,15 @@ pub fn new_acp_server(
                         Some(server.cache_deps.cache.response_cache.clone()),
                         Some(server.cache_deps.cache.vector_store.clone()),
                         None,
-                        Some(Some(Arc::clone(&server.cache_deps.cache.memory_response_cache))),
+                        Some(Some(Arc::clone(
+                            &server.cache_deps.cache.memory_response_cache,
+                        ))),
                     );
                     tracing::info!("capability_bus: memory bus backends injected");
                 } else {
-                    tracing::warn!("capability_bus: Arc already shared, cannot inject memory backends");
+                    tracing::warn!(
+                        "capability_bus: Arc already shared, cannot inject memory backends"
+                    );
                 }
             }
 
@@ -532,6 +535,7 @@ pub fn new_acp_server(
                     hash_chain_auditor: None,
                     secret_manager: None,
                     memory_persistence: None,
+                    memory_retrieval_engine: None,
                     evolution_loop: None,
                     dependency_vulnerability_scanner: None,
                     secret_exposure_detector: None,
@@ -801,6 +805,12 @@ pub async fn run_acp_server(server: &mut AcpServer) -> Result<()> {
 
     let shutdown_notify = Arc::clone(&server.shutdown_notify);
 
+    // ── Wire security subsystems (GAP-B52) ──────────────────────────────
+    crate::security::wire_content_safety(&server.runtime_config);
+    crate::security::wire_prompt_injection(&server.runtime_config);
+    crate::security::wire_cert_monitor(&server.runtime_config);
+    crate::security::start_secret_rotation_if_configured(&server.runtime_config);
+
     // Start background tasks
     if let Err(e) = start_background_tasks(server, Arc::clone(&shutdown_notify)).await {
         error!("Failed to start background tasks: {}", e);
@@ -909,6 +919,12 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
     info!("ACP HTTP server starting on {}", bind_addr);
 
     let shutdown_notify = Arc::clone(&server.shutdown_notify);
+
+    // ── Wire security subsystems (GAP-B52) ──────────────────────────────
+    crate::security::wire_content_safety(&server.runtime_config);
+    crate::security::wire_prompt_injection(&server.runtime_config);
+    crate::security::wire_cert_monitor(&server.runtime_config);
+    crate::security::start_secret_rotation_if_configured(&server.runtime_config);
 
     if let Err(err) = start_background_tasks(server.as_ref(), Arc::clone(&shutdown_notify)).await {
         error!("Failed to start background tasks: {}", err);

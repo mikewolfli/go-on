@@ -44,6 +44,7 @@ health_interval_seconds = 120
 shutdown_drain_seconds = 30
 sqlite_vacuum_interval_cycles = 60
 entry_auth_enabled = false
+entry_auth_api_key_env = "GO_ON_ENTRY_API_KEY"
 entry_rate_limit_rpm = 240
 entry_rate_limit_burst = 60
 production_strict = false
@@ -53,9 +54,18 @@ skills_enabled = true
 skills_import_enabled = false
 skills_allowed_sources = ["local:*"]
 skills_require_sha256 = true
+skills_allow_floating_ref = false
 skills_cache_dir = "skills_cache"
 governance_enabled = true
 governance_policy_mode = "advisory"
+
+# ── Observability / OpenTelemetry ────────────────────────────────────
+otel_enabled = true
+otel_exporter = "otlp"
+otel_endpoint = "http://localhost:4317"
+otel_service_name = "go-on-local"
+otel_sample_ratio = 1.0
+trace_slow_top_n = 20
 
 [agents]
 [agents.deepseek]

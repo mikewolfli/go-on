@@ -10,7 +10,7 @@
 //!   - Optimization / Operations: cost, config baseline, harness
 //!   - Streaming chat: chat_stream
 //!
-//! All methods send JSON-RPC 2.0 requests to `POST {base_url}/v1/responses`.
+//! All methods send JSON-RPC 2.0 requests to `POST {base_url}/rpc`.
 
 pub mod client;
 pub mod error;

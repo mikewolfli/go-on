@@ -362,14 +362,14 @@ impl MtlsAcceptor {
 // MtlsConnector
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)] // Reserved for future outbound mTLS client connections (GAP-B52-24)
 /// Connects to remote mTLS endpoints using rustls.
-#[allow(dead_code)]
 pub struct MtlsConnector {
     config: MtlsConfig,
     client_config: RwLock<Option<Arc<rustls::ClientConfig>>>,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // Reserved for future outbound mTLS client connections (GAP-B52-24)
 impl MtlsConnector {
     pub fn new(config: MtlsConfig) -> Self {
         Self {
@@ -459,7 +459,6 @@ impl MtlsConnector {
 
 /// Check a certificate file for expiry and return a warning if the certificate
 /// will expire within the given threshold.
-#[allow(dead_code)]
 pub fn check_cert_expiry(
     cert_path: &Path,
     warning_threshold_days: u64,
@@ -495,6 +494,7 @@ pub fn check_cert_expiry(
 /// Monitor certificate expiry on a recurring interval.
 /// Spawn this as a tokio task during initialization.
 #[allow(dead_code)]
+/// Wired via server startup in production deployments.
 pub fn start_cert_monitor(
     config: MtlsConfig,
     check_interval: Duration,
@@ -515,6 +515,27 @@ pub fn start_cert_monitor(
             }
         }
     });
+}
+
+/// Spawn the certificate monitor task if an mTLS config is provided.
+///
+/// If `config` is `Some`, calls `start_cert_monitor` with a 24-hour check
+/// interval and a 30-day warning threshold. If `config` is `None`, logs a
+/// debug message indicating certificate monitoring is disabled.
+#[allow(dead_code)]
+/// Wired via server startup in production deployments.
+pub fn spawn_cert_monitor_if_configured(config: Option<MtlsConfig>) {
+    match config {
+        Some(cfg) => {
+            info!(
+                "mTLS certificate monitoring enabled (interval: 24h, warning threshold: 30 days)"
+            );
+            start_cert_monitor(cfg, Duration::from_secs(86400), 30);
+        }
+        None => {
+            tracing::debug!("mTLS certificate monitoring disabled — no config provided");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

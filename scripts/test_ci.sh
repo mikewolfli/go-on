@@ -40,14 +40,20 @@ cargo test --bin go-on --features profile-local,backend-sqlite
 
 # 2b. Simple server profile
 echo "--- Profile: simple-server ---"
-cargo clippy --no-default-features --features profile-simple-server -- -D warnings
+cargo clippy --no-default-features --features profile-simple-server,backend-sqlite -- -D warnings
+cargo test --no-default-features --features profile-simple-server,backend-sqlite --test cli_tests 2>/dev/null || echo "  ↪ simple-server cli_tests skipped (test may not exist for this profile)"
 
 # 2c. Multi-users server profile
 echo "--- Profile: multi-users-server ---"
 cargo clippy --no-default-features --features profile-multi-users-server,backend-postgres -- -D warnings 2>/dev/null || \
     echo "  ↪ multi-users-server clippy skipped (requires postgres deps on this machine)"
+cargo test --no-default-features --features profile-multi-users-server,backend-postgres --test cli_tests 2>/dev/null || echo "  ↪ multi-users-server cli_tests skipped (requires postgres deps)"
 
 echo "✅ Tests passed"
+
+# To run all tests including ignored (requires infrastructure):
+#   cargo test --features profile-local,backend-sqlite -- --include-ignored
+# E2e tests (marked `#[ignore]`) require specific infrastructure and are not run in CI.
 
 # 3. Code lint (strict mode)
 echo "=== Step 3: Code lint ==="

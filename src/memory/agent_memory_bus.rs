@@ -9,6 +9,11 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::memory::memory::{MemoryClass, MemoryEntry, MemoryStore};
+// TODO(TICKET): Once vector similarity search is the production retrieval
+// path, import VectorStore and ConfigurableEmbeddingProvider here to replace
+// the linear substring/tag scan in retrieve_memories().
+//   use crate::memory::vector::VectorStore;
+//   use crate::memory::embedding_provider::ConfigurableEmbeddingProvider;
 use tracing::{info, warn};
 
 // ---------------------------------------------------------------------------
@@ -184,6 +189,9 @@ impl AgentMemoryBus {
     /// query (simple substring / tag match).  In a production system this
     /// would use vector similarity; the current implementation does a
     /// linear scan with a simple tag‑based relevance heuristic.
+    ///
+    // TODO(TICKET): Replace this linear substring/tag scan with vector
+    // similarity search using VectorStore + ConfigurableEmbeddingProvider.
     pub fn retrieve_memories(&self, query: &str, limit: usize) -> Vec<MemoryEntry> {
         let store = match self.store.lock() {
             Ok(s) => s,

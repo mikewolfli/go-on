@@ -71,12 +71,20 @@ export class GoOnClient {
       params,
     };
 
-    const response = await fetch(`${this.baseUrl}${JSON_RPC_ENDPOINT}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(this.timeoutMs),
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}${JSON_RPC_ENDPOINT}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        throw new GoOnError(0, `Request timed out after ${this.timeoutMs}ms`);
+      }
+      throw new GoOnError(0, (err as Error).message ?? "Unknown fetch error");
+    }
 
     if (!response.ok) {
       throw new GoOnError(
@@ -127,10 +135,25 @@ export class GoOnClient {
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let wasAborted = false;
+
+    // Listen for abort signal so we can distinguish "completed" vs "aborted"
+    const onAbort = () => {
+      wasAborted = true;
+    };
+    signal?.addEventListener("abort", onAbort);
 
     try {
       while (true) {
-        const { done, value } = await reader.read();
+        let result: ReadableStreamReadResult<Uint8Array>;
+        try {
+          result = await reader.read();
+        } catch {
+          wasAborted = true;
+          break;
+        }
+
+        const { done, value } = result;
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
@@ -144,14 +167,22 @@ export class GoOnClient {
           for (const line of frame.split("\n")) {
             if (line.startsWith("data:")) {
               const data = line.slice(5).trim();
-              if (data === "[DONE]") return;
+              if (data === "[DONE]") {
+                wasAborted = false;
+                return;
+              }
               yield JSON.parse(data) as Record<string, unknown>;
             }
           }
         }
       }
     } finally {
+      signal?.removeEventListener("abort", onAbort);
       reader.releaseLock();
+      // If the stream ended due to abort, surface it as a GoOnError
+      if (wasAborted) {
+        throw new GoOnError(0, "Chat stream was aborted");
+      }
     }
   }
 

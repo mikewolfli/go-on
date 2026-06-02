@@ -4,6 +4,8 @@
 //! consciousness metrics, and code quality scans into a comprehensive
 //! self-improvement report.
 
+#![allow(dead_code)] // Reserved—wired via evolution loop in production
+
 use crate::intelligence::code_quality::CodeQualityReport;
 use crate::intelligence::consciousness::ConsciousnessProfile;
 use crate::intelligence::metacognitive::MetacognitiveProfile;
@@ -66,7 +68,7 @@ impl SelfImprovementReport {
     }
 
     /// Generate a report from available subsystem data.
-    pub fn generate(
+    pub async fn generate(
         history: Option<&EvolutionHistory>,
         metacognitive_profile: Option<MetacognitiveProfile>,
         consciousness_profile: Option<ConsciousnessProfile>,
@@ -76,7 +78,7 @@ impl SelfImprovementReport {
 
         // ── Evolution history ───────────────────────────────────────────
         if let Some(h) = history {
-            let entries = h.list();
+            let entries = h.list().await;
             report.total_evolution_cycles = entries.len() as u64;
             report.successful_evolutions =
                 entries.iter().filter(|e| e.is_successful()).count() as u64;
@@ -238,8 +240,8 @@ mod tests {
         assert!(!report.summary.is_empty());
     }
 
-    #[test]
-    fn test_generate_with_partial_data() {
+    #[tokio::test]
+    async fn test_generate_with_partial_data() {
         let mc_profile = MetacognitiveProfile {
             total_observations: 10,
             unresolved_observations: 2,
@@ -259,7 +261,7 @@ mod tests {
         };
 
         let report =
-            SelfImprovementReport::generate(None, Some(mc_profile), Some(cs_profile), None);
+            SelfImprovementReport::generate(None, Some(mc_profile), Some(cs_profile), None).await;
 
         assert_eq!(report.total_evolution_cycles, 0);
         assert!(report.overall_health_score > 0.0);
@@ -274,8 +276,8 @@ mod tests {
         assert!(md.contains("Recommendations"));
     }
 
-    #[test]
-    fn test_generate_with_code_quality() {
+    #[tokio::test]
+    async fn test_generate_with_code_quality() {
         let cq = crate::intelligence::code_quality::CodeQualityReport {
             issues: vec![CodeQualityIssue::DeadCode {
                 module: "src/main.rs".to_string(),
@@ -286,7 +288,7 @@ mod tests {
             scanned_at_ms: 1000,
         };
 
-        let report = SelfImprovementReport::generate(None, None, None, Some(cq));
+        let report = SelfImprovementReport::generate(None, None, None, Some(cq)).await;
         assert!(report.overall_health_score < 1.0);
         assert!(!report.recommendations.is_empty());
     }

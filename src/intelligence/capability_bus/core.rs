@@ -625,6 +625,10 @@ pub struct CapabilityBus {
 
     /// Cumulative count of evolve() subsystem timeouts (non-zero indicates silent degradation)
     pub evolve_timeout_count: std::sync::atomic::AtomicU64,
+
+    /// Multi-model voter — cross-validates high-risk decisions via agent consensus
+    #[cfg(feature = "sub-bus-voter-future")]
+    pub multi_voter: crate::intelligence::multi_model_voter::MultiModelVoter,
 }
 
 impl CapabilityBus {
@@ -691,7 +695,13 @@ impl CapabilityBus {
             #[cfg(feature = "sub-bus-optimization")]
             optimization_bus: OptimizationBus::default(),
             #[cfg(feature = "sub-bus-memory")]
-            memory_bus: MemoryBus::new(None, None, None, None),
+            // MemoryBus is created with default in-memory backends so data is
+            // never silently lost. L2/L3 backends (SQLite/vector) can be
+            // injected later via set_backends() once the shared handles are
+            // available at server startup. The evolve_timeout_count tracking
+            // ensures stuck memory operations are surfaced as governance drift
+            // when they exceed their deadline budget.
+            memory_bus: MemoryBus::new(None, None, None, None).with_default_backends(),
             #[cfg(feature = "sub-bus-protocol")]
             protocol_bus: ProtocolBus::new(),
             #[cfg(feature = "sub-bus-orchestration")]
@@ -700,7 +710,10 @@ impl CapabilityBus {
             distributed_memory_bus: DistributedMemoryBus::new(5000),
             max_event_history: 100,
             consciousness: ConsciousnessMetrics::new(Default::default()),
-            metacognitive: MetacognitiveController::new(Default::default()),
+            // BLUE56-GAP-B02: `MetacognitiveController::with_llm(Default::default(), llm_agent)`
+                        // should be used here when an LLM agent is available at bus construction.
+                        // `with_metacognitive_llm()` builder method also exists for post-hoc injection.
+                        metacognitive: MetacognitiveController::new(Default::default()),
             world_model: WorldModel::new(Default::default()),
             self_model: SelfModelCore::new(Default::default()),
             federated_rl: FederatedRL::new(Default::default()),
@@ -728,6 +741,9 @@ impl CapabilityBus {
             transport: Arc::new(Mutex::new(MultiChannelTransport::new(Default::default()))),
             config: CapabilityBusConfig::default(),
             evolve_timeout_count: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(feature = "sub-bus-voter-future")]
+            multi_voter:
+                crate::intelligence::multi_model_voter::MultiModelVoter::new(),
         }
     }
 
@@ -1064,7 +1080,8 @@ impl CapabilityBus {
         // Step C: pick best agent from capability graph + reputation
         // BLUE56-B11: Also query QLearningAgent for learned routing preferences
         let q_learning_state = (task_type_str.clone(), "select_agent".to_string());
-        let _q_preferred_action = lock_guard(&self.q_learning).choose_action(&q_learning_state, &[]);
+        let _q_preferred_action =
+            lock_guard(&self.q_learning).choose_action(&q_learning_state, &[]);
         let candidate_agents = self
             .capability_graph
             .lock()
@@ -2079,7 +2096,8 @@ impl CapabilityBus {
         {
             Ok(r) => r,
             Err(_) => {
-                self.evolve_timeout_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.evolve_timeout_count
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 warn!("evolve: evolve_q_learning timed out — using default reward");
                 0.0
             }
@@ -2091,7 +2109,8 @@ impl CapabilityBus {
         .await
         .is_err()
         {
-            self.evolve_timeout_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.evolve_timeout_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             warn!("evolve: evolve_experience timed out — skipping");
         }
 
@@ -2129,7 +2148,8 @@ impl CapabilityBus {
         .await
         .is_err()
         {
-            self.evolve_timeout_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.evolve_timeout_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             warn!("evolve: scenario registration timed out — skipping");
         }
 
@@ -2140,7 +2160,8 @@ impl CapabilityBus {
         .await
         .is_err()
         {
-            self.evolve_timeout_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.evolve_timeout_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             warn!("evolve: evolve_drift_protection timed out — skipping");
         }
 
@@ -2151,7 +2172,8 @@ impl CapabilityBus {
         .await
         .is_err()
         {
-            self.evolve_timeout_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.evolve_timeout_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             warn!("evolve: evolve_fault_tolerance timed out — skipping");
         }
 
@@ -2161,7 +2183,8 @@ impl CapabilityBus {
         .await
         .is_err()
         {
-            self.evolve_timeout_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.evolve_timeout_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             warn!("evolve: evolve_harness_bus timed out — skipping");
         }
 
@@ -2172,7 +2195,8 @@ impl CapabilityBus {
         .await
         .is_err()
         {
-            self.evolve_timeout_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.evolve_timeout_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             warn!("evolve: evolve_federated_rl timed out — skipping");
         }
 
@@ -2182,7 +2206,8 @@ impl CapabilityBus {
         .await
         .is_err()
         {
-            self.evolve_timeout_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.evolve_timeout_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             warn!("evolve: evolve_continuous_learning timed out — skipping");
         }
 
@@ -2192,7 +2217,8 @@ impl CapabilityBus {
         .await
         .is_err()
         {
-            self.evolve_timeout_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.evolve_timeout_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             warn!("evolve: evolve_metacognitive timed out — skipping");
         }
 
@@ -2203,7 +2229,8 @@ impl CapabilityBus {
         .await
         .is_err()
         {
-            self.evolve_timeout_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.evolve_timeout_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             warn!("evolve: evolve_discovery timed out — skipping");
         }
 
@@ -2261,7 +2288,8 @@ impl CapabilityBus {
         .await
         .is_err()
         {
-            self.evolve_timeout_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.evolve_timeout_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             warn!("evolve: abstract_knowledge phase timed out — skipping");
         }
 
@@ -2272,7 +2300,8 @@ impl CapabilityBus {
         .await
         .is_err()
         {
-            self.evolve_timeout_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.evolve_timeout_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             warn!("evolve: evolve_evolution_graph timed out — skipping");
         }
 
@@ -2282,7 +2311,8 @@ impl CapabilityBus {
         .await
         .is_err()
         {
-            self.evolve_timeout_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.evolve_timeout_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             warn!("evolve: evolve_self_model timed out — skipping");
         }
 
@@ -2292,7 +2322,8 @@ impl CapabilityBus {
         .await
         .is_err()
         {
-            self.evolve_timeout_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.evolve_timeout_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             warn!("evolve: evolve_consciousness timed out — skipping");
         }
 
@@ -2302,7 +2333,8 @@ impl CapabilityBus {
         .await
         .is_err()
         {
-            self.evolve_timeout_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.evolve_timeout_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             warn!("evolve: evolve_world_model timed out — skipping");
         }
 
@@ -2339,7 +2371,8 @@ impl CapabilityBus {
         .await
         .is_err()
         {
-            self.evolve_timeout_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.evolve_timeout_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             warn!("evolve: transport.send_event timed out — skipping");
         }
 
@@ -2349,7 +2382,8 @@ impl CapabilityBus {
         .await
         .is_err()
         {
-            self.evolve_timeout_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.evolve_timeout_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             warn!("evolve: evolve_consensus timed out — skipping");
         }
 
@@ -2360,6 +2394,21 @@ impl CapabilityBus {
             "success",
             serde_json::json!({"reward": reward, "state": state, "action": action}),
         );
+    }
+
+    // ------------------------------------------------------------------
+    // Multi-model voter (sub-bus-voter-future)
+    // ------------------------------------------------------------------
+
+    /// Run multi-model voting on a high-stakes decision.
+    /// Spawns concurrent agent evaluations and aggregates via configured strategy.
+    #[cfg(feature = "sub-bus-voter-future")]
+    pub async fn vote_on_decision(
+        &self,
+        prompt: &str,
+        agents: &[std::sync::Arc<dyn crate::agents::agent::Agent>],
+    ) -> anyhow::Result<crate::intelligence::multi_model_voter::VotingOutcome> {
+        self.multi_voter.vote(prompt, agents).await
     }
 
     // ------------------------------------------------------------------
@@ -2445,7 +2494,9 @@ impl CapabilityBus {
         }
 
         // Evolve timeout counter — report cumulative degradation
-        p.evolve_timeout_count = self.evolve_timeout_count.load(std::sync::atomic::Ordering::Relaxed);
+        p.evolve_timeout_count = self
+            .evolve_timeout_count
+            .load(std::sync::atomic::Ordering::Relaxed);
 
         // Skill evolution metrics
         #[cfg(feature = "sub-bus-tool")]

@@ -312,10 +312,12 @@ impl KeyRotator for EnvRotator {
 /// When the `vault` feature is enabled, uses reqwest to connect
 /// to a HashiCorp Vault server for key management. Without it, all operations
 /// return `BackendError("Vault not configured")`.
-#[allow(dead_code)]
+#[allow(dead_code)] // Reserved—wired via server startup when vault is configured
+/// Wired via server startup when vault feature is enabled.
 pub struct VaultRotator {
     endpoint: String,
-    #[allow(dead_code)]
+    /// Vault API token; only available when the `vault` feature is enabled.
+    #[cfg(feature = "vault")]
     token: String,
     mount_path: String,
     #[cfg(feature = "vault")]
@@ -328,10 +330,16 @@ impl VaultRotator {
     /// When the `vault` feature is enabled, uses reqwest to call the
     /// HashiCorp Vault REST API. Without it, all operations return
     /// `BackendError("Vault not configured")`.
-    #[allow(dead_code)]
-    pub fn new(endpoint: String, token: String, mount_path: String) -> Self {
+    #[allow(dead_code)] // Reserved—wired via server startup when vault is configured
+    /// Wired via server startup when vault feature is enabled.
+    pub fn new(
+        endpoint: String,
+        #[cfg(feature = "vault")] token: String,
+        mount_path: String,
+    ) -> Self {
         Self {
             endpoint,
+            #[cfg(feature = "vault")]
             token,
             mount_path,
             #[cfg(feature = "vault")]
@@ -341,6 +349,7 @@ impl VaultRotator {
 
     /// Build common headers for Vault API calls.
     #[cfg(feature = "vault")]
+    #[allow(dead_code)] // Reserved—wired via server startup
     fn headers(&self) -> reqwest::header::HeaderMap {
         let mut headers = reqwest::header::HeaderMap::new();
         if let Ok(value) = reqwest::header::HeaderValue::from_str(&self.token) {
@@ -406,12 +415,15 @@ impl KeyRotator for VaultRotator {
             tracing::info!(target: "vault", key = %key_id, "VaultRotator: key created");
             return Ok(entry);
         }
-        #[allow(unused_variables)]
-        let _ = (key_id, algorithm);
-        Err(SecretError::BackendError(format!(
-            "Vault not configured: would create key {} at {}/{}",
-            key_id, self.endpoint, self.mount_path
-        )))
+        #[cfg(not(feature = "vault"))]
+        {
+            #[allow(unused_variables)]
+            let _ = (key_id, algorithm);
+            return Err(SecretError::BackendError(format!(
+                "Vault not configured: would create key {} at {}/{}",
+                key_id, self.endpoint, self.mount_path
+            )));
+        }
     }
 
     async fn store_key(&self, entry: &SecretEntry) -> Result<(), SecretError> {
@@ -451,11 +463,14 @@ impl KeyRotator for VaultRotator {
             tracing::debug!(target: "vault", key = %entry.key_id, "VaultRotator: key stored");
             return Ok(());
         }
-        #[allow(unused_variables)]
-        let _ = entry;
-        Err(SecretError::BackendError(
-            "Vault not configured: store".into(),
-        ))
+        #[cfg(not(feature = "vault"))]
+        {
+            #[allow(unused_variables)]
+            let _ = entry;
+            return Err(SecretError::BackendError(
+                "Vault not configured: store".into(),
+            ));
+        }
     }
 
     async fn retrieve_key(&self, key_id: &str) -> Result<Option<SecretEntry>, SecretError> {
@@ -496,11 +511,14 @@ impl KeyRotator for VaultRotator {
             tracing::debug!(target: "vault", key = %key_id, "VaultRotator: key retrieved");
             return Ok(Some(entry));
         }
-        #[allow(unused_variables)]
-        let _ = key_id;
-        Err(SecretError::BackendError(
-            "Vault not configured: retrieve".into(),
-        ))
+        #[cfg(not(feature = "vault"))]
+        {
+            #[allow(unused_variables)]
+            let _ = key_id;
+            return Err(SecretError::BackendError(
+                "Vault not configured: retrieve".into(),
+            ));
+        }
     }
 
     async fn delete_key(&self, key_id: &str) -> Result<(), SecretError> {
@@ -529,11 +547,14 @@ impl KeyRotator for VaultRotator {
             tracing::debug!(target: "vault", key = %key_id, "VaultRotator: key deleted");
             return Ok(());
         }
-        #[allow(unused_variables)]
-        let _ = key_id;
-        Err(SecretError::BackendError(
-            "Vault not configured: delete".into(),
-        ))
+        #[cfg(not(feature = "vault"))]
+        {
+            #[allow(unused_variables)]
+            let _ = key_id;
+            return Err(SecretError::BackendError(
+                "Vault not configured: delete".into(),
+            ));
+        }
     }
 
     async fn list_keys(&self) -> Result<Vec<KeyId>, SecretError> {
@@ -561,9 +582,12 @@ impl KeyRotator for VaultRotator {
             tracing::debug!(target: "vault", "VaultRotator: listed keys");
             return Ok(vec![]);
         }
-        Err(SecretError::BackendError(
-            "Vault not configured: list".into(),
-        ))
+        #[cfg(not(feature = "vault"))]
+        {
+            return Err(SecretError::BackendError(
+                "Vault not configured: list".into(),
+            ));
+        }
     }
 }
 

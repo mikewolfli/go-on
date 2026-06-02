@@ -1681,10 +1681,19 @@ impl BrainLoop {
     /// async loop to completion.  Prefer calling [`run_async`] directly
     /// when already in an async context.
     ///
-    /// ⚠️  Do NOT call from an async context — creating a nested runtime
-    /// will panic. Use `run_async` directly instead.
-    #[deprecated(since = "1.1.0", note = "use run_async instead to avoid nested runtime creation")]
+    /// ╔══════════════════════════════════════════════════════════════╗
+    /// ║  DEPRECATED — will be removed in a future release.         ║
+    /// ║  Do NOT call from an async context — creating a nested     ║
+    /// ║  runtime will panic. Use `run_async()` instead.            ║
+    /// ╚══════════════════════════════════════════════════════════════╝
+    #[deprecated(
+        since = "1.2.0",
+        note = "use run_async instead — this wrapper will be removed in a future release"
+    )]
     pub fn run(&self, task: &str, steps: Vec<BrainLoopStep>) -> anyhow::Result<BrainLoopProfile> {
+        tracing::error!(
+            "BrainLoop::run() is DEPRECATED and scheduled for removal — use run_async() directly instead"
+        );
         let bl = self.clone();
         let task = task.to_string();
         let rt = tokio::runtime::Builder::new_current_thread()

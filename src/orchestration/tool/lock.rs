@@ -122,11 +122,30 @@ impl ToolLockManager {
     ///
     /// # Blocking behaviour
     ///
+    /// Acquire a lock on a tool path with the given access mode.
+    ///
     /// This function **blocks** the calling thread until the lock is
     /// available.  Uses exponential backoff with jitter to avoid CPU
     /// burning.  A 30-second timeout prevents indefinite blocking.
     /// Callers on async runtimes should use
     /// `tokio::task::spawn_blocking` to avoid blocking the runtime.
+    ///
+    /// # Race condition (known — see F-GAP-87)
+    ///
+    /// When the deadline is reached without acquiring the lock, this
+    /// function **returns a `LockHandle` anyway** rather than deadlocking.
+    /// The handle is returned so the caller can proceed, but **the caller
+    /// does NOT have exclusive access** to the resource.
+    ///
+    /// Callers **must**:
+    /// 1. Treat the returned `LockHandle` as a *best-effort* guard.
+    /// 2. Handle concurrent access safely (e.g. via retry, advisory
+    ///    coordination, or accepting temporary inconsistency).
+    /// 3. NOT assume the lock was actually acquired — always check
+    ///    higher-level invariants before mutating state.
+    ///
+    /// See <F-GAP-87> for the planned fix (fair queueing / tokio::sync::Mutex
+    /// migration to eliminate soft-timeout races).
     ///
     /// # Panics
     ///

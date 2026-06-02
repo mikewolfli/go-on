@@ -5,6 +5,7 @@
 //! blacklisting failed models for a configurable cooldown period.
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -229,6 +230,15 @@ impl HotFailover {
         guard.clear();
     }
 }
+
+/// Global singleton HotFailover instance, shared across requests.
+///
+/// Constructed lazily at first access using the default configuration.
+/// Use this when you need a single failover tracker per process without
+/// explicitly plumbing a `&HotFailover` reference through your call chain.
+#[allow(dead_code)] // Reserved for AcpServer wiring
+pub static HOT_FAILOVER_INSTANCE: LazyLock<Mutex<HotFailover>> =
+    LazyLock::new(|| Mutex::new(HotFailover::new(HotFailoverConfig::default())));
 
 // ---------------------------------------------------------------------------
 // Tests

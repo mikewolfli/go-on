@@ -58,8 +58,10 @@ pub mod discovery;
 pub mod hot_failover;
 pub mod matcher;
 pub mod metacognitive;
-pub mod multi_model_voter;
 pub mod semantic_matcher;
+
+pub mod code_quality;
+pub mod metacognitive_persistence;
 
 pub mod capability_bus;
 pub mod capability_graph;
@@ -82,3 +84,8 @@ pub mod evolution_graph;
 pub mod hub;
 pub mod triple_fusion;
 pub mod world_model;
+
+// Multi-model voter for high-stakes decision consensus.
+// Gated behind sub-bus-voter-future feature for advanced deployment profiles.
+#[cfg(feature = "sub-bus-voter-future")]
+pub mod multi_model_voter;

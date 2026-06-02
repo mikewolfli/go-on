@@ -3,7 +3,7 @@ title = "go-on Documentation — AI Agent Orchestration System"
 authors = ["go-on Team"]
 language = "en"
 src = "src"
-description = "Complete documentation for go-on: ACP/MCP agent orchestration runtime with 37+ AI providers, 14-bus architecture, and 21 F-GAP modules"
+description = "Complete documentation for go-on: ACP/MCP agent orchestration runtime with 35 AI provider integrations, 14-bus architecture, autonomous agent orchestration, governance, and observability"
 
 [build]
 build-dir = "book"

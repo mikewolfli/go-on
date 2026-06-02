@@ -12,7 +12,7 @@ interface ApprovalRequest {
   timestamp: string;
 }
 
-const RISK_COLORS: Record<ApprovalRequest["riskLevel"], string> = {
+const _RISK_COLORS: Record<ApprovalRequest["riskLevel"], string> = {
   low: "var(--vscode-testing-iconPassed)",
   medium: "var(--vscode-notificationsInfoIcon-foreground)",
   high: "var(--vscode-notificationsWarningIcon-foreground)",

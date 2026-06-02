@@ -112,6 +112,8 @@ pub struct WebhookConfig {
     pub headers: HashMap<String, String>,
     #[serde(default)]
     pub enabled: bool,
+    /// Timeout in milliseconds for the webhook request.
+    pub timeout_ms: u64,
 }
 
 /// AlertManager — manages alert rules and fires notifications
@@ -189,6 +191,31 @@ impl AlertManager {
         }
 
         fired
+    }
+
+    /// Configure webhook from environment variables.
+    /// Reads `GO_ON_ALERT_WEBHOOK_URL`, `GO_ON_ALERT_WEBHOOK_ENABLED`,
+    /// and `GO_ON_ALERT_WEBHOOK_TIMEOUT`.
+    pub fn configure_from_env(mut self) -> Self {
+        if let Ok(url) = std::env::var("GO_ON_ALERT_WEBHOOK_URL") {
+            if !url.is_empty() {
+                let enabled = std::env::var("GO_ON_ALERT_WEBHOOK_ENABLED")
+                    .map(|v| v == "1" || v.to_lowercase() == "true")
+                    .unwrap_or(true);
+                let config = WebhookConfig {
+                    url,
+                    enabled,
+                    headers: HashMap::new(),
+                    timeout_ms: std::env::var("GO_ON_ALERT_WEBHOOK_TIMEOUT")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(5000),
+                };
+                self.webhook = config;
+                tracing::info!("Alert webhook configured via environment");
+            }
+        }
+        self
     }
 
     /// Set webhook configuration

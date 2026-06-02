@@ -217,7 +217,10 @@ impl GoOnClient {
 
                     for line in frame.lines() {
                         let trimmed = line.trim();
-                        if let Some(data) = trimmed.strip_prefix("data: ") {
+                        if let Some(data) = trimmed
+                            .strip_prefix("data: ")
+                            .or_else(|| trimmed.strip_prefix("data:"))
+                        {
                             let data = data.trim();
                             if data == "[DONE]" {
                                 continue;
@@ -247,6 +250,15 @@ impl GoOnClient {
 
     // ── Internal helpers ──────────────────────────────────────────────
 
+    /// Returns `true` if the HTTP status or error represents a transient
+    /// failure that should be retried.
+    fn is_retryable(status: reqwest::StatusCode, err: Option<&SdkError>) -> bool {
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
+            return true;
+        }
+        matches!(err, Some(SdkError::Http(_)))
+    }
+
     async fn json_rpc(&self, method: &str, params: Value) -> Result<Value, SdkError> {
         let payload = serde_json::json!({
             "jsonrpc": "2.0",
@@ -255,9 +267,10 @@ impl GoOnClient {
             "params": params,
         });
 
-        let mut last_error = None;
+        let mut last_error: Option<SdkError> = None;
 
         for attempt in 0..=self.max_retries {
+            // ── Build request ────────────────────────────────────────────────
             let mut req = self
                 .http
                 .post(format!("{}{}", self.base_url, JSON_RPC_ENDPOINT));
@@ -266,68 +279,89 @@ impl GoOnClient {
                 req = req.timeout(timeout);
             }
 
-            match req.json(&payload).send().await {
+            // ── Send ────────────────────────────────────────────────────────
+            let result = req.json(&payload).send().await;
+
+            // Extract status and response, or handle transport error
+            let (resp, status) = match result {
                 Ok(resp) => {
                     let status = resp.status();
-                    // Non-retryable client errors: 4xx → fail immediately
-                    if status.is_client_error() {
-                        return match resp.json::<Value>().await {
-                            Ok(val) => {
-                                let code = val.get("error").and_then(|e| e.get("code")).and_then(Value::as_i64).unwrap_or(-1);
-                                let msg = val.get("error").and_then(|e| e.get("message")).and_then(Value::as_str).unwrap_or("unknown");
-                                Err(SdkError::JsonRpc { code, message: msg.to_string() })
-                            }
-                            Err(_) => Err(SdkError::UnexpectedShape(format!(
-                                "HTTP {} {}: non-JSON response",
-                                status.as_u16(),
-                                status.canonical_reason().unwrap_or("")
-                            ))),
-                        };
-                    }
-                    // Server errors: 5xx → retry
-                    if status.is_server_error() {
-                        last_error = Some(SdkError::UnexpectedShape(format!(
-                            "server error (HTTP {})",
-                            status.as_u16()
-                        )));
-                        continue;
-                    }
-                    // Success: 2xx → parse JSON
-                    match resp.json::<Value>().await {
-                        Ok(val) => {
-                            if let Some(err) = val.get("error") {
-                                return Err(SdkError::JsonRpc {
-                                    code: err.get("code").and_then(Value::as_i64).unwrap_or(-1),
-                                    message: err
-                                        .get("message")
-                                        .and_then(Value::as_str)
-                                        .unwrap_or("unknown")
-                                        .to_string(),
-                                });
-                            }
-                            return Ok(val.get("result").cloned().unwrap_or(Value::Null));
-                        }
-                        Err(e) => {
-                            // JSON parse failure on 2xx is non-retryable
-                            return Err(SdkError::Http(e));
-                        }
-                    }
+                    (resp, status)
                 }
                 Err(e) => {
-                    // Transport errors (timeout, connection refused) → retry
+                    // Transport errors (timeout, connection refused, etc.)
                     last_error = Some(SdkError::Http(e));
+                    if attempt < self.max_retries {
+                        let backoff = Self::backoff_delay(self.retry_delay, attempt);
+                        tokio::time::sleep(backoff).await;
+                    }
+                    continue;
+                }
+            };
+
+            // ── Determine if retryable ──────────────────────────────────────
+            if Self::is_retryable(status, None) {
+                last_error = Some(SdkError::UnexpectedShape(format!(
+                    "HTTP {} {}",
+                    status.as_u16(),
+                    status.canonical_reason().unwrap_or("")
+                )));
+                if attempt < self.max_retries {
+                    let backoff = Self::backoff_delay(self.retry_delay, attempt);
+                    tokio::time::sleep(backoff).await;
+                }
+                continue;
+            }
+
+            // ── Non-retryable: parse response (success or client error) ────
+            // HTTP success (2xx) — parse JSON-RPC body
+            if status.is_success() {
+                match resp.json::<Value>().await {
+                    Ok(val) => {
+                        if let Some(err) = val.get("error") {
+                            return Err(SdkError::JsonRpc {
+                                code: err.get("code").and_then(Value::as_i64).unwrap_or(-1),
+                                message: err
+                                    .get("message")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("unknown")
+                                    .to_string(),
+                            });
+                        }
+                        return Ok(val.get("result").cloned().unwrap_or(Value::Null));
+                    }
+                    Err(e) => {
+                        // JSON parse failure on 2xx is non-retryable
+                        return Err(SdkError::Http(e));
+                    }
                 }
             }
 
-            if attempt < self.max_retries {
-                // Exponential backoff: delay * 2^attempt, max 30s
-                let backoff = self
-                    .retry_delay
-                    .checked_mul(2u32.saturating_pow(attempt))
-                    .unwrap_or(Duration::from_secs(30))
-                    .min(Duration::from_secs(30));
-                tokio::time::sleep(backoff).await;
-            }
+            // Non-retryable client error (4xx, excluding 429 which is handled
+            // by `is_retryable` above)
+            return match resp.json::<Value>().await {
+                Ok(val) => {
+                    let code = val
+                        .get("error")
+                        .and_then(|e| e.get("code"))
+                        .and_then(Value::as_i64)
+                        .unwrap_or(-1);
+                    let msg = val
+                        .get("error")
+                        .and_then(|e| e.get("message"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown");
+                    Err(SdkError::JsonRpc {
+                        code,
+                        message: msg.to_string(),
+                    })
+                }
+                Err(_) => Err(SdkError::UnexpectedShape(format!(
+                    "HTTP {} {}: non-JSON response",
+                    status.as_u16(),
+                    status.canonical_reason().unwrap_or("")
+                ))),
+            };
         }
 
         Err(last_error.unwrap_or_else(|| {
@@ -336,6 +370,13 @@ impl GoOnClient {
                 self.max_retries + 1
             ))
         }))
+    }
+
+    /// Compute exponential backoff delay for a given attempt.
+    fn backoff_delay(base: Duration, attempt: u32) -> Duration {
+        base.checked_mul(2u32.saturating_pow(attempt))
+            .unwrap_or(Duration::from_secs(30))
+            .min(Duration::from_secs(30))
     }
 
     fn extract<T>(&self, result: Value) -> Result<T, SdkError>

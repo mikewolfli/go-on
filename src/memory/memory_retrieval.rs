@@ -98,7 +98,6 @@ impl MemoryLink {
 /// - A reference to the `MemoryPersistence` instance for tier access.
 /// - An in-memory link graph for fast traversal.
 /// - Session-to-memory mapping.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct MemoryRetrievalEngine {
     /// Reference to the persistence manager.
@@ -110,7 +109,6 @@ pub struct MemoryRetrievalEngine {
 }
 
 /// Internal link graph with bidirectional indexing.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 struct LinkGraph {
     /// All links keyed by (m1, m2).
@@ -122,7 +120,6 @@ struct LinkGraph {
 }
 
 impl LinkGraph {
-    #[allow(dead_code)]
     fn insert(&mut self, link: MemoryLink) {
         let m1 = link.m1.clone();
         let m2 = link.m2.clone();
@@ -135,7 +132,6 @@ impl LinkGraph {
         self.reverse.entry(m2).or_default().push((m1, lt));
     }
 
-    #[allow(dead_code)]
     fn get_links_for(&self, id: &str) -> Vec<MemoryLink> {
         let mut result = Vec::new();
         // Outgoing

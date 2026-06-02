@@ -17,7 +17,7 @@ use std::sync::Arc;
 /// orchestration module internals.
 ///
 /// BLUE56-GAP-A07: Will be wired to AcpServer in upcoming integration.
-#[allow(dead_code)] // F-GAP-49 — trait consumed once AcpServer wiring completes
+#[allow(dead_code)] // Reserved — trait consumed once AcpServer wiring completes
 pub trait OrchestrationProvider: Send + Sync {
     /// Register a skill for later discovery.
     fn register_skill(&self, name: &str, skill: Arc<dyn std::any::Any + Send + Sync>);
@@ -29,10 +29,5 @@ pub trait OrchestrationProvider: Send + Sync {
     fn skill_count(&self) -> usize;
 
     /// Record a capability execution for self-model feedback.
-    fn record_capability_execution(
-        &self,
-        capability_id: &str,
-        duration_ms: u64,
-        success: bool,
-    );
+    fn record_capability_execution(&self, capability_id: &str, duration_ms: u64, success: bool);
 }

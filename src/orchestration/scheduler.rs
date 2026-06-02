@@ -703,6 +703,12 @@ impl TaskScheduler {
         let starvation_threshold = 2.0;
 
         // ── Snapshot phase: single task_map + active lock scope ────────
+        //
+        // ⚠️  LOCK ORDERING: task_map → active (both acquired here, task_map
+        //     first).  Never acquire `active` then `task_map` — doing so
+        //     creates a potential deadlock if another code path takes those
+        //     locks in the opposite order.
+        //
         // Update aging_bonus in place AND snapshot pending tasks atomically.
         let (pending_tasks, starvation_events) = {
             let mut task_map = self.task_map.lock().unwrap_or_else(|poisoned| {

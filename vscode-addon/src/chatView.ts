@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 import * as path from "path";
 import * as vscode from "vscode";
 import { spawn } from "child_process";
@@ -578,6 +579,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   public dispose() {
+    this.streamProcessor.stop();
     this._messageSubscription?.dispose();
     this._executionOutput?.dispose();
   }

@@ -78,7 +78,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
@@ -607,7 +607,7 @@ pub struct PolicyEvaluator {
     pub runtime_control: Arc<Mutex<OnlineControllerState>>,
     pub guard: Arc<Mutex<SelfRationalizationGuard>>,
     pub security_governor: Arc<SecurityGovernor>,
-    pub rbac_enforcer: Option<RbacEnforcer>,
+    pub rbac_enforcer: RwLock<Option<RbacEnforcer>>,
 }
 
 impl PolicyEvaluator {
@@ -695,7 +695,7 @@ impl PolicyEvaluator {
 
                 gov
             }),
-            rbac_enforcer: None,
+            rbac_enforcer: RwLock::new(None),
         }
     }
 
@@ -1046,7 +1046,11 @@ impl PolicyEvaluator {
             _ => GovernanceAction::Read,
         };
 
-        if let Some(ref rbac) = self.rbac_enforcer {
+        let rbac_guard = self.rbac_enforcer.read().unwrap_or_else(|poisoned| {
+            tracing::warn!(target: "harness_bus", "rbac_enforcer RwLock poisoned – recovering");
+            poisoned.into_inner()
+        });
+        if let Some(ref rbac) = *rbac_guard {
             // Map tool name to Permission.  Write-tools require Write, exec-tools require Execute,
             // everything else requires Read.
             let required_perm = match action {
@@ -1113,8 +1117,18 @@ impl PolicyEvaluator {
     }
 
     /// Inject an RBAC enforcer for multi-tenant permission checks.
-    pub fn set_rbac_enforcer(&mut self, enforcer: RbacEnforcer) {
-        self.rbac_enforcer = Some(enforcer);
+    pub fn set_rbac_enforcer(&self, enforcer: RbacEnforcer) {
+        match self.rbac_enforcer.write() {
+            Ok(mut guard) => {
+                *guard = Some(enforcer);
+            }
+            Err(poisoned) => {
+                tracing::error!(target: "harness_bus", "rbac_enforcer RwLock poisoned – cannot set enforcer");
+                // Recover from poison and set anyway
+                let mut guard = poisoned.into_inner();
+                *guard = Some(enforcer);
+            }
+        }
     }
 
     /// Resolve a raw response string into a governance-level review verdict.
@@ -1593,19 +1607,15 @@ impl HarnessBus {
 
     /// Brain loop orchestration profile snapshot.
     ///
-    /// ⚠️ Sync-shim: calls async `profile()` via `block_in_place` + `block_on`.
-    /// Safe for use in status handler / profile endpoints.
-    /// Do NOT call from async code — will block the tokio worker thread.
+    /// ⚠️ Sync-shim: only uses `block_on` when no tokio runtime is active (safe path).
+    /// If a tokio runtime IS active, logs a warning and returns a default profile
+    /// to avoid blocking the tokio worker thread.
     pub fn brain_profile(&self) -> BrainLoopProfile {
         match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                let bl = self.brain_loop.clone();
-                tokio::task::block_in_place(move || {
-                    handle.block_on(bl.profile())
-                })
-            }
-            Err(_) => {
-                tracing::warn!("brain_profile called outside tokio runtime — returning default");
+            Ok(_) => {
+                tracing::warn!(
+                    "brain_profile called from inside tokio runtime — returning default to avoid blocking worker thread"
+                );
                 crate::orchestration::brain_loop::BrainLoopProfile {
                     total_plans: 0,
                     active_plans: 0,
@@ -1617,6 +1627,13 @@ impl HarnessBus {
                     avg_step_score: 0.0,
                     total_steps: 0,
                 }
+            }
+            Err(_) => {
+                // No active tokio runtime — safe to create a temporary runtime and block.
+                let bl = self.brain_loop.clone();
+                tokio::runtime::Runtime::new()
+                    .expect("failed to create temporary tokio runtime for brain_profile")
+                    .block_on(bl.profile())
             }
         }
     }
@@ -1649,19 +1666,15 @@ impl HarnessBus {
 
     /// Brain loop runner profile snapshot (consolidated flat version).
     ///
-    /// ⚠️ Sync-shim: calls async `profile()` via `block_in_place` + `block_on`.
-    /// Safe for use in status handler / profile endpoints.
-    /// Do NOT call from async code — will block the tokio worker thread.
+    /// ⚠️ Sync-shim: only uses `block_on` when no tokio runtime is active (safe path).
+    /// If a tokio runtime IS active, logs a warning and returns a default profile
+    /// to avoid blocking the tokio worker thread.
     pub fn brain_runner_profile(&self) -> BrainLoopProfile {
         match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                let br = self.brain_runner.clone();
-                tokio::task::block_in_place(move || {
-                    handle.block_on(br.profile())
-                })
-            }
-            Err(_) => {
-                tracing::warn!("brain_runner_profile called outside tokio runtime — returning default");
+            Ok(_) => {
+                tracing::warn!(
+                    "brain_runner_profile called from inside tokio runtime — returning default to avoid blocking worker thread"
+                );
                 crate::orchestration::brain_loop::BrainLoopProfile {
                     total_plans: 0,
                     active_plans: 0,
@@ -1673,6 +1686,13 @@ impl HarnessBus {
                     avg_step_score: 0.0,
                     total_steps: 0,
                 }
+            }
+            Err(_) => {
+                // No active tokio runtime — safe to create a temporary runtime and block.
+                let br = self.brain_runner.clone();
+                tokio::runtime::Runtime::new()
+                    .expect("failed to create temporary tokio runtime for brain_runner_profile")
+                    .block_on(br.profile())
             }
         }
     }
@@ -1811,7 +1831,7 @@ impl HarnessBus {
     }
 
     /// Inject an RBAC enforcer into the policy evaluator.
-    pub fn set_rbac_enforcer(&mut self, enforcer: crate::governance::rbac::RbacEnforcer) {
+    pub fn set_rbac_enforcer(&self, enforcer: crate::governance::rbac::RbacEnforcer) {
         self.evaluator.set_rbac_enforcer(enforcer);
     }
 

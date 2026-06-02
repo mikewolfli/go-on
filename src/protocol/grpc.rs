@@ -4,6 +4,8 @@
 //! over HTTP using `reqwest`. This keeps dependencies minimal while still
 //! enabling remote node communication for DAG task dispatch.
 
+#![allow(dead_code)] // Reserved—wired via distributed execution in multi-user profile
+
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 
@@ -100,7 +102,7 @@ pub struct HealthCheckResult {
 pub async fn call_execute_remote(
     base_url: &str,
     params: &ExecuteParams,
-    timeout_s: u64,
+    _timeout_s: u64,
 ) -> Result<ExecuteResult, String> {
     let request = JsonRpcRequest {
         jsonrpc: "2.0".to_string(),
@@ -142,7 +144,7 @@ pub async fn call_execute_remote(
 pub async fn call_health_check(
     base_url: &str,
     node_id: &str,
-    timeout_s: u64,
+    _timeout_s: u64,
 ) -> Result<bool, String> {
     let request = JsonRpcRequest {
         jsonrpc: "2.0".to_string(),

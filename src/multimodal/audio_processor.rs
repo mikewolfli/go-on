@@ -421,7 +421,7 @@ impl AudioProcessor {
         // Convert audio bytes to PCM f32 samples.
         // This expects raw PCM data. For compressed formats, a decoder (e.g.
         // Symphonia or minimp3) would be needed.
-        let samples: Vec<f32> = if audio.len() % 2 == 0 {
+        let samples: Vec<f32> = if audio.len().is_multiple_of(2) {
             audio
                 .chunks_exact(2)
                 .map(|chunk| {

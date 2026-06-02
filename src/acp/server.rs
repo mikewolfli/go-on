@@ -30,6 +30,7 @@ use crate::governance::audit::ThreadSafeAuditLog;
 use crate::governance::harness_bus::HarnessBus;
 use crate::intelligence::capability_bus::core::CapabilityBus;
 use crate::intelligence::token_cache::TokenMultiLevelCache;
+use crate::memory::memory_retrieval::MemoryRetrievalEngine;
 use crate::memory::semantic_cache::SemanticResponseCache;
 use crate::memory_module::{MemoryPolicy, MemoryStore};
 use crate::memory_response_cache::MemoryResponseCache;
@@ -258,6 +259,8 @@ pub struct GovernanceServerDeps {
     pub secret_manager: Option<Arc<crate::security::secret_rotation::SecretManager>>,
     /// Memory persistence manager (GAP-B52-11)
     pub memory_persistence: Option<Arc<crate::memory::memory_persistence::MemoryPersistence>>,
+    /// Memory retrieval engine with link graph and semantic search (GAP-B52-13)
+    pub memory_retrieval_engine: Option<Arc<MemoryRetrievalEngine>>,
     /// Self-evolution loop handle (GAP-B52-02)
     pub evolution_loop: Option<
         Arc<
@@ -692,6 +695,7 @@ pub struct ServerBuilder {
         Option<Arc<std::sync::Mutex<crate::security::audit_integrity::HashChainAuditor>>>,
     secret_manager: Option<Arc<crate::security::secret_rotation::SecretManager>>,
     memory_persistence: Option<Arc<crate::memory::memory_persistence::MemoryPersistence>>,
+    memory_retrieval_engine: Option<Arc<MemoryRetrievalEngine>>,
     evolution_loop: Option<
         Arc<
             tokio::sync::Mutex<crate::orchestration::self_evolution::evolution_loop::EvolutionLoop>,
@@ -735,6 +739,7 @@ impl ServerBuilder {
             hash_chain_auditor: None,
             secret_manager: None,
             memory_persistence: None,
+            memory_retrieval_engine: None,
             evolution_loop: None,
             dependency_vulnerability_scanner: None,
             secret_exposure_detector: None,
@@ -894,6 +899,13 @@ impl ServerBuilder {
         mp: Arc<crate::memory::memory_persistence::MemoryPersistence>,
     ) -> Self {
         self.memory_persistence = Some(mp);
+        self
+    }
+
+    /// Set the memory retrieval engine (GAP-B52-13)
+    #[allow(dead_code)] // Reserved for production server startup wiring
+    pub fn with_memory_retrieval_engine(mut self, engine: Arc<MemoryRetrievalEngine>) -> Self {
+        self.memory_retrieval_engine = Some(engine);
         self
     }
 
@@ -1179,6 +1191,11 @@ impl ServerBuilder {
                 },
                 memory_persistence: if governance_enabled {
                     self.memory_persistence
+                } else {
+                    None
+                },
+                memory_retrieval_engine: if governance_enabled {
+                    self.memory_retrieval_engine
                 } else {
                     None
                 },

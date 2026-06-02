@@ -657,9 +657,7 @@ impl ToolRegistry {
                     } else {
                         let rt = tokio::runtime::Runtime::new()
                             .expect("failed to create tokio runtime for rollback");
-                        tokio::task::block_in_place(|| {
-                            rt.block_on(scope.rollback());
-                        });
+                        rt.block_on(scope.rollback());
                     }
 
                     let completed: Vec<String> = scope.completed_tools.clone();

@@ -200,9 +200,7 @@ class GoOnClient:
 
         for attempt in range(self.max_retries + 1):
             try:
-                resp = await self._client.post(
-                    f"{self.base_url}/rpc", json=payload
-                )
+                resp = await self._client.post(f"{self.base_url}/rpc", json=payload)
                 _ = resp.raise_for_status()
                 try:
                     data = resp.json()
@@ -220,6 +218,7 @@ class GoOnClient:
                 return data.get("result", {})
             except (
                 httpx.TimeoutException,
+                httpx.PoolTimeout,
                 httpx.NetworkError,
                 httpx.RemoteProtocolError,
             ) as e:

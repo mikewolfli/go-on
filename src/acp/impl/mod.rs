@@ -20,6 +20,9 @@ pub mod cors;
 // User session management
 pub mod session;
 
+#[cfg(test)]
+pub mod chat_tests;
+
 // Re-export for convenience — retained for ACP consumer API surface.
 #[allow(unused_imports)]
 pub use runtime::*; // re-exported for ACP consumer API surface

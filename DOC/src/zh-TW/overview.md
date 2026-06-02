@@ -2,7 +2,7 @@
 
 `go-on` 是一個圍繞 Rust 後端構建的三端運行時體系：
 
-- **後端**：負責配置加載、Provider 選擇、路由、setup、健康檢查、協議協商、stdio 或 HTTP 傳輸層，以及包含 14 條總線和 21 個 F-GAP 模塊的能力架構。
+- **後端**：負責配置加載、Provider 選擇、路由、setup、健康檢查、協議協商、stdio 或 HTTP 傳輸層，以及包含 14 條總線和認知模塊的能力架構。
 - **GUI**：EGUI（Rust 原生）桌面圖形界面，負責後端發現、進程生命週期、集成探測、監控、對話和配置管理。
 - **VS Code 插件**：負責拉起或探測運行時，暴露基於 RPC 的命令，並可在工作區級別覆蓋協議模式。
 
@@ -29,21 +29,25 @@ cargo run --manifest-path gui/Cargo.toml
 
 ## 構建配置文件
 
-三種構建配置文件適配不同的部署場景：
+三種構建配置文件適配不同的部署場景，外加 `profile-full` 用於 CI：
 
-| 配置文件 | 後端 | 目標 | 構建命令 |
-|---------|------|------|----------|
+| 配置文件 | 後端 | 使用場景 | 構建命令 |
+|:--------|:------|:---------|:--------|
 | `profile-local` | SQLite + sqlite-vec | 單用戶本地工具 | `cargo build`（默認） |
 | `profile-simple-server` | SQLite + sqlite-vec | 單服務部署 | `cargo build --no-default-features -F profile-simple-server` |
 | `profile-multi-users-server` | PostgreSQL + pgvector | 多用戶生產環境 | `cargo build --no-default-features -F profile-multi-users-server` |
+| `profile-full` | SQLite（全部特性） | CI / 開發 | `cargo build --no-default-features -F profile-full` |
 
-## 驗證狀態（Phase 4+ — 26 輪深度掃描完成，GUI 7 輪）
+## 驗證狀態
 
-| 配置文件 | `cargo check` | `cargo clippy -D warnings` | `cargo test` |
-|---------|:-----------:|:------------------------:|:----------:|
-| **profile-local** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **781 通過** |
-| **profile-simple-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **827 通過** |
-| **profile-multi-users-server** | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **890 通過** |
+| 配置文件 | `cargo clippy -D warnings` | 測試數 |
+|:--------|:--------------------------:|:------:|
+| **profile-local** | ✅ **零警告** | **4699** |
+| **profile-simple-server** | ✅ **零警告** | **3400+** |
+| **profile-full** | ✅ **零警告** | **4000+** |
+| **profile-multi-users-server** | ✅ **零警告** | **3800+** |
+
+所有 19 個測試二進制文件均可編譯通過。23 個 E2e 測試（需要基礎設施）標記為 `#[ignore]`，不會在本地運行中執行。
 
 ## 運行時協議模式
 
@@ -104,70 +108,27 @@ evolve()  →  更新 Q 表、記錄共識投票、發送進化事件
 execute_tool() → HarnessBus evaluate() → ToolBus execute() → ObservabilityBus record()
 ```
 
-## F-GAP 模塊（Phase 4 — 21/21 全部完成 ✅）
+## 安全特性
 
-go-on 實現了 21 個 FutureDesign 模塊，分佈在六個能力領域：
+| 功能 | 描述 |
+|:----|:------|
+| **mTLS** | ACP HTTP 監聽器的雙向 TLS，支援證書鎖定和過期監控 |
+| **請求簽名** | 使用 Ed25519 或 HMAC-SHA256 對 JSON-RPC 請求進行簽名認證 |
+| **Vault 集成** | 集成 HashiCorp Vault 進行金鑰生命週期管理 |
+| **系統金鑰環** | macOS Keychain、Linux Secret Service、Windows Credential Manager |
+| **內容安全** | 運行時內容掃描，可配置安全策略（SafeGuard 模式） |
+| **提示注入檢測** | 運行時掃描注入模式，可配置檢測閾值 |
 
-### 編排與執行（F-GAP-09, 10, 15, 17）
-- **OmnipotentMode 全能模式**（F-GAP-09）：EscalationToken 頒發/驗證/吊銷、RAII 會話守衛、審計日誌
-- **ArtifactLayer 製品層**（F-GAP-10）：製品模式註冊、存儲、TTL 裁剪
-- **RemoteSkill 遠程技能**（F-GAP-10）：遠程 MCP 端點包裝為 Skill trait
-- **OrchestrationCouncil 編排委員會**（F-GAP-15）：多 Agent 協調委員會
-- **BrainLoop 腦回路**（F-GAP-17）：Plan→Execute→Reflect→Replan 全循環
+## 可觀測性
 
-### 智能與學習（F-GAP-11, 12, 16, 18, 19, 21, 22, 23, 24, 25）
-- **DiscoveryCenter 方案發現中心**（F-GAP-11）：解決方案模式註冊與搜索
-- **ScenarioMatcher 場景匹配器**（F-GAP-12）：多維度場景匹配
-- **ConsensusEngine 共識引擎**（F-GAP-16）：分佈式投票與共識
-- **EvolutionGraph 演化圖譜**（F-GAP-18）：6 階段能力演化生命週期
-- **FederatedRL 聯邦強化學習**（F-GAP-19）：FedAvg/FedWeighted/FedMedian 聚合
-- **SelfModelCore 自模型核心**（F-GAP-21）：自我能力評估與置信度
-- **MetacognitiveController 元認知控制器**（F-GAP-22）：6 階段思維鏈、卡頓檢測
-- **WorldModel 世界模型**（F-GAP-23）：世界模型流水線
-- **ContinuousLearningCenter 持續學習中心**（F-GAP-24）：持續學習編排
-- **ConsciousnessMetrics 意識代理指標**（F-GAP-25）：5 維度意識度量
+go-on 提供生產級的可觀測能力：
 
-### 治理與安全（F-GAP-14, 26）
-- **SecurityGovernor 安全治理器**（F-GAP-14）：安全策略治理
-- **DriftProtection 漂移防護**（F-GAP-26）：5 種漂移類型、4 級嚴重度、趨勢檢測
-
-### 彈性與容錯（F-GAP-27, 28）
-- **HyperResilienceEngine 超彈性引擎**（F-GAP-27）：熔斷器、故障切換、自愈
-- **FaultToleranceEngine 跨節點容錯引擎**（F-GAP-28）：節點心跳、隔離、自動恢復、集群健康評分
-
-### 協議與傳輸（F-GAP-29）
-- **MultiChannelTransport 多渠道消息傳輸**（F-GAP-29）：6 通道、4 級優先級、QoS、去重、Peek
-
-### Agent 基礎設施（F-GAP-13）
-- **AgentFactory Agent 工廠**（F-GAP-13）：特性門控的 Agent 實例化
-
-## 38 維度滿星評級
-
-```
-治理與合規 (5/5):    ★★★★★ 溯源賬本, 漂移防護, 策略評估器, Token 門控鏈, 安全治理器
-彈性與容錯 (2/2):    ★★★★★ 超彈性引擎, 跨節點容錯引擎
-編排與執行 (6/6):    ★★★★★ 編排總線, 任務調度器, 執行圖, 全能模式, 製品層, 腦回路
-路由與調度 (7/7):    ★★★★★ 能力圖譜, 信譽存儲, Q學習Agent, 場景匹配器, 發現中心, 工作流注冊表, Agent工廠
-協議與傳輸 (2/2):    ★★★★★ 協議總線, 多渠道消息傳輸
-記憶與緩存 (2/2):    ★★★★★ 內存總線, 分佈式內存總線
-觀測與優化 (3/3):    ★★★★★ 可觀測總線, 優化總線, 工具總線
-智能認知 (5/5):      ★★★★★ 深度知識萃取, 強化深度學習, 技能保持傳承, AI進化, 自建Skills
-自我認知 (5/5):      ★★★★★ 自模型核心, 意識代理指標, 元認知控制器, 世界模型, 共識引擎
-總計 (38/38):        100% ★★★★★
-```
-
-## 整體完成率
-
-```
-Phase 0: 核心雙總線           ████████████████████ 100%
-Phase 1: 子總線接入            ████████████████████ 100%
-Phase 2: 剩餘修復              ████████████████████ 100%
-Phase 3: ARCH 擴展點           ████████████████████ 100%
-Phase 4: FutureDesign (F-GAP)  ████████████████████ 100% (21/21)
-Phase 5: 生產硬化              ████████████████████ 100%
-────────────────────────────────────────────────────────
-總體:                         ████████████████████ 100%
-```
+| 能力 | 詳情 |
+|:-----|:-----|
+| **Prometheus `/metrics` 端點** | 16+ 指標，包括延遲、吞吐量、緩存命中率 |
+| **OpenTelemetry 追蹤** | OTLP 導出（默認端點 `localhost:4317`），路由/執行/選擇的跨度 |
+| **治理狀態端點** | 通過 `governance.status` JSON-RPC 獲取即時 p95 延遲、DAG 指標、緩存統計 |
+| **OTel stdout 導出器** | 當無 OTLP 收集器時可回退到標準輸出導出跟蹤 |
 
 ## 國際化（i18n）
 
@@ -179,13 +140,13 @@ go-on 在後端實現了約 **95%** 的全鏈路國際化覆蓋：
 | 簡體中文 | `languages/zh_CN.json` | 448+ |
 | 繁體中文 | `languages/zh_TW.json` | 448+ |
 
-覆蓋層：ACP/MCP HTTP 錯誤（100%）、Agent 供應商模塊（100%，37+ 供應商）、配置驗證（100%）、CLI 初始化（100%）、API 處理錯誤（100%）、編排層（100%）、GUI（約 98%）、VS Code 插件（70+ 鍵值）。
+覆蓋層：ACP/MCP HTTP 錯誤（100%）、Agent 供應商模塊（100%，35 家供應商）、配置驗證（100%）、CLI 初始化（100%）、API 處理錯誤（100%）、編排層（100%）、GUI（約 98%）、VS Code 插件（70+ 鍵值）。
 
 ## 與架構對應的倉庫目錄
 
 - `src/`：後端運行時、CLI、setup、ACP 與 MCP 實現。
   - `src/acp/`：ACP 服務、請求路由、workflow/task/chat/checkpoint
-  - `src/agents/`：Provider 適配器（OpenAI、Anthropic、DeepSeek、Gemini、xAI Grok、SiliconFlow 等 37+），AgentFactory
+  - `src/agents/`：Provider 適配器（OpenAI、Anthropic、DeepSeek、Gemini、xAI Grok、SiliconFlow 等 35 家），AgentFactory
   - `src/core/`：配置、初始化、就緒性檢查、錯誤模型
   - `src/governance/`：策略/規則治理、審計、安全治理器、漂移防護
   - `src/intelligence/`：選擇器、強化學習、能力總線、發現、共識、演化

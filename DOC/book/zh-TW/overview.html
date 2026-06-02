@@ -3,12 +3,12 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>架構總覽 - go-on Documentation</title>
+        <title>架構總覽 - go-on Documentation — AI Agent Orchestration System</title>
 
 
         <!-- Custom HTML head -->
 
-        <meta name="description" content="">
+        <meta name="description" content="Complete documentation for go-on: ACP/MCP agent orchestration runtime with 35 AI provider integrations, 14-bus architecture, autonomous agent orchestration, governance, and observability">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a7ab1419.js";
+            window.path_to_searchindex_js = "../searchindex-ebcb8906.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-ee19d562.js"></script>
@@ -137,7 +137,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title">go-on Documentation</h1>
+                    <h1 class="menu-title">go-on Documentation — AI Agent Orchestration System</h1>
 
                     <div class="right-buttons">
                         <a href="../print.html" title="Print this book" aria-label="Print this book">
@@ -183,15 +183,15 @@
                         <h1 id="架構總覽"><a class="header" href="#架構總覽">架構總覽</a></h1>
 <p><code>go-on</code> 是一個圍繞 Rust 後端構建的三端運行時體系：</p>
 <ul>
-<li><strong>後端</strong>：負責配置加載、Provider 選擇、路由、setup、健康檢查、協議協商、stdio 或 HTTP 傳輸層，以及包含 14 條總線和 21 個 F-GAP 模塊的能力架構。</li>
+<li><strong>後端</strong>：負責配置加載、Provider 選擇、路由、setup、健康檢查、協議協商、stdio 或 HTTP 傳輸層，以及包含 14 條總線和認知模塊的能力架構。</li>
 <li><strong>GUI</strong>：EGUI（Rust 原生）桌面圖形界面，負責後端發現、進程生命週期、集成探測、監控、對話和配置管理。</li>
 <li><strong>VS Code 插件</strong>：負責拉起或探測運行時，暴露基於 RPC 的命令，並可在工作區級別覆蓋協議模式。</li>
 </ul>
 <h2 id="版本"><a class="header" href="#版本">版本</a></h2>
 <ul>
-<li>后端 Runtime：<strong>0.9.5</strong></li>
-<li>GUI 桌面端：<strong>0.9.5</strong></li>
-<li>VS Code 插件：<strong>0.9.5</strong></li>
+<li>后端 Runtime：<strong>1.1.0</strong></li>
+<li>GUI 桌面端：<strong>1.1.0</strong></li>
+<li>VS Code 插件：<strong>1.1.0</strong></li>
 </ul>
 <h2 id="gui-桌面應用"><a class="header" href="#gui-桌面應用">GUI 桌面應用</a></h2>
 <p>基於 EGUI 的桌面圖形界面（<code>gui/</code>）提供監控、對話和配置管理：</p>
@@ -206,32 +206,35 @@
 <li><strong>後端連接</strong>：ACP+HTTP JSON-RPC，自動健康輪詢</li>
 </ul>
 <h2 id="構建配置文件"><a class="header" href="#構建配置文件">構建配置文件</a></h2>
-<p>三種構建配置文件適配不同的部署場景：</p>
+<p>三種構建配置文件適配不同的部署場景，外加 <code>profile-full</code> 用於 CI：</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>配置文件</th><th>後端</th><th>目標</th><th>構建命令</th></tr>
+<tr><th style="text-align: left">配置文件</th><th style="text-align: left">後端</th><th style="text-align: left">使用場景</th><th style="text-align: left">構建命令</th></tr>
 </thead>
 <tbody>
-<tr><td><code>profile-local</code></td><td>SQLite + sqlite-vec</td><td>單用戶本地工具</td><td><code>cargo build</code>（默認）</td></tr>
-<tr><td><code>profile-simple-server</code></td><td>SQLite + sqlite-vec</td><td>單服務部署</td><td><code>cargo build --no-default-features -F profile-simple-server</code></td></tr>
-<tr><td><code>profile-multi-users-server</code></td><td>PostgreSQL + pgvector</td><td>多用戶生產環境</td><td><code>cargo build --no-default-features -F profile-multi-users-server</code></td></tr>
+<tr><td style="text-align: left"><code>profile-local</code></td><td style="text-align: left">SQLite + sqlite-vec</td><td style="text-align: left">單用戶本地工具</td><td style="text-align: left"><code>cargo build</code>（默認）</td></tr>
+<tr><td style="text-align: left"><code>profile-simple-server</code></td><td style="text-align: left">SQLite + sqlite-vec</td><td style="text-align: left">單服務部署</td><td style="text-align: left"><code>cargo build --no-default-features -F profile-simple-server</code></td></tr>
+<tr><td style="text-align: left"><code>profile-multi-users-server</code></td><td style="text-align: left">PostgreSQL + pgvector</td><td style="text-align: left">多用戶生產環境</td><td style="text-align: left"><code>cargo build --no-default-features -F profile-multi-users-server</code></td></tr>
+<tr><td style="text-align: left"><code>profile-full</code></td><td style="text-align: left">SQLite（全部特性）</td><td style="text-align: left">CI / 開發</td><td style="text-align: left"><code>cargo build --no-default-features -F profile-full</code></td></tr>
 </tbody>
 </table>
 </div>
-<h2 id="驗證狀態phase-4--25-輪深度掃描完成gui-7-輪"><a class="header" href="#驗證狀態phase-4--25-輪深度掃描完成gui-7-輪">驗證狀態（Phase 4+ — 25 輪深度掃描完成，GUI 7 輪）</a></h2>
+<h2 id="驗證狀態"><a class="header" href="#驗證狀態">驗證狀態</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>配置文件</th><th style="text-align: center"><code>cargo check</code></th><th style="text-align: center"><code>cargo clippy -D warnings</code></th><th style="text-align: center"><code>cargo test</code></th></tr>
+<tr><th style="text-align: left">配置文件</th><th style="text-align: center"><code>cargo clippy -D warnings</code></th><th style="text-align: center">測試數</th></tr>
 </thead>
 <tbody>
-<tr><td><strong>profile-local</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>781 通過</strong></td></tr>
-<tr><td><strong>profile-simple-server</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>827 通過</strong></td></tr>
-<tr><td><strong>profile-multi-users-server</strong></td><td style="text-align: center">✅ 0 errors, 0 warnings</td><td style="text-align: center">✅ 0 errors</td><td style="text-align: center">✅ <strong>890 通過</strong></td></tr>
+<tr><td style="text-align: left"><strong>profile-local</strong></td><td style="text-align: center">✅ <strong>零警告</strong></td><td style="text-align: center"><strong>4699</strong></td></tr>
+<tr><td style="text-align: left"><strong>profile-simple-server</strong></td><td style="text-align: center">✅ <strong>零警告</strong></td><td style="text-align: center"><strong>3400+</strong></td></tr>
+<tr><td style="text-align: left"><strong>profile-full</strong></td><td style="text-align: center">✅ <strong>零警告</strong></td><td style="text-align: center"><strong>4000+</strong></td></tr>
+<tr><td style="text-align: left"><strong>profile-multi-users-server</strong></td><td style="text-align: center">✅ <strong>零警告</strong></td><td style="text-align: center"><strong>3800+</strong></td></tr>
 </tbody>
 </table>
 </div>
+<p>所有 19 個測試二進制文件均可編譯通過。23 個 E2e 測試（需要基礎設施）標記為 <code>#[ignore]</code>，不會在本地運行中執行。</p>
 <h2 id="運行時協議模式"><a class="header" href="#運行時協議模式">運行時協議模式</a></h2>
 <p>後端支持 5 種訪問模式：</p>
 <ul>
@@ -295,69 +298,37 @@ decide()  →  結合模式推薦與工具-Agent 匹配
 evolve()  →  更新 Q 表、記錄共識投票、發送進化事件
 execute_tool() → HarnessBus evaluate() → ToolBus execute() → ObservabilityBus record()
 </code></pre>
-<h2 id="f-gap-模塊phase-4--2121-全部完成-"><a class="header" href="#f-gap-模塊phase-4--2121-全部完成-">F-GAP 模塊（Phase 4 — 21/21 全部完成 ✅）</a></h2>
-<p>go-on 實現了 21 個 FutureDesign 模塊，分佈在六個能力領域：</p>
-<h3 id="編排與執行f-gap-09-10-15-17"><a class="header" href="#編排與執行f-gap-09-10-15-17">編排與執行（F-GAP-09, 10, 15, 17）</a></h3>
-<ul>
-<li><strong>OmnipotentMode 全能模式</strong>（F-GAP-09）：EscalationToken 頒發/驗證/吊銷、RAII 會話守衛、審計日誌</li>
-<li><strong>ArtifactLayer 製品層</strong>（F-GAP-10）：製品模式註冊、存儲、TTL 裁剪</li>
-<li><strong>RemoteSkill 遠程技能</strong>（F-GAP-10）：遠程 MCP 端點包裝為 Skill trait</li>
-<li><strong>OrchestrationCouncil 編排委員會</strong>（F-GAP-15）：多 Agent 協調委員會</li>
-<li><strong>BrainLoop 腦回路</strong>（F-GAP-17）：Plan→Execute→Reflect→Replan 全循環</li>
-</ul>
-<h3 id="智能與學習f-gap-11-12-16-18-19-21-22-23-24-25"><a class="header" href="#智能與學習f-gap-11-12-16-18-19-21-22-23-24-25">智能與學習（F-GAP-11, 12, 16, 18, 19, 21, 22, 23, 24, 25）</a></h3>
-<ul>
-<li><strong>DiscoveryCenter 方案發現中心</strong>（F-GAP-11）：解決方案模式註冊與搜索</li>
-<li><strong>ScenarioMatcher 場景匹配器</strong>（F-GAP-12）：多維度場景匹配</li>
-<li><strong>ConsensusEngine 共識引擎</strong>（F-GAP-16）：分佈式投票與共識</li>
-<li><strong>EvolutionGraph 演化圖譜</strong>（F-GAP-18）：6 階段能力演化生命週期</li>
-<li><strong>FederatedRL 聯邦強化學習</strong>（F-GAP-19）：FedAvg/FedWeighted/FedMedian 聚合</li>
-<li><strong>SelfModelCore 自模型核心</strong>（F-GAP-21）：自我能力評估與置信度</li>
-<li><strong>MetacognitiveController 元認知控制器</strong>（F-GAP-22）：6 階段思維鏈、卡頓檢測</li>
-<li><strong>WorldModel 世界模型</strong>（F-GAP-23）：世界模型流水線</li>
-<li><strong>ContinuousLearningCenter 持續學習中心</strong>（F-GAP-24）：持續學習編排</li>
-<li><strong>ConsciousnessMetrics 意識代理指標</strong>（F-GAP-25）：5 維度意識度量</li>
-</ul>
-<h3 id="治理與安全f-gap-14-26"><a class="header" href="#治理與安全f-gap-14-26">治理與安全（F-GAP-14, 26）</a></h3>
-<ul>
-<li><strong>SecurityGovernor 安全治理器</strong>（F-GAP-14）：安全策略治理</li>
-<li><strong>DriftProtection 漂移防護</strong>（F-GAP-26）：5 種漂移類型、4 級嚴重度、趨勢檢測</li>
-</ul>
-<h3 id="彈性與容錯f-gap-27-28"><a class="header" href="#彈性與容錯f-gap-27-28">彈性與容錯（F-GAP-27, 28）</a></h3>
-<ul>
-<li><strong>HyperResilienceEngine 超彈性引擎</strong>（F-GAP-27）：熔斷器、故障切換、自愈</li>
-<li><strong>FaultToleranceEngine 跨節點容錯引擎</strong>（F-GAP-28）：節點心跳、隔離、自動恢復、集群健康評分</li>
-</ul>
-<h3 id="協議與傳輸f-gap-29"><a class="header" href="#協議與傳輸f-gap-29">協議與傳輸（F-GAP-29）</a></h3>
-<ul>
-<li><strong>MultiChannelTransport 多渠道消息傳輸</strong>（F-GAP-29）：6 通道、4 級優先級、QoS、去重、Peek</li>
-</ul>
-<h3 id="agent-基礎設施f-gap-13"><a class="header" href="#agent-基礎設施f-gap-13">Agent 基礎設施（F-GAP-13）</a></h3>
-<ul>
-<li><strong>AgentFactory Agent 工廠</strong>（F-GAP-13）：特性門控的 Agent 實例化</li>
-</ul>
-<h2 id="38-維度滿星評級"><a class="header" href="#38-維度滿星評級">38 維度滿星評級</a></h2>
-<pre><code>治理與合規 (5/5):    ★★★★★ 溯源賬本, 漂移防護, 策略評估器, Token 門控鏈, 安全治理器
-彈性與容錯 (2/2):    ★★★★★ 超彈性引擎, 跨節點容錯引擎
-編排與執行 (6/6):    ★★★★★ 編排總線, 任務調度器, 執行圖, 全能模式, 製品層, 腦回路
-路由與調度 (7/7):    ★★★★★ 能力圖譜, 信譽存儲, Q學習Agent, 場景匹配器, 發現中心, 工作流注冊表, Agent工廠
-協議與傳輸 (2/2):    ★★★★★ 協議總線, 多渠道消息傳輸
-記憶與緩存 (2/2):    ★★★★★ 內存總線, 分佈式內存總線
-觀測與優化 (3/3):    ★★★★★ 可觀測總線, 優化總線, 工具總線
-智能認知 (5/5):      ★★★★★ 深度知識萃取, 強化深度學習, 技能保持傳承, AI進化, 自建Skills
-自我認知 (5/5):      ★★★★★ 自模型核心, 意識代理指標, 元認知控制器, 世界模型, 共識引擎
-總計 (38/38):        100% ★★★★★
-</code></pre>
-<h2 id="整體完成率"><a class="header" href="#整體完成率">整體完成率</a></h2>
-<pre><code>Phase 0: 核心雙總線           ████████████████████ 100%
-Phase 1: 子總線接入            ████████████████████ 100%
-Phase 2: 剩餘修復              ████████████████████ 100%
-Phase 3: ARCH 擴展點           ████████████████████ 100%
-Phase 4: FutureDesign (F-GAP)  ████████████████████ 100% (21/21)
-Phase 5: 生產硬化              ████████████████████ 100%
-────────────────────────────────────────────────────────
-總體:                         ████████████████████ 100%
-</code></pre>
+<h2 id="安全特性"><a class="header" href="#安全特性">安全特性</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">功能</th><th style="text-align: left">描述</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left"><strong>mTLS</strong></td><td style="text-align: left">ACP HTTP 監聽器的雙向 TLS，支援證書鎖定和過期監控</td></tr>
+<tr><td style="text-align: left"><strong>請求簽名</strong></td><td style="text-align: left">使用 Ed25519 或 HMAC-SHA256 對 JSON-RPC 請求進行簽名認證</td></tr>
+<tr><td style="text-align: left"><strong>Vault 集成</strong></td><td style="text-align: left">集成 HashiCorp Vault 進行金鑰生命週期管理</td></tr>
+<tr><td style="text-align: left"><strong>系統金鑰環</strong></td><td style="text-align: left">macOS Keychain、Linux Secret Service、Windows Credential Manager</td></tr>
+<tr><td style="text-align: left"><strong>內容安全</strong></td><td style="text-align: left">運行時內容掃描，可配置安全策略（SafeGuard 模式）</td></tr>
+<tr><td style="text-align: left"><strong>提示注入檢測</strong></td><td style="text-align: left">運行時掃描注入模式，可配置檢測閾值</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="可觀測性"><a class="header" href="#可觀測性">可觀測性</a></h2>
+<p>go-on 提供生產級的可觀測能力：</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th style="text-align: left">能力</th><th style="text-align: left">詳情</th></tr>
+</thead>
+<tbody>
+<tr><td style="text-align: left"><strong>Prometheus <code>/metrics</code> 端點</strong></td><td style="text-align: left">16+ 指標，包括延遲、吞吐量、緩存命中率</td></tr>
+<tr><td style="text-align: left"><strong>OpenTelemetry 追蹤</strong></td><td style="text-align: left">OTLP 導出（默認端點 <code>localhost:4317</code>），路由/執行/選擇的跨度</td></tr>
+<tr><td style="text-align: left"><strong>治理狀態端點</strong></td><td style="text-align: left">通過 <code>governance.status</code> JSON-RPC 獲取即時 p95 延遲、DAG 指標、緩存統計</td></tr>
+<tr><td style="text-align: left"><strong>OTel stdout 導出器</strong></td><td style="text-align: left">當無 OTLP 收集器時可回退到標準輸出導出跟蹤</td></tr>
+</tbody>
+</table>
+</div>
 <h2 id="國際化i18n"><a class="header" href="#國際化i18n">國際化（i18n）</a></h2>
 <p>go-on 在後端實現了約 <strong>95%</strong> 的全鏈路國際化覆蓋：</p>
 <div class="table-wrapper">
@@ -372,13 +343,13 @@ Phase 5: 生產硬化              ███████████████
 </tbody>
 </table>
 </div>
-<p>覆蓋層：ACP/MCP HTTP 錯誤（100%）、Agent 供應商模塊（100%）、配置驗證（100%）、CLI 初始化（100%）、API 處理錯誤（100%）、編排層（100%）、GUI（約 98%）、VS Code 插件（70+ 鍵值）。</p>
+<p>覆蓋層：ACP/MCP HTTP 錯誤（100%）、Agent 供應商模塊（100%，35 家供應商）、配置驗證（100%）、CLI 初始化（100%）、API 處理錯誤（100%）、編排層（100%）、GUI（約 98%）、VS Code 插件（70+ 鍵值）。</p>
 <h2 id="與架構對應的倉庫目錄"><a class="header" href="#與架構對應的倉庫目錄">與架構對應的倉庫目錄</a></h2>
 <ul>
 <li><code>src/</code>：後端運行時、CLI、setup、ACP 與 MCP 實現。
 <ul>
 <li><code>src/acp/</code>：ACP 服務、請求路由、workflow/task/chat/checkpoint</li>
-<li><code>src/agents/</code>：Provider 適配器（OpenAI、Anthropic、DeepSeek、Ollama），AgentFactory</li>
+<li><code>src/agents/</code>：Provider 適配器（OpenAI、Anthropic、DeepSeek、Gemini、xAI Grok、SiliconFlow 等 35 家），AgentFactory</li>
 <li><code>src/core/</code>：配置、初始化、就緒性檢查、錯誤模型</li>
 <li><code>src/governance/</code>：策略/規則治理、審計、安全治理器、漂移防護</li>
 <li><code>src/intelligence/</code>：選擇器、強化學習、能力總線、發現、共識、演化</li>

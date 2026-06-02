@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, Mutex as StdMutex};
 
 use crate::cache::ResponseCache;
-use crate::memory_module::MemoryStore;
+use crate::memory_module::{MemoryPolicy, MemoryStore};
 use crate::memory_response_cache::MemoryResponseCache;
 use crate::vector::VectorStore;
 
@@ -119,6 +119,27 @@ impl MemoryBus {
             memory_response_cache,
             profile: Arc::new(Mutex::new(MemoryBusProfile::default())),
         }
+    }
+
+    /// Populate backends with sensible defaults from environment variables.
+    ///
+    /// Creates default in-memory L1 (`MemoryResponseCache`) and memory store
+    /// (`MemoryStore`) backends. L2 (`ResponseCache`) and L3 (`VectorStore`)
+    /// remain unset and can be wired later via `set_backends`.
+    ///
+    /// This ensures the MemoryBus never operates with all backends `None`,
+    /// which would silently discard all data.
+    pub fn with_default_backends(mut self) -> Self {
+        if self.memory_response_cache.is_none() {
+            self.memory_response_cache =
+                Some(Arc::new(StdMutex::new(MemoryResponseCache::default())));
+        }
+        if self.memory_store.is_none() {
+            self.memory_store = Some(Arc::new(StdMutex::new(MemoryStore::new(
+                MemoryPolicy::default(),
+            ))));
+        }
+        self
     }
 
     /// Set (or replace) cache backends after construction.

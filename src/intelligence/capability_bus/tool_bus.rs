@@ -348,27 +348,29 @@ impl ToolBus {
                 "payload": input.payload,
             });
 
-            // The Skill trait is async.  We block on it here because
-            // the ToolBus interface is synchronous (matching the Tool
-            // trait).  Callers must ensure they are running inside a
-            // Tokio runtime.
-            //
-            // This mirrors the same pattern used by `execute_loop` in
-            // `orchestration::tool` (which is also synchronous).
-            let output_value = std::thread::spawn(move || {
-                let rt = match tokio::runtime::Runtime::new() {
-                    Ok(rt) => rt,
-                    Err(e) => {
-                        return Err(anyhow::anyhow!(
-                            "ToolBus: failed to create Tokio runtime for skill dispatch: {}",
-                            e
-                        ));
-                    }
-                };
-                rt.block_on(skill.execute(&skill_input))
-            })
-            .join()
-            .map_err(|_| anyhow::anyhow!("ToolBus: skill dispatch thread panicked"))??;
+            // The Skill trait is async.  If we are already inside a Tokio
+            // runtime we block in-place; otherwise we spawn a dedicated
+            // thread with a fresh runtime (matching the synchronous Tool
+            // trait interface).
+            let output_value = match tokio::runtime::Handle::try_current() {
+                Ok(handle) => {
+                    tokio::task::block_in_place(|| handle.block_on(skill.execute(&skill_input)))?
+                }
+                Err(_) => std::thread::spawn(move || {
+                    let rt = match tokio::runtime::Runtime::new() {
+                        Ok(rt) => rt,
+                        Err(e) => {
+                            return Err(anyhow::anyhow!(
+                                "ToolBus: failed to create Tokio runtime for skill dispatch: {}",
+                                e
+                            ));
+                        }
+                    };
+                    rt.block_on(skill.execute(&skill_input))
+                })
+                .join()
+                .map_err(|_| anyhow::anyhow!("ToolBus: skill dispatch thread panicked"))??,
+            };
 
             return Ok(ToolOutput {
                 success: true,
@@ -435,7 +437,10 @@ impl ToolBus {
             .map(|reg| reg.list().len() as u32)
             .unwrap_or(0);
 
-        let inner = self.inner.lock().unwrap_or_else(|poisoned| { tracing::warn!("lock poisoned, recovering"); poisoned.into_inner() });
+        let inner = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
         let total_calls = inner.total_calls;
         let total_success_calls = inner.total_success_calls;
         let enabled = inner.enabled;

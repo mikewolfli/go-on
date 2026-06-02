@@ -13,10 +13,34 @@
 pub mod agent_memory_bus;
 pub mod cache;
 pub mod embedding_provider;
-pub mod memory_bridge;
 pub mod memory;
+pub mod memory_bridge;
 pub mod memory_persistence;
 pub mod memory_response_cache;
 pub mod memory_retrieval;
 pub mod semantic_cache;
+
+// TODO: Wire MemoryRetrievalEngine into the server startup path.
+//       MemoryRetrievalEngine is fully implemented (GAP-B52-13) but has zero
+//       production callers. Inject it into AcpServer via ServerBuilder so
+//       governance-aware request processing can perform semantic memory
+//       retrieval and session linkage.
+//
+//       Usage:
+//           let engine = MemoryRetrievalEngine::new(persistence);
+//           let router = MemoryRetrievalRouter::new(engine);
+//           builder = builder.with_memory_retrieval(Arc::new(router));
+
+/// Create a `MemoryRetrievalEngine` wired for future server injection.
+/// This is a placeholder for the server startup path — once the server
+/// carries a `MemoryRetrievalEngine` field, call this during build.
+///
+/// When to call: when `ServerBuilder` gains a `memory_retrieval_engine` field,
+/// invoke this function during the build step to create and inject the engine.
+#[allow(dead_code)] // Reserved—wired via ServerBuilder
+pub fn wire_memory_retrieval(
+    persistence: crate::memory::memory_persistence::MemoryPersistence,
+) -> crate::memory::memory_retrieval::MemoryRetrievalEngine {
+    crate::memory::memory_retrieval::MemoryRetrievalEngine::new(persistence)
+}
 pub mod vector;

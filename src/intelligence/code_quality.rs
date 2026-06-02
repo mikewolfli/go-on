@@ -4,7 +4,7 @@
 //! style violations) and generate evolution triggers for the self-improvement
 //! loop. Hooks run periodically and on plan completion.
 
-#![allow(unused)]
+#![allow(dead_code)] // Reserved—wired via evolution loop in production
 
 use crate::orchestration::self_evolution::evolution_loop::EvolutionTrigger;
 use serde::{Deserialize, Serialize};
@@ -93,16 +93,96 @@ impl CodeQualityReport {
 
 /// Hook that performs a code quality analysis and returns a report.
 ///
-/// In production, this integrates with `cargo clippy` and static analysis
-/// tools. For now, it provides a stub that can be extended.
+/// Runs `cargo clippy` and parses its output to produce a structured
+/// `CodeQualityReport` with per-issue entries and a health score.
 pub fn run_code_quality_scan() -> CodeQualityReport {
-    // Stub: in production, run `cargo clippy` and parse output.
-    // For now, return a clean report indicating no issues found.
-    CodeQualityReport {
-        issues: Vec::new(),
-        health_score: 1.0,
-        modules_scanned: 0,
-        scanned_at_ms: crate::intelligence::now_ms(),
+    let mut issues = Vec::new();
+    let scanned_at_ms = crate::intelligence::now_ms();
+
+    match std::process::Command::new("cargo")
+        .args(["clippy", "--message-format=short", "--quiet"])
+        .output()
+    {
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let combined = format!("{stdout}\n{stderr}");
+
+            // Track unique file paths that appeared in clippy output
+            let modules_scanned_set: std::collections::HashSet<&str> = combined
+                .lines()
+                .filter_map(|l| {
+                    let trimmed = l.trim();
+                    // Lines like "src/foo.rs:12:34: warning: ..."
+                    if trimmed.contains(".rs:") || trimmed.contains(".toml:") {
+                        trimmed.split(':').next()
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let modules_scanned = modules_scanned_set.len();
+
+            // Count warnings and errors
+            let warning_count = combined.lines().filter(|l| l.contains("warning:")).count();
+            let error_count = combined.lines().filter(|l| l.contains("error:")).count();
+
+            // Create issues for each warning
+            for line in combined.lines().filter(|l| l.contains("warning:")) {
+                let module = line.split(':').next().unwrap_or("unknown").to_string();
+
+                let issue = if line.contains("unused")
+                    || line.contains("dead_code")
+                    || line.contains("redundant")
+                {
+                    CodeQualityIssue::DeadCode {
+                        module,
+                        ratio: 0.1, // single-issue ratio
+                    }
+                } else if line.contains("complexity") || line.contains("cognitive") {
+                    CodeQualityIssue::HighComplexity { module, score: 80 }
+                } else if line.contains("missing_docs") || line.contains("doc") {
+                    CodeQualityIssue::MissingDocs { module, count: 1 }
+                } else {
+                    CodeQualityIssue::UnsafePattern {
+                        module,
+                        pattern: line.to_string(),
+                    }
+                };
+                issues.push(issue);
+            }
+
+            // Create issues for each error
+            for line in combined.lines().filter(|l| l.contains("error:")) {
+                let module = line.split(':').next().unwrap_or("unknown").to_string();
+                // Errors are typically compilation or clippy errors; map as UnsafePattern
+                issues.push(CodeQualityIssue::UnsafePattern {
+                    module,
+                    pattern: line.to_string(),
+                });
+            }
+
+            // Health score: 1.0 - penalty for warnings and errors
+            let total_penalty = (warning_count as f64 * 0.01) + (error_count as f64 * 0.05);
+            let health_score = (1.0 - total_penalty.min(0.95)).max(0.05);
+
+            CodeQualityReport {
+                issues,
+                health_score,
+                modules_scanned: modules_scanned.max(1),
+                scanned_at_ms,
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Failed to run cargo clippy for code quality scan: {e}");
+            CodeQualityReport {
+                issues: Vec::new(),
+                health_score: 1.0,
+                modules_scanned: 0,
+                scanned_at_ms,
+            }
+        }
     }
 }
 

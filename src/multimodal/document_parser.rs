@@ -292,8 +292,8 @@ impl DocumentParser {
             b"ModDate",
         ];
         for key in INFO_KEYS {
-            if let Ok(val) = doc.trailer.get(*key) {
-                let key_str = String::from_utf8_lossy(key).to_string();
+            if let Ok(val) = doc.trailer.get(key) {
+                let key_str = std::str::from_utf8(key).unwrap_or_default().to_string();
                 if let Ok(cow_str) = val.as_string() {
                     content.metadata.insert(key_str, cow_str.to_string());
                 }
@@ -377,51 +377,45 @@ impl DocumentParser {
                         headers: Vec::new(),
                         rows: Vec::new(),
                     };
-                    for tc in &tbl.rows {
-                        if let docx_rs::TableChild::TableRow(row) = tc {
-                            let cells: Vec<String> = row
-                                .cells
-                                .iter()
-                                .filter_map(|rc| match rc {
-                                    docx_rs::TableRowChild::TableCell(cell) => {
-                                        let text: String = cell
-                                            .children
-                                            .iter()
-                                            .filter_map(|cc| match cc {
-                                                docx_rs::TableCellContent::Paragraph(p) => {
-                                                    let t: String = p
-                                                        .children
-                                                        .iter()
-                                                        .filter_map(|pc| match pc {
-                                                            ParagraphChild::Run(r) => {
-                                                                let txt: String = r
-                                                                    .children
-                                                                    .iter()
-                                                                    .filter_map(|rc| match rc {
-                                                                        RunChild::Text(tx) => {
-                                                                            Some(tx.text.clone())
-                                                                        }
-                                                                        _ => None,
-                                                                    })
-                                                                    .collect();
-                                                                Some(txt)
-                                                            }
-                                                            _ => None,
-                                                        })
-                                                        .collect();
-                                                    Some(t)
-                                                }
-                                                _ => None,
-                                            })
-                                            .collect::<Vec<_>>()
-                                            .join(" ");
-                                        Some(text)
-                                    }
-                                    _ => None,
-                                })
-                                .collect();
-                            table.rows.push(cells);
-                        }
+                    for docx_rs::TableChild::TableRow(row) in &tbl.rows {
+                        let cells: Vec<String> = row
+                            .cells
+                            .iter()
+                            .map(|rc| {
+                                let docx_rs::TableRowChild::TableCell(cell) = rc;
+                                cell.children
+                                    .iter()
+                                    .filter_map(|cc| match cc {
+                                        docx_rs::TableCellContent::Paragraph(p) => {
+                                            let t: String = p
+                                                .children
+                                                .iter()
+                                                .filter_map(|pc| match pc {
+                                                    ParagraphChild::Run(r) => {
+                                                        let txt: String = r
+                                                            .children
+                                                            .iter()
+                                                            .filter_map(|rc| match rc {
+                                                                RunChild::Text(tx) => {
+                                                                    Some(tx.text.clone())
+                                                                }
+                                                                _ => None,
+                                                            })
+                                                            .collect();
+                                                        Some(txt)
+                                                    }
+                                                    _ => None,
+                                                })
+                                                .collect();
+                                            Some(t)
+                                        }
+                                        _ => None,
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(" ")
+                            })
+                            .collect();
+                        table.rows.push(cells);
                     }
                     content.tables.push(table);
                 }
@@ -524,14 +518,15 @@ impl DocumentParser {
                 if let Some(href) = elem.value().attr("href") {
                     let label: String = elem.text().collect();
                     let key = if label.is_empty() {
-                        format!("link")
+                        "link".to_string()
                     } else {
                         format!("link:{}", label)
                     };
                     // Avoid overwriting duplicate labels with the same key.
-                    if !content.metadata.contains_key(&key) {
-                        content.metadata.insert(key, href.to_string());
-                    }
+                    content
+                        .metadata
+                        .entry(key)
+                        .or_insert_with(|| href.to_string());
                 }
             }
         }
@@ -758,9 +753,10 @@ impl DocumentParser {
                     } else {
                         format!("link:{label}")
                     };
-                    if !content.metadata.contains_key(&key) {
-                        content.metadata.insert(key, href.to_string());
-                    }
+                    content
+                        .metadata
+                        .entry(key)
+                        .or_insert_with(|| href.to_string());
                 }
             }
         }

@@ -11,7 +11,6 @@ use crate::pua::mode_execution_report;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
@@ -231,14 +230,11 @@ impl BaseModeRuntime {
     /// 3. Attempt real agent execution (chat or run_task as determined by strategy).
     /// 4. Fall through to a placeholder response when no agent is available.
     ///
-    // BLUE56-GAP-C01: Use Handle::current().spawn() instead of safe_block_on
-    // to avoid blocking the tokio thread in async contexts.
     pub fn run(
         &self,
         strategy: &dyn ModeStrategy,
         task: AgentTaskEnvelope,
     ) -> Result<AgentTaskResult> {
-        let handle = Handle::current();
         let task_id = task.task_id.clone();
         let objective = task.objective.clone();
         let phase = task.phase.clone();
@@ -261,12 +257,40 @@ impl BaseModeRuntime {
 
             if let Some(name) = agent_name {
                 if let Some(agent) = registry.get(&name) {
-                        if strategy.use_chat() {
+                    // CLI sync wrapper — if called from inside a tokio runtime,
+                    // warn and return a default; don't block a worker thread.
+                    if tokio::runtime::Handle::try_current().is_ok() {
+                        warn!(
+                            "[{} Mode] Called from inside a tokio runtime — returning fallback",
+                            strategy.mode_name(),
+                        );
+                        return Ok(strategy.fallback_result(&task_id, &objective, &phase, &role));
+                    }
+
+                    // No active runtime — create a temporary one for CLI execution.
+                    let rt = match tokio::runtime::Runtime::new() {
+                        Ok(rt) => rt,
+                        Err(e) => {
+                            warn!(
+                                "[{} Mode] Failed to create tokio runtime: {}",
+                                strategy.mode_name(),
+                                e,
+                            );
+                            return Ok(
+                                strategy.fallback_result(&task_id, &objective, &phase, &role)
+                            );
+                        }
+                    };
+
+                    if strategy.use_chat() {
                         let messages = build_chat_messages(&task);
                         let agent_clone = agent.clone();
-                        let result = tokio::task::block_in_place(|| {
-                            handle.block_on(execute_agent_chat_async(agent_clone.as_ref(), messages, None, None))
-                        });
+                        let result = rt.block_on(execute_agent_chat_async(
+                            agent_clone.as_ref(),
+                            messages,
+                            None,
+                            None,
+                        ));
                         match result {
                             Ok(output) => {
                                 return Ok(AgentTaskResult {
@@ -304,9 +328,8 @@ impl BaseModeRuntime {
                         }
                     } else {
                         let agent_clone = agent.clone();
-                        let result = tokio::task::block_in_place(|| {
-                            handle.block_on(execute_agent_run_task_async(agent_clone.as_ref(), task))
-                        });
+                        let result =
+                            rt.block_on(execute_agent_run_task_async(agent_clone.as_ref(), task));
                         match result {
                             Ok(result) => {
                                 return Ok(AgentTaskResult {

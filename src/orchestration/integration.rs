@@ -2,15 +2,22 @@
 //! Gated behind `sub-bus-tool-future` feature.
 // F-GAP-51: dead_code allowed on items when sub-bus-tool-future is disabled
 
+#[cfg(feature = "sub-bus-tool-future")]
 use crate::orchestration::cache_warming::CacheWarmingEngine;
+#[cfg(feature = "sub-bus-tool-future")]
 use crate::orchestration::complexity_estimator::ComplexityEstimator;
+#[cfg(feature = "sub-bus-tool-future")]
 use crate::orchestration::diagnostic_feedback::DiagnosticFeedbackEngine;
+#[cfg(feature = "sub-bus-tool-future")]
 use crate::orchestration::session_context::SessionContextManager;
+#[cfg(feature = "sub-bus-tool-future")]
 use crate::orchestration::tool_lock::ToolLockManager;
+#[cfg(feature = "sub-bus-tool-future")]
 use crate::orchestration::tool_recommender::ToolRecommender;
 
 /// Initializes all subsystems during application startup.
-#[allow(dead_code)] // F-GAP-51 — reserved for future use
+#[cfg(feature = "sub-bus-tool-future")]
+#[allow(dead_code)] // Reserved — wired via SystemIntegration init
 pub struct SystemIntegration {
     pub session_context: SessionContextManager,
     pub cache_warming: CacheWarmingEngine,
@@ -20,8 +27,9 @@ pub struct SystemIntegration {
     pub tool_lock: ToolLockManager,
 }
 
+#[cfg(feature = "sub-bus-tool-future")]
+#[allow(dead_code)]
 impl SystemIntegration {
-    #[allow(dead_code)] // F-GAP-51 — gated behind sub-bus-tool-future
     pub fn new() -> Self {
         Self {
             session_context: SessionContextManager::default(),
@@ -34,6 +42,7 @@ impl SystemIntegration {
     }
 }
 
+#[cfg(feature = "sub-bus-tool-future")]
 impl Default for SystemIntegration {
     fn default() -> Self {
         Self::new()

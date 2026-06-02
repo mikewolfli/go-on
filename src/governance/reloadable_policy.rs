@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use notify::{Config, Event, EventKind, RecursiveMode, Watcher};
+use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
 // ─── ReloadablePolicy trait ────────────────────────────────────────────────
@@ -39,6 +40,7 @@ pub struct PolicyReloader {
     /// Registered hot-reloadable policies.
     policies: Vec<Box<dyn ReloadablePolicy>>,
     /// Optional filesystem watcher for automatic reloads.
+    #[allow(dead_code)] // Set during construction, used by background reload task
     watcher: Option<notify::RecommendedWatcher>,
     /// The directory path being watched (if watcher is active).
     watch_path: Option<String>,
@@ -53,7 +55,7 @@ impl Default for PolicyReloader {
         Self::new()
     }
 }
-#[allow(dead_code)]
+#[allow(dead_code)] // All methods reserved for production governance wiring
 impl PolicyReloader {
     /// Create a new empty `PolicyReloader` without a watcher.
     pub fn new() -> Self {
@@ -121,6 +123,7 @@ impl PolicyReloader {
     }
 
     /// Get a mutable reference to all registered policies.
+    #[allow(dead_code)] // Reserved for production governance wiring
     pub fn policies_mut(&mut self) -> &mut [Box<dyn ReloadablePolicy>] {
         &mut self.policies
     }
@@ -130,6 +133,7 @@ impl PolicyReloader {
     /// When a file modification event is detected, all registered policies
     /// are reloaded automatically. This is best-effort: watcher errors are
     /// logged but do not crash the process.
+    #[allow(dead_code)] // Reserved for production governance wiring
     pub fn start_watching(&mut self, watch_dir: impl AsRef<Path>) -> Result<()> {
         let watch_dir = watch_dir.as_ref().to_path_buf();
         let watch_path = watch_dir.to_string_lossy().to_string();
@@ -176,6 +180,7 @@ impl PolicyReloader {
     }
 
     /// Stop the filesystem watcher, if one is active.
+    #[allow(dead_code)] // Reserved for production governance wiring
     pub fn stop_watching(&mut self) {
         if let Some(watcher) = self.watcher.take() {
             // Dropping the watcher stops it
@@ -186,8 +191,35 @@ impl PolicyReloader {
     }
 
     /// Returns the path being watched, if any.
+    #[allow(dead_code)] // Reserved for production governance wiring
     pub fn watch_path(&self) -> Option<&str> {
         self.watch_path.as_deref()
+    }
+
+    /// Start a background task that calls [`reload_all`] periodically.
+    ///
+    /// Consumes this `PolicyReloader` and spawns a tokio task that runs
+    /// forever (or until the returned `JoinHandle` is cancelled).
+    /// Each iteration waits `interval_secs` seconds, then calls
+    /// `reload_all()`.
+    ///
+    /// ## Example
+    ///
+    /// ```ignore
+    /// let handle = reloader.start_background_reload(60);
+    /// // … later …
+    /// handle.abort();
+    /// ```
+    #[allow(dead_code)] // Reserved for production governance wiring
+    pub fn start_background_reload(mut self, interval_secs: u64) -> JoinHandle<()> {
+        let duration = std::time::Duration::from_secs(interval_secs);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(duration);
+            loop {
+                interval.tick().await;
+                self.reload_all();
+            }
+        })
     }
 }
 

@@ -21,7 +21,7 @@ sudo chown "go-on:go-on" "${INSTALL_DIR}" -R
 # 2. Build
 echo "Building..."
 cd "$BUILD_DIR"
-cargo build --release --no-default-features -F profile-multi-users-server 2>&1 | { grep -v "^$" || true; } && \
+cargo build --release --no-default-features -F profile-multi-users-server 2>&1 && \
     echo "Build OK" || { echo "BUILD FAILED"; exit 1; }
 
 # 3. Copy binary

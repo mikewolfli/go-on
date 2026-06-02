@@ -364,7 +364,7 @@ pub fn run_timeout_check(cycle: u64, pending_count: Option<usize>, timeout_secs:
         }
     }
 
-    if cycle.is_multiple_of(12) {
+    if cycle > 0 && cycle.is_multiple_of(12) {
         // Log every 60 seconds (12 * 5s)
         tracing::debug!(
             target: "runtime_controls",
@@ -372,4 +372,65 @@ pub fn run_timeout_check(cycle: u64, pending_count: Option<usize>, timeout_secs:
             "timeout check: no timeouts detected"
         );
     }
+}
+
+/// Spawn a continuous background loop that periodically checks for runtime
+/// timeouts and processes approval engine timeouts.
+///
+/// Call this once during server startup to integrate timeout checking into
+/// the runtime control system.
+///
+/// The loop runs every 5 seconds and exits when `shutdown_notify` is signalled.
+pub fn spawn_timeout_loop(
+    shutdown_notify: std::sync::Arc<tokio::sync::Notify>,
+    approval_engine: Option<
+        std::sync::Arc<std::sync::RwLock<crate::governance::approval_engine::ApprovalEngine>>,
+    >,
+) {
+    tokio::spawn(async move {
+        let mut cycle: u64 = 0;
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        loop {
+            tokio::select! {
+                _ = shutdown_notify.notified() => {
+                    tracing::debug!(target: "runtime_controls", "timeout loop shutting down");
+                    break;
+                }
+                _ = ticker.tick() => {
+                    cycle = cycle.wrapping_add(1);
+
+                    // 1. Run the runtime_controls timeout check
+                    run_timeout_check(cycle, None, None);
+
+                    // 2. Process approval engine timeouts if available
+                    if let Some(ref engine) = approval_engine {
+                        // std::sync::RwLock is used here (not tokio::sync::RwLock)
+                        // because ApprovalEngine operations are synchronous.
+                        // The lock scope is brief and never held across .await points.
+                        let mut guard = match engine.write() {
+                            Ok(g) => g,
+                            Err(poisoned) => {
+                                tracing::error!(
+                                    target: "runtime_controls",
+                                    "approval_engine lock poisoned in timeout loop"
+                                );
+                                poisoned.into_inner()
+                            }
+                        };
+                        let changed = guard.process_timeouts();
+                        if !changed.is_empty() {
+                            tracing::info!(
+                                target: "runtime_controls",
+                                count = changed.len(),
+                                "approval engine timed out {} request(s)",
+                                changed.len()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    });
 }

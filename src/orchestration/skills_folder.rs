@@ -156,12 +156,12 @@ impl SkillsFolderIndex {
     /// Refresh: rescan folder + re-fetch if stale.
     #[allow(dead_code)]
     // F-GAP-49 — reserved for future use
-    pub fn refresh(&mut self) {
+    pub async fn refresh(&mut self) {
         if self.last_scan.elapsed() >= RESCAN_INTERVAL {
             self.scan_folder();
         }
         if self.last_fetch.elapsed() >= FETCH_INTERVAL {
-            self.fetch_all();
+            self.fetch_all().await;
         }
     }
 
@@ -241,7 +241,7 @@ impl SkillsFolderIndex {
     /// Fetch all URLs that haven't been fetched recently.
     #[allow(dead_code)]
     // F-GAP-49 — reserved for future use
-    fn fetch_all(&mut self) {
+    async fn fetch_all(&mut self) {
         let now = Instant::now();
         let stale_urls: Vec<String> = self
             .sources
@@ -251,7 +251,7 @@ impl SkillsFolderIndex {
             .collect();
 
         for url in stale_urls {
-            self.fetch_url(&url);
+            self.fetch_url(&url).await;
         }
 
         self.last_fetch = Instant::now();
@@ -260,31 +260,10 @@ impl SkillsFolderIndex {
     /// Fetch a single URL and parse skills.
     #[allow(dead_code)]
     // F-GAP-49 — reserved for future use
-    fn fetch_url(&mut self, url: &str) {
+    async fn fetch_url(&mut self, url: &str) {
         debug!("fetching skills from: {}", url);
 
-        // Use the existing tokio runtime handle to avoid creating a new
-        // blocking runtime on every fetch. Falls back to a new Runtime
-        // only when no tokio runtime is present (e.g., in tests).
-        let result = match tokio::runtime::Handle::try_current() {
-            Ok(h) => tokio::task::block_in_place(move || {
-                h.block_on(fetch_skills_from_url(url))
-            }),
-            Err(_) => {
-                warn!(
-                    "no tokio runtime found for fetching {}; creating temporary runtime",
-                    url
-                );
-                let rt = match tokio::runtime::Runtime::new() {
-                    Ok(r) => r,
-                    Err(e) => {
-                        warn!("failed to create runtime for fetching {}: {}", url, e);
-                        return;
-                    }
-                };
-                rt.block_on(fetch_skills_from_url(url))
-            }
-        };
+        let result = fetch_skills_from_url(url).await;
 
         match result {
             Ok(Value::Array(arr)) => {

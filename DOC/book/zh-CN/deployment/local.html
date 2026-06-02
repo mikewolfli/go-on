@@ -3,12 +3,12 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>本地模式 - go-on Documentation</title>
+        <title>本地模式 - go-on Documentation — AI Agent Orchestration System</title>
 
 
         <!-- Custom HTML head -->
 
-        <meta name="description" content="">
+        <meta name="description" content="Complete documentation for go-on: ACP/MCP agent orchestration runtime with 35 AI provider integrations, 14-bus architecture, autonomous agent orchestration, governance, and observability">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
@@ -35,7 +35,7 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-a7ab1419.js";
+            window.path_to_searchindex_js = "../../searchindex-ebcb8906.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../../toc-ee19d562.js"></script>
@@ -137,7 +137,7 @@
                         </button>
                     </div>
 
-                    <h1 class="menu-title">go-on Documentation</h1>
+                    <h1 class="menu-title">go-on Documentation — AI Agent Orchestration System</h1>
 
                     <div class="right-buttons">
                         <a href="../../print.html" title="Print this book" aria-label="Print this book">
@@ -190,7 +190,7 @@
 <li><strong>SQLite 存储</strong>：基于本地文件的缓存和向量存储</li>
 <li><strong>自适应向量存储</strong>：当 <code>sqlite-vec</code> 可用时使用，否则回退到 JSON 嵌入</li>
 <li><strong>零外部依赖</strong>：无需数据库服务器</li>
-<li><strong>所有 14 条能力总线和 21 个 F-GAP 模块已包含</strong>：本地配置文件拥有完整的 Phase 4 功能</li>
+<li><strong>所有 14 条能力总线已包含</strong>：完整的工具、编排、可观测、优化、内存和协议子总线支持</li>
 </ul>
 <h3 id="存储架构"><a class="header" href="#存储架构">存储架构</a></h3>
 <pre><code>本地模式存储：
@@ -201,27 +201,52 @@
 <h2 id="配置"><a class="header" href="#配置">配置</a></h2>
 <h3 id="默认配置"><a class="header" href="#默认配置">默认配置</a></h3>
 <p>本地模式使用 <code>config/config.toml</code> 作为默认配置：</p>
-<pre><code class="language-toml"># config/config.toml（本地模式默认配置）
-default_phase = "coding"
+<pre><code class="language-toml"># config/config.toml（profile-local 默认配置）
+schema_version = "1.0.0"
+default_phase = "think"
 model_selection_mode = "adaptive"
 
 [protocol]
-mode = "adaptive"
+mode = "acp_http"
 
 [cache]
 enabled = true
 path = "acp_cache.sqlite3"
-default_ttl_seconds = 3600
-max_entries = 5000
+default_ttl_seconds = 1800
+max_entries = 2000
 
 [vector]
 enabled = true
 auto_mode = true
 path = "acp_vector.sqlite3"
-dimensions = 192
-min_query_chars = 80
+dimensions = 128
+min_query_chars = 120
 top_k = 2
 min_similarity = 0.82
+max_snippet_chars = 600
+max_entries = 3000
+summary_trigger_messages = 4
+summary_max_chars = 800
+
+[runtime]
+acp_http_bind_addr = "127.0.0.1:8090"
+maintenance_interval_seconds = 60
+health_interval_seconds = 120
+shutdown_drain_seconds = 30
+entry_auth_enabled = false
+entry_rate_limit_rpm = 240
+entry_rate_limit_burst = 60
+i18n_enabled = true
+i18n_default_language = "en-US"
+governance_enabled = true
+governance_policy_mode = "advisory"
+skills_enabled = true
+skills_cache_dir = "skills_cache"
+
+# OpenTelemetry
+otel_enabled = true
+otel_exporter = "otlp"
+otel_endpoint = "http://localhost:4317"
 </code></pre>
 <h3 id="特性标志"><a class="header" href="#特性标志">特性标志</a></h3>
 <p>本地模式启用以下 Cargo 特性：</p>

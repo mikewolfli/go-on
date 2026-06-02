@@ -14,8 +14,8 @@ serde_json = "1"
 reqwest = { version = "0.12.9", default-features = false, features = ["json", "stream", "rustls-tls"] }
 anyhow = "1"
 thiserror = "2"
-futures-util = "0.3"
 futures = "0.3"
+futures-util = "0.3"
 base64 = "0.22"
 keyring = { version = "3" }
 uuid = { version = "1", features = ["v4", "serde"] }
@@ -135,21 +135,19 @@ profile-full = [
     "sub-bus-multimodal",
     "audio-whisper-openai",
     "audio-vosk",
+    "vault",
+    "temp_env",
 ]
 
 # Backend implementations
 backend-sqlite = ["dep:rusqlite", "dep:sqlite-vec"]
 backend-postgres = ["dep:postgres", "dep:pgvector"]
 
-# Test utilities (no-op stub when not available)
-temp_env = []
-
 # Legacy aliases (kept for backward compatibility)
 local-acp-sqlite = ["profile-local"]
 server-mcp-postgres = ["profile-multi-users-server"]
-
-# HashiCorp Vault integration (uses reqwest — no extra crate needed)
 vault = []
+temp_env = []
 
 [dependencies]
 tokio.workspace = true
@@ -168,7 +166,7 @@ tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 opentelemetry-stdout = "0.31"
 lazy_static = "1.4"
-rusqlite = { version = "0.39.0", features = ["bundled"], optional = true }
+rusqlite = { version = "0.31.0", features = ["bundled"], optional = true }
 sha2 = "0.10"
 uuid.workspace = true
 toml = "1.1.0"

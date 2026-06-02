@@ -84,12 +84,20 @@ pub struct VectorStore {
     /// Selected sqlite vector implementation mode.
     mode: SqliteVectorMode,
     /// Optional embedding provider — overrides the built-in `embed_text()`.
+    ///
+    /// In production, inject via [`VectorStore::with_embedding_provider`].
+    /// When `None`, the built-in minhash fallback (`embed_text()`) is used,
+    /// which is only suitable for development/testing.
     embedding_provider: Option<ConfigurableEmbeddingProvider>,
 }
 
 #[cfg(not(feature = "backend-postgres"))]
 impl VectorStore {
-    /// Create a new vector store
+    /// Create a new vector store with the built-in minhash fallback for embeddings.
+    ///
+    /// ⚠️  The minhash fallback is only suitable for development/testing.
+    ///     Production deployments should call [`new_with_env()`] or
+    ///     [`with_embedding_provider()`] to use real embeddings.
     ///
     /// # Arguments
     /// * `path` - Path to the SQLite database file
@@ -159,6 +167,19 @@ impl VectorStore {
         self.dimensions = provider.dimensions();
         self.embedding_provider = Some(provider);
         self
+    }
+
+    /// Create a new vector store configured from environment variables.
+    ///
+    /// Reads `GO_ON_EMBEDDING_BACKEND` (and provider-specific env vars)
+    /// via [`embedding_provider_from_env()`] and passes the result to
+    /// [`with_embedding_provider()`].
+    ///
+    /// This is the recommended entry point for production deployments.
+    pub fn new_with_env(path: &Path, max_entries: usize) -> Result<Self> {
+        let provider = crate::memory::embedding_provider::embedding_provider_from_env();
+        let dimensions = provider.dimensions();
+        Self::new(path, dimensions, max_entries).map(|s| s.with_embedding_provider(provider))
     }
 
     /// Upsert a memory entry
@@ -516,7 +537,7 @@ impl VectorStore {
 // delegates to `sqlite3_vec_init()`, which is the upstream sqlite-vec init function.
 unsafe extern "C" fn sqlite3_vec_init_auto_extension(
     _db: *mut rusqlite::ffi::sqlite3,
-    _pz_err_msg: *mut *mut std::os::raw::c_char,
+    _pz_err_msg: *mut *const std::os::raw::c_char,
     _p_err_msg: *const rusqlite::ffi::sqlite3_api_routines,
 ) -> std::ffi::c_int {
     // The underlying C symbol (declared at the top of sqlite_vec::lib.rs
@@ -539,6 +560,9 @@ fn register_sqlite_vec_auto_extension() {
         // This is called at most once due to `Once`, before any database connections
         // are opened, so there is no race on the internal SQLite data structures.
         unsafe {
+            // SAFETY: `sqlite3_vec_init_auto_extension` has the exact signature
+            // that `sqlite3_auto_extension` expects:
+            //   fn(db: *mut sqlite3, pzErrMsg: *mut *const c_char, pThunk: *const sqlite3_api_routines) -> c_int
             sqlite3_auto_extension(Some(sqlite3_vec_init_auto_extension));
         }
     });
@@ -637,8 +661,7 @@ fn embed_text(text: &str, dimensions: usize) -> Vec<f32> {
     }
 
     // Warn only once via a static atomic flag to avoid log spam.
-    static WARNED_ONCE: std::sync::atomic::AtomicBool =
-        std::sync::atomic::AtomicBool::new(false);
+    static WARNED_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if !WARNED_ONCE.swap(true, std::sync::atomic::Ordering::Relaxed) {
         warn!(
             "embed_text: using minhash fallback embedding —
@@ -859,6 +882,10 @@ pub struct VectorStore {
     dimensions: usize,
     max_entries: usize,
     /// Optional embedding provider — overrides the built-in `embed_text()`.
+    ///
+    /// In production, inject via [`VectorStore::with_embedding_provider`].
+    /// When `None`, the built-in minhash fallback (`embed_text()`) is used,
+    /// which is only suitable for development/testing.
     embedding_provider: Option<ConfigurableEmbeddingProvider>,
 }
 
@@ -869,7 +896,13 @@ impl std::fmt::Debug for VectorStore {
             .field("client", &"<postgres Client>")
             .field("dimensions", &self.dimensions)
             .field("max_entries", &self.max_entries)
-            .field("embedding_provider", &self.embedding_provider.as_ref().map(|_| "<ConfigurableEmbeddingProvider>"))
+            .field(
+                "embedding_provider",
+                &self
+                    .embedding_provider
+                    .as_ref()
+                    .map(|_| "<ConfigurableEmbeddingProvider>"),
+            )
             .finish()
     }
 }
@@ -1122,6 +1155,11 @@ impl VectorStore {
     }
 
     /// No-op on PostgreSQL — VACUUM is managed by autovacuum.
+    ///
+    /// TODO(F-GAP-93): Implement explicit vacuum triggering for postgres.
+    ///   Current implementation is a no-op relying on autovacuum. For
+    ///   consistency with the SQLite backend, consider issuing a manual
+    ///   `VACUUM` or reindexing call after large deletions.
     pub fn vacuum(&self) -> Result<()> {
         Ok(())
     }

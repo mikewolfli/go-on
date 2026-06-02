@@ -36,7 +36,21 @@ skills_import_enabled = true
 skills_allowed_sources = ["github.com/*", "raw.githubusercontent.com/*", "https://*"]
 skills_require_sha256 = false
 skills_allow_floating_ref = true
+entry_auth_enabled = false
+entry_rate_limit_rpm = 240
+entry_rate_limit_burst = 60
+production_strict = false
+governance_enabled = true
+governance_policy_mode = "advisory"
 #acp_http_bind_addr = "127.0.0.1:8090"
+
+# ── Observability / OpenTelemetry ────────────────────────────────────
+otel_enabled = true
+otel_exporter = "otlp"
+otel_endpoint = "http://localhost:4317"
+otel_service_name = "go-on-zed"
+otel_sample_ratio = 1.0
+trace_slow_top_n = 20
 
 [autotune]
 enabled = false

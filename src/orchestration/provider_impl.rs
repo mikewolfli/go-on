@@ -19,16 +19,16 @@ use crate::orchestration::tool::ToolRegistry;
 /// import orchestration concrete types.
 ///
 /// BLUE56-GAP-A07: Will be constructed and wired in `new_acp_server()`.
-#[allow(dead_code)]
+#[allow(dead_code)] // Reserved for ACP server startup wiring
 pub struct OrchestrationProviderImpl {
     skill_registry: Arc<Mutex<SkillRegistry>>,
-    #[allow(dead_code)] // Kept for future full-auto flow creation
+    #[allow(dead_code)] // Reserved for future full-auto flow creation (E-GAP-12)
     tool_registry: Arc<ToolRegistry>,
 }
 
+#[allow(dead_code)]
 impl OrchestrationProviderImpl {
     /// BLUE56-GAP-A07: Called when ACP wire-up integration completes.
-    #[allow(dead_code)]
     pub fn new(
         skill_registry: Arc<Mutex<SkillRegistry>>,
         tool_registry: Arc<ToolRegistry>,
@@ -65,25 +65,20 @@ impl OrchestrationProvider for OrchestrationProviderImpl {
         }
     }
 
-    fn record_capability_execution(
-        &self,
-        _capability_id: &str,
-        _duration_ms: u64,
-        _success: bool,
-    ) {
+    fn record_capability_execution(&self, _capability_id: &str, _duration_ms: u64, _success: bool) {
         // BLUE56-GAP-B07: wired to SelfModelCore in later step
     }
 }
 
 /// A minimal generic Skill wrapper for the provider layer.
 /// BLUE56-GAP-A07: Wired to provider when ACP integration completes.
-#[allow(dead_code)]
+#[allow(dead_code)] // Reserved for production server startup wiring (BLUE56-GAP-A07)
 struct GenericSkill {
     name: String,
 }
 
+#[allow(dead_code)] // Reserved for production server startup wiring (BLUE56-GAP-A07)
 impl GenericSkill {
-    #[allow(dead_code)]
     fn new(name: String) -> Self {
         Self { name }
     }
