@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! mTLS (GAP-B52-24)
 //!
 //! Provides mTLS configuration, acceptor/connector components built on rustls,
@@ -17,6 +15,7 @@ use tracing::{info, warn};
 // Errors
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 #[derive(Debug, Error)]
 pub enum MtlsError {
     #[error("certificate not found: {0}")]
@@ -55,6 +54,7 @@ impl From<std::io::Error> for MtlsError {
 // ---------------------------------------------------------------------------
 
 /// mTLS configuration for the go-on runtime.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MtlsConfig {
     /// Path to the CA certificate file (PEM).
@@ -69,6 +69,7 @@ pub struct MtlsConfig {
     pub allowed_cn_list: Vec<String>,
 }
 
+#[allow(dead_code)]
 impl MtlsConfig {
     /// Create a new mTLS configuration.
     pub fn new(
@@ -102,6 +103,7 @@ impl MtlsConfig {
 // CertificateInfo
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CertificateInfo {
     pub subject_cn: String,
@@ -113,6 +115,7 @@ pub struct CertificateInfo {
     pub days_remaining: i64,
 }
 
+#[allow(dead_code)]
 impl CertificateInfo {
     /// Parse certificate info from DER-encoded certificate bytes.
     pub fn from_der(der_bytes: &[u8]) -> Result<Self, MtlsError> {
@@ -171,12 +174,14 @@ impl CertificateInfo {
 /// Accepts incoming mTLS connections using rustls.
 ///
 /// Loads CA and server certificates from the paths specified in MtlsConfig.
+#[allow(dead_code)]
 pub struct MtlsAcceptor {
     config: MtlsConfig,
     /// Cached server config (rebuilt on cert reload).
     server_config: RwLock<Option<Arc<rustls::ServerConfig>>>,
 }
 
+#[allow(dead_code)]
 impl MtlsAcceptor {
     /// Create a new MtlsAcceptor from configuration.
     pub fn new(config: MtlsConfig) -> Self {
@@ -294,7 +299,7 @@ impl MtlsAcceptor {
     /// Returns the CN of the client certificate if available.
     pub async fn accept(
         &self,
-        _stream: tokio::net::TcpStream,
+        stream: tokio::net::TcpStream,
     ) -> Result<(tokio_rustls::TlsAcceptor, String), MtlsError> {
         let server_config = {
             let cached = self.server_config.read().await;
@@ -309,10 +314,39 @@ impl MtlsAcceptor {
             }
         };
 
-        let acceptor = tokio_rustls::TlsAcceptor::from(server_config);
-        let cn = "unknown".to_string(); // In a full impl, extract from client cert
+        let acceptor = tokio_rustls::TlsAcceptor::from(server_config.clone());
 
-        Ok((acceptor, cn))
+        // BLUE56-D03: Perform the actual TLS handshake and extract client CN
+        let tls_stream = match acceptor.accept(stream).await {
+            Ok(tls) => tls,
+            Err(e) => return Err(MtlsError::HandshakeFailed(e.to_string())),
+        };
+
+        // Extract CN from the peer certificate
+        let cn = if let Some(peer_certs) = tls_stream.get_ref().1.peer_certificates() {
+            if let Some(cert_der) = peer_certs.first() {
+                match x509_parser::parse_x509_certificate(cert_der) {
+                    Ok((_, cert)) => {
+                        let subject = cert.subject().to_string();
+                        // Extract CN from subject string "CN=name,..."
+                        subject
+                            .split(',')
+                            .find_map(|part| {
+                                let p = part.trim();
+                                p.strip_prefix("CN=").map(|cn| cn.to_string())
+                            })
+                            .unwrap_or_else(|| "unknown".to_string())
+                    }
+                    Err(_) => "unknown".to_string(),
+                }
+            } else {
+                "unknown".to_string()
+            }
+        } else {
+            "unknown".to_string()
+        };
+
+        Ok((tokio_rustls::TlsAcceptor::from(server_config), cn))
     }
 
     /// Reload certificates from disk (for hot-reload scenarios).
@@ -329,11 +363,13 @@ impl MtlsAcceptor {
 // ---------------------------------------------------------------------------
 
 /// Connects to remote mTLS endpoints using rustls.
+#[allow(dead_code)]
 pub struct MtlsConnector {
     config: MtlsConfig,
     client_config: RwLock<Option<Arc<rustls::ClientConfig>>>,
 }
 
+#[allow(dead_code)]
 impl MtlsConnector {
     pub fn new(config: MtlsConfig) -> Self {
         Self {
@@ -381,8 +417,8 @@ impl MtlsConnector {
     /// Connect to a remote mTLS endpoint.
     pub async fn connect(
         &self,
-        _addr: &str,
-        _server_name: &str,
+        addr: &str,
+        server_name: &str,
     ) -> Result<tokio_rustls::TlsConnector, MtlsError> {
         let client_config = {
             let cached = self.client_config.read().await;
@@ -397,7 +433,22 @@ impl MtlsConnector {
             }
         };
 
+        // BLUE56-D03: Perform actual TCP connection and TLS handshake
+        let stream = tokio::net::TcpStream::connect(addr)
+            .await
+            .map_err(|e| MtlsError::HandshakeFailed(format!("TCP connect: {}", e)))?;
+
         let connector = tokio_rustls::TlsConnector::from(client_config);
+        let _tls_stream = connector
+            .connect(
+                rustls::pki_types::ServerName::try_from(server_name)
+                    .map_err(|e| MtlsError::HandshakeFailed(format!("invalid server name: {}", e)))?
+                    .to_owned(),
+                stream,
+            )
+            .await
+            .map_err(|e| MtlsError::HandshakeFailed(format!("TLS connect: {}", e)))?;
+
         Ok(connector)
     }
 }
@@ -408,6 +459,7 @@ impl MtlsConnector {
 
 /// Check a certificate file for expiry and return a warning if the certificate
 /// will expire within the given threshold.
+#[allow(dead_code)]
 pub fn check_cert_expiry(
     cert_path: &Path,
     warning_threshold_days: u64,
@@ -442,6 +494,7 @@ pub fn check_cert_expiry(
 
 /// Monitor certificate expiry on a recurring interval.
 /// Spawn this as a tokio task during initialization.
+#[allow(dead_code)]
 pub fn start_cert_monitor(
     config: MtlsConfig,
     check_interval: Duration,
@@ -471,7 +524,7 @@ pub fn start_cert_monitor(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     use tempfile::TempDir;
 
     fn setup_test_certs() -> (TempDir, MtlsConfig) {

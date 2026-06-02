@@ -527,6 +527,45 @@ pub async fn start_background_tasks(
         advisor.start_digest_schedule();
     }
 
+    // BLUE56-D01: Policy reloader — check for policy file changes every 60 seconds
+    {
+        use crate::governance::reloadable_policy::PolicyReloader;
+        let mut reloader = PolicyReloader::new();
+        let shutdown = shutdown_notify.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Duration::from_secs(60));
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = shutdown.notified() => break,
+                    _ = ticker.tick() => {
+                        reloader.reload_all();
+                        debug!("Policy reloader: checked for policy updates");
+                    }
+                }
+            }
+        });
+    }
+
+    // BLUE56-D02: Process timeouts — scan for timed-out processes every 5 seconds
+    {
+        let shutdown = shutdown_notify.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Duration::from_secs(5));
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            let mut cycle: u64 = 0;
+            loop {
+                tokio::select! {
+                    _ = shutdown.notified() => break,
+                    _ = ticker.tick() => {
+                        cycle += 1;
+                        crate::governance::runtime_controls::run_timeout_check(cycle);
+                    }
+                }
+            }
+        });
+    }
+
     Ok(())
 }
 

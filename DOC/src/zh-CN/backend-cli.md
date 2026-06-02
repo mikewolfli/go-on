@@ -178,7 +178,7 @@ phase_max_inflight = 4
 |--------|---------|------|
 | `request_timeout_seconds` | 150 | 此 phase 中单个任务请求的最大时间 |
 | `review_timeout_seconds` | 60 | 此 phase 中审查的最大时间 |
-| `review_timeout_policy` | `"reject"` | 审查超时时的处理方式（`"reject"` 或 `"warn"`） |
+| `review_timeout_policy` | `"reject"` | 审查超时时的处理方式（`"reject"`、`"degrade_single"` 或 `"warn"`） |
 | `review_min_response_chars` | 12 | 审查回复的最小字符数 |
 | `cache_enabled` | true | 在此 phase 中启用缓存查找 |
 | `vector_enabled` | true | 在此 phase 中启用向量存储查找 |

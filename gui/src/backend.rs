@@ -16,10 +16,10 @@ type ModelsCache = Arc<std::sync::Mutex<ModelsCacheState>>;
 
 const MAX_SSE_LINE_LENGTH: usize = 1024 * 1024; // 1 MB per SSE line
 
-/// Incrementally parses an SSE byte stream frame-by-frame, extracting `data:`
-/// payloads as JSON values.  Tracks token count and total bytes processed
-/// for progress reporting in the UI.
-#[allow(dead_code)] // F-GAP-51 — fields reserved for future use
+/// Incrementally parses an SSE byte stream frame-by-frame, extracting `event:`
+/// and `data:` fields. Returns parsed JSON values with the event type attached
+/// (either as a top-level `"_event_type"` field, or through the existing structure).
+/// Tracks token count and total bytes processed for progress reporting in the UI.
 pub struct StreamProcessor {
     buffer: String,
     max_buffer_size: usize,
@@ -41,7 +41,9 @@ impl StreamProcessor {
 
     /// Feed a chunk of raw bytes into the processor.
     /// Returns a batch of parsed results (Ok(values) or Err(errors)).
-    #[allow(dead_code)] // F-GAP-51 — reserved for future use
+    /// Each parsed value now includes an `"_event_type"` field extracted from
+    /// the SSE `event:` line, allowing the caller to distinguish between chunk,
+    /// done, telemetry, and other event types emitted by the backend.
     pub fn push_chunk(&mut self, chunk: &[u8]) -> Vec<Result<Value, String>> {
         let mut events: Vec<Result<Value, String>> = Vec::new();
 
@@ -88,23 +90,57 @@ impl StreamProcessor {
                 vec![&segment]
             };
 
-            for line in sub_lines {
-                if let Some(data) = line.strip_prefix("data: ") {
-                    let trimmed = data.trim();
-                    if trimmed == "[DONE]" {
-                        events.push(Ok(Value::String("[DONE]".to_string())));
-                        continue;
+            let mut current_event_type: Option<String> = None;
+            let mut current_data: Option<String> = None;
+
+            for line in &sub_lines {
+                if let Some(event) = line.strip_prefix("event: ") {
+                    current_event_type = Some(event.trim().to_string());
+                } else if let Some(data) = line.strip_prefix("data: ") {
+                    current_data = Some(data.trim().to_string());
+                } else if let Some(data) = line.strip_prefix("data:") {
+                    // Handle "data: {json}" without space after colon
+                    current_data = Some(data.trim().to_string());
+                }
+            }
+
+            // Emit a single event per frame, combining event type + data
+            if let Some(data_str) = current_data {
+                if data_str == "[DONE]" {
+                    let mut val = Value::String("[DONE]".to_string());
+                    if let Some(ev) = current_event_type {
+                        // Wrap [DONE] in an object with event type
+                        val = serde_json::json!({
+                            "_event_type": ev,
+                            "data": "[DONE]",
+                        });
                     }
-                    match serde_json::from_str::<Value>(trimmed) {
-                        Ok(val) => {
-                            self.token_count += 1;
-                            events.push(Ok(val));
+                    events.push(Ok(val));
+                    continue;
+                }
+
+                match serde_json::from_str::<Value>(&data_str) {
+                    Ok(mut val) => {
+                        self.token_count += 1;
+                        // Inject the event type so callers can distinguish
+                        // "chunk", "done", "telemetry", etc.
+                        if let Some(ev) = current_event_type {
+                            if let Some(obj) = val.as_object_mut() {
+                                obj.insert("_event_type".to_string(), Value::String(ev));
+                            }
                         }
-                        Err(e) => {
-                            events.push(Err(format!("JSON parse error: {}", e)));
-                        }
+                        events.push(Ok(val));
+                    }
+                    Err(e) => {
+                        events.push(Err(format!("JSON parse error: {}", e)));
                     }
                 }
+            } else if let Some(ev) = current_event_type {
+                // Event with no data payload — emit a minimal object
+                events.push(Ok(serde_json::json!({
+                    "_event_type": ev,
+                    "_no_data": true,
+                })));
             }
         }
 
@@ -146,7 +182,6 @@ impl AbortController {
     }
 
     /// Signal abort.  Idempotent — safe to call multiple times.
-    #[allow(dead_code)]
     pub fn abort(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
     }

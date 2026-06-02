@@ -32,6 +32,7 @@ pub use crate::core::config;
 pub use crate::core::config_validation;
 pub use crate::core::context;
 pub use crate::core::error;
+pub use crate::core::provider::OrchestrationProvider;
 pub use crate::core::setup;
 pub use crate::governance::audit;
 pub use crate::governance::drift;
@@ -89,22 +90,29 @@ compile_error!(
     feature = "profile-local",
     feature = "profile-simple-server",
     feature = "profile-multi-users-server",
+    feature = "profile-full",
 )))]
 compile_error!(
     "No profile feature is enabled. Exactly one must be selected: \
-     profile-local, profile-simple-server, or profile-multi-users-server"
+     profile-local, profile-simple-server, profile-multi-users-server, or profile-full"
 );
 
 // Fail if more than one profile is selected simultaneously.
 #[cfg(any(
     all(feature = "profile-local", feature = "profile-simple-server"),
     all(feature = "profile-local", feature = "profile-multi-users-server"),
+    all(feature = "profile-local", feature = "profile-full"),
     all(
         feature = "profile-simple-server",
         feature = "profile-multi-users-server"
     ),
+    all(feature = "profile-simple-server", feature = "profile-full"),
+    all(
+        feature = "profile-multi-users-server",
+        feature = "profile-full"
+    ),
 ))]
 compile_error!(
     "Exactly one profile feature must be enabled. \
-     Choose one of: profile-local, profile-simple-server, profile-multi-users-server"
+     Choose one of: profile-local, profile-simple-server, profile-multi-users-server, or profile-full"
 );

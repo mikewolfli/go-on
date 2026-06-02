@@ -4,10 +4,12 @@
 //! triggers corrective actions.  All mutable state is guarded behind
 //! `Arc<Mutex<>>` for thread-safe concurrent access.
 
+use crate::agent::{Agent, Message, StreamingSender};
 use crate::i18n::{t, tf};
 use crate::intelligence::lock_guard;
 use crate::intelligence::now_ms;
 use anyhow::Result;
+use tokio::sync::mpsc;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -209,9 +211,22 @@ struct Inner {
 
 /// Thread-safe controller that monitors execution quality and triggers
 /// corrective actions through a reflection/self-correction loop.
-#[derive(Debug, Clone)]
+///
+/// When an `llm_agent` is provided, reflect operations use LLM-based
+/// root cause analysis instead of keyword matching.
+#[derive(Clone)]
 pub struct MetacognitiveController {
     inner: Arc<Mutex<Inner>>,
+    llm_agent: Option<Arc<dyn Agent>>,
+}
+
+impl std::fmt::Debug for MetacognitiveController {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MetacognitiveController")
+            .field("inner", &self.inner)
+            .field("llm_agent", &self.llm_agent.as_ref().map(|_| "Some(Arc<dyn Agent>)"))
+            .finish()
+    }
 }
 
 impl MetacognitiveController {
@@ -227,7 +242,35 @@ impl MetacognitiveController {
                 max_reports: DEFAULT_MAX_REPORTS,
                 next_id: 1,
             })),
+            llm_agent: None,
         }
+    }
+
+    /// Create a new metacognitive controller with an LLM agent for
+    /// AI-driven root cause analysis and reflection.
+    pub fn with_llm(config: MetacognitiveConfig, llm_agent: Arc<dyn Agent>) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(Inner {
+                config,
+                observations: Vec::new(),
+                observation_index: HashMap::new(),
+                actions: Vec::new(),
+                reports: Vec::new(),
+                max_reports: DEFAULT_MAX_REPORTS,
+                next_id: 1,
+            })),
+            llm_agent: Some(llm_agent),
+        }
+    }
+
+    /// Returns a reference to the optional LLM agent.
+    pub fn llm_agent(&self) -> Option<&Arc<dyn Agent>> {
+        self.llm_agent.as_ref()
+    }
+
+    /// Set or replace the LLM agent used for AI-driven reflection.
+    pub fn set_llm_agent(&mut self, agent: Arc<dyn Agent>) {
+        self.llm_agent = Some(agent);
     }
 
     // ── Observation management ──────────────────────────────────────────
@@ -652,6 +695,82 @@ impl MetacognitiveController {
         inner.reports.push(report);
 
         Ok(report_id)
+    }
+
+    /// Generate a reflection report using LLM for root cause analysis.
+    /// Falls back to keyword-based analysis if no LLM agent is available.
+    pub async fn generate_reflection_report_with_llm(&self, task_id: &str) -> Result<String> {
+        if let Some(ref agent) = self.llm_agent {
+            let task_observations = {
+                let inner = lock_guard(&self.inner);
+                inner
+                    .observations
+                    .iter()
+                    .filter(|o| o.task_id == task_id)
+                    .cloned()
+                    .collect::<Vec<ExecutionObservation>>()
+            }; // lock released here, before any await points
+
+            if !task_observations.is_empty() {
+                let obs_summary: String = task_observations
+                    .iter()
+                    .map(|o| format!("- [{}] {}: {} (severity: {})", o.id, o.observation_type, o.description, o.severity))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                let prompt = format!(
+                    "You are a metacognitive reflection system. Analyze the following execution observations \
+                     for task '{}' and provide:\n\
+                     1. Root cause analysis\n\
+                     2. Corrective action recommendations\n\
+                     3. Preventive measures\n\n\
+                     Observations:\n{}\n\n\
+                     Provide your analysis in a structured format.",
+                    task_id, obs_summary
+                );
+
+                let (tx, mut rx) = mpsc::channel::<String>(64);
+                let sender = StreamingSender::new(tx);
+
+                let messages = vec![
+                    Message { role: "system".to_string(), content: "You are an expert metacognitive analysis system.".to_string() },
+                    Message { role: "user".to_string(), content: prompt },
+                ];
+
+                match agent.chat(messages, None, None, sender).await {
+                    Ok(()) => {
+                        let mut full_output = String::new();
+                        while let Some(token) = rx.recv().await {
+                            full_output.push_str(&token);
+                        }
+                        // Store as a reflection entry
+                        let mut inner = lock_guard(&self.inner);
+                        let report_id = format!("report-llm-{}", inner.next_id);
+                        inner.next_id += 1;
+                        let report = ReflectionReport {
+                            id: report_id.clone(),
+                            task_id: task_id.to_string(),
+                            observations: task_observations,
+                            actions_taken: Vec::new(),
+                            overall_assessment: full_output.clone(),
+                            confidence_score: 0.8,
+                            reflection_level: ReflectionLevel::Deep,
+                            created_ms: now_ms(),
+                        };
+                        if inner.reports.len() >= inner.max_reports {
+                            inner.reports.remove(0);
+                        }
+                        inner.reports.push(report);
+                        return Ok(report_id);
+                    }
+                    Err(e) => {
+                        tracing::warn!(target: "metacognitive", error = %e, "LLM reflection failed, falling back to rule-based");
+                    }
+                }
+            }
+        }
+        // Fall back to rule-based analysis
+        self.generate_reflection_report(task_id)
     }
 
     /// Get a single reflection report by id.

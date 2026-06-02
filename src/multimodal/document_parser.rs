@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Document parser — extracts structured content (text, images, tables, metadata)
 //! from PDF, DOCX, HTML, and Markdown files.
 //!
@@ -373,7 +371,8 @@ impl DocumentParser {
                     }
                 }
                 DocumentChild::Table(tbl) => {
-                    let mut table = Table {
+                    // Use fully-qualified path to avoid shadowing from docx_rs::*
+                    let mut table = crate::multimodal::document_parser::Table {
                         caption: None,
                         headers: Vec::new(),
                         rows: Vec::new(),
@@ -421,22 +420,12 @@ impl DocumentParser {
                                     _ => None,
                                 })
                                 .collect();
-                            if table.headers.is_empty() {
-                                table.headers = cells;
-                            } else {
-                                table.rows.push(cells);
-                            }
+                            table.rows.push(cells);
                         }
                     }
                     content.tables.push(table);
                 }
-                // Images embedded in runs can be accessed via RunChild::Drawing
-                // or ImagePart references. For now we note this for enhancement.
-                DocumentChild::Drawing(_) => {
-                    // docx-rs v0.4 exposes drawings at the DocumentChild level;
-                    // actual image extraction would dereference the drawing's
-                    // relationship ID to the [Content_Types].xml media parts.
-                }
+                // Images / drawings — skipped: image extraction is not yet implemented
                 _ => {}
             }
         }
@@ -648,6 +637,7 @@ impl DocumentParser {
     }
 
     #[cfg(not(feature = "document-html"))]
+    #[allow(dead_code)]
     fn parse_html_str(_html_str: &str) -> Result<ParsedContent, DocumentParserError> {
         Err(DocumentParserError::feature_disabled("HTML"))
     }
@@ -783,6 +773,7 @@ impl DocumentParser {
     }
 
     #[cfg(not(feature = "document-markdown"))]
+    #[allow(dead_code)]
     fn parse_markdown_str(_md_str: &str) -> Result<ParsedContent, DocumentParserError> {
         Err(DocumentParserError::feature_disabled("Markdown"))
     }

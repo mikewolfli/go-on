@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Remote Executor (GAP-B52-21)
 //!
 //! Defines the TaskPacket, NodeOutput, and RemoteExecutor trait for
@@ -17,6 +15,7 @@ use tracing::{debug, info};
 // Errors
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 #[derive(Debug, Error)]
 pub enum RemoteExecutionError {
     #[error("node not found: {0}")]
@@ -46,15 +45,18 @@ pub enum RemoteExecutionError {
 // ---------------------------------------------------------------------------
 
 /// Unique identifier for a distributed node.
+#[allow(dead_code)]
 pub type NodeId = String;
 
 /// Unique identifier for a DAG instance.
+#[allow(dead_code)]
 pub type DagId = String;
 
 // ---------------------------------------------------------------------------
 // TaskPacket
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskPacket {
     /// The target node ID to execute on.
@@ -73,6 +75,7 @@ pub struct TaskPacket {
     pub max_retries: u32,
 }
 
+#[allow(dead_code)]
 impl TaskPacket {
     /// Create a new TaskPacket for a given node and DAG.
     pub fn new(
@@ -102,6 +105,7 @@ impl TaskPacket {
 // NodeOutput
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeOutput {
     /// The node ID that produced this output.
@@ -122,6 +126,7 @@ pub struct NodeOutput {
     pub completed_at_ms: u64,
 }
 
+#[allow(dead_code)]
 impl NodeOutput {
     pub fn success(
         node_id: NodeId,
@@ -166,6 +171,7 @@ impl NodeOutput {
 // NodeCapabilities
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeCapabilities {
     pub node_id: NodeId,
@@ -177,6 +183,7 @@ pub struct NodeCapabilities {
     pub additional_caps: HashMap<String, String>,
 }
 
+#[allow(dead_code)]
 impl NodeCapabilities {
     pub fn new(node_id: NodeId, supported_tools: Vec<String>) -> Self {
         Self {
@@ -200,6 +207,7 @@ impl NodeCapabilities {
 // NodeRegistration
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeRegistration {
     pub node_id: NodeId,
@@ -209,6 +217,7 @@ pub struct NodeRegistration {
     pub registered_at_ms: u64,
 }
 
+#[allow(dead_code)]
 impl NodeRegistration {
     pub fn new(
         node_id: NodeId,
@@ -237,6 +246,7 @@ impl NodeRegistration {
 
 /// Trait for executing tasks on remote nodes.
 #[async_trait::async_trait]
+#[allow(dead_code)]
 pub trait RemoteExecutor: Send + Sync {
     /// Execute a task packet on a remote node and return the output.
     async fn execute_remote(&self, packet: TaskPacket) -> Result<NodeOutput, RemoteExecutionError>;
@@ -268,11 +278,13 @@ pub trait RemoteExecutor: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// In-memory node registry used as a backing store for executors.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct NodeRegistry {
     nodes: RwLock<HashMap<NodeId, NodeRegistration>>,
 }
 
+#[allow(dead_code)]
 impl NodeRegistry {
     pub fn new() -> Self {
         Self {
@@ -319,11 +331,13 @@ impl Default for NodeRegistry {
 
 /// An in-process remote executor that runs tasks locally.
 /// Useful for testing and single-node deployments.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct InProcessRemoteExecutor {
     registry: Arc<NodeRegistry>,
 }
 
+#[allow(dead_code)]
 impl InProcessRemoteExecutor {
     pub fn new(registry: Arc<NodeRegistry>) -> Self {
         Self { registry }
@@ -424,15 +438,18 @@ impl RemoteExecutor for InProcessRemoteExecutor {
 /// Note: This is a stub that requires a proto service definition and
 /// tonic build setup for full functionality. The structure demonstrates
 /// the integration boundary.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct GrpcRemoteExecutor {
     registry: Arc<NodeRegistry>,
     /// gRPC channel map: node_id -> endpoint address
     channels: RwLock<HashMap<NodeId, String>>,
     /// Default timeout in seconds for gRPC calls.
+    #[allow(dead_code)]
     default_timeout_s: u64,
 }
 
+#[allow(dead_code)]
 impl GrpcRemoteExecutor {
     pub fn new(registry: Arc<NodeRegistry>, default_timeout_s: u64) -> Self {
         Self {
@@ -443,6 +460,7 @@ impl GrpcRemoteExecutor {
     }
 
     /// Resolve the gRPC address for a node.
+    #[allow(dead_code)]
     async fn resolve_addr(&self, node_id: &NodeId) -> Result<String, RemoteExecutionError> {
         if let Some(addr) = self.channels.read().await.get(node_id) {
             return Ok(addr.clone());
@@ -535,6 +553,7 @@ impl RemoteExecutor for GrpcRemoteExecutor {
 // Helpers
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 fn current_timestamp_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

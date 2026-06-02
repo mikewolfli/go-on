@@ -4,6 +4,7 @@ pub mod config_validation;
 pub mod context;
 pub mod error;
 pub mod onboarding;
+pub mod provider;
 pub mod setup;
 
 // Provider specs are fully hardcoded in `built_in_provider_specs()`

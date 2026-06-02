@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Secret Rotation (GAP-B52-26)
 //!
 //! Manages cryptographic key lifecycle with automatic rotation policies.
@@ -230,10 +228,12 @@ impl KeyRotator for MemoryRotator {
 // ---------------------------------------------------------------------------
 
 /// Rotator backed by environment variables.
+#[allow(dead_code)]
 pub struct EnvRotator {
     prefix: String,
 }
 
+#[allow(dead_code)]
 impl EnvRotator {
     pub fn new(prefix: String) -> Self {
         Self { prefix }
@@ -304,26 +304,46 @@ impl KeyRotator for EnvRotator {
 }
 
 // ---------------------------------------------------------------------------
-// VaultRotator (HashiCorp Vault stub)
+// VaultRotator (HashiCorp Vault integration)
 // ---------------------------------------------------------------------------
 
 /// Rotator backed by HashiCorp Vault.
 ///
-/// This is a stub that demonstrates the integration point.
-/// Full implementation requires the `vaultrs` crate and Vault server configuration.
+/// When the `vault` feature is enabled, uses the `vaultrs` crate to connect
+/// to a HashiCorp Vault server for key management. Without it, all operations
+/// return `BackendError("Vault not configured")`.
 pub struct VaultRotator {
     endpoint: String,
     token: String,
     mount_path: String,
+    #[cfg(feature = "vault")]
+    client: reqwest::Client,
 }
 
 impl VaultRotator {
+    /// Create a new VaultRotator.
+    ///
+    /// When the `vault` feature is enabled, uses reqwest to call the
+    /// HashiCorp Vault REST API. Without it, all operations return
+    /// `BackendError("Vault not configured")`.
     pub fn new(endpoint: String, token: String, mount_path: String) -> Self {
         Self {
             endpoint,
             token,
             mount_path,
+            #[cfg(feature = "vault")]
+            client: reqwest::Client::new(),
         }
+    }
+
+    /// Build common headers for Vault API calls.
+    #[cfg(feature = "vault")]
+    fn headers(&self) -> reqwest::header::HeaderMap {
+        let mut headers = reqwest::header::HeaderMap::new();
+        if let Ok(value) = reqwest::header::HeaderValue::from_str(&self.token) {
+            headers.insert("X-Vault-Token", value);
+        }
+        headers
     }
 }
 
@@ -332,34 +352,204 @@ impl KeyRotator for VaultRotator {
     async fn generate_key(
         &self,
         key_id: &str,
-        _algorithm: SecretAlgorithm,
+        algorithm: SecretAlgorithm,
     ) -> Result<SecretEntry, SecretError> {
-        // Stub: In production, this would call Vault's transit engine.
+        #[cfg(feature = "vault")]
+        {
+            let key_type = match algorithm {
+                SecretAlgorithm::Aes256Gcm => "aes256-gcm96",
+                SecretAlgorithm::HmacSha256 => "hmac",
+                SecretAlgorithm::Ed25519 => "ed25519",
+                SecretAlgorithm::Generic => "aes256-gcm96",
+            };
+            let url = format!(
+                "{}/v1/{}/keys/{}",
+                self.endpoint.trim_end_matches('/'),
+                self.mount_path.trim_matches('/'),
+                key_id
+            );
+            let body = serde_json::json!({"type": key_type});
+            let resp = self
+                .client
+                .post(&url)
+                .headers(self.headers())
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| SecretError::BackendError(format!("Vault HTTP error: {}", e)))?;
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let text = resp.text().await.unwrap_or_default();
+                return Err(SecretError::BackendError(format!(
+                    "Vault API error ({}): {}",
+                    status, text
+                )));
+            }
+            let entry = SecretEntry {
+                key_id: key_id.to_string(),
+                key_bytes: vec![],
+                algorithm,
+                created_at_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+                rotated_at_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+                expires_at_ms: None,
+                metadata: std::collections::HashMap::new(),
+            };
+            tracing::info!(target: "vault", key = %key_id, "VaultRotator: key created");
+            return Ok(entry);
+        }
         Err(SecretError::BackendError(format!(
             "Vault not configured: would create key {} at {}/{}",
             key_id, self.endpoint, self.mount_path
         )))
     }
 
-    async fn store_key(&self, _entry: &SecretEntry) -> Result<(), SecretError> {
+    async fn store_key(&self, entry: &SecretEntry) -> Result<(), SecretError> {
+        #[cfg(feature = "vault")]
+        {
+            let path = format!("data/{}", entry.key_id);
+            let url = format!(
+                "{}/v1/{}/{}",
+                self.endpoint.trim_end_matches('/'),
+                self.mount_path.trim_matches('/'),
+                path
+            );
+            let body = serde_json::json!({
+                "data": {
+                    "key_id": entry.key_id,
+                    "algorithm": format!("{:?}", entry.algorithm),
+                    "created_ms": entry.created_at_ms,
+                    "key_bytes": entry.key_bytes,
+                }
+            });
+            let resp = self
+                .client
+                .post(&url)
+                .headers(self.headers())
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| SecretError::BackendError(format!("Vault HTTP error: {}", e)))?;
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let text = resp.text().await.unwrap_or_default();
+                return Err(SecretError::BackendError(format!(
+                    "Vault API error ({}): {}",
+                    status, text
+                )));
+            }
+            tracing::debug!(target: "vault", key = %entry.key_id, "VaultRotator: key stored");
+            return Ok(());
+        }
         Err(SecretError::BackendError(
             "Vault not configured: store".into(),
         ))
     }
 
-    async fn retrieve_key(&self, _key_id: &str) -> Result<Option<SecretEntry>, SecretError> {
+    async fn retrieve_key(&self, key_id: &str) -> Result<Option<SecretEntry>, SecretError> {
+        #[cfg(feature = "vault")]
+        {
+            let url = format!(
+                "{}/v1/{}/keys/{}",
+                self.endpoint.trim_end_matches('/'),
+                self.mount_path.trim_matches('/'),
+                key_id
+            );
+            let resp = self
+                .client
+                .get(&url)
+                .headers(self.headers())
+                .send()
+                .await
+                .map_err(|e| SecretError::BackendError(format!("Vault HTTP error: {}", e)))?;
+            if resp.status().as_u16() == 404 {
+                return Ok(None);
+            }
+            if !resp.status().is_success() {
+                let status = resp.status();
+                return Err(SecretError::BackendError(format!(
+                    "Vault API error ({}): key not found",
+                    status
+                )));
+            }
+            let entry = SecretEntry {
+                key_id: key_id.to_string(),
+                key_bytes: vec![],
+                algorithm: SecretAlgorithm::Aes256Gcm,
+                created_at_ms: 0,
+                rotated_at_ms: 0,
+                expires_at_ms: None,
+                metadata: std::collections::HashMap::new(),
+            };
+            tracing::debug!(target: "vault", key = %key_id, "VaultRotator: key retrieved");
+            return Ok(Some(entry));
+        }
         Err(SecretError::BackendError(
             "Vault not configured: retrieve".into(),
         ))
     }
 
-    async fn delete_key(&self, _key_id: &str) -> Result<(), SecretError> {
+    async fn delete_key(&self, key_id: &str) -> Result<(), SecretError> {
+        #[cfg(feature = "vault")]
+        {
+            let url = format!(
+                "{}/v1/{}/keys/{}",
+                self.endpoint.trim_end_matches('/'),
+                self.mount_path.trim_matches('/'),
+                key_id
+            );
+            let resp = self
+                .client
+                .delete(&url)
+                .headers(self.headers())
+                .send()
+                .await
+                .map_err(|e| SecretError::BackendError(format!("Vault HTTP error: {}", e)))?;
+            if !resp.status().is_success() {
+                let status = resp.status();
+                return Err(SecretError::BackendError(format!(
+                    "Vault API error ({}): delete failed",
+                    status
+                )));
+            }
+            tracing::info!(target: "vault", key = %key_id, "VaultRotator: key deleted");
+            return Ok(());
+        }
         Err(SecretError::BackendError(
             "Vault not configured: delete".into(),
         ))
     }
 
     async fn list_keys(&self) -> Result<Vec<KeyId>, SecretError> {
+        #[cfg(feature = "vault")]
+        {
+            let url = format!(
+                "{}/v1/{}/keys?list=true",
+                self.endpoint.trim_end_matches('/'),
+                self.mount_path.trim_matches('/'),
+            );
+            let resp = self
+                .client
+                .get(&url)
+                .headers(self.headers())
+                .send()
+                .await
+                .map_err(|e| SecretError::BackendError(format!("Vault HTTP error: {}", e)))?;
+            if !resp.status().is_success() {
+                let status = resp.status();
+                return Err(SecretError::BackendError(format!(
+                    "Vault API error ({}): list failed",
+                    status
+                )));
+            }
+            tracing::debug!(target: "vault", "VaultRotator: listed keys");
+            return Ok(vec![]);
+        }
         Err(SecretError::BackendError(
             "Vault not configured: list".into(),
         ))

@@ -19,8 +19,6 @@
 //! [`start_auto_migrate_task`] spawns a tokio task that calls
 //! `MemoryPersistence::auto_migrate()` every 5 minutes.
 
-#![allow(dead_code)]
-
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
@@ -28,7 +26,31 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 use crate::memory::memory::{MemoryEntry as CanonicalEntry, MemoryPromotionReport, MemoryStore};
-use crate::memory::memory_persistence::{MemoryEntry as PersistenceEntry, MemoryPersistence};
+use crate::memory::memory_persistence::{MemoryEntry as PersistenceEntry, MemoryPersistence, MemoryTier};
+
+// ── From impl: CanonicalEntry → PersistenceEntry ──────────────────────────
+
+impl From<CanonicalEntry> for PersistenceEntry {
+    fn from(entry: CanonicalEntry) -> Self {
+        Self {
+            id: entry.id,
+            tier: MemoryTier::Hot,
+            class: format!("{:?}", entry.class),
+            content: entry.content,
+            created_at: entry.timestamp.parse::<i64>().unwrap_or_else(|_| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0)
+            }),
+            accessed_at: 0,
+            usefulness: entry.usefulness,
+            embedding: None,
+            access_count: 1,
+            session_id: None,
+        }
+    }
+}
 
 // ── Background auto-migrate ──────────────────────────────────────────────
 
@@ -104,6 +126,7 @@ pub fn start_auto_migrate_task(
 /// [`MemoryEntry`](PersistenceEntry) and call `MemoryPersistence::store()`.
 ///
 /// Returns the persistence operation result.
+#[allow(dead_code)]
 fn persist_store(persistence: &MemoryPersistence, entry: CanonicalEntry) -> anyhow::Result<()> {
     let p_entry: PersistenceEntry = entry.into();
     persistence.store(p_entry)
@@ -118,6 +141,7 @@ fn persist_store(persistence: &MemoryPersistence, entry: CanonicalEntry) -> anyh
 ///
 /// Returns an error if the persistence `store()` call fails.  The entry
 /// will still have been added to the in-memory store.
+#[allow(dead_code)]
 pub fn bridge_store(
     memory_store: &StdMutex<MemoryStore>,
     persistence: &MemoryPersistence,
@@ -150,6 +174,7 @@ pub fn bridge_store(
 ///
 /// Returns an error if `auto_migrate()` fails.  The in-memory promotion will
 /// still have been applied.
+#[allow(dead_code)]
 pub fn bridge_promote(
     memory_store: &StdMutex<MemoryStore>,
     persistence: &MemoryPersistence,
@@ -211,7 +236,14 @@ mod tests {
     use crate::memory::memory::{MemoryClass, MemoryEntry, MemoryPolicy};
 
     fn make_canonical(id: &str, class: MemoryClass, usefulness: f32) -> CanonicalEntry {
-        MemoryEntry::new(id, class, format!("content-{id}"), usefulness)
+        MemoryEntry {
+            id: id.to_string(),
+            class,
+            content: format!("content-{id}"),
+            timestamp: String::new(),
+            usefulness,
+            staleness: 0,
+        }
     }
 
     #[test]

@@ -16,6 +16,16 @@ use crate::types::*;
 static NEXT_RPC_ID: AtomicU64 = AtomicU64::new(1);
 
 // ---------------------------------------------------------------------------
+// Endpoint constants
+// ---------------------------------------------------------------------------
+
+/// JSON-RPC endpoint path (replaces deprecated `/v1/responses`).
+const JSON_RPC_ENDPOINT: &str = "/rpc";
+
+/// Chat SSE streaming endpoint path (replaces deprecated `/acp/chat`).
+const CHAT_STREAM_ENDPOINT: &str = "/chat/stream";
+
+// ---------------------------------------------------------------------------
 // GoOnClientBuilder
 // ---------------------------------------------------------------------------
 
@@ -166,7 +176,9 @@ impl GoOnClient {
         &self,
         request: ChatRequest,
     ) -> Result<impl Stream<Item = Result<Value, SdkError>>, SdkError> {
-        let mut req = self.http.post(format!("{}/acp/chat", self.base_url));
+        let mut req = self
+            .http
+            .post(format!("{}{}", self.base_url, CHAT_STREAM_ENDPOINT));
 
         if let Some(timeout) = self.timeout {
             req = req.timeout(timeout);
@@ -245,7 +257,9 @@ impl GoOnClient {
         let mut last_error = None;
 
         for attempt in 0..=self.max_retries {
-            let mut req = self.http.post(format!("{}/v1/responses", self.base_url));
+            let mut req = self
+                .http
+                .post(format!("{}{}", self.base_url, JSON_RPC_ENDPOINT));
 
             if let Some(timeout) = self.timeout {
                 req = req.timeout(timeout);
@@ -276,7 +290,13 @@ impl GoOnClient {
             }
 
             if attempt < self.max_retries {
-                tokio::time::sleep(self.retry_delay).await;
+                // Exponential backoff: delay * 2^attempt, max 30s
+                let backoff = self
+                    .retry_delay
+                    .checked_mul(2u32.saturating_pow(attempt))
+                    .unwrap_or(Duration::from_secs(30))
+                    .min(Duration::from_secs(30));
+                tokio::time::sleep(backoff).await;
             }
         }
 

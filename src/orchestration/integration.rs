@@ -10,7 +10,7 @@ use crate::orchestration::tool_lock::ToolLockManager;
 use crate::orchestration::tool_recommender::ToolRecommender;
 
 /// Initializes all subsystems during application startup.
-#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
+#[allow(dead_code)] // F-GAP-51 — reserved for future use
 pub struct SystemIntegration {
     pub session_context: SessionContextManager,
     pub cache_warming: CacheWarmingEngine,

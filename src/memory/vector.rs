@@ -25,6 +25,9 @@ use sha2::{Digest, Sha256};
 use sqlite_vec::sqlite3_vec_init;
 use tracing::warn;
 
+#[cfg(not(feature = "backend-postgres"))]
+use crate::memory::embedding_provider::{ConfigurableEmbeddingProvider, EmbeddingProvider};
+
 /// Vector search hit
 #[derive(Debug, Clone)]
 pub struct VectorHit {
@@ -80,6 +83,8 @@ pub struct VectorStore {
     max_entries: usize,
     /// Selected sqlite vector implementation mode.
     mode: SqliteVectorMode,
+    /// Optional embedding provider — overrides the built-in `embed_text()`.
+    embedding_provider: Option<ConfigurableEmbeddingProvider>,
 }
 
 #[cfg(not(feature = "backend-postgres"))]
@@ -142,7 +147,18 @@ impl VectorStore {
             dimensions,
             max_entries,
             mode,
+            embedding_provider: None,
         })
+    }
+
+    /// Create a new vector store with an embedding provider.
+    ///
+    /// When a provider is supplied it will be used for all embedding;
+    /// otherwise the built-in `embed_text()` fallback is used.
+    pub fn with_embedding_provider(mut self, provider: ConfigurableEmbeddingProvider) -> Self {
+        self.dimensions = provider.dimensions();
+        self.embedding_provider = Some(provider);
+        self
     }
 
     /// Upsert a memory entry
@@ -160,8 +176,11 @@ impl VectorStore {
         if query.is_empty() || response.is_empty() {
             return Ok(());
         }
-
-        let embedding = embed_text(query, self.dimensions);
+        let embedding = if let Some(ref provider) = self.embedding_provider {
+            provider.embed(query)
+        } else {
+            embed_text(query, self.dimensions)
+        };
         let embedding_json = serde_json::to_string(&embedding)?;
         let embedding_blob = embedding_blob(&embedding);
         let memory_key = build_memory_key(phase, query);
@@ -245,7 +264,11 @@ impl VectorStore {
             return Ok((Vec::new(), VectorPrecisionFeedback::new(&[])));
         }
 
-        let query_embedding = embed_text(query, self.dimensions);
+        let query_embedding = if let Some(ref provider) = self.embedding_provider {
+            provider.embed(query)
+        } else {
+            embed_text(query, self.dimensions)
+        };
         let now = now_ts();
         let limit = self.max_entries.max(top_k);
 
@@ -828,10 +851,15 @@ mod tests {
 use postgres::{Client, NoTls};
 
 #[cfg(feature = "backend-postgres")]
+use crate::memory::embedding_provider::{ConfigurableEmbeddingProvider, EmbeddingProvider};
+
+#[cfg(feature = "backend-postgres")]
 pub struct VectorStore {
     client: Mutex<Client>,
     dimensions: usize,
     max_entries: usize,
+    /// Optional embedding provider — overrides the built-in `embed_text()`.
+    embedding_provider: Option<ConfigurableEmbeddingProvider>,
 }
 
 #[cfg(feature = "backend-postgres")]
@@ -841,6 +869,7 @@ impl std::fmt::Debug for VectorStore {
             .field("client", &"<postgres Client>")
             .field("dimensions", &self.dimensions)
             .field("max_entries", &self.max_entries)
+            .field("embedding_provider", &self.embedding_provider.as_ref().map(|_| "<ConfigurableEmbeddingProvider>"))
             .finish()
     }
 }
@@ -888,7 +917,18 @@ impl VectorStore {
             client: Mutex::new(client),
             dimensions,
             max_entries,
+            embedding_provider: None,
         })
+    }
+
+    /// Create a new vector store with an embedding provider.
+    ///
+    /// When a provider is supplied it will be used for all embedding;
+    /// otherwise the built-in `embed_text()` fallback is used.
+    pub fn with_embedding_provider(mut self, provider: ConfigurableEmbeddingProvider) -> Self {
+        self.dimensions = provider.dimensions();
+        self.embedding_provider = Some(provider);
+        self
     }
 
     pub fn upsert(&self, phase: &str, query_text: &str, response_text: &str) -> Result<()> {
@@ -897,7 +937,12 @@ impl VectorStore {
         if query.is_empty() || response.is_empty() {
             return Ok(());
         }
-        let embedding = Vector::from(embed_text(query, self.dimensions));
+        let embedding_vec = if let Some(ref provider) = self.embedding_provider {
+            provider.embed(query)
+        } else {
+            embed_text(query, self.dimensions)
+        };
+        let embedding = Vector::from(embedding_vec);
         let memory_key = build_memory_key(phase, query);
         let now = now_ts();
         let max_entries = self.max_entries as i64;
@@ -952,7 +997,12 @@ impl VectorStore {
             return Ok((Vec::new(), VectorPrecisionFeedback::new(&[])));
         }
 
-        let query_embedding = Vector::from(embed_text(query, self.dimensions));
+        let query_vec = if let Some(ref provider) = self.embedding_provider {
+            provider.embed(query)
+        } else {
+            embed_text(query, self.dimensions)
+        };
+        let query_embedding = Vector::from(query_vec);
         let now = now_ts();
         let mut client = self
             .client

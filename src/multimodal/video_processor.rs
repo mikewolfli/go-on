@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Video Processor (GAP-B52-29)
 //!
 //! Provides frame extraction, audio extraction, and scene analysis for video

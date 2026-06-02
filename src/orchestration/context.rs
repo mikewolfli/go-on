@@ -54,11 +54,15 @@ impl OrchestrationContext {
     // ------------------------------------------------------------------
 
     /// Record a model execution outcome.
+    /// Updates both LivePerformanceFeed and HotFailover for automatic
+    /// model switching on repeated failures.
     pub fn record_model_execution(&self, model_id: &str, success: bool, latency_ms: u64) {
         if success {
             self.performance_feed.record_success(model_id, latency_ms);
         } else {
             self.performance_feed.record_failure(model_id, latency_ms);
+            // Record failure in HotFailover to enable automatic model switching
+            self.failover.record_failure(model_id);
         }
     }
 }

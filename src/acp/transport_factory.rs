@@ -60,10 +60,19 @@ pub async fn initialize_cache(
         })
         .await
         .map_err(|e| anyhow::anyhow!("cache init: {e}"))?;
+        #[cfg(any(
+            feature = "profile-simple-server",
+            feature = "profile-multi-users-server",
+            feature = "profile-full",
+        ))]
+        {
+            r
+        }
         #[cfg(all(
             feature = "profile-local",
             not(feature = "profile-simple-server"),
-            not(feature = "profile-multi-users-server")
+            not(feature = "profile-multi-users-server"),
+            not(feature = "profile-full"),
         ))]
         {
             match r {
@@ -74,18 +83,11 @@ pub async fn initialize_cache(
                 }
             }
         }
-        #[cfg(any(
-            feature = "profile-simple-server",
-            feature = "profile-multi-users-server"
-        ))]
-        {
-            r
-        }
     }
 }
 
-/// Initialize vector store.
-#[allow(unused_variables)] // config_path unused in backend-postgres code path
+/// Initialize the vector store.
+#[allow(unused_variables)]
 pub async fn initialize_vector_store(
     config_path: &Path,
     vector_cfg: Option<VectorConfig>,
@@ -97,15 +99,21 @@ pub async fn initialize_vector_store(
         return Ok(None);
     }
 
+    // Initialize embedding provider from environment (GAP-B55-019)
+    // Supports: "openai" (requires OPENAI_API_KEY), "local" (default, minhash-based)
+    let embedding_provider = crate::memory::embedding_provider::embedding_provider_from_env();
+
     #[cfg(feature = "backend-postgres")]
     {
         let url = cfg
             .connection_string
             .ok_or_else(|| anyhow::anyhow!("vector.connection_string required"))?;
+        let provider = embedding_provider;
         tokio::task::spawn_blocking(move || {
-            VectorStore::new(&url, cfg.dimensions, cfg.max_entries)
-                .map(Arc::new)
-                .map(Some)
+            let store = VectorStore::new(&url, cfg.dimensions, cfg.max_entries)?
+                .with_embedding_provider(provider);
+            tracing::info!("vector store: embedding provider injected");
+            Ok::<_, anyhow::Error>(Some(Arc::new(store)))
         })
         .await
         .map_err(|e| anyhow::anyhow!("vector init: {e}"))?
@@ -114,17 +122,20 @@ pub async fn initialize_vector_store(
     #[cfg(not(feature = "backend-postgres"))]
     {
         let sp = resolve_path(config_path, &cfg.path);
+        let provider = embedding_provider;
         let r = tokio::task::spawn_blocking(move || {
-            VectorStore::new(&sp, cfg.dimensions, cfg.max_entries)
-                .map(Arc::new)
-                .map(Some)
+            let store = VectorStore::new(&sp, cfg.dimensions, cfg.max_entries)?
+                .with_embedding_provider(provider);
+            tracing::info!("vector store: embedding provider injected");
+            Ok::<_, anyhow::Error>(Some(Arc::new(store)))
         })
         .await
         .map_err(|e| anyhow::anyhow!("vector init: {e}"))?;
         #[cfg(all(
             feature = "profile-local",
             not(feature = "profile-simple-server"),
-            not(feature = "profile-multi-users-server")
+            not(feature = "profile-multi-users-server"),
+            not(feature = "profile-full"),
         ))]
         {
             match r {
@@ -137,7 +148,8 @@ pub async fn initialize_vector_store(
         }
         #[cfg(any(
             feature = "profile-simple-server",
-            feature = "profile-multi-users-server"
+            feature = "profile-multi-users-server",
+            feature = "profile-full",
         ))]
         {
             r

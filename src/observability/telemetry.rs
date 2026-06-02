@@ -125,6 +125,28 @@ impl TelemetryRuntime {
         Some(cx)
     }
 
+    /// Inject the trace context from a `Context` into a `HashMap` of headers
+    /// suitable for outbound HTTP requests (W3C Trace Context propagation).
+    pub fn inject_context(&self, cx: &Context) -> std::collections::HashMap<String, String> {
+        let mut headers = std::collections::HashMap::new();
+        if self.enabled && cx.span().span_context().is_valid() {
+            global::get_text_map_propagator(|propagator| {
+                propagator.inject_context(cx, &mut headers);
+            });
+        }
+        headers
+    }
+
+    /// Extract a `Context` from a `HashMap` of HTTP headers (W3C Trace Context
+    /// propagation). Returns a remote span context if `traceparent` etc. are
+    /// present, otherwise returns the current default context.
+    pub fn extract_context(&self, headers: &std::collections::HashMap<String, String>) -> Context {
+        if !self.enabled {
+            return Context::current();
+        }
+        global::get_text_map_propagator(|propagator| propagator.extract(headers))
+    }
+
     pub fn start_child_span(
         &self,
         parent: &Context,
@@ -136,6 +158,8 @@ impl TelemetryRuntime {
         }
 
         let tracer = global::tracer("go-on.acp");
+        // Create a child span linked to the parent context so the trace tree
+        // is properly maintained across async boundaries.
         let span = tracer.start_with_context(name.to_string(), parent);
         let cx = parent.with_span(span);
         for attr in attributes {

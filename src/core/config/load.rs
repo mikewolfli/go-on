@@ -1873,6 +1873,17 @@ mod tests {
             enable_dag_execution: false,
             enable_agent_reroute: true,
             enable_metacognitive_feedback: true,
+            governance_enabled: true,
+            governance_policy_mode: String::new(),
+            request_signing_enabled: false,
+            request_signing_public_key: String::new(),
+            request_signing_hmac_secret: String::new(),
+            mtls_enabled: false,
+            mtls_ca_cert_path: String::new(),
+            mtls_server_cert_path: String::new(),
+            mtls_server_key_path: String::new(),
+            mtls_require_client_cert: false,
+            mtls_allowed_cns: String::new(),
         });
 
         let err = cfg
@@ -2421,6 +2432,17 @@ mod tests {
             enable_dag_execution: false,
             enable_agent_reroute: true,
             enable_metacognitive_feedback: true,
+            governance_enabled: true,
+            governance_policy_mode: String::new(),
+            request_signing_enabled: false,
+            request_signing_public_key: String::new(),
+            request_signing_hmac_secret: String::new(),
+            mtls_enabled: false,
+            mtls_ca_cert_path: String::new(),
+            mtls_server_cert_path: String::new(),
+            mtls_server_key_path: String::new(),
+            mtls_require_client_cert: false,
+            mtls_allowed_cns: String::new(),
         });
 
         let report = build_config_health_report(&config_path, &cfg);

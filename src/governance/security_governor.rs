@@ -369,6 +369,9 @@ pub struct SecurityGovernorConfig {
     pub enabled: bool,
     /// Default action when no policy matches.
     pub default_action: PolicyAction,
+    /// Policy mode: "enforce", "advisory", or empty (default).
+    /// Controls how governance policies are applied during request processing.
+    pub policy_mode: String,
 }
 
 impl Default for SecurityGovernorConfig {
@@ -376,6 +379,7 @@ impl Default for SecurityGovernorConfig {
         Self {
             enabled: true,
             default_action: PolicyAction::Allow,
+            policy_mode: String::new(),
         }
     }
 }
@@ -409,6 +413,8 @@ pub struct GovernorProfile {
 struct Inner {
     config: SecurityGovernorConfig,
     policies: IndexMap<String, SecurityPolicy>,
+    // Audit log.
+    audit_log: Vec<AuditEntry>,
     // Metrics counters.
     total_evaluations: u64,
     total_denials: u64,
@@ -434,6 +440,7 @@ impl SecurityGovernor {
         let inner = Inner {
             config,
             policies: IndexMap::new(),
+            audit_log: Vec::new(),
             total_evaluations: 0,
             total_denials: 0,
             total_reviews: 0,
@@ -704,23 +711,49 @@ impl SecurityGovernor {
         })
     }
 
-    /// Record an audit log entry (delegated to ThreadSafeAuditLog via HarnessBus).
-    ///
-    /// This method now only increments metric counters; the actual audit data is
-    /// persisted through the canonical ThreadSafeAuditLog in HarnessBus.
-    pub fn record_audit(&self, _entry: AuditEntry) {
-        // Audit data is recorded via the canonical ThreadSafeAuditLog in HarnessBus.
-        // This method remains as a hook for counter/metrics tracking.
+    /// Record an audit log entry: appends to the internal audit log and
+    /// updates governance metric counters (evaluations, denials, reviews).
+    pub fn record_audit(&self, entry: AuditEntry) {
+        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("SecurityGovernor lock poisoned in record_audit, recovering");
+            poisoned.into_inner()
+        });
+        inner.total_evaluations += 1;
+        if !entry.verdict.allowed {
+            inner.total_denials += 1;
+        }
+        if entry.verdict.required_review {
+            inner.total_reviews += 1;
+        }
+        if !entry.verdict.escalation_level.is_empty() {
+            inner.active_escalations += 1;
+        }
+        inner.audit_log.push(entry);
     }
 
-    /// Return all recorded audit log entries (always empty — canonical sink is ThreadSafeAuditLog).
+    /// Return all recorded audit log entries.
     pub fn audit_log(&self) -> Vec<AuditEntry> {
-        Vec::new()
+        self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("SecurityGovernor lock poisoned in audit_log, recovering");
+            poisoned.into_inner()
+        }).audit_log.clone()
     }
 
-    /// Clear the audit log (no-op — canonical sink is ThreadSafeAuditLog).
+    /// Clear the internal audit log.
     pub fn clear_audit(&self) {
-        // No-op: audit data is managed by ThreadSafeAuditLog in HarnessBus.
+        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("SecurityGovernor lock poisoned in clear_audit, recovering");
+            poisoned.into_inner()
+        });
+        inner.audit_log.clear();
+    }
+
+    /// Return the policy mode configured for this governor.
+    pub fn policy_mode(&self) -> String {
+        self.inner.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("SecurityGovernor lock poisoned in policy_mode, recovering");
+            poisoned.into_inner()
+        }).config.policy_mode.clone()
     }
 
     /// Return a [`GovernorProfile`] snapshot of current metrics.
@@ -913,6 +946,7 @@ mod tests {
         let config = SecurityGovernorConfig {
             enabled: true,
             default_action: PolicyAction::Deny,
+            ..Default::default()
         };
         let governor = SecurityGovernor::new(config);
         let policy = make_deny_policy("p-deny", "resource", "secret");
@@ -956,6 +990,7 @@ mod tests {
         let config = SecurityGovernorConfig {
             enabled: true,
             default_action: PolicyAction::Allow,
+            ..Default::default()
         };
         let governor = SecurityGovernor::new(config);
 
@@ -1064,6 +1099,7 @@ mod tests {
         let config = SecurityGovernorConfig {
             enabled: false,
             default_action: PolicyAction::Deny,
+            ..Default::default()
         };
         let governor = SecurityGovernor::new(config);
         governor.register_policy(make_deny_policy("deny-all", "resource", "anything"));

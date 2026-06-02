@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Prompt Injection Detection (GAP-B52-25)
 //!
 //! Detects prompt injection attacks including role-playing, jailbreak attempts,
@@ -14,6 +12,7 @@ use thiserror::Error;
 // Errors
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 #[derive(Debug, Error)]
 pub enum InjectionError {
     #[error("detection failed: {0}")]

@@ -4,11 +4,14 @@
   "description": "TypeScript SDK for go-on — ACP/MCP agent orchestration runtime",
   "main": "dist/client.js",
   "types": "dist/client.d.ts",
-  "files": ["dist/"],
+  "files": [
+    "dist/"
+  ],
   "scripts": {
     "build": "tsc",
     "clean": "rm -rf dist/",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "test": "vitest run"
   },
   "repository": {
     "type": "git",
@@ -16,7 +19,8 @@
   },
   "license": "MIT",
   "devDependencies": {
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "vitest": "^3.0.0"
   },
   "dependencies": {
     "node-fetch": "^2.7.0"

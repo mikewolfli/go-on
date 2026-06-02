@@ -317,6 +317,17 @@ pub(crate) async fn execute_mcp_tool_call(
         }
     }
 
+    // BLUE56-C05: ChaosEngine fault injection check
+    #[cfg(feature = "temp_env")]
+    if let Some(fault_type) = crate::resilience::chaos::ChaosEngine::default().check_fault(name) {
+        tracing::warn!(
+            target: "chaos",
+            tool = %name,
+            fault = ?fault_type,
+            "chaos engine would inject fault"
+        );
+    }
+
     let policy = policy_bundle_for_target(server.runtime_config.deployment_target.as_deref());
     let budget_scope = budget_scope_key(name, arguments);
     let estimated_tokens = estimate_argument_tokens(arguments);
@@ -872,7 +883,7 @@ mod tests {
         let match_score = if query_lower.is_empty() {
             0.0
         } else if name_lower.contains(query_lower) || desc_lower.contains(query_lower) {
-            ((score * 0.7 + 0.3)).max(0.0).min(1.0)
+            f64::max(f64::min(score * 0.7 + 0.3, 1.0), 0.0)
         } else {
             let query_words: Vec<&str> = query_lower.split_whitespace().collect();
             let name_words: Vec<&str> = name_lower.split_whitespace().collect();
@@ -885,7 +896,7 @@ mod tests {
             let matches = query_words.iter().filter(|w| all_words.contains(w)).count();
             if matches > 0 {
                 let ratio = matches as f64 / query_words.len() as f64;
-                ((score * 0.5 + ratio * 0.5).max(0.0)).min(1.0)
+                f64::max(f64::min(score * 0.5 + ratio * 0.5, 1.0), 0.0)
             } else {
                 score * 0.3
             }
@@ -904,7 +915,7 @@ mod tests {
         let match_score = if query_lower.is_empty() {
             0.0
         } else if name_lower.contains(query_lower) || desc_lower.contains(query_lower) {
-            ((score * 0.7 + 0.3)).max(0.0).min(1.0)
+            f64::max(f64::min(score * 0.7 + 0.3, 1.0), 0.0)
         } else {
             score * 0.3
         };

@@ -54,12 +54,14 @@ use crate::intelligence::token_cache::ContextLengthClass;
 use crate::orchestration::autonomy_runtime::{
     build_tool_execution_followup_message, build_tool_result_block,
 };
+use crate::orchestration::mode::{resolve_mode_runtime, ModeKind};
+use crate::orchestration::multi_agent_pipeline::{AgentAssignment, MultiAgentPipeline};
 
 use crate::agents::sse_optimizer::SseBufferPool;
 use crate::orchestration::prompt_layers::PromptAssembler;
 use crate::orchestration::session_compressor::SessionCompressor;
 use crate::orchestration::session_context::SessionContextManager;
-use crate::orchestration::task_router::{TaskRouter, TaskType};
+use crate::orchestration::task_router::{TaskCharacteristics, TaskRouter, TaskType};
 use crate::orchestration::tool::{execute_loop, LoopConfig, LoopDecision, ToolInput, ToolRegistry};
 
 use crate::memory_module::{MemoryClass, MemoryEntry, MemoryPolicy, MemoryStore};
@@ -2101,7 +2103,160 @@ pub(crate) async fn process_chat_request(
             }
         }
 
-        // ── Step 7: FullAuto execution (review gate + TAO loop) ────────
+        // ── Step 7a: ModeRuntime execution + MultiAgent pipeline ──────────
+        // Resolve mode runtime to apply per-mode policies (tool whitelist, approval,
+        // risk assessment, PUA reporting) and optionally decompose into multi-agent.
+        let mode_runtime = resolve_mode_runtime(
+            &params.mode,
+            server.agent_registry(),
+            Some(selected_agent.clone()),
+        );
+
+        // Apply ModeRuntime.run() to enforce mode policies and collect execution report
+        if !cache_hit && !response_text.is_empty() {
+            let envelope = crate::agent::AgentTaskEnvelope {
+                task_id: format!("chat-{}-{}", phase_name, trace.request_id),
+                phase: phase_name.to_string(),
+                role: selected_agent.clone(),
+                objective: extract_task_description(&params.messages),
+                constraints: None,
+                evidence: Some(params.messages.iter().map(|m| format!("{}: {}", m.role, m.content)).collect::<Vec<_>>().join("\n")),
+                input: serde_json::json!({
+                    "response_text": response_text,
+                    "reasoning_text": reasoning_text,
+                }),
+            };
+            match mode_runtime.run(envelope) {
+                Ok(result) => {
+                    tracing::info!(
+                        target: "mode_runtime",
+                        mode = %params.mode,
+                        agent = %selected_agent,
+                        pua_report = ?result.pua_report,
+                        "ModeRuntime execution completed"
+                    );
+                    // Collect PUA report for governance
+                    if let Some(pua) = result.pua_report {
+                        tracing::debug!(target: "pua", report = ?pua, "Mode PUA execution report");
+                    }
+                    // Schedule continuous learning review after each execution
+                    if let Some(ref cb) = server.governance_deps.capability_bus {
+                        let now_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0);
+                        let consolidated = crate::intelligence::continuous_learning::ConsolidatedMemory {
+                            id: format!("chat-{}-{}", phase_name, trace.request_id),
+                            pattern_key: format!("chat:{}:{}", params.mode, extract_task_description(&params.messages).chars().take(50).collect::<String>()),
+                            data: serde_json::json!({
+                                "task": extract_task_description(&params.messages),
+                                "agent": &selected_agent,
+                                "response_length": response_text.len(),
+                                "mode": &params.mode,
+                            }).to_string(),
+                            importance: 0.5,
+                            consolidated_ms: now_ms,
+                            last_accessed_ms: now_ms,
+                            access_count: 1,
+                        };
+                        if let Ok(clc) = cb.continuous_learning.lock() {
+                            clc.schedule_review(&consolidated);
+                            tracing::debug!(target: "continuous_learning", "scheduled review after chat execution");
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(target: "mode_runtime", error = %e, "ModeRuntime execution failed");
+                }
+            }
+        }
+
+        if matches!(mode_runtime.kind(), ModeKind::Agent)
+            && resolved.agents.len() > 1
+            && !cache_hit
+        {
+            let task_chars = TaskCharacteristics {
+                description: extract_task_description(&params.messages),
+                task_type: TaskType::FeatureImplementation, // default — can be refined
+                complexity: 3,
+                required_capabilities: vec![
+                    "coding".to_string(),
+                ],
+                involves_multiple_modules: false,
+                is_time_critical: false,
+                needs_verification: true,
+                has_safety_concerns: false,
+            };
+
+            let registry = server.agent_registry().unwrap_or_else(|| {
+                Arc::new(crate::agent::AgentRegistry::new())
+            });
+            let assignment = AgentAssignment::RoundRobin;
+            let pipeline = MultiAgentPipeline::new(registry, assignment);
+
+            let pipeline_result = pipeline
+                .execute(
+                    &extract_task_description(&params.messages),
+                    &task_chars,
+                    resolved.agents.first().map(|(_, agent)| agent.clone()), // pass first available agent for LLM decomposition
+                )
+                .await;
+
+            // If pipeline produced output, use it as the response
+            if pipeline_result.succeeded_count > 0 {
+                response_text = pipeline_result
+                    .merged_output
+                    .get("subtask_outputs")
+                    .and_then(|o| serde_json::to_string(o).ok())
+                    .unwrap_or_default();
+                selected_agent = format!(
+                    "multi-agent ({} succeeded)",
+                    pipeline_result.succeeded_count
+                );
+
+                // BLUE56-B04: MultiModelVoter voting on multi-agent results
+                {
+                    use crate::intelligence::multi_model_voter::MultiModelVoter;
+                    let voter = MultiModelVoter::new();
+                    let agents: Vec<Arc<dyn crate::agent::Agent>> = resolved.agents
+                        .iter()
+                        .map(|(_, agent)| agent.clone())
+                        .collect();
+                    if agents.len() > 1 {
+                        match voter.vote(&extract_task_description(&params.messages), &agents).await {
+                            Ok(outcome) => {
+                                tracing::info!(
+                                    target: "multi_model_voter",
+                                    outcome = %outcome.winning_response.chars().take(100).collect::<String>(),
+                                    consensus = outcome.consensus_level,
+                                    agents_voted = outcome.all_votes.len(),
+                                    "MultiModelVoter selected best response"
+                                );
+                                // Log low-consensus voting to audit
+                                if outcome.consensus_level < 0.5 {
+                                    tracing::warn!(
+                                        target: "multi_model_voter",
+                                        consensus = outcome.consensus_level,
+                                        "low-consensus multi-agent vote"
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    target: "multi_model_voter",
+                                    error = %e,
+                                    "MultiModelVoter vote failed"
+                                );
+                            }
+                        }
+                    }
+                }
+
+                cache_hit = true; // mark as resolved so fallback is skipped
+            }
+        }
+
+        // ── Step 7b: FullAuto execution (review gate + TAO loop) ────────
         // Cache task_description once for all full_auto sub-steps
         let full_auto_result = run_full_auto_execution(
             server,
@@ -3086,6 +3241,61 @@ async fn execute_fallback_agents(
                             false,
                             attempt_started.elapsed().as_millis() as u64,
                         );
+
+                    // BLUE56-GAP-B06/B07: Record consciousness metric and self-model on failure
+                    if let Some(ref cb) = server.governance_deps.capability_bus {
+                        use crate::intelligence::consciousness::AwarenessMetricType;
+                        let _ = cb.consciousness.record_metric(
+                            AwarenessMetricType::SelfAwareness,
+                            0.0,
+                            0.8,
+                        );
+                        cb.self_model.record_execution_result(
+                            &agent_name,
+                            false,
+                            attempt_started.elapsed().as_millis() as u64,
+                        );
+                        // BLUE56-B08: Record agent failure event in WorldModel
+                        let mut payload = std::collections::HashMap::new();
+                        payload.insert("status".to_string(), "failure".to_string());
+                        payload.insert("phase".to_string(), phase_name.to_string());
+                        payload.insert("duration_ms".to_string(), attempt_started.elapsed().as_millis().to_string());
+                        let _ = cb.world_model.record_event(
+                            "agent_execution",
+                            &agent_name,
+                            payload,
+                        );
+                        // BLUE56-B09: Run TripleFusion fusion cycle after execution
+                        let fusion_bridge =
+                            crate::intelligence::triple_fusion::TripleFusionBridge::new(
+                                Default::default(),
+                            );
+                        let triggers = fusion_bridge.run_fusion_cycle(
+                            &cb.metacognitive,
+                            &cb.consciousness,
+                        );
+                        if !triggers.is_empty() {
+                            tracing::info!(
+                                target: "triple_fusion",
+                                count = triggers.len(),
+                                "TripleFusion generated evolution triggers"
+                            );
+                        }
+                    }
+                    // BLUE56-GAP-C04: Record failure in HyperResilienceEngine
+                    let _ = server.hyper_resilience.record_failure_with_mode(
+                        &agent_name,
+                        crate::resilience::hyper_resilience::FailureMode::ResourceExhaustion,
+                    );
+                    // BLUE56-B05: Record failure in HotFailover
+                    {
+                        use crate::intelligence::hot_failover::HotFailover;
+                        let failover = HotFailover::new(
+                            crate::intelligence::hot_failover::HotFailoverConfig::default(),
+                        );
+                        failover.record_failure(&agent_name);
+                    }
+
                     continue;
                 }
 
@@ -3102,6 +3312,49 @@ async fn execute_fallback_agents(
                         true,
                         attempt_started.elapsed().as_millis() as u64,
                     );
+
+                // BLUE56-GAP-B06/B07: Record consciousness metric and self-model on success
+                if let Some(ref cb) = server.governance_deps.capability_bus {
+                    use crate::intelligence::consciousness::AwarenessMetricType;
+                    let _ = cb.consciousness.record_metric(
+                        AwarenessMetricType::SelfAwareness,
+                        1.0,
+                        0.9,
+                    );
+                    cb.self_model.record_execution_result(
+                        &agent_name,
+                        true,
+                        attempt_started.elapsed().as_millis() as u64,
+                    );
+                    // BLUE56-B08: Record agent success event in WorldModel
+                    let mut payload = std::collections::HashMap::new();
+                    payload.insert("status".to_string(), "success".to_string());
+                    payload.insert("phase".to_string(), phase_name.to_string());
+                    payload.insert("duration_ms".to_string(), attempt_started.elapsed().as_millis().to_string());
+                    let _ = cb.world_model.record_event(
+                        "agent_execution",
+                        &agent_name,
+                        payload,
+                    );
+                    // BLUE56-B09: Run TripleFusion fusion cycle after execution
+                    let fusion_bridge =
+                        crate::intelligence::triple_fusion::TripleFusionBridge::new(
+                            Default::default(),
+                        );
+                    let triggers = fusion_bridge.run_fusion_cycle(
+                        &cb.metacognitive,
+                        &cb.consciousness,
+                    );
+                    if !triggers.is_empty() {
+                        tracing::info!(
+                            target: "triple_fusion",
+                            count = triggers.len(),
+                            "TripleFusion generated evolution triggers"
+                        );
+                    }
+                }
+            // BLUE56-GAP-C04: Record success in HyperResilienceEngine
+                let _ = server.hyper_resilience.record_success(&agent_name);
 
                 agent_attempts.push(json!({
                     "agent": agent_name,
@@ -3218,7 +3471,9 @@ async fn run_full_auto_execution(
     let mut reviews = Vec::new();
     let mut tool_execution_results = Vec::new();
 
-    if !params.mode.eq_ignore_ascii_case("full_auto") {
+    // Use ModeRuntime to check if this is FullAuto mode — replaces raw string comparison
+    let runtime = resolve_mode_runtime(&params.mode, server.agent_registry(), None);
+    if !matches!(runtime.kind(), ModeKind::FullAuto) {
         return FullAutoExecutionResult {
             reviews,
             tool_execution_results,

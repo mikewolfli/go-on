@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Embedding provider abstraction and implementations.
 //!
 //! Provides a trait for generating text embeddings and several concrete
@@ -236,9 +234,20 @@ pub enum EmbeddingBackend {
 /// Runtime-configurable embedding provider that dispatches to either a local
 /// hash-based provider or an OpenAI API provider based on configuration.
 pub struct ConfigurableEmbeddingProvider {
+    /// The inner embedding provider.
     inner: Box<dyn EmbeddingProvider>,
     backend: EmbeddingBackend,
     dimensions: usize,
+}
+
+impl std::fmt::Debug for ConfigurableEmbeddingProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConfigurableEmbeddingProvider")
+            .field("inner", &"<dyn EmbeddingProvider>")
+            .field("backend", &self.backend)
+            .field("dimensions", &self.dimensions)
+            .finish()
+    }
 }
 
 impl ConfigurableEmbeddingProvider {
@@ -315,6 +324,7 @@ impl EmbeddingProvider for ConfigurableEmbeddingProvider {
 // Helper: create a ConfigurableEmbeddingProvider from environment variables
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 /// Build a `ConfigurableEmbeddingProvider` based on the env var
 /// `GO_ON_EMBEDDING_BACKEND` (values: `local` or `openai`).
 ///

@@ -8,9 +8,6 @@
 //! Provides automatic migration (promotion/demotion) between tiers and
 //! metadata indexing on startup.
 
-#![allow(dead_code)]
-
-
 use anyhow::{Context, Result};
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;

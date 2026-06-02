@@ -69,6 +69,34 @@ pub struct DrainGuard {
     pub drain_timeout: Duration,
     /// Monotonic request ID counter for tracing.
     pub request_seq: AtomicU64,
+    /// Notify when a permit is released (BLUE56-C03).
+    notify_drain: Arc<tokio::sync::Notify>,
+}
+
+/// A permit that notifies the drain waiter when dropped (BLUE56-C03).
+///
+/// Wraps `OwnedSemaphorePermit` so that releasing the permit triggers
+/// a notification to `DrainGuard::wait_for_drain()` instead of polling.
+pub struct DrainPermit {
+    permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    notify: Arc<tokio::sync::Notify>,
+}
+
+impl Drop for DrainPermit {
+    fn drop(&mut self) {
+        // Drop the permit first, then notify
+        drop(self.permit.take());
+        self.notify.notify_one();
+    }
+}
+
+impl DrainPermit {
+    /// Consume the permit and return the inner semaphore permit.
+    /// The caller is responsible for ensuring the inner permit is eventually dropped.
+    #[allow(dead_code)]
+    pub fn into_inner(mut self) -> tokio::sync::OwnedSemaphorePermit {
+        self.permit.take().expect("DrainPermit already consumed")
+    }
 }
 
 impl DrainGuard {
@@ -80,6 +108,7 @@ impl DrainGuard {
             max_permits: max_inflight,
             drain_timeout: Duration::from_secs(drain_timeout_secs.max(5)),
             request_seq: AtomicU64::new(0),
+            notify_drain: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -98,6 +127,7 @@ impl DrainGuard {
     }
 
     /// Wait until all in-flight requests complete or the timeout elapses.
+    /// Uses tokio::sync::Notify for zero-wait notification (BLUE56-C03).
     pub async fn wait_for_drain(&self) -> bool {
         let permit_count = self.inflight.available_permits();
         if permit_count == self.max_permits {
@@ -109,27 +139,32 @@ impl DrainGuard {
             self.max_permits.saturating_sub(permit_count),
             self.max_permits
         );
-        // Wait for all permits to be released or timeout.
+        // Wait for all permits to be released or timeout, using Notify
         let deadline = tokio::time::Instant::now() + self.drain_timeout;
         loop {
-            if tokio::time::Instant::now() >= deadline {
-                tracing::warn!(
-                    "DrainGuard: drain timeout reached, {} requests still in-flight",
-                    self.max_permits
-                        .saturating_sub(self.inflight.available_permits())
-                );
-                return false;
+            let wait_fut = self.notify_drain.notified();
+            tokio::select! {
+                _ = wait_fut => {
+                    let current_avail = self.inflight.available_permits();
+                    if current_avail == self.max_permits {
+                        return true;
+                    }
+                    // Notify was spurious or partial — continue waiting
+                }
+                _ = tokio::time::sleep_until(deadline) => {
+                    tracing::warn!(
+                        "DrainGuard: drain timeout reached, {} requests still in-flight",
+                        self.max_permits
+                            .saturating_sub(self.inflight.available_permits())
+                    );
+                    return false;
+                }
             }
-            let current_avail = self.inflight.available_permits();
-            if current_avail == self.max_permits {
-                return true;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
 
     /// Acquire a permit for an incoming request. Returns None if draining.
-    pub async fn acquire(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    pub async fn acquire(&self) -> Option<DrainPermit> {
         if self.is_draining() {
             return None;
         }
@@ -139,7 +174,10 @@ impl DrainGuard {
             drop(permit);
             return None;
         }
-        Some(permit)
+        Some(DrainPermit {
+            permit: Some(permit),
+            notify: self.notify_drain.clone(),
+        })
     }
 
     /// Get the next request sequence number.
@@ -290,6 +328,8 @@ pub struct AcpServer {
     pub online_controller: Arc<StdMutex<OnlineControllerState>>,
     /// Circuit breaker registry for failure prevention
     pub circuit_breakers: Arc<StdMutex<CircuitBreakerRegistry>>,
+    /// Hyper-resilience engine for circuit breaking, failover, and self-healing (BLUE56-GAP-C04)
+    pub hyper_resilience: Arc<crate::resilience::hyper_resilience::HyperResilienceEngine>,
     /// Maintenance tracker for system health monitoring
     pub maintenance_tracker: Arc<StdMutex<MaintenanceTracker>>,
     /// Inflight request limiter
@@ -667,6 +707,8 @@ pub struct ServerBuilder {
     security_advisor: Option<Arc<crate::security::security_advisor::SecurityAdvisorAgent>>,
     /// Optional multimodal processor for document, audio, video, and repo analysis.
     multimodal_processor: Option<crate::multimodal::MultimodalProcessor>,
+    /// Runtime config for gating governance, tenant quotas, etc.
+    runtime_config: Option<RuntimeConfig>,
 }
 
 impl ServerBuilder {
@@ -699,6 +741,7 @@ impl ServerBuilder {
             permit_exposure_analyzer: None,
             security_advisor: None,
             multimodal_processor: None,
+            runtime_config: None,
         }
     }
 
@@ -865,6 +908,13 @@ impl ServerBuilder {
         self
     }
 
+    /// Set the runtime config for gating governance, tenant quotas, etc.
+    #[allow(dead_code)]
+    pub fn with_runtime_config(mut self, config: RuntimeConfig) -> Self {
+        self.runtime_config = Some(config);
+        self
+    }
+
     /// Set the multimodal processor.
     ///
     /// When configured, the chat pipeline will route `repo:`-prefixed messages,
@@ -927,6 +977,11 @@ impl ServerBuilder {
         let lock_monitor = Arc::new(AcpLockMonitor::default());
         let online_controller = Arc::new(StdMutex::new(OnlineControllerState::default()));
         let circuit_breakers = Arc::new(StdMutex::new(CircuitBreakerRegistry::default()));
+        let hyper_resilience = Arc::new(
+            crate::resilience::hyper_resilience::HyperResilienceEngine::new(
+                crate::resilience::hyper_resilience::ResilienceConfig::default(),
+            ),
+        );
         let maintenance_tracker = Arc::new(StdMutex::new(MaintenanceTracker::new()));
         let inflight_limiter = Arc::new(StdMutex::new(InflightLimiter::default()));
         let lifecycle_state = Arc::new(StdMutex::new(LifecycleState::new()));
@@ -973,9 +1028,64 @@ impl ServerBuilder {
         // Wire the skill registry into the global discovery engine
         crate::acp::r#impl::request::tools_pack::init_skill_discovery(skill_registry.clone());
 
-        let telemetry_runtime = Arc::new(StdMutex::new(TelemetryRuntime::new(
-            &RuntimeConfig::default(),
-        )));
+        // Resolve runtime config: use provided one or default.
+        let runtime_config = self.runtime_config.unwrap_or_default();
+
+        let telemetry_runtime = Arc::new(StdMutex::new(TelemetryRuntime::new(&runtime_config)));
+
+        // ── B54-073: Gate governance initialization ──────────────────────
+        let governance_enabled = runtime_config.governance_enabled;
+        if !governance_enabled {
+            tracing::info!(
+                "governance_enabled=false — skipping governance subsystem initialization"
+            );
+        } else {
+            let policy_mode = &runtime_config.governance_policy_mode;
+            if !policy_mode.is_empty() {
+                tracing::info!(
+                    "governance_policy_mode={} — governance subsystem initialized with policy mode",
+                    policy_mode
+                );
+            }
+        }
+
+        // ── B54-016: Wire continuous learning review cycle (background task) ──
+        if let Some(ref capability_bus) = self.capability_bus {
+            let cl_bus = Arc::clone(capability_bus);
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(600)); // 10 min
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    interval.tick().await;
+                    match cl_bus.continuous_learning.lock() {
+                        Ok(cl) => {
+                            let (replayed, evicted) = cl.review_cycle();
+                            if replayed > 0 || evicted > 0 {
+                                tracing::debug!(
+                                    "ContinuousLearning: review_cycle replayed={} evicted={}",
+                                    replayed,
+                                    evicted
+                                );
+                            }
+                        }
+                        Err(poisoned) => {
+                            tracing::warn!(
+                                "continuous_learning mutex poisoned in review_cycle task — recovering"
+                            );
+                            let cl = poisoned.into_inner();
+                            let (replayed, evicted) = cl.review_cycle();
+                            if replayed > 0 || evicted > 0 {
+                                tracing::debug!(
+                                    "ContinuousLearning: review_cycle (poisoned) replayed={} evicted={}",
+                                    replayed,
+                                    evicted
+                                );
+                            }
+                        }
+                    }
+                }
+            });
+        }
 
         // Create a default PUA enforcement plan
         let pua_enforcement_plan = Arc::new(StdMutex::new(crate::pua::PuaEnforcementPlan {
@@ -1025,22 +1135,78 @@ impl ServerBuilder {
                 flow_model_selector,
             },
             governance_deps: GovernanceServerDeps {
-                harness_bus: self.harness_bus,
-                capability_bus: self.capability_bus,
+                harness_bus: if governance_enabled {
+                    self.harness_bus
+                } else {
+                    None
+                },
+                capability_bus: if governance_enabled {
+                    self.capability_bus
+                } else {
+                    None
+                },
                 pua_enforcement_plan,
                 rbac_enforcer: None,
-                provenance_ledger: self.provenance_ledger,
-                approval_engine: self.approval_engine,
-                injection_detector: self.injection_detector,
-                safety_checker: self.safety_checker,
-                hash_chain_auditor: self.hash_chain_auditor,
-                secret_manager: self.secret_manager,
-                memory_persistence: self.memory_persistence,
-                evolution_loop: self.evolution_loop,
-                dependency_vulnerability_scanner: self.dependency_vulnerability_scanner,
-                secret_exposure_detector: self.secret_exposure_detector,
-                permit_exposure_analyzer: self.permit_exposure_analyzer,
-                security_advisor: self.security_advisor,
+                provenance_ledger: if governance_enabled {
+                    self.provenance_ledger
+                } else {
+                    None
+                },
+                approval_engine: if governance_enabled {
+                    self.approval_engine
+                } else {
+                    None
+                },
+                injection_detector: if governance_enabled {
+                    self.injection_detector
+                } else {
+                    None
+                },
+                safety_checker: if governance_enabled {
+                    self.safety_checker
+                } else {
+                    None
+                },
+                hash_chain_auditor: if governance_enabled {
+                    self.hash_chain_auditor
+                } else {
+                    None
+                },
+                secret_manager: if governance_enabled {
+                    self.secret_manager
+                } else {
+                    None
+                },
+                memory_persistence: if governance_enabled {
+                    self.memory_persistence
+                } else {
+                    None
+                },
+                evolution_loop: if governance_enabled {
+                    self.evolution_loop
+                } else {
+                    None
+                },
+                dependency_vulnerability_scanner: if governance_enabled {
+                    self.dependency_vulnerability_scanner
+                } else {
+                    None
+                },
+                secret_exposure_detector: if governance_enabled {
+                    self.secret_exposure_detector
+                } else {
+                    None
+                },
+                permit_exposure_analyzer: if governance_enabled {
+                    self.permit_exposure_analyzer
+                } else {
+                    None
+                },
+                security_advisor: if governance_enabled {
+                    self.security_advisor
+                } else {
+                    None
+                },
             },
             orchestration_deps: OrchestrationServerDeps {
                 scheduler: self.scheduler,
@@ -1049,7 +1215,7 @@ impl ServerBuilder {
                 planner_executor_config: self.planner_executor_config,
                 skill_registry,
             },
-            runtime_config: RuntimeConfig::default(),
+            runtime_config,
             config_path: self.config_path,
             observability: ObservabilityLayer {
                 metrics,
@@ -1063,6 +1229,7 @@ impl ServerBuilder {
             },
             online_controller,
             circuit_breakers,
+            hyper_resilience,
             maintenance_tracker,
             inflight_limiter,
             lifecycle_state,

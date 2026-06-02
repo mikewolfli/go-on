@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Request Signing (GAP-B52-23)
 //!
 //! Provides Ed25519 and HMAC-SHA256 request signing with replay protection
@@ -24,6 +22,7 @@ pub enum SigningError {
     #[error("invalid key: {0}")]
     InvalidKey(String),
 
+    #[allow(dead_code)]
     #[error("signing algorithm mismatch: expected {expected}, got {actual}")]
     AlgorithmMismatch { expected: String, actual: String },
 

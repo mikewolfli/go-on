@@ -24,7 +24,7 @@ RUN cargo build --release --no-default-features -F profile-simple-server && \
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates libsqlite3-0 && \
+    ca-certificates libsqlite3-0 curl && \
     rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r goon && useradd -r -g goon -d /opt/go-on -s /sbin/nologin goon

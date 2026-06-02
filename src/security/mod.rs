@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Security Module (GAP-B52)
 //!
 //! Provides request signing, mTLS configuration, prompt injection detection,

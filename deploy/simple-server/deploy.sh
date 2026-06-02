@@ -14,9 +14,9 @@ echo "Install dir: ${INSTALL_DIR}/backend"
 
 # 1. Create directories
 sudo mkdir -p "${INSTALL_DIR}/backend"
-# Use colon-separated user (no group) for compatibility with systems
-# where the user's primary group name differs from the username.
-sudo chown "$USER:" "${INSTALL_DIR}" -R
+# Ensure go-on user exists (matches systemd service User=go-on)
+sudo id -u go-on &>/dev/null || sudo useradd -r -s /sbin/nologin go-on
+sudo chown "go-on:" "${INSTALL_DIR}" -R
 
 # 2. Build
 echo "Building..."

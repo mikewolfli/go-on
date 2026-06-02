@@ -148,7 +148,7 @@ Each `[phases.<name>.options]` block supports:
 |--------|------|---------|-------------|
 | `request_timeout_seconds` | u64 | 120 | Max seconds per request |
 | `review_timeout_seconds` | u64 | 60 | Max seconds for review |
-| `review_timeout_policy` | string | `"reject"` | `"reject"` or `"warn"` |
+| `review_timeout_policy` | string | `"reject"` | `"reject"`, `"degrade_single"`, or `"warn"` |
 | `review_min_response_chars` | usize | 12 | Min chars for review to accept |
 | `cache_enabled` | bool | true | Enable response cache |
 | `vector_enabled` | bool | true | Enable vector memory |

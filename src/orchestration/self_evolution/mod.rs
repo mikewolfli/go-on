@@ -9,8 +9,6 @@
 //! - `evolution_loop`: Trigger sources and lifecycle orchestration
 //! - `evolution_history`: Persistent NDJSON history with rollback support
 
-#![allow(dead_code)]
-
 pub mod evolution_history; // GAP-B52-05
 pub mod evolution_loop; // GAP-B52-02
 pub mod sandbox; // GAP-B52-01

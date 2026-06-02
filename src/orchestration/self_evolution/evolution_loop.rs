@@ -4,12 +4,14 @@
 //! await_approval → apply → verify → record. Runs as an async select! loop
 //! that polls multiple trigger sources and processes them one at a time.
 
+use crate::agents::self_evolution_agent::SelfEvolutionAgent;
 use crate::orchestration::self_evolution::evolution_history::EvolutionHistory;
 use crate::orchestration::self_evolution::sandbox::{CodePatch, SandboxExecutor};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -61,6 +63,13 @@ pub enum EvolutionTrigger {
         /// The actual value found.
         actual: String,
     },
+    /// Capability degradation detected by EvolutionGraph (BLUE56-B10).
+    DegradationDetected {
+        /// The capability ID that is degrading.
+        capability_id: String,
+        /// The degradation trend slope (negative = degrading).
+        trend_slope: f64,
+    },
 }
 
 impl EvolutionTrigger {
@@ -72,6 +81,7 @@ impl EvolutionTrigger {
             EvolutionTrigger::DeadCodeDetected { .. } => "dead_code_detected",
             EvolutionTrigger::ManualRequest { .. } => "manual_request",
             EvolutionTrigger::ConfigDrift { .. } => "config_drift",
+            EvolutionTrigger::DegradationDetected { .. } => "degradation_detected",
         }
     }
 
@@ -108,6 +118,15 @@ impl EvolutionTrigger {
                 actual,
             } => {
                 format!("Config drift: {} expected={} actual={}", key, expected, actual)
+            }
+            EvolutionTrigger::DegradationDetected {
+                capability_id,
+                trend_slope,
+            } => {
+                format!(
+                    "Capability degradation: {} trend={:.3}",
+                    capability_id, trend_slope
+                )
             }
         }
     }
@@ -367,6 +386,7 @@ pub trait TriggerSource: Send + Sync + std::fmt::Debug {
 
 /// A trigger source that monitors the system's own cognitive performance
 /// (e.g., decision latency, retry rates, planning depth).
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct MetacognitiveTriggerSource {
     /// Name of this source.
@@ -377,6 +397,7 @@ pub struct MetacognitiveTriggerSource {
     thresholds: HashMap<String, f64>,
 }
 
+#[allow(dead_code)]
 impl MetacognitiveTriggerSource {
     /// Create a new metacognitive trigger source.
     pub fn new(name: String, interval: Duration) -> Self {
@@ -416,14 +437,17 @@ impl TriggerSource for MetacognitiveTriggerSource {
 
 /// A trigger source that listens to the alert manager for active alerts
 /// that should trigger an evolution cycle.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct AlertManagerTriggerSource {
     /// Name of this source.
     name: String,
     /// Cached alert fingerprints to avoid re-triggering.
+    #[allow(dead_code)]
     seen_alerts: std::sync::Mutex<Vec<String>>,
 }
 
+#[allow(dead_code)]
 impl AlertManagerTriggerSource {
     /// Create a new alert manager trigger source.
     pub fn new(name: String) -> Self {
@@ -450,6 +474,7 @@ impl TriggerSource for AlertManagerTriggerSource {
 
 /// A trigger source that monitors compiler/LSP diagnostics and test results
 /// to detect repeated error patterns.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct DiagnosticTriggerSource {
     /// Name of this source.
@@ -460,6 +485,7 @@ pub struct DiagnosticTriggerSource {
     min_count: u64,
 }
 
+#[allow(dead_code)]
 impl DiagnosticTriggerSource {
     /// Create a new diagnostic trigger source.
     pub fn new(name: String, min_count: u64) -> Self {
@@ -505,6 +531,7 @@ impl TriggerSource for DiagnosticTriggerSource {
 // ---------------------------------------------------------------------------
 
 /// A trigger source that accepts manual evolution requests via a channel.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct ManualTriggerSource {
     /// Name of this source.
@@ -515,6 +542,7 @@ pub struct ManualTriggerSource {
     tx: mpsc::UnboundedSender<String>,
 }
 
+#[allow(dead_code)]
 impl ManualTriggerSource {
     /// Create a new manual trigger source.
     pub fn new(name: String) -> Self {
@@ -618,9 +646,12 @@ pub struct EvolutionLoop {
     /// Evolution history recorder.
     history: Option<EvolutionHistory>,
     /// Working directory for sandbox operations.
+    #[allow(dead_code)]
     workdir: PathBuf,
     /// Poll interval for trigger sources.
     poll_interval: Duration,
+    /// Self-evolution agent for LLM-based code analysis and patch generation.
+    agent: Option<Arc<SelfEvolutionAgent>>,
 }
 
 impl EvolutionLoop {
@@ -634,6 +665,7 @@ impl EvolutionLoop {
             history: None,
             workdir,
             poll_interval: Duration::from_secs(30),
+            agent: None,
         }
     }
 
@@ -664,6 +696,12 @@ impl EvolutionLoop {
     /// Set the poll interval for trigger sources.
     pub fn with_poll_interval(mut self, interval: Duration) -> Self {
         self.poll_interval = interval;
+        self
+    }
+
+    /// Set the self-evolution agent for LLM-based analysis and patch generation.
+    pub fn with_agent(mut self, agent: Arc<SelfEvolutionAgent>) -> Self {
+        self.agent = Some(agent);
         self
     }
 
@@ -787,9 +825,52 @@ impl EvolutionLoop {
     // -----------------------------------------------------------------------
 
     /// Phase 2: Analyze a trigger to produce an analysis.
+    ///
+    /// If a `SelfEvolutionAgent` is configured, delegates to
+    /// `SelfEvolutionAgent::analyze_code()` for LLM-based analysis.
+    /// Otherwise falls back to the heuristic stub.
     async fn analyze(&self, trigger: &EvolutionTrigger) -> Analysis {
-        // Basic analysis generation. In production, this would use a
-        // self-evolution agent (GAP-B52-03) to produce deeper analysis.
+        // If a self-evolution agent is available, use it for real analysis
+        if let Some(ref agent) = self.agent {
+            let target = match trigger {
+                EvolutionTrigger::PerformanceRegression { metric, .. } => metric.clone(),
+                EvolutionTrigger::RepeatedError { pattern, .. } => pattern.clone(),
+                EvolutionTrigger::DeadCodeDetected { module, .. } => module.clone(),
+                EvolutionTrigger::ManualRequest { .. } => "src/lib.rs".to_string(),
+                EvolutionTrigger::ConfigDrift { key, .. } => key.clone(),
+                EvolutionTrigger::DegradationDetected { capability_id, .. } => {
+                    capability_id.clone()
+                }
+            };
+
+            match agent.analyze_code(&target).await {
+                Ok(report) => {
+                    let risk_label = report.risk.label().to_string();
+                    return Analysis::new(
+                        trigger.clone(),
+                        format!(
+                            "Analysis of '{}': {} findings, risk={}",
+                            target,
+                            report.findings.len(),
+                            risk_label
+                        ),
+                        report.summary(),
+                        report.findings.clone(),
+                        risk_label,
+                        (100.0 - report.todo_count.min(100) as f64) / 100.0,
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        target = %target,
+                        error = %e,
+                        "SelfEvolutionAgent analyze_code failed, falling back to stub"
+                    );
+                }
+            }
+        }
+
+        // Fallback stub analysis when no agent is configured or analysis fails
         let root_cause = match trigger {
             EvolutionTrigger::PerformanceRegression { metric, .. } => {
                 format!("Suspected performance regression in metric '{}'", metric)
@@ -807,6 +888,15 @@ impl EvolutionLoop {
                 format!(
                     "Configuration drift: '{}' expected '{}' but found '{}'",
                     key, expected, actual
+                )
+            }
+            EvolutionTrigger::DegradationDetected {
+                capability_id,
+                trend_slope,
+            } => {
+                format!(
+                    "Capability '{}' is degrading (trend={:.3})",
+                    capability_id, trend_slope
                 )
             }
         };
@@ -827,6 +917,9 @@ impl EvolutionLoop {
             EvolutionTrigger::ConfigDrift { .. } => {
                 "Update configuration to match expected values".to_string()
             }
+            EvolutionTrigger::DegradationDetected { .. } => {
+                "Investigate and fix capability degradation".to_string()
+            }
         };
 
         let risk_level = match trigger {
@@ -846,16 +939,46 @@ impl EvolutionLoop {
     }
 
     /// Phase 3: Propose a code patch based on the analysis.
+    ///
+    /// If a `SelfEvolutionAgent` is configured, delegates to
+    /// `SelfEvolutionAgent::generate_patch()` for LLM-based patch
+    /// generation. Otherwise falls back to the heuristic stub.
     async fn propose(&self, analysis: &Analysis) -> CodePatch {
-        // Basic patch generation. In production, this would use a
-        // self-evolution agent with LLM-based patch generation.
+        // If a self-evolution agent is available, use it for real patch generation
+        if let Some(ref agent) = self.agent {
+            // Build a synthetic Report from the Analysis to pass to generate_patch
+            let report = crate::agents::self_evolution_agent::Report::new(
+                analysis.suggested_approach.clone(),
+            );
+
+            match agent
+                .generate_patch(&report, &analysis.root_cause)
+                .await
+            {
+                Ok(patch) => {
+                    info!(
+                        analysis_id = %analysis.analysis_id,
+                        target = %patch.target_file,
+                        "patch generated by SelfEvolutionAgent"
+                    );
+                    return patch;
+                }
+                Err(e) => {
+                    warn!(
+                        analysis_id = %analysis.analysis_id,
+                        error = %e,
+                        "SelfEvolutionAgent generate_patch failed, falling back to stub"
+                    );
+                }
+            }
+        }
+
+        // Fallback stub patch when no agent is configured or generation fails
         info!(
             analysis_id = %analysis.analysis_id,
-            "proposing patch for analysis"
+            "proposing stub patch (no SelfEvolutionAgent available)"
         );
 
-        // Return a minimal placeholder patch — real implementation
-        // uses SelfEvolutionAgent::generate_patch().
         CodePatch::new(
             "placeholder.rs".to_string(),
             vec![],

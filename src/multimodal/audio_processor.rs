@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Audio processor — speech-to-text (STT) transcription with speaker diarization
 //! support.
 //!
@@ -715,6 +713,7 @@ impl AudioProcessor {
 ///     go_on::multimodal::audio_processor::SttBackend::OpenAIWhisper,
 /// );
 /// ```
+#[allow(dead_code)]
 pub fn transcribe(
     audio: &[u8],
     format: AudioFormat,

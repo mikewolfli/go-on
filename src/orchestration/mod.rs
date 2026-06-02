@@ -25,6 +25,7 @@ pub mod execution_graph;
 pub mod fast_path_cache; // BLUE43 Steps 11-14: Fast-path cache
 pub mod flow;
 pub mod flow_with_models;
+pub mod multi_agent_pipeline;
 pub mod fork_registry;
 pub mod full_auto; // BLUE43 Step 10: Full-auto flow orchestrator
 pub mod integration;
@@ -36,6 +37,7 @@ pub mod planner_embedding; // BLUE47 Step 7: Embedding-based task classification
 pub mod planner_execution_graph; // Bridge: Planner → ExecutionGraph DAG
 pub mod planner_executor;
 pub mod plugin_system;
+pub mod provider_impl;
 pub mod promotion_plugin;
 pub mod prompt_layers;
 pub mod recovery; // BLUE43 Step 16: Auto recovery orchestration with escalation
@@ -58,11 +60,14 @@ pub mod task_schema;
 pub mod threshold_learner; // BLUE44: Dynamic threshold learning for skill matching
 pub mod token_layers;
 pub mod tool;
-pub mod tool_extended; // BLUE44: Extended built-in tools (10 additional tools)
-pub mod tool_lock; // BLUE44: Tool lock manager for concurrent file access
-pub mod tool_native; // BLUE44: Native function call bridge for OpenAI/Anthropic
-pub mod tool_pipeline; // BLUE44: Tool pipeline for composing multi-step workflows
-pub mod tool_recommender; // BLUE44: Dynamic tool recommendation engine
+pub use tool::extended as tool_extended;
+pub use tool::lock as tool_lock;
+#[allow(unused_imports)]
+pub use tool::native as tool_native;
+pub use tool::pipeline as tool_pipeline;
+pub use tool::recommender as tool_recommender;
+#[allow(unused_imports)]
+pub use tool::transaction as tool_transaction;
 pub mod workflow_optimizer;
 pub mod workflow_registry;
 

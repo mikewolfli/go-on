@@ -63,7 +63,7 @@ pub(crate) async fn run_acp_autonomy_loop(
         enable_execution_intelligence: option_bool("enable_metacognitive_feedback", true),
         recovery_orchestrator: Some(crate::orchestration::recovery::RecoveryOrchestrator::new()),
         max_messages: 200,
-        use_brain_loop: option_bool("use_brain_loop", false),
+        use_brain_loop: option_bool("use_brain_loop", true), // Enable by default; disable via config for simple tasks
     };
 
     let result = if config.use_brain_loop {

@@ -8,9 +8,6 @@
 //! - `should_compress(msg_count > 50 || token_ratio > 0.7)` – trigger detection
 //! - `compress(messages) -> CompressedContext` – produces a structured summary
 //! - `inject_compressed_context(messages, compressed)` – merges summary into history
-
-#![allow(dead_code)]
-
 //! - Incremental compression: tracks which messages have already been compressed
 
 use serde::{Deserialize, Serialize};
@@ -87,6 +84,7 @@ pub struct IncrementalState {
 }
 
 /// Configuration for the session compressor.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct SessionCompressor {
     /// Maximum number of messages before compression is mandatory (default 1000).
@@ -120,6 +118,7 @@ impl Default for SessionCompressor {
     }
 }
 
+#[allow(dead_code)]
 impl SessionCompressor {
     /// Create a new compressor with default configuration.
     pub fn new() -> Self {

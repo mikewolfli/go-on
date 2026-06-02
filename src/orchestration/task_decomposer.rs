@@ -4,9 +4,11 @@
 //! subtasks with identified dependencies, parallel execution opportunities,
 //! and optimal execution order.
 
+use crate::agent::Agent;
 use crate::task_router::{TaskCharacteristics, TaskType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::sync::Arc;
 
 /// A single subtask
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,7 +44,129 @@ pub struct TaskDecomposition {
 pub struct TaskDecomposer;
 
 impl TaskDecomposer {
-    /// Decompose a task into subtasks
+    /// Decompose a task using an LLM agent for AI-driven decomposition.
+    ///
+    /// When an LLM agent is provided, it generates a decomposition dynamically
+    /// based on the task characteristics. Otherwise falls back to the
+    /// rule-based `decompose()` method.
+    ///
+    /// # Arguments
+    /// * `characteristics` - The task characteristics to decompose
+    /// * `llm_agent` - Optional LLM agent for AI-driven decomposition
+    ///
+    /// # Returns
+    /// TaskDecomposition with identified subtasks and dependencies
+    pub async fn decompose_with_llm(
+        characteristics: &TaskCharacteristics,
+        llm_agent: Option<Arc<dyn Agent>>,
+    ) -> TaskDecomposition {
+        if let Some(agent) = llm_agent {
+            // Attempt LLM-based decomposition
+            let prompt = format!(
+                r##"You are a task decomposition specialist. Break the following task into subtasks.
+
+Task: {}
+Type: {:?}
+Complexity: {}
+Capabilities: {:?}
+
+Respond with a JSON object containing:
+- "subtasks": array of {{"id": "step_N", "description": "...", "complexity": 1-5, "dependencies": ["step_M", ...], "estimated_duration_seconds": N, "priority": 1-5}}
+- "execution_phases": array of arrays of subtask IDs (each phase runs in parallel)
+
+Return ONLY valid JSON, no markdown formatting.
+"##,
+                characteristics.description,
+                characteristics.task_type,
+                characteristics.complexity,
+                characteristics.required_capabilities
+            );
+
+            let envelope = crate::agent::AgentTaskEnvelope {
+                task_id: format!(
+                    "decomp_{}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis()
+                ),
+                phase: "decomposition".to_string(),
+                role: "decomposer".to_string(),
+                objective: prompt,
+                evidence: None,
+                constraints: Some("Return only valid JSON.".to_string()),
+                input: serde_json::json!({
+                    "description": characteristics.description,
+                    "task_type": format!("{:?}", characteristics.task_type),
+                    "complexity": characteristics.complexity,
+                }),
+            };
+
+            match agent.run_task(envelope) {
+                Ok(result) => {
+                    if let Some(ref output) = result.output {
+                        // Try to parse the LLM output as a TaskDecomposition
+                        if let Ok(decomp) = serde_json::from_value::<TaskDecomposition>(output.clone())
+                        {
+                            // Ensure the execution_phases are populated even if LLM
+                            // returned subtasks without explicit phases
+                            if decomp.execution_phases.is_empty() && !decomp.subtasks.is_empty() {
+                                let phases = Self::compute_execution_phases(&decomp.subtasks);
+                                return TaskDecomposition {
+                                    execution_phases: phases,
+                                    ..decomp
+                                };
+                            }
+                            return decomp;
+                        }
+                        // Try wrapping: LLM might return the object directly without task_id
+                        if let Ok(decomp) =
+                            serde_json::from_value::<serde_json::Value>(output.clone())
+                        {
+                            if let Some(subtasks_val) = decomp.get("subtasks") {
+                                if let Ok(subtasks) =
+                                    serde_json::from_value::<Vec<Subtask>>(subtasks_val.clone())
+                                {
+                                    let task_id = format!(
+                                        "task_{}",
+                                        std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_millis()
+                                    );
+                                    let execution_phases =
+                                        Self::compute_execution_phases(&subtasks);
+                                    let total_duration_estimated: u32 = subtasks
+                                        .iter()
+                                        .map(|s| s.estimated_duration_seconds)
+                                        .sum();
+                                    return TaskDecomposition {
+                                        task_id,
+                                        subtasks,
+                                        execution_phases,
+                                        total_duration_estimated,
+                                    };
+                                }
+                            }
+                        }
+                    }
+                    tracing::warn!(
+                        "LLM decomposition failed to produce valid output, falling back to rule-based"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "LLM agent returned error: {}, falling back to rule-based decomposition",
+                        e
+                    );
+                }
+            }
+        }
+        // Fallback: rule-based decomposition
+        Self::decompose(characteristics)
+    }
+
+    /// Decompose a task into subtasks using rule-based keyword matching
     ///
     /// # Arguments
     /// * `characteristics` - The task characteristics to decompose

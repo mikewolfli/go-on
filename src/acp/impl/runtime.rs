@@ -169,13 +169,42 @@ pub fn new_acp_server(
     ));
     // Create a shared provenance ledger
     let provenance_ledger = Arc::new(crate::observability::provenance::ProvenanceLedger::default());
-    let capability_bus = Arc::new(
-        crate::intelligence::capability_bus::core::CapabilityBus::new_default(
-            Arc::clone(&harness_bus),
-            Some(workflow_registry),
-        )
-        .with_provenance_ledger(Arc::clone(&provenance_ledger)),
-    );
+    // BLUE56-GAP-B02: Inject first available LLM agent into MetacognitiveController
+    let first_agent: Option<Arc<dyn crate::agent::Agent>> = registry.get("coder")
+        .or_else(|| registry.get("assistant"))
+        .or_else(|| {
+            let names = registry.names();
+            names.first().and_then(|n| registry.get(n))
+        });
+
+    // Build capability bus and optionally inject an LLM agent
+    let cb_builder = crate::intelligence::capability_bus::core::CapabilityBus::new_default(
+        Arc::clone(&harness_bus),
+        Some(workflow_registry),
+    )
+    .with_provenance_ledger(Arc::clone(&provenance_ledger));
+    let cb_builder = if let Some(agent) = first_agent {
+        cb_builder.with_metacognitive_llm(agent)
+    } else {
+        cb_builder
+    };
+    let capability_bus = Arc::new(cb_builder);
+
+    // BLUE56-C15: Warn if default credentials are still in use
+    {
+        let env_name = runtime_config.entry_auth_api_key_env.trim();
+        if runtime_config.entry_auth_enabled && !env_name.is_empty() {
+            let key = std::env::var(env_name).unwrap_or_default();
+            if key == "change-me" || key.is_empty() {
+                tracing::warn!(
+                    target: "startup",
+                    env = %env_name,
+                    "entry auth enabled but API key is still default/empty — set {} to a random secret",
+                    env_name
+                );
+            }
+        }
+    }
 
     // ── Governance dependency wiring ──────────────────────────────────────
     // Wire approval engine
@@ -193,10 +222,10 @@ pub fn new_acp_server(
         builder = builder.with_approval_engine(engine);
     }
 
-    // Wire injection detector
+    // Wire injection detector with runtime config (BLUE56-GAP-D08)
     {
-        use crate::security::prompt_injection::{DetectionConfig, InjectionDetector};
-        let detector = Arc::new(InjectionDetector::new(DetectionConfig::default()));
+        use crate::security::prompt_injection::InjectionDetector;
+        let detector = Arc::new(InjectionDetector::new(runtime_config.detection_config()));
         builder = builder.with_injection_detector(detector);
     }
 
@@ -302,6 +331,12 @@ pub fn new_acp_server(
         advisor
     };
 
+    // Wire multimodal processor for document, audio, video, and repo analysis (GAP-B55-110)
+    {
+        use crate::multimodal::MultimodalProcessor;
+        builder = builder.with_multimodal_processor(MultimodalProcessor::default());
+    }
+
     match builder.build() {
         Ok(mut server) => {
             // Set fields that aren't available in ServerBuilder yet
@@ -382,9 +417,38 @@ pub fn new_acp_server(
             // BLUE48 Step 1: Initialize global embedding vector store for
             // semantic task classification in the Planner.
             if let Some(ref vs) = server.cache_deps.cache.vector_store {
+                // GAP-B55-020: Initialize memory bridge with auto-migration
+                crate::memory::memory_bridge::init_memory_persistence_with_auto_migrate(None);
+                tracing::info!("memory bridge: auto-migration task started");
+
                 crate::orchestration::planner_embedding::init_global_task_vector_store(Arc::clone(
                     vs,
                 ));
+            }
+
+            // GAP-B55-042: Start approval engine timeout processing background task
+            if let Some(ref approval_engine) = server.governance_deps.approval_engine {
+                let engine = Arc::clone(approval_engine);
+                tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+                    loop {
+                        interval.tick().await;
+                        let mut guard = match engine.write() {
+                            Ok(g) => g,
+                            Err(poisoned) => {
+                                tracing::error!("approval_engine lock poisoned in timeout task");
+                                poisoned.into_inner()
+                            }
+                        };
+                        let changed = guard.process_timeouts();
+                        if !changed.is_empty() {
+                            tracing::info!(
+                                "approval engine timed out {} request(s)",
+                                changed.len()
+                            );
+                        }
+                    }
+                });
             }
 
             server
@@ -491,6 +555,11 @@ pub fn new_acp_server(
                 },
                 online_controller: Arc::new(StdMutex::new(OnlineControllerState::default())),
                 circuit_breakers: Arc::new(StdMutex::new(CircuitBreakerRegistry::new())),
+                hyper_resilience: Arc::new(
+                    crate::resilience::hyper_resilience::HyperResilienceEngine::new(
+                        crate::resilience::hyper_resilience::ResilienceConfig::default(),
+                    ),
+                ),
                 maintenance_tracker: Arc::new(StdMutex::new(MaintenanceTracker::new())),
                 inflight_limiter: Arc::new(StdMutex::new(InflightLimiter::default())),
                 lifecycle_state: Arc::new(StdMutex::new(LifecycleState::new())),
@@ -546,7 +615,7 @@ pub fn new_acp_server(
                 drain_guard: crate::acp::server::DrainGuard::default(),
                 session_registry: None,
                 websocket_hub: None,
-                multimodal_processor: None,
+                multimodal_processor: Some(crate::multimodal::MultimodalProcessor::default()),
             };
 
             // Wire RBAC enforcer into the fallback server for HTTP-level authorization
@@ -854,12 +923,12 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
             {
                 use crate::security::mtls::MtlsConfig;
                 let mut mtls_config = MtlsConfig::new(
+                    &server.runtime_config.mtls_ca_cert_path,
                     &server.runtime_config.mtls_server_cert_path,
                     &server.runtime_config.mtls_server_key_path,
                 );
                 if !server.runtime_config.mtls_ca_cert_path.is_empty() {
-                    mtls_config =
-                        mtls_config.with_client_cert(&server.runtime_config.mtls_ca_cert_path);
+                    mtls_config = mtls_config.with_client_cert(true);
                 }
                 if !server.runtime_config.mtls_allowed_cns.is_empty() {
                     let allowed: Vec<String> = server
@@ -872,14 +941,15 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
                     mtls_config = mtls_config.with_allowed_cns(allowed);
                 }
 
-                match crate::security::mtls::MtlsAcceptor::new(mtls_config) {
-                    Ok(acceptor) => {
+                let acceptor = crate::security::mtls::MtlsAcceptor::new(mtls_config);
+                match acceptor.build_server_config() {
+                    Ok(server_config) => {
                         tracing::info!("mTLS enabled for ACP HTTP server");
-                        Some(tokio_rustls::TlsAcceptor::from(acceptor.into_inner()))
+                        Some(tokio_rustls::TlsAcceptor::from(server_config))
                     }
                     Err(e) => {
                         tracing::warn!(
-                            "Failed to create mTLS acceptor: {} — falling back to plain TCP",
+                            "Failed to build mTLS server config: {} — falling back to plain TCP",
                             e
                         );
                         None
@@ -3801,6 +3871,10 @@ async fn handle_http_connection(
 /// JSON-RPC response value. This is a simplified handler that supports
 /// the core RPC methods used over mTLS connections.
 async fn route_rpc_over_tls(server: &AcpServer, request: JsonRpcRequest) -> serde_json::Value {
+    // SERIALIZED: Acquire the RPC_SERIAL lock to prevent pipe-swapping race
+    // conditions on server.output, matching the same guard used in route_http_post.
+    let _rpc_guard = RPC_SERIAL.lock().await;
+
     // For the mTLS path, we delegate to the existing handle_request function
     // which sends responses through server.output. To capture the response,
     // we temporarily replace the output with a buffer.

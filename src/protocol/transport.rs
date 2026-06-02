@@ -747,7 +747,7 @@ impl MultiChannelTransport {
 
     /// Atomically increment and return the next message id counter.
     fn next_id() -> u64 {
-        NEXT_MSG_ID.fetch_add(1, Ordering::SeqCst)
+        NEXT_MSG_ID.fetch_add(1, Ordering::Relaxed)
     }
 }
 

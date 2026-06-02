@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Distributed DAG Coordinator (GAP-B52-22)
 //!
 //! Coordinates DAG execution across a distributed cluster using Raft-based
@@ -22,6 +20,7 @@ use tracing::{debug, error, info, warn};
 // Errors
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 #[derive(Debug, Error)]
 pub enum DagCoordinatorError {
     #[error("DAG not found: {0}")]
@@ -50,7 +49,8 @@ pub enum DagCoordinatorError {
 // NodeState
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum NodeState {
     Online,
     Offline,
@@ -62,6 +62,7 @@ pub enum NodeState {
 // DistributedDagState
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeInfo {
     pub node_id: NodeId,
@@ -72,6 +73,7 @@ pub struct NodeInfo {
     pub lease_expiry_ms: u64,
 }
 
+#[allow(dead_code)]
 impl NodeInfo {
     pub fn new(node_id: NodeId, address: String, port: u16) -> Self {
         let now = current_timestamp_ms();
@@ -94,6 +96,7 @@ impl NodeInfo {
 // DagNodeAssignment
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DagNodeAssignment {
     pub dag_node_id: String, // Logical node ID within the DAG
@@ -104,6 +107,7 @@ pub struct DagNodeAssignment {
     pub completed: bool,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DagExecutionPlan {
     pub dag_id: DagId,
@@ -113,7 +117,8 @@ pub struct DagExecutionPlan {
     pub status: DagStatus,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum DagStatus {
     Pending,
     Running,
@@ -126,6 +131,7 @@ pub enum DagStatus {
 // DistributedDagState (state machine)
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DistributedDagState {
     pub plan: DagExecutionPlan,
@@ -135,6 +141,7 @@ pub struct DistributedDagState {
     pub leader_id: Option<NodeId>,
 }
 
+#[allow(dead_code)]
 impl DistributedDagState {
     pub fn new(dag_id: DagId) -> Self {
         Self {
@@ -189,6 +196,7 @@ impl DistributedDagState {
 // RaftLogEntry
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RaftCommand {
     AssignNode {
@@ -220,6 +228,7 @@ pub enum RaftCommand {
     UpdateDagStatus(DagStatus),
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RaftLogEntry {
     pub index: u64,
@@ -231,6 +240,7 @@ pub struct RaftLogEntry {
 // FaultDetectionConfig
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct FaultDetectionConfig {
     /// Heartbeat interval in seconds.
@@ -258,6 +268,7 @@ impl Default for FaultDetectionConfig {
 // DistributedDAGCoordinator
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 pub struct DistributedDAGCoordinator {
     /// DAG state map: dag_id -> DistributedDagState
     dag_states: RwLock<HashMap<DagId, DistributedDagState>>,
@@ -275,6 +286,7 @@ pub struct DistributedDAGCoordinator {
     self_node_id: NodeId,
 }
 
+#[allow(dead_code)]
 impl DistributedDAGCoordinator {
     pub fn new(self_node_id: NodeId, executor: Arc<dyn RemoteExecutor>) -> Self {
         Self {
@@ -626,6 +638,7 @@ impl DistributedDAGCoordinator {
 // Helpers
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 fn current_timestamp_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

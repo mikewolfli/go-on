@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Audit Integrity — Hash Chain Auditor (GAP-B52-27)
 //!
 //! Provides tamper-evident audit logging using a hash chain.

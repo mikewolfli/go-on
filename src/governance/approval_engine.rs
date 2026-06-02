@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Approval Engine (GAP-B52-19)
 //!
 //! Manages approval workflows with time-based auto-escalation,

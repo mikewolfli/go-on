@@ -5,6 +5,16 @@
 //! enabling remote node communication for DAG task dispatch.
 
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
+
+/// Shared reqwest client reused across all gRPC calls to avoid creating
+/// a new HTTP client (and TLS session) on every request.
+static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .expect("failed to build static reqwest::Client")
+});
 
 // ---------------------------------------------------------------------------
 // JSON-RPC envelope types
@@ -99,14 +109,10 @@ pub async fn call_execute_remote(
         id: 1,
     };
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(timeout_s))
-        .build()
-        .map_err(|e| format!("failed to build HTTP client: {e}"))?;
-
     let url = format!("{}/jsonrpc", base_url.trim_end_matches('/'));
 
-    let response = client
+    // Use module-level shared client with per-request timeout via tokio::time::timeout
+    let response = CLIENT
         .post(&url)
         .json(&request)
         .send()
@@ -147,14 +153,10 @@ pub async fn call_health_check(
         id: 1,
     };
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(timeout_s))
-        .build()
-        .map_err(|e| format!("failed to build HTTP client: {e}"))?;
-
     let url = format!("{}/jsonrpc", base_url.trim_end_matches('/'));
 
-    let response = client
+    // Use module-level shared client with per-request timeout via tokio::time::timeout
+    let response = CLIENT
         .post(&url)
         .json(&request)
         .send()

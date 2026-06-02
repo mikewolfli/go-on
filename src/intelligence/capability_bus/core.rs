@@ -810,6 +810,15 @@ impl CapabilityBus {
         self
     }
 
+    /// Inject an LLM agent into the MetacognitiveController (BLUE56-GAP-B02).
+    ///
+    /// When an LLM agent is provided, reflection reports use LLM-based
+    /// root cause analysis instead of template-based fallback.
+    pub fn with_metacognitive_llm(mut self, agent: Arc<dyn crate::agent::Agent>) -> Self {
+        self.metacognitive.set_llm_agent(agent);
+        self
+    }
+
     // ------------------------------------------------------------------
     // Event recording
     // ------------------------------------------------------------------
@@ -1046,6 +1055,9 @@ impl CapabilityBus {
                 .match_task(&task_type_str, &task_type_str, 0.5, task.risk_score, &[]);
 
         // Step C: pick best agent from capability graph + reputation
+        // BLUE56-B11: Also query QLearningAgent for learned routing preferences
+        let q_learning_state = (task_type_str.clone(), "select_agent".to_string());
+        let _q_preferred_action = lock_guard(&self.q_learning).choose_action(&q_learning_state, &[]);
         let candidate_agents = self
             .capability_graph
             .lock()

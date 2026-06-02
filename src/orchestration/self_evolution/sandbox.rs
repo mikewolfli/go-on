@@ -25,6 +25,7 @@ use uuid::Uuid;
 const MAX_ITERATIONS: u64 = 10;
 
 /// Hosts file entry to block network access from the sandbox.
+#[allow(dead_code)]
 const BLOCKED_HOSTS_ENTRY: &str = "127.0.0.1 localhost\n::1 localhost\n0.0.0.0 0.0.0.0\n";
 
 // ---------------------------------------------------------------------------

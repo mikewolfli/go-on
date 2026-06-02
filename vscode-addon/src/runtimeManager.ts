@@ -1165,9 +1165,11 @@ export class GoOnManager {
 
         for (const line of lines) {
           const trimmed = line.trim();
-          if (!trimmed || !trimmed.startsWith("data: ")) continue;
+          if (!trimmed || !trimmed.startsWith("data:")) continue;
 
-          const dataStr = trimmed.slice(6).trim();
+          // Handle both "data: " (with space) and "data:" (without space)
+          const prefixLen = trimmed.startsWith("data: ") ? 6 : 5;
+          const dataStr = trimmed.slice(prefixLen).trim();
 
           // Check for OpenAI-style [DONE] marker
           if (dataStr === protocolContract.openai.streamDoneMarker) {

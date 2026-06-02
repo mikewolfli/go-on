@@ -862,7 +862,7 @@ impl FaultToleranceEngine {
     }
 
     /// Run the full recovery cycle: check heartbeats, auto-create recovery plans,
-    /// and return the status summary.
+    /// and return the status summary. Also persists state to DB if available.
     pub fn run_recovery_cycle(&self) -> RecoveryCycleSummary {
         let offenders = self.check_heartbeats();
         let mut plans_created = 0u32;
@@ -895,6 +895,9 @@ impl FaultToleranceEngine {
         let health = self.cluster_health();
         let profile = self.profile();
 
+        // BLUE56-C06: Persist recovery cycle state to DB
+        self.try_persist_state();
+
         RecoveryCycleSummary {
             offenders,
             plans_created,
@@ -902,6 +905,32 @@ impl FaultToleranceEngine {
             cluster_health: health,
             active_faults: profile.active_faults as u32,
             isolated_groups: profile.isolated_groups as u32,
+        }
+    }
+
+    /// Try to persist fault tolerance state to the default SQLite cache path.
+    fn try_persist_state(&self) {
+        #[cfg(feature = "backend-sqlite")]
+        {
+            let cache_path = std::path::PathBuf::from("target")
+                .join("go-on")
+                .join("fault_tolerance.db");
+            if let Some(parent) = cache_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Ok(conn) = rusqlite::Connection::open(&cache_path) {
+                if let Err(e) = self.save_to_db(&conn) {
+                    tracing::warn!(
+                        target: "fault_tolerance",
+                        error = %e,
+                        "failed to persist fault tolerance state"
+                    );
+                }
+            }
+        }
+        #[cfg(not(feature = "backend-sqlite"))]
+        {
+            let _ = self.save_to_db(&());
         }
     }
 

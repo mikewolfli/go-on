@@ -356,6 +356,24 @@ impl RuntimeConfig {
         };
         Some(cfg)
     }
+
+    /// Build a [`DetectionConfig`] from the RuntimeConfig (BLUE56-GAP-D08).
+    /// Uses a production-sensible threshold and enables model check when
+    /// governance is active.
+    pub fn detection_config(&self) -> crate::security::prompt_injection::DetectionConfig {
+        let threshold = if self.governance_enabled && self.governance_policy_mode == "active" {
+            0.6
+        } else {
+            0.8
+        };
+        crate::security::prompt_injection::DetectionConfig {
+            threshold,
+            enable_model_check: self.governance_enabled,
+            model_check_max_len: 4096,
+            contamination_threshold: 0.7,
+            enable_contamination_check: self.governance_enabled && self.user_auth_enabled,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

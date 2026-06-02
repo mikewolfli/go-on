@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Content Safety (GAP-B52-28)
 //!
 //! Detects unsafe content across multiple categories: hate speech, PII,

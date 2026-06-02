@@ -80,4 +80,5 @@ pub mod continuous_learning;
 pub mod evolution_graph;
 
 pub mod hub;
+pub mod triple_fusion;
 pub mod world_model;

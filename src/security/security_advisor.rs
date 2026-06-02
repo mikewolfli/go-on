@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Security Advisor Agent (GAP-B52-36)
 //!
 //! Provides an automated security advisory agent that:

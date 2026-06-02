@@ -31,7 +31,7 @@ use tracing::{error, info, warn};
 // ---------------------------------------------------------------------------
 
 /// Status of a distributed transaction.
-#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
+#[allow(dead_code)] // F-GAP-51
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DistributedTxStatus {
     /// Transaction has been created but not yet started.
@@ -76,7 +76,7 @@ impl DistributedTxStatus {
 // ---------------------------------------------------------------------------
 
 /// A participant in a distributed transaction.
-#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
+#[allow(dead_code)] // F-GAP-51
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionParticipant {
     /// Unique identifier for this participant.
@@ -94,7 +94,7 @@ pub struct TransactionParticipant {
 // ---------------------------------------------------------------------------
 
 /// A distributed transaction managed via two-phase commit.
-#[cfg_attr(not(feature = "sub-bus-tool-future"), allow(dead_code))] // F-GAP-51
+#[allow(dead_code)] // F-GAP-51
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DistributedTransaction {
     /// Unique transaction ID.

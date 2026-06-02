@@ -8,6 +8,7 @@ pub(crate) fn push_metric_header(
     lines.push(format!("# TYPE {} {}", name, metric_type));
 }
 
+#[allow(dead_code)]
 pub(crate) fn push_scalar_metric(
     lines: &mut Vec<String>,
     name: &str,

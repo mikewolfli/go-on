@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -30,6 +30,12 @@ jobs:
 
       - name: Check formatting
         run: cargo fmt --check
+
+      - name: Code coverage (cargo-tarpaulin)
+        run: |
+          cargo install cargo-tarpaulin 2>/dev/null || true
+          cargo tarpaulin --no-default-features -F profile-local --out Xml -- --test-threads=1 2>/dev/null || \
+            echo "[warn] cargo-tarpaulin coverage skipped (check install)"
 
       - name: Check dependencies (cargo-deny)
         uses: EmbarkStudios/cargo-deny-action@v2
@@ -63,8 +69,8 @@ jobs:
       - name: All integration tests
         timeout-minutes: 30
         run: |
-          cargo test --no-default-features -F profile-local --test e2e_integration -- --test-threads=1 --nocapture || echo "WARNING: e2e_integration tests had failures"
-          cargo test --no-default-features -F profile-local --test chaos_drill -- --test-threads=1 --nocapture || echo "WARNING: chaos_drill tests had failures"
+          cargo test --no-default-features -F profile-local --test e2e_integration -- --test-threads=1 --nocapture
+          cargo test --no-default-features -F profile-local --test chaos_drill -- --test-threads=1 --nocapture
         env:
           GO_ON_ENABLE_LOCAL_TEST_AGENTS: "1"
 
@@ -73,7 +79,7 @@ jobs:
     name: macOS (check)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -93,7 +99,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -134,9 +140,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm

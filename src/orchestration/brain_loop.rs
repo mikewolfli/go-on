@@ -1,11 +1,26 @@
 //! # Brain Loop — Plan → Execute → Reflect → Replan
-
 //!
 //! Implements FUTURE5.MD M5 "脑回路（Plan→Execute→Reflect→Replan）",
 //! an iterative orchestration cycle that drives a plan forward by executing
 //! individual steps, reflecting on the outcome, and optionally replanning
 //! the remaining work.  The loop continues until the plan completes, fails,
 //! is cancelled, or reaches the configured maximum number of iterations.
+//!
+//! ⚠️ **RETENTION NOTE**: This module (~1700 lines) is currently **held back**
+//!    as a future-extension. The Plan→Execute→Reflect→Replan loop requires
+//!    the ACP autonomy runtime (`autonomy_runtime.rs`) and the DAG executor
+//!    (`dag_executor.rs`) to be stabilized first. Once those components are
+//!    production-ready, the BrainLoop should be wired into `process_chat_request`
+//!    as a post-fallback reflection stage — after the agent responds, BrainLoop
+//!    evaluates the result, replans if needed, and feeds back into execution.
+//!
+//! ## Wiring TODO (when activated)
+//!
+//! 1. In `process_chat_request` (chat.rs), after the agent selection & execution
+//!    pipeline completes, call `BrainLoop::new(…)` with the response context.
+//! 2. Use `BrainLoop::execute_step()` to run a single plan→execute→reflect cycle.
+//! 3. Wire `BrainLoop::is_complete()` to skip further iteration when the goal is met.
+//! 4. Connect `ProgressReporter` to SSE stream for real-time loop status.
 //!
 //! ## Thread safety
 //!

@@ -10,15 +10,10 @@ use crate::agent::{
 use crate::pua::mode_execution_report;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
+use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
-
-/// Shared tokio runtime reused across all mode executions.
-fn shared_runtime() -> &'static tokio::runtime::Runtime {
-    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-    RT.get_or_init(|| tokio::runtime::Runtime::new().expect("create shared runtime"))
-}
 
 /// Supported chat/agent modes
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -62,43 +57,86 @@ pub trait ModeRuntime: Send + Sync {
     /// Whether the given objective is high risk.
     fn is_high_risk_operation(&self, objective: &str) -> bool;
     /// Run the mode orchestration for a given agent task.
+    /// Safe to call from both sync and async contexts (uses Handle::current()
+    /// when inside a tokio runtime to avoid nested runtime panic).
     fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult>;
 }
 
-/// Helper to execute an agent chat synchronously by blocking on a shared tokio runtime.
-fn execute_agent_chat(
+/// Resolve a mode string ("ask", "edit", "agent", "full_auto", "safeguard") into
+/// a [`Box<dyn ModeRuntime>`] with the given registry and agent name.
+///
+/// This wires the `ModeRuntime` trait into the chat execution flow — callers
+/// in `chat.rs` can use the returned runtime to get per-mode policies for
+/// allowed tools, max tool calls, approval requirements, and risk assessment.
+pub fn resolve_mode_runtime(
+    mode: &str,
+    registry: Option<Arc<AgentRegistry>>,
+    agent_name: Option<String>,
+) -> Box<dyn ModeRuntime> {
+    match mode.to_lowercase().as_str() {
+        "ask" => Box::new(AskModeRuntime::new(
+            registry.expect("AskModeRuntime requires a registry"),
+            agent_name,
+        )),
+        "edit" => Box::new(EditModeRuntime::new(
+            registry.expect("EditModeRuntime requires a registry"),
+            agent_name,
+        )),
+        "agent" => Box::new(AgentModeRuntime::new(
+            registry.expect("AgentModeRuntime requires a registry"),
+            agent_name,
+        )),
+        "full_auto" => Box::new(FullAutoModeRuntime::new(
+            registry.expect("FullAutoModeRuntime requires a registry"),
+            agent_name,
+        )),
+        "safeguard" => Box::new(SafeGuardModeRuntime::new(
+            registry.expect("SafeGuardModeRuntime requires a registry"),
+            agent_name,
+        )),
+        _ => {
+            // Default to Ask mode for unknown mode strings
+            tracing::warn!("unknown mode '{}', defaulting to Ask", mode);
+            Box::new(AskModeRuntime::new(
+                registry.expect("AskModeRuntime requires a registry"),
+                agent_name,
+            ))
+        }
+    }
+}
+
+/// Async helper to execute an agent chat without blocking.
+/// Safe to call from within any tokio runtime context.
+async fn execute_agent_chat_async(
     agent: &dyn Agent,
     messages: Vec<Message>,
     principles: Option<Vec<String>>,
     options: Option<std::collections::HashMap<String, serde_json::Value>>,
 ) -> Result<String> {
-    shared_runtime().block_on(async {
-        let (tx, mut rx) = mpsc::channel::<String>(64);
-        let sender = StreamingSender::new(tx);
+    let (tx, mut rx) = mpsc::channel::<String>(64);
+    let sender = StreamingSender::new(tx);
 
-        let agent_ref: &dyn Agent = agent;
-        agent_ref
-            .chat(messages, principles, options, sender)
-            .await
-            .map_err(|e| anyhow::anyhow!("agent chat failed: {}", e))?;
+    let agent_ref: &dyn Agent = agent;
+    agent_ref
+        .chat(messages, principles, options, sender)
+        .await
+        .map_err(|e| anyhow::anyhow!("agent chat failed: {}", e))?;
 
-        let mut full_output = String::new();
-        while let Some(token) = rx.recv().await {
-            full_output.push_str(&token);
-        }
-        Ok(full_output)
-    })
+    let mut full_output = String::new();
+    while let Some(token) = rx.recv().await {
+        full_output.push_str(&token);
+    }
+    Ok(full_output)
 }
 
-/// Helper to execute an agent run_task synchronously using the shared tokio runtime.
-fn execute_agent_run_task(
+/// Async helper to execute an agent run_task without blocking.
+/// Safe to call from within any tokio runtime context.
+async fn execute_agent_run_task_async(
     agent: &dyn Agent,
     envelope: AgentTaskEnvelope,
 ) -> Result<AgentTaskResult> {
-    shared_runtime().block_on(async {
-        let result = agent.run_task(envelope);
-        result.map_err(|e| anyhow::anyhow!("agent run_task failed: {}", e))
-    })
+    let result = agent.run_task(envelope);
+    result.map_err(|e| anyhow::anyhow!("agent run_task failed: {}", e))
 }
 
 /// Helper to build a chat message from the task envelope.
@@ -192,11 +230,15 @@ impl BaseModeRuntime {
     /// 2. Run pre-execution checks (risk assessment, degradation) via strategy.
     /// 3. Attempt real agent execution (chat or run_task as determined by strategy).
     /// 4. Fall through to a placeholder response when no agent is available.
+    ///
+    // BLUE56-GAP-C01: Use Handle::current().spawn() instead of safe_block_on
+    // to avoid blocking the tokio thread in async contexts.
     pub fn run(
         &self,
         strategy: &dyn ModeStrategy,
         task: AgentTaskEnvelope,
     ) -> Result<AgentTaskResult> {
+        let handle = Handle::current();
         let task_id = task.task_id.clone();
         let objective = task.objective.clone();
         let phase = task.phase.clone();
@@ -221,7 +263,8 @@ impl BaseModeRuntime {
                 if let Some(agent) = registry.get(&name) {
                     if strategy.use_chat() {
                         let messages = build_chat_messages(&task);
-                        match execute_agent_chat(agent.as_ref(), messages, None, None) {
+                        let result = handle.block_on(execute_agent_chat_async(agent.as_ref(), messages, None, None));
+                        match result {
                             Ok(output) => {
                                 return Ok(AgentTaskResult {
                                     success: true,
@@ -257,7 +300,8 @@ impl BaseModeRuntime {
                             }
                         }
                     } else {
-                        match execute_agent_run_task(agent.as_ref(), task) {
+                        let result = handle.block_on(execute_agent_run_task_async(agent.as_ref(), task));
+                        match result {
                             Ok(result) => {
                                 return Ok(AgentTaskResult {
                                     pua_report: Some(mode_execution_report(

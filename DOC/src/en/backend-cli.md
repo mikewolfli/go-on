@@ -178,7 +178,7 @@ phase_max_inflight = 4
 |--------|---------|-------------|
 | `request_timeout_seconds` | 150 | Max time for a single task request within this phase |
 | `review_timeout_seconds` | 60 | Max time for review within this phase |
-| `review_timeout_policy` | `"reject"` | Action on review timeout (`"reject"` or `"warn"`) |
+| `review_timeout_policy` | `"reject"` | Action on review timeout (`"reject"`, `"degrade_single"`, or `"warn"`) |
 | `review_min_response_chars` | 12 | Minimum characters expected in a review response |
 | `cache_enabled` | true | Enable cache lookups within this phase |
 | `vector_enabled` | true | Enable vector store lookups within this phase |

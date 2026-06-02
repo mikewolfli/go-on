@@ -85,7 +85,7 @@ export class MultiAgentPanelProvider implements vscode.WebviewViewProvider {
     this.pollTimer = setInterval(() => {
       if (this._disposed) return;
       this._fetchAgents();
-    }, 3000);
+    }, 5000);
   }
 
   private _stopPolling(): void {

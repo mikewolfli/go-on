@@ -95,3 +95,58 @@ export interface CheckpointListResponse {
 export interface TaskPlanResponse {
   plan: Record<string, unknown>;
 }
+
+// ── BLUE56-E05: Missing key types ────────────────────────────────────────
+
+/** Record of a tool call made by an agent. */
+export interface ToolCall {
+  /** Name of the tool that was called. */
+  tool_name: string;
+  /** Arguments passed to the tool. */
+  arguments: Record<string, unknown>;
+  /** The agent that made the call. */
+  agent_name: string;
+  /** Optional result of the tool execution. */
+  result?: Record<string, unknown>;
+  /** Duration of the tool call in milliseconds. */
+  duration_ms: number;
+}
+
+/** Multimodal input types for rich chat requests. */
+export type MultimodalInput =
+  | { type: "text"; text: string }
+  | { type: "image"; image_url: string; detail?: "auto" | "low" | "high" }
+  | { type: "document"; data: string; mime_type: string; filename?: string }
+  | { type: "audio"; data: string; format: string };
+
+/** A single chunk in an SSE streaming response. */
+export interface StreamChunk {
+  /** The token text content. */
+  token: string;
+  /** Whether this is the final chunk. */
+  done: boolean;
+  /** Optional reasoning content. */
+  reasoning?: string;
+  /** Optional tool calls included in this chunk. */
+  tool_calls?: ToolCall[];
+  /** Chunk index in the stream. */
+  index: number;
+  /** Total characters sent so far. */
+  total_chars: number;
+}
+
+/** Metadata about an available agent. */
+export interface AgentInfo {
+  /** Unique agent name/ID. */
+  name: string;
+  /** Agent type (e.g. "copilot", "custom"). */
+  agent_type: string;
+  /** Human-readable description. */
+  description: string;
+  /** Available model names this agent can use. */
+  models?: string[];
+  /** Capability tags (e.g. "coding", "review"). */
+  capabilities?: string[];
+  /** Whether this agent is currently healthy. */
+  healthy?: boolean;
+}

@@ -18,6 +18,16 @@ import type {
 } from "./types";
 
 // ---------------------------------------------------------------------------
+// Endpoint constants
+// ---------------------------------------------------------------------------
+
+/** JSON-RPC endpoint path (replaces deprecated `/v1/responses`). */
+const JSON_RPC_ENDPOINT = "/rpc";
+
+/** Chat SSE streaming endpoint path (replaces deprecated `/acp/chat`). */
+const CHAT_STREAM_ENDPOINT = "/chat/stream";
+
+// ---------------------------------------------------------------------------
 // Internal error type
 // ---------------------------------------------------------------------------
 
@@ -49,7 +59,10 @@ export class GoOnClient {
 
   // ── Low-level JSON-RPC ─────────────────────────────────────────────
 
-  private async jsonRpc<T>(method: string, params: Record<string, unknown>): Promise<T> {
+  private async jsonRpc<T>(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<T> {
     const id = this.nextId++;
     const body = {
       jsonrpc: "2.0",
@@ -58,7 +71,7 @@ export class GoOnClient {
       params,
     };
 
-    const response = await fetch(`${this.baseUrl}/v1/responses`, {
+    const response = await fetch(`${this.baseUrl}${JSON_RPC_ENDPOINT}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -66,7 +79,10 @@ export class GoOnClient {
     });
 
     if (!response.ok) {
-      throw new GoOnError(response.status, `HTTP ${response.status}: ${response.statusText}`);
+      throw new GoOnError(
+        response.status,
+        `HTTP ${response.status}: ${response.statusText}`,
+      );
     }
 
     const json: unknown = await response.json();
@@ -94,7 +110,7 @@ export class GoOnClient {
     request: ChatRequest,
     signal?: AbortSignal,
   ): AsyncGenerator<Record<string, unknown>, void, unknown> {
-    const response = await fetch(`${this.baseUrl}/acp/chat`, {
+    const response = await fetch(`${this.baseUrl}${CHAT_STREAM_ENDPOINT}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...request, stream: true }),
@@ -102,7 +118,10 @@ export class GoOnClient {
     });
 
     if (!response.ok) {
-      throw new GoOnError(response.status, `HTTP ${response.status}: ${response.statusText}`);
+      throw new GoOnError(
+        response.status,
+        `HTTP ${response.status}: ${response.statusText}`,
+      );
     }
 
     const reader = response.body!.getReader();
@@ -144,7 +163,10 @@ export class GoOnClient {
       signal: AbortSignal.timeout(5_000),
     });
     if (!response.ok) {
-      throw new GoOnError(response.status, `HTTP ${response.status}: ${response.statusText}`);
+      throw new GoOnError(
+        response.status,
+        `HTTP ${response.status}: ${response.statusText}`,
+      );
     }
     return (await response.json()) as ApiResponse<HealthResponse>;
   }
@@ -239,8 +261,12 @@ export class GoOnClient {
   }
 
   /** conversation.rollback — roll back to a checkpoint. */
-  async conversationRollback(checkpointId: string): Promise<Record<string, unknown>> {
-    return this.jsonRpc("conversation.rollback", { checkpoint_id: checkpointId });
+  async conversationRollback(
+    checkpointId: string,
+  ): Promise<Record<string, unknown>> {
+    return this.jsonRpc("conversation.rollback", {
+      checkpoint_id: checkpointId,
+    });
   }
 
   // ── Workflow / Task ────────────────────────────────────────────────

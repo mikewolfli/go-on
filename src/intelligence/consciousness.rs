@@ -65,17 +65,23 @@ pub enum AwarenessMetricType {
     SocialAwareness,
     /// Awareness of one's own cognitive processes (thinking about thinking).
     MetaAwareness,
+    /// Error rate awareness — how often operations fail.
+    ErrorRate,
+    /// Task success rate awareness — how often tasks complete successfully.
+    TaskSuccessRate,
 }
 
 impl AwarenessMetricType {
-    /// All five metric types in a canonical ordering.
-    pub fn all() -> [AwarenessMetricType; 5] {
+    /// All metric types in a canonical ordering.
+    pub fn all() -> [AwarenessMetricType; 7] {
         [
             AwarenessMetricType::SelfAwareness,
             AwarenessMetricType::EnvironmentalAwareness,
             AwarenessMetricType::TemporalAwareness,
             AwarenessMetricType::SocialAwareness,
             AwarenessMetricType::MetaAwareness,
+            AwarenessMetricType::ErrorRate,
+            AwarenessMetricType::TaskSuccessRate,
         ]
     }
 }

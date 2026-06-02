@@ -188,11 +188,15 @@ pub struct TransportProfile {
 // Internal state
 // ---------------------------------------------------------------------------
 
+/// Maximum number of tracked dedup IDs to prevent unbounded memory growth.
+const MAX_DEDUP_IDS: usize = 10_000;
+
 struct TransportInner {
     config: ChannelConfig,
     queues: HashMap<TransportChannel, VecDeque<ChannelMessage>>,
     stats: HashMap<TransportChannel, ChannelStats>,
     sent_ids: HashSet<String>,
+    sent_ids_order: VecDeque<String>,
     last_activity_ms: u64,
     total_sent: u64,
     total_received: u64,
@@ -225,6 +229,7 @@ impl MultiChannelTransport {
                 queues: HashMap::new(),
                 stats: HashMap::new(),
                 sent_ids: HashSet::new(),
+                sent_ids_order: VecDeque::new(),
                 last_activity_ms: Self::now_ms(),
                 total_sent: 0,
                 total_received: 0,
@@ -273,9 +278,15 @@ impl MultiChannelTransport {
             }
         }
 
-        // Track sent ID (only if dedup enabled)
+        // Track sent ID (only if dedup enabled), evicting old entries when limit is reached
         if inner.config.enable_dedup {
             inner.sent_ids.insert(msg.id.clone());
+            inner.sent_ids_order.push_back(msg.id.clone());
+            if inner.sent_ids.len() > MAX_DEDUP_IDS {
+                if let Some(oldest) = inner.sent_ids_order.pop_front() {
+                    inner.sent_ids.remove(&oldest);
+                }
+            }
         }
 
         inner.total_sent += 1;

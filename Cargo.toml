@@ -110,12 +110,31 @@ profile-simple-server = [
 profile-multi-users-server = [
     "backend-postgres",
     "sub-bus-tool",
+    "sub-bus-tool-future",
+    "sub-bus-voter-future",
     "sub-bus-observability",
     "sub-bus-optimization",
     "sub-bus-memory",
     "sub-bus-protocol",
     "sub-bus-orchestration",
     "sub-bus-distributed-memory",
+]
+
+# Full-feature profile for local development and CI testing
+# Includes EVERY feature for maximum coverage
+profile-full = [
+    "backend-sqlite",
+    "sub-bus-tool",
+    "sub-bus-tool-future",
+    "sub-bus-voter-future",
+    "sub-bus-observability",
+    "sub-bus-optimization",
+    "sub-bus-memory",
+    "sub-bus-protocol",
+    "sub-bus-orchestration",
+    "sub-bus-multimodal",
+    "audio-whisper-openai",
+    "audio-vosk",
 ]
 
 # Backend implementations
@@ -128,6 +147,9 @@ temp_env = []
 # Legacy aliases (kept for backward compatibility)
 local-acp-sqlite = ["profile-local"]
 server-mcp-postgres = ["profile-multi-users-server"]
+
+# HashiCorp Vault integration (uses reqwest — no extra crate needed)
+vault = []
 
 [dependencies]
 tokio.workspace = true

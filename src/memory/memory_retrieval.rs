@@ -9,8 +9,6 @@
 //! - `retrieve_related_sessions(session_id)` – find memories by session
 //! - `MemoryLink` graph for cross-referencing related memories
 
-#![allow(dead_code)]
-
 //! - `link_memories(m1, m2, link_type)` – create bidirectional links
 
 use crate::memory::memory_persistence::{MemoryEntry, MemoryPersistence};
@@ -42,6 +40,7 @@ pub enum LinkType {
 
 impl LinkType {
     /// Human-readable label.
+    #[allow(dead_code)]
     pub fn label(&self) -> &str {
         match self {
             LinkType::Similar => "similar",
@@ -71,6 +70,7 @@ pub struct MemoryLink {
 
 impl MemoryLink {
     /// Create a new memory link.
+    #[allow(dead_code)]
     pub fn new(
         m1: impl Into<String>,
         m2: impl Into<String>,
@@ -98,6 +98,7 @@ impl MemoryLink {
 /// - A reference to the `MemoryPersistence` instance for tier access.
 /// - An in-memory link graph for fast traversal.
 /// - Session-to-memory mapping.
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct MemoryRetrievalEngine {
     /// Reference to the persistence manager.
@@ -109,6 +110,7 @@ pub struct MemoryRetrievalEngine {
 }
 
 /// Internal link graph with bidirectional indexing.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 struct LinkGraph {
     /// All links keyed by (m1, m2).
@@ -120,6 +122,7 @@ struct LinkGraph {
 }
 
 impl LinkGraph {
+    #[allow(dead_code)]
     fn insert(&mut self, link: MemoryLink) {
         let m1 = link.m1.clone();
         let m2 = link.m2.clone();
@@ -132,6 +135,7 @@ impl LinkGraph {
         self.reverse.entry(m2).or_default().push((m1, lt));
     }
 
+    #[allow(dead_code)]
     fn get_links_for(&self, id: &str) -> Vec<MemoryLink> {
         let mut result = Vec::new();
         // Outgoing
@@ -158,11 +162,13 @@ impl LinkGraph {
         result
     }
 
+    #[allow(dead_code)]
     fn has_link(&self, m1: &str, m2: &str) -> bool {
         self.links.contains_key(&(m1.to_string(), m2.to_string()))
             || self.links.contains_key(&(m2.to_string(), m1.to_string()))
     }
 
+    #[allow(dead_code)]
     fn len(&self) -> usize {
         self.links.len()
     }
@@ -173,6 +179,7 @@ impl LinkGraph {
     }
 }
 
+#[allow(dead_code)]
 impl MemoryRetrievalEngine {
     /// Create a new retrieval engine backed by the given persistence manager.
     pub fn new(persistence: MemoryPersistence) -> Self {
@@ -406,6 +413,7 @@ impl MemoryRetrievalEngine {
 // Helpers
 // ===========================================================================
 
+#[allow(dead_code)]
 fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

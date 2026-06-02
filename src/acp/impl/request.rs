@@ -570,6 +570,58 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
         }
     }
 
+    // BLUE56-D06: RBAC access check for all endpoints
+    let rbac_denied = if let Some(ref rbac) = server.governance_deps.rbac_enforcer {
+        if let Ok(guard) = rbac.read() {
+            let permission = method_to_permission(method.as_ref());
+            let principal = request_to_principal(&request);
+            match guard.check_access(&principal, &permission) {
+                crate::governance::rbac::AccessDecision::Deny { ref reason } => {
+                    Some(format!("Access denied: {}", reason))
+                }
+                crate::governance::rbac::AccessDecision::Escalate { ref required_role } => {
+                    Some(format!("Access requires role: {}", required_role))
+                }
+                crate::governance::rbac::AccessDecision::Allow => None,
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    // Guard is dropped here — safe to await
+    if let Some(error_msg) = rbac_denied {
+        let is_escalation = error_msg.contains("requires role");
+        tracing::warn!(target: "rbac", error = %error_msg, "RBAC check failed");
+        return send_error(
+            server,
+            request.id,
+            AcpErrorCode::AuthRequired as i64,
+            error_msg,
+            Some(serde_json::json!({
+                "code": if is_escalation { "ESCALATION_REQUIRED" } else { "ACCESS_DENIED" },
+            })),
+        )
+        .await;
+    }
+
+    // BLUE56-D07: Hash chain audit integrity — append to hash chain
+    if let Some(ref hca) = server.governance_deps.hash_chain_auditor {
+        if let Ok(mut hca_guard) = hca.lock() {
+            let payload = serde_json::json!({
+                "id": request.id.as_ref().map(|v| format!("{:?}", v)).unwrap_or_default(),
+                "method": method.as_ref(),
+                "params": request.params,
+                "timestamp_ms": std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis(),
+            });
+            let _ = hca_guard.append(payload);
+        }
+    }
+
     let pua_engine = PuaRuleEngine::new(server.governance_deps.pua_enforcement_plan.clone());
     let task_type = infer_task_type(method.as_ref(), &request.params);
     let task_context = TaskContext {
@@ -1796,6 +1848,54 @@ fn session_id_for_task(task: &str) -> String {
         compact.as_str()
     };
     tf("info.request.session_id_format", &[("id", id)])
+}
+
+/// Map a JSON-RPC method name to an RBAC permission (BLUE56-D06).
+fn method_to_permission(method: &str) -> crate::governance::rbac::Permission {
+    use crate::governance::rbac::Permission;
+    if method.starts_with("admin.") || method == "shutdown" || method == "maintenance.gc" {
+        Permission::Admin
+    } else if method.starts_with("governance.") || method.starts_with("tenant.") {
+        Permission::ManageUsers
+    } else if method.starts_with("config.") || method.starts_with("autotune.") {
+        Permission::ManageConfig
+    } else if method.starts_with("session/") || method.starts_with("chat/") || method == "session/prompt" {
+        Permission::Execute
+    } else if method.starts_with("metrics.") || method.starts_with("trace.") || method == "runtime.health" {
+        Permission::Read
+    } else {
+        // Default: require Execute for unknown methods
+        Permission::Execute
+    }
+}
+
+/// Extract a Principal from a JSON-RPC request for RBAC checks (BLUE56-D06).
+fn request_to_principal(request: &JsonRpcRequest) -> crate::governance::rbac::Principal {
+    use crate::governance::rbac::Principal;
+    let user_id = request
+        .params
+        .as_ref()
+        .and_then(|p| p.get("user_id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("anonymous")
+        .to_string();
+    let roles: Vec<&str> = request
+        .params
+        .as_ref()
+        .and_then(|p| p.get("roles"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .collect()
+        })
+        .unwrap_or_else(|| vec!["user"]);
+    let tenant_id = request
+        .params
+        .as_ref()
+        .and_then(|p| p.get("tenant_id"))
+        .and_then(|v| v.as_str());
+    Principal::new(&user_id, roles, tenant_id)
 }
 
 #[cfg(test)]

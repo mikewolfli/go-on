@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 //! Code Repository Analyzer (GAP-B52-30)
 //!
 //! Provides repository cloning, build-graph generation, type-index extraction,
@@ -37,6 +35,7 @@ use tracing::info;
 pub const REPO_PREFIX: &str = "repo:";
 
 /// Default clone directory name under temp.
+#[allow(dead_code)]
 const CLONE_DIR_PREFIX: &str = "go-on-repo-";
 
 // ---------------------------------------------------------------------------
