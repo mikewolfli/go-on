@@ -5,7 +5,6 @@ use crate::acp::prelude::now_ts;
 
 #[derive(Debug, Clone)]
 pub(crate) struct MemoryCachedResponse {
-    #[allow(dead_code)] // F-GAP-49 — accessed via clone from get()
     pub(crate) response_text: String,
     expires_at: i64,
 }
@@ -16,7 +15,6 @@ pub struct MemoryResponseCache {
 }
 
 impl MemoryResponseCache {
-    #[allow(dead_code)] // F-GAP-49 — used by agent response cache layer
     pub(crate) fn get(&self, key: &str) -> Option<MemoryCachedResponse> {
         let now = now_ts();
         let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
@@ -60,7 +58,6 @@ impl MemoryResponseCache {
         self.inner.lock().map(|guard| guard.len()).unwrap_or(0)
     }
 
-    #[allow(dead_code)] // F-GAP-49 — used to store agent responses
     pub(crate) fn put(
         &self,
         key: String,

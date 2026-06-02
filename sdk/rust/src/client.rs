@@ -102,8 +102,8 @@ impl GoOnClientBuilder {
 
 /// Async client for go-on ACP JSON-RPC endpoints.
 ///
-/// Targets `POST {base_url}/v1/responses` for JSON-RPC calls
-/// and direct HTTP GET for `/health`.
+/// Targets `POST {base_url}/rpc` for JSON-RPC calls
+/// and `/chat/stream` for SSE streaming chat.
 ///
 /// Phase 4 coverage: runtime, governance, observability, reliability,
 /// checkpoint, workflow, learning, optimization, and streaming chat.
@@ -118,6 +118,7 @@ pub struct GoOnClient {
 
 impl GoOnClient {
     /// Create a new client targeting the go-on HTTP endpoint.
+    /// Uses `max_retries: 3` and `retry_delay: 1s` (aligned with Builder defaults).
     ///
     /// Example:
     /// ```ignore
@@ -128,8 +129,8 @@ impl GoOnClient {
             base_url: base_url.into(),
             http: reqwest::Client::new(),
             timeout: Some(Duration::from_secs(30)),
-            max_retries: 0,
-            retry_delay: Duration::from_millis(500),
+            max_retries: 3,
+            retry_delay: Duration::from_secs(1),
         }
     }
 
@@ -266,25 +267,54 @@ impl GoOnClient {
             }
 
             match req.json(&payload).send().await {
-                Ok(resp) => match resp.json::<Value>().await {
-                    Ok(val) => {
-                        if let Some(err) = val.get("error") {
-                            return Err(SdkError::JsonRpc {
-                                code: err.get("code").and_then(Value::as_i64).unwrap_or(-1),
-                                message: err
-                                    .get("message")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("unknown")
-                                    .to_string(),
-                            });
+                Ok(resp) => {
+                    let status = resp.status();
+                    // Non-retryable client errors: 4xx → fail immediately
+                    if status.is_client_error() {
+                        return match resp.json::<Value>().await {
+                            Ok(val) => {
+                                let code = val.get("error").and_then(|e| e.get("code")).and_then(Value::as_i64).unwrap_or(-1);
+                                let msg = val.get("error").and_then(|e| e.get("message")).and_then(Value::as_str).unwrap_or("unknown");
+                                Err(SdkError::JsonRpc { code, message: msg.to_string() })
+                            }
+                            Err(_) => Err(SdkError::UnexpectedShape(format!(
+                                "HTTP {} {}: non-JSON response",
+                                status.as_u16(),
+                                status.canonical_reason().unwrap_or("")
+                            ))),
+                        };
+                    }
+                    // Server errors: 5xx → retry
+                    if status.is_server_error() {
+                        last_error = Some(SdkError::UnexpectedShape(format!(
+                            "server error (HTTP {})",
+                            status.as_u16()
+                        )));
+                        continue;
+                    }
+                    // Success: 2xx → parse JSON
+                    match resp.json::<Value>().await {
+                        Ok(val) => {
+                            if let Some(err) = val.get("error") {
+                                return Err(SdkError::JsonRpc {
+                                    code: err.get("code").and_then(Value::as_i64).unwrap_or(-1),
+                                    message: err
+                                        .get("message")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("unknown")
+                                        .to_string(),
+                                });
+                            }
+                            return Ok(val.get("result").cloned().unwrap_or(Value::Null));
                         }
-                        return Ok(val.get("result").cloned().unwrap_or(Value::Null));
+                        Err(e) => {
+                            // JSON parse failure on 2xx is non-retryable
+                            return Err(SdkError::Http(e));
+                        }
                     }
-                    Err(e) => {
-                        last_error = Some(SdkError::Http(e));
-                    }
-                },
+                }
                 Err(e) => {
+                    // Transport errors (timeout, connection refused) → retry
                     last_error = Some(SdkError::Http(e));
                 }
             }

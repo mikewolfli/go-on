@@ -10,9 +10,10 @@ User=go-on
 Group=go-on
 WorkingDirectory=/opt/go-on/backend
 
+# ── Environment ────────────────────────────────────────────────────
+# Store sensitive secrets in /opt/go-on/backend/environment (chmod 600)
+EnvironmentFile=-/opt/go-on/backend/environment
 Environment="RUST_LOG=warn"
-Environment="GO_ON_SERVER_API_KEY=change-me-to-a-random-secret"
-# Environment="DEEPSEEK_API_KEY=sk-xxxxx"
 
 ExecStart=/opt/go-on/backend/go-on \
     -c /opt/go-on/backend/config.toml \

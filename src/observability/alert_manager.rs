@@ -106,7 +106,6 @@ pub fn default_alert_rules() -> Vec<AlertRule> {
 }
 
 /// Webhook configuration for alert notification
-#[allow(dead_code)] // F-GAP-49: Webhook dispatch not yet active in production
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WebhookConfig {
     pub url: String,

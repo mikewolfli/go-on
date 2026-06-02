@@ -1,14 +1,11 @@
+import * as crypto from "crypto";
+
 /**
  * Generate a cryptographic nonce string for use in CSP headers.
+ * Uses Node.js crypto.randomBytes for cryptographically secure nonces.
  */
 export function getNonce(): string {
-  let text = "";
-  const possible =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) {
-    text += possible.charAt(Math.floor(Math.random() * possible.length));
-  }
-  return text;
+  return crypto.randomBytes(32).toString("base64url");
 }
 
 /**

@@ -267,7 +267,9 @@ impl SkillsFolderIndex {
         // blocking runtime on every fetch. Falls back to a new Runtime
         // only when no tokio runtime is present (e.g., in tests).
         let result = match tokio::runtime::Handle::try_current() {
-            Ok(h) => h.block_on(fetch_skills_from_url(url)),
+            Ok(h) => tokio::task::block_in_place(move || {
+                h.block_on(fetch_skills_from_url(url))
+            }),
             Err(_) => {
                 warn!(
                     "no tokio runtime found for fetching {}; creating temporary runtime",

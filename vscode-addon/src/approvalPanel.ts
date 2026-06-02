@@ -85,13 +85,15 @@ export class ApprovalPanelProvider implements vscode.WebviewViewProvider {
     this._startPolling();
   }
 
+  private readonly POLL_INTERVAL_MS = 5000;
+
   private _startPolling(): void {
     this._stopPolling();
     this._fetchPendingRequests();
     this.pollTimer = setInterval(() => {
       if (this._disposed) return;
       this._fetchPendingRequests();
-    }, 5000);
+    }, this.POLL_INTERVAL_MS);
   }
 
   private _stopPolling(): void {
@@ -124,9 +126,7 @@ export class ApprovalPanelProvider implements vscode.WebviewViewProvider {
           item.description ?? item.action ?? "No description",
         ),
         details: item.details as Record<string, unknown> | undefined,
-        timestamp: String(
-          item.timestamp ?? new Date().toISOString(),
-        ),
+        timestamp: String(item.timestamp ?? new Date().toISOString()),
       }));
 
       this._view.webview.postMessage({
@@ -139,9 +139,7 @@ export class ApprovalPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private _normalizeRiskLevel(
-    level: string,
-  ): ApprovalRequest["riskLevel"] {
+  private _normalizeRiskLevel(level: string): ApprovalRequest["riskLevel"] {
     const l = level.toLowerCase();
     if (l.includes("critical") || l === "critical") return "critical";
     if (l.includes("high")) return "high";

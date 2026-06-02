@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 
 use super::config_handlers::build_trace_payload;
 use super::prompts_pack::{build_prompts_get_tool, build_prompts_list_tool};
@@ -10,6 +10,16 @@ use crate::acp::helpers::tool_governance::{
 use crate::orchestration::skill::SkillRegistry;
 use crate::orchestration::skill_discovery::SkillDiscovery;
 use crate::orchestration::skill_import::{SkillImportPolicy, SkillImportRequest, SkillImportStore};
+
+/// Shared HTTP client reused across all tool calls to avoid creating
+/// a new TLS session and connection pool on every request.
+pub(crate) static SHARED_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent("go-on/1.0")
+        .build()
+        .expect("failed to build shared reqwest::Client for tool calls")
+});
 
 /// Global `SkillDiscovery` engine, lazily initialized on first `skill-finder` call.
 static SKILL_DISCOVERY: OnceLock<Mutex<SkillDiscovery>> = OnceLock::new();
@@ -318,8 +328,13 @@ pub(crate) async fn execute_mcp_tool_call(
     }
 
     // BLUE56-C05: ChaosEngine fault injection check
-    #[cfg(feature = "temp_env")]
-    if let Some(fault_type) = crate::resilience::chaos::ChaosEngine::default().check_fault(name) {
+    static CHAOS: LazyLock<crate::resilience::chaos::ChaosEngine> = LazyLock::new(|| {
+        let engine = crate::resilience::chaos::ChaosEngine::new();
+        // Enabled via environment variable
+        engine.set_enabled(std::env::var("GO_ON_CHAOS_ENABLED").as_deref() == Ok("1"));
+        engine
+    });
+    if let Some(fault_type) = CHAOS.check_fault(name) {
         tracing::warn!(
             target: "chaos",
             tool = %name,
@@ -537,11 +552,7 @@ pub(crate) async fn execute_mcp_tool_call(
                 .clamp(1, 20) as usize;
 
             // Try GitHub API first, with a short timeout
-            let client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
-                .user_agent("go-on/1.0")
-                .build()
-                .context("failed to build HTTP client for GitHub search")?;
+            let client = &SHARED_HTTP_CLIENT;
 
             let encoded_query = query.replace(" ", "+");
 

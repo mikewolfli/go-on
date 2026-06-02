@@ -15,7 +15,6 @@ use tracing::{info, warn};
 // Errors
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
 #[derive(Debug, Error)]
 pub enum MtlsError {
     #[error("certificate not found: {0}")]
@@ -36,6 +35,7 @@ pub enum MtlsError {
     #[error("CN not in allowed list: {0}")]
     CnNotAllowed(String),
 
+    #[allow(dead_code)] // Reserved for cert expiry monitoring
     #[error("certificate expired at {0}")]
     CertExpired(String),
 

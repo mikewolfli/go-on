@@ -437,7 +437,11 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
               "Later",
             );
             if (action === "Open Settings") {
-              vscode.commands.executeCommand("go-on.openSettings");
+              Promise.resolve(
+                vscode.commands.executeCommand("go-on.openSettings"),
+              ).catch((err: unknown) => {
+                console.error("Failed to open settings:", err);
+              });
             }
             return;
           }
@@ -528,7 +532,11 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
           "Later",
         );
         if (action === "Open Settings") {
-          vscode.commands.executeCommand("go-on.openSettings");
+          Promise.resolve(
+            vscode.commands.executeCommand("go-on.openSettings"),
+          ).catch((err: unknown) => {
+            console.error("Failed to open settings:", err);
+          });
         }
         return;
       }

@@ -261,9 +261,12 @@ impl BaseModeRuntime {
 
             if let Some(name) = agent_name {
                 if let Some(agent) = registry.get(&name) {
-                    if strategy.use_chat() {
+                        if strategy.use_chat() {
                         let messages = build_chat_messages(&task);
-                        let result = handle.block_on(execute_agent_chat_async(agent.as_ref(), messages, None, None));
+                        let agent_clone = agent.clone();
+                        let result = tokio::task::block_in_place(|| {
+                            handle.block_on(execute_agent_chat_async(agent_clone.as_ref(), messages, None, None))
+                        });
                         match result {
                             Ok(output) => {
                                 return Ok(AgentTaskResult {
@@ -300,7 +303,10 @@ impl BaseModeRuntime {
                             }
                         }
                     } else {
-                        let result = handle.block_on(execute_agent_run_task_async(agent.as_ref(), task));
+                        let agent_clone = agent.clone();
+                        let result = tokio::task::block_in_place(|| {
+                            handle.block_on(execute_agent_run_task_async(agent_clone.as_ref(), task))
+                        });
                         match result {
                             Ok(result) => {
                                 return Ok(AgentTaskResult {

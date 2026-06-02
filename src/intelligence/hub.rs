@@ -24,10 +24,12 @@ use crate::intelligence::consensus::{ConsensusEngine, ConsensusNode, ConsensusVo
 // F-GAP-49 — reserved for future use
 pub static INTEL_HUB_ACTIVATIONS: AtomicU64 = AtomicU64::new(0);
 /// How many consensus rounds have been started.
+#[allow(dead_code)]
 pub static CONSENSUS_ROUNDS: AtomicU64 = AtomicU64::new(0);
 /// How many rationalization evaluations were performed.
 pub static RATIONALIZATION_COUNT: AtomicU64 = AtomicU64::new(0);
 /// How many audit entries were recorded.
+#[allow(dead_code)]
 pub static AUDIT_ENTRY_COUNT: AtomicU64 = AtomicU64::new(0);
 
 // ── Global instances ──────────────────────────────────────────────────────
@@ -38,6 +40,7 @@ static GLOBAL_CONSENSUS: LazyLock<Mutex<ConsensusEngine>> =
 static GLOBAL_RATIONALIZATION: LazyLock<Mutex<SelfRationalizationGuard>> =
     LazyLock::new(|| Mutex::new(SelfRationalizationGuard::new(0.3)));
 
+#[allow(dead_code)]
 static GLOBAL_AUDIT: LazyLock<ThreadSafeAuditLog> = LazyLock::new(|| {
     let audit_path: std::path::PathBuf = std::env::temp_dir().join("goon-audit.ndjson");
     ThreadSafeAuditLog::new_with_path(10_000, audit_path)
@@ -194,6 +197,8 @@ pub fn consensus_vote_on(
 
 /// Evaluate a decision using the rationalization guard with multi-factor risk analysis.
 ///
+/// Multi-factor risk scoring for agent decisions.
+///
 /// Analyzes:
 /// - Task complexity (via token count, keywords)
 /// - Agent reputation (via historical success rate, if available)
@@ -201,8 +206,6 @@ pub fn consensus_vote_on(
 /// - Risk keywords in task description
 ///
 /// Returns (is_justified, explanation) where explanation describes concerns.
-#[allow(dead_code)]
-// F-GAP-49 — reserved for future use
 pub fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (bool, String) {
     // Multi-factor risk scoring
     let risk_keywords = [

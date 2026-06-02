@@ -309,11 +309,13 @@ impl KeyRotator for EnvRotator {
 
 /// Rotator backed by HashiCorp Vault.
 ///
-/// When the `vault` feature is enabled, uses the `vaultrs` crate to connect
+/// When the `vault` feature is enabled, uses reqwest to connect
 /// to a HashiCorp Vault server for key management. Without it, all operations
 /// return `BackendError("Vault not configured")`.
+#[allow(dead_code)]
 pub struct VaultRotator {
     endpoint: String,
+    #[allow(dead_code)]
     token: String,
     mount_path: String,
     #[cfg(feature = "vault")]
@@ -326,6 +328,7 @@ impl VaultRotator {
     /// When the `vault` feature is enabled, uses reqwest to call the
     /// HashiCorp Vault REST API. Without it, all operations return
     /// `BackendError("Vault not configured")`.
+    #[allow(dead_code)]
     pub fn new(endpoint: String, token: String, mount_path: String) -> Self {
         Self {
             endpoint,
@@ -403,6 +406,8 @@ impl KeyRotator for VaultRotator {
             tracing::info!(target: "vault", key = %key_id, "VaultRotator: key created");
             return Ok(entry);
         }
+        #[allow(unused_variables)]
+        let _ = (key_id, algorithm);
         Err(SecretError::BackendError(format!(
             "Vault not configured: would create key {} at {}/{}",
             key_id, self.endpoint, self.mount_path
@@ -446,6 +451,8 @@ impl KeyRotator for VaultRotator {
             tracing::debug!(target: "vault", key = %entry.key_id, "VaultRotator: key stored");
             return Ok(());
         }
+        #[allow(unused_variables)]
+        let _ = entry;
         Err(SecretError::BackendError(
             "Vault not configured: store".into(),
         ))
@@ -489,6 +496,8 @@ impl KeyRotator for VaultRotator {
             tracing::debug!(target: "vault", key = %key_id, "VaultRotator: key retrieved");
             return Ok(Some(entry));
         }
+        #[allow(unused_variables)]
+        let _ = key_id;
         Err(SecretError::BackendError(
             "Vault not configured: retrieve".into(),
         ))
@@ -517,9 +526,11 @@ impl KeyRotator for VaultRotator {
                     status
                 )));
             }
-            tracing::info!(target: "vault", key = %key_id, "VaultRotator: key deleted");
+            tracing::debug!(target: "vault", key = %key_id, "VaultRotator: key deleted");
             return Ok(());
         }
+        #[allow(unused_variables)]
+        let _ = key_id;
         Err(SecretError::BackendError(
             "Vault not configured: delete".into(),
         ))

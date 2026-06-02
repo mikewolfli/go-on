@@ -1680,6 +1680,10 @@ impl BrainLoop {
     /// Creates a temporary single-threaded tokio runtime to drive the
     /// async loop to completion.  Prefer calling [`run_async`] directly
     /// when already in an async context.
+    ///
+    /// ⚠️  Do NOT call from an async context — creating a nested runtime
+    /// will panic. Use `run_async` directly instead.
+    #[deprecated(since = "1.1.0", note = "use run_async instead to avoid nested runtime creation")]
     pub fn run(&self, task: &str, steps: Vec<BrainLoopStep>) -> anyhow::Result<BrainLoopProfile> {
         let bl = self.clone();
         let task = task.to_string();

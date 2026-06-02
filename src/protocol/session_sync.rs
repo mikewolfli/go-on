@@ -84,6 +84,15 @@ pub struct CouncilProposal {
 // SharedSession – thread-safe, versioned session data
 // ---------------------------------------------------------------------------
 
+/// Maximum number of chat messages kept per session (oldest evicted first).
+const MAX_CHAT_HISTORY: usize = 1000;
+
+/// Maximum number of active tasks tracked per session.
+const MAX_ACTIVE_TASKS: usize = 200;
+
+/// Maximum number of council proposals kept per session.
+const MAX_COUNCIL_PROPOSALS: usize = 200;
+
 /// A session whose state is guarded by an `RwLock` and wrapped in `Arc` so it
 /// can be shared across tasks and frontend handlers.
 ///
@@ -117,6 +126,19 @@ impl SharedSession {
     fn touch(&mut self) {
         self.last_active = now_ms();
         self.version += 1;
+    }
+
+    /// Evict oldest entries when capacity limits are exceeded.
+    fn enforce_capacity(&mut self) {
+        while self.chat_history.len() > MAX_CHAT_HISTORY {
+            self.chat_history.remove(0);
+        }
+        while self.active_tasks.len() > MAX_ACTIVE_TASKS {
+            self.active_tasks.remove(0);
+        }
+        while self.council_proposals.len() > MAX_COUNCIL_PROPOSALS {
+            self.council_proposals.remove(0);
+        }
     }
 }
 
@@ -305,10 +327,7 @@ impl SessionRegistry {
 
     // ── Mutations (bump version) ─────────────────────────────────────────
 
-    /// Append a chat message to a session.
-    ///
-    /// Returns `Ok(new_version)` on success, or `Err` if the session does not
-    /// exist.
+    /// Append a message to the session's chat history with capacity enforcement.
     pub async fn append_message(
         &self,
         session_id: &str,
@@ -319,18 +338,26 @@ impl SessionRegistry {
             .get_mut(session_id)
             .ok_or_else(|| format!("session {session_id} not found"))?;
         session.chat_history.push(message);
+        // Enforce chat_history capacity: oldest entries evicted first
+        while session.chat_history.len() > MAX_CHAT_HISTORY {
+            session.chat_history.remove(0);
+        }
         session.touch();
         let new_version = session.version;
         Ok(new_version)
     }
 
-    /// Add a new active task to a session.
+    /// Add an active task with capacity enforcement.
     pub async fn add_task(&self, session_id: &str, task: ActiveTask) -> Result<u64, String> {
         let mut sessions = self.sessions.write().await;
         let session = sessions
             .get_mut(session_id)
             .ok_or_else(|| format!("session {session_id} not found"))?;
         session.active_tasks.push(task);
+        // Enforce active_tasks capacity
+        while session.active_tasks.len() > MAX_ACTIVE_TASKS {
+            session.active_tasks.remove(0);
+        }
         session.touch();
         Ok(session.version)
     }
@@ -360,7 +387,7 @@ impl SessionRegistry {
         Ok(session.version)
     }
 
-    /// Add a council proposal to a session.
+    /// Add a council proposal with capacity enforcement.
     pub async fn add_proposal(
         &self,
         session_id: &str,
@@ -371,6 +398,10 @@ impl SessionRegistry {
             .get_mut(session_id)
             .ok_or_else(|| format!("session {session_id} not found"))?;
         session.council_proposals.push(proposal);
+        // Enforce council_proposals capacity
+        while session.council_proposals.len() > MAX_COUNCIL_PROPOSALS {
+            session.council_proposals.remove(0);
+        }
         session.touch();
         Ok(session.version)
     }

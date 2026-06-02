@@ -6,7 +6,7 @@
 //! wrapper that selects between them at runtime.
 
 use sha2::{Digest, Sha256};
-use tracing::{info, warn};
+use tracing::{debug, error, info, warn};
 
 // ---------------------------------------------------------------------------
 // Trait
@@ -151,10 +151,21 @@ impl OpenAiEmbeddingProvider {
             .unwrap_or_default();
         Self { config, client }
     }
+
+    /// Check if this provider has an API key configured (not empty).
+    pub fn has_api_key(&self) -> bool {
+        !self.config.api_key.is_empty() && self.config.api_key != "sk-placeholder"
+    }
 }
 
 impl EmbeddingProvider for OpenAiEmbeddingProvider {
     fn embed(&self, text: &str) -> Vec<f32> {
+        // If no real API key is configured, use local hash fallback silently
+        if !self.has_api_key() {
+            debug!("OpenAiEmbeddingProvider: no API key configured, using local hash");
+            return local_hash_embed(text, self.config.dimensions);
+        }
+
         let url = format!("{}/embeddings", self.config.api_base.trim_end_matches('/'));
         let body = serde_json::json!({
             "model": self.config.model,
@@ -170,11 +181,12 @@ impl EmbeddingProvider for OpenAiEmbeddingProvider {
         {
             Ok(resp) => {
                 if !resp.status().is_success() {
-                    warn!(
-                        "OpenAiEmbeddingProvider: API returned {} — falling back to local hash",
+                    error!(
+                        "OpenAiEmbeddingProvider: API returned {} — real embedding failed",
                         resp.status()
                     );
-                    return local_hash_embed(text, self.config.dimensions);
+                    // Return zero vector to signal failure (not silent hash fallback)
+                    return vec![0.0; self.config.dimensions];
                 }
                 match resp.json::<serde_json::Value>() {
                     Ok(json) => {
@@ -187,34 +199,246 @@ impl EmbeddingProvider for OpenAiEmbeddingProvider {
                             if vec.len() == self.config.dimensions {
                                 return vec;
                             }
-                            warn!(
-                                "OpenAiEmbeddingProvider: expected {} dimensions, got {} — falling back to local hash",
+                            error!(
+                                "OpenAiEmbeddingProvider: expected {} dimensions, got {}",
                                 self.config.dimensions,
                                 vec.len()
                             );
                         } else {
-                            warn!(
-                                "OpenAiEmbeddingProvider: unexpected response shape — falling back to local hash"
+                            error!(
+                                "OpenAiEmbeddingProvider: unexpected response shape"
                             );
                         }
                     }
                     Err(e) => {
-                        warn!(
-                            "OpenAiEmbeddingProvider: failed to parse response: {} — falling back to local hash",
+                        error!(
+                            "OpenAiEmbeddingProvider: failed to parse response: {}",
                             e
                         );
                     }
                 }
             }
             Err(e) => {
-                warn!(
-                    "OpenAiEmbeddingProvider: request failed: {} — falling back to local hash",
+                error!(
+                    "OpenAiEmbeddingProvider: HTTP error: {} — returning zero vector",
                     e
                 );
             }
         }
+        // Return zero vector to signal failure — caller can detect this
+        vec![0.0; self.config.dimensions]
+    }
+}
 
+// ---------------------------------------------------------------------------
+// Ollama local embedding provider — calls a local Ollama instance
+// ---------------------------------------------------------------------------
+// Ollama supports many embedding models locally:
+//   ollama pull nomic-embed-text    # 通用embedding (∼0.5GB)
+//   ollama pull qwen2.5:7b          # Qwen 2.5 for embedding (∼4.5GB)
+//   ollama pull bge-m3              # BGE multilingual (∼2.2GB)
+// Endpoint: POST http://localhost:11434/api/embed
+// ---------------------------------------------------------------------------
+
+/// Configuration for the Ollama local embedding provider.
+pub struct OllamaEmbeddingConfig {
+    /// Ollama server URL (default: http://localhost:11434).
+    pub base_url: String,
+    /// Model name, e.g. "nomic-embed-text", "qwen2.5:7b".
+    pub model: String,
+    /// Dimensionality of the output vectors.
+    pub dimensions: usize,
+}
+
+impl Default for OllamaEmbeddingConfig {
+    fn default() -> Self {
+        Self {
+            base_url: std::env::var("OLLAMA_BASE_URL")
+                .unwrap_or_else(|_| "http://localhost:11434".to_string()),
+            model: std::env::var("OLLAMA_EMBEDDING_MODEL")
+                .unwrap_or_else(|_| "nomic-embed-text".to_string()),
+            dimensions: std::env::var("OLLAMA_EMBEDDING_DIMENSIONS")
+                .ok().and_then(|v| v.parse().ok())
+                .unwrap_or(768),
+        }
+    }
+}
+
+/// Embedding provider backed by a local Ollama instance.
+pub struct OllamaEmbeddingProvider {
+    config: OllamaEmbeddingConfig,
+    client: reqwest::blocking::Client,
+}
+
+impl OllamaEmbeddingProvider {
+    pub fn new(config: OllamaEmbeddingConfig) -> Self {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .unwrap_or_default();
+        Self { config, client }
+    }
+}
+
+impl EmbeddingProvider for OllamaEmbeddingProvider {
+    fn embed(&self, text: &str) -> Vec<f32> {
+        let url = format!("{}/api/embed", self.config.base_url.trim_end_matches('/'));
+        let body = serde_json::json!({
+            "model": self.config.model,
+            "input": text,
+        });
+
+        match self.client.post(&url).json(&body).send() {
+            Ok(resp) => {
+                if !resp.status().is_success() {
+                    error!(
+                        "OllamaEmbeddingProvider: server returned {} — is ollama running?",
+                        resp.status()
+                    );
+                    return local_hash_embed(text, self.config.dimensions);
+                }
+                match resp.json::<serde_json::Value>() {
+                    Ok(json) => {
+                        // Ollama /api/embed returns: {"model":"...","embeddings":[[...]]}
+                        if let Some(embeddings) = json["embeddings"].as_array() {
+                            if let Some(embedding) = embeddings.first().and_then(|v| v.as_array()) {
+                                let vec: Vec<f32> = embedding
+                                    .iter()
+                                    .filter_map(|v| v.as_f64().map(|f| f as f32))
+                                    .collect();
+                                if !vec.is_empty() {
+                                    return vec;
+                                }
+                            }
+                        }
+                        error!("OllamaEmbeddingProvider: unexpected response: {:?}", json);
+                    }
+                    Err(e) => {
+                        error!("OllamaEmbeddingProvider: failed to parse response: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                error!(
+                    "OllamaEmbeddingProvider: cannot connect to {} — {}. Is ollama running?",
+                    self.config.base_url, e
+                );
+            }
+        }
         local_hash_embed(text, self.config.dimensions)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Qwen3 (DashScope) embedding provider — calls the Alibaba Cloud DashScope API
+// ---------------------------------------------------------------------------
+
+/// Configuration for the Qwen3 (DashScope) embedding provider.
+pub struct Qwen3EmbeddingConfig {
+    /// DashScope API key (from https://dashscope.aliyun.com/).
+    pub api_key: String,
+    /// Model name, e.g. "text-embedding-v3" (Qwen3 official embedding).
+    pub model: String,
+    /// Dimensionality of the output vectors (v3 supports 768, 1024, 1536).
+    pub dimensions: usize,
+}
+
+impl Default for Qwen3EmbeddingConfig {
+    fn default() -> Self {
+        Self {
+            api_key: std::env::var("DASHSCOPE_API_KEY").unwrap_or_default(),
+            model: "text-embedding-v3".to_string(),
+            dimensions: 1024,
+        }
+    }
+}
+
+/// Embedding provider backed by Alibaba Cloud DashScope API (Qwen3).
+/// https://help.aliyun.com/zh/model-studio/developer-reference/text-embedding
+pub struct Qwen3EmbeddingProvider {
+    config: Qwen3EmbeddingConfig,
+    client: reqwest::blocking::Client,
+}
+
+impl Qwen3EmbeddingProvider {
+    pub fn new(config: Qwen3EmbeddingConfig) -> Self {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_default();
+        Self { config, client }
+    }
+
+    fn has_api_key(&self) -> bool {
+        !self.config.api_key.is_empty() && self.config.api_key != "sk-placeholder"
+    }
+}
+
+impl EmbeddingProvider for Qwen3EmbeddingProvider {
+    fn embed(&self, text: &str) -> Vec<f32> {
+        if !self.has_api_key() {
+            debug!("Qwen3EmbeddingProvider: no DASHSCOPE_API_KEY configured, using local hash");
+            return local_hash_embed(text, self.config.dimensions);
+        }
+
+        let url = "https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding";
+        let body = serde_json::json!({
+            "model": self.config.model,
+            "input": {
+                "texts": [text]
+            },
+            "parameters": {
+                "dimension": self.config.dimensions
+            }
+        });
+
+        match self
+            .client
+            .post(url)
+            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .json(&body)
+            .send()
+        {
+            Ok(resp) => {
+                if !resp.status().is_success() {
+                    error!(
+                        "Qwen3EmbeddingProvider: DashScope API returned {} — real embedding failed",
+                        resp.status()
+                    );
+                    return vec![0.0; self.config.dimensions];
+                }
+                match resp.json::<serde_json::Value>() {
+                    Ok(json) => {
+                        // DashScope response: output.embeddings[0].embedding
+                        if let Some(embedding) = json
+                            .pointer("/output/embeddings/0/embedding")
+                            .and_then(|v| v.as_array())
+                        {
+                            let vec: Vec<f32> = embedding
+                                .iter()
+                                .filter_map(|v| v.as_f64().map(|f| f as f32))
+                                .collect();
+                            if vec.len() == self.config.dimensions {
+                                return vec;
+                            }
+                            error!(
+                                "Qwen3EmbeddingProvider: expected {} dimensions, got {}",
+                                self.config.dimensions, vec.len()
+                            );
+                        } else {
+                            error!("Qwen3EmbeddingProvider: unexpected response shape");
+                        }
+                    }
+                    Err(e) => {
+                        error!("Qwen3EmbeddingProvider: failed to parse response: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Qwen3EmbeddingProvider: HTTP error: {} — returning zero vector", e);
+            }
+        }
+        vec![0.0; self.config.dimensions]
     }
 }
 
@@ -222,13 +446,17 @@ impl EmbeddingProvider for OpenAiEmbeddingProvider {
 // Configurable embedding provider — switches between providers at runtime
 // ---------------------------------------------------------------------------
 
-/// Selection of which embedding backend to use.
+// Selection of which embedding backend to use.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmbeddingBackend {
     /// Use the local minhash fallback.
     Local,
     /// Use the OpenAI API.
     OpenAi,
+    /// Use the Qwen3 (DashScope) API.
+    Qwen3,
+    /// Use a local Ollama instance.
+    Ollama,
 }
 
 /// Runtime-configurable embedding provider that dispatches to either a local
@@ -257,13 +485,26 @@ impl ConfigurableEmbeddingProvider {
     /// which produces vectors of `dimensions` length.
     ///
     /// When `backend` is `OpenAi`, the provider calls the OpenAI API using
-    /// the provided config.  If the API is unreachable or returns an error,
-    /// it transparently falls back to the local hash provider.
-    pub fn new(backend: EmbeddingBackend, openai_config: Option<OpenAiEmbeddingConfig>) -> Self {
+    /// the provided config.
+    ///
+    /// When `backend` is `Qwen3`, the provider calls the Alibaba Cloud
+    /// DashScope API using the Qwen3 `text-embedding-v3` model.
+    pub fn new(
+        backend: EmbeddingBackend,
+        openai_config: Option<OpenAiEmbeddingConfig>,
+        qwen3_config: Option<Qwen3EmbeddingConfig>,
+        ollama_config: Option<OllamaEmbeddingConfig>,
+    ) -> Self {
         let dimensions = match &backend {
             EmbeddingBackend::Local => 128,
             EmbeddingBackend::OpenAi => {
                 openai_config.as_ref().map(|c| c.dimensions).unwrap_or(1536)
+            }
+            EmbeddingBackend::Qwen3 => {
+                qwen3_config.as_ref().map(|c| c.dimensions).unwrap_or(1024)
+            }
+            EmbeddingBackend::Ollama => {
+                ollama_config.as_ref().map(|c| c.dimensions).unwrap_or(768)
             }
         };
         let inner: Box<dyn EmbeddingProvider> = match &backend {
@@ -281,6 +522,22 @@ impl ConfigurableEmbeddingProvider {
                     cfg.model, cfg.dimensions
                 );
                 Box::new(OpenAiEmbeddingProvider::new(cfg))
+            }
+            EmbeddingBackend::Qwen3 => {
+                let cfg = qwen3_config.unwrap_or_default();
+                info!(
+                    "ConfigurableEmbeddingProvider: using Qwen3 '{}' ({} dims) via DashScope",
+                    cfg.model, cfg.dimensions
+                );
+                Box::new(Qwen3EmbeddingProvider::new(cfg))
+            }
+            EmbeddingBackend::Ollama => {
+                let cfg = ollama_config.unwrap_or_default();
+                info!(
+                    "ConfigurableEmbeddingProvider: using Ollama '{}' ({} dims) at {}",
+                    cfg.model, cfg.dimensions, cfg.base_url
+                );
+                Box::new(OllamaEmbeddingProvider::new(cfg))
             }
         };
         Self {
@@ -326,13 +583,26 @@ impl EmbeddingProvider for ConfigurableEmbeddingProvider {
 
 #[allow(dead_code)]
 /// Build a `ConfigurableEmbeddingProvider` based on the env var
-/// `GO_ON_EMBEDDING_BACKEND` (values: `local` or `openai`).
+/// `GO_ON_EMBEDDING_BACKEND` (values: `local`, `openai`, `qwen3`, `ollama`).
 ///
-/// When `openai` is selected, additional env vars are read:
-/// - `OPENAI_API_KEY` or `GO_ON_OPENAI_API_KEY`
-/// - `OPENAI_EMBEDDING_MODEL`  (default: `text-embedding-3-small`)
-/// - `OPENAI_API_BASE`         (default: `https://api.openai.com/v1`)
-/// - `OPENAI_EMBEDDING_DIMENSIONS` (default: `1536`)
+/// - `local` (default): minhash fallback, no external service needed
+///   - `LOCAL_EMBEDDING_DIMENSIONS` (default: `128`)
+///
+/// - `openai`: OpenAI API
+///   - `OPENAI_API_KEY` or `GO_ON_OPENAI_API_KEY`
+///   - `OPENAI_EMBEDDING_MODEL`  (default: `text-embedding-3-small`)
+///   - `OPENAI_API_BASE`         (default: `https://api.openai.com/v1`)
+///   - `OPENAI_EMBEDDING_DIMENSIONS` (default: `1536`)
+///
+/// - `qwen3`: Alibaba Cloud DashScope API (Qwen3 embedding)
+///   - `DASHSCOPE_API_KEY` — get from https://dashscope.aliyun.com/
+///   - `QWEN_EMBEDDING_MODEL` (default: `text-embedding-v3`)
+///   - `QWEN_EMBEDDING_DIMENSIONS` (default: `1024`, supports 768/1024/1536)
+///
+/// - `ollama`: local Ollama instance (download models via `ollama pull`)
+///   - `OLLAMA_BASE_URL` (default: `http://localhost:11434`)
+///   - `OLLAMA_EMBEDDING_MODEL` (default: `nomic-embed-text`)
+///   - `OLLAMA_EMBEDDING_DIMENSIONS` (default: `768`)
 pub fn embedding_provider_from_env() -> ConfigurableEmbeddingProvider {
     let backend_str = std::env::var("GO_ON_EMBEDDING_BACKEND")
         .unwrap_or_else(|_| "local".to_string())
@@ -358,7 +628,21 @@ pub fn embedding_provider_from_env() -> ConfigurableEmbeddingProvider {
                 api_key,
                 dimensions: dims,
             };
-            ConfigurableEmbeddingProvider::new(EmbeddingBackend::OpenAi, Some(config))
+            ConfigurableEmbeddingProvider::new(EmbeddingBackend::OpenAi, Some(config), None, None)
+        }
+        "qwen3" => {
+            let api_key = std::env::var("DASHSCOPE_API_KEY").unwrap_or_default();
+            let model = std::env::var("QWEN_EMBEDDING_MODEL")
+                .unwrap_or_else(|_| "text-embedding-v3".to_string());
+            let dims = std::env::var("QWEN_EMBEDDING_DIMENSIONS")
+                .ok().and_then(|v| v.parse().ok())
+                .unwrap_or(1024);
+            let config = Qwen3EmbeddingConfig { api_key, model, dimensions: dims };
+            ConfigurableEmbeddingProvider::new(EmbeddingBackend::Qwen3, None, Some(config), None)
+        }
+        "ollama" => {
+            let config = OllamaEmbeddingConfig::default();
+            ConfigurableEmbeddingProvider::new(EmbeddingBackend::Ollama, None, None, Some(config))
         }
         _ => {
             let dims = std::env::var("LOCAL_EMBEDDING_DIMENSIONS")

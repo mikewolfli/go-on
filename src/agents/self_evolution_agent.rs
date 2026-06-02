@@ -29,7 +29,7 @@ const MAX_FIX_ITERATIONS: usize = 5;
 const RULES_DIR: &str = "RULES";
 
 /// Supported source file extensions for analysis.
-#[allow(dead_code)]
+#[allow(dead_code)] // Reserved
 const SUPPORTED_EXTENSIONS: &[&str] = &["rs", "toml", "md", "json", "yaml", "yml"];
 
 // ---------------------------------------------------------------------------
@@ -191,7 +191,6 @@ impl From<std::io::Error> for SelfEvolutionAgentError {
 /// generations in the project's coding standards.
 pub struct SelfEvolutionAgent {
     /// Model selector for choosing the right LLM for each task.
-    #[allow(dead_code)]
     model_selector: Arc<ModelSelector>,
     /// Agent registry reference for resolving available agents/models.
     agent_registry: HashMap<String, String>,

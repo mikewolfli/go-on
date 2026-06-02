@@ -44,6 +44,7 @@ impl StreamProcessor {
     /// Each parsed value now includes an `"_event_type"` field extracted from
     /// the SSE `event:` line, allowing the caller to distinguish between chunk,
     /// done, telemetry, and other event types emitted by the backend.
+    #[allow(dead_code)]
     pub fn push_chunk(&mut self, chunk: &[u8]) -> Vec<Result<Value, String>> {
         let mut events: Vec<Result<Value, String>> = Vec::new();
 
@@ -928,6 +929,108 @@ impl BackendClient {
         } else {
             Ok((response_text, thinking_text, agent_text, selected_model))
         }
+    }
+
+    /// Send a chat message via SSE streaming (`POST /chat/stream`).
+    /// Returns a tuple of (response_text, reasoning_text, conversation_id, branch_id).
+    /// Processes the SSE stream incrementally.
+    #[allow(dead_code)] // Available for app.rs migration to streaming
+    pub async fn chat_streaming(
+        &self,
+        message: &str,
+        mode: &str,
+        phase: &str,
+        model: Option<&str>,
+        options_extra: Option<Value>,
+        history: Option<Vec<Value>>,
+    ) -> Result<(String, String, String, Option<String>), String> {
+        let phase_val = if phase.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String(phase.to_string())
+        };
+
+        let messages = if let Some(hist) = history {
+            let mut msgs = hist;
+            msgs.push(serde_json::json!({ "role": "user", "content": message }));
+            msgs
+        } else {
+            vec![serde_json::json!({ "role": "user", "content": message })]
+        };
+
+        let mut body = serde_json::json!({
+            "messages": messages,
+            "mode": mode,
+            "phase": phase_val,
+            "stream": true,
+        });
+
+        if let Some(selected_model) = model.filter(|m| !m.trim().is_empty() && *m != "auto") {
+            body["options"] = serde_json::json!({ "model": selected_model });
+        }
+
+        if let Some(ref extra) = options_extra {
+            if let Some(obj) = extra.as_object() {
+                for (k, v) in obj {
+                    body["options"][k] = v.clone();
+                }
+            }
+        }
+
+        let resp = self
+            .long_client
+            .post(format!("{}/chat/stream", self.base_url))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("SSE request failed: {}", e))?;
+
+        let resp_body = resp
+            .text()
+            .await
+            .map_err(|e| format!("SSE body read failed: {}", e))?;
+
+        let mut response_text = String::new();
+        let mut reasoning_text = String::new();
+        let mut conversation_id = String::new();
+        let mut branch_id: Option<String> = None;
+
+        // Parse SSE events from the full response body
+        for frame in resp_body.split("\n\n") {
+            let mut current_data: Option<String> = None;
+            for line in frame.lines() {
+                let stripped = line
+                    .strip_prefix("data: ")
+                    .or_else(|| line.strip_prefix("data:"))
+                    .or_else(|| line.strip_prefix("event: "));
+                if let Some(data) = stripped {
+                    current_data = Some(data.to_string());
+                }
+            }
+
+            if let Some(data) = current_data {
+                let data = data.trim();
+                if data == "[DONE]" {
+                    break;
+                }
+                if let Ok(val) = serde_json::from_str::<Value>(data) {
+                    if let Some(text) = val.get("text").and_then(|v| v.as_str()) {
+                        response_text.push_str(text);
+                    }
+                    if let Some(r) = val.get("reasoning").and_then(|v| v.as_str()) {
+                        reasoning_text.push_str(r);
+                    }
+                    if let Some(cid) = val.get("conversation_id").and_then(|v| v.as_str()) {
+                        conversation_id = cid.to_string();
+                    }
+                    if let Some(bid) = val.get("branch_id").and_then(|v| v.as_str()) {
+                        branch_id = Some(bid.to_string());
+                    }
+                }
+            }
+        }
+
+        Ok((response_text, reasoning_text, conversation_id, branch_id))
     }
 
     pub async fn configure_provider(

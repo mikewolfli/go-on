@@ -498,8 +498,6 @@
     "error.tenant_limit_exceeded": "租户 '{tenant_id}' 超出每日 API 调用限制 ({calls}/{limit})",
     "error.policy_already_registered": "策略 '{name}' 已注册",
     "error.alert_not_found": "告警 '{alert_id}' 未找到",
-    "error.circuit_breaker_not_found": "断路器 '{name}' 未找到",
-    "error.failover_group_not_found": "故障转移组 '{name}' 未找到",
     "error.token_not_found": "令牌 '{token_id}' 未找到",
     "error.token_revoked": "令牌 '{token_id}' 已被撤销",
     "error.token_expired": "令牌 '{token_id}' 已于 {expires_at} 过期 (当前: {now})",
@@ -657,8 +655,6 @@
     "error.chaos.recovery.degrade": "降级",
     "error.chaos.recovery.replan": "重新规划",
     "error.chaos.recovery.repair": "修复",
-
-    "error.circuit_breaker_already_registered": "断路器 '{name}' 已注册",
     "error.circuit_breaker_not_found": "未找到断路器 '{name}'",
     "error.failover_group_not_found": "未找到故障转移组 '{name}'",
     "error.hyper_resilience.failover_already_registered": "故障转移组 '{name}' 已注册",

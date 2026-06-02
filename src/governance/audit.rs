@@ -88,12 +88,10 @@ impl AuditLog {
 /// Wraps internal state in `Arc<Mutex<...>>` so it can be shared across threads.
 /// When a `log_path` is configured, every recorded entry is appended as a JSON
 /// line to the file. Buffer overflow warnings are emitted via `tracing::warn!`.
-#[allow(dead_code)] // F-GAP-49 — reserved for Phase 2 audit pipeline integration
 pub struct ThreadSafeAuditLog {
     inner: Arc<Mutex<AuditLogInner>>,
 }
 
-#[allow(dead_code)] // F-GAP-49 — reserved for Phase 2 audit pipeline integration
 struct AuditLogInner {
     entries: VecDeque<AuditLogEntry>,
     max_entries: usize,
@@ -101,7 +99,6 @@ struct AuditLogInner {
     log_path: Option<PathBuf>,
 }
 
-#[allow(dead_code)] // F-GAP-49 — reserved for Phase 2 audit pipeline integration
 impl ThreadSafeAuditLog {
     /// Create a new thread-safe audit log with the given capacity.
     pub fn new(max_entries: usize) -> Self {

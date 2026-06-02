@@ -1,6 +1,12 @@
-#![allow(dead_code)]
+#![allow(dead_code)] // Reserved for HarnessBus integration — all items are pub but unreachable from bin entry point
 
 //! Approval Preference Learning (GAP-B52-34)
+//!
+//! This module is compiled but items are suppressed from dead_code warnings
+//! because in a binary crate (`[[bin]]`) pub items still trigger dead_code
+//! when they are not reachable from the binary's main entry point.
+//! The module is declared `pub mod` for re-export from `lib.rs`,
+//! but its types are not yet wired into the HarnessBus execution path.
 //!
 //! Learns approver preferences over time by recording historical decisions
 //! and using them to predict approval likelihood. When confidence exceeds
@@ -30,9 +36,9 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 use thiserror::Error;
-use tracing::{debug, info, warn};
+use tracing::{debug};
 
 // ---------------------------------------------------------------------------
 // Constants

@@ -3,7 +3,7 @@
 # Validates production readiness before release.
 set -euo pipefail
 
-CONFIG="${1:-config.production.toml}"
+CONFIG="${1:-config.multi-users-server.toml}"
 BINARY="${2:-./target/debug/go-on}"
 
 echo "=== Release Readiness Gate ==="
@@ -29,17 +29,17 @@ echo "  PASS"
 
 # Check 3: Cargo check
 echo "[3/5] Running cargo check..."
-cargo check --no-default-features -F profile-multi-users-server 2>/dev/null
+cargo check --no-default-features -F profile-multi-users-server
 echo "  PASS"
 
 # Check 4: Clippy
 echo "[4/5] Running clippy..."
-cargo clippy --no-default-features -F profile-multi-users-server -- -D warnings 2>/dev/null
+cargo clippy --no-default-features -F profile-multi-users-server -- -D warnings
 echo "  PASS"
 
 # Check 5: Tests
 echo "[5/5] Running tests..."
-cargo test --no-default-features -F profile-multi-users-server 2>/dev/null
+cargo test --no-default-features -F profile-multi-users-server
 echo "  PASS"
 
 echo ""

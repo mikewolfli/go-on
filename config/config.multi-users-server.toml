@@ -65,7 +65,8 @@ user_auth_token_ttl_seconds = 86400
 # Comma-separated list of allowed origins.
 # Set GO_ON_CORS_ALLOWED_ORIGINS env var at runtime, or configure here.
 # Use "*" to allow all origins (development only).
-cors_allowed_origins = []
+# For production, set to the actual origin of your frontend.
+cors_allowed_origins = ["http://localhost:3000", "http://127.0.0.1:3000", "https://localhost:3000"]
 
 # ── Tenant Resource Quotas ────────────────────────────────────────────
 tenant_default_daily_token_limit = 1000000
@@ -89,6 +90,10 @@ skills_cache_dir = "skills_cache"
 # ── Governance ────────────────────────────────────────────────────────
 governance_enabled = true
 governance_policy_mode = "enforce"
+
+# ── i18n ───────────────────────────────────────────────────────────────
+i18n_enabled = true
+i18n_default_language = "en-US"
 
 # ── Agents ────────────────────────────────────────────────────────────
 [agents]
@@ -153,7 +158,7 @@ global_max_inflight = 128
 
 [phases.done]
 description = "Done — finalize, deliver, complete"
-agents = ["deepseek"]
+agents = []
 fallback = false
 
 [phases.done.options]

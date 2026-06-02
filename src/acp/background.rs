@@ -559,7 +559,7 @@ pub async fn start_background_tasks(
                     _ = shutdown.notified() => break,
                     _ = ticker.tick() => {
                         cycle += 1;
-                        crate::governance::runtime_controls::run_timeout_check(cycle);
+                        crate::governance::runtime_controls::run_timeout_check(cycle, None, None);
                     }
                 }
             }

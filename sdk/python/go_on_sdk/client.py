@@ -120,8 +120,8 @@ class HarnessStatusResponse:
 class GoOnClient:
     """Async client for go-on ACP JSON-RPC endpoints.
 
-    Targets ``POST {base_url}/v1/responses`` for JSON-RPC calls
-    and direct HTTP GET for ``/health``.
+    Targets ``POST {base_url}/rpc`` for JSON-RPC calls
+    and ``/chat/stream`` for SSE streaming chat.
 
     Phase 4 coverage: runtime, governance, observability, reliability,
     checkpoint, workflow, learning, optimization, streaming chat.
@@ -201,7 +201,7 @@ class GoOnClient:
         for attempt in range(self.max_retries + 1):
             try:
                 resp = await self._client.post(
-                    f"{self.base_url}/v1/responses", json=payload
+                    f"{self.base_url}/rpc", json=payload
                 )
                 _ = resp.raise_for_status()
                 try:

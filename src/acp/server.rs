@@ -93,7 +93,7 @@ impl Drop for DrainPermit {
 impl DrainPermit {
     /// Consume the permit and return the inner semaphore permit.
     /// The caller is responsible for ensuring the inner permit is eventually dropped.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Reserved for future drain coordination patterns
     pub fn into_inner(mut self) -> tokio::sync::OwnedSemaphorePermit {
         self.permit.take().expect("DrainPermit already consumed")
     }

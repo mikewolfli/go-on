@@ -1,0 +1,25 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - deployment.yaml
+  - service.yaml
+  - configmap.yaml
+
+commonLabels:
+  app.kubernetes.io/name: go-on
+  app.kubernetes.io/component: server
+
+configMapGenerator:
+  - name: go-on-config
+    behavior: replace
+    files:
+      - config.toml=configmap.yaml
+
+secretGenerator:
+  - name: go-on-secrets
+    behavior: create
+    literals:
+      - deepseek-api-key=sk-placeholder
+      - server-api-key=change-me-to-a-random-secret

@@ -38,6 +38,10 @@ pub struct TaskDecomposition {
     pub execution_phases: Vec<Vec<String>>, // phase -> [subtask_ids]
     /// Total estimated duration in seconds
     pub total_duration_estimated: u32,
+    /// Whether LLM was used for decomposition.
+    /// `true` = LLM produced the result; `false` = fell back to rule-based.
+    #[serde(default)]
+    pub llm_used: bool,
 }
 
 /// Task decomposer for breaking down complex tasks
@@ -114,10 +118,14 @@ Return ONLY valid JSON, no markdown formatting.
                                 let phases = Self::compute_execution_phases(&decomp.subtasks);
                                 return TaskDecomposition {
                                     execution_phases: phases,
+                                    llm_used: true,
                                     ..decomp
                                 };
                             }
-                            return decomp;
+                            return TaskDecomposition {
+                                llm_used: true,
+                                ..decomp
+                            };
                         }
                         // Try wrapping: LLM might return the object directly without task_id
                         if let Ok(decomp) =
@@ -145,6 +153,7 @@ Return ONLY valid JSON, no markdown formatting.
                                         subtasks,
                                         execution_phases,
                                         total_duration_estimated,
+                                        llm_used: true,
                                     };
                                 }
                             }
@@ -212,6 +221,7 @@ Return ONLY valid JSON, no markdown formatting.
             subtasks,
             execution_phases,
             total_duration_estimated,
+            llm_used: false,
         }
     }
 

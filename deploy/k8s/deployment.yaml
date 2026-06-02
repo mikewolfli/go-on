@@ -1,0 +1,82 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: go-on
+  labels:
+    app: go-on
+    component: server
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: go-on
+      component: server
+  template:
+    metadata:
+      labels:
+        app: go-on
+        component: server
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8090"
+        prometheus.io/path: "/metrics/prometheus"
+    spec:
+      serviceAccountName: go-on
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      containers:
+        - name: go-on
+          image: go-on-server:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - -c
+            - /etc/go-on/config.toml
+            - --mode
+            - acp_http
+            - --bind
+            - 0.0.0.0:8090
+          ports:
+            - containerPort: 8090
+              protocol: TCP
+              name: http
+          envFrom:
+            - secretRef:
+                name: go-on-secrets
+                optional: true
+          volumeMounts:
+            - name: config
+              mountPath: /etc/go-on
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/go-on
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8090
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8090
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "2000m"
+              memory: "2Gi"
+      volumes:
+        - name: config
+          configMap:
+            name: go-on-config
+        - name: data
+          emptyDir:
+            sizeLimit: "1Gi"

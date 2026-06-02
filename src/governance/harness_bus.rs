@@ -1592,11 +1592,33 @@ impl HarnessBus {
     }
 
     /// Brain loop orchestration profile snapshot.
+    ///
+    /// ⚠️ Sync-shim: calls async `profile()` via `block_in_place` + `block_on`.
+    /// Safe for use in status handler / profile endpoints.
+    /// Do NOT call from async code — will block the tokio worker thread.
     pub fn brain_profile(&self) -> BrainLoopProfile {
-        let bl = self.brain_loop.clone();
-        tokio::task::block_in_place(move || {
-            tokio::runtime::Handle::current().block_on(bl.profile())
-        })
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                let bl = self.brain_loop.clone();
+                tokio::task::block_in_place(move || {
+                    handle.block_on(bl.profile())
+                })
+            }
+            Err(_) => {
+                tracing::warn!("brain_profile called outside tokio runtime — returning default");
+                crate::orchestration::brain_loop::BrainLoopProfile {
+                    total_plans: 0,
+                    active_plans: 0,
+                    completed_plans: 0,
+                    failed_plans: 0,
+                    total_cycles: 0,
+                    avg_cycles_per_plan: 0.0,
+                    convergence_info: String::new(),
+                    avg_step_score: 0.0,
+                    total_steps: 0,
+                }
+            }
+        }
     }
 
     /// Artifact layer profile snapshot.
@@ -1626,11 +1648,33 @@ impl HarnessBus {
     }
 
     /// Brain loop runner profile snapshot (consolidated flat version).
+    ///
+    /// ⚠️ Sync-shim: calls async `profile()` via `block_in_place` + `block_on`.
+    /// Safe for use in status handler / profile endpoints.
+    /// Do NOT call from async code — will block the tokio worker thread.
     pub fn brain_runner_profile(&self) -> BrainLoopProfile {
-        let br = self.brain_runner.clone();
-        tokio::task::block_in_place(move || {
-            tokio::runtime::Handle::current().block_on(br.profile())
-        })
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                let br = self.brain_runner.clone();
+                tokio::task::block_in_place(move || {
+                    handle.block_on(br.profile())
+                })
+            }
+            Err(_) => {
+                tracing::warn!("brain_runner_profile called outside tokio runtime — returning default");
+                crate::orchestration::brain_loop::BrainLoopProfile {
+                    total_plans: 0,
+                    active_plans: 0,
+                    completed_plans: 0,
+                    failed_plans: 0,
+                    total_cycles: 0,
+                    avg_cycles_per_plan: 0.0,
+                    convergence_info: String::new(),
+                    avg_step_score: 0.0,
+                    total_steps: 0,
+                }
+            }
+        }
     }
 
     /// Hyper-resilience profile snapshot (F-GAP-27)

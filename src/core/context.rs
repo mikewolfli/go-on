@@ -38,14 +38,35 @@ impl SystemContext {
             return Ok(());
         }
 
+        // Helper: monotonic ID for memory entries
+        let now_ms = || -> u128 {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        };
+
+        let ts = || -> String {
+            format!("{}", now_ms())
+        };
+
         // 1. Load README (try common filenames)
         for name in &["README.md", "README.txt", "README", "readme.md"] {
             let readme_path = repo.join(name);
             if let Ok(content) = std::fs::read_to_string(&readme_path) {
                 let excerpt: String = content.chars().take(2000).collect();
                 // Store excerpt in memory for later agent context injection
-                // (In a full implementation, this would go into memory_store)
-                tracing::debug!(repo = %repo_path, chars = excerpt.len(), "loaded README excerpt");
+                use crate::memory::memory::{MemoryClass, MemoryEntry};
+                let entry = MemoryEntry {
+                    id: format!("repo_readme_{}", now_ms()),
+                    class: MemoryClass::ProjectState,
+                    content: excerpt.clone(),
+                    timestamp: ts(),
+                    usefulness: 1.0,
+                    staleness: 0,
+                };
+                self.memory_store.store(entry);
+                tracing::debug!(repo = %repo_path, chars = excerpt.len(), "stored README excerpt in memory");
                 break;
             }
         }
@@ -70,7 +91,17 @@ impl SystemContext {
         }
 
         if !build_commands.is_empty() {
-            tracing::debug!(repo = %repo_path, commands = ?build_commands, "detected build commands");
+            use crate::memory::memory::{MemoryClass, MemoryEntry};
+            let entry = MemoryEntry {
+                id: format!("repo_build_{}", now_ms()),
+                class: MemoryClass::ProjectState,
+                content: build_commands.join(", "),
+                timestamp: ts(),
+                usefulness: 0.9,
+                staleness: 0,
+            };
+            self.memory_store.store(entry);
+            tracing::debug!(repo = %repo_path, commands = ?build_commands, "stored build commands in memory");
         }
 
         // 3. Load recent git commits (best-effort)
@@ -82,7 +113,17 @@ impl SystemContext {
                 if output.status.success() {
                     let lines = String::from_utf8_lossy(&output.stdout);
                     let commits: Vec<String> = lines.lines().map(|l| l.to_string()).collect();
-                    tracing::debug!(repo = %repo_path, count = commits.len(), "loaded recent commits");
+                    use crate::memory::memory::{MemoryClass, MemoryEntry};
+                    let entry = MemoryEntry {
+                        id: format!("repo_git_{}", now_ms()),
+                        class: MemoryClass::Observation,
+                        content: lines.to_string(),
+                        timestamp: ts(),
+                        usefulness: 0.8,
+                        staleness: 0,
+                    };
+                    self.memory_store.store(entry);
+                    tracing::debug!(repo = %repo_path, count = commits.len(), "stored recent commits in memory");
                 }
             }
         }

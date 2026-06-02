@@ -3,7 +3,10 @@ import { i18n, MessageKeys } from "./i18n";
 
 import { RuntimeManagerLike } from "./managerTypes";
 
-const DEFAULT_HEALTH_INTERVAL_SECONDS = 300;
+/** Health polling interval in seconds.
+ *  Reduced from 300s to 30s for faster backend crash detection.
+ *  Can be overridden by VS Code setting `go-on.healthCheckInterval`. */
+const DEFAULT_HEALTH_INTERVAL_SECONDS = 30;
 
 interface ProbeReport {
   probes?: {

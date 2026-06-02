@@ -8,6 +8,7 @@
 //! evaluation scoring, and final result augmentation.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
 
 use serde_json::{json, Value};
@@ -215,16 +216,21 @@ fn collect_agent_outputs(
             used_tokens,
             1.0,
         );
-        // Also update the reinforcement learning loop with the outcome
+        // Also update the reinforcement learning loop with the outcome (spawn to avoid blocking)
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.block_on(cb.evolve(
-                &(phase_name.to_string(), selected_agent.to_string()),
-                "execute",
-                &(phase_name.to_string(), selected_agent.to_string()),
-                used_tokens,
-                request_succeeded,
-                1.0,
-            ));
+            let cb = Arc::clone(cb);
+            let phase = phase_name.to_string();
+            let agent = selected_agent.to_string();
+            handle.spawn(async move {
+                let _ = cb.evolve(
+                    &(phase.clone(), agent.clone()),
+                    "execute",
+                    &(phase, agent),
+                    used_tokens,
+                    request_succeeded,
+                    1.0,
+                ).await;
+            });
         }
     }
 

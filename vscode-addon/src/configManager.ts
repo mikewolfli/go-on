@@ -155,6 +155,7 @@ class ConfigManager {
       await this.loadFromFile(configPath);
     } catch {
       // File doesn't exist, create default
+      console.warn("configManager: Config file not found, creating default");
       this.createDefaultConfig();
     }
   }

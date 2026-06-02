@@ -426,6 +426,22 @@ pub fn new_acp_server(
                 ));
             }
 
+            // BLUE57-B01: Inject cache backends into CapabilityBus MemoryBus
+            if let Some(ref mut cb_arc) = server.governance_deps.capability_bus {
+                if let Some(cb_mut) = Arc::get_mut(cb_arc) {
+                    #[cfg(feature = "sub-bus-memory")]
+                    cb_mut.memory_bus.set_backends(
+                        Some(server.cache_deps.cache.response_cache.clone()),
+                        Some(server.cache_deps.cache.vector_store.clone()),
+                        None,
+                        Some(Some(Arc::clone(&server.cache_deps.cache.memory_response_cache))),
+                    );
+                    tracing::info!("capability_bus: memory bus backends injected");
+                } else {
+                    tracing::warn!("capability_bus: Arc already shared, cannot inject memory backends");
+                }
+            }
+
             // GAP-B55-042: Start approval engine timeout processing background task
             if let Some(ref approval_engine) = server.governance_deps.approval_engine {
                 let engine = Arc::clone(approval_engine);
@@ -740,15 +756,17 @@ fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
     ));
 
     // Start WebSocket heartbeat and wire broadcast fn.
-    // new_acp_server is sync, so use Handle::block_on for the one-time async setup.
+    // new_acp_server is sync, so wrap the one-time async setup in block_in_place.
     {
         let handle = tokio::runtime::Handle::current();
         let ws = ws_hub.clone();
         let sr = session_registry.clone();
-        handle.block_on(async {
-            ws.start_heartbeat().await;
-            let broadcast_fn = ws.create_broadcast_fn();
-            sr.set_broadcast_fn(broadcast_fn).await;
+        tokio::task::block_in_place(move || {
+            handle.block_on(async {
+                ws.start_heartbeat().await;
+                let broadcast_fn = ws.create_broadcast_fn();
+                sr.set_broadcast_fn(broadcast_fn).await;
+            });
         });
     }
 

@@ -1,9 +1,11 @@
 #!/bin/sh
-# 启动 go-on，监听 8090 端口，日志输出到 go-on.log
+# Start go-on service on port 8090
+set -eu
+
 DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$DIR"
 
-# go-on 进程管理脚本
+# go-on process manager
 ACTION=${1:-start}
 GOON_BIN="./go-on"
 PID_FILE="go-on.pid"
@@ -64,9 +66,14 @@ start() {
 		echo "[info] 当前协议模式: $PROTO_MODE"
 	fi
 
-	nohup "$GOON_BIN" > "$LOG_FILE" 2>&1 &
-	echo \$! > "$PID_FILE"
-	echo "go-on 已启动，日志写入 $LOG_FILE，PID: $(cat $PID_FILE)"
+	nohup "$GOON_BIN" > "$LOG_FILE" 2>&1 &&
+	PID=$!
+	if [ -z "$PID" ] || ! kill -0 "$PID" 2>/dev/null; then
+		echo "错误: go-on 启动失败，请检查日志: $LOG_FILE"
+		exit 1
+	fi
+	echo "$PID" > "$PID_FILE"
+	echo "go-on 已启动，日志写入 $LOG_FILE，PID: $(cat "$PID_FILE")"
 }
 
 restart() {

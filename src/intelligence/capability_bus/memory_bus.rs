@@ -121,6 +121,29 @@ impl MemoryBus {
         }
     }
 
+    /// Set (or replace) cache backends after construction.
+    /// Any backend passed as `None` will be left unchanged.
+    pub fn set_backends(
+        &mut self,
+        response_cache: Option<Option<Arc<ResponseCache>>>,
+        vector_store: Option<Option<Arc<VectorStore>>>,
+        memory_store: Option<Option<Arc<StdMutex<MemoryStore>>>>,
+        memory_response_cache: Option<Option<Arc<StdMutex<MemoryResponseCache>>>>,
+    ) {
+        if let Some(rc) = response_cache {
+            self.response_cache = rc;
+        }
+        if let Some(vs) = vector_store {
+            self.vector_store = vs;
+        }
+        if let Some(ms) = memory_store {
+            self.memory_store = ms;
+        }
+        if let Some(mrc) = memory_response_cache {
+            self.memory_response_cache = mrc;
+        }
+    }
+
     /// Cascading cache lookup: L1 (memory) → L2 (SQLite) → L3 (vector).
     ///
     /// Returns the first hit found according to the provided `strategy`.

@@ -1,0 +1,88 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: go-on-config
+  labels:
+    app: go-on
+data:
+  config.toml: |
+    # go-on Kubernetes Config
+    # Non-sensitive settings only. API keys go in go-on-secrets Secret.
+
+    schema_version = "1.0.0"
+    default_phase = "think"
+    model_selection_mode = "adaptive"
+
+    [protocol]
+    mode = "acp_http"
+
+    [cache]
+    enabled = true
+    path = "/var/lib/go-on/acp_cache.sqlite3"
+    default_ttl_seconds = 3600
+    max_entries = 50000
+
+    [vector]
+    enabled = true
+    auto_mode = true
+    path = "/var/lib/go-on/acp_vector.sqlite3"
+    dimensions = 128
+    min_query_chars = 120
+    top_k = 4
+    min_similarity = 0.82
+    max_snippet_chars = 600
+    max_entries = 10000
+    summary_trigger_messages = 4
+    summary_max_chars = 800
+
+    [runtime]
+    acp_http_bind_addr = "0.0.0.0:8090"
+    maintenance_interval_seconds = 60
+    health_interval_seconds = 30
+    shutdown_drain_seconds = 30
+    entry_auth_enabled = true
+    entry_rate_limit_rpm = 5000
+    entry_rate_limit_burst = 1000
+    production_strict = true
+    i18n_enabled = true
+    i18n_default_language = "en-US"
+    skills_enabled = false
+    skills_import_enabled = false
+    skills_allowed_sources = []
+    skills_require_sha256 = true
+    governance_enabled = true
+    governance_policy_mode = "enforce"
+    otel_enabled = true
+    otel_exporter = "otlp"
+    otel_service_name = "go-on-k8s"
+
+    [flow]
+    name = "Kubernetes Adaptive"
+    phases = ["think", "act", "check", "done"]
+
+    [phases.think]
+    description = "Think — analyze, plan, gather context"
+    agents = ["deepseek"]
+    fallback = true
+
+    [phases.act]
+    description = "Act — execute, generate, implement"
+    agents = ["deepseek"]
+    fallback = true
+
+    [phases.check]
+    description = "Check — verify, validate, review results"
+    agents = ["deepseek"]
+    fallback = true
+
+    [phases.done]
+    description = "Done — finalize, deliver, complete"
+    agents = []
+    fallback = false
+
+    [phases.done.options]
+    request_timeout_seconds = 90
+    summary_enabled = true
+    phase_max_inflight = 4
+    global_max_inflight = 16

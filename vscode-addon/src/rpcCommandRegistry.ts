@@ -39,6 +39,10 @@ function safeStringify(value: unknown): string {
         return val;
       });
     } catch {
+      console.error(
+        "rpcCommandRegistry: Failed to safe-stringify value",
+        value,
+      );
       return String(value);
     }
   }

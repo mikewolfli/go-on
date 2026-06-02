@@ -9,6 +9,7 @@ pub(crate) fn push_metric_header(
 }
 
 #[allow(dead_code)]
+// Reserved for future metrics reporting — not yet wired into the hot path
 pub(crate) fn push_scalar_metric(
     lines: &mut Vec<String>,
     name: &str,

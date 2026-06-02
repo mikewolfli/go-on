@@ -31,11 +31,13 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
-      - name: Code coverage (cargo-tarpaulin)
+      - name: Code coverage (cargo-llvm-cov)
         run: |
-          cargo install cargo-tarpaulin 2>/dev/null || true
-          cargo tarpaulin --no-default-features -F profile-local --out Xml -- --test-threads=1 2>/dev/null || \
-            echo "[warn] cargo-tarpaulin coverage skipped (check install)"
+          cargo install cargo-llvm-cov 2>/dev/null || true
+          cargo llvm-cov --all-targets --features profile-local,backend-sqlite -- --test-threads=1 --nocapture 2>/dev/null || \
+            echo "[warn] cargo-llvm-cov coverage skipped — try: cargo install cargo-llvm-cov"
+          echo "Fallback: running tests without coverage"
+          cargo test --features profile-local,backend-sqlite --test-threads=1 2>/dev/null
 
       - name: Check dependencies (cargo-deny)
         uses: EmbarkStudios/cargo-deny-action@v2

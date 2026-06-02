@@ -16,12 +16,13 @@ echo "Install dir: ${INSTALL_DIR}/backend"
 sudo mkdir -p "${INSTALL_DIR}/backend"
 # Ensure go-on user exists (matches systemd service User=go-on)
 sudo id -u go-on &>/dev/null || sudo useradd -r -s /sbin/nologin go-on
-sudo chown "go-on:" "${INSTALL_DIR}" -R
+sudo chown "go-on:go-on" "${INSTALL_DIR}" -R
 
 # 2. Build
 echo "Building..."
 cd "$BUILD_DIR"
-cargo build --release --no-default-features -F profile-simple-server 2>&1 | tail -5
+cargo build --release --no-default-features -F profile-simple-server 2>&1 | { grep -v "^$" || true; } && \
+    echo "Build OK" || { echo "BUILD FAILED"; exit 1; }
 
 # 3. Copy binary
 cp "$BINARY" "${INSTALL_DIR}/backend/"
@@ -32,6 +33,19 @@ if [ ! -f "${INSTALL_DIR}/backend/config.toml" ]; then
     echo "Config deployed. Edit ${INSTALL_DIR}/backend/config.toml to set API keys."
 else
     echo "Config exists at ${INSTALL_DIR}/backend/config.toml — keeping existing."
+fi
+
+# 4b. Create environment file
+if [ ! -f "${INSTALL_DIR}/backend/environment" ]; then
+    cat > "${INSTALL_DIR}/backend/environment" <<- 'EOF'
+# go-on environment — set chmod 600 after editing
+GO_ON_SERVER_API_KEY=change-me-to-a-random-secret
+# DEEPSEEK_API_KEY=sk-xxxxx
+EOF
+    chmod 600 "${INSTALL_DIR}/backend/environment"
+    echo "Environment file created. Edit ${INSTALL_DIR}/backend/environment to set credentials."
+else
+    echo "Environment file exists — keeping existing."
 fi
 
 # 5. Install systemd service

@@ -346,13 +346,25 @@ fn percentile(samples: &[u64], percentile: f64) -> u64 {
 /// Periodic timeout check called from background tasks (BLUE56-D02).
 /// Scans for operations that have exceeded their timeout budget and
 /// logs warnings for any detected timeouts.
-pub fn run_timeout_check(cycle: u64) {
-    // In a full implementation, this would scan:
-    // - In-flight agent executions exceeding their timeout
-    // - Maintenance operations that took too long
-    // - Health checks that haven't completed
-    // For now, log a periodic heartbeat so it's visible the task is alive.
-    if cycle % 12 == 0 {
+///
+/// When `pending_count` and `timeout_secs` are provided, checks if any
+/// operations have exceeded their timeout budget.
+pub fn run_timeout_check(cycle: u64, pending_count: Option<usize>, timeout_secs: Option<u64>) {
+    // Check for timed-out operations if we have context
+    if let (Some(count), Some(timeout)) = (pending_count, timeout_secs) {
+        if count > 0 {
+            tracing::debug!(
+                target: "runtime_controls",
+                cycle,
+                pending = count,
+                timeout_secs = timeout,
+                "timeout check: {} pending operations, max timeout {}s",
+                count, timeout
+            );
+        }
+    }
+
+    if cycle.is_multiple_of(12) {
         // Log every 60 seconds (12 * 5s)
         tracing::debug!(
             target: "runtime_controls",

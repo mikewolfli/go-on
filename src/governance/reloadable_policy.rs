@@ -25,6 +25,7 @@ pub trait ReloadablePolicy: Send + Sync {
     fn reload(&mut self) -> Result<()>;
 
     /// Returns the last known good version timestamp (milliseconds since epoch).
+    #[allow(dead_code)]
     fn last_reload_ms(&self) -> u64;
 }
 
@@ -52,7 +53,7 @@ impl Default for PolicyReloader {
         Self::new()
     }
 }
-
+#[allow(dead_code)]
 impl PolicyReloader {
     /// Create a new empty `PolicyReloader` without a watcher.
     pub fn new() -> Self {
@@ -214,12 +215,14 @@ pub fn now_ms() -> u64 {
 // ─── Concrete reloadable policy wrappers ────────────────────────────────────
 
 /// A reloadable policy that reads a TOML-based red-line configuration file.
+#[allow(dead_code)]
 pub struct RedLinePolicy {
     path: std::path::PathBuf,
     last_reload: u64,
 }
 
 impl RedLinePolicy {
+    #[allow(dead_code)]
     pub fn new(path: impl Into<std::path::PathBuf>) -> Self {
         Self {
             path: path.into(),
@@ -243,12 +246,14 @@ impl ReloadablePolicy for RedLinePolicy {
 }
 
 /// A reloadable policy that reads a TOML-based quality-compass configuration file.
+#[allow(dead_code)]
 pub struct QualityCompassPolicy {
     path: std::path::PathBuf,
     last_reload: u64,
 }
 
 impl QualityCompassPolicy {
+    #[allow(dead_code)]
     pub fn new(path: impl Into<std::path::PathBuf>) -> Self {
         Self {
             path: path.into(),
@@ -275,12 +280,14 @@ impl ReloadablePolicy for QualityCompassPolicy {
 }
 
 /// A reloadable policy that reads a TOML-based sandbox configuration file.
+#[allow(dead_code)]
 pub struct SandboxPolicyReloadable {
     path: std::path::PathBuf,
     last_reload: u64,
 }
 
 impl SandboxPolicyReloadable {
+    #[allow(dead_code)]
     pub fn new(path: impl Into<std::path::PathBuf>) -> Self {
         Self {
             path: path.into(),

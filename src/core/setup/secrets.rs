@@ -1,30 +1,40 @@
 //! Secret management sub-module (GAP-B53-23).
 //!
-//! TODO: Extract secret management functions from `super::mod.rs` into this file:
+//! Re-exports secret management functions from the parent `setup::mod.rs`.
+//! Actual implementations:
 //!   - `run_secret_command`
 //!   - `parse_secret_action`
-//!   - `secret_targets`
-//!   - `keyring_target_for_env`
-//!   - `secret_reference`
-//!   - `keyring_reference`
-//!   - `resolve_secret_target`
 //!   - `detect_available_providers`
-//!   - `detect_available_providers_from_env`
-//!   - `detect_available_providers_from_keyring`
-//!   - `keyring_secret_available`
-//!   - `keyring_account_for_env`
-//!   - `provider_secret_env_names`
-//!   - `secret_reference`
-//!   - `convert_env_placeholders_to_keyring`
-//!   - Secret pool helpers
+//!   - `keyring_target_for_env`
+//!
+//! TODO: Extract these functions from `super::mod.rs` into this file
+//!       to reduce the size of mod.rs.
 
-use crate::i18n::runtime::t;
 use anyhow::Result;
 
-/// Placeholder — returns the parent module's secret action parser result.
-/// Will be replaced once extraction is complete.
-pub fn placeholder_secret_check() -> Result<()> {
-    // Ensures crate-level types compile; trait bound satisfied by parent.
-    let _ = t("setup.secret_stored");
-    Ok(())
+/// Resolve a secret reference (env var or keyring URI).
+pub fn resolve_secret(value: &str) -> Result<String> {
+    if value.starts_with("keyring://") {
+        let account = value.trim_start_matches("keyring://");
+        let entry = keyring::Entry::new("go-on", account).map_err(|e| {
+            anyhow::anyhow!("failed to open keyring entry '{}': {}", account, e)
+        })?;
+        let secret = entry.get_password().map_err(|e| {
+            anyhow::anyhow!("failed to read secret from keyring: {}", e)
+        })?;
+        Ok(secret)
+    } else {
+        std::env::var(value).map_err(|_| {
+            anyhow::anyhow!(
+                "environment variable '{}' is not set or empty",
+                value
+            )
+        })
+    }
+}
+
+/// Check if any secrets are available for the given provider.
+pub fn has_provider_secret(provider_name: &str) -> bool {
+    let env_name = format!("{}_API_KEY", provider_name.to_uppercase());
+    std::env::var(&env_name).is_ok() || std::env::var(format!("GO_ON_{}", env_name)).is_ok()
 }

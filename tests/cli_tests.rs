@@ -60,15 +60,19 @@ fn test_cli_invalid_flag_fails() {
 fn test_cli_diagnose_accepts_flag() {
     // diagnose should at least parse the flag without crashing.
     let (_, _, status) = run_cli(&["--diagnose", "--config", "/dev/null"]);
-    // Diagnose may fail due to missing config, but should not panic on format.
-    // We just verify the binary parsed the arguments.
-    let _ = status;
+    assert!(
+        status.success(),
+        "Expected --diagnose flag to be accepted, got exit status: {status}"
+    );
 }
 
 #[test]
 fn test_cli_status_accepts_flag() {
     let (_, _, status) = run_cli(&["--status", "--config", "/dev/null"]);
-    let _ = status;
+    assert!(
+        status.success(),
+        "Expected --status flag to be accepted, got exit status: {status}"
+    );
 }
 
 #[test]
@@ -84,7 +88,10 @@ fn test_cli_unknown_subcommand_fails_gracefully() {
 #[test]
 fn test_cli_chat_flag_parses() {
     let (_, _, status) = run_cli(&["--chat", "--config", "/dev/null"]);
-    let _ = status;
+    assert!(
+        status.success(),
+        "Expected --chat flag to be accepted, got exit status: {status}"
+    );
 }
 
 #[test]
@@ -107,6 +114,9 @@ fn test_cli_config_validation_rejects_missing_config() {
 fn test_cli_verbose_mode_output() {
     let (_, _stderr, status) =
         run_cli(&["--verbose", "--validate-config", "--config", "/dev/null"]);
-    let _ = status;
+    assert!(
+        status.success(),
+        "Expected verbose mode to succeed, got exit status: {status}"
+    );
     // Verbose mode may produce additional diagnostic output, but no assertion on content.
 }
