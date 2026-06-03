@@ -1,4 +1,20 @@
-#![allow(dead_code)] // Reserved for HarnessBus integration — all items are pub but unreachable from bin entry point
+#![allow(dead_code)]
+// GAP-B52-34: Approval Preference Learning — INTEGRATION PATH
+//
+// This module is compiled but not yet wired into the HarnessBus execution
+// path. In a binary crate, `pub` items still trigger dead_code warnings
+// when unreachable from `main`. The integration plan:
+//
+// 1. `HarnessBus::new()` calls `ApprovalPreferenceLearner::default()` and
+//    stores it as `approval_learner: Option<ApprovalPreferenceLearner>`.
+// 2. Each decision in the governance pipeline calls
+//    `learner.record_decision(...)` to build history.
+// 3. Before escalation, `learner.predict_approval(...)` determines whether
+//    auto-approval is warranted.
+// 4. `ApprovalPolicySuggester` runs periodically (or on demand) to produce
+//    policy improvement suggestions.
+//
+// Until step 1 is implemented, this module remains behind `#[allow(dead_code)]`.
 
 //! Approval Preference Learning (GAP-B52-34)
 //!

@@ -228,10 +228,7 @@ impl SelfEvolutionAgent {
     /// # Arguments
     /// * `project_root` - Root path of the project.
     /// * `available_models` - List of available model characteristics for selection.
-    pub async fn new(
-        project_root: PathBuf,
-        available_models: Vec<ModelCharacteristics>,
-    ) -> Self {
+    pub async fn new(project_root: PathBuf, available_models: Vec<ModelCharacteristics>) -> Self {
         Self::with_llm(project_root, available_models, None).await
     }
 
@@ -424,7 +421,8 @@ impl SelfEvolutionAgent {
             let messages = vec![
                 crate::agent::Message {
                     role: "system".to_string(),
-                    content: "You are a code evolution agent. Generate precise code patches.".to_string(),
+                    content: "You are a code evolution agent. Generate precise code patches."
+                        .to_string(),
                 },
                 crate::agent::Message {
                     role: "user".to_string(),
@@ -433,10 +431,7 @@ impl SelfEvolutionAgent {
             ];
             let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(64);
             let sender = crate::agent::StreamingSender::from(tx);
-            if let Err(e) = agent
-                .chat(messages, None, None, sender)
-                .await
-            {
+            if let Err(e) = agent.chat(messages, None, None, sender).await {
                 warn!("LLM agent patch generation failed: {e}, falling back to heuristic");
                 self.synthesize_patch_lines(&content, instruction)
             } else {

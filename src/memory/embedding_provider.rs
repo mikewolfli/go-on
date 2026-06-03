@@ -577,7 +577,7 @@ impl EmbeddingProvider for ConfigurableEmbeddingProvider {
 // Helper: create a ConfigurableEmbeddingProvider from environment variables
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved embedding provider feature
 /// Build a `ConfigurableEmbeddingProvider` based on the env var
 /// `GO_ON_EMBEDDING_BACKEND` (values: `local`, `openai`, `qwen3`, `ollama`).
 ///

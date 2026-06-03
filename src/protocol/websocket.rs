@@ -3,7 +3,7 @@
 //! Thread-safe hub for managing WebSocket connections with topic-based pub/sub,
 //! heartbeat keep-alive, and auto-reconnection support.
 
-// F-GAP-51: dead_code allowed on specific items below (reserved for WebSocket integration)
+// activated, formerly F-GAP-51: all items below are active WebSocket code
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -32,7 +32,7 @@ pub type ConnectionId = String;
 ///
 /// The `type` field identifies the kind of payload and follows a structured
 /// naming convention for topic-based filtering.
-#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
+// activated, formerly F-GAP-51
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WsMessage {
     /// Message type — see module docs for known type strings.
@@ -44,7 +44,7 @@ pub struct WsMessage {
     pub timestamp: u64,
 }
 
-#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
+// activated, formerly F-GAP-51
 impl WsMessage {
     /// Create a new `WsMessage` with the current system timestamp.
     pub fn new(msg_type: impl Into<String>, payload: Value) -> Self {
@@ -65,7 +65,7 @@ impl WsMessage {
 // ---------------------------------------------------------------------------
 
 /// Metadata attached to each registered connection.
-#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
+// activated, formerly F-GAP-51
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionMetadata {
     /// Timestamp (Unix seconds) when the connection was established.
@@ -76,7 +76,7 @@ pub struct ConnectionMetadata {
     pub user_agent: String,
 }
 
-#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
+// activated, formerly F-GAP-51
 impl Default for ConnectionMetadata {
     fn default() -> Self {
         let connected_at = SystemTime::now()
@@ -96,7 +96,7 @@ impl Default for ConnectionMetadata {
 // ---------------------------------------------------------------------------
 
 /// Channel wrapper for sending messages to a single WebSocket connection.
-#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
+// activated, formerly F-GAP-51
 #[derive(Debug)]
 pub struct WsSender {
     /// The unbounded sender used to push messages into the connection's task.
@@ -109,7 +109,7 @@ pub struct WsSender {
     pub last_heartbeat: Instant,
 }
 
-#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
+// activated, formerly F-GAP-51
 impl WsSender {
     /// Create a new `WsSender` wrapping the given channel sender.
     pub fn new(sender: UnboundedSender<WsMessage>, metadata: ConnectionMetadata) -> Self {
@@ -158,7 +158,7 @@ impl WsSender {
 // ---------------------------------------------------------------------------
 
 /// Configuration for the WebSocket hub.
-#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
+// activated, formerly F-GAP-51
 #[derive(Debug, Clone)]
 pub struct WebSocketConfig {
     /// Maximum number of concurrent connections (default 1000).
@@ -169,7 +169,7 @@ pub struct WebSocketConfig {
     pub message_buffer_size: usize,
 }
 
-#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
+// activated, formerly F-GAP-51
 impl Default for WebSocketConfig {
     fn default() -> Self {
         Self {
@@ -185,7 +185,7 @@ impl Default for WebSocketConfig {
 // ---------------------------------------------------------------------------
 
 /// Hint sent to a client about recommended reconnection timing.
-#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
+// activated, formerly F-GAP-51
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReconnectHint {
     /// Backoff delay in seconds that the client should wait before retrying.
@@ -199,7 +199,7 @@ pub struct ReconnectHint {
 /// Compute exponential backoff delay (seconds) for the given reconnection count.
 ///
 /// Uses the formula: `min(base * 2^attempt, max_delay)` with ±25% jitter.
-#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
+// activated, formerly F-GAP-51
 pub fn exponential_backoff(attempt: u64, base_secs: u64, max_secs: u64) -> u64 {
     use std::cmp::min;
 
@@ -216,7 +216,7 @@ pub fn exponential_backoff(attempt: u64, base_secs: u64, max_secs: u64) -> u64 {
     }
 }
 
-#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
+// activated, formerly F-GAP-51
 impl ReconnectHint {
     /// Build a hint for a client that has attempted reconnection `reconnect_count` times.
     pub fn new(reconnect_count: u64) -> Self {
@@ -234,7 +234,7 @@ impl ReconnectHint {
 // ---------------------------------------------------------------------------
 
 /// Message sent from the hub to a connection to check liveness.
-#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
+#[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeartbeatPing {
     /// Monotonically increasing ping sequence number.
@@ -244,7 +244,7 @@ pub struct HeartbeatPing {
 }
 
 /// Expected response from a connection acknowledging a heartbeat ping.
-#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
+#[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeartbeatPong {
     /// Echoed ping sequence number.
@@ -259,7 +259,7 @@ pub struct HeartbeatPong {
 
 /// Thread-safe, clonable hub that manages WebSocket connections,
 /// topic subscriptions, heartbeats, and message broadcasting.
-#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
+// activated, formerly F-GAP-51
 #[derive(Debug, Clone)]
 pub struct WebSocketHub {
     inner: Arc<WebSocketHubInner>,
@@ -279,7 +279,7 @@ struct WebSocketHubInner {
     heartbeat_seq: RwLock<u64>,
 }
 
-#[allow(dead_code)] // F-GAP-51 — reserved for WebSocket integration
+// activated, formerly F-GAP-51
 impl WebSocketHub {
     /// Create a new hub with the given configuration.
     ///

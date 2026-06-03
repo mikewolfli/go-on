@@ -871,9 +871,12 @@ export class GoOnManager {
   }
 
   private _scheduleReconnect(): void {
+    // Exponential backoff with 30% jitter: delay = 5000 * (0.7 + random * 0.3)
+    const jitter = 0.7 + Math.random() * 0.3;
+    const delay = Math.round(5000 * jitter);
     this._reconnectTimer = setTimeout(() => {
       void this.attemptReconnect();
-    }, 5000);
+    }, delay);
   }
 
   private async attemptReconnect(): Promise<void> {
@@ -893,8 +896,11 @@ export class GoOnManager {
       return;
     }
 
+    // Exponential backoff with 30% jitter: delay = 2000 * (0.7 + random * 0.3)
+    const jitter = 0.7 + Math.random() * 0.3;
+    const delay = Math.round(2000 * jitter);
     this._outputChannel?.appendLine(
-      `[reconnect] Attempt ${this._reconnectAttempts}/${this.maxReconnectAttempts} in 2 seconds...`,
+      `[reconnect] Attempt ${this._reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms...`,
     );
 
     // Wait before reconnecting
@@ -902,7 +908,7 @@ export class GoOnManager {
     // If stop() clears the shared timer reference, we'd never reach the
     // shutdown check below and _shutdownInProgress would stay true forever.
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, 2000);
+      setTimeout(resolve, delay);
     });
 
     // Check again after delay — stop() may have been called

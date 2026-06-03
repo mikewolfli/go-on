@@ -437,12 +437,28 @@ fn get_memory_usage() -> u64 {
     };
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
-    // SAFETY: `GetCurrentProcess` returns a pseudo-handle (always valid, never null).
-    // `PROCESS_MEMORY_COUNTERS` is a Win32 POD struct initialized with `zeroed()`
-    // (which sets cb=0 as per Win32 convention), then cb is set to the struct size.
-    // `K32GetProcessMemoryInfo` writes into `counters` via raw pointer — the size
-    // parameter ensures no buffer overflow. The function is safe to call from any
-    // thread (it reads process-level metrics, not thread-local state).
+    // SAFETY:
+    //
+    // `GetCurrentProcess()` returns a pseudo-handle that is always valid, never
+    // null, and does not need to be closed. It refers to the calling process and
+    // is valid from any thread.
+    //
+    // `PROCESS_MEMORY_COUNTERS` is a Win32 POD struct. Zero-initializing via
+    // `zeroed()` and then setting `cb` to `size_of::<PROCESS_MEMORY_COUNTERS>()`
+    // is the documented Win32 pattern. The `cb` field must be set before calling
+    // into the API; the kernel uses it to know the struct version/size.
+    //
+    // `K32GetProcessMemoryInfo(handle, &mut counters, cb)` writes the process
+    // memory counters into `counters` through a raw pointer. The `cb` parameter
+    // ensures the kernel writes at most `size_of::<PROCESS_MEMORY_COUNTERS>`
+    // bytes, preventing buffer overflow.
+    //
+    // This function is safe to call from any thread — it reads process-level
+    // metrics and does not touch thread-local state.
+    //
+    // The return value is BOOL (nonzero = success). We check this before
+    // reading `WorkingSetSize`. The `cfg(target_os = "windows")` gate ensures
+    // this code only compiles on Windows, where these Win32 APIs are available.
     unsafe {
         let handle = GetCurrentProcess();
         let mut counters: PROCESS_MEMORY_COUNTERS = zeroed();

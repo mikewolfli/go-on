@@ -265,16 +265,16 @@ impl GoOnClient {
 
     // ── Internal helpers ──────────────────────────────────────────────
 
-    /// Returns `true` if the HTTP status or error represents a transient
+    /// Returns `true` if the HTTP status represents a transient
     /// failure that should be retried.
-    fn is_retryable(status: reqwest::StatusCode, err: Option<&SdkError>) -> bool {
-        if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+    ///
+    /// Only retries on 429 (Too Many Requests), 408 (Request Timeout),
+    /// and 5xx (server errors). Client errors (4xx) like 400, 401, 403,
+    /// 404 are never retryable — they indicate a problem with the request.
+    fn is_retryable(status: reqwest::StatusCode, _err: Option<&SdkError>) -> bool {
+        status == reqwest::StatusCode::TOO_MANY_REQUESTS
             || status == reqwest::StatusCode::REQUEST_TIMEOUT
             || status.is_server_error()
-        {
-            return true;
-        }
-        matches!(err, Some(SdkError::Http(_)))
     }
 
     async fn json_rpc(&self, method: &str, params: Value) -> Result<Value, SdkError> {
@@ -390,11 +390,15 @@ impl GoOnClient {
         }))
     }
 
-    /// Compute exponential backoff delay for a given attempt.
+    /// Compute exponential backoff delay with 30% jitter for a given attempt.
+    /// delay = base * 2^attempt * (0.7 + random * 0.3), capped at 30s.
     fn backoff_delay(base: Duration, attempt: u32) -> Duration {
-        base.checked_mul(2u32.saturating_pow(attempt))
+        let raw = base
+            .checked_mul(2u32.saturating_pow(attempt))
             .unwrap_or(Duration::from_secs(30))
-            .min(Duration::from_secs(30))
+            .min(Duration::from_secs(30));
+        let jitter_factor = 0.7 + fastrand::f64() * 0.3;
+        Duration::from_secs_f64(raw.as_secs_f64() * jitter_factor)
     }
 
     fn extract<T>(&self, result: Value) -> Result<T, SdkError>

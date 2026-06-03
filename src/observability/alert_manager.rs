@@ -243,14 +243,13 @@ impl AlertManager {
             span.in_scope(|| {
                 // The span is entered for the duration of the async block
             });
-            match crate::shared::http_client::http_client()
-                .post(&url)
-                .json(&payload)
-                .send()
-                .await
-            {
-                Ok(_) => {}
-                Err(e) => warn!("AlertManager webhook failed: {e}"),
+            match crate::shared::http_client::http_client() {
+                Ok(client) => {
+                    if let Err(e) = client.post(&url).json(&payload).send().await {
+                        warn!("AlertManager webhook send failed: {e}");
+                    }
+                }
+                Err(e) => warn!("AlertManager http_client unavailable: {e}"),
             }
         });
     }

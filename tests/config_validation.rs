@@ -82,7 +82,10 @@ fn config_has_runtime_config() {
         "acp_http_bind_addr must be set"
     );
     let bind_addr = runtime.acp_http_bind_addr.as_deref().unwrap();
-    assert!(!bind_addr.is_empty(), "acp_http_bind_addr must not be empty");
+    assert!(
+        !bind_addr.is_empty(),
+        "acp_http_bind_addr must not be empty"
+    );
     assert!(
         bind_addr.contains(':'),
         "acp_http_bind_addr should contain port separator ':'"

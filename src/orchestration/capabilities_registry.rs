@@ -39,7 +39,16 @@ use crate::orchestration::tool_recommender::ToolRecommender;
 /// is intentionally discarded in the current bootstrap phase; callers that
 /// require a specific engine obtain it via direct construction or the global
 /// plugin registry.
-#[allow(dead_code)] // F-GAP-49 — reserved for future use
+///
+/// ## Warm-up rationale
+///
+/// Even though the handle is discarded, constructing every subsystem triggers
+/// cold-start initialization (lazy statics, connection pools, caches) during
+/// startup rather than on the first user request. This avoids a latency spike
+/// when e.g. `CacheWarmingEngine` or `SseBufferPool` is first accessed from
+/// the hot path. Each subsystem's constructor is idempotent and cheap enough
+/// that a single eager construction does not materially affect boot time.
+#[allow(dead_code)] // F-GAP-49 — reserved for future use; eager warm-up (see doc comment)
 pub fn initialize_capabilities() -> CapabilitiesHandle {
     CapabilitiesHandle::new()
 }

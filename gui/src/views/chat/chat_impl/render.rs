@@ -20,7 +20,13 @@ impl ChatView {
 
         const MAX_MARKDOWN_CHARS: usize = 10_000;
         if text.len() > MAX_MARKDOWN_CHARS {
-            let preview: String = text.chars().take(MAX_MARKDOWN_CHARS).collect();
+            // Truncate on a UTF-8 char boundary using char_indices() to avoid
+            // cutting a multi-byte character in the middle.
+            let preview: String = text
+                .char_indices()
+                .take_while(|(idx, _)| *idx < MAX_MARKDOWN_CHARS)
+                .map(|(_, c)| c)
+                .collect();
             let trunc_color = if ui.visuals().dark_mode {
                 egui::Color32::from_rgb(220, 170, 80)
             } else {

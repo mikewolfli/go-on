@@ -11,9 +11,22 @@ import * as os from "os";
 import * as tar from "tar";
 
 // Trusted SHA-256 checksum for offline verification.
-// Set this to a known-good hash and uncomment the verification call to
-// eliminate the MITM risk inherent in downloading checksums from the same server.
-// const TRUSTED_RUNTIME_SHA256: string | null = null;
+//
+// HOW TO ENABLE:
+//   1. Compute the SHA-256 hash of a known-good runtime binary:
+//      $ shasum -a 256 <path-to-go-on-binary>
+//   2. Uncomment the line below and paste the hash as the string value:
+//      const TRUSTED_RUNTIME_SHA256: string | null = "<paste-hash-here>";
+//   3. Modify verifyArchiveChecksum() to compare against this hardcoded
+//      constant instead of (or in addition to) the downloaded checksums.txt.
+//
+// When enabled, this eliminates the MITM risk inherent in downloading
+// checksums from the same server that serves the binary.
+//
+// When null (the default), verification relies solely on checksums.txt
+// downloaded from the same release. This is better than no verification,
+// but an attacker who can MITM the download can also forge checksums.txt.
+const TRUSTED_RUNTIME_SHA256: string | null = null;
 
 export interface RuntimeResolution {
   executablePath: string;
@@ -206,8 +219,13 @@ async function downloadFile(
     });
   } catch (err) {
     if (attempt < MAX_DOWNLOAD_RETRIES) {
+      // Exponential backoff with 30% jitter to prevent thundering herd.
+      // delay = (2^attempt * 1000) * (0.7 + random * 0.3)
       const delay = Math.pow(2, attempt) * 1000;
-      await new Promise((resolve) => setTimeout(resolve, delay));
+      const jitter = 0.7 + Math.random() * 0.3;
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.round(delay * jitter)),
+      );
       return downloadFile(url, destinationPath, maxRedirects, attempt + 1);
     }
     throw err;
@@ -469,6 +487,15 @@ export async function ensureGoOnBinary(
       releaseTag,
     ]),
   );
+  // SHA-256 verification relies on checksums.txt downloaded from the same release server.
+  // To eliminate the MITM risk, set TRUSTED_RUNTIME_SHA256 above to a known-good hash.
+  if (TRUSTED_RUNTIME_SHA256 === null) {
+    void vscode.window.showWarningMessage(
+      "[go-on] SHA-256 verification relies on checksums.txt from the same release server. " +
+        "Set TRUSTED_RUNTIME_SHA256 in runtimeBinaryService.ts for stronger security.",
+    );
+  }
+
   try {
     await downloadFile(downloadUrl, archivePath);
 

@@ -12,9 +12,6 @@
 //! Weight exchange and aggregation are validated structurally. Real FL rounds
 //! would use gRPC streaming between nodes.
 
-use std::time::Duration;
-use tokio::time::sleep;
-
 // ── Context ────────────────────────────────────────────────────────────────
 
 /// Simulates a minimal FL node identity.
@@ -141,8 +138,6 @@ async fn test_federated_learning_full_round() {
     // Each participant should have consumed some privacy budget.
     assert!(node_a.privacy_budget < 1.0);
     assert!(node_b.privacy_budget < 1.0);
-
-    sleep(Duration::from_millis(10)).await;
 }
 
 /// Validates that a node with exhausted privacy budget is excluded.
@@ -185,8 +180,6 @@ async fn test_federated_learning_privacy_budget_exhaustion() {
         vec![]
     };
     assert_eq!(eligible_partial.len(), 1);
-
-    sleep(Duration::from_millis(10)).await;
 }
 
 /// Verifies that differential privacy noise is structurally represented.
@@ -227,6 +220,4 @@ async fn test_federated_learning_dp_noise_application() {
         (node.privacy_budget - 0.7).abs() < f64::EPSILON,
         "budget after two rounds should be 0.7"
     );
-
-    sleep(Duration::from_millis(10)).await;
 }

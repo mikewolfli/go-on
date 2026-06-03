@@ -13,9 +13,9 @@ pub mod rpc_protocol;
 // When `sub-bus-protocol` is enabled, the v2 `multi_channel_transport` module provides an
 // alternative with richer features. The two struct names are intentionally identical because
 // they live in separate modules, avoiding name collisions.
+pub mod grpc;
 pub mod rate_limit;
 pub mod transport;
-pub mod grpc;
 pub mod websocket;
 
 // Re-exports

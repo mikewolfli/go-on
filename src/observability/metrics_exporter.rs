@@ -24,6 +24,7 @@
 //!   for unified Prometheus exposure.
 
 use crate::acp::server::AcpServer;
+use std::sync::LazyLock;
 use std::sync::Mutex;
 
 /// Sliding window over latency bucket histogram snapshots.
@@ -31,7 +32,10 @@ use std::sync::Mutex;
 /// Stores the most recent `N` snapshots of the request_latency_bucket_counts
 /// array so that P95 estimates reflect recent behavior rather than cumulative
 /// lifetime counts.
-#[allow(dead_code)]
+///
+/// GAP-B58-C15: Activated — the sliding window is wired into `build_prometheus_metrics`
+/// via the global `P95_SLIDING_WINDOW`. Each call to `build_prometheus_metrics`
+/// records a snapshot and uses the windowed delta for P95 estimation.
 pub struct SlidingWindowBuckets {
     /// Circular buffer of bucket snapshots.
     windows: Vec<[u64; 10]>,
@@ -39,9 +43,11 @@ pub struct SlidingWindowBuckets {
     capacity: usize,
     /// Next write index in the circular buffer.
     write_index: usize,
+    /// Previous cumulative snapshot for delta computation.
+    last_cumulative: Option<[u64; 10]>,
 }
 
-#[allow(dead_code)]
+/// Methods on the activated sliding-window struct.
 impl SlidingWindowBuckets {
     /// Create a new sliding window with the given capacity (number of snapshots).
     /// Each snapshot captures the cumulative bucket counts at a point in time.
@@ -50,15 +56,13 @@ impl SlidingWindowBuckets {
             windows: Vec::with_capacity(capacity),
             capacity,
             write_index: 0,
+            last_cumulative: None,
         }
     }
 
     /// Record a new snapshot of cumulative bucket counts.
-    /// This converts the cumulative snapshot into a delta (the change since
-    /// the previous snapshot) and stores it in the sliding window.
     pub fn record_snapshot(&mut self, cumulative: &[u64; 10]) {
-        // Compute delta from previous cumulative snapshot
-        let delta = if let Some(prev) = self.last_cumulative() {
+        let delta = if let Some(prev) = self.last_cumulative {
             let mut d = [0u64; 10];
             for i in 0..10 {
                 d[i] = cumulative[i].saturating_sub(prev[i]);
@@ -67,6 +71,7 @@ impl SlidingWindowBuckets {
         } else {
             *cumulative
         };
+        self.last_cumulative = Some(*cumulative);
 
         if self.windows.len() < self.capacity {
             self.windows.push(delta);
@@ -74,21 +79,6 @@ impl SlidingWindowBuckets {
             self.windows[self.write_index % self.capacity] = delta;
         }
         self.write_index += 1;
-    }
-
-    /// Return the last recorded cumulative snapshot, or `None` if none yet.
-    fn last_cumulative(&self) -> Option<&[u64; 10]> {
-        if self.write_index == 0 {
-            return None;
-        }
-        // We don't store cumulatives, so we return None to force full capture
-        // on the first call. On subsequent calls we compute deltas.
-        if self.write_index < 2 {
-            return None;
-        }
-        // This is a simplified approach — we only store deltas.
-        // For correctness, we always start fresh.
-        None
     }
 
     /// Compute the sum of all deltas in the sliding window.
@@ -106,14 +96,17 @@ impl SlidingWindowBuckets {
     pub fn reset(&mut self) {
         self.windows.clear();
         self.write_index = 0;
+        self.last_cumulative = None;
     }
 
     /// Return the number of snapshots currently in the window.
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.windows.len()
     }
 
     /// Return whether the window is empty (no snapshots recorded).
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.windows.is_empty()
     }
@@ -121,12 +114,14 @@ impl SlidingWindowBuckets {
 
 /// Thread-safe wrapper around `SlidingWindowBuckets` for use in Prometheus
 /// metrics rendering.
-#[allow(dead_code)]
+///
+/// GAP-B58-C15: Activated — provides thread-safe snapshot recording and
+/// windowed bucket sum for P95 calculation.
 pub struct MetricsSlidingWindow {
     inner: Mutex<SlidingWindowBuckets>,
 }
 
-#[allow(dead_code)]
+/// Methods on the activated sliding-window wrapper.
 impl MetricsSlidingWindow {
     /// Create a new metrics sliding window with the given capacity.
     pub fn new(capacity: usize) -> Self {
@@ -143,6 +138,7 @@ impl MetricsSlidingWindow {
     }
 
     /// Reset the sliding window.
+    #[allow(dead_code)]
     pub fn reset(&self) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.reset();
@@ -158,6 +154,11 @@ impl MetricsSlidingWindow {
         }
     }
 }
+
+/// Global sliding window for P95 latency tracking (activated).
+/// Records histogram bucket snapshots on each `/metrics` scrape.
+static P95_SLIDING_WINDOW: LazyLock<MetricsSlidingWindow> =
+    LazyLock::new(|| MetricsSlidingWindow::new(12));
 
 /// Reset the per-process cumulative latency bucket counts so that P95
 /// reflects recent behavior rather than lifetime totals.
@@ -229,7 +230,15 @@ pub fn build_prometheus_metrics(server: &AcpServer) -> String {
     } else {
         100.0
     };
-    let p95 = estimate_p95_latency(&m.request_latency_bucket_counts);
+    // Record snapshot into sliding window for rolling P95 estimate
+    P95_SLIDING_WINDOW.record_snapshot(&m.request_latency_bucket_counts);
+    let window_sum = P95_SLIDING_WINDOW.window_sum();
+    // Use windowed delta if window has data, otherwise fall back to cumulative
+    let p95 = if window_sum.iter().any(|&c| c > 0) {
+        estimate_p95_latency(&window_sum)
+    } else {
+        estimate_p95_latency(&m.request_latency_bucket_counts)
+    };
 
     let mut lines = Vec::new();
 

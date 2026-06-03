@@ -198,7 +198,9 @@ impl SessionCompressor {
         // - Recent N messages (last keep_recent).
         // - System messages anywhere in the history.
         // - User instruction messages that appear to contain directives.
-        let split_point = original_count.saturating_sub(self.keep_recent).max(incremental_count);
+        let split_point = original_count
+            .saturating_sub(self.keep_recent)
+            .max(incremental_count);
         let mut kept: Vec<Message> = Vec::new();
         let mut trimmed: Vec<&Message> = Vec::new();
 
@@ -244,10 +246,7 @@ impl SessionCompressor {
         } else if new_summary.is_empty() {
             self.incremental.running_summary.clone()
         } else {
-            format!(
-                "{}\n{}",
-                self.incremental.running_summary, new_summary
-            )
+            format!("{}\n{}", self.incremental.running_summary, new_summary)
         };
 
         let compressed_count = kept.len() + 1; // +1 for the summary message itself
@@ -280,7 +279,11 @@ impl SessionCompressor {
     /// # Arguments
     /// * `messages` - The original message list (mutated in place).
     /// * `compressed` - The `CompressedContext` produced by `compress`.
-    pub fn inject_compressed_context(&self, messages: &mut Vec<Message>, compressed: &CompressedContext) {
+    pub fn inject_compressed_context(
+        &self,
+        messages: &mut Vec<Message>,
+        compressed: &CompressedContext,
+    ) {
         if compressed.summary.is_empty() {
             return;
         }
@@ -485,7 +488,12 @@ mod tests {
             ..Default::default()
         };
         let msgs = make_msgs(&[
-            "user", "assistant", "user", "assistant", "user", "assistant",
+            "user",
+            "assistant",
+            "user",
+            "assistant",
+            "user",
+            "assistant",
         ]);
         let result = compressor.compress(&msgs);
         assert_eq!(result.original_count, 6);
@@ -565,7 +573,10 @@ mod tests {
 
         // Round 1: compress 10 messages.
         let mut roles = Vec::with_capacity(10);
-        for _ in 0..5 { roles.push("user"); roles.push("assistant"); }
+        for _ in 0..5 {
+            roles.push("user");
+            roles.push("assistant");
+        }
         let msgs_round1 = make_msgs(&roles);
         let keep_recent = compressor.keep_recent;
         let result1 = compressor.compress(&msgs_round1);

@@ -143,7 +143,7 @@ pub fn new_acp_server(
             vec![Permission::Read, Permission::Write, Permission::Execute],
         );
         enforcer.register_role("viewer", vec![Permission::Read]);
-        // Register tenants from environment-backed sources (F-GAP-15 / MCP-5):
+        // Register tenants from environment-backed sources (activated, formerly F-GAP-15 / MCP-5):
         // - GO_ON_TENANTS (inline IDs)
         // - GO_ON_TENANTS_FILE (file-backed tenant registry)
         let tenant_count = enforcer.register_tenants_from_sources();
@@ -254,21 +254,9 @@ pub fn new_acp_server(
     // Wire safety checker
     {
         use crate::security::content_safety::{ContentSafetyConfig, SafetyChecker};
-        let checker = match SafetyChecker::new(ContentSafetyConfig::default()) {
-            Ok(c) => Arc::new(c),
-            Err(e) => {
-                tracing::warn!("Failed to create SafetyChecker (degraded mode): {}", e);
-                // Fallback: empty check_categories — no rules compiled, cannot fail
-                let lenient_config = ContentSafetyConfig {
-                    check_categories: std::collections::HashSet::new(),
-                    ..Default::default()
-                };
-                Arc::new(
-                    SafetyChecker::new(lenient_config)
-                        .expect("empty-category SafetyChecker is infallible"),
-                )
-            }
-        };
+        // SafetyChecker::new is now infallible — regex compilation errors are
+        // logged and result in an empty ruleset rather than a hard failure.
+        let checker = Arc::new(SafetyChecker::new(ContentSafetyConfig::default()));
         builder = builder.with_safety_checker(checker);
     }
 
@@ -859,7 +847,7 @@ fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
     server.session_registry = Some(session_registry);
     server.websocket_hub = Some(ws_hub);
 
-    // ── Federated learning initializer (BLUE2 / F-GAP-19) ────────────
+    // ── Federated learning initializer (activated, formerly BLUE2 / F-GAP-19) ────
     // If FEDERATED_PEERS is set, initialize the FederatedRLAdapter with
     // differential privacy and model versioning enabled.
     {
@@ -877,6 +865,16 @@ fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
             debug!("wire_server: FEDERATED_PEERS not set, federated learning disabled");
         }
     }
+
+    // ── Memory health monitor (F-GAP-49 activation) ───────────────
+    // Start background memory pressure monitoring. Periodically queries
+    // system memory, logs warnings on low/critical conditions, and
+    // evaluates AlertManager rules for threshold-based alerting.
+    crate::observability::memory_health::start_memory_monitor();
+    info!(
+        "memory health monitor started (interval: {}s)",
+        crate::observability::memory_health::MEMORY_MONITOR_INTERVAL_SECS
+    );
 }
 
 /// Run the ACP server
@@ -999,7 +997,7 @@ pub async fn run_acp_server(server: &mut AcpServer) -> Result<()> {
             continue;
         }
 
-        if let Err(err) = handle_request(server, request).await {
+        if let Err(err) = handle_request(server, request, None).await {
             error!("request failed: {err:#}");
         }
     }
@@ -3592,8 +3590,9 @@ async fn route_http_post(
                     // Spawn the RPC handler so we can read from the pipe concurrently,
                     // preventing a deadlock if the response exceeds the duplex buffer size.
                     let server_ref = Arc::clone(&server);
+                    let headers_owned = header_part.to_string();
                     let rpc_task = tokio::spawn(async move {
-                        handle_request(server_ref.as_ref(), request).await
+                        handle_request(server_ref.as_ref(), request, Some(&headers_owned)).await
                     });
 
                     // Read the captured RPC response from the pipe concurrently.
@@ -4023,7 +4022,7 @@ async fn route_rpc_over_tls(server: &AcpServer, request: JsonRpcRequest) -> serd
     // are written to server.output as usual. For the mTLS HTTP response, we
     // return a minimal JSON-RPC envelope.
     let method = request.method.clone();
-    match handle_request(server, request).await {
+    match handle_request(server, request, None).await {
         Ok(()) => {
             serde_json::json!({
                 "ok": true,

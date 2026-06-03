@@ -231,12 +231,12 @@ impl KeyRotator for MemoryRotator {
 // ---------------------------------------------------------------------------
 
 /// Rotator backed by environment variables.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved secret rotation feature
 pub struct EnvRotator {
     prefix: String,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved secret rotation feature
 impl EnvRotator {
     pub fn new(prefix: String) -> Self {
         Self { prefix }
@@ -346,7 +346,12 @@ impl VaultRotator {
             token,
             mount_path,
             #[cfg(feature = "vault")]
-            client: crate::shared::http_client::http_client(),
+            client: match crate::shared::http_client::http_client() {
+                Ok(c) => c,
+                Err(e) => {
+                    panic!("VaultRotator: failed to build shared HTTP client: {e}")
+                }
+            },
         }
     }
 

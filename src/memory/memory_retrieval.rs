@@ -40,7 +40,7 @@ pub enum LinkType {
 
 impl LinkType {
     /// Human-readable label.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved memory retrieval feature
     pub fn label(&self) -> &str {
         match self {
             LinkType::Similar => "similar",
@@ -70,7 +70,7 @@ pub struct MemoryLink {
 
 impl MemoryLink {
     /// Create a new memory link.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved memory retrieval feature
     pub fn new(
         m1: impl Into<String>,
         m2: impl Into<String>,
@@ -158,24 +158,24 @@ impl LinkGraph {
         result
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved memory retrieval feature
     fn has_link(&self, m1: &str, m2: &str) -> bool {
         self.links.contains_key(&(m1.to_string(), m2.to_string()))
             || self.links.contains_key(&(m2.to_string(), m1.to_string()))
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved memory retrieval feature
     fn len(&self) -> usize {
         self.links.len()
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved memory retrieval feature
     fn is_empty(&self) -> bool {
         self.links.is_empty()
     }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved memory retrieval feature
 impl MemoryRetrievalEngine {
     /// Create a new retrieval engine backed by the given persistence manager.
     pub fn new(persistence: MemoryPersistence) -> Self {
@@ -409,7 +409,7 @@ impl MemoryRetrievalEngine {
 // Helpers
 // ===========================================================================
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved memory retrieval feature
 fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

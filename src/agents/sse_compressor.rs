@@ -122,7 +122,7 @@ impl SseDecompressor {
 ///
 /// Returns `None` when compression would expand the data (payload too small),
 /// allowing callers to fall back to uncompressed output.
-#[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
+#[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
 pub fn compress_sse_payload(data: &[u8]) -> Option<Vec<u8>> {
     if data.len() < 128 {
         return None;
@@ -144,7 +144,8 @@ pub fn compress_sse_payload(data: &[u8]) -> Option<Vec<u8>> {
 // Deprecated aliases for backward compatibility
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)] // F-GAP-51 — deprecated alias kept for backward compat
+/// activated, formerly F-GAP-51 — deprecated alias kept for backward compat
+#[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
 #[deprecated(since = "0.1.0", note = "renamed to SseDecompressor")]
 pub type SseCompressor = SseDecompressor;
 

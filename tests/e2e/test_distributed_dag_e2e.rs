@@ -12,8 +12,6 @@
 //! network connectivity between them.
 
 use std::collections::HashMap;
-use std::time::Duration;
-use tokio::time::sleep;
 
 use go_on::fault_tolerance::{FaultEvent, FaultType};
 use go_on::orchestration::distributed::dag_coordinator::{
@@ -247,8 +245,6 @@ async fn test_distributed_dag_failure_recovery() {
     assert_eq!(dag_state.plan.status, DagStatus::Running);
     dag_state.plan.status = DagStatus::Completed;
     assert_eq!(dag_state.plan.status, DagStatus::Completed);
-
-    sleep(Duration::from_millis(10)).await;
 }
 
 /// Validates that a DAG with invalid structure (cyclic deps) is rejected.
@@ -324,8 +320,6 @@ async fn test_distributed_dag_rejects_invalid_dag() {
     let initial_ready = state.ready_nodes();
     assert_eq!(initial_ready.len(), 1);
     assert_eq!(initial_ready[0].dag_node_id, "fetch-data");
-
-    sleep(Duration::from_millis(10)).await;
 }
 
 /// Validates DAG status transitions.
@@ -370,6 +364,4 @@ async fn test_distributed_dag_status_transitions() {
     assert_eq!(state.plan.status, DagStatus::Running);
     state.plan.status = DagStatus::Completed;
     assert_eq!(state.plan.status, DagStatus::Completed);
-
-    sleep(Duration::from_millis(10)).await;
 }

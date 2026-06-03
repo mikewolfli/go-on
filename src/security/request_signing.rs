@@ -22,7 +22,7 @@ pub enum SigningError {
     #[error("invalid key: {0}")]
     InvalidKey(String),
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved request signing feature
     #[error("signing algorithm mismatch: expected {expected}, got {actual}")]
     AlgorithmMismatch { expected: String, actual: String },
 
@@ -76,7 +76,7 @@ pub struct RequestSignature {
 impl RequestSignature {
     /// Create a new RequestSignature with the current timestamp.
     /// Deprecated: construct directly with fields instead (timestamp must match signing_payload).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved request signing feature
     pub fn new(
         signature: Vec<u8>,
         algorithm: SigningAlgorithm,

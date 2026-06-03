@@ -151,10 +151,7 @@ mod unit_tests {
         ));
 
         // Special names
-        assert!(matches!(
-            Theme::from_name("Hello Kitty"),
-            Theme::HelloKitty
-        ));
+        assert!(matches!(Theme::from_name("Hello Kitty"), Theme::HelloKitty));
         assert!(matches!(Theme::from_name("hellokitty"), Theme::HelloKitty));
 
         // Unknown name defaults to Minimal
@@ -194,7 +191,10 @@ mod unit_tests {
         assert!(cfg.features.chat, "Chat should be enabled by default");
         assert!(cfg.features.config, "Config should be enabled by default");
         assert!(cfg.features.skills, "Skills should be enabled by default");
-        assert!(cfg.features.workflow, "Workflow should be enabled by default");
+        assert!(
+            cfg.features.workflow,
+            "Workflow should be enabled by default"
+        );
         // These features may be disabled by default
         assert!(
             !cfg.features.autotune_chain_injection,

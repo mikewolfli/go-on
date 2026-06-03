@@ -165,14 +165,22 @@ struct SpeedEstimator {
 impl SpeedEstimator {
     fn new() -> Self {
         let mut base_latencies = HashMap::new();
-        CostEstimator::insert_bounded_u64(&mut base_latencies, "claude-sonnet-4".to_string(), 1200, 500);
-        CostEstimator::insert_bounded_u64(&mut base_latencies, "claude-haiku".to_string(), 400, 500);
+        CostEstimator::insert_bounded_u64(
+            &mut base_latencies,
+            "claude-sonnet-4".to_string(),
+            1200,
+            500,
+        );
+        CostEstimator::insert_bounded_u64(
+            &mut base_latencies,
+            "claude-haiku".to_string(),
+            400,
+            500,
+        );
         CostEstimator::insert_bounded_u64(&mut base_latencies, "gpt-4o".to_string(), 800, 500);
         CostEstimator::insert_bounded_u64(&mut base_latencies, "gpt-4o-mini".to_string(), 350, 500);
 
-        Self {
-            base_latencies,
-        }
+        Self { base_latencies }
     }
 
     /// Estimate the latency (ms) for a given agent and token count.

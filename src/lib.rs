@@ -45,6 +45,8 @@ pub use crate::governance::review_controls;
 pub use crate::governance::runtime_controls;
 pub use crate::governance::security_governor;
 pub use crate::i18n::runtime;
+// Public re-export for external consumers (SDK / GUI integrations).
+// Internal modules should use `crate::i18n::watcher` directly.
 pub use crate::i18n::watcher as i18n_watcher;
 pub use crate::intelligence::adaptive_selector;
 pub use crate::intelligence::evaluation;
@@ -107,10 +109,7 @@ compile_error!(
         feature = "profile-multi-users-server"
     ),
     all(feature = "profile-simple-server", feature = "profile-full"),
-    all(
-        feature = "profile-multi-users-server",
-        feature = "profile-full"
-    ),
+    all(feature = "profile-multi-users-server", feature = "profile-full"),
 ))]
 compile_error!(
     "Exactly one profile feature must be enabled. \

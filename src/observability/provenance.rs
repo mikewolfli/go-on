@@ -185,7 +185,105 @@ impl ProvenanceLedger {
     }
 }
 
-/// Helper to create a provenance entry quickly
+// ── ProvenanceEntryBuilder ──────────────────────────────────────────────────
+
+/// Builder for [`ProvenanceEntry`] that avoids long argument lists.
+///
+/// # Usage
+///
+/// ```ignore
+/// use crate::observability::provenance::ProvenanceEntryBuilder;
+///
+/// let entry = ProvenanceEntryBuilder::new("task-001", "chat", "agent-a", "read_file")
+///     .input(&serde_json::json!({"path": "/foo"}))
+///     .output(&serde_json::json!({"content": "..."}))
+///     .upstream_ids(vec!["prev-id".to_string()])
+///     .build();
+/// ```
+#[allow(dead_code)] // Public API — reserved for adoption over the old positional functions
+pub struct ProvenanceEntryBuilder {
+    task_id: String,
+    phase: String,
+    agent: String,
+    tool: String,
+    input: serde_json::Value,
+    output: serde_json::Value,
+    upstream_ids: Vec<String>,
+    rationale: Option<String>,
+    metadata: serde_json::Value,
+}
+
+#[allow(dead_code)] // Public API — reserved for adoption over the old positional functions
+impl ProvenanceEntryBuilder {
+    /// Start building a provenance entry with the minimum required fields.
+    /// `input` and `output` default to `serde_json::Value::Null`; call
+    /// `.input()` / `.output()` to override.
+    pub fn new(task_id: &str, phase: &str, agent: &str, tool: &str) -> Self {
+        Self {
+            task_id: task_id.to_string(),
+            phase: phase.to_string(),
+            agent: agent.to_string(),
+            tool: tool.to_string(),
+            input: serde_json::Value::Null,
+            output: serde_json::Value::Null,
+            upstream_ids: vec![],
+            rationale: None,
+            metadata: serde_json::Value::Object(Default::default()),
+        }
+    }
+
+    /// Set the input value (used to compute `input_digest`).
+    pub fn input(mut self, value: &serde_json::Value) -> Self {
+        self.input = value.clone();
+        self
+    }
+
+    /// Set the output value (used to compute `output_digest`).
+    pub fn output(mut self, value: &serde_json::Value) -> Self {
+        self.output = value.clone();
+        self
+    }
+
+    /// Set the upstream provenance IDs.
+    pub fn upstream_ids(mut self, ids: Vec<String>) -> Self {
+        self.upstream_ids = ids;
+        self
+    }
+
+    /// Attach an optional rationale string.
+    pub fn rationale(mut self, rationale: &str) -> Self {
+        self.rationale = Some(rationale.to_string());
+        self
+    }
+
+    /// Set arbitrary metadata.
+    pub fn metadata(mut self, meta: serde_json::Value) -> Self {
+        self.metadata = meta;
+        self
+    }
+
+    /// Consume the builder and produce a [`ProvenanceEntry`].
+    pub fn build(self) -> ProvenanceEntry {
+        ProvenanceEntry {
+            id: uuid_v4(),
+            task_id: self.task_id,
+            phase: self.phase,
+            agent: self.agent,
+            tool: self.tool,
+            input_digest: ProvenanceLedger::digest(&self.input),
+            output_digest: ProvenanceLedger::digest(&self.output),
+            upstream_ids: self.upstream_ids,
+            timestamp_ms: now_ms(),
+            rationale: self.rationale,
+            metadata: self.metadata,
+        }
+    }
+}
+
+/// Helper to create a provenance entry.
+///
+/// Prefer [`ProvenanceEntryBuilder`] for new code — it avoids the long
+/// parameter list and makes call sites self-documenting.
 pub fn make_entry(
     task_id: &str,
     phase: &str,
@@ -195,23 +293,18 @@ pub fn make_entry(
     output: &serde_json::Value,
     upstream_ids: Vec<String>,
 ) -> ProvenanceEntry {
-    ProvenanceEntry {
-        id: uuid_v4(),
-        task_id: task_id.to_string(),
-        phase: phase.to_string(),
-        agent: agent.to_string(),
-        tool: tool.to_string(),
-        input_digest: ProvenanceLedger::digest(input),
-        output_digest: ProvenanceLedger::digest(output),
-        upstream_ids,
-        timestamp_ms: now_ms(),
-        rationale: None,
-        metadata: serde_json::Value::Object(Default::default()),
-    }
+    ProvenanceEntryBuilder::new(task_id, phase, agent, tool)
+        .input(input)
+        .output(output)
+        .upstream_ids(upstream_ids)
+        .build()
 }
 
 /// Helper to create a provenance entry with an optional rationale.
-#[allow(dead_code)] // Intentionally reserved for future wiring
+///
+/// Prefer [`ProvenanceEntryBuilder`] for new code — it avoids the long
+/// parameter list and makes call sites self-documenting.
+#[allow(dead_code, clippy::too_many_arguments)] // Reserved for future wiring — callers will adopt ProvenanceEntryBuilder
 pub fn make_entry_with_rationale(
     task_id: &str,
     phase: &str,
@@ -222,19 +315,14 @@ pub fn make_entry_with_rationale(
     upstream_ids: Vec<String>,
     rationale: Option<String>,
 ) -> ProvenanceEntry {
-    ProvenanceEntry {
-        id: uuid_v4(),
-        task_id: task_id.to_string(),
-        phase: phase.to_string(),
-        agent: agent.to_string(),
-        tool: tool.to_string(),
-        input_digest: ProvenanceLedger::digest(input),
-        output_digest: ProvenanceLedger::digest(output),
-        upstream_ids,
-        timestamp_ms: now_ms(),
-        rationale,
-        metadata: serde_json::Value::Object(Default::default()),
+    let mut builder = ProvenanceEntryBuilder::new(task_id, phase, agent, tool)
+        .input(input)
+        .output(output)
+        .upstream_ids(upstream_ids);
+    if let Some(r) = rationale {
+        builder = builder.rationale(&r);
     }
+    builder.build()
 }
 
 fn uuid_v4() -> String {

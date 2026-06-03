@@ -40,7 +40,8 @@ pub(super) async fn handle_health(server: &AcpServer, request_id: Option<Value>)
 
     // Module-level health profiles — read from harness_bus and capability_bus.
     let harness_profile = server
-        .governance_deps.harness_bus
+        .governance_deps
+        .harness_bus
         .as_ref()
         .map(|hb| {
             json!({
@@ -58,7 +59,8 @@ pub(super) async fn handle_health(server: &AcpServer, request_id: Option<Value>)
         .unwrap_or(json!({"enabled": false}));
 
     let capability_profile = server
-        .governance_deps.capability_bus
+        .governance_deps
+        .capability_bus
         .as_ref()
         .map(|cb| {
             json!({
@@ -362,7 +364,8 @@ pub(super) async fn handle_capabilities_list(
     request_id: Option<Value>,
 ) -> Result<()> {
     let capability_profile = server
-        .governance_deps.capability_bus
+        .governance_deps
+        .capability_bus
         .as_ref()
         .map(|cb| {
             let p = cb.capability_bus_profile();

@@ -245,7 +245,7 @@ impl HotCache {
         self.remove(&lru_id)
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — planned memory persistence feature
     fn contains(&self, id: &str) -> bool {
         self.entries.contains_key(id)
     }
@@ -254,12 +254,12 @@ impl HotCache {
         self.entries.len()
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — planned memory persistence feature
     fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — planned memory persistence feature
     fn iter_entries(&self) -> impl Iterator<Item = &MemoryEntry> {
         self.entries.values().map(|he| &he.entry)
     }
@@ -522,10 +522,10 @@ impl WarmStore {
             .embedding
             .as_ref()
             .map(|v| serde_json::to_string(v).unwrap_or_default());
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
+        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("warm store mutex poisoned, recovering");
+            poisoned.into_inner()
+        });
         conn.execute(
             "INSERT INTO warm_memory(id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id)
              VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
@@ -562,10 +562,10 @@ impl WarmStore {
     }
 
     fn get(&self, id: &str) -> Result<Option<MemoryEntry>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
+        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("warm store mutex poisoned, recovering");
+            poisoned.into_inner()
+        });
         let mut stmt = conn.prepare(
             "SELECT id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id
              FROM warm_memory WHERE id = ?1",
@@ -594,10 +594,10 @@ impl WarmStore {
     }
 
     fn remove(&self, id: &str) -> Result<bool> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
+        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("warm store mutex poisoned, recovering");
+            poisoned.into_inner()
+        });
         let affected = conn.execute(
             "DELETE FROM warm_memory WHERE id = ?1",
             rusqlite::params![id],
@@ -610,10 +610,10 @@ impl WarmStore {
         min_usefulness: f32,
         limit: usize,
     ) -> Result<Vec<MemoryEntry>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
+        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("warm store mutex poisoned, recovering");
+            poisoned.into_inner()
+        });
         let mut stmt = conn.prepare(
             "SELECT id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id
              FROM warm_memory WHERE usefulness >= ?1 ORDER BY usefulness DESC LIMIT ?2",
@@ -642,10 +642,10 @@ impl WarmStore {
     }
 
     fn count(&self) -> Result<usize> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
+        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("warm store mutex poisoned, recovering");
+            poisoned.into_inner()
+        });
         let count: i64 =
             conn.query_row("SELECT COUNT(*) FROM warm_memory", [], |row| row.get(0))?;
         Ok(count as usize)
@@ -724,7 +724,7 @@ impl WarmStore {
 #[cfg(not(feature = "backend-sqlite"))]
 #[derive(Debug)]
 pub struct WarmStore {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — planned memory persistence feature
     max_entries: usize,
 }
 
@@ -760,7 +760,7 @@ impl WarmStore {
         Ok(Vec::new())
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — planned memory persistence feature
     fn search_by_session(&self, _session_id: &str, _limit: usize) -> Result<Vec<MemoryEntry>> {
         Ok(Vec::new())
     }
@@ -846,10 +846,10 @@ impl MemoryPersistence {
         let seq = self.sequence.fetch_add(1, Ordering::Relaxed);
         let _ = seq; // available for future ordering needs
 
-        let mut hot = self
-            .hot
-            .lock()
-            .map_err(|e| anyhow::anyhow!("hot cache mutex poisoned: {}", e))?;
+        let mut hot = self.hot.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("hot cache mutex poisoned in 'store', recovering");
+            poisoned.into_inner()
+        });
 
         // Always insert/refresh in hot tier.
         hot.insert(entry);
@@ -860,10 +860,10 @@ impl MemoryPersistence {
     pub fn retrieve(&self, id: &str) -> Result<Option<MemoryEntry>> {
         // Check hot first.
         {
-            let mut hot = self
-                .hot
-                .lock()
-                .map_err(|e| anyhow::anyhow!("hot cache mutex poisoned: {}", e))?;
+            let mut hot = self.hot.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("hot cache mutex poisoned in 'retrieve', recovering");
+                poisoned.into_inner()
+            });
             if let Some(entry) = hot.get(id) {
                 entry.touch();
                 return Ok(Some(entry.clone()));
@@ -899,10 +899,10 @@ impl MemoryPersistence {
         let mut removed = false;
         // Remove from hot.
         {
-            let mut hot = self
-                .hot
-                .lock()
-                .map_err(|e| anyhow::anyhow!("hot cache mutex poisoned: {}", e))?;
+            let mut hot = self.hot.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("hot cache mutex poisoned in 'remove', recovering");
+                poisoned.into_inner()
+            });
             if hot.remove(id).is_some() {
                 removed = true;
             }
@@ -922,10 +922,10 @@ impl MemoryPersistence {
         self.warm.upsert(&entry)?;
 
         // Remove from hot.
-        let mut hot = self
-            .hot
-            .lock()
-            .map_err(|e| anyhow::anyhow!("hot cache mutex poisoned: {}", e))?;
+        let mut hot = self.hot.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("hot cache mutex poisoned in 'promote_to_warm', recovering");
+            poisoned.into_inner()
+        });
         hot.remove(&entry.id);
         Ok(())
     }
@@ -946,10 +946,10 @@ impl MemoryPersistence {
         let mut entry = entry;
         entry.tier = MemoryTier::Hot;
         {
-            let mut hot = self
-                .hot
-                .lock()
-                .map_err(|e| anyhow::anyhow!("hot cache mutex poisoned: {}", e))?;
+            let mut hot = self.hot.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("hot cache mutex poisoned in 'promote_to_hot', recovering");
+                poisoned.into_inner()
+            });
             hot.insert(entry);
         }
         Ok(())
@@ -964,10 +964,10 @@ impl MemoryPersistence {
 
         // ── Step 1: Process hot cache evictions ──
         let evicted: Vec<MemoryEntry> = {
-            let mut hot = self
-                .hot
-                .lock()
-                .map_err(|e| anyhow::anyhow!("hot cache mutex poisoned: {}", e))?;
+            let mut hot = self.hot.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("hot cache mutex poisoned in 'auto_migrate', recovering");
+                poisoned.into_inner()
+            });
             hot.evict_expired()
         };
 
@@ -1012,10 +1012,10 @@ impl MemoryPersistence {
                 e.tier = MemoryTier::Warm;
                 self.warm.upsert(&e)?;
                 {
-                    let mut hot = self
-                        .hot
-                        .lock()
-                        .map_err(|e| anyhow::anyhow!("hot cache mutex poisoned: {}", e))?;
+                    let mut hot = self.hot.lock().unwrap_or_else(|poisoned| {
+                        tracing::warn!("hot cache mutex poisoned in 'promote', recovering");
+                        poisoned.into_inner()
+                    });
                     hot.remove(&entry.id);
                 }
                 Ok(Some(e))
@@ -1062,7 +1062,10 @@ impl MemoryPersistence {
         let hot_count = self
             .hot
             .lock()
-            .map_err(|e| anyhow::anyhow!("hot cache mutex poisoned: {}", e))?
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("hot cache mutex poisoned in 'tier_counts', recovering");
+                poisoned.into_inner()
+            })
             .len();
         let warm_count = self.warm.count().unwrap_or(0);
         Ok(TierCounts {

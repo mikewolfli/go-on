@@ -236,7 +236,7 @@ impl PermissionOptionId {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
+#[allow(dead_code)] // F-GAP-49 — generic reserved ACP protocol type from v0.13.2 spec
 pub struct PermissionOption {
     pub option_id: PermissionOptionId,
     pub name: String,
@@ -245,7 +245,7 @@ pub struct PermissionOption {
     pub meta: Option<Meta>,
 }
 
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
+#[allow(dead_code)] // F-GAP-49 — generic reserved ACP protocol type from v0.13.2 spec
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionOptionKind {
@@ -257,7 +257,7 @@ pub enum PermissionOptionKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
+#[allow(dead_code)] // F-GAP-49 — generic reserved ACP protocol type from v0.13.2 spec
 pub struct RequestPermissionRequest {
     pub session_id: SessionId,
     pub tool_call: ToolCallUpdate,
@@ -281,7 +281,7 @@ impl TerminalId {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
+#[allow(dead_code)] // F-GAP-49 — generic reserved ACP protocol type from v0.13.2 spec
 pub struct CreateTerminalRequest {
     pub session_id: SessionId,
     pub command: String,
@@ -307,7 +307,7 @@ pub struct CreateTerminalResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
+#[allow(dead_code)] // F-GAP-49 — generic reserved ACP protocol type from v0.13.2 spec
 pub struct TerminalOutputRequest {
     pub session_id: SessionId,
     pub terminal_id: TerminalId,
@@ -339,7 +339,7 @@ pub struct TerminalExitStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
+#[allow(dead_code)] // F-GAP-49 — generic reserved ACP protocol type from v0.13.2 spec
 pub struct ReleaseTerminalRequest {
     pub session_id: SessionId,
     pub terminal_id: TerminalId,
@@ -349,7 +349,7 @@ pub struct ReleaseTerminalRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
+#[allow(dead_code)] // F-GAP-49 — generic reserved ACP protocol type from v0.13.2 spec
 pub struct KillTerminalRequest {
     pub session_id: SessionId,
     pub terminal_id: TerminalId,
@@ -359,7 +359,7 @@ pub struct KillTerminalRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
+#[allow(dead_code)] // F-GAP-49 — generic reserved ACP protocol type from v0.13.2 spec
 pub struct WaitForTerminalExitRequest {
     pub session_id: SessionId,
     pub terminal_id: TerminalId,

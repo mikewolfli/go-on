@@ -21,6 +21,7 @@ base64.workspace = true
 image = { version = "0.25", default-features = false, features = ["ico"] }
 webbrowser = "1"
 tokio-stream.workspace = true
+fastrand.workspace = true
 
 [package.metadata.bundle]
 name = "Go-On GUI"

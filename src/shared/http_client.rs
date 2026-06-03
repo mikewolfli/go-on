@@ -8,16 +8,27 @@
 use std::sync::OnceLock;
 use std::time::Duration;
 
+/// Inner storage that separates initialization success from the public API.
+///
+/// [`OnceLock::get_or_init`] always runs the initializer, but `build()` can
+/// fail (e.g. missing TLS backend). By storing a `Result` we propagate the
+/// error on first access instead of panicking with `.expect()`.
+static CLIENT: OnceLock<Result<reqwest::Client, reqwest::Error>> = OnceLock::new();
+
 /// Returns a reference to the process-global `reqwest::Client`.
 ///
 /// The client is created once on first access and configured with a 30-second
 /// default timeout. All callers share the same connection pool.
-pub fn http_client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
+///
+/// # Errors
+///
+/// Returns an error if the underlying `reqwest::Client` cannot be built
+/// (e.g. TLS backend initialization failure).
+pub fn http_client() -> Result<&'static reqwest::Client, &'static reqwest::Error> {
+    let result = CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
-            .expect("Failed to create shared HTTP client")
-    })
+    });
+    result.as_ref()
 }

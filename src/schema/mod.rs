@@ -71,7 +71,7 @@ impl From<&str> for SessionId {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProtocolVersion(u16);
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved schema feature
 impl ProtocolVersion {
     pub const V1: Self = Self(1);
     pub const LATEST: Self = Self::V1;
@@ -108,7 +108,7 @@ pub struct EnvVariable {
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
 }
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved schema feature
 impl EnvVariable {
     pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
         Self {

@@ -10,8 +10,10 @@ pub(crate) fn push_metric_header(
     lines.push(format!("# TYPE {} {}", name, metric_type));
 }
 
-#[allow(dead_code)]
-// Reserved for future metrics reporting — not yet wired into the hot path
+// F-GAP-49: Reserved for future metrics reporting — not yet wired into the hot path.
+// `push_scalar_metric` is a convenience wrapper around `push_metric_header` + value line.
+// Once a consumer calls it from the Prometheus endpoint builder, remove this annotation.
+#[allow(dead_code)] // F-GAP-49 — reserved observability feature
 pub(crate) fn push_scalar_metric(
     lines: &mut Vec<String>,
     name: &str,

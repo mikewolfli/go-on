@@ -14,6 +14,15 @@
 #![allow(clippy::module_inception)]
 
 /// Acquire a lock on a `Mutex`, recovering from a poisoned state with a warning.
+///
+/// This is the canonical lock-acquisition helper for observability-layer mutexes.
+/// All observability subsystems (alert_manager, provenance, metrics_exporter) should
+/// use this helper instead of calling `mtx.lock()` directly to ensure consistent
+/// poison recovery and logging.
+///
+/// # Future wiring
+/// If a profiling/deadlock-detection wrapper is added later (e.g., timed lock
+/// acquisition), this is the single point where the instrumentation is injected.
 pub fn lock_mutex<T>(mtx: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     match mtx.lock() {
         Ok(guard) => guard,

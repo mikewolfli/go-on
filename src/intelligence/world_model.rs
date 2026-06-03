@@ -724,14 +724,12 @@ impl WorldModel {
                 if entity_changes.len() >= 2 {
                     // Check for temporal consistency: the same source affecting
                     // the same target multiple times strengthens confidence
-                    let consistent_targets: std::collections::HashMap<&str, usize> =
-                        entity_changes.iter().fold(
-                            std::collections::HashMap::new(),
-                            |mut acc, &e| {
-                                *acc.entry(e).or_insert(0) += 1;
-                                acc
-                            },
-                        );
+                    let consistent_targets: std::collections::HashMap<&str, usize> = entity_changes
+                        .iter()
+                        .fold(std::collections::HashMap::new(), |mut acc, &e| {
+                            *acc.entry(e).or_insert(0) += 1;
+                            acc
+                        });
 
                     for (target, count) in &consistent_targets {
                         let confidence = (0.2 + *count as f64 * 0.15).min(0.9);
@@ -741,7 +739,11 @@ impl WorldModel {
                             .iter()
                             .filter_map(|(payload, ts)| {
                                 payload.get("target_entity").and_then(|v| {
-                                    if v == *target { Some(*ts) } else { None }
+                                    if v == *target {
+                                        Some(*ts)
+                                    } else {
+                                        None
+                                    }
                                 })
                             })
                             .collect();
@@ -799,17 +801,19 @@ impl WorldModel {
             let mut inner = lock_guard(&self.inner);
             let mut actually_added = 0;
             for link in &new_links {
-                let already_exists = inner
-                    .causal_links
-                    .iter()
-                    .any(|l| l.cause_entity_id == link.cause_entity_id
-                        && l.effect_entity_id == link.effect_entity_id);
+                let already_exists = inner.causal_links.iter().any(|l| {
+                    l.cause_entity_id == link.cause_entity_id
+                        && l.effect_entity_id == link.effect_entity_id
+                });
                 if !already_exists {
                     // Evict the oldest causal link when at capacity.
                     if inner.causal_links.len() >= inner.max_causal_links {
                         let removed = inner.causal_links.remove(0);
                         // Clean up index.
-                        if let Some(indices) = inner.causal_links_by_cause.get_mut(&removed.cause_entity_id) {
+                        if let Some(indices) = inner
+                            .causal_links_by_cause
+                            .get_mut(&removed.cause_entity_id)
+                        {
                             indices.retain(|&i| i != 0);
                             // Shift remaining indices down by 1.
                             for idx in indices.iter_mut() {

@@ -88,10 +88,7 @@ impl LivePerformanceFeed {
         *entry = alpha * 1.0 + (1.0 - alpha) * *entry;
 
         // Bump request count.
-        *inner
-            .model_requests
-            .entry(model.to_string())
-            .or_insert(0) += 1;
+        *inner.model_requests.entry(model.to_string()).or_insert(0) += 1;
 
         // Drop the inner lock before calling into self_model to avoid
         // potential deadlock (different mutex order).
@@ -132,10 +129,7 @@ impl LivePerformanceFeed {
         *entry = alpha * 0.0 + (1.0 - alpha) * *entry;
 
         // Bump request count.
-        *inner
-            .model_requests
-            .entry(model.to_string())
-            .or_insert(0) += 1;
+        *inner.model_requests.entry(model.to_string()).or_insert(0) += 1;
 
         // Drop the inner lock before calling into self_model to avoid
         // potential deadlock (different mutex order).
@@ -159,11 +153,7 @@ impl LivePerformanceFeed {
         let inner = crate::observability::lock_mutex(&self.inner);
 
         let latency = inner.model_latency.get(model)?;
-        let success = inner
-            .model_success_rate
-            .get(model)
-            .copied()
-            .unwrap_or(1.0);
+        let success = inner.model_success_rate.get(model).copied().unwrap_or(1.0);
 
         // Cost ∝ latency / success_rate: faster + reliable → cheaper.
         Some(*latency / success.max(0.01))

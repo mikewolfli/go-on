@@ -299,16 +299,22 @@ mod tests {
         let schema = desc.input_schema.unwrap();
         assert_eq!(schema["type"], "object");
         let required = schema["required"].as_array().unwrap();
-        assert!(required.contains(&serde_json::Value::String("path".to_string())),
-            "read_file should require 'path'");
+        assert!(
+            required.contains(&serde_json::Value::String("path".to_string())),
+            "read_file should require 'path'"
+        );
 
         let desc = tool_descriptor("write_file");
         let schema = desc.input_schema.unwrap();
         let required = schema["required"].as_array().unwrap();
-        assert!(required.contains(&serde_json::Value::String("path".to_string())),
-            "write_file should require 'path'");
-        assert!(required.contains(&serde_json::Value::String("content".to_string())),
-            "write_file should require 'content'");
+        assert!(
+            required.contains(&serde_json::Value::String("path".to_string())),
+            "write_file should require 'path'"
+        );
+        assert!(
+            required.contains(&serde_json::Value::String("content".to_string())),
+            "write_file should require 'content'"
+        );
     }
 
     // ── validate_required_arguments ──────────────────────────────────
@@ -320,15 +326,26 @@ mod tests {
         // read_file requires path
         assert!(validate_required_arguments("read_file", &json!({"path": "foo.txt"})).is_ok());
         // write_file requires path + content
-        assert!(validate_required_arguments("write_file", &json!({"path": "foo.txt", "content": "hello"})).is_ok());
+        assert!(validate_required_arguments(
+            "write_file",
+            &json!({"path": "foo.txt", "content": "hello"})
+        )
+        .is_ok());
         // search_files requires pattern
         assert!(validate_required_arguments("search_files", &json!({"pattern": "*.rs"})).is_ok());
         // workflow_execute requires task
-        assert!(validate_required_arguments("workflow_execute", &json!({"task": "do something"})).is_ok());
+        assert!(
+            validate_required_arguments("workflow_execute", &json!({"task": "do something"}))
+                .is_ok()
+        );
         // workflow_ask requires task
-        assert!(validate_required_arguments("workflow_ask", &json!({"task": "analyze this"})).is_ok());
+        assert!(
+            validate_required_arguments("workflow_ask", &json!({"task": "analyze this"})).is_ok()
+        );
         // workflow_generate requires task
-        assert!(validate_required_arguments("workflow_generate", &json!({"task": "plan this"})).is_ok());
+        assert!(
+            validate_required_arguments("workflow_generate", &json!({"task": "plan this"})).is_ok()
+        );
     }
 
     /// Verify that `validate_required_arguments` rejects missing arguments.
@@ -336,15 +353,21 @@ mod tests {
     fn test_validate_required_arguments_missing() {
         // read_file without path
         let err = validate_required_arguments("read_file", &json!({})).unwrap_err();
-        assert!(err.to_string().contains("read_file requires arguments.path"));
+        assert!(err
+            .to_string()
+            .contains("read_file requires arguments.path"));
 
         // write_file without content
         let err = validate_required_arguments("write_file", &json!({"path": "x.txt"})).unwrap_err();
-        assert!(err.to_string().contains("write_file requires arguments.content"));
+        assert!(err
+            .to_string()
+            .contains("write_file requires arguments.content"));
 
         // search_files without pattern
         let err = validate_required_arguments("search_files", &json!({})).unwrap_err();
-        assert!(err.to_string().contains("search_files requires arguments.pattern"));
+        assert!(err
+            .to_string()
+            .contains("search_files requires arguments.pattern"));
     }
 
     /// Verify that unknown tools are validated successfully (no required args).

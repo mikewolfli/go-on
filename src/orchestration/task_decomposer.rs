@@ -110,7 +110,8 @@ Return ONLY valid JSON, no markdown formatting.
                 Ok(result) => {
                     if let Some(ref output) = result.output {
                         // Try to parse the LLM output as a TaskDecomposition
-                        if let Ok(decomp) = serde_json::from_value::<TaskDecomposition>(output.clone())
+                        if let Ok(decomp) =
+                            serde_json::from_value::<TaskDecomposition>(output.clone())
                         {
                             // Ensure the execution_phases are populated even if LLM
                             // returned subtasks without explicit phases
@@ -144,10 +145,8 @@ Return ONLY valid JSON, no markdown formatting.
                                     );
                                     let execution_phases =
                                         Self::compute_execution_phases(&subtasks);
-                                    let total_duration_estimated: u32 = subtasks
-                                        .iter()
-                                        .map(|s| s.estimated_duration_seconds)
-                                        .sum();
+                                    let total_duration_estimated: u32 =
+                                        subtasks.iter().map(|s| s.estimated_duration_seconds).sum();
                                     return TaskDecomposition {
                                         task_id,
                                         subtasks,

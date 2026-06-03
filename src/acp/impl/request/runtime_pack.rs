@@ -99,7 +99,14 @@ fn build_github_client() -> reqwest::Client {
 
     // 3. Fallback: plain direct client via shared singleton
     tracing::debug!("No proxy detected, using direct connection");
-    crate::shared::http_client::http_client().clone()
+    crate::shared::http_client::http_client()
+        .cloned()
+        .unwrap_or_else(|_| {
+            reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .expect("reqwest Client build failed (TLS backend?)")
+        })
 }
 
 fn copilot_models_cache() -> &'static CopilotModelsCache {

@@ -249,17 +249,20 @@ impl SemanticCapabilityMatcher {
     fn tag_signal(tags: &[String]) -> f64 {
         // Tier 1: highly specific technology or domain tags
         const HIGH_SPECIFICITY: &[&str] = &[
-            "vision", "image", "multimodal", "function_calling", "tool_use",
-            "agent", "chain_of_thought", "reasoning",
+            "vision",
+            "image",
+            "multimodal",
+            "function_calling",
+            "tool_use",
+            "agent",
+            "chain_of_thought",
+            "reasoning",
         ];
         // Tier 2: broad capability area tags
-        const MEDIUM_SPECIFICITY: &[&str] = &[
-            "code", "programming", "generation", "analysis", "language",
-        ];
+        const MEDIUM_SPECIFICITY: &[&str] =
+            &["code", "programming", "generation", "analysis", "language"];
         // Tier 3: generic interaction-mode tags
-        const LOW_SPECIFICITY: &[&str] = &[
-            "chat", "conversation", "general",
-        ];
+        const LOW_SPECIFICITY: &[&str] = &["chat", "conversation", "general"];
 
         let known_tags: HashSet<&str> = HIGH_SPECIFICITY
             .iter()

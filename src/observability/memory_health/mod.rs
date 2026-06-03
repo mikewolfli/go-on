@@ -38,32 +38,31 @@ pub const MEMORY_WARN_MB: u64 = 512;
 pub const MEMORY_CRITICAL_MB: u64 = 256;
 
 /// Free memory threshold (MB) below which we abort immediately.
-// F-GAP-11 — reserved for future runtime monitor integration
-#[allow(dead_code)]
-// F-GAP-49 — reserved for future use
 pub const MEMORY_JETSAM_RISK_MB: u64 = 128;
 
 /// How often the runtime monitor checks memory pressure (seconds).
-// F-GAP-11 — reserved for future runtime monitor integration
-#[allow(dead_code)]
-// F-GAP-49 — reserved for future use
 pub const MEMORY_MONITOR_INTERVAL_SECS: u64 = 30;
 
 // ── System Memory Info ──────────────────────────────────────────────────────
 
 /// Snapshot of system memory state.
 #[derive(Debug, Clone, Default)]
-#[allow(dead_code)] // Fields are public API for runtime monitor consumers
 pub struct SystemMemoryInfo {
     /// Total physical RAM in bytes.
     pub total_bytes: u64,
     /// Approximate free (available) memory in bytes.
     pub free_bytes: u64,
     /// Active memory in bytes.
+    #[allow(dead_code)]
+    // populated by query_system_memory; reserved for future pressure analysis
     pub active_bytes: u64,
     /// Wired (unpageable) memory in bytes.
+    #[allow(dead_code)]
+    // populated by query_system_memory; reserved for future pressure analysis
     pub wired_bytes: u64,
     /// Swap usage in bytes (0 if swap is disabled).
+    #[allow(dead_code)]
+    // populated by query_system_memory; reserved for future pressure analysis
     pub swap_used_bytes: u64,
     /// Swap total capacity in bytes.
     pub swap_total_bytes: u64,
@@ -71,7 +70,6 @@ pub struct SystemMemoryInfo {
     pub pressure_level: u8,
 }
 
-#[allow(dead_code)] // Public API — used by runtime monitor and external consumers
 impl SystemMemoryInfo {
     /// Free memory in MB.
     pub fn free_mb(&self) -> u64 {
@@ -405,6 +403,7 @@ fn query_windows_memory() -> SystemMemoryInfo {
 /// Result of a pre-startup memory health check.
 // F-GAP-11 — reserved for future startup health-check integration
 #[allow(dead_code)]
+// F-GAP-49 — reserved memory health monitor; wire when memory pressure detection is enabled
 // F-GAP-49 — reserved for future use
 #[derive(Debug, Clone, PartialEq)]
 pub enum MemoryHealth {
@@ -424,8 +423,8 @@ pub enum MemoryHealth {
 /// Returns `MemoryHealth::Low` if memory is constrained (warns user).
 /// Returns `MemoryHealth::Critical` if starting would likely trigger OOM.
 // F-GAP-11 — reserved for future startup health-check integration
-#[allow(dead_code)]
-// F-GAP-49 — reserved for future use
+#[allow(dead_code)] // F-GAP-49 — reserved memory health monitor; wire when memory pressure detection is enabled
+                    // F-GAP-49 — reserved for future use
 pub fn check_startup_memory() -> MemoryHealth {
     let info = query_system_memory();
     let free_mb = info.free_mb();
@@ -503,8 +502,8 @@ pub fn check_startup_memory() -> MemoryHealth {
 
 /// Print a formatted memory health report to stderr.
 // F-GAP-11 — reserved for future startup health-check integration
-#[allow(dead_code)]
-// F-GAP-49 — reserved for future use
+#[allow(dead_code)] // F-GAP-49 — reserved memory health monitor; wire when memory pressure detection is enabled
+                    // F-GAP-49 — reserved for future use
 pub fn print_memory_health(health: &MemoryHealth) {
     match health {
         MemoryHealth::Healthy => {
@@ -548,24 +547,21 @@ pub fn print_memory_health(health: &MemoryHealth) {
 static RUNTIME_MEMORY_FREE_MB: AtomicU64 = AtomicU64::new(0);
 static RUNTIME_MEMORY_TOTAL_MB: AtomicU64 = AtomicU64::new(0);
 static RUNTIME_PRESSURE_LEVEL: AtomicU64 = AtomicU64::new(0);
-// F-GAP-11 — reserved for future runtime monitor integration
-#[allow(dead_code)]
-// F-GAP-49 — reserved for future use
 static MEMORY_MONITOR_INITIALIZED: OnceLock<bool> = OnceLock::new();
 
-#[allow(dead_code)] // Public API — used by external runtime consumers
+#[allow(dead_code)] // F-GAP-49 — reserved memory health monitor; wire when memory pressure detection is enabled
 /// Get the last known free memory in MB (from the runtime monitor).
 pub fn runtime_free_mb() -> u64 {
     RUNTIME_MEMORY_FREE_MB.load(Ordering::Relaxed)
 }
 
-#[allow(dead_code)] // Public API — used by external runtime consumers
+#[allow(dead_code)] // F-GAP-49 — reserved memory health monitor; wire when memory pressure detection is enabled
 /// Get the last known total memory in MB.
 pub fn runtime_total_mb() -> u64 {
     RUNTIME_MEMORY_TOTAL_MB.load(Ordering::Relaxed)
 }
 
-#[allow(dead_code)] // Public API — used by external runtime consumers
+#[allow(dead_code)] // F-GAP-49 — reserved memory health monitor; wire when memory pressure detection is enabled
 /// Get the last known macOS memory pressure level.
 pub fn runtime_pressure_level() -> u8 {
     RUNTIME_PRESSURE_LEVEL.load(Ordering::Relaxed) as u8
@@ -576,9 +572,6 @@ pub fn runtime_pressure_level() -> u8 {
 /// Spawns a tokio task that queries `query_system_memory()` every
 /// `MEMORY_MONITOR_INTERVAL_SECS` seconds, logs warnings if
 /// memory is critically low, and evaluates AlertManager rules.
-// F-GAP-11 — reserved for future runtime monitor integration
-#[allow(dead_code)]
-// F-GAP-49 — reserved for future use
 pub fn start_memory_monitor() {
     MEMORY_MONITOR_INITIALIZED.set(true).unwrap_or(());
 

@@ -335,7 +335,7 @@ fn build_response_metadata(
         .collect()
     };
 
-    // ── Planner/Executor integration (F-GAP-05) ────────────────────────
+    // ── Planner/Executor integration (activated, formerly F-GAP-05) ────
     let execution_plan = {
         let envelope = crate::agent::AgentTaskEnvelope {
             task_id: conversation_id.to_string(),
@@ -401,7 +401,7 @@ fn build_response_metadata(
         }
     };
 
-    // ── Evaluation Suite scoring (F-GAP-06) ────────────────────────────
+    // ── Evaluation Suite scoring (activated, formerly F-GAP-06) ────────
     let evaluation_results: Vec<Value> = {
         let suite = server.evaluation_suite.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("evaluation_suite lock poisoned in build_response_metadata");

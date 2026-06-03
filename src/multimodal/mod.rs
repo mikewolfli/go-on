@@ -62,6 +62,11 @@ pub use video_processor::MAX_FILE_SIZE_MB;
 /// Represents a multimodal input payload that can be routed to an appropriate
 /// processor (document parser, ASR pipeline, vision model, etc.).
 ///
+/// Maximum allowed size for image payloads (10 MB).
+pub const MAX_IMAGE_SIZE: usize = 10 * 1024 * 1024;
+/// Maximum allowed size for audio payloads (25 MB).
+pub const MAX_AUDIO_SIZE: usize = 25 * 1024 * 1024;
+
 /// ## Variants
 ///
 /// | Variant | Contents | Typical use |
@@ -151,6 +156,33 @@ impl MultimodalInput {
             Self::Text(t) => t.as_bytes(),
             Self::Image(b) | Self::Audio(b) | Self::Video(b) | Self::Document(b, _) => b.as_slice(),
         }
+    }
+
+    /// Create an `Image` variant, returning an error if the payload exceeds
+    /// [`MAX_IMAGE_SIZE`].
+    pub fn try_new_image(bytes: Vec<u8>) -> Result<Self, &'static str> {
+        if bytes.len() > MAX_IMAGE_SIZE {
+            return Err("image payload exceeds MAX_IMAGE_SIZE (10 MB)");
+        }
+        Ok(Self::Image(bytes))
+    }
+
+    /// Create an `Audio` variant, returning an error if the payload exceeds
+    /// [`MAX_AUDIO_SIZE`].
+    pub fn try_new_audio(bytes: Vec<u8>) -> Result<Self, &'static str> {
+        if bytes.len() > MAX_AUDIO_SIZE {
+            return Err("audio payload exceeds MAX_AUDIO_SIZE (25 MB)");
+        }
+        Ok(Self::Audio(bytes))
+    }
+
+    /// Create a `Document` variant, returning an error if the payload exceeds
+    /// a reasonable limit (also [`MAX_AUDIO_SIZE`] for documents).
+    pub fn try_new_document(bytes: Vec<u8>, ext: String) -> Result<Self, &'static str> {
+        if bytes.len() > MAX_AUDIO_SIZE {
+            return Err("document payload exceeds maximum allowed size (25 MB)");
+        }
+        Ok(Self::Document(bytes, ext))
     }
 
     /// Consume `self` and return the contained bytes together with any
@@ -520,15 +552,18 @@ pub fn base64_decode(input: &str) -> Result<Vec<u8>, base64::DecodeError> {
 /// Falls back to `"bin"` when the MIME type is unrecognised.
 pub fn mime_to_extension(mime: &str) -> String {
     match mime {
+        // Specific text subtypes must be checked BEFORE the catch-all m.contains("text").
         m if m.contains("pdf") => "pdf".to_string(),
         m if m.contains("word") || m.contains("docx") || m.contains("doc") => "docx".to_string(),
         m if m.contains("html") || m.contains("xhtml") => "html".to_string(),
         m if m.contains("markdown") || m.contains("md") => "md".to_string(),
-        m if m.contains("text/plain") || m.contains("text") => "txt".to_string(),
         m if m.contains("json") => "json".to_string(),
         m if m.contains("csv") => "csv".to_string(),
         m if m.contains("xml") => "xml".to_string(),
         m if m.contains("yaml") || m.contains("yml") => "yaml".to_string(),
+        // Catch-all text match — keep last so more-specific text/* subtypes
+        // (html, markdown, json, csv, xml) are matched above first.
+        m if m.contains("text/plain") || m.contains("text") => "txt".to_string(),
         _ => "bin".to_string(),
     }
 }

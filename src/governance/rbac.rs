@@ -33,7 +33,7 @@ impl BuiltinRole {
 
     #[cfg(test)]
     #[allow(dead_code)]
-// F-GAP-49 — reserved for future use
+    // F-GAP-49 — reserved for future use
     fn from_str(s: &str) -> Option<Self> {
         match s {
             "admin" => Some(BuiltinRole::Admin),
@@ -79,7 +79,7 @@ pub enum Permission {
 impl Permission {
     #[cfg(test)]
     #[allow(dead_code)]
-// F-GAP-49 — reserved for future use
+    // F-GAP-49 — reserved for future use
     fn as_str(&self) -> &'static str {
         match self {
             Permission::Read => "read",
@@ -95,7 +95,7 @@ impl Permission {
 
     #[cfg(test)]
     #[allow(dead_code)]
-// F-GAP-49 — reserved for future use
+    // F-GAP-49 — reserved for future use
     fn from_str(s: &str) -> Option<Self> {
         match s {
             "read" => Some(Permission::Read),
@@ -137,7 +137,7 @@ impl Principal {
 
     #[cfg(test)]
     #[allow(dead_code)]
-// F-GAP-49 — reserved for future use
+    // F-GAP-49 — reserved for future use
     fn has_role(&self, role: &str) -> bool {
         self.roles.iter().any(|r| r == role)
     }
@@ -373,7 +373,7 @@ impl RbacEnforcer {
 
     #[cfg(test)]
     #[allow(dead_code)]
-// F-GAP-49 — reserved for future use
+    // F-GAP-49 — reserved for future use
     fn role_count(&self) -> usize {
         self.role_permissions.len()
     }
@@ -486,7 +486,7 @@ impl RbacEnforcer {
 
     #[cfg(test)]
     #[allow(dead_code)]
-// F-GAP-49 — reserved for future use
+    // F-GAP-49 — reserved for future use
     fn tenant_count(&self) -> usize {
         self.tenants.len()
     }

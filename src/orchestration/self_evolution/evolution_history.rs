@@ -14,10 +14,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use thiserror::Error;
 use tokio::fs;
-use tokio::sync::Mutex;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
+use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
@@ -478,12 +478,12 @@ impl EvolutionHistory {
             }
 
             match serde_json::from_str::<EvolutionEntry>(&trimmed) {
-                    Ok(entry) => {
-                        let mut entries = self.entries.lock().await;
-                        let mut ids = self.ordered_ids.lock().await;
-                        ids.push(entry.id);
-                        entries.insert(entry.id, entry);
-                    }
+                Ok(entry) => {
+                    let mut entries = self.entries.lock().await;
+                    let mut ids = self.ordered_ids.lock().await;
+                    ids.push(entry.id);
+                    entries.insert(entry.id, entry);
+                }
                 Err(e) => {
                     warn!(
                         path = ?self.history_path,
@@ -560,9 +560,7 @@ impl Drop for EvolutionHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::orchestration::self_evolution::evolution_loop::{
-        Approval, EvolutionTrigger,
-    };
+    use crate::orchestration::self_evolution::evolution_loop::{Approval, EvolutionTrigger};
     use crate::orchestration::self_evolution::sandbox::BuildResult;
     use tempfile::TempDir;
 
@@ -730,7 +728,10 @@ mod tests {
         // with_path creates a sync instance (does not load from disk).
         // The Mutex fields are tokio::sync::Mutex, which cannot be used in a sync context.
         // For the empty-history check, just verify the path is set correctly.
-        assert_eq!(history.history_path, PathBuf::from("/tmp/nonexistent.ndjson"));
+        assert_eq!(
+            history.history_path,
+            PathBuf::from("/tmp/nonexistent.ndjson")
+        );
     }
 
     #[test]

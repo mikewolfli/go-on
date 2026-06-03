@@ -67,7 +67,7 @@ impl AuthProvider for JsonRpcAuthProvider<'_> {
 }
 
 /// Authenticates via HTTP headers (Bearer token, X-API-Key, or session cookie).
-#[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
+// activated, formerly F-GAP-51 — HTTP path now passes headers to authenticate_request
 pub struct HttpAuthProvider<'a> {
     pub headers: &'a str,
 }

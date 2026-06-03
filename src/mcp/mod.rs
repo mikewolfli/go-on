@@ -95,6 +95,8 @@ impl McpServer {
     pub fn skill_registry(
         &self,
     ) -> Option<&Arc<std::sync::Mutex<crate::orchestration::skill::SkillRegistry>>> {
-        self.acp_server.as_ref().map(|s| &s.orchestration_deps.skill_registry)
+        self.acp_server
+            .as_ref()
+            .map(|s| &s.orchestration_deps.skill_registry)
     }
 }

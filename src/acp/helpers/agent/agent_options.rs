@@ -81,10 +81,14 @@ pub(crate) fn assemble_agent_options(
     // NOTE: DeepSeek and some other providers enforce a strict pattern on
     // function names: ^[a-zA-Z0-9_-]+$. We sanitize skill names to match.
     {
-        let registry = server.orchestration_deps.skill_registry.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("skill_registry lock poisoned during tool injection – recovered");
-            poisoned.into_inner()
-        });
+        let registry = server
+            .orchestration_deps
+            .skill_registry
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("skill_registry lock poisoned during tool injection – recovered");
+                poisoned.into_inner()
+            });
         let sanitize_fn_name = |name: &str| -> String {
             name.chars()
                 .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')

@@ -110,10 +110,13 @@ pub(crate) async fn evaluate_pre_route_policies(
         }
     }
 
-    // ── TenantBudgetEnforcer pre-route check (F-GAP-08) ───────────────
+    // ── TenantBudgetEnforcer pre-route check (activated) ───────────────
     // Check per-tenant resource quotas before allocating compute.
     // Uses the tenant_id resolved from the ChatRequestContext (which comes
     // from the user session when auth is enabled, or falls back to default).
+    // In strict mode (production_strict=true) the request is rejected when
+    // quota is exceeded; in non-strict mode the request is allowed with a
+    // warning log.
     let tenant_budget_ok = {
         let budget_guard = server.tenant_budget.lock();
         match budget_guard {

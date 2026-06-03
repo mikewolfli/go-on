@@ -54,10 +54,14 @@ impl AutoTuneView {
 
     pub fn load_runtime_options() -> Value {
         let state = Self::load_state();
+        // Clamp values to valid ranges before sending to backend
+        let temperature = state.temperature.clamp(0.0, 2.0);
+        let top_p = state.top_p.clamp(0.0, 1.0);
+        let max_tokens = state.max_tokens.clamp(1, 1_048_576);
         serde_json::json!({
-            "temperature": state.temperature,
-            "top_p": state.top_p,
-            "max_tokens": state.max_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+            "max_tokens": max_tokens,
             "aggressive": state.aggressive,
         })
     }

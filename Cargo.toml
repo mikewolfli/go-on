@@ -25,6 +25,7 @@ tokio-test = "0.4"
 tokio-util = { version = "0.7", features = ["rt"] }
 tempfile = "3"
 wiremock = "0.6"
+fastrand = "2"
 
 [package]
 name = "go-on"

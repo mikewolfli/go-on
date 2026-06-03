@@ -46,9 +46,7 @@ impl SystemContext {
                 .as_millis()
         };
 
-        let ts = || -> String {
-            format!("{}", now_ms())
-        };
+        let ts = || -> String { format!("{}", now_ms()) };
 
         // 1. Load README (try common filenames)
         for name in &["README.md", "README.txt", "README", "readme.md"] {

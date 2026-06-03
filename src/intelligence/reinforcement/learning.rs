@@ -542,8 +542,7 @@ impl QLearningAgent {
         reward: f64,
         next_state: &(String, String),
     ) {
-        let is_new = !self.q_table.contains_key(state)
-            && !self.q_table_2.contains_key(state);
+        let is_new = !self.q_table.contains_key(state) && !self.q_table_2.contains_key(state);
 
         let current_q = self
             .q_table
@@ -589,8 +588,7 @@ impl QLearningAgent {
         let alpha = self.learning_rate;
         let gamma = self.discount_factor;
 
-        let is_new = !self.q_table.contains_key(state)
-            && !self.q_table_2.contains_key(state);
+        let is_new = !self.q_table.contains_key(state) && !self.q_table_2.contains_key(state);
 
         // Use fastrand for a true random coin flip
         let coin = fastrand::bool();

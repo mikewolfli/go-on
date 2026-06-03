@@ -525,18 +525,16 @@ impl BackendClient {
     }
 
     fn retry_backoff(attempt: usize) -> Duration {
-        // Exponential backoff with jitter to prevent thundering herd:
-        // Attempt 1: [100,200), Attempt 2: [200,400), Attempt 3+: [400,800)
-        let (base_ms, span_ms): (u64, u64) = match attempt {
-            1 => (100, 100),
-            2 => (200, 200),
-            _ => (400, 400),
+        // Exponential backoff with 30% jitter to prevent thundering herd:
+        // delay = base * (0.7 + random * 0.3)
+        // Attempt 1: ~100ms, Attempt 2: ~200ms, Attempt 3+: ~400ms
+        let base_ms: u64 = match attempt {
+            1 => 100,
+            2 => 200,
+            _ => 400,
         };
-        let jitter = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| (d.as_nanos() as u64) % span_ms)
-            .unwrap_or(0);
-        Duration::from_millis(base_ms + jitter)
+        let jitter_factor = 0.7 + fastrand::f64() * 0.3;
+        Duration::from_secs_f64((base_ms as f64 * jitter_factor) / 1000.0)
     }
 
     fn parse_rpc_error(err: &Value) -> String {
@@ -1001,9 +999,7 @@ impl BackendClient {
         };
 
         // Validate actual body size after reading
-        if let Err(e) = validate_input_size(resp_body.as_bytes(), 64 * 1024 * 1024) {
-            return Err(e);
-        }
+        validate_input_size(resp_body.as_bytes(), 64 * 1024 * 1024)?;
 
         // Parse SSE events using StreamProcessor
         let mut response_text = String::new();

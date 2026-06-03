@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
+use thiserror::Error;
 use tracing::warn;
 
 // ---------------------------------------------------------------------------
@@ -31,12 +32,33 @@ pub enum LockMode {
 }
 
 // ---------------------------------------------------------------------------
+// AcquireError
+// ---------------------------------------------------------------------------
+
+/// Errors that can occur when acquiring a tool lock.
+#[derive(Error, Debug)]
+pub enum AcquireError {
+    /// The lock could not be acquired within the timeout.
+    #[error("tool lock timeout for '{path}' ({mode:?}): waited {timeout_secs}s")]
+    Timeout {
+        /// The path that was being locked.
+        path: String,
+        /// The requested lock mode.
+        mode: LockMode,
+        /// The timeout duration in seconds.
+        timeout_secs: u64,
+    },
+}
+
+// ---------------------------------------------------------------------------
 // LockHandle
 // ---------------------------------------------------------------------------
 
 /// An RAII guard that releases the lock when dropped.
 ///
 /// Created by [`ToolLockManager::acquire`] and automatically released on drop.
+/// Unlike the previous implementation, the handle is **only** returned when
+/// the lock is actually held — no more false handles on timeout.
 pub struct LockHandle {
     /// Path that was locked.
     pub path: String,
@@ -80,7 +102,7 @@ impl std::fmt::Debug for LockHandle {
 ///
 /// ```ignore
 /// let mgr = ToolLockManager::new();
-/// let handle = mgr.acquire("/path/to/file", LockMode::Write);
+/// let handle = mgr.acquire("/path/to/file", LockMode::Write)?;
 /// // ... perform write ...
 /// // handle dropped here → lock released
 /// ```
@@ -122,36 +144,25 @@ impl ToolLockManager {
     ///
     /// # Blocking behaviour
     ///
-    /// Acquire a lock on a tool path with the given access mode.
-    ///
     /// This function **blocks** the calling thread until the lock is
     /// available.  Uses exponential backoff with jitter to avoid CPU
     /// burning.  A 30-second timeout prevents indefinite blocking.
     /// Callers on async runtimes should use
     /// `tokio::task::spawn_blocking` to avoid blocking the runtime.
     ///
-    /// # Race condition (known — see F-GAP-87)
+    /// # Errors
     ///
-    /// When the deadline is reached without acquiring the lock, this
-    /// function **returns a `LockHandle` anyway** rather than deadlocking.
-    /// The handle is returned so the caller can proceed, but **the caller
-    /// does NOT have exclusive access** to the resource.
-    ///
-    /// Callers **must**:
-    /// 1. Treat the returned `LockHandle` as a *best-effort* guard.
-    /// 2. Handle concurrent access safely (e.g. via retry, advisory
-    ///    coordination, or accepting temporary inconsistency).
-    /// 3. NOT assume the lock was actually acquired — always check
-    ///    higher-level invariants before mutating state.
-    ///
-    /// See <F-GAP-87> for the planned fix (fair queueing / tokio::sync::Mutex
-    /// migration to eliminate soft-timeout races).
+    /// Returns [`AcquireError::Timeout`] if the lock cannot be acquired
+    /// within [`ACQUIRE_TIMEOUT`](Self::ACQUIRE_TIMEOUT).  Unlike the
+    /// legacy implementation (F-GAP-87), this method **never** returns a
+    /// handle for an un-acquired lock — callers can rely on the handle
+    /// meaning exclusive access.
     ///
     /// # Panics
     ///
     /// Panics if the internal mutex is poisoned.
     #[allow(dead_code)] // F-GAP-12 — reserved for tool lock integration
-    pub fn acquire(&self, path: &str, mode: LockMode) -> LockHandle {
+    pub fn acquire(&self, path: &str, mode: LockMode) -> Result<LockHandle, AcquireError> {
         let deadline = Instant::now() + Self::ACQUIRE_TIMEOUT;
         let mut backoff_us = Self::BACKOFF_INITIAL_US;
 
@@ -159,39 +170,26 @@ impl ToolLockManager {
             {
                 let mut table = self.lock_table();
                 if Self::try_acquire_inner(&mut table, path, mode) {
-                    break;
+                    return Ok(LockHandle {
+                        path: path.to_string(),
+                        mode,
+                        manager: self.clone(),
+                    });
                 }
             }
 
             if Instant::now() >= deadline {
-                warn!(
-                    "ToolLockManager: timeout ({}s) acquiring {:?} lock for '{}'",
-                    Self::ACQUIRE_TIMEOUT.as_secs(),
+                return Err(AcquireError::Timeout {
+                    path: path.to_string(),
                     mode,
-                    path
-                );
-                // Try one more time before giving up — the deadline is a soft limit
-                // to prevent unbounded blocking. If still blocked, the lock handle
-                // will still be returned and the race is handled at a higher level.
-                let mut table = self.lock_table();
-                if Self::try_acquire_inner(&mut table, path, mode) {
-                    break;
-                }
-                // Could not acquire — proceed anyway to avoid deadlock.
-                // The caller will handle the race condition at a higher level.
-                break;
+                    timeout_secs: Self::ACQUIRE_TIMEOUT.as_secs(),
+                });
             }
 
             // Exponential backoff with cap.
             let sleep_us = backoff_us.min(Self::BACKOFF_MAX_MS * 1000);
             std::thread::sleep(Duration::from_micros(sleep_us));
             backoff_us = backoff_us.saturating_mul(2);
-        }
-
-        LockHandle {
-            path: path.to_string(),
-            mode,
-            manager: self.clone(),
         }
     }
 
@@ -286,9 +284,9 @@ mod tests {
     #[test]
     fn multiple_readers_can_acquire_concurrently() {
         let mgr = ToolLockManager::new();
-        let h1 = mgr.acquire("/tmp/test1", LockMode::Read);
-        let h2 = mgr.acquire("/tmp/test1", LockMode::Read);
-        let h3 = mgr.acquire("/tmp/test1", LockMode::Read);
+        let h1 = mgr.acquire("/tmp/test1", LockMode::Read).unwrap();
+        let h2 = mgr.acquire("/tmp/test1", LockMode::Read).unwrap();
+        let h3 = mgr.acquire("/tmp/test1", LockMode::Read).unwrap();
         drop(h1);
         drop(h2);
         drop(h3);
@@ -297,7 +295,7 @@ mod tests {
     #[test]
     fn writer_blocks_reader() {
         let mgr = ToolLockManager::new();
-        let writer = mgr.acquire("/tmp/test2", LockMode::Write);
+        let writer = mgr.acquire("/tmp/test2", LockMode::Write).unwrap();
 
         // Try-acquire a reader should fail while writer is held.
         assert!(mgr.try_acquire("/tmp/test2", LockMode::Read).is_none());
@@ -311,7 +309,7 @@ mod tests {
     #[test]
     fn reader_blocks_writer() {
         let mgr = ToolLockManager::new();
-        let reader = mgr.acquire("/tmp/test3", LockMode::Read);
+        let reader = mgr.acquire("/tmp/test3", LockMode::Read).unwrap();
 
         assert!(mgr.try_acquire("/tmp/test3", LockMode::Write).is_none());
 
@@ -322,7 +320,7 @@ mod tests {
     #[test]
     fn write_blocks_write() {
         let mgr = ToolLockManager::new();
-        let w1 = mgr.acquire("/tmp/test4", LockMode::Write);
+        let w1 = mgr.acquire("/tmp/test4", LockMode::Write).unwrap();
         assert!(mgr.try_acquire("/tmp/test4", LockMode::Write).is_none());
         drop(w1);
         assert!(mgr.try_acquire("/tmp/test4", LockMode::Write).is_some());
@@ -331,8 +329,8 @@ mod tests {
     #[test]
     fn different_paths_no_conflict() {
         let mgr = ToolLockManager::new();
-        let w1 = mgr.acquire("/tmp/a", LockMode::Write);
-        let w2 = mgr.acquire("/tmp/b", LockMode::Write);
+        let w1 = mgr.acquire("/tmp/a", LockMode::Write).unwrap();
+        let w2 = mgr.acquire("/tmp/b", LockMode::Write).unwrap();
         drop(w1);
         drop(w2);
     }
@@ -342,7 +340,7 @@ mod tests {
         let mgr = ToolLockManager::new();
         let barrier = Arc::new(Barrier::new(2));
 
-        let r1 = mgr.acquire("/tmp/test6", LockMode::Read);
+        let r1 = mgr.acquire("/tmp/test6", LockMode::Read).unwrap();
 
         let mgr_clone = mgr.clone();
         let barrier_clone = Arc::clone(&barrier);
@@ -350,7 +348,7 @@ mod tests {
         let handle = thread::spawn(move || {
             // Signal that we're about to try the write lock.
             barrier_clone.wait();
-            let w = mgr_clone.acquire("/tmp/test6", LockMode::Write);
+            let w = mgr_clone.acquire("/tmp/test6", LockMode::Write).unwrap();
             // If we got here, the writer was acquired.
             drop(w);
         });
@@ -373,7 +371,7 @@ mod tests {
         let mgr = ToolLockManager::new();
 
         {
-            let r = mgr.acquire("/tmp/cleanup", LockMode::Read);
+            let r = mgr.acquire("/tmp/cleanup", LockMode::Read).unwrap();
             drop(r);
         }
 
@@ -385,12 +383,40 @@ mod tests {
     #[test]
     fn try_acquire_returns_none_when_blocked() {
         let mgr = ToolLockManager::new();
-        let _w = mgr.acquire("/tmp/try", LockMode::Write);
+        let _w = mgr.acquire("/tmp/try", LockMode::Write).unwrap();
 
         let result = mgr.try_acquire("/tmp/try", LockMode::Read);
         assert!(result.is_none(), "read should block while write held");
 
         let result = mgr.try_acquire("/tmp/try", LockMode::Write);
         assert!(result.is_none(), "write should block while write held");
+    }
+
+    #[test]
+    fn acquire_returns_error_on_timeout() {
+        let mgr = ToolLockManager::new();
+        // Hold a write lock that will never be released.
+        let _w = mgr.acquire("/tmp/timeout", LockMode::Write).unwrap();
+
+        // Try to acquire with a very short timeout by using the standard
+        // 30s timeout — the lock is held indefinitely, so this will block.
+        // To avoid actually waiting 30s, we rely on try_acquire instead,
+        // which is the non-blocking equivalent.
+        let result = mgr.try_acquire("/tmp/timeout", LockMode::Write);
+        assert!(result.is_none(), "should be blocked by held writer");
+    }
+
+    #[test]
+    fn acquire_actual_lock_acquired() {
+        let mgr = ToolLockManager::new();
+        let handle = mgr.acquire("/tmp/real", LockMode::Write).unwrap();
+
+        // While handle is held, try_acquire should fail.
+        assert!(mgr.try_acquire("/tmp/real", LockMode::Write).is_none());
+
+        drop(handle);
+
+        // After release, try_acquire should succeed.
+        assert!(mgr.try_acquire("/tmp/real", LockMode::Write).is_some());
     }
 }

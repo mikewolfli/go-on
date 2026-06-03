@@ -343,7 +343,7 @@ pub struct SemanticCacheStats {
 
 /// Cache mode for embedding-based semantic cache
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved semantic cache feature
 pub enum CacheMode {
     /// Simple TF-IDF fallback (zero external dependencies)
     #[default]
@@ -356,7 +356,7 @@ pub enum CacheMode {
 
 /// Configuration for the embedding-based semantic cache
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved semantic cache feature
 pub struct EmbeddingCacheConfig {
     /// Whether to use embedding-based cache at all
     pub use_embedding: bool,
@@ -399,7 +399,7 @@ pub struct EmbeddingCacheEntry {
     pub ttl_secs: u64,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved semantic cache feature
 impl EmbeddingCacheEntry {
     /// Returns true if this entry has expired
     pub fn is_expired(&self) -> bool {
@@ -503,7 +503,7 @@ pub struct EmbeddingSemanticCache {
     cancellation_token: Arc<Mutex<Option<tokio_util::sync::CancellationToken>>>,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved semantic cache feature
 impl EmbeddingSemanticCache {
     /// Create a new embedding semantic cache from the given configuration.
     pub fn new(config: &EmbeddingCacheConfig) -> Self {
@@ -737,7 +737,7 @@ pub struct SimpleEmbeddingCache {
     total_docs: Arc<RwLock<usize>>,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved semantic cache feature
 impl SimpleEmbeddingCache {
     /// Create a new simple (TF-IDF) embedding cache.
     pub fn new(config: &EmbeddingCacheConfig) -> Self {
@@ -939,13 +939,13 @@ impl SimpleEmbeddingCache {
 /// `compute_remote_embedding` method to an actual MCP tool call, HTTP
 /// request, or gRPC endpoint for production use.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved semantic cache feature
 pub struct RemoteEmbeddingCache {
     inner: Arc<RemoteEmbeddingCacheInner>,
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved semantic cache feature
 struct RemoteEmbeddingCacheInner {
     entries: Arc<RwLock<Vec<EmbeddingCacheEntry>>>,
     cosine_threshold: f64,
@@ -954,7 +954,7 @@ struct RemoteEmbeddingCacheInner {
     endpoint: String,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved semantic cache feature
 impl RemoteEmbeddingCache {
     /// Create a new remote embedding cache.
     ///
@@ -1139,7 +1139,7 @@ impl RemoteEmbeddingCache {
 ///
 /// Splits on non-alphanumeric characters, filters out empty strings,
 /// single-character tokens, and purely numeric tokens (which carry little semantic weight).
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved semantic cache feature
 fn tokenize(text: &str) -> Vec<String> {
     text.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
@@ -1152,7 +1152,7 @@ fn tokenize(text: &str) -> Vec<String> {
 ///
 /// The returned vector is sorted by term score for deterministic ordering
 /// across calls. Each dimension represents a TF-IDF-weighted term signal.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved semantic cache feature
 fn compute_tfidf_vector(
     tokens: &[String],
     df: &HashMap<String, usize>,

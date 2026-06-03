@@ -803,17 +803,47 @@ fn call_openai_whisper_api(
     let json: serde_json::Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| AudioProcessorError::ResponseParse(format!("invalid JSON: {e}")))?;
 
-    let text = json["text"].as_str().unwrap_or("").to_string();
+    let text = json["text"]
+        .as_str()
+        .unwrap_or_else(|| {
+            tracing::warn!(
+                "OpenAI Whisper API response missing 'text' field, falling back to empty string"
+            );
+            ""
+        })
+        .to_string();
 
-    let language = json["language"].as_str().unwrap_or("en").to_string();
+    let language = json["language"]
+        .as_str()
+        .unwrap_or_else(|| {
+            tracing::warn!(
+                "OpenAI Whisper API response missing 'language' field, falling back to 'en'"
+            );
+            "en"
+        })
+        .to_string();
 
     // Parse segments if available.
     let mut segments: Vec<TranscriptSegment> = Vec::new();
     if let Some(segments_arr) = json["segments"].as_array() {
         for seg_val in segments_arr {
-            let start = seg_val["start"].as_f64().unwrap_or(0.0);
-            let end = seg_val["end"].as_f64().unwrap_or(0.0);
-            let seg_text = seg_val["text"].as_str().unwrap_or("").to_string();
+            let start = seg_val["start"].as_f64().unwrap_or_else(|| {
+                tracing::warn!("OpenAI Whisper API segment missing 'start', falling back to 0.0");
+                0.0
+            });
+            let end = seg_val["end"].as_f64().unwrap_or_else(|| {
+                tracing::warn!("OpenAI Whisper API segment missing 'end', falling back to 0.0");
+                0.0
+            });
+            let seg_text = seg_val["text"]
+                .as_str()
+                .unwrap_or_else(|| {
+                    tracing::warn!(
+                        "OpenAI Whisper API segment missing 'text', falling back to empty string"
+                    );
+                    ""
+                })
+                .to_string();
             let conf = seg_val["confidence"].as_f64();
             let speaker = seg_val["speaker"].as_str().map(|s| s.to_string());
 

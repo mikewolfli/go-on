@@ -319,44 +319,47 @@ impl TaskRouter {
                 AgentRole::Reviewer => RoleSpecifications::reviewer(),
                 AgentRole::Custom(name) => {
                     // Try RoleRegistry first; fall back to default coder spec.
-                    // Use lock-poison recovery so that a poisoned mutex does not
-                    // silently downgrade routing quality.
-                    let registry = role_registry();
-                    match registry.read() {
-                        Ok(guard) => {
-                            if let Some(def) = guard.get(name) {
-                                RoleSpecification {
-                                    role: AgentRole::Custom(name.clone()),
-                                    tier: "primary".to_string(),
-                                    allowed_tools: def.allowed_tools.clone(),
-                                    max_tool_calls: def.max_tool_calls,
-                                    token_budget: def.token_budget,
-                                    timeout_seconds: def.timeout_seconds,
+                    // If the registry hasn't been installed yet, fall through to
+                    // the default directly.
+                    if let Some(registry) = role_registry() {
+                        match registry.read() {
+                            Ok(guard) => {
+                                if let Some(def) = guard.get(name) {
+                                    RoleSpecification {
+                                        role: AgentRole::Custom(name.clone()),
+                                        tier: "primary".to_string(),
+                                        allowed_tools: def.allowed_tools.clone(),
+                                        max_tool_calls: def.max_tool_calls,
+                                        token_budget: def.token_budget,
+                                        timeout_seconds: def.timeout_seconds,
+                                    }
+                                } else {
+                                    RoleSpecifications::coder()
                                 }
-                            } else {
-                                RoleSpecifications::coder()
+                            }
+                            Err(poisoned) => {
+                                tracing::warn!(
+                                    "RoleRegistry lock is poisoned; recovering inner data for custom role '{}'",
+                                    name
+                                );
+                                // Recover the inner guard – the data is still usable.
+                                let guard = poisoned.into_inner();
+                                if let Some(def) = guard.get(name) {
+                                    RoleSpecification {
+                                        role: AgentRole::Custom(name.clone()),
+                                        tier: "primary".to_string(),
+                                        allowed_tools: def.allowed_tools.clone(),
+                                        max_tool_calls: def.max_tool_calls,
+                                        token_budget: def.token_budget,
+                                        timeout_seconds: def.timeout_seconds,
+                                    }
+                                } else {
+                                    RoleSpecifications::coder()
+                                }
                             }
                         }
-                        Err(poisoned) => {
-                            tracing::warn!(
-                                "RoleRegistry lock is poisoned; recovering inner data for custom role '{}'",
-                                name
-                            );
-                            // Recover the inner guard – the data is still usable.
-                            let guard = poisoned.into_inner();
-                            if let Some(def) = guard.get(name) {
-                                RoleSpecification {
-                                    role: AgentRole::Custom(name.clone()),
-                                    tier: "primary".to_string(),
-                                    allowed_tools: def.allowed_tools.clone(),
-                                    max_tool_calls: def.max_tool_calls,
-                                    token_budget: def.token_budget,
-                                    timeout_seconds: def.timeout_seconds,
-                                }
-                            } else {
-                                RoleSpecifications::coder()
-                            }
-                        }
+                    } else {
+                        RoleSpecifications::coder()
                     }
                 }
             })

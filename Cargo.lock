@@ -2257,6 +2257,7 @@ dependencies = [
  "directories",
  "eframe",
  "egui",
+ "fastrand",
  "futures-util",
  "image",
  "keyring",
@@ -2274,6 +2275,7 @@ dependencies = [
 name = "go_on_sdk"
 version = "1.1.0"
 dependencies = [
+ "fastrand",
  "futures",
  "reqwest",
  "serde",

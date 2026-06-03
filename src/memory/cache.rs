@@ -4,9 +4,11 @@
 //! - `backend-sqlite` (profile-local, profile-simple-server): rusqlite-backed, sync API
 //! - `backend-postgres` (profile-multi-users-server): postgres-backed sync API
 
-// Ensure features are mutually exclusive
+// Ensure exactly one backend feature is enabled.
 #[cfg(all(feature = "backend-sqlite", feature = "backend-postgres"))]
 compile_error!("features 'backend-sqlite' and 'backend-postgres' cannot be enabled simultaneously");
+#[cfg(not(any(feature = "backend-sqlite", feature = "backend-postgres")))]
+compile_error!("one of 'backend-sqlite' or 'backend-postgres' must be enabled");
 
 use std::sync::Mutex;
 
@@ -38,13 +40,13 @@ pub struct ResponseCacheStats {
 }
 
 // ─── SQLite backend (profile-local / profile-simple-server) ──────────────────
-#[cfg(not(feature = "backend-postgres"))]
+#[cfg(feature = "backend-sqlite")]
 use rusqlite::{params, Connection, OptionalExtension};
-#[cfg(not(feature = "backend-postgres"))]
+#[cfg(feature = "backend-sqlite")]
 use std::path::Path;
 
 /// SQLite-based response cache
-#[cfg(not(feature = "backend-postgres"))]
+#[cfg(feature = "backend-sqlite")]
 #[derive(Debug)]
 pub struct ResponseCache {
     /// SQLite connection (mutex-protected)
@@ -55,7 +57,7 @@ pub struct ResponseCache {
     max_entries: usize,
 }
 
-#[cfg(not(feature = "backend-postgres"))]
+#[cfg(feature = "backend-sqlite")]
 impl ResponseCache {
     /// Create a new response cache
     ///
@@ -312,7 +314,7 @@ impl ResponseCache {
     }
 }
 
-#[cfg(all(test, not(feature = "backend-postgres")))]
+#[cfg(all(test, feature = "backend-sqlite"))]
 mod tests {
     use super::ResponseCache;
 

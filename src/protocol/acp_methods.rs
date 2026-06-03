@@ -13,10 +13,10 @@
 /// ACP method name constants.
 ///
 /// Provides compile-time checked method name strings for ACP protocol methods.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved ACP methods feature
 pub struct AcpMethodNames;
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved ACP methods feature
 impl AcpMethodNames {
     pub const INITIALIZE: &'static str = "initialize";
     pub const AUTHENTICATE: &'static str = "authenticate";

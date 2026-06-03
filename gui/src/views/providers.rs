@@ -3,7 +3,7 @@ use crate::config::{save_app_config, AppConfig, ProviderConfig};
 use crate::i18n::I18n;
 use crate::section_hash;
 use crate::views::security_prefs;
-use crate::widgets::cache::{CachedView, Section, SectionCache};
+use crate::widgets::cache::CachedView;
 use serde_json::Value;
 use std::cell::RefCell;
 use std::sync::mpsc;
@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 thread_local! {
-    static COPILOT_AUTH_CACHE: RefCell<SectionCache> = RefCell::new(SectionCache::new());
+    static COPILOT_AUTH_CACHE: RefCell<CachedView> = RefCell::new(CachedView::new());
 }
 
 pub struct ProvidersView {
@@ -1001,10 +1001,7 @@ impl ProvidersView {
                                         );
 
                                         let _ = COPILOT_AUTH_CACHE.with(|c| {
-                                            c.borrow().check(
-                                                &Section::View("copilot_auth".to_string()),
-                                                copilot_hash,
-                                            )
+                                            c.borrow().check_size("copilot_auth", copilot_hash)
                                         });
                                         let resp = egui::Frame::NONE.show(ui, |ui| {
                                             match state.as_str() {
@@ -1105,8 +1102,8 @@ impl ProvidersView {
                                             }
                                         });
                                         COPILOT_AUTH_CACHE.with(|c| {
-                                            c.borrow_mut().store(
-                                                &Section::View("copilot_auth".to_string()),
+                                            c.borrow_mut().store_size(
+                                                "copilot_auth",
                                                 copilot_hash,
                                                 resp.response.rect.size(),
                                             )

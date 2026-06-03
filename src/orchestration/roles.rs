@@ -68,36 +68,46 @@ pub struct RoleRegistry {
 
 static ROLE_REGISTRY: OnceLock<RwLock<RoleRegistry>> = OnceLock::new();
 
-pub fn role_registry() -> &'static RwLock<RoleRegistry> {
-    ROLE_REGISTRY.get_or_init(|| RwLock::new(RoleRegistry::new()))
+/// Returns the role registry if it has been installed.
+/// Returns `None` if `install_role_registry` has not been called yet.
+///
+/// This avoids a race condition between installation and first read:
+/// using `get_or_init` would eagerly initialize an empty registry before
+/// installation data is available, creating a window where readers see
+/// stale state. By returning `Option`, callers naturally fall back to
+/// empty/default responses instead of racing with the installer.
+pub fn role_registry() -> Option<&'static RwLock<RoleRegistry>> {
+    ROLE_REGISTRY.get()
 }
 
 pub fn role_registry_keywords_for(name: &str) -> Vec<String> {
     role_registry()
-        .read()
+        .and_then(|lock| lock.read().ok())
         .map(|registry| registry.keywords_for(name))
         .unwrap_or_default()
 }
 
 pub fn role_registry_count() -> usize {
     role_registry()
-        .read()
+        .and_then(|lock| lock.read().ok())
         .map(|registry| registry.roles.len())
         .unwrap_or(0)
 }
 
 pub fn role_registry_industry_for(name: &str) -> Option<String> {
-    role_registry().read().ok().and_then(|registry| {
-        registry
-            .get(name)
-            .map(|definition| definition.industry.clone())
-    })
+    role_registry()
+        .and_then(|lock| lock.read().ok())
+        .and_then(|registry| {
+            registry
+                .get(name)
+                .map(|definition| definition.industry.clone())
+        })
 }
 
 pub fn install_role_registry(definitions: HashMap<String, RoleDefinition>) {
-    let lock = role_registry();
-    if let Ok(mut registry) = lock.write() {
-        registry.roles = definitions;
+    let registry = ROLE_REGISTRY.get_or_init(|| RwLock::new(RoleRegistry::new()));
+    if let Ok(mut guard) = registry.write() {
+        guard.roles = definitions;
     }
 }
 

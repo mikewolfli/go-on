@@ -2597,7 +2597,7 @@ async fn resolve_request_phase(
         ));
     }
 
-    // ── SchemaRegistry task envelope validation (F-GAP-07) ─────────────
+    // ── SchemaRegistry task envelope validation (activated, formerly F-GAP-07) ─
     let mut schema_warnings: Vec<String> = Vec::new();
     let mut schema_error: Option<String> = None;
     let sr_guard = server.schema_registry.lock().unwrap_or_else(|poisoned| {

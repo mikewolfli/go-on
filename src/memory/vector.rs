@@ -210,10 +210,10 @@ impl VectorStore {
         let memory_key = build_memory_key(phase, query);
         let now = now_ts();
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'upsert'"))?;
+        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("vector mutex poisoned in 'upsert', recovering");
+            poisoned.into_inner()
+        });
 
         let (json_value, blob_value): (Option<String>, Option<Vec<u8>>) = match self.mode {
             SqliteVectorMode::SqliteVec => (None, Some(embedding_blob)),
@@ -299,10 +299,10 @@ impl VectorStore {
         // Collect results within a locked scope, then release the lock
         // before doing sorting/processing (minimizes lock duration).
         let mut scored = {
-            let conn = self
-                .conn
-                .lock()
-                .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'search'"))?;
+            let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("vector mutex poisoned in 'search', recovering");
+                poisoned.into_inner()
+            });
 
             let scored = match self.mode {
                 SqliteVectorMode::SqliteVec => {
@@ -421,10 +421,10 @@ impl VectorStore {
     /// # Returns
     /// * `Result<Option<String>>` - Returns Ok(Some(String)) if a summary exists, Ok(None) if not, or an error if something goes wrong
     pub fn get_phase_summary(&self, phase: &str) -> Result<Option<String>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'get_phase_summary'"))?;
+        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("vector mutex poisoned in 'get_phase_summary', recovering");
+            poisoned.into_inner()
+        });
 
         let summary = conn
             .query_row(
@@ -452,10 +452,10 @@ impl VectorStore {
         }
 
         let now = now_ts();
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'upsert_phase_summary'"))?;
+        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("vector mutex poisoned in 'upsert_phase_summary', recovering");
+            poisoned.into_inner()
+        });
 
         conn.execute(
             "
@@ -476,10 +476,10 @@ impl VectorStore {
     /// # Returns
     /// * `Result<u64>` - Returns Ok(u64) with the number of memory entries, or an error if something goes wrong
     pub fn memory_entry_count(&self) -> Result<u64> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'memory_entry_count'"))?;
+        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("vector mutex poisoned in 'memory_entry_count', recovering");
+            poisoned.into_inner()
+        });
         let count = conn.query_row("SELECT COUNT(*) FROM vector_memory", [], |row| {
             row.get::<_, i64>(0)
         })?;
@@ -491,10 +491,10 @@ impl VectorStore {
     /// # Returns
     /// * `Result<u64>` - Returns Ok(u64) with the number of summary entries, or an error if something goes wrong
     pub fn summary_entry_count(&self) -> Result<u64> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'summary_entry_count'"))?;
+        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("vector mutex poisoned in 'summary_entry_count', recovering");
+            poisoned.into_inner()
+        });
         let count = conn.query_row("SELECT COUNT(*) FROM phase_summary", [], |row| {
             row.get::<_, i64>(0)
         })?;
@@ -506,10 +506,10 @@ impl VectorStore {
     /// # Returns
     /// * `Result<(usize, usize)>` - Returns Ok((usize, usize)) with the number of memory entries and summary entries deleted, or an error if something goes wrong
     pub fn clear_all(&self) -> Result<(usize, usize)> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'clear'"))?;
+        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("vector mutex poisoned in 'clear', recovering");
+            poisoned.into_inner()
+        });
         let memory_deleted = conn.execute("DELETE FROM vector_memory", [])?;
         let summaries_deleted = conn.execute("DELETE FROM phase_summary", [])?;
         Ok((memory_deleted, summaries_deleted))
@@ -517,10 +517,10 @@ impl VectorStore {
 
     /// Reclaim SQLite free pages after retention cleanup.
     pub fn vacuum(&self) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'vacuum'"))?;
+        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("vector mutex poisoned in 'vacuum', recovering");
+            poisoned.into_inner()
+        });
         conn.execute_batch("VACUUM;")?;
         Ok(())
     }
@@ -531,13 +531,29 @@ impl VectorStore {
 ///
 /// This avoids undefined behaviour from transmuting a function pointer
 /// with one ABI signature to another (Rust ABI vs C ABI).
-/// SAFETY: `db`, `pz_err_msg`, and `p_err_msg` are valid pointers
-/// provided by the SQLite runtime.
 #[cfg(not(feature = "backend-postgres"))]
 // SAFETY: This FFI function is called by SQLite during `sqlite3_auto_extension`.
-// The raw C pointers (`_db`, `_pz_err_msg`, `_p_err_msg`) are passed by SQLite
-// and are guaranteed valid at call time. The implementation ignores them and
-// delegates to `sqlite3_vec_init()`, which is the upstream sqlite-vec init function.
+//
+// Why this `unsafe` block is sound:
+//
+// 1. **Pointer validity** — `_db`, `_pz_err_msg`, and `_p_err_msg` are raw
+//    pointers passed by the SQLite runtime which guarantees they are valid
+//    at the call site.  The implementation ignores all three anyway.
+// 2. **ABI correctness** — The `extern "C"` ABI matches what
+//    `sqlite3_auto_extension` expects.  Without this wrapper, casting
+//    `sqlite3_vec_init` (which is `extern "C" fn()`) to the
+//    `sqlite3_auto_extension` callback signature would be undefined
+//    behaviour (calling a function through a pointer with incompatible type).
+// 3. **Delegation** — The body calls `sqlite3_vec_init()`, which is the
+//    upstream sqlite-vec initialiser re-exported by the `sqlite-vec` Rust
+//    crate.  That symbol is statically linked from the vendored C extension.
+// 4. **Feature gate** — This function is compiled only when
+//    `cfg(not(feature = "backend-postgres"))` is true, which implies the
+//    sqlite-vec C extension is linked into the binary.  Without the feature,
+//    this module is dead code.
+// 5. **Return value** — Returning `0` (SQLITE_OK) is required: any non-zero
+//    value causes SQLite to permanently skip this auto-extension, silently
+//    disabling vector search.
 unsafe extern "C" fn sqlite3_vec_init_auto_extension(
     _db: *mut rusqlite::ffi::sqlite3,
     _pz_err_msg: *mut *const std::os::raw::c_char,
@@ -562,10 +578,21 @@ fn register_sqlite_vec_auto_extension() {
         // pointer (`sqlite3_vec_init_auto_extension`) is a valid C ABI function.
         // This is called at most once due to `Once`, before any database connections
         // are opened, so there is no race on the internal SQLite data structures.
+        //
+        // The `unsafe` block is required because:
+        // - `sqlite3_auto_extension` is a foreign (C) function; calling any
+        //   FFI function is inherently `unsafe` in Rust.
+        // - `sqlite3_vec_init_auto_extension` is the `extern "C"` wrapper
+        //   defined above with a signature that matches exactly what
+        //   `sqlite3_auto_extension` expects (see its SAFETY comment
+        //   for why the wrapper itself is sound).
+        // - This code path is gated on `#[cfg(not(feature = "backend-postgres"))]`,
+        //   which implies the `sqlite-vec` feature is active and the C extension
+        //   is linked into the binary.  Without that feature, this entire
+        //   function is dead code.
+        // - `Once::call_once` guarantees single-threaded initialisation, so
+        //   there is no data race on SQLite's internal auto-extension list.
         unsafe {
-            // SAFETY: `sqlite3_vec_init_auto_extension` has the exact signature
-            // that `sqlite3_auto_extension` expects:
-            //   fn(db: *mut sqlite3, pzErrMsg: *mut *const c_char, pThunk: *const sqlite3_api_routines) -> c_int
             sqlite3_auto_extension(Some(sqlite3_vec_init_auto_extension));
         }
     });
@@ -901,10 +928,10 @@ impl VectorStore {
         let memory_key = build_memory_key(phase, query);
         let now = now_ts();
         let max_entries = self.max_entries as i64;
-        let mut client = self
-            .client
-            .lock()
-            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'upsert'"))?;
+        let mut client = self.client.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("vector mutex poisoned in 'upsert', recovering");
+            poisoned.into_inner()
+        });
         client.execute(
             "INSERT INTO vector_memory
                 (memory_key, phase, query_text, response_text, embedding,
@@ -959,10 +986,10 @@ impl VectorStore {
         };
         let query_embedding = Vector::from(query_vec);
         let now = now_ts();
-        let mut client = self
-            .client
-            .lock()
-            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'search'"))?;
+        let mut client = self.client.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("vector mutex poisoned in 'search', recovering");
+            poisoned.into_inner()
+        });
         let rows = client.query(
             "SELECT memory_key, response_text, updated_at,
                     1 - (embedding <=> $2) AS similarity
@@ -1013,10 +1040,10 @@ impl VectorStore {
     }
 
     pub fn get_phase_summary(&self, phase: &str) -> Result<Option<String>> {
-        let mut client = self
-            .client
-            .lock()
-            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'get_phase_summary'"))?;
+        let mut client = self.client.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("vector mutex poisoned in 'get_phase_summary', recovering");
+            poisoned.into_inner()
+        });
         Ok(client
             .query_opt(
                 "SELECT summary_text FROM phase_summary WHERE phase = $1",
@@ -1030,10 +1057,10 @@ impl VectorStore {
         if text.is_empty() {
             return Ok(());
         }
-        let mut client = self
-            .client
-            .lock()
-            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'upsert_phase_summary'"))?;
+        let mut client = self.client.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("vector mutex poisoned in 'upsert_phase_summary', recovering");
+            poisoned.into_inner()
+        });
         let now = now_ts();
         client.execute(
             "INSERT INTO phase_summary (phase, summary_text, updated_at)
@@ -1047,30 +1074,30 @@ impl VectorStore {
     }
 
     pub fn memory_entry_count(&self) -> Result<u64> {
-        let mut client = self
-            .client
-            .lock()
-            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'memory_entry_count'"))?;
+        let mut client = self.client.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("vector mutex poisoned in 'memory_entry_count', recovering");
+            poisoned.into_inner()
+        });
         let row = client.query_one("SELECT COUNT(*) FROM vector_memory", &[])?;
         let count: i64 = row.get(0);
         Ok(count.max(0) as u64)
     }
 
     pub fn summary_entry_count(&self) -> Result<u64> {
-        let mut client = self
-            .client
-            .lock()
-            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'summary_entry_count'"))?;
+        let mut client = self.client.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("vector mutex poisoned in 'summary_entry_count', recovering");
+            poisoned.into_inner()
+        });
         let row = client.query_one("SELECT COUNT(*) FROM phase_summary", &[])?;
         let count: i64 = row.get(0);
         Ok(count.max(0) as u64)
     }
 
     pub fn clear_all(&self) -> Result<(usize, usize)> {
-        let mut client = self
-            .client
-            .lock()
-            .map_err(|_| anyhow::anyhow!("vector mutex poisoned in 'clear_all'"))?;
+        let mut client = self.client.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("vector mutex poisoned in 'clear_all', recovering");
+            poisoned.into_inner()
+        });
         let memory_deleted = client.execute("DELETE FROM vector_memory", &[])? as usize;
         let summaries_deleted = client.execute("DELETE FROM phase_summary", &[])? as usize;
         Ok((memory_deleted, summaries_deleted))

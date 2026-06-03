@@ -6,10 +6,10 @@ use std::time::Instant;
 use crate::backend::{BackendClient, SkillRecord};
 use crate::i18n::I18n;
 use crate::views::security_prefs;
-use crate::widgets::cache::{Section, SectionCache};
+use crate::widgets::cache::CachedView;
 
 thread_local! {
-    static SKILLS_CACHE: RefCell<SectionCache> = RefCell::new(SectionCache::new());
+    static SKILLS_CACHE: RefCell<CachedView> = RefCell::new(CachedView::new());
 }
 
 /// Send a SkillsUpdate over a SyncSender with a single try_send attempt.
@@ -301,7 +301,7 @@ impl SkillsView {
 
         let hash = 0_u64;
 
-        let _ = SKILLS_CACHE.with(|c| c.borrow().check(&Section::SkillsList, hash));
+        let _ = SKILLS_CACHE.with(|c| c.borrow().check_size("skills_list", hash));
 
         let resp = egui::Frame::NONE.show(ui, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
@@ -1290,7 +1290,7 @@ impl SkillsView {
         });
         SKILLS_CACHE.with(|c| {
             c.borrow_mut()
-                .store(&Section::SkillsList, hash, resp.response.rect.size())
+                .store_size("skills_list", hash, resp.response.rect.size())
         });
     }
 }

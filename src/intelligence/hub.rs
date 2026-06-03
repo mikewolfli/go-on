@@ -20,16 +20,15 @@ use crate::intelligence::consensus::{ConsensusEngine, ConsensusNode, ConsensusVo
 // ── Global counters for observability ─────────────────────────────────────
 
 /// How many times the intelligence hub has been activated.
-#[allow(dead_code)]
-// F-GAP-49 — reserved for future use
+#[allow(dead_code)] // F-GAP-49 — reserved intelligence hub feature
 pub static INTEL_HUB_ACTIVATIONS: AtomicU64 = AtomicU64::new(0);
 /// How many consensus rounds have been started.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved intelligence hub feature
 pub static CONSENSUS_ROUNDS: AtomicU64 = AtomicU64::new(0);
 /// How many rationalization evaluations were performed.
 pub static RATIONALIZATION_COUNT: AtomicU64 = AtomicU64::new(0);
 /// How many audit entries were recorded.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved intelligence hub feature
 pub static AUDIT_ENTRY_COUNT: AtomicU64 = AtomicU64::new(0);
 
 // ── Global instances ──────────────────────────────────────────────────────
@@ -40,7 +39,7 @@ static GLOBAL_CONSENSUS: LazyLock<Mutex<ConsensusEngine>> =
 static GLOBAL_RATIONALIZATION: LazyLock<Mutex<SelfRationalizationGuard>> =
     LazyLock::new(|| Mutex::new(SelfRationalizationGuard::new(0.3)));
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved intelligence hub feature
 static GLOBAL_AUDIT: LazyLock<ThreadSafeAuditLog> = LazyLock::new(|| {
     let audit_path: std::path::PathBuf = std::env::temp_dir().join("goon-audit.ndjson");
     ThreadSafeAuditLog::new_with_path(10_000, audit_path)
@@ -87,8 +86,7 @@ pub fn init_intel_hub() {
 /// Returns the REAL consensus verdict (approve/reject) and confidence.
 /// Non-blocking — returns (approve, 0.3) as degraded fallback on any failure.
 // F-GAP-48: intentionally not wired into the hot path; rationalize_decision is primary
-#[allow(dead_code)]
-// F-GAP-49 — reserved for future use
+#[allow(dead_code)] // F-GAP-49 — reserved intelligence hub feature
 pub fn consensus_vote_on(
     proposal_id: &str,
     proposal: serde_json::Value,
@@ -287,16 +285,162 @@ pub fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (bool, 
 
 /// Record an audit entry for the decision pipeline.
 // F-GAP-48: intentionally not wired into the hot path; rationalize_decision is primary
-#[allow(dead_code)]
-// F-GAP-49 — reserved for future use
+#[allow(dead_code)] // F-GAP-49 — reserved intelligence hub feature
 pub fn record_audit_entry(entry: AuditLogEntry) {
     GLOBAL_AUDIT.record(entry);
     AUDIT_ENTRY_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
+// ── AuditEntryBuilder ──────────────────────────────────────────────────────
+
+/// Builder for [`AuditLogEntry`] that avoids long argument lists.
+///
+/// # Usage
+///
+/// ```ignore
+/// use crate::intelligence::hub::AuditEntryBuilder;
+///
+/// let entry = AuditEntryBuilder::new("task-001", "chat", "allow")
+///     .agent("agent-a")
+///     .tool("read_file")
+///     .inputs(serde_json::json!({"input": "test"}))
+///     .confidence(0.95)
+///     .build();
+/// ```
+#[allow(dead_code)] // Public API — reserved for adoption over the old positional function
+pub struct AuditEntryBuilder {
+    task_id: String,
+    phase: String,
+    decision: String,
+    agent: Option<String>,
+    tool: Option<String>,
+    inputs: serde_json::Value,
+    outputs: Option<serde_json::Value>,
+    error: Option<String>,
+    confidence: Option<f32>,
+    data_classification: Option<String>,
+    compliance_tags: Vec<String>,
+    retention_policy: Option<String>,
+    correlation_id: Option<String>,
+}
+
+#[allow(dead_code)] // Public API — reserved for adoption over the old positional function
+impl AuditEntryBuilder {
+    /// Start building an audit entry with the minimum required fields.
+    pub fn new(task_id: &str, phase: &str, decision: &str) -> Self {
+        Self {
+            task_id: task_id.to_string(),
+            phase: phase.to_string(),
+            decision: decision.to_string(),
+            agent: None,
+            tool: None,
+            inputs: serde_json::Value::Null,
+            outputs: None,
+            error: None,
+            confidence: None,
+            data_classification: None,
+            compliance_tags: vec![],
+            retention_policy: None,
+            correlation_id: None,
+        }
+    }
+
+    /// Set the agent name.
+    pub fn agent(mut self, agent: &str) -> Self {
+        self.agent = Some(agent.to_string());
+        self
+    }
+
+    /// Set the tool name.
+    pub fn tool(mut self, tool: &str) -> Self {
+        self.tool = Some(tool.to_string());
+        self
+    }
+
+    /// Set the input payload.
+    pub fn inputs(mut self, inputs: serde_json::Value) -> Self {
+        self.inputs = inputs;
+        self
+    }
+
+    /// Set the output payload.
+    pub fn outputs(mut self, outputs: serde_json::Value) -> Self {
+        self.outputs = Some(outputs);
+        self
+    }
+
+    /// Set the error message.
+    pub fn error(mut self, error: &str) -> Self {
+        self.error = Some(error.to_string());
+        self
+    }
+
+    /// Set the confidence score.
+    pub fn confidence(mut self, confidence: f32) -> Self {
+        self.confidence = Some(confidence);
+        self
+    }
+
+    /// Set the data classification label.
+    pub fn data_classification(mut self, dc: &str) -> Self {
+        self.data_classification = Some(dc.to_string());
+        self
+    }
+
+    /// Add a compliance tag.
+    pub fn compliance_tag(mut self, tag: &str) -> Self {
+        self.compliance_tags.push(tag.to_string());
+        self
+    }
+
+    /// Set the retention policy.
+    pub fn retention_policy(mut self, rp: &str) -> Self {
+        self.retention_policy = Some(rp.to_string());
+        self
+    }
+
+    /// Set the correlation ID.
+    pub fn correlation_id(mut self, cid: &str) -> Self {
+        self.correlation_id = Some(cid.to_string());
+        self
+    }
+
+    /// Consume the builder and produce an [`AuditLogEntry`].
+    pub fn build(self) -> AuditLogEntry {
+        AuditLogEntry {
+            timestamp: format!(
+                "{:?}",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            ),
+            task_id: self.task_id,
+            phase: self.phase,
+            agent: self.agent,
+            tool: self.tool,
+            decision: self.decision,
+            inputs: serde_json::to_value(self.inputs).unwrap_or_default(),
+            outputs: self
+                .outputs
+                .map(|o| serde_json::to_value(o).unwrap_or_default()),
+            error: self.error,
+            confidence: self.confidence,
+            data_classification: self.data_classification,
+            compliance_tags: self.compliance_tags,
+            retention_policy: self.retention_policy,
+            correlation_id: self.correlation_id,
+        }
+    }
+}
+
 /// Build an audit entry for agent decision.
+///
+/// Prefer [`AuditEntryBuilder`] for new code — it avoids the long parameter
+/// list and makes call sites self-documenting.
 // F-GAP-48: intentionally not wired into the hot path; rationalize_decision is primary
 #[allow(dead_code)] // F-GAP-49
+#[allow(clippy::too_many_arguments)]
 pub fn build_audit_entry(
     task_id: &str,
     phase: &str,

@@ -36,9 +36,9 @@ pub mod perplexity;
 pub mod progress_reporter;
 pub mod qianfan;
 pub mod replicate;
+pub mod self_evolution_agent; // GAP-B52-03: Self-Evolution Agent
 pub mod siliconflow;
 pub mod skywork;
-pub mod self_evolution_agent; // GAP-B52-03: Self-Evolution Agent
 pub mod sse_compressor;
 pub mod sse_optimizer;
 pub mod stepfun;

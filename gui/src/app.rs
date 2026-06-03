@@ -434,6 +434,32 @@ impl GoOnApp {
     /// Windows, Keychain on macOS). The backend also falls back to env vars if the
     /// keyring is unavailable — see `load_secret_value()` in the backend code.
     fn generate_backend_config(path: &std::path::Path, config: &AppConfig) {
+        /// Clamp a temperature value to the valid range [0.0, 2.0].
+        #[allow(dead_code)]
+        fn clamp_temperature(v: f32) -> f32 {
+            v.clamp(0.0, 2.0)
+        }
+
+        /// Clamp top_p to the valid range [0.0, 1.0].
+        #[allow(dead_code)]
+        fn clamp_top_p(v: f32) -> f32 {
+            v.clamp(0.0, 1.0)
+        }
+
+        /// Clamp max_tokens to the valid range [1, 1_048_576].
+        #[allow(dead_code)]
+        fn clamp_max_tokens(v: u32) -> u32 {
+            v.clamp(1, 1_048_576)
+        }
+
+        /// Clamp a u64 value to the range [min, max].
+        #[allow(dead_code)]
+        fn clamp_u64(v: u64, min: u64, max: u64) -> u64 {
+            v.clamp(min, max)
+        }
+
+        // == Validation helpers available above ==
+
         // Canonical provider metadata — maps provider name to (agent_type, url, default_model, supports_system).
         // This is the GUI-side hardcoded duplicate of the backend's built_in_provider_specs().
         // ⚠️ IMPORTANT: This function MUST be kept in sync with the backend's `built_in_provider_specs()`.

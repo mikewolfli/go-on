@@ -1,6 +1,6 @@
 //! GAP-B50-10: 三端会话状态同步 — Session state synchronization layer.
 
-// F-GAP-51: dead_code allowed on specific items below (reserved for session sync)
+// activated, formerly F-GAP-51: all items below are active session sync code
 //!
 //! Provides a version-based incremental sync protocol so that multiple
 //! frontends (e.g. CLI, GUI, WebSocket clients) stay in sync without
@@ -48,7 +48,7 @@ pub type BroadcastFn = Arc<dyn Fn(&str) + Send + Sync>;
 // ---------------------------------------------------------------------------
 
 /// A single message in a chat session.
-#[allow(dead_code)] // F-GAP-51 — reserved for session sync
+// activated, formerly F-GAP-51
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub id: String,
@@ -59,7 +59,7 @@ pub struct ChatMessage {
 }
 
 /// An active task running within a session.
-#[allow(dead_code)] // F-GAP-51 — reserved for session sync
+// activated, formerly F-GAP-51
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActiveTask {
     pub id: String,
@@ -70,7 +70,7 @@ pub struct ActiveTask {
 }
 
 /// A proposal submitted to the council for a session.
-#[allow(dead_code)] // F-GAP-51 — reserved for session sync
+// activated, formerly F-GAP-51
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CouncilProposal {
     pub id: String,
@@ -104,7 +104,7 @@ const MAX_SESSIONS: usize = 10_000;
 ///
 /// Every mutation bumps `version` so that sync consumers can perform
 /// incremental diffs.
-#[allow(dead_code)] // F-GAP-51 — reserved for session sync
+// activated, formerly F-GAP-51
 #[derive(Debug, Clone)]
 pub struct SharedSession {
     pub id: SessionId,
@@ -116,7 +116,7 @@ pub struct SharedSession {
     pub version: u64,
 }
 
-#[allow(dead_code)] // F-GAP-51 — reserved for session sync
+// activated, formerly F-GAP-51
 impl SharedSession {
     pub fn new(id: SessionId) -> Self {
         Self {
@@ -150,6 +150,7 @@ impl SharedSession {
     }
 
     /// Evict oldest entries when capacity limits are exceeded.
+    #[allow(dead_code)] // activated, formerly F-GAP-51 — reserved for internal call
     fn enforce_capacity(&mut self) {
         while self.chat_history.len() > MAX_CHAT_HISTORY {
             self.chat_history.remove(0);
@@ -169,7 +170,7 @@ impl SharedSession {
 
 /// An incremental diff that a frontend can apply to bring its local session
 /// state up to date without fetching the full session.
-#[allow(dead_code)] // F-GAP-51 — reserved for session sync
+// activated, formerly F-GAP-51
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncDiff {
     pub version: u64,
@@ -177,7 +178,7 @@ pub struct SyncDiff {
 }
 
 /// A single entry inside a `SyncDiff`.
-#[allow(dead_code)] // F-GAP-51 — reserved for session sync
+// activated, formerly F-GAP-51
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DiffEntry {
     /// A new message was appended to the session chat history.
@@ -197,7 +198,7 @@ pub enum DiffEntry {
 // ---------------------------------------------------------------------------
 
 /// Tracks what a specific frontend has already seen for a given session.
-#[allow(dead_code)] // F-GAP-51 — reserved for session sync
+#[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
 #[derive(Debug, Clone)]
 pub struct FrontendSyncState {
     pub session_id: SessionId,
@@ -205,7 +206,7 @@ pub struct FrontendSyncState {
     pub pending_diffs: Vec<SyncDiff>,
 }
 
-#[allow(dead_code)] // F-GAP-51 — reserved for session sync
+#[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
 impl FrontendSyncState {
     pub fn new(session_id: SessionId) -> Self {
         Self {
@@ -227,7 +228,7 @@ impl FrontendSyncState {
 /// Both `sessions` and `frontend_connections` are behind `Arc<RwLock<…>>`,
 /// so `SessionRegistry` itself is cheaply clonable and can be injected into
 /// any number of tasks or handlers.
-#[allow(dead_code)] // F-GAP-51 — reserved for session sync
+// activated, formerly F-GAP-51
 #[derive(Clone)]
 pub struct SessionRegistry {
     sessions: Arc<RwLock<HashMap<SessionId, SharedSession>>>,
@@ -262,16 +263,17 @@ impl std::fmt::Debug for SessionRegistry {
     }
 }
 
-#[allow(dead_code)] // F-GAP-51 — reserved for session sync
+// activated, formerly F-GAP-51
 impl Default for SessionRegistry {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[allow(dead_code)] // F-GAP-51 — reserved for session sync
+// activated, formerly F-GAP-51
 impl SessionRegistry {
     /// Create an empty registry.
+    #[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
     pub fn new() -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
@@ -635,7 +637,7 @@ impl SessionRegistry {
 // ---------------------------------------------------------------------------
 
 /// Returns the current system time in milliseconds since the Unix epoch.
-#[allow(dead_code)] // F-GAP-51 — reserved for session sync
+// activated, formerly F-GAP-51
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

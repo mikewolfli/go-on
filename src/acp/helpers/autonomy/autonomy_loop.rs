@@ -169,12 +169,14 @@ mod tests {
     #[test]
     fn autonomy_phases_are_distinct() {
         use std::collections::HashSet;
-        let phases = [format!("{:?}", AutonomyPhase::Planning),
+        let phases = [
+            format!("{:?}", AutonomyPhase::Planning),
             format!("{:?}", AutonomyPhase::Executing),
             format!("{:?}", AutonomyPhase::Observing),
             format!("{:?}", AutonomyPhase::Finalizing),
             format!("{:?}", AutonomyPhase::Completed),
-            format!("{:?}", AutonomyPhase::Failed)];
+            format!("{:?}", AutonomyPhase::Failed),
+        ];
         let unique: HashSet<_> = phases.iter().collect();
         assert_eq!(unique.len(), phases.len(), "all phases must be distinct");
     }

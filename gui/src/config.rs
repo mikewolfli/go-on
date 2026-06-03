@@ -41,6 +41,21 @@ pub struct UiStabilityConfig {
     pub stream_token_flush_ms: u64,
 }
 
+impl UiStabilityConfig {
+    /// Clamp all numeric fields to sensible ranges to prevent
+    /// misconfigured values from causing UI hangs or excessive repaints.
+    fn clamp_to_sensible_ranges(&mut self) {
+        self.backend_refresh_interval_secs = self.backend_refresh_interval_secs.clamp(1, 300);
+        self.backend_ui_commit_debounce_ms = self.backend_ui_commit_debounce_ms.clamp(16, 5000);
+        self.health_disconnect_debounce_count = self.health_disconnect_debounce_count.clamp(0, 10);
+        self.chat_stream_chunk_flush_ms = self.chat_stream_chunk_flush_ms.clamp(1, 500);
+        self.chat_repaint_interval_ms = self.chat_repaint_interval_ms.clamp(1, 1000);
+        self.chat_max_pending_events_per_frame =
+            self.chat_max_pending_events_per_frame.clamp(1, 4096);
+        self.stream_token_flush_ms = self.stream_token_flush_ms.clamp(1, 500);
+    }
+}
+
 impl Default for UiStabilityConfig {
     fn default() -> Self {
         Self {
@@ -253,6 +268,9 @@ pub fn load_app_config() -> AppConfig {
             path.display()
         );
     }
+
+    // Clamp UI stability config to sensible ranges after deserialization
+    config.ui_stability.clamp_to_sensible_ranges();
 
     let mut changed = false;
 

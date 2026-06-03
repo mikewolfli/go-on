@@ -54,7 +54,7 @@ impl From<std::io::Error> for MtlsError {
 // ---------------------------------------------------------------------------
 
 /// mTLS configuration for the go-on runtime.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved mTLS feature
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MtlsConfig {
     /// Path to the CA certificate file (PEM).
@@ -69,7 +69,7 @@ pub struct MtlsConfig {
     pub allowed_cn_list: Vec<String>,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved mTLS feature
 impl MtlsConfig {
     /// Create a new mTLS configuration.
     pub fn new(
@@ -103,7 +103,7 @@ impl MtlsConfig {
 // CertificateInfo
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved mTLS feature
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CertificateInfo {
     pub subject_cn: String,
@@ -115,7 +115,7 @@ pub struct CertificateInfo {
     pub days_remaining: i64,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved mTLS feature
 impl CertificateInfo {
     /// Parse certificate info from DER-encoded certificate bytes.
     pub fn from_der(der_bytes: &[u8]) -> Result<Self, MtlsError> {
@@ -174,14 +174,14 @@ impl CertificateInfo {
 /// Accepts incoming mTLS connections using rustls.
 ///
 /// Loads CA and server certificates from the paths specified in MtlsConfig.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved mTLS feature
 pub struct MtlsAcceptor {
     config: MtlsConfig,
     /// Cached server config (rebuilt on cert reload).
     server_config: RwLock<Option<Arc<rustls::ServerConfig>>>,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved mTLS feature
 impl MtlsAcceptor {
     /// Create a new MtlsAcceptor from configuration.
     pub fn new(config: MtlsConfig) -> Self {
@@ -493,7 +493,7 @@ pub fn check_cert_expiry(
 
 /// Monitor certificate expiry on a recurring interval.
 /// Spawn this as a tokio task during initialization.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved mTLS feature
 /// Wired via server startup in production deployments.
 pub fn start_cert_monitor(
     config: MtlsConfig,
@@ -522,7 +522,7 @@ pub fn start_cert_monitor(
 /// If `config` is `Some`, calls `start_cert_monitor` with a 24-hour check
 /// interval and a 30-day warning threshold. If `config` is `None`, logs a
 /// debug message indicating certificate monitoring is disabled.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved mTLS feature
 /// Wired via server startup in production deployments.
 pub fn spawn_cert_monitor_if_configured(config: Option<MtlsConfig>) {
     match config {

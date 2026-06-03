@@ -5,10 +5,10 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AcpErrorCode {
     /// Invalid JSON was received by the server (-32700).
-    #[allow(dead_code)] // F-GAP-51 — standard code, reserved for future use
+    #[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
     ParseError = -32700,
     /// The JSON sent is not a valid Request object (-32600).
-    #[allow(dead_code)] // F-GAP-51 — standard code, reserved for future use
+    #[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
     InvalidRequest = -32600,
     /// The method does not exist / is not available (-32601).
     MethodNotFound = -32601,
@@ -365,24 +365,28 @@ pub(crate) fn append_trace_event(event: TraceEvent) {
 }
 
 // GAP-B50-36: Authenticate a JSON-RPC request before dispatch.
-/// Extract authentication token from request params and validate it.
+/// Extract authentication token from request params or HTTP headers and validate it.
 /// Returns None if auth is disabled (local profile backward compat) or the session.
+/// When `http_headers` is Some, prefers HttpAuthProvider over JsonRpcAuthProvider.
 pub fn authenticate_request(
     server: &AcpServer,
     request: &JsonRpcRequest,
+    http_headers: Option<&str>,
 ) -> Result<
     Option<crate::acp::r#impl::session::UserSession>,
     Box<crate::acp::r#impl::session::TokenIntrospectResult>,
 > {
-    // B51-29: Use AuthMiddleware with JsonRpcAuthProvider
-    use auth_middleware::{AuthMiddleware, JsonRpcAuthProvider};
+    use auth_middleware::{AuthMiddleware, HttpAuthProvider, JsonRpcAuthProvider};
 
-    match AuthMiddleware::authenticate(
+    let provider: &dyn auth_middleware::AuthProvider = if let Some(headers) = http_headers {
+        &HttpAuthProvider { headers }
+    } else {
         &JsonRpcAuthProvider {
             params: &request.params,
-        },
-        server,
-    ) {
+        }
+    };
+
+    match AuthMiddleware::authenticate(provider, server) {
         Ok(session) => Ok(session),
         Err(reason) => Err(Box::new(
             crate::acp::r#impl::session::TokenIntrospectResult {
@@ -401,9 +405,13 @@ pub fn authenticate_request(
 /// `#[tracing::instrument]` creates the root tracing span.
 /// We avoid `.entered()` to keep the future `Send` (EnteredSpan is !Send).
 #[tracing::instrument(skip(server, request))]
-pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Result<()> {
+pub async fn handle_request(
+    server: &AcpServer,
+    request: JsonRpcRequest,
+    http_headers: Option<&str>,
+) -> Result<()> {
     // GAP-B50-36: Authenticate request before dispatch
-    match authenticate_request(server, &request) {
+    match authenticate_request(server, &request, http_headers) {
         Ok(Some(session)) => {
             tracing::debug!(
                 user_id = %session.user_id,
@@ -439,12 +447,21 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             use base64::Engine;
             let b64_engine = base64::engine::general_purpose::STANDARD;
             match b64_engine.decode(&server.runtime_config.request_signing_public_key) {
-                Ok(key) => Some((key, crate::security::request_signing::SigningAlgorithm::Ed25519)),
+                Ok(key) => Some((
+                    key,
+                    crate::security::request_signing::SigningAlgorithm::Ed25519,
+                )),
                 Err(_) => {
-                    tracing::warn!("request_signing: invalid base64 public key, falling back to HMAC");
+                    tracing::warn!(
+                        "request_signing: invalid base64 public key, falling back to HMAC"
+                    );
                     if !server.runtime_config.request_signing_hmac_secret.is_empty() {
                         Some((
-                            server.runtime_config.request_signing_hmac_secret.as_bytes().to_vec(),
+                            server
+                                .runtime_config
+                                .request_signing_hmac_secret
+                                .as_bytes()
+                                .to_vec(),
                             crate::security::request_signing::SigningAlgorithm::HmacSha256,
                         ))
                     } else {
@@ -454,7 +471,11 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             }
         } else if !server.runtime_config.request_signing_hmac_secret.is_empty() {
             Some((
-                server.runtime_config.request_signing_hmac_secret.as_bytes().to_vec(),
+                server
+                    .runtime_config
+                    .request_signing_hmac_secret
+                    .as_bytes()
+                    .to_vec(),
                 crate::security::request_signing::SigningAlgorithm::HmacSha256,
             ))
         } else {
@@ -465,24 +486,38 @@ pub async fn handle_request(server: &AcpServer, request: JsonRpcRequest) -> Resu
             // Extract the _signature field from request params
             let sig_from_params = request.params.as_ref().and_then(|params| {
                 params.get("_signature").and_then(|s| {
-                    serde_json::from_value::<crate::security::request_signing::RequestSignature>(s.clone()).ok()
+                    serde_json::from_value::<crate::security::request_signing::RequestSignature>(
+                        s.clone(),
+                    )
+                    .ok()
                 })
             });
 
             match sig_from_params {
                 Some(ref request_sig) => {
                     // Serialize the params without the _signature field for body verification
-                    let body_for_verification = request.params.as_ref().map(|params| {
-                        let mut params_copy = params.clone();
-                        if let serde_json::Value::Object(ref mut map) = params_copy {
-                            map.remove("_signature");
-                        }
-                        serde_json::to_vec(&params_copy).unwrap_or_default()
-                    }).unwrap_or_default();
+                    let body_for_verification = request
+                        .params
+                        .as_ref()
+                        .map(|params| {
+                            let mut params_copy = params.clone();
+                            if let serde_json::Value::Object(ref mut map) = params_copy {
+                                map.remove("_signature");
+                            }
+                            serde_json::to_vec(&params_copy).unwrap_or_default()
+                        })
+                        .unwrap_or_default();
 
-                    match crate::security::request_signing::verify_request(key, &body_for_verification, request_sig) {
+                    match crate::security::request_signing::verify_request(
+                        key,
+                        &body_for_verification,
+                        request_sig,
+                    ) {
                         Ok(true) => {
-                            tracing::debug!("Request signature verified (key_id={})", request_sig.key_id);
+                            tracing::debug!(
+                                "Request signature verified (key_id={})",
+                                request_sig.key_id
+                            );
                         }
                         Ok(false) | Err(_) => {
                             tracing::warn!("Request signature verification failed");
@@ -1859,9 +1894,15 @@ fn method_to_permission(method: &str) -> crate::governance::rbac::Permission {
         Permission::ManageUsers
     } else if method.starts_with("config.") || method.starts_with("autotune.") {
         Permission::ManageConfig
-    } else if method.starts_with("session/") || method.starts_with("chat/") || method == "session/prompt" {
+    } else if method.starts_with("session/")
+        || method.starts_with("chat/")
+        || method == "session/prompt"
+    {
         Permission::Execute
-    } else if method.starts_with("metrics.") || method.starts_with("trace.") || method == "runtime.health" {
+    } else if method.starts_with("metrics.")
+        || method.starts_with("trace.")
+        || method == "runtime.health"
+    {
         Permission::Read
     } else {
         // Default: require Execute for unknown methods
@@ -1884,11 +1925,7 @@ fn request_to_principal(request: &JsonRpcRequest) -> crate::governance::rbac::Pr
         .as_ref()
         .and_then(|p| p.get("roles"))
         .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str())
-                .collect()
-        })
+        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
         .unwrap_or_else(|| vec!["user"]);
     let tenant_id = request
         .params

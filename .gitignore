@@ -13,6 +13,12 @@ tmp_provider_fail_config2.toml
 tmp_review_collision.toml
 .goon/
 dist/
+sdk/typescript/node_modules/
+sdk/typescript/dist/
+sdk/typescript/.vite/
+sdk/typescript/gen/
+sdk/typescript/target/
+sdk/rust/target/
 
 # VS Code extension build output
 vscode-addon/out/

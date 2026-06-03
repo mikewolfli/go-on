@@ -686,7 +686,9 @@ impl SecurityAdvisorAgent {
         let body = serde_json::to_value(digest)
             .map_err(|e| SecurityAdvisorError::DigestBuildFailed(e.to_string()))?;
 
-        let resp = crate::shared::http_client::http_client()
+        let client = crate::shared::http_client::http_client()
+            .map_err(|e| SecurityAdvisorError::DigestBuildFailed(e.to_string()))?;
+        let resp = client
             .post(url)
             .json(&body)
             .send()

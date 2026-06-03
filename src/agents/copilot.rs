@@ -503,7 +503,10 @@ impl CopilotAgent {
 
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
                 // Capture model name from the first event that has it.
-                let mut m = capture.lock().unwrap_or_else(|poisoned| { tracing::warn!("lock poisoned, recovering"); poisoned.into_inner() });
+                let mut m = capture.lock().unwrap_or_else(|poisoned| {
+                    tracing::warn!("lock poisoned, recovering");
+                    poisoned.into_inner()
+                });
                 if m.is_none() {
                     if let Some(model_name) = json.get("model").and_then(|v| v.as_str()) {
                         if !model_name.is_empty() {

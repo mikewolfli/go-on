@@ -155,11 +155,11 @@ pub struct ConsciousnessProfile {
 /// state based on whether awareness is improving or declining.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum TrendDirection {
-StrongUp,
-WeakUp,
-Stable,
-WeakDown,
-StrongDown,
+    StrongUp,
+    WeakUp,
+    Stable,
+    WeakDown,
+    StrongDown,
 }
 
 // ── Internal state ──────────────────────────────────────────────────────────
@@ -449,12 +449,8 @@ impl ConsciousnessMetrics {
     fn compute_trend(&self) -> TrendDirection {
         let inner = lock_guard(&self.inner);
         let window = inner.config.tracking_window;
-        let metrics: Vec<&AwarenessMetric> = inner
-            .metrics
-            .iter()
-            .rev()
-            .take(window)
-            .collect::<Vec<_>>();
+        let metrics: Vec<&AwarenessMetric> =
+            inner.metrics.iter().rev().take(window).collect::<Vec<_>>();
 
         // Require at least 10 data points before attempting trend analysis
         // to avoid overreacting to noise in small samples.

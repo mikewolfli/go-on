@@ -46,13 +46,13 @@ pub enum PipelineStep {
 pub enum PipelineErrorStrategy {
     /// Stop execution immediately and return the partial results.
     #[allow(dead_code)]
-// F-GAP-49 — reserved for future use
+    // F-GAP-49 — reserved for future use
     Stop,
     /// Continue executing remaining steps despite the error.
     Continue,
     /// Stop execution and invoke rollback (requires transactional context).
     #[allow(dead_code)]
-// F-GAP-49 — reserved for future use
+    // F-GAP-49 — reserved for future use
     Rollback,
 }
 
@@ -451,7 +451,7 @@ mod tests {
     }
 
     #[allow(dead_code)]
-// F-GAP-49 — reserved for future use
+    // F-GAP-49 — reserved for future use
     fn dummy_input() -> ToolInput {
         ToolInput {
             task_id: "pipeline-test".to_string(),

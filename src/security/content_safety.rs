@@ -149,9 +149,24 @@ pub struct SafetyChecker {
 
 impl SafetyChecker {
     /// Create a new SafetyChecker with the given configuration.
-    pub fn new(config: ContentSafetyConfig) -> Result<Self, SafetyError> {
-        let rules = Self::compile_rules(&config)?;
-        Ok(Self { config, rules })
+    ///
+    /// If regex compilation fails for any rule pattern, the error is logged
+    /// and an empty ruleset is used (the checker will report no violations).
+    /// This ensures the SafetyChecker can always be constructed, even when
+    /// a pattern is invalid — the caller can still add valid rules later
+    /// via [`add_rule`].
+    pub fn new(config: ContentSafetyConfig) -> Self {
+        let rules = match Self::compile_rules(&config) {
+            Ok(rules) => rules,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "SafetyChecker: regex compilation failed, falling back to empty ruleset"
+                );
+                Vec::new()
+            }
+        };
+        Self { config, rules }
     }
 
     /// Check the given text for safety violations.
@@ -410,7 +425,7 @@ mod tests {
     use super::*;
 
     fn make_checker() -> SafetyChecker {
-        SafetyChecker::new(ContentSafetyConfig::default()).unwrap()
+        SafetyChecker::new(ContentSafetyConfig::default())
     }
 
     #[test]
@@ -528,7 +543,7 @@ mod tests {
             threshold: SafetySeverity::High, // Only High and Critical violations
             ..Default::default()
         };
-        let checker = SafetyChecker::new(config).unwrap();
+        let checker = SafetyChecker::new(config);
 
         // PII email is Medium severity, so it should be filtered out
         let violations = checker.check("Email: test@example.com");
@@ -546,7 +561,7 @@ mod tests {
             enable_pii_scanning: false,
             ..Default::default()
         };
-        let checker = SafetyChecker::new(config).unwrap();
+        let checker = SafetyChecker::new(config);
         let violations = checker.check("Email: test@example.com");
         // PII scanning disabled, no violation expected from email
         let pii_violations: Vec<_> = violations

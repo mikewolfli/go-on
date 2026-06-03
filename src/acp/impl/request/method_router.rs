@@ -45,7 +45,7 @@ impl MethodRouter {
     }
 
     /// Register a handler for the given method name.
-    #[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
+    #[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
     pub fn register(&mut self, method: &'static str, handler: Box<dyn MethodHandler>) {
         self.handlers.insert(method, handler);
     }
@@ -92,7 +92,7 @@ pub fn global_method_router() -> &'static MethodRouter {
 }
 
 /// Convenience: register a handler on the global router at startup.
-#[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
+#[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
 pub fn register_method_handler(method: &'static str, handler: Box<dyn MethodHandler>) {
     // Get-or-init guarantees we get the same instance to modify.
     let router = GLOBAL_ROUTER.get_or_init(MethodRouter::new);
@@ -110,16 +110,16 @@ pub fn register_method_handler(method: &'static str, handler: Box<dyn MethodHand
 
 // ── ACP method-name tracking ──────────────────────────────────────────────
 
-#[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
+#[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
 static ACP_METHOD_REGISTRY: OnceLock<std::sync::Mutex<Vec<&'static str>>> = OnceLock::new();
 
-#[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
+#[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
 fn acp_method_registry() -> &'static std::sync::Mutex<Vec<&'static str>> {
     ACP_METHOD_REGISTRY.get_or_init(|| std::sync::Mutex::new(Vec::new()))
 }
 
 /// Register an ACP method name so that `is_acp_request` recognises it.
-#[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
+#[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
 pub fn register_acp_method(method: &'static str) {
     if let Ok(mut guard) = acp_method_registry().lock() {
         guard.push(method);
@@ -128,7 +128,7 @@ pub fn register_acp_method(method: &'static str) {
 
 /// Returns true if the method is known to the ACP protocol (either built-in
 /// or dynamically registered).
-#[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
+#[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
 pub fn is_registered_acp_method(method: &str) -> bool {
     if let Ok(guard) = acp_method_registry().lock() {
         guard.contains(&method)

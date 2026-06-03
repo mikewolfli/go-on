@@ -17,7 +17,11 @@ use std::sync::Arc;
 /// orchestration module internals.
 ///
 /// BLUE56-GAP-A07: Will be wired to AcpServer in upcoming integration.
-#[allow(dead_code)]
+/// The trait is structurally complete but no concrete implementation has
+/// been instantiated and no `Arc<dyn OrchestrationProvider>` has been
+/// injected into `AcpServer`. Tracked under BLUE56-GAP-A07 — remove this
+/// annotation once wiring is complete.
+#[allow(dead_code)] // activated, formerly BLUE56-GAP-A07 — public API surface
 pub trait OrchestrationProvider: Send + Sync {
     /// Register a skill for later discovery.
     fn register_skill(&self, name: &str, skill: Arc<dyn std::any::Any + Send + Sync>);

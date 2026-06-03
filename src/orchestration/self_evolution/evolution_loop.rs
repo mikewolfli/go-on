@@ -117,7 +117,10 @@ impl EvolutionTrigger {
                 expected,
                 actual,
             } => {
-                format!("Config drift: {} expected={} actual={}", key, expected, actual)
+                format!(
+                    "Config drift: {} expected={} actual={}",
+                    key, expected, actual
+                )
             }
             EvolutionTrigger::DegradationDetected {
                 capability_id,
@@ -812,10 +815,7 @@ impl EvolutionLoop {
                         .await;
                 }
 
-                info!(
-                    cycle_id = self.cycle_id,
-                    "evolution cycle completed"
-                );
+                info!(cycle_id = self.cycle_id, "evolution cycle completed");
             }
         }
     }
@@ -884,7 +884,11 @@ impl EvolutionLoop {
             EvolutionTrigger::ManualRequest { instruction } => {
                 format!("Manual evolution request: {}", instruction)
             }
-            EvolutionTrigger::ConfigDrift { key, expected, actual } => {
+            EvolutionTrigger::ConfigDrift {
+                key,
+                expected,
+                actual,
+            } => {
                 format!(
                     "Configuration drift: '{}' expected '{}' but found '{}'",
                     key, expected, actual
@@ -951,10 +955,7 @@ impl EvolutionLoop {
                 analysis.suggested_approach.clone(),
             );
 
-            match agent
-                .generate_patch(&report, &analysis.root_cause)
-                .await
-            {
+            match agent.generate_patch(&report, &analysis.root_cause).await {
                 Ok(patch) => {
                     info!(
                         analysis_id = %analysis.analysis_id,
@@ -1021,10 +1022,7 @@ impl EvolutionLoop {
 
     /// Phase 5: Apply the patch using the sandbox.
     async fn apply(&self, patch: &CodePatch) -> Result<CodePatch, EvolutionLoopError> {
-        let sandbox = self
-            .sandbox
-            .as_ref()
-            .ok_or(EvolutionLoopError::NoSandbox)?;
+        let sandbox = self.sandbox.as_ref().ok_or(EvolutionLoopError::NoSandbox)?;
 
         sandbox
             .apply_patch(patch)

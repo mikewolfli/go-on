@@ -71,11 +71,12 @@ impl TelemetryRuntime {
                     .map_err(|err| err.to_string()),
                 );
             }
-            // Safe to unwrap: guard is guaranteed to be Some at this point
-            // because we just set it above if it was None.
-            let init = guard.as_ref().unwrap();
-            if init.is_err() {
-                return Self::default();
+            // guard is guaranteed to be Some at this point because we just
+            // set it above if it was None.
+            if let Some(init) = guard.as_ref() {
+                if init.is_err() {
+                    return Self::default();
+                }
             }
         }
 

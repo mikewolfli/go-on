@@ -88,7 +88,10 @@ fn error_code_for(err: &anyhow::Error) -> i32 {
 
 impl McpServer {
     fn mark_cancelled_request(&self, request_id: &Value) {
-        let mut cancelled = self.cancelled_requests.lock().unwrap_or_else(|poisoned| { tracing::warn!("lock poisoned, recovering"); poisoned.into_inner() });
+        let mut cancelled = self.cancelled_requests.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("lock poisoned, recovering");
+            poisoned.into_inner()
+        });
         // Prevent unbounded growth: evict oldest entry if over 10K limit
         if cancelled.len() >= 10_000 {
             if let Some(oldest) = cancelled.iter().next().cloned() {
@@ -253,7 +256,10 @@ impl McpServer {
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
                 if let Some(ref lvl) = level {
-                    let mut guard = self.logging_level.lock().unwrap_or_else(|poisoned| { tracing::warn!("lock poisoned, recovering"); poisoned.into_inner() });
+                    let mut guard = self.logging_level.lock().unwrap_or_else(|poisoned| {
+                        tracing::warn!("lock poisoned, recovering");
+                        poisoned.into_inner()
+                    });
                     *guard = Some(lvl.clone());
                     info!("MCP: logging level set to {}", lvl);
                 }

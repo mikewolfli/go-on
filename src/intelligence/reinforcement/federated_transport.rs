@@ -625,7 +625,7 @@ pub struct HttpFederatedTransport {
     /// HTTP client (reused across requests).
     client: reqwest::Client,
     /// Request timeout.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved federated transport feature
     timeout: Duration,
 }
 
@@ -875,7 +875,7 @@ mod tests {
 mod temp_env_compat {
     /// A stand-in that sets the env var for the duration of the closure and
     /// restores the previous value afterwards.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved federated transport feature
     pub fn with_var<F>(key: &str, value: Option<&str>, f: F)
     where
         F: FnOnce(),

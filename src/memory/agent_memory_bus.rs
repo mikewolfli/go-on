@@ -33,7 +33,7 @@ pub struct AgentMemoryBus {
 }
 
 impl AgentMemoryBus {
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved agent memory bus feature
     /// Create a new agent memory bus wrapping the given store.
     pub fn new(store: Arc<Mutex<MemoryStore>>) -> Self {
         Self {
@@ -53,14 +53,14 @@ impl AgentMemoryBus {
         }
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved agent memory bus feature
     /// Set the maximum number of insights stored per task completion.
     pub fn with_max_insights_per_task(mut self, n: usize) -> Self {
         self.max_insights_per_task = n;
         self
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved agent memory bus feature
     /// Return a reference to the underlying store.
     pub fn store(&self) -> &Arc<Mutex<MemoryStore>> {
         &self.store

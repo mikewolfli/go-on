@@ -418,8 +418,18 @@ impl HyperResilienceEngine {
     /// `half_open_probe_interval_ms`, this method automatically transitions
     /// it to **HalfOpen**, enabling the self-healing / auto-recovery pattern
     /// without requiring an explicit `probe()` call.
+    ///
+    /// # Lock ordering
+    /// Always acquires `circuit_breakers` Mutex **first**, then `config` RwLock
+    /// (only in the Open branch where `probe_interval` is needed).
+    /// This matches the common pattern used by `record_failure_with_mode`,
+    /// `record_success`, `record_execution`, etc. — all of which acquire
+    /// `circuit_breakers` without taking `config` at all. Acquiring in the
+    /// opposite order (config first, then circuit_breakers) would risk a
+    /// deadlock with code paths that hold circuit_breakers and later take
+    /// config (e.g. `health_check_cycle` → `record_execution`).
     pub fn is_available(&self, breaker_name: &str) -> bool {
-        let probe_interval = read_lock(&self.config).half_open_probe_interval_ms;
+        // Acquire circuit_breakers FIRST — this is the canonical lock order.
         let mut cbs = lock_mutex(&self.circuit_breakers);
         let cb = match cbs.get_mut(breaker_name) {
             Some(cb) => cb,
@@ -429,6 +439,8 @@ impl HyperResilienceEngine {
         match cb.state {
             CircuitState::Closed | CircuitState::HalfOpen => true,
             CircuitState::Open => {
+                // Acquire config RwLock only in the Open branch (not in the fast path).
+                let probe_interval = read_lock(&self.config).half_open_probe_interval_ms;
                 let now = now_millis();
                 if now >= cb.last_failure_ms + probe_interval {
                     cb.state = CircuitState::HalfOpen;
@@ -701,17 +713,16 @@ impl HyperResilienceEngine {
             ResilienceLevel::Critical
         };
 
-        // Determine system health degradation.
-        let system_health =
-            if open_circuits > 0 && open_circuits >= total_circuit_breakers.saturating_sub(1) {
-                DegradationLevel::Emergency
-            } else if open_circuits >= total_circuit_breakers / 2 {
-                DegradationLevel::Constrained
-            } else if open_circuits > 0 {
-                DegradationLevel::Degraded
-            } else {
-                DegradationLevel::Normal
-            };
+        // Determine system health degradation (aligned with system_health()).
+        let system_health = if open_circuits > 0 && open_circuits > total_circuit_breakers / 2 {
+            DegradationLevel::Emergency
+        } else if open_circuits > total_circuit_breakers / 3 && open_circuits > 0 {
+            DegradationLevel::Constrained
+        } else if open_circuits > 0 {
+            DegradationLevel::Degraded
+        } else {
+            DegradationLevel::Normal
+        };
 
         let uptime_ms = now_millis().saturating_sub(self.started_ms);
         let healing_actions_taken = self.healing_actions_taken.load(Ordering::Acquire);

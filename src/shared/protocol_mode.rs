@@ -39,13 +39,13 @@ impl ProtocolMode {
     }
 
     /// Returns true if this mode uses HTTP transport.
-    #[allow(dead_code)] // F-GAP-51 — reserved for future use
+    #[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
     pub fn is_http(self) -> bool {
         matches!(self, ProtocolMode::AcpHttp | ProtocolMode::McpHttp)
     }
 
     /// Returns true if this mode uses stdio transport.
-    #[allow(dead_code)] // F-GAP-51 — reserved for future use
+    #[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
     pub fn is_stdio(self) -> bool {
         matches!(self, ProtocolMode::AcpStdio | ProtocolMode::McpStdio)
     }

@@ -95,10 +95,7 @@ impl StaticDiscovery {
     pub fn new(peers: &[PeerInfo]) -> Self {
         let mut nodes = HashMap::new();
         for peer in peers {
-            nodes.insert(
-                peer.id.clone(),
-                NodeInfo::from_peer(peer, true),
-            );
+            nodes.insert(peer.id.clone(), NodeInfo::from_peer(peer, true));
         }
         let node_list: Vec<NodeInfo> = nodes.values().cloned().collect();
         let (tx, _rx) = tokio::sync::watch::channel(node_list);
@@ -111,7 +108,8 @@ impl StaticDiscovery {
 
     /// Create a `StaticDiscovery` from the `FEDERATED_PEERS` env var.
     pub fn from_env() -> Self {
-        let peers = crate::intelligence::reinforcement::federated_transport::parse_federated_peers_env();
+        let peers =
+            crate::intelligence::reinforcement::federated_transport::parse_federated_peers_env();
         Self::new(&peers)
     }
 
@@ -182,9 +180,7 @@ pub const DEFAULT_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 pub const DEFAULT_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Callback invoked by the heartbeat when a node's online status changes.
-pub type StatusChangeCallback = Arc<
-    dyn Fn(String, bool) -> Result<()> + Send + Sync,
->;
+pub type StatusChangeCallback = Arc<dyn Fn(String, bool) -> Result<()> + Send + Sync>;
 
 /// A heartbeat monitor that periodically checks peer health and marks
 /// unresponsive nodes as offline.
@@ -220,17 +216,17 @@ impl std::fmt::Debug for Heartbeat {
             .field("interval", &self.interval)
             .field("timeout", &self.timeout)
             .field("stopped", &self.stopped)
-            .field("on_status_change", &self.on_status_change.as_ref().map(|_| "<closure>"))
+            .field(
+                "on_status_change",
+                &self.on_status_change.as_ref().map(|_| "<closure>"),
+            )
             .finish()
     }
 }
 
 impl Heartbeat {
     /// Create a new heartbeat monitor.
-    pub fn new(
-        discovery: Arc<dyn NodeDiscovery>,
-        transport: Arc<dyn FederatedTransport>,
-    ) -> Self {
+    pub fn new(discovery: Arc<dyn NodeDiscovery>, transport: Arc<dyn FederatedTransport>) -> Self {
         Self {
             discovery,
             transport,
@@ -269,10 +265,7 @@ impl Heartbeat {
     ///
     /// This registers a callback that calls `record_heartbeat` and
     /// `set_online` on the discovery when nodes change state.
-    pub fn with_static_discovery(
-        mut self,
-        discovery: Arc<StaticDiscovery>,
-    ) -> Self {
+    pub fn with_static_discovery(mut self, discovery: Arc<StaticDiscovery>) -> Self {
         self.on_status_change = Some(Arc::new(move |node_id, online| {
             let d = discovery.clone();
             let id = node_id.clone();
@@ -343,10 +336,7 @@ impl Heartbeat {
                         }
                         Ok(false) | Err(_) => {
                             // Node did not respond. Check timeout.
-                            let last = last_heartbeats
-                                .get(&node.id)
-                                .copied()
-                                .unwrap_or(now);
+                            let last = last_heartbeats.get(&node.id).copied().unwrap_or(now);
 
                             if now.duration_since(last) >= self.timeout {
                                 warn!(
@@ -361,10 +351,7 @@ impl Heartbeat {
                                     let _ = cb(node.id.clone(), false);
                                 }
                             } else {
-                                debug!(
-                                    "Heartbeat: {} missed check, but within timeout",
-                                    node.id
-                                );
+                                debug!("Heartbeat: {} missed check, but within timeout", node.id);
                             }
                         }
                     }
@@ -435,7 +422,10 @@ mod tests {
         );
         let result = discovery.register(&node).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("already registered"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("already registered"));
     }
 
     #[tokio::test]
@@ -460,7 +450,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_static_discovery_watch() {
-        let peers = vec![PeerInfo::new("alpha", "10.0.0.1:50051", NodeRole::Coordinator)];
+        let peers = vec![PeerInfo::new(
+            "alpha",
+            "10.0.0.1:50051",
+            NodeRole::Coordinator,
+        )];
         let discovery = StaticDiscovery::new(&peers);
 
         let mut rx = discovery.watch().await.unwrap();

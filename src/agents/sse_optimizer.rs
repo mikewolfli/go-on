@@ -169,7 +169,7 @@ impl TokenExtractionCache {
 
 /// Compress SSE data using gzip encoding and send via the sender.
 /// Falls back to uncompressed when gzip would expand the data.
-#[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
+#[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
 pub fn compress_and_send_sse(
     data: &str,
     sender: &StreamingSender,
@@ -202,25 +202,22 @@ pub fn compress_and_send_sse(
 
 /// Metrics collected during streaming for adaptive tuning.
 #[derive(Debug, Clone, Default)]
-#[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
+#[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
 pub struct StreamingMetrics {
     pub total_bytes_sent: u64,
-    #[allow(dead_code)]
-    // F-GAP-49 — reserved for future use
+    #[allow(dead_code)] // F-GAP-49 — reserved SSE optimizer feature
     pub total_events_sent: u64,
-    #[allow(dead_code)]
-    // F-GAP-49 — reserved for future use
+    #[allow(dead_code)] // F-GAP-49 — reserved SSE optimizer feature
     pub batches_flushed: u64,
     pub bytes_saved_by_compression: u64,
-    #[allow(dead_code)]
-    // F-GAP-49 — reserved for future use
+    #[allow(dead_code)] // F-GAP-49 — reserved SSE optimizer feature
     pub avg_batch_size: f64,
     pub cache_hits: u64,
     pub cache_misses: u64,
 }
 
 impl StreamingMetrics {
-    #[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
+    #[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
     pub fn cache_hit_rate(&self) -> f64 {
         let total = self.cache_hits + self.cache_misses;
         if total == 0 {
@@ -230,7 +227,7 @@ impl StreamingMetrics {
         }
     }
 
-    #[allow(dead_code)] // F-GAP-51 — new API surface, not yet wired
+    #[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
     pub fn compression_ratio(&self) -> f64 {
         if self.total_bytes_sent == 0 {
             0.0

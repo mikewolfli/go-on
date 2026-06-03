@@ -268,7 +268,10 @@ impl PromotionPlugin for EvidenceWeightedPromotion {
             );
 
             // Track in history.
-            let mut hist = self.history.lock().unwrap_or_else(|poisoned| { tracing::warn!("lock poisoned, recovering"); poisoned.into_inner() });
+            let mut hist = self.history.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
             hist.entry(agent.clone())
                 .or_default()
                 .push(PromotionHistoryEntry {
