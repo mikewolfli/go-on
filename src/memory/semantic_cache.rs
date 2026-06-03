@@ -1177,26 +1177,26 @@ mod tests {
     #[test]
     fn test_cache_miss() {
         let cache = SemanticResponseCache::new(SemanticCacheConfig::default());
-        let result = cache.get("never cached");
-        assert!(result.is_none());
+        assert!(cache.get("never cached").is_none());
     }
 
     #[test]
     fn test_ttl_expiry() {
-        let mut config = SemanticCacheConfig::default();
-        config.default_ttl_seconds = 0; // Immediate expiry
-        let mut cache = SemanticResponseCache::new(config);
+        let mut cache = SemanticResponseCache::new(SemanticCacheConfig {
+            default_ttl_seconds: 0, // Immediate expiry
+            ..Default::default()
+        });
         cache.put("hello", json!("world"));
         std::thread::sleep(std::time::Duration::from_millis(10));
-        let result = cache.get("hello");
-        assert!(result.is_none());
+        assert!(cache.get("hello").is_none());
     }
 
     #[test]
     fn test_lru_eviction() {
-        let mut config = SemanticCacheConfig::default();
-        config.max_entries = 2;
-        let mut cache = SemanticResponseCache::new(config);
+        let mut cache = SemanticResponseCache::new(SemanticCacheConfig {
+            max_entries: 2,
+            ..Default::default()
+        });
         cache.put("a", json!("1"));
         cache.put("b", json!("2"));
         cache.put("c", json!("3"));

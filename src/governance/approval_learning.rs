@@ -38,7 +38,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::SystemTime;
 use thiserror::Error;
-use tracing::{debug};
+use tracing::debug;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -229,12 +229,7 @@ impl ApprovalPreferenceLearner {
             ApprovalDecision::Rejected
         };
 
-        let id = format!(
-            "{}-{}-{}",
-            approver,
-            action_type,
-            uuid::Uuid::new_v4()
-        );
+        let id = format!("{}-{}-{}", approver, action_type, uuid::Uuid::new_v4());
 
         let record = DecisionRecord {
             approver: approver.to_owned(),
@@ -371,11 +366,7 @@ impl ApprovalPreferenceLearner {
     // ── Stats retrieval ─────────────────────────────────────────────────
 
     /// Get stats for a specific approver and action type.
-    pub fn get_stats(
-        &self,
-        approver: &str,
-        action_type: &str,
-    ) -> Option<&ApproverActionStats> {
+    pub fn get_stats(&self, approver: &str, action_type: &str) -> Option<&ApproverActionStats> {
         let key = (approver.to_owned(), action_type.to_owned());
         self.stats.get(&key)
     }
@@ -461,10 +452,7 @@ impl ApprovalPolicySuggester {
     /// - Approvers who consistently reject certain action types, suggesting
     ///   additional training or stricter pre-screening.
     /// - Actions with low decision volume that need more data.
-    pub fn suggest_policies(
-        &self,
-        learner: &ApprovalPreferenceLearner,
-    ) -> Vec<PolicySuggestion> {
+    pub fn suggest_policies(&self, learner: &ApprovalPreferenceLearner) -> Vec<PolicySuggestion> {
         let mut suggestions = Vec::new();
 
         // Collect unique action types.
@@ -541,10 +529,7 @@ impl ApprovalPolicySuggester {
                         "more restrictive"
                     };
                     suggestions.push(PolicySuggestion {
-                        title: format!(
-                            "Approver '{}' is {} for '{}'",
-                            stats.approver, trend, at
-                        ),
+                        title: format!("Approver '{}' is {} for '{}'", stats.approver, trend, at),
                         description: format!(
                             "Approver '{}' has an approval rate of {:.1}% for '{}', \
                              while the average is {:.1}% (deviation: {:.1}%). \
@@ -590,12 +575,7 @@ mod tests {
     #[test]
     fn test_record_decision_and_stats() {
         let mut learner = ApprovalPreferenceLearner::new();
-        let id = learner.record_decision(
-            "alice",
-            "deploy",
-            true,
-            make_context(&[("env", "prod")]),
-        );
+        let id = learner.record_decision("alice", "deploy", true, make_context(&[("env", "prod")]));
         assert!(!id.is_empty());
         assert_eq!(learner.total_decisions(), 1);
         let stats = learner.get_stats("alice", "deploy").unwrap();
@@ -611,9 +591,7 @@ mod tests {
         learner.record_decision("bob", "deploy", true, HashMap::new());
         learner.record_decision("carol", "deploy", false, HashMap::new());
 
-        let rate = learner
-            .predict_approval("deploy", &HashMap::new())
-            .unwrap();
+        let rate = learner.predict_approval("deploy", &HashMap::new()).unwrap();
         assert!((rate - 2.0 / 3.0).abs() < 1e-6);
     }
 
@@ -719,7 +697,7 @@ mod tests {
         let json = serde_json::to_string(&record).unwrap();
         let deserialized: DecisionRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.approver, "alice");
-        assert_eq!(deserialized.approved, true);
+        assert!(deserialized.approved);
     }
 
     #[test]

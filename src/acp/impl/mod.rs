@@ -21,6 +21,7 @@ pub mod cors;
 pub mod session;
 
 #[cfg(test)]
+#[allow(clippy::duplicate_mod)] // lib+bin dual compilation; both need this module
 pub mod chat_tests;
 
 // Re-export for convenience — retained for ACP consumer API surface.

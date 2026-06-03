@@ -63,7 +63,7 @@ async fn test_federated_learning_full_round() {
     assert_eq!(node_b.port, 9102);
 
     // ── 2. Discovery ──────────────────────────────────────────────────
-    let discovered = vec![node_a.id.clone(), node_b.id.clone(), node_c.id.clone()];
+    let discovered = [node_a.id.clone(), node_b.id.clone(), node_c.id.clone()];
     assert!(discovered.contains(&"node-alpha".to_string()));
     assert!(discovered.contains(&"node-beta".to_string()));
     assert!(discovered.contains(&"node-gamma".to_string()));
@@ -124,7 +124,6 @@ async fn test_federated_learning_full_round() {
     // model parameters: θ_global = Σ (n_i / N_total) × θ_i.
 
     sleep(Duration::from_millis(10)).await;
-    assert!(true, "federated learning full round passed");
 }
 
 /// Validates that a node with exhausted privacy budget is excluded.
@@ -152,7 +151,6 @@ async fn test_federated_learning_privacy_budget_exhaustion() {
     );
 
     sleep(Duration::from_millis(10)).await;
-    assert!(true, "privacy budget exhaustion passed");
 }
 
 /// Verifies that differential privacy noise is structurally represented.
@@ -174,5 +172,4 @@ async fn test_federated_learning_dp_noise_application() {
     let _noise_scale = sensitivity / epsilon;
 
     sleep(Duration::from_millis(10)).await;
-    assert!(true, "DP noise parameter validation passed");
 }

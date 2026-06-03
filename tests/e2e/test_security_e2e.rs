@@ -207,7 +207,6 @@ async fn test_security_all_controls() {
     assert_eq!(retrieved.key_id, "api-key-e2e");
 
     sleep(Duration::from_millis(10)).await;
-    assert!(true, "security all controls passed");
 }
 
 /// Validates that a tampered audit chain is detected.
@@ -241,14 +240,13 @@ async fn test_security_audit_tamper_detection() {
     let auditor_after = HashChainAuditor::new(chain_path.clone())
         .expect("HashChainAuditor re-creation must succeed");
 
-    let violations = auditor_after
+    let _violations = auditor_after
         .verify_integrity()
         .expect("verify_integrity must succeed");
     // The chain may fail depending on whether the hash changed.
     // This validates the verify_integrity API works structurally.
 
     sleep(Duration::from_millis(10)).await;
-    assert!(true, "audit tamper detection passed");
 }
 
 /// Validates secret rotation with Ed25519 keys via SecretManager.
@@ -276,5 +274,4 @@ async fn test_security_secret_rotation_ed25519() {
     assert_ne!(rotated.key_bytes, key.key_bytes);
 
     sleep(Duration::from_millis(10)).await;
-    assert!(true, "secret rotation Ed25519 passed");
 }

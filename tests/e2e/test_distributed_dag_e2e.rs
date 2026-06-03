@@ -112,7 +112,7 @@ async fn test_distributed_dag_failure_recovery() {
     // integration-test-stub: real registration calls
     // coordinator.register_node("node-1", "127.0.0.1", 9301).await.
     // Here we validate node registration via the NodeInfo type.
-    let registered_nodes = vec![node1, node2];
+    let registered_nodes = [node1, node2];
     assert_eq!(registered_nodes.len(), 2);
 
     // ── 4. Cross-node parallel execution ───────────────────────────────
@@ -167,7 +167,6 @@ async fn test_distributed_dag_failure_recovery() {
     assert_eq!(completed_plan.status, DagStatus::Completed);
 
     sleep(Duration::from_millis(10)).await;
-    assert!(true, "distributed DAG failure recovery passed");
 }
 
 /// Validates that a DAG with invalid structure (cyclic deps) is rejected.
@@ -230,7 +229,6 @@ async fn test_distributed_dag_rejects_invalid_dag() {
     //   assert!(result.is_err(), "cyclic DAG must be rejected");
 
     sleep(Duration::from_millis(10)).await;
-    assert!(true, "invalid DAG rejection passed");
 }
 
 /// Validates DAG status transitions.
@@ -261,5 +259,4 @@ async fn test_distributed_dag_status_transitions() {
     };
 
     sleep(Duration::from_millis(10)).await;
-    assert!(true, "status transitions passed");
 }

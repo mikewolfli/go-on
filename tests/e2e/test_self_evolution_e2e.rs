@@ -131,7 +131,6 @@ async fn test_self_evolution_full_lifecycle() {
     );
 
     sleep(Duration::from_millis(10)).await;
-    assert!(true, "self-evolution full lifecycle passed");
 }
 
 /// Validates that a rollback can be triggered automatically.
@@ -154,7 +153,6 @@ async fn test_self_evolution_auto_rollback_on_health_check_failure() {
     assert!(rollback_approval.is_approved());
 
     sleep(Duration::from_millis(10)).await;
-    assert!(true, "auto-rollback e2e skeleton passed");
 }
 
 fn new_source() -> Box<dyn TriggerSource> {

@@ -120,7 +120,6 @@ async fn test_multimodal_pipeline_full() {
     assert!(combined_prompt.contains("Hello"));
 
     sleep(Duration::from_millis(10)).await;
-    assert!(true, "multimodal pipeline full passed");
 }
 
 /// Validates error handling for unsupported file formats.
@@ -145,14 +144,13 @@ async fn test_multimodal_unsupported_format() {
     }
 
     sleep(Duration::from_millis(10)).await;
-    assert!(true, "unsupported format skeleton passed");
 }
 
 /// Validates that the AudioProcessorConfig can be constructed with different backends.
 #[tokio::test]
 #[ignore]
 async fn test_multimodal_audio_processor_config() {
-    let config = AudioProcessorConfig::default();
+    let _config = AudioProcessorConfig::default();
     // The default backend is implementation-defined; we just verify construction.
     let _config_with_backend = AudioProcessorConfig {
         backend: SttBackend::OpenAIWhisper,
@@ -165,5 +163,4 @@ async fn test_multimodal_audio_processor_config() {
     let _flac = AudioFormat::Flac;
 
     sleep(Duration::from_millis(10)).await;
-    assert!(true, "audio processor config passed");
 }

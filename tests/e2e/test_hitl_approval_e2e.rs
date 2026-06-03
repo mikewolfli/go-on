@@ -122,7 +122,6 @@ async fn test_hitl_approval_full_flow() {
     }
 
     sleep(Duration::from_millis(10)).await;
-    assert!(true, "HITL approval full flow passed");
 }
 
 /// Validates that a pending request auto-denies after timeout.
@@ -153,7 +152,6 @@ async fn test_hitl_approval_auto_deny_on_timeout() {
     assert!(auto_denied.is_finalized(), "auto-denied must be finalized");
 
     sleep(Duration::from_millis(10)).await;
-    assert!(true, "auto-deny skeleton passed");
 }
 
 /// Validates that a rejected action is not released.
@@ -171,7 +169,7 @@ async fn test_hitl_approval_rejection_blocks_execution() {
         HashMap::new(),
     );
 
-    let request_id = approval_engine.submit_for_approval(request);
+    let _request_id = approval_engine.submit_for_approval(request);
 
     // Simulate rejection.
     let rejected_status = ApprovalStatus::Rejected {
@@ -201,7 +199,6 @@ async fn test_hitl_approval_rejection_blocks_execution() {
     }
 
     sleep(Duration::from_millis(10)).await;
-    assert!(true, "rejection blocks execution skeleton passed");
 }
 
 /// Validates escalation chain structure for high-risk actions.
@@ -230,5 +227,4 @@ async fn test_hitl_approval_escalation_chain() {
     assert_eq!(chain.steps[1].approver_role, "director");
 
     sleep(Duration::from_millis(10)).await;
-    assert!(true, "escalation chain validation passed");
 }

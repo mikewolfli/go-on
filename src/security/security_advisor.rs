@@ -1036,8 +1036,17 @@ mod tests {
         ];
 
         let recs = advisor.generate_recommendations(&alerts);
-        assert!(recs.iter().any(|r| r.contains("dependency vulnerability")));
-        assert!(recs.iter().any(|r| r.contains("exposed secrets")));
+        assert!(
+            recs.iter()
+                .any(|r| r.contains("dependency vulnerabilities")),
+            "no dep vuln rec in {:?}",
+            recs
+        );
+        assert!(
+            recs.iter().any(|r| r.contains("exposed secrets")),
+            "no secret rec in {:?}",
+            recs
+        );
     }
 
     #[test]

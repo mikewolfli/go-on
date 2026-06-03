@@ -276,12 +276,15 @@ mod tests {
         let persistence = Arc::new(MemoryPersistence::new(&db_path, &cold_path, None).unwrap());
 
         let cancel = CancellationToken::new();
-        let handle = start_auto_migrate_task(Arc::clone(&persistence), Some(cancel.clone()));
-        cancel.cancel();
         let rt = tokio::runtime::Runtime::new().unwrap();
+        let mut handle: Option<tokio::task::JoinHandle<()>> = None;
         rt.block_on(async {
+            let h = start_auto_migrate_task(Arc::clone(&persistence), Some(cancel.clone()));
+            cancel.cancel();
             tokio::time::sleep(Duration::from_millis(50)).await;
+            handle = Some(h);
         });
+        let handle = handle.expect("handle should be set");
         assert!(
             handle.is_finished(),
             "task should finish promptly after cancellation"

@@ -2387,15 +2387,13 @@ mod tests {
         // This tests the JSON-RPC error response structure.
         let error_code = -32603;
         let message = "Internal error".to_string();
-        let data = Some(json!({"detail": "test"}));
-
         let error_json = json!({
             "jsonrpc": "2.0",
             "id": Value::Null,
             "error": {
                 "code": error_code,
                 "message": message,
-                "data": data.unwrap_or_default(),
+                "data": json!({"detail": "test"}),
             }
         });
 

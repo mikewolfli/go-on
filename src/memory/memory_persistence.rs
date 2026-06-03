@@ -1179,17 +1179,21 @@ mod tests {
         let db_path = dir.path().join("warm.db");
         let cold_path = dir.path().join("cold");
 
-        let mut policy = MemoryTieringPolicy::default();
-        policy.hot_ttl_secs = 0; // Instant expiry
-        let persistence = MemoryPersistence::new(&db_path, &cold_path, Some(policy)).unwrap();
+        let persistence = MemoryPersistence::new(
+            &db_path,
+            &cold_path,
+            Some(MemoryTieringPolicy {
+                hot_ttl_secs: 0,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
 
         // Entry with low usefulness → gets demoted to cold (not promoted to warm)
-        let entry = make_entry("low", 0.1);
-        persistence.store(entry).unwrap();
+        persistence.store(make_entry("low", 0.1)).unwrap();
 
         // Entry with high usefulness → promoted to warm
-        let entry = make_entry("high", 0.8);
-        persistence.store(entry).unwrap();
+        persistence.store(make_entry("high", 0.8)).unwrap();
 
         let report = persistence.auto_migrate().unwrap();
         assert_eq!(report.promoted_hot_to_warm, 1);

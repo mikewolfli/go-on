@@ -284,7 +284,7 @@ fn bench_stream(harness: &mut BenchHarness, prompt: &str) -> StreamBenchResult {
     }
 
     // Detect interrupt latency: if a timeout occurred, measure gap
-    if let Some(last) = chunks.iter().rev().skip(1).next() {
+    if let Some(last) = chunks.iter().rev().nth(1) {
         if let Some(timeout) = chunks.last() {
             if timeout.data.get("type").and_then(|t| t.as_str()) == Some("timeout") {
                 result.stream_interrupt_latency_ms = Some(
@@ -419,11 +419,10 @@ fn run_benchmarks() -> BTreeMap<String, Vec<StreamBenchResult>> {
 
 #[test]
 fn streaming_e2e_benchmark() {
-    eprintln!("");
     eprintln!("╔═══════════════════════════════════════════════════════════╗");
     eprintln!("║   GAP-B50-20: Streaming E2E Performance Benchmark       ║");
     eprintln!("╚═══════════════════════════════════════════════════════════╝");
-    eprintln!("");
+    eprintln!();
 
     let all_results = run_benchmarks();
 
@@ -447,7 +446,7 @@ fn streaming_e2e_benchmark() {
                 total_regressions += 1;
             }
         }
-        eprintln!("");
+        eprintln!();
     }
 
     // Print profiles summary
@@ -464,7 +463,7 @@ fn streaming_e2e_benchmark() {
             label, avg_ttft, avg_ttc, avg_tps
         );
     }
-    eprintln!("");
+    eprintln!();
 
     // Report regressions
     if total_regressions > 0 {

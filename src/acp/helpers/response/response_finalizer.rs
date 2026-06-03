@@ -222,14 +222,16 @@ fn collect_agent_outputs(
             let phase = phase_name.to_string();
             let agent = selected_agent.to_string();
             handle.spawn(async move {
-                let _ = cb.evolve(
-                    &(phase.clone(), agent.clone()),
-                    "execute",
-                    &(phase, agent),
-                    used_tokens,
-                    request_succeeded,
-                    1.0,
-                ).await;
+                let _ = cb
+                    .evolve(
+                        &(phase.clone(), agent.clone()),
+                        "execute",
+                        &(phase, agent),
+                        used_tokens,
+                        request_succeeded,
+                        1.0,
+                    )
+                    .await;
             });
         }
     }

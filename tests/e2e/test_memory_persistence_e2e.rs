@@ -147,7 +147,6 @@ async fn test_memory_persistence_three_tier_lifecycle() {
 
     // ── 7. Teardown via Drop ───────────────────────────────────────────
     sleep(Duration::from_millis(10)).await;
-    assert!(true, "memory persistence three-tier lifecycle passed");
 }
 
 /// Tests automatic demotion from L1 → L2 when hot cache exceeds capacity.
@@ -186,7 +185,6 @@ async fn test_memory_persistence_automatic_demotion_on_capacity() {
     assert!(evicted_count > 0, "entries above capacity must be demoted");
 
     sleep(Duration::from_millis(10)).await;
-    assert!(true, "automatic demotion skeleton passed");
 }
 
 /// Tests the metadata index retrieval.
@@ -204,5 +202,4 @@ async fn test_memory_persistence_metadata_index() {
     // let index = mgr.load_metadata_index().expect("load index");
 
     sleep(Duration::from_millis(10)).await;
-    assert!(true, "metadata index test passed");
 }
