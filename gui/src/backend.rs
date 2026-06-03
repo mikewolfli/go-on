@@ -12,9 +12,25 @@ type ProviderModels = std::collections::HashMap<String, Vec<String>>;
 type ModelsCacheState = (Option<ProviderModels>, std::time::Instant);
 type ModelsCache = Arc<std::sync::Mutex<ModelsCacheState>>;
 
+// ── Input validation ────────────────────────────────────────────────────────
+
+/// Validate that `data` does not exceed `max_bytes`. Returns `Ok(())` if
+/// within bounds, `Err` with a descriptive message otherwise.
+pub fn validate_input_size(data: &[u8], max_bytes: usize) -> Result<(), String> {
+    if data.len() > max_bytes {
+        return Err(format!(
+            "input exceeds maximum size limit: {} bytes > {} bytes",
+            data.len(),
+            max_bytes
+        ));
+    }
+    Ok(())
+}
+
 // ── StreamProcessor ────────────────────────────────────────────────────────
 
 const MAX_SSE_LINE_LENGTH: usize = 1024 * 1024; // 1 MB per SSE line
+const MAX_SSE_CHUNK_SIZE: usize = 16 * 1024 * 1024; // 16 MB total per push call
 
 /// Incrementally parses an SSE byte stream frame-by-frame, extracting `event:`
 /// and `data:` fields. Returns parsed JSON values with the event type attached
@@ -46,6 +62,12 @@ impl StreamProcessor {
     /// done, telemetry, and other event types emitted by the backend.
     pub fn push_chunk(&mut self, chunk: &[u8]) -> Vec<Result<Value, String>> {
         let mut events: Vec<Result<Value, String>> = Vec::new();
+
+        // Validate input size before processing
+        if let Err(e) = validate_input_size(chunk, MAX_SSE_CHUNK_SIZE) {
+            events.push(Err(e));
+            return events;
+        }
 
         // Overflow guard
         if self.buffer.len() + chunk.len() > self.max_buffer_size {
@@ -556,6 +578,8 @@ impl BackendClient {
         let url = format!("{}/rpc", self.base_url);
         let mut last_err = String::new();
 
+        const MAX_RPC_RESPONSE_BYTES: usize = 64 * 1024 * 1024; // 64 MB
+
         for attempt in 1..=attempts {
             let response = match client.post(&url).json(&body).send().await {
                 Ok(resp) => resp,
@@ -579,9 +603,24 @@ impl BackendClient {
                 }
             };
 
+            // Pre-validate content-length header if present
+            if let Some(cl) = response.content_length() {
+                if (cl as usize) > MAX_RPC_RESPONSE_BYTES {
+                    last_err = format!("response content length too large: {} bytes > 64 MB", cl);
+                    return Err(last_err);
+                }
+            }
+
             let status = response.status();
             let response_text = match response.text().await {
-                Ok(text) => text,
+                Ok(text) => {
+                    // Validate actual body size
+                    if let Err(e) = validate_input_size(text.as_bytes(), MAX_RPC_RESPONSE_BYTES) {
+                        last_err = e;
+                        return Err(last_err);
+                    }
+                    text
+                }
                 Err(err) => {
                     last_err = format!("HTTP body read error: {err}");
                     // Retry on ANY body read error regardless of status code
@@ -903,6 +942,19 @@ impl BackendClient {
             .error_for_status()
             .map_err(|e| format!("HTTP error: {}", e))?;
 
+        // Validate response size before reading the body (limit to 64 MB)
+        if let Some(content_length) = resp.content_length() {
+            // Pre-validate the declared content-length to avoid allocating
+            // an excessively large response buffer.
+            let max_response_bytes: usize = 64 * 1024 * 1024;
+            if (content_length as usize) > max_response_bytes {
+                return Err(format!(
+                    "response content length too large: {} bytes > 64 MB",
+                    content_length
+                ));
+            }
+        }
+
         // Reset abort controller in case it's being reused across requests
         if let Some(ref ctrl) = abort_ctrl {
             ctrl.reset();
@@ -947,6 +999,11 @@ impl BackendClient {
                 .await
                 .map_err(|e| format!("SSE body read error: {}", e))?
         };
+
+        // Validate actual body size after reading
+        if let Err(e) = validate_input_size(resp_body.as_bytes(), 64 * 1024 * 1024) {
+            return Err(e);
+        }
 
         // Parse SSE events using StreamProcessor
         let mut response_text = String::new();

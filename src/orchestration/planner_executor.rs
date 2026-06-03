@@ -12,6 +12,8 @@ use std::time::Duration;
 
 use crate::agent::{AgentRegistry, AgentTaskEnvelope, AgentTaskResult};
 use crate::i18n::runtime::tf;
+use std::sync::Arc;
+
 use crate::orchestration::mode::{ModeKind, ModeRuntime};
 use crate::orchestration::planner_embedding::EmbeddingTaskClassifier;
 use futures_util::future::join_all;
@@ -437,7 +439,7 @@ impl Executor {
     pub async fn execute(
         plan: &ExecutionPlan,
         _registry: &AgentRegistry,
-        runtimes: &[(ModeKind, Box<dyn ModeRuntime>)],
+        runtimes: &[(ModeKind, Arc<dyn ModeRuntime>)],
     ) -> Vec<(String, Result<AgentTaskResult, String>)> {
         Self::execute_with_cancel(plan, _registry, runtimes, CancellationToken::new()).await
     }
@@ -449,7 +451,7 @@ impl Executor {
     pub async fn execute_with_cancel(
         plan: &ExecutionPlan,
         _registry: &AgentRegistry,
-        runtimes: &[(ModeKind, Box<dyn ModeRuntime>)],
+        runtimes: &[(ModeKind, Arc<dyn ModeRuntime>)],
         cancel: CancellationToken,
     ) -> Vec<(String, Result<AgentTaskResult, String>)> {
         let mut results: Vec<(String, Result<AgentTaskResult, String>)> = Vec::new();
@@ -652,25 +654,11 @@ impl Executor {
                                             "mode": format!("{:?}", mode),
                                         }),
                                     };
-                                    // SAFETY: The runtimes slice lives for the duration of
-                                    // execute(), and we await all spawn_blocking handles before
-                                    // returning, so the reference remains valid.
-                                    let rt_pair: [usize; 2] = unsafe {
-                                        std::mem::transmute::<
-                                            *const (dyn ModeRuntime + 'static),
-                                            [usize; 2],
-                                        >(
-                                            rt.as_ref() as *const (dyn ModeRuntime + 'static)
-                                        )
-                                    };
+                                    // Clone the Arc so spawn_blocking can safely own the
+                                    // reference without any unsafe transmute.
+                                    let rt_clone = Arc::clone(rt);
                                     blocking_tasks.push(tokio::task::spawn_blocking(move || {
-                                        // SAFETY: rt_pair was created from a valid reference
-                                        // that outlives this spawn_blocking task.
-                                        let rt_ref: *const (dyn ModeRuntime + 'static) = unsafe {
-                                            std::mem::transmute::<[usize; 2], _>(rt_pair)
-                                        };
-                                        let rt: &dyn ModeRuntime = unsafe { &*rt_ref };
-                                        let result = rt.run(envelope).map_err(|e| {
+                                        let result = rt_clone.run(envelope).map_err(|e| {
                                             tf(
                                                 "error.planner.runtime_failed",
                                                 &[("detail", &e.to_string())],

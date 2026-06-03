@@ -248,6 +248,14 @@ async fn auto_detect_proxy() {
     if let Ok(proxy_url) = std::env::var("GO_ON_PROXY_URL") {
         let proxy_url = proxy_url.trim().to_string();
         if !proxy_url.is_empty() {
+            // Validate proxy URL length to prevent oversized env var abuse
+            if proxy_url.len() > 4096 {
+                eprintln!(
+                    "WARNING: GO_ON_PROXY_URL too long ({} chars), ignoring",
+                    proxy_url.len()
+                );
+                return;
+            }
             std::env::set_var("HTTPS_PROXY", &proxy_url);
             std::env::set_var("https_proxy", &proxy_url);
             std::env::set_var("HTTP_PROXY", &proxy_url);
@@ -381,7 +389,17 @@ async fn main() -> eframe::Result<()> {
         ..Default::default()
     };
 
-    let requested_renderer = std::env::var("GO_ON_RENDERER").ok();
+    let mut requested_renderer = std::env::var("GO_ON_RENDERER").ok();
+    // Sanity-check that the env var value is not absurdly large
+    if let Some(ref r) = requested_renderer {
+        if r.len() > 256 {
+            eprintln!(
+                "WARNING: GO_ON_RENDERER value too long ({} chars), using default",
+                r.len()
+            );
+            requested_renderer = None;
+        }
+    }
     let preferred_renderer = match requested_renderer.as_deref() {
         Some("glow") => eframe::Renderer::Glow,
         // Default to WGPU because swap-chain double buffering is more stable

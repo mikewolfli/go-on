@@ -156,6 +156,16 @@ pub enum ClusterHealth {
     Down,
 }
 
+/// Result of a single consistency check after a recovery action.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsistencyCheckEvent {
+    pub check_id: String,
+    pub check_type: String,
+    pub passed: bool,
+    pub details: String,
+    pub timestamp_ms: u64,
+}
+
 /// Summary of a recovery cycle run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecoveryCycleSummary {
@@ -165,6 +175,7 @@ pub struct RecoveryCycleSummary {
     pub cluster_health: ClusterHealth,
     pub active_faults: u32,
     pub isolated_groups: u32,
+    pub consistency_checks: Vec<ConsistencyCheckEvent>,
 }
 
 // ---------------------------------------------------------------------------
@@ -758,8 +769,74 @@ impl FaultToleranceEngine {
         Ok(())
     }
 
-    /// Complete a recovery plan with a result.
-    pub fn complete_recovery_plan(&self, plan_id: &str, result: &str) -> Result<()> {
+    /// Run a post-recovery consistency check and return the result.
+    pub fn post_recovery_consistency_check(&self, plan_id: &str) -> ConsistencyCheckEvent {
+        let inner = read_guard(&self.inner);
+        let plan = inner.recovery_plans.get(plan_id);
+
+        let now = now_millis();
+        let check_id = format!("cc-{}-{}", plan_id, now);
+
+        let (passed, details) = if let Some(p) = plan {
+            // Verify the plan's node still has a heartbeat record
+            let has_heartbeat = inner.heartbeats.contains_key(&p.node_id);
+            // Check that all active faults for this node have been resolved
+            let unresolved_faults: Vec<&str> = inner
+                .faults
+                .values()
+                .filter(|f| f.node_id == p.node_id && !f.recovered)
+                .map(|f| f.id.as_str())
+                .collect();
+            // Plan should be in progress or completed (not pending or failed)
+            let plan_active = matches!(
+                p.state,
+                RecoveryState::InProgress | RecoveryState::Completed
+            );
+
+            let all_ok = has_heartbeat && unresolved_faults.is_empty() && plan_active;
+            let detail = if all_ok {
+                format!(
+                    "node '{}' heartbeat present, {} unresolved faults cleared, plan completed",
+                    p.node_id,
+                    unresolved_faults.len()
+                )
+            } else {
+                let mut issues: Vec<String> = Vec::new();
+                if !has_heartbeat {
+                    issues.push("missing heartbeat record".to_string());
+                }
+                if !unresolved_faults.is_empty() {
+                    issues.push(format!(
+                        "{} unresolved faults remain",
+                        unresolved_faults.len()
+                    ));
+                }
+                if !plan_active {
+                    issues.push("plan not active (pending or failed)".to_string());
+                }
+                format!("inconsistencies detected: {}", issues.join(", "))
+            };
+            (all_ok, detail)
+        } else {
+            (false, format!("recovery plan '{}' not found", plan_id))
+        };
+
+        ConsistencyCheckEvent {
+            check_id,
+            check_type: "post_recovery".to_string(),
+            passed,
+            details,
+            timestamp_ms: now,
+        }
+    }
+
+    /// Complete a recovery plan with a result. Runs a post-recovery
+    /// consistency check and returns it alongside the completion outcome.
+    pub fn complete_recovery_plan(
+        &self,
+        plan_id: &str,
+        result: &str,
+    ) -> Result<ConsistencyCheckEvent> {
         let mut inner = write_guard(&self.inner);
         let plan = inner
             .recovery_plans
@@ -780,7 +857,18 @@ impl FaultToleranceEngine {
         if let Some(record) = inner.heartbeats.get_mut(&node_id_clone) {
             record.status = NodeStatus::Recovering;
         }
-        Ok(())
+        drop(inner);
+
+        // Run post-recovery consistency check
+        let check = self.post_recovery_consistency_check(plan_id);
+        if !check.passed {
+            tracing::warn!(
+                "consistency check failed after recovery plan '{}': {}",
+                plan_id,
+                check.details
+            );
+        }
+        Ok(check)
     }
 
     /// Fail a recovery plan.
@@ -867,6 +955,7 @@ impl FaultToleranceEngine {
         let offenders = self.check_heartbeats();
         let mut plans_created = 0u32;
         let mut plans_activated = 0u32;
+        let mut consistency_checks = Vec::new();
 
         for node_id in &offenders {
             // Check if a plan already exists for this node
@@ -882,13 +971,23 @@ impl FaultToleranceEngine {
             }
         }
 
-        // Auto-execute pending plans and count completions
+        // Auto-execute pending plans and run consistency checks on activations
         let pending_plans = self.active_recovery_plans();
         for plan in &pending_plans {
             if plan.state == RecoveryState::Pending
                 && self.execute_recovery_plan(&plan.plan_id).is_ok()
             {
                 plans_activated += 1;
+                // Run consistency check after activation
+                let check = self.post_recovery_consistency_check(&plan.plan_id);
+                if !check.passed {
+                    tracing::warn!(
+                        "consistency check after activation of plan '{}': {}",
+                        plan.plan_id,
+                        check.details
+                    );
+                }
+                consistency_checks.push(check);
             }
         }
 
@@ -905,6 +1004,7 @@ impl FaultToleranceEngine {
             cluster_health: health,
             active_faults: profile.active_faults as u32,
             isolated_groups: profile.isolated_groups as u32,
+            consistency_checks,
         }
     }
 

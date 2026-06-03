@@ -93,6 +93,170 @@ impl NodeInfo {
 }
 
 // ---------------------------------------------------------------------------
+// SchemaContract — JSON Schema contract validation for DAG node I/O
+// ---------------------------------------------------------------------------
+
+/// A schema contract that constrains the shape of a DAG node's input or
+/// output payloads.  Contracts are expressed as JSON Schema documents
+/// (draft-07 subset).  When set on a [`DagNodeAssignment`], the
+/// orchestrator can validate at runtime that the actual data flowing
+/// through the node conforms to the declared shape, preventing implicit
+/// type drift across a multi-agent pipeline.
+///
+/// Both fields are optional — when `None` no validation is performed
+/// for that direction.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchemaContract {
+    /// JSON Schema document describing the expected input shape.
+    pub input_schema: Option<serde_json::Value>,
+    /// JSON Schema document describing the expected output shape.
+    pub output_schema: Option<serde_json::Value>,
+}
+
+/// Validate `data` against the non-`None` schemas carried by `contract`.
+///
+/// Returns `Ok(())` when every present schema passes.  Returns
+/// `Err(reason)` with a human-readable description of the first
+/// constraint violation found.
+#[allow(dead_code)]
+pub fn validate_contract(
+    data: &serde_json::Value,
+    contract: &SchemaContract,
+) -> Result<(), String> {
+    // ── helper: check a single optional JSON Schema ────────────────
+    fn check(
+        data: &serde_json::Value,
+        schema: &Option<serde_json::Value>,
+        label: &str,
+    ) -> Result<(), String> {
+        let Some(schema) = schema else { return Ok(()) };
+
+        // Type constraint
+        if let Some(ty) = schema.get("type").and_then(|v| v.as_str()) {
+            let matches = match ty {
+                "string" => data.is_string(),
+                "number" | "integer" => data.is_number(),
+                "boolean" => data.is_boolean(),
+                "array" => data.is_array(),
+                "object" => data.is_object(),
+                "null" => data.is_null(),
+                _ => true, // unknown type keyword — be lenient
+            };
+            if !matches {
+                return Err(format!(
+                    "contract violation ({label}): expected type '{ty}', got {}",
+                    type_name_of(data)
+                ));
+            }
+        }
+
+        // Enum constraint
+        if let Some(enum_vals) = schema.get("enum").and_then(|v| v.as_array()) {
+            if !enum_vals.iter().any(|ev| ev == data) {
+                return Err(format!(
+                    "contract violation ({label}): value {} not in allowed enum",
+                    data
+                ));
+            }
+        }
+
+        // Required properties (top-level object only)
+        if data.is_object() {
+            if let Some(required) = schema.get("required").and_then(|v| v.as_array()) {
+                let obj = data.as_object().unwrap();
+                for req in required {
+                    if let Some(key) = req.as_str() {
+                        if !obj.contains_key(key) {
+                            return Err(format!(
+                                "contract violation ({label}): missing required property '{}'",
+                                key
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Minimum / maximum (numbers)
+        if let Some(n) = data.as_f64() {
+            if let Some(min) = schema.get("minimum").and_then(|v| v.as_f64()) {
+                if n < min {
+                    return Err(format!(
+                        "contract violation ({label}): value {n} < minimum {min}"
+                    ));
+                }
+            }
+            if let Some(max) = schema.get("maximum").and_then(|v| v.as_f64()) {
+                if n > max {
+                    return Err(format!(
+                        "contract violation ({label}): value {n} > maximum {max}"
+                    ));
+                }
+            }
+        }
+
+        // Min-length / max-length (strings)
+        if let Some(s) = data.as_str() {
+            if let Some(min) = schema.get("minLength").and_then(|v| v.as_u64()) {
+                if (s.len() as u64) < min {
+                    return Err(format!(
+                        "contract violation ({label}): string length {} < minLength {min}",
+                        s.len()
+                    ));
+                }
+            }
+            if let Some(max) = schema.get("maxLength").and_then(|v| v.as_u64()) {
+                if (s.len() as u64) > max {
+                    return Err(format!(
+                        "contract violation ({label}): string length {} > maxLength {max}",
+                        s.len()
+                    ));
+                }
+            }
+        }
+
+        // Min-items / max-items (arrays)
+        if let Some(arr) = data.as_array() {
+            if let Some(min) = schema.get("minItems").and_then(|v| v.as_u64()) {
+                if (arr.len() as u64) < min {
+                    return Err(format!(
+                        "contract violation ({label}): array length {} < minItems {min}",
+                        arr.len()
+                    ));
+                }
+            }
+            if let Some(max) = schema.get("maxItems").and_then(|v| v.as_u64()) {
+                if (arr.len() as u64) > max {
+                    return Err(format!(
+                        "contract violation ({label}): array length {} > maxItems {max}",
+                        arr.len()
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    check(data, &contract.input_schema, "input")?;
+    check(data, &contract.output_schema, "output")?;
+    Ok(())
+}
+
+/// Return a human-readable type name for a JSON value.
+fn type_name_of(v: &serde_json::Value) -> &'static str {
+    match v {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
+}
+
+// ---------------------------------------------------------------------------
 // DagNodeAssignment
 // ---------------------------------------------------------------------------
 
@@ -105,6 +269,8 @@ pub struct DagNodeAssignment {
     pub output: Option<NodeOutput>,
     pub error: Option<String>,
     pub completed: bool,
+    /// Optional schema contract for validating this node's input and output.
+    pub contract: Option<SchemaContract>,
 }
 
 #[allow(dead_code)]
@@ -115,6 +281,48 @@ pub struct DagExecutionPlan {
     pub adjacency: HashMap<String, Vec<String>>, // dag_node_id -> dependency IDs
     pub created_at_ms: u64,
     pub status: DagStatus,
+}
+
+impl DagExecutionPlan {
+    /// Validate **all** node input/output contracts in this plan.
+    ///
+    /// Returns `Ok(())` when every node satisfies its declared contract.
+    /// Returns the first `Err(reason)` otherwise, describing which node
+    /// failed and why.
+    ///
+    /// *Input validation* checks the node's output (the result of its
+    /// execution) against the **output_schema** of its contract.
+    ///
+    /// If a node has no contract (`None`), it is skipped.
+    #[allow(dead_code)]
+    pub fn validate_all_contracts(&self) -> Result<(), String> {
+        for assign in &self.assignments {
+            let Some(ref contract) = assign.contract else {
+                continue;
+            };
+
+            // Validate output against output_schema
+            if let Some(ref output) = assign.output {
+                if let Some(ref payload) = output.output {
+                    if let Some(ref out_schema) = contract.output_schema {
+                        let mini = SchemaContract {
+                            input_schema: None,
+                            output_schema: Some(out_schema.clone()),
+                        };
+                        validate_contract(payload, &mini)
+                            .map_err(|e| format!("node '{}' output: {}", assign.dag_node_id, e))?;
+                    }
+                }
+            }
+
+            // Note: input validation would require the input payload to be
+            // stored on the assignment.  The current data model does not
+            // retain the input after execution, so we only validate output
+            // here.  Input validation can be added when the input is
+            // persisted alongside the assignment.
+        }
+        Ok(())
+    }
 }
 
 #[allow(dead_code)]
@@ -746,5 +954,215 @@ mod tests {
         coord.create_dag("dag-status".into()).await.unwrap();
         let status = coord.get_dag_status("dag-status").await.unwrap();
         assert_eq!(status, DagStatus::Pending);
+    }
+
+    // ── Schema contract validation tests ────────────────────────────────
+
+    #[test]
+    fn test_schema_contract_type_pass() {
+        let contract = SchemaContract {
+            input_schema: None,
+            output_schema: Some(serde_json::json!({"type": "object"})),
+        };
+        let data = serde_json::json!({"key": "value"});
+        assert!(validate_contract(&data, &contract).is_ok());
+    }
+
+    #[test]
+    fn test_schema_contract_type_fail() {
+        let contract = SchemaContract {
+            input_schema: None,
+            output_schema: Some(serde_json::json!({"type": "string"})),
+        };
+        let data = serde_json::json!(42);
+        let err = validate_contract(&data, &contract).unwrap_err();
+        assert!(err.contains("expected type 'string'"), "got: {err}");
+    }
+
+    #[test]
+    fn test_schema_contract_required_properties() {
+        let contract = SchemaContract {
+            input_schema: Some(serde_json::json!({
+                "type": "object",
+                "required": ["name", "version"]
+            })),
+            output_schema: None,
+        };
+        // Missing "version"
+        let data = serde_json::json!({"name": "foo"});
+        let err = validate_contract(&data, &contract).unwrap_err();
+        assert!(
+            err.contains("missing required property 'version'"),
+            "got: {err}"
+        );
+
+        // Now with all required fields
+        let ok_data = serde_json::json!({"name": "foo", "version": 1});
+        assert!(validate_contract(&ok_data, &contract).is_ok());
+    }
+
+    #[test]
+    fn test_schema_contract_enum() {
+        let contract = SchemaContract {
+            input_schema: None,
+            output_schema: Some(serde_json::json!({
+                "enum": ["pending", "running", "completed"]
+            })),
+        };
+        assert!(validate_contract(&serde_json::json!("running"), &contract).is_ok());
+        let err = validate_contract(&serde_json::json!("unknown"), &contract).unwrap_err();
+        assert!(err.contains("not in allowed enum"), "got: {err}");
+    }
+
+    #[test]
+    fn test_schema_contract_numeric_bounds() {
+        let contract = SchemaContract {
+            input_schema: Some(serde_json::json!({
+                "type": "number",
+                "minimum": 0.0,
+                "maximum": 100.0
+            })),
+            output_schema: None,
+        };
+        assert!(validate_contract(&serde_json::json!(50.0), &contract).is_ok());
+        let err = validate_contract(&serde_json::json!(-1.0), &contract).unwrap_err();
+        assert!(err.contains("< minimum"), "got: {err}");
+        let err = validate_contract(&serde_json::json!(101.0), &contract).unwrap_err();
+        assert!(err.contains("> maximum"), "got: {err}");
+    }
+
+    #[test]
+    fn test_schema_contract_string_length() {
+        let contract = SchemaContract {
+            input_schema: None,
+            output_schema: Some(serde_json::json!({
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 10
+            })),
+        };
+        assert!(validate_contract(&serde_json::json!("hello"), &contract).is_ok());
+        let err = validate_contract(&serde_json::json!(""), &contract).unwrap_err();
+        assert!(err.contains("< minLength"), "got: {err}");
+        let err = validate_contract(&serde_json::json!("toolongstring"), &contract).unwrap_err();
+        assert!(err.contains("> maxLength"), "got: {err}");
+    }
+
+    #[test]
+    fn test_schema_contract_array_items() {
+        let contract = SchemaContract {
+            input_schema: None,
+            output_schema: Some(serde_json::json!({
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 3
+            })),
+        };
+        assert!(validate_contract(&serde_json::json!([1, 2]), &contract).is_ok());
+        let err = validate_contract(&serde_json::json!([]), &contract).unwrap_err();
+        assert!(err.contains("< minItems"), "got: {err}");
+    }
+
+    #[test]
+    fn test_validate_all_contracts_ok() {
+        let plan = DagExecutionPlan {
+            dag_id: "test-ok".into(),
+            assignments: vec![
+                DagNodeAssignment {
+                    dag_node_id: "node-a".into(),
+                    tool_name: "tool_a".into(),
+                    assigned_node_id: None,
+                    output: Some(NodeOutput::success(
+                        "n1".into(),
+                        "test-ok".into(),
+                        "tool_a".into(),
+                        serde_json::json!({"result": "ok"}),
+                        10,
+                    )),
+                    error: None,
+                    completed: true,
+                    contract: Some(SchemaContract {
+                        input_schema: None,
+                        output_schema: Some(serde_json::json!({
+                            "type": "object",
+                            "required": ["result"]
+                        })),
+                    }),
+                },
+                DagNodeAssignment {
+                    dag_node_id: "node-b".into(),
+                    tool_name: "tool_b".into(),
+                    assigned_node_id: None,
+                    output: None,
+                    error: None,
+                    completed: false,
+                    contract: None, // no contract — skipped
+                },
+            ],
+            adjacency: HashMap::new(),
+            created_at_ms: 0,
+            status: DagStatus::Running,
+        };
+        assert!(plan.validate_all_contracts().is_ok());
+    }
+
+    #[test]
+    fn test_validate_all_contracts_fail() {
+        let plan = DagExecutionPlan {
+            dag_id: "test-fail".into(),
+            assignments: vec![DagNodeAssignment {
+                dag_node_id: "node-bad".into(),
+                tool_name: "bad_tool".into(),
+                assigned_node_id: None,
+                output: Some(NodeOutput::success(
+                    "n1".into(),
+                    "test-fail".into(),
+                    "bad_tool".into(),
+                    serde_json::json!("this is a string, not an object"),
+                    5,
+                )),
+                error: None,
+                completed: true,
+                contract: Some(SchemaContract {
+                    input_schema: None,
+                    output_schema: Some(serde_json::json!({"type": "object"})),
+                }),
+            }],
+            adjacency: HashMap::new(),
+            created_at_ms: 0,
+            status: DagStatus::Running,
+        };
+        let err = plan.validate_all_contracts().unwrap_err();
+        assert!(
+            err.contains("node-bad") && err.contains("expected type 'object'"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_schema_contract_input_output_independent() {
+        // input_schema applies to input, output_schema applies to output
+        let contract = SchemaContract {
+            input_schema: Some(serde_json::json!({"type": "number"})),
+            output_schema: Some(serde_json::json!({"type": "string"})),
+        };
+        // Data passed here is checked against *both* schemas, so this
+        // should fail because a string is not a number.
+        let err = validate_contract(&serde_json::json!("hello"), &contract).unwrap_err();
+        assert!(err.contains("(input)"), "got: {err}");
+
+        // A number passes input_schema but fails output_schema
+        let err = validate_contract(&serde_json::json!(42), &contract).unwrap_err();
+        assert!(err.contains("(output)"), "got: {err}");
+    }
+
+    #[test]
+    fn test_schema_contract_none_always_ok() {
+        let contract = SchemaContract {
+            input_schema: None,
+            output_schema: None,
+        };
+        assert!(validate_contract(&serde_json::json!("anything"), &contract).is_ok());
+        assert!(validate_contract(&serde_json::json!(null), &contract).is_ok());
     }
 }

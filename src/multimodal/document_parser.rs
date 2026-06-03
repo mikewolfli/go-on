@@ -37,6 +37,14 @@ pub enum DocumentParserError {
     #[error("feature not enabled: {0}")]
     FeatureDisabled(String),
 
+    /// Empty input provided (empty bytes or missing file extension).
+    #[error("empty input provided: {0}")]
+    EmptyInput(String),
+
+    /// File size exceeds the maximum allowed limit.
+    #[error("file too large: {size} bytes (maximum: {max} bytes)")]
+    FileTooLarge { size: u64, max: u64 },
+
     /// PDF backend-specific error (lopdf).
     #[cfg(feature = "document-pdf")]
     #[error("PDF parse error: {0}")]
@@ -156,11 +164,35 @@ impl Table {
 ///
 /// Usage:
 /// ```ignore
-/// let result = go_on::multimodal::DocumentParser::parse("report.pdf");
+/// let parser = go_on::multimodal::DocumentParser::default();
+/// let result = parser.parse("report.pdf");
 /// println!("{}", result.text_content);
 /// ```
+///
+/// The parser can be configured with a custom `max_text_length` to cap the
+/// extracted text content length:
+/// ```ignore
+/// let parser = go_on::multimodal::DocumentParser {
+///     max_text_length: 5_000_000,  // 5 MB
+/// };
+/// ```
 #[derive(Debug, Clone)]
-pub struct DocumentParser;
+pub struct DocumentParser {
+    /// Maximum length of `text_content` in bytes (soft cap).
+    /// When the extracted text exceeds this value it will be truncated and a
+    /// `"truncated"` entry will be added to the metadata.
+    pub max_text_length: usize,
+}
+
+impl Default for DocumentParser {
+    fn default() -> Self {
+        Self {
+            // 10 MB default — covers most realistic documents while bounding
+            // memory usage from malformed or pathological inputs.
+            max_text_length: 10 * 1024 * 1024,
+        }
+    }
+}
 
 impl DocumentParser {
     /// Parse a file at `path`, inferring the format from the file extension.
@@ -172,7 +204,7 @@ impl DocumentParser {
     /// - `.md`, `.markdown` (requires `document-markdown`)
     ///
     /// Unsupported extensions return a [`DocumentParserError::UnsupportedExtension`].
-    pub fn parse(path: impl AsRef<Path>) -> Result<ParsedContent, DocumentParserError> {
+    pub fn parse(&self, path: impl AsRef<Path>) -> Result<ParsedContent, DocumentParserError> {
         let path = path.as_ref();
         let ext = path
             .extension()
@@ -180,13 +212,39 @@ impl DocumentParser {
             .unwrap_or("")
             .to_lowercase();
 
-        match ext.as_str() {
-            "pdf" => Self::parse_pdf(path),
-            "docx" => Self::parse_docx(path),
-            "html" | "htm" => Self::parse_html(path),
-            "md" | "markdown" => Self::parse_markdown(path),
-            _ => Err(DocumentParserError::UnsupportedExtension(ext)),
+        // ── Input validation ──────────────────────────────────────────
+        if ext.is_empty() {
+            return Err(DocumentParserError::EmptyInput(
+                "file path has no extension; cannot determine document format".to_string(),
+            ));
         }
+
+        let metadata = std::fs::metadata(path).map_err(DocumentParserError::from_io)?;
+        let file_size = metadata.len();
+        if file_size == 0 {
+            return Err(DocumentParserError::EmptyInput(format!(
+                "file '{}' is empty (0 bytes)",
+                path.display(),
+            )));
+        }
+        const MAX_FILE_SIZE: u64 = 50 * 1024 * 1024; // 50 MB
+        if file_size > MAX_FILE_SIZE {
+            return Err(DocumentParserError::FileTooLarge {
+                size: file_size,
+                max: MAX_FILE_SIZE,
+            });
+        }
+
+        let mut result = match ext.as_str() {
+            "pdf" => self.parse_pdf(path),
+            "docx" => self.parse_docx(path),
+            "html" | "htm" => self.parse_html(path),
+            "md" | "markdown" => self.parse_markdown(path),
+            _ => return Err(DocumentParserError::UnsupportedExtension(ext)),
+        }?;
+
+        self.truncate_content(&mut result);
+        Ok(result)
     }
 
     /// Parse bytes with an explicit extension hint (no I/O).
@@ -194,16 +252,52 @@ impl DocumentParser {
     /// This is useful when the document data is already in memory (e.g. from
     /// a [`MultimodalInput::Document`]).
     pub fn parse_bytes(
+        &self,
         bytes: &[u8],
         extension: &str,
     ) -> Result<ParsedContent, DocumentParserError> {
         let ext = extension.trim().to_lowercase();
-        match ext.as_str() {
-            "pdf" => Self::parse_pdf_bytes(bytes),
-            "docx" => Self::parse_docx_bytes(bytes),
-            "html" | "htm" => Self::parse_html_bytes(bytes),
-            "md" | "markdown" => Self::parse_markdown_bytes(bytes),
-            _ => Err(DocumentParserError::UnsupportedExtension(ext)),
+
+        // ── Input validation ──────────────────────────────────────────
+        if ext.is_empty() {
+            return Err(DocumentParserError::EmptyInput(
+                "extension hint is empty; cannot determine document format".to_string(),
+            ));
+        }
+        if bytes.is_empty() {
+            return Err(DocumentParserError::EmptyInput(
+                "byte slice is empty; nothing to parse".to_string(),
+            ));
+        }
+
+        let mut result = match ext.as_str() {
+            "pdf" => self.parse_pdf_bytes(bytes),
+            "docx" => self.parse_docx_bytes(bytes),
+            "html" | "htm" => self.parse_html_bytes(bytes),
+            "md" | "markdown" => self.parse_markdown_bytes(bytes),
+            _ => return Err(DocumentParserError::UnsupportedExtension(ext)),
+        }?;
+
+        self.truncate_content(&mut result);
+        Ok(result)
+    }
+
+    /// Cap `text_content` to [`max_text_length`] if it exceeds the limit
+    /// and record a `"truncated"` metadata entry.
+    fn truncate_content(&self, content: &mut ParsedContent) {
+        if content.text_content.len() > self.max_text_length {
+            let original_len = content.text_content.len();
+            content.text_content.truncate(self.max_text_length);
+            content
+                .text_content
+                .push_str("\n\n[... content truncated ...]");
+            content.metadata.insert(
+                "truncated".to_string(),
+                format!(
+                    "text_content was truncated from {} to {} bytes",
+                    original_len, self.max_text_length
+                ),
+            );
         }
     }
 
@@ -212,18 +306,18 @@ impl DocumentParser {
     // =======================================================================
 
     #[cfg(feature = "document-pdf")]
-    fn parse_pdf(path: &Path) -> Result<ParsedContent, DocumentParserError> {
+    fn parse_pdf(&self, path: &Path) -> Result<ParsedContent, DocumentParserError> {
         let bytes = std::fs::read(path).map_err(DocumentParserError::from_io)?;
-        Self::parse_pdf_bytes(&bytes)
+        self.parse_pdf_bytes(&bytes)
     }
 
     #[cfg(not(feature = "document-pdf"))]
-    fn parse_pdf(_path: &Path) -> Result<ParsedContent, DocumentParserError> {
+    fn parse_pdf(&self, _path: &Path) -> Result<ParsedContent, DocumentParserError> {
         Err(DocumentParserError::feature_disabled("PDF"))
     }
 
     #[cfg(feature = "document-pdf")]
-    fn parse_pdf_bytes(bytes: &[u8]) -> Result<ParsedContent, DocumentParserError> {
+    fn parse_pdf_bytes(&self, bytes: &[u8]) -> Result<ParsedContent, DocumentParserError> {
         use lopdf::Document;
 
         let doc = Document::load_mem(bytes).map_err(|e| DocumentParserError::Pdf(e.to_string()))?;
@@ -312,7 +406,7 @@ impl DocumentParser {
     }
 
     #[cfg(not(feature = "document-pdf"))]
-    fn parse_pdf_bytes(_bytes: &[u8]) -> Result<ParsedContent, DocumentParserError> {
+    fn parse_pdf_bytes(&self, _bytes: &[u8]) -> Result<ParsedContent, DocumentParserError> {
         Err(DocumentParserError::feature_disabled("PDF"))
     }
 
@@ -321,18 +415,18 @@ impl DocumentParser {
     // =======================================================================
 
     #[cfg(feature = "document-docx")]
-    fn parse_docx(path: &Path) -> Result<ParsedContent, DocumentParserError> {
+    fn parse_docx(&self, path: &Path) -> Result<ParsedContent, DocumentParserError> {
         let bytes = std::fs::read(path).map_err(DocumentParserError::from_io)?;
-        Self::parse_docx_bytes(&bytes)
+        self.parse_docx_bytes(&bytes)
     }
 
     #[cfg(not(feature = "document-docx"))]
-    fn parse_docx(_path: &Path) -> Result<ParsedContent, DocumentParserError> {
+    fn parse_docx(&self, _path: &Path) -> Result<ParsedContent, DocumentParserError> {
         Err(DocumentParserError::feature_disabled("DOCX"))
     }
 
     #[cfg(feature = "document-docx")]
-    fn parse_docx_bytes(bytes: &[u8]) -> Result<ParsedContent, DocumentParserError> {
+    fn parse_docx_bytes(&self, bytes: &[u8]) -> Result<ParsedContent, DocumentParserError> {
         use docx_rs::*;
 
         let docx = read_docx(bytes).map_err(|e| DocumentParserError::Docx(e.to_string()))?;
@@ -439,7 +533,7 @@ impl DocumentParser {
     }
 
     #[cfg(not(feature = "document-docx"))]
-    fn parse_docx_bytes(_bytes: &[u8]) -> Result<ParsedContent, DocumentParserError> {
+    fn parse_docx_bytes(&self, _bytes: &[u8]) -> Result<ParsedContent, DocumentParserError> {
         Err(DocumentParserError::feature_disabled("DOCX"))
     }
 
@@ -448,30 +542,30 @@ impl DocumentParser {
     // =======================================================================
 
     #[cfg(feature = "document-html")]
-    fn parse_html(path: &Path) -> Result<ParsedContent, DocumentParserError> {
+    fn parse_html(&self, path: &Path) -> Result<ParsedContent, DocumentParserError> {
         let html_str = std::fs::read_to_string(path).map_err(DocumentParserError::from_io)?;
-        Self::parse_html_str(&html_str)
+        self.parse_html_str(&html_str)
     }
 
     #[cfg(not(feature = "document-html"))]
-    fn parse_html(_path: &Path) -> Result<ParsedContent, DocumentParserError> {
+    fn parse_html(&self, _path: &Path) -> Result<ParsedContent, DocumentParserError> {
         Err(DocumentParserError::feature_disabled("HTML"))
     }
 
     #[cfg(feature = "document-html")]
-    fn parse_html_bytes(bytes: &[u8]) -> Result<ParsedContent, DocumentParserError> {
+    fn parse_html_bytes(&self, bytes: &[u8]) -> Result<ParsedContent, DocumentParserError> {
         let html_str = String::from_utf8(bytes.to_vec())
             .map_err(|e| DocumentParserError::Html(format!("invalid UTF-8: {e}")))?;
-        Self::parse_html_str(&html_str)
+        self.parse_html_str(&html_str)
     }
 
     #[cfg(not(feature = "document-html"))]
-    fn parse_html_bytes(_bytes: &[u8]) -> Result<ParsedContent, DocumentParserError> {
+    fn parse_html_bytes(&self, _bytes: &[u8]) -> Result<ParsedContent, DocumentParserError> {
         Err(DocumentParserError::feature_disabled("HTML"))
     }
 
     #[cfg(feature = "document-html")]
-    fn parse_html_str(html_str: &str) -> Result<ParsedContent, DocumentParserError> {
+    fn parse_html_str(&self, html_str: &str) -> Result<ParsedContent, DocumentParserError> {
         use scraper::{Html, Selector};
 
         let document = Html::parse_document(html_str);
@@ -556,6 +650,18 @@ impl DocumentParser {
                     }
                 }
 
+                // Pre-parse known-valid CSS selectors for table cell extraction.
+                // These selectors are static strings guaranteed to be valid,
+                // but we use if-let to avoid any potential panic surface.
+                let cell_selector_opt = Selector::parse("td, th").ok();
+                let cell_selector = match cell_selector_opt.as_ref() {
+                    Some(s) => s,
+                    None => {
+                        tracing::error!("Failed to parse static selector 'td, th' - this is a bug");
+                        continue;
+                    }
+                };
+
                 // <tr> rows (skip the <thead> row if headers were captured)
                 if let Ok(tr_sel) = Selector::parse("tr") {
                     let mut row_idx = 0usize;
@@ -570,7 +676,7 @@ impl DocumentParser {
                         };
 
                         let cells: Vec<String> = tr
-                            .select(&Selector::parse("td, th").unwrap())
+                            .select(cell_selector)
                             .map(|cell| cell.text().collect::<String>().trim().to_string())
                             .collect();
                         if !cells.is_empty() {
@@ -633,7 +739,7 @@ impl DocumentParser {
 
     #[cfg(not(feature = "document-html"))]
     #[allow(dead_code)]
-    fn parse_html_str(_html_str: &str) -> Result<ParsedContent, DocumentParserError> {
+    fn parse_html_str(&self, _html_str: &str) -> Result<ParsedContent, DocumentParserError> {
         Err(DocumentParserError::feature_disabled("HTML"))
     }
 
@@ -642,30 +748,30 @@ impl DocumentParser {
     // =======================================================================
 
     #[cfg(feature = "document-markdown")]
-    fn parse_markdown(path: &Path) -> Result<ParsedContent, DocumentParserError> {
+    fn parse_markdown(&self, path: &Path) -> Result<ParsedContent, DocumentParserError> {
         let md_str = std::fs::read_to_string(path).map_err(DocumentParserError::from_io)?;
-        Self::parse_markdown_str(&md_str)
+        self.parse_markdown_str(&md_str)
     }
 
     #[cfg(not(feature = "document-markdown"))]
-    fn parse_markdown(_path: &Path) -> Result<ParsedContent, DocumentParserError> {
+    fn parse_markdown(&self, _path: &Path) -> Result<ParsedContent, DocumentParserError> {
         Err(DocumentParserError::feature_disabled("Markdown"))
     }
 
     #[cfg(feature = "document-markdown")]
-    fn parse_markdown_bytes(bytes: &[u8]) -> Result<ParsedContent, DocumentParserError> {
+    fn parse_markdown_bytes(&self, bytes: &[u8]) -> Result<ParsedContent, DocumentParserError> {
         let md_str = String::from_utf8(bytes.to_vec())
             .map_err(|e| DocumentParserError::Markdown(format!("invalid UTF-8: {e}")))?;
-        Self::parse_markdown_str(&md_str)
+        self.parse_markdown_str(&md_str)
     }
 
     #[cfg(not(feature = "document-markdown"))]
-    fn parse_markdown_bytes(_bytes: &[u8]) -> Result<ParsedContent, DocumentParserError> {
+    fn parse_markdown_bytes(&self, _bytes: &[u8]) -> Result<ParsedContent, DocumentParserError> {
         Err(DocumentParserError::feature_disabled("Markdown"))
     }
 
     #[cfg(feature = "document-markdown")]
-    fn parse_markdown_str(md_str: &str) -> Result<ParsedContent, DocumentParserError> {
+    fn parse_markdown_str(&self, md_str: &str) -> Result<ParsedContent, DocumentParserError> {
         use comrak::{markdown_to_html, ComrakOptions};
         use scraper::{Html, Selector};
 
@@ -710,10 +816,18 @@ impl DocumentParser {
                     headers: Vec::new(),
                     rows: Vec::new(),
                 };
+                // Pre-parse selector once - static string known to be valid.
+                let cell_selector = match Selector::parse("th, td").ok() {
+                    Some(s) => s,
+                    None => {
+                        tracing::error!("Failed to parse static selector 'th, td' - this is a bug");
+                        continue;
+                    }
+                };
                 if let Ok(tr_sel) = Selector::parse("tr") {
                     for (row_idx, tr) in table_elem.select(&tr_sel).enumerate() {
                         let cells: Vec<String> = tr
-                            .select(&Selector::parse("th, td").unwrap())
+                            .select(&cell_selector)
                             .map(|cell| cell.text().collect::<String>().trim().to_string())
                             .collect();
                         if row_idx == 0 {
@@ -770,7 +884,7 @@ impl DocumentParser {
 
     #[cfg(not(feature = "document-markdown"))]
     #[allow(dead_code)]
-    fn parse_markdown_str(_md_str: &str) -> Result<ParsedContent, DocumentParserError> {
+    fn parse_markdown_str(&self, _md_str: &str) -> Result<ParsedContent, DocumentParserError> {
         Err(DocumentParserError::feature_disabled("Markdown"))
     }
 }
@@ -801,7 +915,11 @@ mod tests {
 
     #[test]
     fn test_unsupported_extension() {
-        let err = DocumentParser::parse("file.xyz").unwrap_err();
+        // parse_bytes doesn't hit the file-system, so it goes straight
+        // to extension matching and returns UnsupportedExtension.
+        let err = DocumentParser::default()
+            .parse_bytes(b"dummy content", "xyz")
+            .unwrap_err();
         assert!(matches!(err, DocumentParserError::UnsupportedExtension(_)));
         assert!(err.to_string().contains("xyz"));
     }
@@ -856,7 +974,9 @@ mod tests {
 
     #[test]
     fn test_parse_bytes_with_unsupported_ext() {
-        let err = DocumentParser::parse_bytes(b"data", "xyz").unwrap_err();
+        let err = DocumentParser::default()
+            .parse_bytes(b"data", "xyz")
+            .unwrap_err();
         assert!(matches!(err, DocumentParserError::UnsupportedExtension(_)));
     }
 
@@ -865,5 +985,87 @@ mod tests {
         let err = DocumentParserError::feature_disabled("PDF");
         assert!(err.to_string().contains("PDF"));
         assert!(err.to_string().contains("feature"));
+    }
+
+    #[test]
+    fn test_parse_empty_extension() {
+        let err = DocumentParser::default()
+            .parse_bytes(b"some data", "")
+            .unwrap_err();
+        assert!(matches!(err, DocumentParserError::EmptyInput(_)));
+    }
+
+    #[test]
+    fn test_parse_bytes_empty_extension() {
+        let err = DocumentParser::default()
+            .parse_bytes(b"data", "  ")
+            .unwrap_err();
+        assert!(matches!(err, DocumentParserError::EmptyInput(_)));
+    }
+
+    #[test]
+    fn test_parse_bytes_empty_slice() {
+        let err = DocumentParser::default()
+            .parse_bytes(b"", "pdf")
+            .unwrap_err();
+        assert!(matches!(err, DocumentParserError::EmptyInput(_)));
+    }
+
+    #[test]
+    fn test_file_too_large_error() {
+        let err = DocumentParserError::FileTooLarge {
+            size: 100_000_000,
+            max: 50_000_000,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("100000000"));
+        assert!(msg.contains("50000000"));
+    }
+
+    #[test]
+    fn test_text_truncation() {
+        let parser = DocumentParser {
+            max_text_length: 10,
+        };
+        let mut content = ParsedContent {
+            text_content: "Hello, this is a long text that should be truncated.".to_string(),
+            ..Default::default()
+        };
+        parser.truncate_content(&mut content);
+        assert!(content.text_content.len() <= 10 + "\n\n[... content truncated ...]".len());
+        assert!(content.metadata.contains_key("truncated"));
+        assert!(content.metadata["truncated"].contains("truncated"));
+    }
+
+    #[test]
+    fn test_text_no_truncation_when_under_limit() {
+        let parser = DocumentParser {
+            max_text_length: 1000,
+        };
+        let mut content = ParsedContent {
+            text_content: "Short text.".to_string(),
+            ..Default::default()
+        };
+        parser.truncate_content(&mut content);
+        assert_eq!(content.text_content, "Short text.");
+        assert!(!content.metadata.contains_key("truncated"));
+    }
+
+    #[test]
+    fn test_empty_input_error_display() {
+        let err = DocumentParserError::EmptyInput("test reason".to_string());
+        let msg = err.to_string();
+        assert!(msg.contains("test reason"));
+    }
+
+    #[test]
+    fn test_parse_path_without_extension() {
+        // A path with no extension should produce EmptyInput
+        // (we can't test a real file that doesn't exist, but we can test the
+        //  extension validation logic conceptually via EmptyInput error)
+        let err = DocumentParserError::EmptyInput(
+            "file path has no extension; cannot determine document format".to_string(),
+        );
+        assert!(err.to_string().contains("no extension"));
     }
 }

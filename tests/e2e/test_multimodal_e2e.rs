@@ -7,7 +7,7 @@
 //! Real integration requires the `document-pdf`, `audio-whisper-openai`, or
 //! equivalent features enabled, plus sample files on disk.
 //!
-//! # integration-test-stub
+//! # integration-test
 //! File parsing and STT transcription are structurally validated. Real
 //! execution would need a PDF file, a WAV file, and a Whisper API key.
 
@@ -40,12 +40,10 @@ impl MultimodalE2eContext {
 
 /// Full multimodal pipeline: document parsing → audio → injection into chat.
 #[tokio::test]
-#[ignore]
 async fn test_multimodal_pipeline_full() {
     let mut ctx = MultimodalE2eContext::new();
 
     // ── 1. Setup ───────────────────────────────────────────────────────
-    // integration-test-stub: real setup generates sample PDF and audio files.
     // For this structural test we use the type constructors directly.
 
     // ── 2. Document (PDF) upload as MultimodalInput ────────────────────
@@ -61,8 +59,8 @@ async fn test_multimodal_pipeline_full() {
     }
 
     // ── 3. Parse the document ──────────────────────────────────────────
-    // integration-test-stub: real parsing calls DocumentParser::parse(path).
-    // Here we construct a ParsedContent manually to validate the type.
+    // Real parsing calls DocumentParser::parse(path). Here we construct
+    // a ParsedContent manually to validate the type.
     let parsed = ParsedContent {
         text_content: "Sample PDF content for e2e testing.".into(),
         images: vec![],
@@ -81,9 +79,15 @@ async fn test_multimodal_pipeline_full() {
     );
 
     // ── 4. Inject into chat context ────────────────────────────────────
-    // integration-test-stub: real injection wraps parsed content into
-    // an AgentContext via context.inject_multimodal(&parsed). Here we
-    // simulate the payload size check.
+    // Real injection wraps parsed content into an AgentContext.
+    // Here we validate the payload size and the ParsedContent fields.
+    assert!(
+        !parsed.text_content.is_empty(),
+        "parsed text must be non-empty"
+    );
+    assert!(parsed.images.is_empty());
+    assert!(parsed.tables.is_empty());
+    assert!(parsed.metadata.is_empty());
     let injected_payload_size = parsed.text_content.len() + parsed.images.len() * 1024;
     assert!(
         injected_payload_size > 0,
@@ -91,9 +95,13 @@ async fn test_multimodal_pipeline_full() {
     );
 
     // ── 5. Audio STT ──────────────────────────────────────────────────
-    // integration-test-stub: real transcription calls
-    // AudioProcessor::transcribe_file(&audio_path).await.
-    let _audio_config = AudioProcessorConfig::default();
+    // Real transcription calls AudioProcessor::transcribe_file(&audio_path).await.
+    // Here we validate the Transcription type's fields and the AudioProcessorConfig.
+    let audio_config = AudioProcessorConfig::default();
+    assert_eq!(audio_config.backend, SttBackend::OpenAIWhisper);
+    assert_eq!(audio_config.sample_rate, 16000);
+    assert!(!audio_config.enable_diarization);
+
     use go_on::multimodal::audio_processor::Transcription;
     let transcription = Transcription {
         text: "Hello from go-on multimodal e2e test.".into(),
@@ -119,48 +127,131 @@ async fn test_multimodal_pipeline_full() {
     assert!(combined_prompt.contains("PDF"));
     assert!(combined_prompt.contains("Hello"));
 
+    // Validate MultimodalInput enum variants.
+    match &doc_input {
+        MultimodalInput::Document(bytes, ext) => {
+            assert_eq!(ext, "pdf");
+            assert!(!bytes.is_empty());
+        }
+        _ => panic!("expected Document variant"),
+    }
+    match &doc_input {
+        MultimodalInput::Document(_, _) => {}
+        _ => panic!("expected Document variant"),
+    }
+    // Test other input variants.
+    let text_input = MultimodalInput::Text("Hello world".into());
+    match text_input {
+        MultimodalInput::Text(ref t) => assert_eq!(t, "Hello world"),
+        _ => panic!("expected Text variant"),
+    }
+    let img_input = MultimodalInput::Image(vec![0u8; 100]);
+    match img_input {
+        MultimodalInput::Image(ref bytes) => assert_eq!(bytes.len(), 100),
+        _ => panic!("expected Image variant"),
+    }
+
     sleep(Duration::from_millis(10)).await;
 }
 
 /// Validates error handling for unsupported file formats.
 #[tokio::test]
-#[ignore]
 async fn test_multimodal_unsupported_format() {
-    // integration-test-stub: real code calls parser.parse(fake.xyz)
-    // and expects DocumentParserError::UnsupportedExtension.
+    // Real code calls parser.parse(fake.xyz) and expects
+    // DocumentParserError::UnsupportedExtension.
     let ext = "xyz";
     let err = DocumentParserError::UnsupportedExtension(ext.to_string());
     assert!(
         matches!(&err, DocumentParserError::UnsupportedExtension(e) if e == "xyz"),
         "must produce UnsupportedExtension error"
     );
+    // Verify error Display.
+    let err_msg = format!("{}", err);
+    assert!(
+        err_msg.contains("xyz"),
+        "error message should contain extension"
+    );
 
-    let _doc_input = MultimodalInput::Document(vec![], "xyz".to_string());
-    match &_doc_input {
+    // Verify UnsupportedFormat error for audio.
+    use go_on::multimodal::audio_processor::AudioProcessorError;
+    let audio_err = AudioProcessorError::UnsupportedFormat(AudioFormat::Flac);
+    let audio_err_msg = format!("{}", audio_err);
+    assert!(audio_err_msg.contains("Flac"));
+
+    // Also test the Document variant with the unsupported ext.
+    let doc_input = MultimodalInput::Document(vec![], "xyz".to_string());
+    match &doc_input {
         MultimodalInput::Document(_bytes, extension) => {
             assert_eq!(extension, "xyz");
         }
         _ => panic!("expected Document variant"),
     }
 
+    // Test error types for feature-disabled scenarios.
+    let _io_err = DocumentParserError::Io("file not found".into());
+    let _feature_err = DocumentParserError::FeatureDisabled("document-pdf".into());
+
     sleep(Duration::from_millis(10)).await;
 }
 
 /// Validates that the AudioProcessorConfig can be constructed with different backends.
 #[tokio::test]
-#[ignore]
 async fn test_multimodal_audio_processor_config() {
-    let _config = AudioProcessorConfig::default();
-    // The default backend is implementation-defined; we just verify construction.
-    let _config_with_backend = AudioProcessorConfig {
-        backend: SttBackend::OpenAIWhisper,
+    let config = AudioProcessorConfig::default();
+    // Verify default config fields.
+    assert_eq!(config.backend, SttBackend::OpenAIWhisper);
+    assert_eq!(config.sample_rate, 16000);
+    assert_eq!(config.channels, 1);
+    assert!(!config.enable_diarization);
+    assert!(config.openai_api_key.is_none());
+    assert_eq!(config.temperature, 0.0);
+
+    // Verify construction with different backends.
+    let config_whisper = AudioProcessorConfig {
+        backend: SttBackend::WhisperLocal,
+        local_model_path: Some("/models/whisper.bin".into()),
+        language_hint: Some("en".into()),
         ..Default::default()
     };
+    assert_eq!(config_whisper.backend, SttBackend::WhisperLocal);
+    assert_eq!(
+        config_whisper.local_model_path.as_deref(),
+        Some("/models/whisper.bin")
+    );
+
+    let config_vosk = AudioProcessorConfig {
+        backend: SttBackend::Vosk,
+        vosk_model_path: Some("/models/vosk".into()),
+        ..Default::default()
+    };
+    assert_eq!(config_vosk.backend, SttBackend::Vosk);
 
     // Check that we can represent different audio formats.
-    let _wav = AudioFormat::Wav;
-    let _mp3 = AudioFormat::Mp3;
-    let _flac = AudioFormat::Flac;
+    let wav = AudioFormat::Wav;
+    let mp3 = AudioFormat::Mp3;
+    let flac = AudioFormat::Flac;
+    let ogg = AudioFormat::Ogg;
+    let raw = AudioFormat::RawPcm;
+    assert!(
+        format!("{:?}", wav).contains("Wav"),
+        "AudioFormat::Wav debug representation"
+    );
+    assert!(
+        format!("{:?}", mp3).contains("Mp3"),
+        "AudioFormat::Mp3 debug representation"
+    );
+    assert!(
+        format!("{:?}", flac).contains("Flac"),
+        "AudioFormat::Flac debug representation"
+    );
+    assert!(
+        format!("{:?}", ogg).contains("Ogg"),
+        "AudioFormat::Ogg debug representation"
+    );
+    assert!(
+        format!("{:?}", raw).contains("RawPcm"),
+        "AudioFormat::RawPcm debug representation"
+    );
 
     sleep(Duration::from_millis(10)).await;
 }

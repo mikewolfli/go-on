@@ -93,7 +93,10 @@ export class GoOnClient {
           (err as Error).message ?? "Unknown fetch error",
         );
         if (attempt < maxRetries) {
-          await new Promise((r) => setTimeout(r, 100 * 2 ** attempt));
+          // Exponential backoff with jitter to prevent thundering herd
+          const baseDelay = 100 * 2 ** attempt;
+          const jitter = Math.random() * baseDelay * 0.3; // up to 30% jitter
+          await new Promise((r) => setTimeout(r, baseDelay + jitter));
         }
         continue;
       }
@@ -105,7 +108,10 @@ export class GoOnClient {
           `HTTP ${response.status}: ${response.statusText}`,
         );
         if (attempt < maxRetries) {
-          await new Promise((r) => setTimeout(r, 100 * 2 ** attempt));
+          // Exponential backoff with jitter to prevent thundering herd
+          const baseDelay = 100 * 2 ** attempt;
+          const jitter = Math.random() * baseDelay * 0.3; // up to 30% jitter
+          await new Promise((r) => setTimeout(r, baseDelay + jitter));
         }
         continue;
       }

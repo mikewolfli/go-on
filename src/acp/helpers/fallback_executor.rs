@@ -29,9 +29,9 @@ pub struct FallbackAgentResult {
 ///
 /// Runs up to `max_concurrency` agents simultaneously. Returns the first
 /// successful response, or all failures if all agents fail.
-#[allow(unused_variables, dead_code)] // F-GAP-49 — reserved for fallback executor integration
+#[allow(dead_code)] // F-GAP-49 — reserved for fallback executor integration
 pub async fn execute_fallback_agents_parallel(
-    server: &AcpServer,
+    _server: &AcpServer,
     agents: Vec<(String, Arc<dyn Agent>)>,
     messages: Vec<Message>,
     max_concurrency: usize,

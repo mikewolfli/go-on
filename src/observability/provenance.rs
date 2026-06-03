@@ -211,7 +211,7 @@ pub fn make_entry(
 }
 
 /// Helper to create a provenance entry with an optional rationale.
-#[allow(dead_code, clippy::too_many_arguments)]
+#[allow(dead_code)] // Intentionally reserved for future wiring
 pub fn make_entry_with_rationale(
     task_id: &str,
     phase: &str,

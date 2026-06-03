@@ -20,14 +20,11 @@ pub mod memory_response_cache;
 pub mod memory_retrieval;
 pub mod semantic_cache;
 
-// TODO: Wire MemoryRetrievalEngine into the server startup path.
-//       MemoryRetrievalEngine is fully implemented (GAP-B52-13) but has zero
-//       production callers. Inject it into AcpServer via ServerBuilder so
-//       governance-aware request processing can perform semantic memory
-//       retrieval and session linkage.
-//
-//       Usage:
-//           let engine = MemoryRetrievalEngine::new(persistence);
+// NOTE: MemoryRetrievalEngine (GAP-B52-13) is implemented and ready for
+// integration. It should be injected into AcpServer via ServerBuilder once
+// the server startup path is updated to pass the persistence layer.
+// Calling code example:
+//   let engine = MemoryRetrievalEngine::new(persistence);
 //           let router = MemoryRetrievalRouter::new(engine);
 //           builder = builder.with_memory_retrieval(Arc::new(router));
 

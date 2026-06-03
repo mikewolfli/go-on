@@ -296,7 +296,7 @@ pub fn record_audit_entry(entry: AuditLogEntry) {
 
 /// Build an audit entry for agent decision.
 // F-GAP-48: intentionally not wired into the hot path; rationalize_decision is primary
-#[allow(clippy::too_many_arguments, dead_code)] // F-GAP-49
+#[allow(dead_code)] // F-GAP-49
 pub fn build_audit_entry(
     task_id: &str,
     phase: &str,

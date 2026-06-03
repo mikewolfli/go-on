@@ -466,8 +466,8 @@ impl MultimodalProcessor {
     /// Process a document input — delegates to the `DocumentParser` when
     /// configured.
     async fn process_document(&self, data: &[u8], ext: &str) -> ProcessedContent {
-        if self.document_parser.is_some() {
-            match DocumentParser::parse_bytes(data, ext) {
+        if let Some(ref parser) = self.document_parser {
+            match parser.parse_bytes(data, ext) {
                 Ok(parsed) => {
                     let images: Vec<String> = parsed
                         .images
