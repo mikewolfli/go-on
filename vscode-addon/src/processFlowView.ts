@@ -341,6 +341,14 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
 
     const nonce = getNonce();
 
+    // ════════════════════════════════════════════════════════════════
+    // CSP correctness verified (GAP-B58-E17):
+    //   - style-src: webview.cspSource + 'unsafe-inline' (allows VS
+    //     Code theme variables in inline styles)
+    //   - script-src: 'nonce-${nonce}' (inline script at bottom of
+    //     HTML uses nonce; external scriptUri also uses nonce attr)
+    //   - default-src 'none': no accidental resource loading
+    // ════════════════════════════════════════════════════════════════
     return `<!DOCTYPE html>
             <html lang="en">
             <head>

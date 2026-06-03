@@ -128,8 +128,8 @@ pub fn start_auto_migrate_task(
 /// [`MemoryEntry`](PersistenceEntry) and call `MemoryPersistence::store()`.
 ///
 /// Returns the persistence operation result.
-#[allow(dead_code)] // Reserved for MemoryBridge full activation
-fn persist_store(persistence: &MemoryPersistence, entry: CanonicalEntry) -> anyhow::Result<()> {
+#[allow(dead_code)] // Reserved bridge API; wired via runtime.rs startup
+pub fn persist_store(persistence: &MemoryPersistence, entry: CanonicalEntry) -> anyhow::Result<()> {
     let p_entry: PersistenceEntry = entry.into();
     persistence.store(p_entry)
 }
@@ -143,7 +143,7 @@ fn persist_store(persistence: &MemoryPersistence, entry: CanonicalEntry) -> anyh
 ///
 /// Returns an error if the persistence `store()` call fails.  The entry
 /// will still have been added to the in-memory store.
-#[allow(dead_code)] // Reserved for MemoryBridge full activation
+#[allow(dead_code)] // Reserved bridge API; wired via runtime.rs startup
 pub fn bridge_store(
     memory_store: &StdMutex<MemoryStore>,
     persistence: &MemoryPersistence,
@@ -176,7 +176,6 @@ pub fn bridge_store(
 ///
 /// Returns an error if `auto_migrate()` fails.  The in-memory promotion will
 /// still have been applied.
-#[allow(dead_code)] // Reserved for MemoryBridge full activation
 pub fn bridge_promote(
     memory_store: &StdMutex<MemoryStore>,
     persistence: &MemoryPersistence,

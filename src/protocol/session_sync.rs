@@ -93,6 +93,12 @@ const MAX_ACTIVE_TASKS: usize = 200;
 /// Maximum number of council proposals kept per session.
 const MAX_COUNCIL_PROPOSALS: usize = 200;
 
+/// GAP-B58-C14: Global maximum number of concurrent sessions across all
+/// frontends. When this limit is reached, `create_session` returns an error
+/// so callers can surface a "too many sessions" response instead of silently
+/// growing unbounded.
+const MAX_SESSIONS: usize = 10_000;
+
 /// A session whose state is guarded by an `RwLock` and wrapped in `Arc` so it
 /// can be shared across tasks and frontend handlers.
 ///
@@ -268,12 +274,21 @@ impl SessionRegistry {
     // ── Session lifecycle ────────────────────────────────────────────────
 
     /// Create a new session with a random UUID and return its ID.
-    pub async fn create_session(&self) -> SessionId {
+    ///
+    /// Returns `Err` with a descriptive message when the global `MAX_SESSIONS`
+    /// limit has been reached.
+    pub async fn create_session(&self) -> Result<SessionId, String> {
+        let sessions = self.sessions.read().await;
+        if sessions.len() >= MAX_SESSIONS {
+            return Err(format!("session limit reached (max={MAX_SESSIONS})"));
+        }
+        drop(sessions);
+
         let id = uuid::Uuid::new_v4().to_string();
         let session = SharedSession::new(id.clone());
         self.sessions.write().await.insert(id.clone(), session);
         debug!(session_id = %id, "session created");
-        id
+        Ok(id)
     }
 
     /// Retrieve a clone of the session data, if it exists.
@@ -618,7 +633,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_and_get_session() {
         let registry = SessionRegistry::new();
-        let id = registry.create_session().await;
+        let id = registry.create_session().await.unwrap();
         let session = registry.get_session(&id).await;
         assert!(session.is_some());
         assert_eq!(session.unwrap().id, id);
@@ -634,7 +649,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_session() {
         let registry = SessionRegistry::new();
-        let id = registry.create_session().await;
+        let id = registry.create_session().await.unwrap();
         assert_eq!(registry.session_count().await, 1);
 
         registry.delete_session(&id).await;
@@ -645,8 +660,8 @@ mod tests {
     #[tokio::test]
     async fn test_create_multiple_sessions() {
         let registry = SessionRegistry::new();
-        let id1 = registry.create_session().await;
-        let id2 = registry.create_session().await;
+        let id1 = registry.create_session().await.unwrap();
+        let id2 = registry.create_session().await.unwrap();
         assert_eq!(registry.session_count().await, 2);
         assert_ne!(id1, id2);
     }
@@ -656,7 +671,7 @@ mod tests {
     #[tokio::test]
     async fn test_connect_frontend() {
         let registry = SessionRegistry::new();
-        let sid = registry.create_session().await;
+        let sid = registry.create_session().await.unwrap();
         registry.connect_frontend("fe1", &sid).await;
         assert_eq!(registry.frontend_count().await, 1);
     }
@@ -664,7 +679,7 @@ mod tests {
     #[tokio::test]
     async fn test_disconnect_frontend() {
         let registry = SessionRegistry::new();
-        let sid = registry.create_session().await;
+        let sid = registry.create_session().await.unwrap();
         registry.connect_frontend("fe1", &sid).await;
         assert_eq!(registry.frontend_count().await, 1);
 
@@ -675,8 +690,8 @@ mod tests {
     #[tokio::test]
     async fn test_disconnect_frontend_all() {
         let registry = SessionRegistry::new();
-        let sid1 = registry.create_session().await;
-        let sid2 = registry.create_session().await;
+        let sid1 = registry.create_session().await.unwrap();
+        let sid2 = registry.create_session().await.unwrap();
         registry.connect_frontend("fe1", &sid1).await;
         registry.connect_frontend("fe1", &sid2).await;
 
@@ -687,7 +702,7 @@ mod tests {
     #[tokio::test]
     async fn test_deleting_session_removes_frontend_bindings() {
         let registry = SessionRegistry::new();
-        let sid = registry.create_session().await;
+        let sid = registry.create_session().await.unwrap();
         registry.connect_frontend("fe1", &sid).await;
 
         registry.delete_session(&sid).await;
@@ -705,7 +720,7 @@ mod tests {
     #[tokio::test]
     async fn test_append_message_bumps_version() {
         let registry = SessionRegistry::new();
-        let sid = registry.create_session().await;
+        let sid = registry.create_session().await.unwrap();
         let msg = sample_message("m1", "user", "hello");
 
         let version = registry
@@ -731,7 +746,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_task() {
         let registry = SessionRegistry::new();
-        let sid = registry.create_session().await;
+        let sid = registry.create_session().await.unwrap();
         let task = sample_task("t1", "running", 0.5);
 
         let version = registry
@@ -748,7 +763,7 @@ mod tests {
     #[tokio::test]
     async fn test_update_task() {
         let registry = SessionRegistry::new();
-        let sid = registry.create_session().await;
+        let sid = registry.create_session().await.unwrap();
         let task = sample_task("t1", "running", 0.5);
         registry.add_task(&sid, task).await.unwrap();
 
@@ -766,7 +781,7 @@ mod tests {
     #[tokio::test]
     async fn test_update_nonexistent_task() {
         let registry = SessionRegistry::new();
-        let sid = registry.create_session().await;
+        let sid = registry.create_session().await.unwrap();
         let result = registry
             .update_task(&sid, "ghost", "done".to_string(), 1.0)
             .await;
@@ -776,7 +791,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_proposal() {
         let registry = SessionRegistry::new();
-        let sid = registry.create_session().await;
+        let sid = registry.create_session().await.unwrap();
         let proposal = sample_proposal("p1", "test proposal");
 
         let version = registry
@@ -793,7 +808,7 @@ mod tests {
     #[tokio::test]
     async fn test_version_monotonically_increments() {
         let registry = SessionRegistry::new();
-        let sid = registry.create_session().await;
+        let sid = registry.create_session().await.unwrap();
 
         let v1 = registry
             .append_message(&sid, sample_message("m1", "user", "a"))
@@ -817,7 +832,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_sync_diff_empty_for_unconnected_frontend() {
         let registry = SessionRegistry::new();
-        let sid = registry.create_session().await;
+        let sid = registry.create_session().await.unwrap();
         let diffs = registry.get_sync_diff("unconnected", &sid).await;
         assert!(diffs.is_empty());
     }
@@ -825,7 +840,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_sync_diff_includes_messages_and_tasks() {
         let registry = SessionRegistry::new();
-        let sid = registry.create_session().await;
+        let sid = registry.create_session().await.unwrap();
 
         registry
             .append_message(&sid, sample_message("m1", "user", "hello"))
@@ -864,7 +879,7 @@ mod tests {
     #[tokio::test]
     async fn test_broadcast_with_callback() {
         let registry = SessionRegistry::new();
-        let sid = registry.create_session().await;
+        let sid = registry.create_session().await.unwrap();
         let received = Arc::new(RwLock::new(String::new()));
 
         let recv = received.clone();
@@ -885,7 +900,7 @@ mod tests {
     #[tokio::test]
     async fn test_broadcast_without_callback_does_not_panic() {
         let registry = SessionRegistry::new();
-        let sid = registry.create_session().await;
+        let sid = registry.create_session().await.unwrap();
         // Should not panic even though no broadcast function is set.
         registry
             .broadcast_to_session(&sid, r#"{"type":"test"}"#)
@@ -897,7 +912,7 @@ mod tests {
     #[tokio::test]
     async fn test_cleanup_inactive_sessions() {
         let registry = SessionRegistry::new();
-        let sid = registry.create_session().await;
+        let sid = registry.create_session().await.unwrap();
 
         // Use a very short max_age and artificially set the session's
         // last_active far in the past by modifying through the internal API.
@@ -918,7 +933,7 @@ mod tests {
     #[tokio::test]
     async fn test_cleanup_recent_sessions_not_removed() {
         let registry = SessionRegistry::new();
-        let _sid = registry.create_session().await;
+        let _sid = registry.create_session().await.unwrap();
 
         // No session should be removed because they are all recent.
         let removed = registry
@@ -931,7 +946,7 @@ mod tests {
     #[tokio::test]
     async fn test_cleanup_removes_orphaned_frontend_bindings() {
         let registry = SessionRegistry::new();
-        let sid = registry.create_session().await;
+        let sid = registry.create_session().await.unwrap();
         registry.connect_frontend("fe1", &sid).await;
 
         // Set session as stale.
@@ -959,7 +974,7 @@ mod tests {
     #[tokio::test]
     async fn test_concurrent_session_mutations() {
         let registry = Arc::new(SessionRegistry::new());
-        let sid = registry.create_session().await;
+        let sid = registry.create_session().await.unwrap();
 
         let mut handles = Vec::new();
         for i in 0..10 {
@@ -996,7 +1011,7 @@ mod tests {
         let registry = SessionRegistry::new();
         let registry2 = registry.clone();
 
-        let sid = registry.create_session().await;
+        let sid = registry.create_session().await.unwrap();
         let session = registry2.get_session(&sid).await;
         assert!(session.is_some(), "cloned registry should see the session");
     }

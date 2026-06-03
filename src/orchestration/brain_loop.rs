@@ -2418,6 +2418,7 @@ mod tests {
     /// Note: uses a regular `#[test]` because `run()` creates its own
     /// temporary tokio runtime internally.
     #[test]
+    #[allow(deprecated)]
     fn test_run_sync_compat() {
         let bl = BrainLoop::new(default_config());
         let steps = vec![make_step("rs1", "Sync compat step")];

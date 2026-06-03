@@ -30,7 +30,7 @@ print_status() {
 # Function to run command and check status
 run_check() {
     echo -e "${YELLOW}Running:${NC} $1"
-    eval $1
+    bash -c "$1"
     local status=$?
     if [ $status -eq 0 ]; then
         print_status 0 "$2"

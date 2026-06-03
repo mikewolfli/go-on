@@ -97,9 +97,9 @@ fn build_github_client() -> reqwest::Client {
         }
     }
 
-    // 3. Fallback: plain direct client
+    // 3. Fallback: plain direct client via shared singleton
     tracing::debug!("No proxy detected, using direct connection");
-    reqwest::Client::new()
+    crate::shared::http_client::http_client().clone()
 }
 
 fn copilot_models_cache() -> &'static CopilotModelsCache {

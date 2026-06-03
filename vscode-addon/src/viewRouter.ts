@@ -25,11 +25,13 @@ export async function revealGoOnView(
     "workbench.view.extension.goon",
   ]);
 
+  // Only hyphen variant command IDs are registered in package.json,
+  // so underscore variants are omitted here.
   const focusCommands: Record<typeof target, string[]> = {
-    chat: ["go-on-chat.focus", "go_on_chat.focus"],
-    settings: ["go-on-settings.focus", "go_on_settings.focus"],
-    workflow: ["go-on-workflow.focus", "go_on_workflow.focus"],
-    "process-flow": ["go-on-process-flow.focus", "go_on_process_flow.focus"],
+    chat: ["go-on-chat.focus"],
+    settings: ["go-on-settings.focus"],
+    workflow: ["go-on-workflow.focus"],
+    "process-flow": ["go-on-process-flow.focus"],
   };
 
   const focused = await executeFirstAvailableCommand(focusCommands[target]);

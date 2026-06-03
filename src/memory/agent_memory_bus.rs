@@ -9,11 +9,7 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::memory::memory::{MemoryClass, MemoryEntry, MemoryStore};
-// TODO(TICKET): Once vector similarity search is the production retrieval
-// path, import VectorStore and ConfigurableEmbeddingProvider here to replace
-// the linear substring/tag scan in retrieve_memories().
-//   use crate::memory::vector::VectorStore;
-//   use crate::memory::embedding_provider::ConfigurableEmbeddingProvider;
+use crate::memory::vector::VectorStore;
 use tracing::{info, warn};
 
 // ---------------------------------------------------------------------------
@@ -30,6 +26,10 @@ pub struct AgentMemoryBus {
     store: Arc<Mutex<MemoryStore>>,
     /// Maximum number of insights stored per agent task completion.
     max_insights_per_task: usize,
+    /// Optional VectorStore for similarity-based memory retrieval.
+    /// When set, `retrieve_memories` uses vector search instead of
+    /// linear substring/tag scanning.
+    vector_store: Option<Arc<VectorStore>>,
 }
 
 impl AgentMemoryBus {
@@ -39,6 +39,7 @@ impl AgentMemoryBus {
         Self {
             store,
             max_insights_per_task: 5,
+            vector_store: None,
         }
     }
 
@@ -48,6 +49,7 @@ impl AgentMemoryBus {
         Self {
             store,
             max_insights_per_task: 5,
+            vector_store: None,
         }
     }
 
@@ -62,6 +64,13 @@ impl AgentMemoryBus {
     /// Return a reference to the underlying store.
     pub fn store(&self) -> &Arc<Mutex<MemoryStore>> {
         &self.store
+    }
+
+    /// Attach a VectorStore for similarity-based memory retrieval.
+    #[allow(dead_code)] // Wired via runtime.rs init_agent_memory_bus_with_vector_store
+    pub fn with_vector_store(mut self, vs: Arc<VectorStore>) -> Self {
+        self.vector_store = Some(vs);
+        self
     }
 
     // ── Store ─────────────────────────────────────────────────────────
@@ -185,14 +194,45 @@ impl AgentMemoryBus {
 
     /// Retrieve up to `limit` memories relevant to the given query.
     ///
-    /// Searches the `Semantic` class for entries whose content matches the
-    /// query (simple substring / tag match).  In a production system this
-    /// would use vector similarity; the current implementation does a
-    /// linear scan with a simple tag‑based relevance heuristic.
-    ///
-    // TODO(TICKET): Replace this linear substring/tag scan with vector
-    // similarity search using VectorStore + ConfigurableEmbeddingProvider.
+    /// When a [`VectorStore`] is attached (via [`with_vector_store`]), this
+    /// uses vector similarity search via [`VectorStore::search`] with the
+    /// `"agent_memory"` phase.  Otherwise falls back to the original linear
+    /// substring/tag scan of the in-memory `Semantic` class.
     pub fn retrieve_memories(&self, query: &str, limit: usize) -> Vec<MemoryEntry> {
+        // Fast path: vector similarity search via VectorStore
+        if let Some(ref vs) = self.vector_store {
+            return match vs.search("agent_memory", query, limit, 0.0, 512) {
+                Ok((hits, _)) => {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    hits.into_iter()
+                        .map(|hit| MemoryEntry {
+                            id: format!("vec_{:x}", {
+                                use sha2::Digest;
+                                let mut h = sha2::Sha256::new();
+                                h.update(hit.response_snippet.as_bytes());
+                                let d = h.finalize();
+                                u64::from_le_bytes(d[0..8].try_into().unwrap_or_default())
+                            }),
+                            class: MemoryClass::Semantic,
+                            content: hit.response_snippet,
+                            timestamp: now.to_string(),
+                            usefulness: hit.similarity.clamp(0.0, 1.0),
+                            staleness: 0,
+                        })
+                        .collect()
+                }
+                Err(e) => {
+                    warn!("AgentMemoryBus: vector search failed, falling back to linear scan: {e}");
+                    // Fall through to linear-scan fallback
+                    Vec::new()
+                }
+            };
+        }
+
+        // Fallback: linear substring/tag scan
         let store = match self.store.lock() {
             Ok(s) => s,
             Err(poisoned) => {
@@ -308,6 +348,23 @@ impl AgentMemoryBus {
 /// Uses a default `MemoryStore`; call `AGENT_MEMORY_BUS.get_or_init(|| …)` to
 /// provide a custom initialiser.
 pub static AGENT_MEMORY_BUS: OnceLock<AgentMemoryBus> = OnceLock::new();
+
+/// Pre-initialize `AGENT_MEMORY_BUS` with a `VectorStore` for similarity search.
+///
+/// This should be called during server startup (e.g. from `new_acp_server()`) so
+/// that `retrieve_memories()` uses vector similarity instead of linear scans.
+/// Idempotent — does nothing if the bus was already initialised.
+pub fn init_agent_memory_bus_with_vector_store(vs: Arc<VectorStore>) {
+    AGENT_MEMORY_BUS.get_or_init(|| {
+        let store = Arc::new(Mutex::new(MemoryStore::new(Default::default())));
+        AgentMemoryBus {
+            store,
+            max_insights_per_task: 5,
+            vector_store: Some(vs),
+        }
+    });
+    info!("AgentMemoryBus: pre-initialised with VectorStore for similarity search");
+}
 
 // ---------------------------------------------------------------------------
 // Tests

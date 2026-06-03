@@ -35,23 +35,19 @@ else
     echo "Config exists — keeping existing."
 fi
 
-# 5. Create environment file
+# 5. Environment file — must be pre-created by admin
 if [ ! -f "${INSTALL_DIR}/backend/environment" ]; then
-    cat > "${INSTALL_DIR}/backend/environment" <<- EOF
-# go-on environment — set chmod 600 after editing
-DB_HOST=localhost
-DB_PORT=5432
-DB_USER=goon
-DB_PASS=change-me
-DB_NAME=goon
-GO_ON_ENTRY_API_KEY=generate-a-random-secret-here
-# DEEPSEEK_API_KEY=sk-xxxxx
-# OPENAI_API_KEY=sk-xxxxx
-EOF
-    chmod 600 "${INSTALL_DIR}/backend/environment"
-    echo "Environment file created. Edit ${INSTALL_DIR}/backend/environment to set credentials."
+  echo "ERROR: Environment file not found at ${INSTALL_DIR}/backend/environment"
+  echo "Create it manually with the required variables:"
+  echo "  DB_HOST=localhost"
+  echo "  DB_PORT=5432"
+  echo "  DB_USER=goon"
+  echo "  DB_PASS=<your-password>"
+  echo "  DB_NAME=goon"
+  echo "  GO_ON_ENTRY_API_KEY=<your-api-key>"
+  exit 1
 else
-    echo "Environment file exists — keeping existing."
+  echo "Environment file exists — keeping existing."
 fi
 
 # 6. Install systemd service

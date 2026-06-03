@@ -496,6 +496,8 @@ pub struct CapabilityBusConfig {
     pub evolve_interval: u64,
     /// Whether the capability bus is enabled. Default: false.
     pub enable_capability_bus: bool,
+    /// Timeout (ms) for each subsystem call inside evolve(). Default: 100.
+    pub subsystem_timeout_ms: u64,
 }
 
 impl Default for CapabilityBusConfig {
@@ -503,6 +505,7 @@ impl Default for CapabilityBusConfig {
         Self {
             evolve_interval: 50,
             enable_capability_bus: false,
+            subsystem_timeout_ms: 100,
         }
     }
 }
@@ -2082,7 +2085,8 @@ impl CapabilityBus {
         quality_score: f64,
     ) {
         // ── Core RL update (reward, Q-table, experience) ────────────────
-        let reward = match timeout(Duration::from_millis(100), async {
+        let timeout_dur = Duration::from_millis(self.config.subsystem_timeout_ms);
+        let reward = match timeout(timeout_dur, async {
             self.evolve_q_learning(
                 state,
                 action,
@@ -2103,7 +2107,7 @@ impl CapabilityBus {
             }
         };
 
-        if timeout(Duration::from_millis(100), async {
+        if timeout(timeout_dur, async {
             self.evolve_experience(state, action, success, quality_score)
         })
         .await
@@ -2115,7 +2119,7 @@ impl CapabilityBus {
         }
 
         // ── ScenarioMatcher: record task pattern ────────────────────────
-        if timeout(Duration::from_millis(100), async {
+        if timeout(timeout_dur, async {
             use crate::intelligence::matcher::{MatchRules, ScenarioRouting};
             let now = now_ms();
             let scenario_id = format!("evolve_{}_{}", state.0, action);
@@ -2154,7 +2158,7 @@ impl CapabilityBus {
         }
 
         // ── HarnessBus: drift / fault tolerance / audit ─────────────────
-        if timeout(Duration::from_millis(100), async {
+        if timeout(timeout_dur, async {
             self.evolve_drift_protection(quality_score, success)
         })
         .await
@@ -2166,18 +2170,16 @@ impl CapabilityBus {
         }
 
         let node_id = format!("evolve::{}_{}", state.0, action);
-        if timeout(Duration::from_millis(100), async {
-            self.evolve_fault_tolerance(&node_id)
-        })
-        .await
-        .is_err()
+        if timeout(timeout_dur, async { self.evolve_fault_tolerance(&node_id) })
+            .await
+            .is_err()
         {
             self.evolve_timeout_count
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             warn!("evolve: evolve_fault_tolerance timed out — skipping");
         }
 
-        if timeout(Duration::from_millis(100), async {
+        if timeout(timeout_dur, async {
             self.evolve_harness_bus(state, action, reward, success, quality_score)
         })
         .await
@@ -2189,7 +2191,7 @@ impl CapabilityBus {
         }
 
         // ── Cognitive modules ───────────────────────────────────────────
-        if timeout(Duration::from_millis(100), async {
+        if timeout(timeout_dur, async {
             self.evolve_federated_rl(state, action, reward, quality_score, success)
         })
         .await
@@ -2200,7 +2202,7 @@ impl CapabilityBus {
             warn!("evolve: evolve_federated_rl timed out — skipping");
         }
 
-        if timeout(Duration::from_millis(100), async {
+        if timeout(timeout_dur, async {
             self.evolve_continuous_learning(state, action, reward, success, quality_score)
         })
         .await
@@ -2211,7 +2213,7 @@ impl CapabilityBus {
             warn!("evolve: evolve_continuous_learning timed out — skipping");
         }
 
-        if timeout(Duration::from_millis(100), async {
+        if timeout(timeout_dur, async {
             self.evolve_metacognitive(state, action, reward, quality_score, success)
         })
         .await
@@ -2223,7 +2225,7 @@ impl CapabilityBus {
         }
 
         let now = now_ms();
-        if timeout(Duration::from_millis(100), async {
+        if timeout(timeout_dur, async {
             self.evolve_discovery(state, action, reward, quality_score, success, now)
         })
         .await
@@ -2235,7 +2237,7 @@ impl CapabilityBus {
         }
 
         // ── Abstract knowledge (periodic, every 50th evolve) ────────────
-        if timeout(Duration::from_millis(100), async {
+        if timeout(timeout_dur, async {
             use std::sync::atomic::{AtomicU64, Ordering};
             static EVOLVE_COUNTER: AtomicU64 = AtomicU64::new(0);
             let evolve_count = EVOLVE_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -2294,7 +2296,7 @@ impl CapabilityBus {
         }
 
         // ── Self-model & meta-cognitive evolution ───────────────────────
-        if timeout(Duration::from_millis(100), async {
+        if timeout(timeout_dur, async {
             self.evolve_evolution_graph(state, action, success, quality_score)
         })
         .await
@@ -2305,18 +2307,16 @@ impl CapabilityBus {
             warn!("evolve: evolve_evolution_graph timed out — skipping");
         }
 
-        if timeout(Duration::from_millis(100), async {
-            self.evolve_self_model(now, success)
-        })
-        .await
-        .is_err()
+        if timeout(timeout_dur, async { self.evolve_self_model(now, success) })
+            .await
+            .is_err()
         {
             self.evolve_timeout_count
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             warn!("evolve: evolve_self_model timed out — skipping");
         }
 
-        if timeout(Duration::from_millis(100), async {
+        if timeout(timeout_dur, async {
             self.evolve_consciousness(state, action, quality_score, success)
         })
         .await
@@ -2327,7 +2327,7 @@ impl CapabilityBus {
             warn!("evolve: evolve_consciousness timed out — skipping");
         }
 
-        if timeout(Duration::from_millis(100), async {
+        if timeout(timeout_dur, async {
             self.evolve_world_model(action, state, reward)
         })
         .await
@@ -2339,7 +2339,7 @@ impl CapabilityBus {
         }
 
         // ── Transport event & consensus ────────────────────────────────
-        let (q_value, exploration_rate) = timeout(Duration::from_millis(100), async {
+        let (q_value, exploration_rate) = timeout(timeout_dur, async {
             let ql = lock_guard(&self.q_learning);
             let qv = ql
                 .q_table
@@ -2357,7 +2357,7 @@ impl CapabilityBus {
             (0.0, 0.0)
         });
 
-        if timeout(Duration::from_millis(100), async {
+        if timeout(timeout_dur, async {
             let transport = lock_guard(&self.transport);
             let summary = serde_json::json!({
                 "q_value": q_value,
@@ -2376,7 +2376,7 @@ impl CapabilityBus {
             warn!("evolve: transport.send_event timed out — skipping");
         }
 
-        if timeout(Duration::from_millis(100), async {
+        if timeout(timeout_dur, async {
             self.evolve_consensus(state, action, reward, q_value, success, now)
         })
         .await

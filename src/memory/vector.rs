@@ -15,6 +15,10 @@ use std::sync::Mutex;
 #[cfg(not(feature = "backend-postgres"))]
 use std::sync::Once;
 
+#[cfg(not(feature = "backend-postgres"))]
+use crate::memory::embedding_provider::{
+    local_hash_embed, ConfigurableEmbeddingProvider, EmbeddingProvider,
+};
 use anyhow::Result;
 #[cfg(feature = "backend-postgres")]
 use pgvector::Vector;
@@ -23,10 +27,9 @@ use rusqlite::{ffi::sqlite3_auto_extension, params, Connection, OptionalExtensio
 use sha2::{Digest, Sha256};
 #[cfg(not(feature = "backend-postgres"))]
 use sqlite_vec::sqlite3_vec_init;
-use tracing::warn;
 
-#[cfg(not(feature = "backend-postgres"))]
-use crate::memory::embedding_provider::{ConfigurableEmbeddingProvider, EmbeddingProvider};
+#[cfg(all(not(feature = "backend-postgres"), feature = "profile-local"))]
+use tracing::warn;
 
 /// Vector search hit
 #[derive(Debug, Clone)]
@@ -622,92 +625,9 @@ fn blend_similarity_with_recency(similarity: f32, now: i64, updated_at: i64) -> 
     similarity * 0.70 + recency_weight * 0.30
 }
 
-fn tokenize(text: &str) -> Vec<String> {
-    text.split(|c: char| !c.is_alphanumeric())
-        .filter_map(|token| {
-            let t = token.trim().to_ascii_lowercase();
-            if t.len() >= 2 {
-                Some(t)
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-/// Maximum number of tokens to process in `embed_text` to prevent
-/// unbounded memory / CPU in the fallback embedding path.
-const EMBED_MAX_TOKEN_COUNT: usize = 1024;
-
-/// Number of hash functions used for the minhash-like locality-sensitive
-/// hashing (LSH) approach. Each hash function independently votes on a
-/// dimension, reducing collision bias from a single hash.
-const MINHASH_NUM_HASHES: usize = 4;
-
-/// Embed text into a vector of `dimensions` using a minhash-like LSH
-/// approach with multiple hash functions.
-///
-/// NOTE: This is a **hash-based fallback** embedding — it is NOT a real
-/// embedding model. It uses multiple hash functions per token (improved
-/// from the previous single SHA-256 approach) to simulate locality-sensitive
-/// hashing, which gives better semantic discrimination.
-///
-/// For production use, configure a proper embedding model (e.g., via the
-/// configured LLM provider or a dedicated embedding service).
+/// Embed text using the canonical minhash implementation (avoids code duplication).
 fn embed_text(text: &str, dimensions: usize) -> Vec<f32> {
-    let mut vector = vec![0_f32; dimensions];
-    if dimensions == 0 {
-        return vector;
-    }
-
-    // Warn only once via a static atomic flag to avoid log spam.
-    static WARNED_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if !WARNED_ONCE.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        warn!(
-            "embed_text: using minhash fallback embedding —
-             no real embedding model configured"
-        );
-    }
-
-    // Bound token count to prevent unbounded memory in embedding computation
-    let tokens: Vec<String> = tokenize(text)
-        .into_iter()
-        .take(EMBED_MAX_TOKEN_COUNT)
-        .collect();
-
-    if tokens.is_empty() {
-        return vector;
-    }
-
-    for token in &tokens {
-        // Use multiple hash seeds (minhash-like) for better distribution
-        for seed in 0..MINHASH_NUM_HASHES {
-            let mut hasher = Sha256::new();
-            // Incorporate seed to produce an independent hash function
-            hasher.update(seed.to_le_bytes());
-            hasher.update(token.as_bytes());
-            let digest = hasher.finalize();
-
-            // Derive index from first 8 bytes of the digest
-            let mut idx_bytes = [0_u8; 8];
-            idx_bytes.copy_from_slice(&digest[0..8]);
-            let idx = (u64::from_le_bytes(idx_bytes) as usize) % dimensions;
-
-            // Use digest bytes to determine sign (+1 or -1)
-            let sign = if digest[9] % 2 == 0 { 1.0 } else { -1.0 };
-            vector[idx] += sign;
-        }
-    }
-
-    // Normalize to unit vector
-    let norm = vector.iter().map(|v| v * v).sum::<f32>().sqrt();
-    if norm > 0.0 {
-        for value in &mut vector {
-            *value /= norm;
-        }
-    }
-
-    vector
+    local_hash_embed(text, dimensions)
 }
 
 #[cfg(not(feature = "backend-postgres"))]
@@ -821,7 +741,7 @@ mod tests {
         let stale_ts: i64 = super::now_ts() - 180 * 86_400;
         {
             let conn = Connection::open(&db_path).expect("should open db");
-            let embedding = super::embed_text("rust async performance stale", 64);
+            let embedding = super::local_hash_embed("rust async performance stale", 64);
             let embedding_json =
                 serde_json::to_string(&embedding).expect("should serialize embedding");
             let embedding_blob = super::embedding_blob(&embedding);
@@ -874,7 +794,9 @@ mod tests {
 use postgres::{Client, NoTls};
 
 #[cfg(feature = "backend-postgres")]
-use crate::memory::embedding_provider::{ConfigurableEmbeddingProvider, EmbeddingProvider};
+use crate::memory::embedding_provider::{
+    local_hash_embed, ConfigurableEmbeddingProvider, EmbeddingProvider,
+};
 
 #[cfg(feature = "backend-postgres")]
 pub struct VectorStore {

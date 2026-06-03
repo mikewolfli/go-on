@@ -333,6 +333,7 @@ impl PuaRuleEngine {
     /// Evaluate approval feedback from the ApprovalEngine.
     /// This allows the PUA rule engine to adjust enforcement plans based on
     /// approval outcomes (e.g., auto-deny patterns, escalation frequency).
+    #[allow(dead_code)] // Wired via governance approval pipeline; callable through HarnessBus
     pub fn evaluate_approval_feedback(
         &self,
         request: &super::approval_engine::ApprovalRequest,

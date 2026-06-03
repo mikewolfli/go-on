@@ -175,10 +175,17 @@ pub fn run_code_quality_scan() -> CodeQualityReport {
             }
         }
         Err(e) => {
+            // GAP-B58-B17: Distinguish "no issues" from "scan failed".
+            // When the external command fails we return health_score 0.0 and
+            // encode the error into a synthetic issue entry so callers can
+            // distinguish a broken scan from a clean result.
             tracing::warn!("Failed to run cargo clippy for code quality scan: {e}");
             CodeQualityReport {
-                issues: Vec::new(),
-                health_score: 1.0,
+                issues: vec![CodeQualityIssue::UnsafePattern {
+                    module: "cargo_clippy".to_string(),
+                    pattern: format!("scan failed: {e}"),
+                }],
+                health_score: 0.0,
                 modules_scanned: 0,
                 scanned_at_ms,
             }

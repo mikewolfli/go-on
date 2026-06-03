@@ -19,9 +19,13 @@ static ENHANCED_SAFETY_MODE: std::sync::OnceLock<std::sync::atomic::AtomicBool> 
     std::sync::OnceLock::new();
 
 /// Enable or disable enhanced (LLM/embedding) mode for safety evaluation.
+///
+/// GAP-B58-B15: Default changed from `false` to `true` so that Jaccard-similarity
+/// analysis (simulating embedding-based checking) runs by default. The keyword-only
+/// fallback is still available for callers that explicitly disable enhanced mode.
 pub fn set_enhanced_safety_mode(enabled: bool) {
     let cell = ENHANCED_SAFETY_MODE.get_or_init(|| {
-        std::sync::atomic::AtomicBool::new(false)
+        std::sync::atomic::AtomicBool::new(true) // GAP-B58-B15: default true
     });
     cell.store(enabled, std::sync::atomic::Ordering::Relaxed);
 }
@@ -42,9 +46,8 @@ static EMBEDDING_SAFETY_CHECK_ENABLED: std::sync::OnceLock<std::sync::atomic::At
 
 /// Enable or disable embedding-based safety checking.
 pub fn set_embedding_safety_check_enabled(enabled: bool) {
-    let cell = EMBEDDING_SAFETY_CHECK_ENABLED.get_or_init(|| {
-        std::sync::atomic::AtomicBool::new(false)
-    });
+    let cell =
+        EMBEDDING_SAFETY_CHECK_ENABLED.get_or_init(|| std::sync::atomic::AtomicBool::new(false));
     cell.store(enabled, std::sync::atomic::Ordering::Relaxed);
 }
 
@@ -72,21 +75,119 @@ fn embedding_safety_check(agent_output: &str) -> f64 {
     // Each group represents a category of dangerous behaviour.
     const UNSAFE_PATTERNS: &[&[&str]] = &[
         // File-system destruction
-        &["rm", "-rf", "/", "delete", "remove", "force", "recursive", "unlink", "wipe", "destroy", "erase", "truncate", "shred"],
+        &[
+            "rm",
+            "-rf",
+            "/",
+            "delete",
+            "remove",
+            "force",
+            "recursive",
+            "unlink",
+            "wipe",
+            "destroy",
+            "erase",
+            "truncate",
+            "shred",
+        ],
         // SQL injection / database destruction
-        &["DROP", "TABLE", "DATABASE", "DELETE", "FROM", "TRUNCATE", "ALTER", "EXEC", "xp_cmdshell", "INTO", "OVERRIDE"],
+        &[
+            "DROP",
+            "TABLE",
+            "DATABASE",
+            "DELETE",
+            "FROM",
+            "TRUNCATE",
+            "ALTER",
+            "EXEC",
+            "xp_cmdshell",
+            "INTO",
+            "OVERRIDE",
+        ],
         // Arbitrary code execution
-        &["eval", "exec", "shell", "popen", "subprocess", "os.system", "execve", "command", "invoke", "spawn", "compile", "runtime.exec"],
+        &[
+            "eval",
+            "exec",
+            "shell",
+            "popen",
+            "subprocess",
+            "os.system",
+            "execve",
+            "command",
+            "invoke",
+            "spawn",
+            "compile",
+            "runtime.exec",
+        ],
         // Privilege escalation
-        &["chmod", "777", "0777", "chown", "sudo", "root", "privilege", "suid", "sgid", "setuid", "setgid", "sudoers", "passwd"],
+        &[
+            "chmod",
+            "777",
+            "0777",
+            "chown",
+            "sudo",
+            "root",
+            "privilege",
+            "suid",
+            "sgid",
+            "setuid",
+            "setgid",
+            "sudoers",
+            "passwd",
+        ],
         // Security bypass / defence disablement
-        &["bypass", "security", "disable", "SELinux", "AppArmor", "iptables", "ufw", "firewall", "disable_secure", "no_check", "insecure"],
+        &[
+            "bypass",
+            "security",
+            "disable",
+            "SELinux",
+            "AppArmor",
+            "iptables",
+            "ufw",
+            "firewall",
+            "disable_secure",
+            "no_check",
+            "insecure",
+        ],
         // Network / data exfiltration
-        &["curl", "wget", "nc", "netcat", "reverse", "shell", "bind", "exfiltrate", "upload", "send_to", "callback", "c2"],
+        &[
+            "curl",
+            "wget",
+            "nc",
+            "netcat",
+            "reverse",
+            "shell",
+            "bind",
+            "exfiltrate",
+            "upload",
+            "send_to",
+            "callback",
+            "c2",
+        ],
         // Cryptographic / ransomware-like operations
-        &["encrypt", "decrypt", "cipher", "aes", "rsa", "ransomware", "key_rotation", "crypt", "lock"],
+        &[
+            "encrypt",
+            "decrypt",
+            "cipher",
+            "aes",
+            "rsa",
+            "ransomware",
+            "key_rotation",
+            "crypt",
+            "lock",
+        ],
         // Credential / secret handling
-        &["password", "secret", "token", "api_key", "credential", "plaintext", "hardcode", "leak", "expose"],
+        &[
+            "password",
+            "secret",
+            "token",
+            "api_key",
+            "credential",
+            "plaintext",
+            "hardcode",
+            "leak",
+            "expose",
+        ],
     ];
 
     let output_lower = agent_output.to_lowercase();

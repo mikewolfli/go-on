@@ -3,11 +3,11 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use futures::stream::{self, StreamExt};
 use futures::Stream;
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use tokio_stream::StreamExt;
 
 use crate::error::SdkError;
 use crate::types::*;
@@ -191,7 +191,7 @@ impl GoOnClient {
 
         // Spawn a background task that reads the byte stream, parses SSE
         // frames delimited by \n\n, and sends parsed events through the channel.
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let mut byte_stream = response.bytes_stream();
             let mut sse_buf = String::with_capacity(4096);
 
@@ -245,7 +245,22 @@ impl GoOnClient {
             }
         });
 
-        Ok(ReceiverStream::new(rx))
+        let rx_stream = ReceiverStream::new(rx);
+
+        // Check for background task panic when the stream ends.
+        // If the spawned task panicked, yield one final error item so the
+        // caller receives the panic notification instead of a silent hang.
+        let panic_check = stream::once(async move {
+            match handle.await {
+                Ok(()) => None,
+                Err(_) => Some(Err(SdkError::Stream(
+                    "background chat stream task panicked".to_string(),
+                ))),
+            }
+        })
+        .filter_map(|x| async move { x });
+
+        Ok(rx_stream.chain(panic_check))
     }
 
     // ── Internal helpers ──────────────────────────────────────────────
@@ -253,7 +268,10 @@ impl GoOnClient {
     /// Returns `true` if the HTTP status or error represents a transient
     /// failure that should be retried.
     fn is_retryable(status: reqwest::StatusCode, err: Option<&SdkError>) -> bool {
-        if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+            || status == reqwest::StatusCode::REQUEST_TIMEOUT
+            || status.is_server_error()
+        {
             return true;
         }
         matches!(err, Some(SdkError::Http(_)))

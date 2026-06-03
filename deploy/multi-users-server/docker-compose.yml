@@ -10,7 +10,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: goon
-      POSTGRES_PASSWORD: ${DB_PASS:-change-me}
+      POSTGRES_PASSWORD: ${DB_PASS:?must be set}
       POSTGRES_DB: goon
     volumes:
       - postgres-data:/var/lib/postgresql/data
@@ -50,9 +50,9 @@ services:
       - DB_HOST=postgres-db
       - DB_PORT=5432
       - DB_USER=goon
-      - DB_PASS=${DB_PASS:-change-me}
+      - DB_PASS=${DB_PASS:?must be set}
       - DB_NAME=goon
-      - GO_ON_ENTRY_API_KEY=${GO_ON_ENTRY_API_KEY:-change-me}
+      - GO_ON_ENTRY_API_KEY=${GO_ON_ENTRY_API_KEY:?must be set}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}

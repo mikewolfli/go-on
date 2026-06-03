@@ -150,6 +150,7 @@ impl HotFailover {
             return Err(E::default());
         }
         if attempts.is_empty() {
+            tracing::error!("HotFailover: no models provided — cannot execute");
             return Err(E::default());
         }
 
@@ -158,6 +159,8 @@ impl HotFailover {
 
         let failover_start = Instant::now();
         let mut last_error: Option<E> = None;
+        // GAP-B58-B16: Track which models failed so the error is informative.
+        let mut failed_models: Vec<String> = Vec::new();
 
         for (i, (model_id, f)) in attempts.iter().enumerate().take(max_attempts) {
             // Skip blacklisted models.
@@ -193,6 +196,7 @@ impl HotFailover {
                         "HotFailover: model returned error"
                     );
                     self.record_failure(model_id);
+                    failed_models.push(model_id.clone());
                     last_error = Some(e);
                 }
                 Err(_elapsed) => {
@@ -203,6 +207,7 @@ impl HotFailover {
                         "HotFailover: model timed out"
                     );
                     self.record_failure(model_id);
+                    failed_models.push(model_id.clone());
                 }
             }
         }
@@ -211,6 +216,15 @@ impl HotFailover {
         m.failover_count += 1;
         let latency = Instant::now().duration_since(failover_start);
         m.total_failover_latency_ms += latency.as_millis() as u64;
+
+        // GAP-B58-B16: Log all models that failed before returning the error.
+        if !failed_models.is_empty() {
+            tracing::error!(
+                failed_models = ?failed_models,
+                "HotFailover: all {} model(s) exhausted",
+                failed_models.len(),
+            );
+        }
 
         // All models exhausted — return the last error or a default error.
         match last_error {

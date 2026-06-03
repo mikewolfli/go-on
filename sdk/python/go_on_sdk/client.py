@@ -221,6 +221,8 @@ class GoOnClient:
                 httpx.PoolTimeout,
                 httpx.NetworkError,
                 httpx.RemoteProtocolError,
+                httpx.ConnectError,
+                httpx.ReadError,
             ) as e:
                 last_error = e
                 if attempt < self.max_retries:

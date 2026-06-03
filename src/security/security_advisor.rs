@@ -683,11 +683,10 @@ impl SecurityAdvisorAgent {
         url: &str,
         digest: &SecurityDigest,
     ) -> Result<(), SecurityAdvisorError> {
-        let client = reqwest::Client::new();
         let body = serde_json::to_value(digest)
             .map_err(|e| SecurityAdvisorError::DigestBuildFailed(e.to_string()))?;
 
-        let resp = client
+        let resp = crate::shared::http_client::http_client()
             .post(url)
             .json(&body)
             .send()

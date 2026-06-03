@@ -35,17 +35,14 @@ else
     echo "Config exists at ${INSTALL_DIR}/backend/config.toml — keeping existing."
 fi
 
-# 4b. Create environment file
+# 4b. Environment file — must be pre-created by admin
 if [ ! -f "${INSTALL_DIR}/backend/environment" ]; then
-    cat > "${INSTALL_DIR}/backend/environment" <<- 'EOF'
-# go-on environment — set chmod 600 after editing
-GO_ON_SERVER_API_KEY=change-me-to-a-random-secret
-# DEEPSEEK_API_KEY=sk-xxxxx
-EOF
-    chmod 600 "${INSTALL_DIR}/backend/environment"
-    echo "Environment file created. Edit ${INSTALL_DIR}/backend/environment to set credentials."
+  echo "ERROR: Environment file not found at ${INSTALL_DIR}/backend/environment"
+  echo "Create it manually with the required variables:"
+  echo "  GO_ON_SERVER_API_KEY=<your-api-key>"
+  exit 1
 else
-    echo "Environment file exists — keeping existing."
+  echo "Environment file exists — keeping existing."
 fi
 
 # 5. Install systemd service

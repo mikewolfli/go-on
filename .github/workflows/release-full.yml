@@ -25,16 +25,31 @@ jobs:
             backend_bin: go-on
             gui_bin: go-on-gui-egui
             archive_ext: tar.gz
+            profile_features: profile-local,backend-sqlite
+          - os: ubuntu-latest
+            platform: linux-x64-multi-users
+            backend_bin: go-on
+            gui_bin: go-on-gui-egui
+            archive_ext: tar.gz
+            profile_features: profile-multi-users-server,backend-postgres
+          - os: ubuntu-latest
+            platform: linux-x64-simple-server
+            backend_bin: go-on
+            gui_bin: go-on-gui-egui
+            archive_ext: tar.gz
+            profile_features: profile-simple-server,backend-sqlite
           - os: macos-latest
             platform: macos-arm64
             backend_bin: go-on
             gui_bin: go-on-gui-egui
             archive_ext: tar.gz
+            profile_features: profile-local,backend-sqlite
           - os: windows-latest
             platform: windows-x64
             backend_bin: go-on.exe
             gui_bin: go-on-gui-egui.exe
             archive_ext: zip
+            profile_features: profile-local,backend-sqlite
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repository
@@ -79,9 +94,9 @@ jobs:
           touch config/acp_cache.sqlite3
           touch config/acp_vector.sqlite3
 
-      # ── Build (default profile: profile-local) ───────────────
-      - name: Build backend (release)
-        run: cargo build --release --locked
+      # ── Build backend (all profiles) ────────────────────────
+      - name: Build backend (release, ${{ matrix.profile_features }})
+        run: cargo build --release --locked --no-default-features -F "${{ matrix.profile_features }}"
 
       - name: Build EGUI GUI (release, locked)
         run: cargo build --release --locked --manifest-path gui/Cargo.toml

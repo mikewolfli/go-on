@@ -444,6 +444,14 @@ pub fn load_app_config() -> AppConfig {
         save_app_config(&config);
     }
 
+    // Allow env var override of backend URL
+    if let Ok(env_url) = std::env::var("GO_ON_BACKEND_URL") {
+        let env_url = env_url.trim().to_string();
+        if !env_url.is_empty() {
+            config.backend_url = env_url;
+        }
+    }
+
     config
 }
 

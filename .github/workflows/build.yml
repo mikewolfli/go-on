@@ -34,10 +34,10 @@ jobs:
       - name: Code coverage (cargo-llvm-cov)
         run: |
           cargo install cargo-llvm-cov 2>/dev/null || true
-          cargo llvm-cov --all-targets --features profile-local,backend-sqlite -- --test-threads=1 --nocapture 2>/dev/null || \
+          cargo llvm-cov --all-targets --features profile-local,backend-sqlite -- --test-threads=1 --nocapture 2>&1 || \
             echo "[warn] cargo-llvm-cov coverage skipped — try: cargo install cargo-llvm-cov"
           echo "Fallback: running tests without coverage"
-          cargo test --features profile-local,backend-sqlite --test-threads=1 2>/dev/null
+          cargo test --features profile-local,backend-sqlite --test-threads=1
 
       - name: Check dependencies (cargo-deny)
         uses: EmbarkStudios/cargo-deny-action@v2
@@ -62,10 +62,14 @@ jobs:
       # ── Profile: simple-server ────────────────────────────────
       - name: Clippy (profile-simple-server)
         run: cargo clippy --no-default-features -F profile-simple-server -- -D warnings
+      - name: Lib unit tests (profile-simple-server)
+        run: cargo test --no-default-features -F profile-simple-server,backend-sqlite --lib
 
       # ── Profile: multi-users-server ───────────────────────────
       - name: Clippy (profile-multi-users-server)
         run: cargo clippy --no-default-features -F profile-multi-users-server -- -D warnings
+      - name: Lib unit tests (profile-multi-users-server)
+        run: cargo test --no-default-features -F profile-multi-users-server,backend-postgres --lib
 
       # ── Integration tests ─────────────────────────────────────
       - name: All integration tests

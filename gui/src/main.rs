@@ -254,6 +254,8 @@ async fn auto_detect_proxy() {
             std::env::set_var("http_proxy", &proxy_url);
             std::env::set_var("ALL_PROXY", &proxy_url);
             std::env::set_var("all_proxy", &proxy_url);
+            std::env::set_var("NO_PROXY", "localhost,127.0.0.1");
+            std::env::set_var("no_proxy", "localhost,127.0.0.1");
             eprintln!("auto_detect_proxy: using GO_ON_PROXY_URL={proxy_url}");
             return;
         }
@@ -270,7 +272,6 @@ async fn auto_detect_proxy() {
         "http://127.0.0.1:1087",
         "http://127.0.0.1:1080",
         "http://127.0.0.1:10808",
-        "http://127.0.0.1:33210",
     ];
     // Spawn all connection attempts in parallel so the total time is ~100ms
     // instead of 700ms sequential. Each task is a tokio::spawn using
@@ -313,6 +314,8 @@ async fn auto_detect_proxy() {
             std::env::set_var("http_proxy", &proxy_url);
             std::env::set_var("ALL_PROXY", &proxy_url);
             std::env::set_var("all_proxy", &proxy_url);
+            std::env::set_var("NO_PROXY", "localhost,127.0.0.1");
+            std::env::set_var("no_proxy", "localhost,127.0.0.1");
             eprintln!("auto_detect_proxy: found proxy at {proxy_url}, set all proxy env vars.");
             return;
         }

@@ -4,6 +4,24 @@
 //! metrics including: request_count, request_duration_seconds, inflight_requests,
 //! circuit_breaker_state, agent_success_rate, p95_latency_ms, cache_hit_ratio,
 //! and error_rate.
+//!
+//! ## Relationship with `telemetry_enhanced`
+//!
+//! GAP-B58-C15: The project has two parallel metrics systems:
+//!
+//! - **`metrics_exporter`** (this file) — reads `AcpServer::RuntimeMetrics` and
+//!   renders a Prometheus `/metrics` endpoint. This is the **primary** path for
+//!   Prometheus scraping.
+//! - **`telemetry_enhanced::MetricsRecorder`** — a standalone `AppMetrics` collector
+//!   used by the structured-logging / OTLP path. It tracks request counts, cache
+//!   operations, memory usage, etc.
+//!
+//! The two are **independent** but complementary:
+//! - `MetricsRecorder` feeds into structured event streams (e.g. OTLP traces, JSON logs)
+//!   but is **not** exported via `/metrics`.
+//! - `RuntimeMetrics` (consumed here) is the canonical source for the Prometheus
+//!   endpoint. Future work may bridge `MetricsRecorder` values into `RuntimeMetrics`
+//!   for unified Prometheus exposure.
 
 use crate::acp::server::AcpServer;
 

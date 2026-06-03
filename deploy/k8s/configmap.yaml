@@ -61,6 +61,14 @@ data:
     name = "Kubernetes Adaptive"
     phases = ["think", "act", "check", "done"]
 
+    [agents]
+
+    [agents.deepseek]
+    type = "deepseek"
+    api_key_env = "GO_ON_DEEPSEEK_API_KEY"
+    model = "deepseek-v4-flash"
+    supports_system = true
+
     [phases.think]
     description = "Think — analyze, plan, gather context"
     agents = ["deepseek"]

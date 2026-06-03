@@ -321,7 +321,7 @@ pub struct VaultRotator {
     token: String,
     mount_path: String,
     #[cfg(feature = "vault")]
-    client: reqwest::Client,
+    client: &'static reqwest::Client,
 }
 
 impl VaultRotator {
@@ -343,7 +343,7 @@ impl VaultRotator {
             token,
             mount_path,
             #[cfg(feature = "vault")]
-            client: reqwest::Client::new(),
+            client: crate::shared::http_client::http_client(),
         }
     }
 

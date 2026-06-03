@@ -3,6 +3,17 @@
 
 set -e
 
+CLEANUP_NEEDED=false
+
+cleanup() {
+  if [ "$CLEANUP_NEEDED" = true ] && [ -f "${GUI_CONFIG}.backup" ]; then
+    cp "${GUI_CONFIG}.backup" "$GUI_CONFIG"
+    echo ""
+    echo "=== Cleanup: restored original gui_config.json from backup ==="
+  fi
+}
+trap cleanup EXIT
+
 echo "=== Testing Keyring Migration Fix ==="
 echo ""
 
@@ -27,6 +38,7 @@ GUI_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/go-on-gui/gui_config.json"
 if [ -f "$GUI_CONFIG" ]; then
     echo "2. Backing up existing gui_config.json..."
     cp "$GUI_CONFIG" "${GUI_CONFIG}.backup"
+    CLEANUP_NEEDED=true
     echo "   ✓ Backup saved to ${GUI_CONFIG}.backup"
 fi
 echo ""

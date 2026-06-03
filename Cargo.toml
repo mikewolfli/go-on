@@ -21,8 +21,10 @@ keyring = { version = "3" }
 uuid = { version = "1", features = ["v4", "serde"] }
 tracing = "0.1"
 tokio-stream = "0.1"
+tokio-test = "0.4"
 tokio-util = { version = "0.7", features = ["rt"] }
 tempfile = "3"
+wiremock = "0.6"
 
 [package]
 name = "go-on"
@@ -146,6 +148,8 @@ backend-postgres = ["dep:postgres", "dep:pgvector"]
 # Legacy aliases (kept for backward compatibility)
 local-acp-sqlite = ["profile-local"]
 server-mcp-postgres = ["profile-multi-users-server"]
+
+# Feature gates for conditional compilation (used by source code)
 vault = []
 temp_env = []
 
@@ -200,7 +204,7 @@ x509-parser = { version = "0.17", default-features = false, features = ["verify"
 lopdf = { version = "0.34", optional = true }
 docx-rs = { version = "0.4", optional = true }
 scraper = { version = "0.20", optional = true }
-comrak = { version = "0.28", optional = true }
+comrak = { version = "0.30", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_ProcessStatus", "Win32_System_Threading"] }

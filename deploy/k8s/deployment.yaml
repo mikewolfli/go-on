@@ -78,5 +78,20 @@ spec:
           configMap:
             name: go-on-config
         - name: data
-          emptyDir:
-            sizeLimit: "1Gi"
+          persistentVolumeClaim:
+            claimName: go-on-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: go-on-data
+  labels:
+    app: go-on
+    component: server
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  # storageClassName: standard  # uncomment if your cluster requires an explicit class

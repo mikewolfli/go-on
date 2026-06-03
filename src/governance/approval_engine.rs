@@ -3,10 +3,12 @@
 //! Manages approval workflows with time-based auto-escalation,
 //! multi-level escalation chains, and feedback to the PUA rule engine.
 
+use super::approval_learning::ApprovalPreferenceLearner;
 use super::pua::PuaRuleEngine;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::RwLock as StdRwLock;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -210,6 +212,8 @@ pub struct ApprovalEngine {
     escalation_chains: HashMap<String, EscalationChain>,
     timeout_policy: TimeoutPolicy,
     pua_engine: Arc<Mutex<PuaRuleEngine>>,
+    /// Optional preference learner that records decisions for auto-approval analysis.
+    learner: Option<Arc<StdRwLock<ApprovalPreferenceLearner>>>,
 }
 
 impl ApprovalEngine {
@@ -220,7 +224,19 @@ impl ApprovalEngine {
             escalation_chains: HashMap::new(),
             timeout_policy,
             pua_engine,
+            learner: None,
         }
+    }
+
+    /// Attach an approval preference learner to record decisions.
+    pub fn with_learner(mut self, learner: Arc<StdRwLock<ApprovalPreferenceLearner>>) -> Self {
+        self.learner = Some(learner);
+        self
+    }
+
+    /// Set the approval preference learner (mutating variant for already-constructed engines).
+    pub fn set_learner(&mut self, learner: Arc<StdRwLock<ApprovalPreferenceLearner>>) {
+        self.learner = Some(learner);
     }
 
     // ── Submission ──────────────────────────────────────────────────────────
@@ -285,6 +301,7 @@ impl ApprovalEngine {
 
         info!(%id, approver = %approver, "Approval request approved");
         self.feedback_to_pua(&status);
+        self.feedback_to_learner(&status);
         Ok(())
     }
 
@@ -315,6 +332,7 @@ impl ApprovalEngine {
 
         warn!(%id, approver = %approver, reason = %reason, "Approval request rejected");
         self.feedback_to_pua(&request_clone);
+        self.feedback_to_learner(&request_clone);
         Ok(())
     }
 
@@ -465,6 +483,31 @@ impl ApprovalEngine {
                 warn!(error = %e, "Failed to send approval feedback to PUA engine");
             }
         });
+    }
+
+    /// Record the approval decision in the preference learner (if attached).
+    fn feedback_to_learner(&self, request: &ApprovalRequest) {
+        if let Some(ref learner) = self.learner {
+            let (approver, approved) = match &request.status {
+                ApprovalStatus::Approved { approver, .. } => (approver.clone(), true),
+                ApprovalStatus::Rejected { approver, .. } => (approver.clone(), false),
+                _ => return,
+            };
+            if let Ok(mut guard) = learner.write() {
+                guard.record_decision(
+                    &approver,
+                    &request.action,
+                    approved,
+                    std::collections::HashMap::new(),
+                );
+                debug!(
+                    action = %request.action,
+                    approver = %approver,
+                    approved = approved,
+                    "Approval decision recorded in preference learner"
+                );
+            }
+        }
     }
 }
 

@@ -280,6 +280,9 @@ pub struct GovernanceServerDeps {
         Option<Arc<crate::security::vulnerability_scan::PermitExposureAnalyzer>>,
     /// Security advisor agent (GAP-B52-30)
     pub security_advisor: Option<Arc<crate::security::security_advisor::SecurityAdvisorAgent>>,
+    /// Policy reloader for hot-reloading governance policies (GAP-B58-D04)
+    pub policy_reloader:
+        Option<Arc<std::sync::Mutex<crate::governance::reloadable_policy::PolicyReloader>>>,
 }
 
 /// Orchestration subsystems grouped together (scheduler + planner + executor + skill)
@@ -709,6 +712,9 @@ pub struct ServerBuilder {
     permit_exposure_analyzer:
         Option<Arc<crate::security::vulnerability_scan::PermitExposureAnalyzer>>,
     security_advisor: Option<Arc<crate::security::security_advisor::SecurityAdvisorAgent>>,
+    /// Policy reloader for hot-reloading governance policies (GAP-B58-D04)
+    policy_reloader:
+        Option<Arc<std::sync::Mutex<crate::governance::reloadable_policy::PolicyReloader>>>,
     /// Optional multimodal processor for document, audio, video, and repo analysis.
     multimodal_processor: Option<crate::multimodal::MultimodalProcessor>,
     /// Runtime config for gating governance, tenant quotas, etc.
@@ -745,6 +751,7 @@ impl ServerBuilder {
             secret_exposure_detector: None,
             permit_exposure_analyzer: None,
             security_advisor: None,
+            policy_reloader: None,
             multimodal_processor: None,
             runtime_config: None,
         }
@@ -975,6 +982,15 @@ impl ServerBuilder {
         advisor: Arc<crate::security::security_advisor::SecurityAdvisorAgent>,
     ) -> Self {
         self.security_advisor = Some(advisor);
+        self
+    }
+
+    /// Set the policy reloader for hot-reloading governance policies (GAP-B58-D04)
+    pub fn with_policy_reloader(
+        mut self,
+        reloader: Arc<std::sync::Mutex<crate::governance::reloadable_policy::PolicyReloader>>,
+    ) -> Self {
+        self.policy_reloader = Some(reloader);
         self
     }
 
@@ -1224,6 +1240,11 @@ impl ServerBuilder {
                 } else {
                     None
                 },
+                policy_reloader: if governance_enabled {
+                    self.policy_reloader
+                } else {
+                    None
+                },
             },
             orchestration_deps: OrchestrationServerDeps {
                 scheduler: self.scheduler,
@@ -1238,11 +1259,21 @@ impl ServerBuilder {
                 metrics,
                 lock_monitor,
                 telemetry_runtime,
-                alert_manager: Arc::new(StdMutex::new(
-                    crate::observability::alert_manager::AlertManager::new(
-                        crate::observability::alert_manager::default_alert_rules(),
-                    ),
-                )),
+                alert_manager: {
+                    let am = Arc::new(StdMutex::new(
+                        crate::observability::alert_manager::AlertManager::new(
+                            crate::observability::alert_manager::default_alert_rules(),
+                        ),
+                    ));
+                    // GAP-B58-C12: Call configure_from_env() so webhook is picked up
+                    am.lock()
+                        .unwrap_or_else(|e| {
+                            tracing::warn!("AlertManager lock poisoned – recovering");
+                            e.into_inner()
+                        })
+                        .configure_from_env();
+                    am
+                },
             },
             online_controller,
             circuit_breakers,

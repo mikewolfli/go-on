@@ -196,7 +196,7 @@ impl AlertManager {
     /// Configure webhook from environment variables.
     /// Reads `GO_ON_ALERT_WEBHOOK_URL`, `GO_ON_ALERT_WEBHOOK_ENABLED`,
     /// and `GO_ON_ALERT_WEBHOOK_TIMEOUT`.
-    pub fn configure_from_env(mut self) -> Self {
+    pub fn configure_from_env(&mut self) -> &mut Self {
         if let Ok(url) = std::env::var("GO_ON_ALERT_WEBHOOK_URL") {
             if !url.is_empty() {
                 let enabled = std::env::var("GO_ON_ALERT_WEBHOOK_ENABLED")
@@ -238,8 +238,12 @@ impl AlertManager {
         });
         // Spawn a background task to send the webhook
         tokio::spawn(async move {
-            let client = reqwest::Client::new();
-            match client.post(&url).json(&payload).send().await {
+            match crate::shared::http_client::http_client()
+                .post(&url)
+                .json(&payload)
+                .send()
+                .await
+            {
                 Ok(_) => {}
                 Err(e) => warn!("AlertManager webhook failed: {e}"),
             }

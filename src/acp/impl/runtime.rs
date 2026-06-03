@@ -122,7 +122,7 @@ pub fn new_acp_server(
             ))
         }
     };
-    // Inject RBAC enforcer into the harness bus and create HTTP-level enforcer
+    // Inject RBAC enforcer into the harness bus and create HTTP-level enforcer (GAP-B58-D05)
     use crate::governance::rbac::{Permission, RbacEnforcer};
     let rbac_enforcer: Arc<std::sync::RwLock<RbacEnforcer>> = {
         let mut enforcer = RbacEnforcer::new();
@@ -155,11 +155,12 @@ pub fn new_acp_server(
                 crate::governance::rbac::GO_ON_TENANTS_FILE_ENV,
             );
         }
-        // Clone the enforcer for harness bus injection
-        let bus_enforcer = enforcer.clone();
-        // Use the RwLock-backed setter which works through Arc without requiring unique ownership.
-        harness_bus.set_rbac_enforcer(bus_enforcer);
-        Arc::new(std::sync::RwLock::new(enforcer))
+        // Wrap enforcer in a shared Arc<RwLock> so that both the harness bus
+        // and the HTTP-level enforcer reference the same instance (GAP-B58-D05).
+        let shared = Arc::new(std::sync::RwLock::new(enforcer));
+        // Inject a clone of the Arc into the harness bus policy evaluator.
+        harness_bus.set_rbac_enforcer(Arc::clone(&shared));
+        shared
     };
 
     let workflow_registry = Arc::new(std::sync::Mutex::new(
@@ -187,7 +188,25 @@ pub fn new_acp_server(
     } else {
         cb_builder
     };
-    let capability_bus = Arc::new(cb_builder);
+    let mut capability_bus = Arc::new(cb_builder);
+
+    // GAP-B58-B09: Set self-model identity from package metadata
+    if let Some(cb_mut) = Arc::get_mut(&mut capability_bus) {
+        cb_mut
+            .self_model
+            .set_identity(crate::intelligence::self_model::SelfIdentity {
+                system_name: env!("CARGO_PKG_NAME").to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                description: "Go-On ACP cognitive engine with full capability bus".to_string(),
+                creator: "go-on".to_string(),
+                created_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0),
+                tags: vec!["acp".to_string(), "intelligence".to_string()],
+            });
+        tracing::info!("self_model: system identity set from package metadata");
+    }
 
     // BLUE56-C15: Warn if default credentials are still in use
     {
@@ -206,18 +225,22 @@ pub fn new_acp_server(
     }
 
     // ── Governance dependency wiring ──────────────────────────────────────
-    // Wire approval engine
+    // Wire approval engine with preference learner (GAP-B58-D01)
     {
         use crate::governance::approval_engine::{ApprovalEngine, TimeoutPolicy};
+        use crate::governance::approval_learning::ApprovalPreferenceLearner;
         use crate::governance::pua::PuaRuleEngine;
         let pua_plan = Arc::new(std::sync::Mutex::new(
             crate::pua::PuaEnforcementPlan::default(),
         ));
         let pua_rule_engine = Arc::new(tokio::sync::Mutex::new(PuaRuleEngine::new(pua_plan)));
-        let engine = Arc::new(std::sync::RwLock::new(ApprovalEngine::new(
-            pua_rule_engine,
-            TimeoutPolicy::default(),
-        )));
+        let preference_learner = Arc::new(std::sync::RwLock::new(
+            ApprovalPreferenceLearner::with_thresholds(20, 0.9),
+        ));
+        let engine = Arc::new(std::sync::RwLock::new(
+            ApprovalEngine::new(pua_rule_engine, TimeoutPolicy::default())
+                .with_learner(preference_learner),
+        ));
         builder = builder.with_approval_engine(engine);
     }
 
@@ -231,10 +254,21 @@ pub fn new_acp_server(
     // Wire safety checker
     {
         use crate::security::content_safety::{ContentSafetyConfig, SafetyChecker};
-        let checker = Arc::new(
-            SafetyChecker::new(ContentSafetyConfig::default())
-                .expect("Failed to create SafetyChecker"),
-        );
+        let checker = match SafetyChecker::new(ContentSafetyConfig::default()) {
+            Ok(c) => Arc::new(c),
+            Err(e) => {
+                tracing::warn!("Failed to create SafetyChecker (degraded mode): {}", e);
+                // Fallback: empty check_categories — no rules compiled, cannot fail
+                let lenient_config = ContentSafetyConfig {
+                    check_categories: std::collections::HashSet::new(),
+                    ..Default::default()
+                };
+                Arc::new(
+                    SafetyChecker::new(lenient_config)
+                        .expect("empty-category SafetyChecker is infallible"),
+                )
+            }
+        };
         builder = builder.with_safety_checker(checker);
     }
 
@@ -265,13 +299,25 @@ pub fn new_acp_server(
         builder = builder.with_secret_manager(manager);
     }
 
-    // Wire memory persistence
+    // Wire memory persistence and memory retrieval engine (GAP-B58-D03)
     {
         use crate::memory::memory_persistence::MemoryPersistence;
+        use crate::memory::memory_retrieval::MemoryRetrievalEngine;
         let db_path = std::path::Path::new(".goon/memory/warm.db");
         let cold_path = std::path::Path::new(".goon/memory/cold");
         if let Ok(mp) = MemoryPersistence::new(db_path, cold_path, None) {
-            builder = builder.with_memory_persistence(Arc::new(mp));
+            // Create a separate MemoryPersistence for the retrieval engine.
+            // Both instances share the same underlying SQLite database store.
+            let retrieval_engine = MemoryPersistence::new(db_path, cold_path, None)
+                .ok()
+                .map(|retrieval_mp| Arc::new(MemoryRetrievalEngine::new(retrieval_mp)));
+            let mp = Arc::new(mp);
+            builder = builder.with_memory_persistence(mp);
+            if let Some(engine) = retrieval_engine {
+                builder = builder.with_memory_retrieval_engine(engine);
+            } else {
+                tracing::warn!("Memory retrieval engine not wired (secondary persistence failed)");
+            }
         } else {
             tracing::warn!("Failed to create MemoryPersistence");
         }
@@ -334,6 +380,24 @@ pub fn new_acp_server(
     {
         use crate::multimodal::MultimodalProcessor;
         builder = builder.with_multimodal_processor(MultimodalProcessor::default());
+    }
+
+    // Wire policy reloader for hot-reloading governance policies (GAP-B58-D04)
+    {
+        use crate::governance::reloadable_policy::{
+            PolicyReloader, QualityCompassPolicy, RedLinePolicy, SandboxPolicyReloadable,
+        };
+        let mut reloader = PolicyReloader::new();
+        // Register concrete reloadable policies.
+        reloader.register(Box::new(RedLinePolicy::new(".goon/policies/redlines.toml")));
+        reloader.register(Box::new(QualityCompassPolicy::new(
+            ".goon/policies/quality_compass.toml",
+        )));
+        reloader.register(Box::new(SandboxPolicyReloadable::new(
+            ".goon/policies/sandbox.toml",
+        )));
+        let reloader = Arc::new(std::sync::Mutex::new(reloader));
+        builder = builder.with_policy_reloader(reloader);
     }
 
     match builder.build() {
@@ -413,19 +477,29 @@ pub fn new_acp_server(
             // avoid first-request latency penalty from lazy initialization.
             crate::acp::r#impl::chat::pre_init_sse_buffer_pool();
 
+            // GAP-B55-020: Initialize memory bridge with auto-migration
+            // Called unconditionally (not gated on vector_store) so bridge
+            // functions bridge_store/bridge_promote are wired early.
+            crate::memory::memory_bridge::init_memory_persistence_with_auto_migrate(None);
+            tracing::info!("memory bridge: auto-migration task started");
+
             // BLUE48 Step 1: Initialize global embedding vector store for
             // semantic task classification in the Planner.
             if let Some(ref vs) = server.cache_deps.cache.vector_store {
-                // GAP-B55-020: Initialize memory bridge with auto-migration
-                crate::memory::memory_bridge::init_memory_persistence_with_auto_migrate(None);
-                tracing::info!("memory bridge: auto-migration task started");
-
                 crate::orchestration::planner_embedding::init_global_task_vector_store(Arc::clone(
                     vs,
                 ));
+
+                // GAP-B58-B12: Pre-initialize AgentMemoryBus with VectorStore
+                // so retrieve_memories() uses vector similarity instead of linear scan.
+                crate::memory::agent_memory_bus::init_agent_memory_bus_with_vector_store(
+                    Arc::clone(vs),
+                );
             }
 
             // BLUE57-B01: Inject cache backends into CapabilityBus MemoryBus
+            // CapabilityBus does not implement Clone, so Arc::make_mut cannot be used.
+            // Arc::get_mut warns if the Arc is already shared (GAP-B58-C08).
             if let Some(ref mut cb_arc) = server.governance_deps.capability_bus {
                 if let Some(cb_mut) = Arc::get_mut(cb_arc) {
                     #[cfg(feature = "sub-bus-memory")]
@@ -541,6 +615,7 @@ pub fn new_acp_server(
                     secret_exposure_detector: None,
                     permit_exposure_analyzer: None,
                     security_advisor: None,
+                    policy_reloader: None,
                 },
                 orchestration_deps: OrchestrationServerDeps {
                     scheduler: None,
@@ -761,8 +836,15 @@ fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
 
     // Start WebSocket heartbeat and wire broadcast fn.
     // new_acp_server is sync, so wrap the one-time async setup in block_in_place.
+    // Use try_current() to avoid panicking if no runtime is present (GAP-B58-C07).
     {
-        let handle = tokio::runtime::Handle::current();
+        let handle = match tokio::runtime::Handle::try_current() {
+            Ok(h) => h,
+            Err(_) => {
+                tracing::warn!("No tokio runtime available — skipping WebSocket heartbeat setup");
+                return;
+            }
+        };
         let ws = ws_hub.clone();
         let sr = session_registry.clone();
         tokio::task::block_in_place(move || {
@@ -802,6 +884,24 @@ fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
 /// This function replaces the `AcpServer::run` method.
 pub async fn run_acp_server(server: &mut AcpServer) -> Result<()> {
     info!("ACP server starting");
+
+    // GAP-B58-B13: Wire memory bridge — run initial promotion on startup
+    if let Some(mp) = server.governance_deps.memory_persistence.as_ref() {
+        let memory_store = &server.memory_store;
+        match crate::memory::memory_bridge::bridge_promote(memory_store, mp) {
+            Ok(report) => {
+                if report.promoted_count > 0 {
+                    tracing::info!(
+                        "memory bridge: initial promote moved {} entries",
+                        report.promoted_count
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!("memory bridge: initial bridge_promote failed: {e}");
+            }
+        }
+    }
 
     let shutdown_notify = Arc::clone(&server.shutdown_notify);
 

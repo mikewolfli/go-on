@@ -7,6 +7,7 @@ import { GoOnSettingsViewProvider } from "./settingsView";
 import { StatusMonitor } from "./statusMonitor";
 import { GoOnWorkflowViewProvider } from "./workflowView";
 import { GoOnProcessFlowViewProvider } from "./processFlowView";
+import { ApprovalPanelProvider } from "./approvalPanel";
 import { GoOnAdvancedEditProvider } from "./advancedEdit";
 import { i18n, MessageKeys } from "./i18n";
 import { configManager } from "./configManager";
@@ -500,6 +501,7 @@ async function updateRulesMarkdownFiles(
 let goOnManager: GoOnManager;
 let statusProvider: GoOnStatusProvider;
 let goOnOutput: vscode.OutputChannel;
+let approvalPanelProvider: ApprovalPanelProvider;
 
 export function activate(context: vscode.ExtensionContext) {
   goOnOutput = vscode.window.createOutputChannel("Go-On");
@@ -569,6 +571,10 @@ export function activate(context: vscode.ExtensionContext) {
       goOnManager,
       context,
     );
+    approvalPanelProvider = new ApprovalPanelProvider(
+      context.extensionUri,
+      goOnManager,
+    );
 
     context.subscriptions.push(
       vscode.window.registerWebviewViewProvider(
@@ -586,6 +592,10 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.window.registerWebviewViewProvider(
         GoOnProcessFlowViewProvider.viewType,
         processFlowProvider,
+      ),
+      vscode.window.registerWebviewViewProvider(
+        ApprovalPanelProvider.viewType,
+        approvalPanelProvider,
       ),
     );
 
@@ -871,4 +881,5 @@ export function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {
   if (goOnManager) goOnManager.stop();
+  approvalPanelProvider.dispose();
 }

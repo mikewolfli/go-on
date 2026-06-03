@@ -62,6 +62,7 @@ export class GoOnClient {
   private async jsonRpc<T>(
     method: string,
     params: Record<string, unknown>,
+    maxRetries = 3,
   ): Promise<T> {
     const id = this.nextId++;
     const body = {
@@ -71,40 +72,67 @@ export class GoOnClient {
       params,
     };
 
-    let response: Response;
-    try {
-      response = await fetch(`${this.baseUrl}${JSON_RPC_ENDPOINT}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(this.timeoutMs),
-      });
-    } catch (err: unknown) {
-      if (err instanceof DOMException && err.name === "AbortError") {
-        throw new GoOnError(0, `Request timed out after ${this.timeoutMs}ms`);
+    let lastError: GoOnError | null = null;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      let response: Response;
+      try {
+        response = await fetch(`${this.baseUrl}${JSON_RPC_ENDPOINT}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(this.timeoutMs),
+        });
+      } catch (err: unknown) {
+        if (err instanceof DOMException && err.name === "AbortError") {
+          throw new GoOnError(0, `Request timed out after ${this.timeoutMs}ms`);
+        }
+        // Network errors are retryable
+        lastError = new GoOnError(
+          0,
+          (err as Error).message ?? "Unknown fetch error",
+        );
+        if (attempt < maxRetries) {
+          await new Promise((r) => setTimeout(r, 100 * 2 ** attempt));
+        }
+        continue;
       }
-      throw new GoOnError(0, (err as Error).message ?? "Unknown fetch error");
+
+      // Retry on 429 (Too Many Requests) and 5xx (server errors)
+      if (response.status === 429 || response.status >= 500) {
+        lastError = new GoOnError(
+          response.status,
+          `HTTP ${response.status}: ${response.statusText}`,
+        );
+        if (attempt < maxRetries) {
+          await new Promise((r) => setTimeout(r, 100 * 2 ** attempt));
+        }
+        continue;
+      }
+
+      // Non-retryable HTTP error (4xx except 429)
+      if (!response.ok) {
+        throw new GoOnError(
+          response.status,
+          `HTTP ${response.status}: ${response.statusText}`,
+        );
+      }
+
+      const json: unknown = await response.json();
+      const payload = json as Record<string, unknown>;
+
+      if (payload.error) {
+        const err = payload.error as Record<string, unknown>;
+        throw new GoOnError(
+          (err.code as number) ?? -1,
+          (err.message as string) ?? "unknown error",
+        );
+      }
+
+      return (payload.result ?? payload) as T;
     }
 
-    if (!response.ok) {
-      throw new GoOnError(
-        response.status,
-        `HTTP ${response.status}: ${response.statusText}`,
-      );
-    }
-
-    const json: unknown = await response.json();
-    const payload = json as Record<string, unknown>;
-
-    if (payload.error) {
-      const err = payload.error as Record<string, unknown>;
-      throw new GoOnError(
-        (err.code as number) ?? -1,
-        (err.message as string) ?? "unknown error",
-      );
-    }
-
-    return (payload.result ?? payload) as T;
+    throw lastError ?? new GoOnError(0, "Request failed after retries");
   }
 
   // ── Streaming chat (SSE) ───────────────────────────────────────────
@@ -150,7 +178,11 @@ export class GoOnClient {
           result = await reader.read();
         } catch {
           wasAborted = true;
-          break;
+          yield {
+            _type: "abort",
+            message: "Chat stream was aborted",
+          } as Record<string, unknown>;
+          return;
         }
 
         const { done, value } = result;
@@ -179,9 +211,12 @@ export class GoOnClient {
     } finally {
       signal?.removeEventListener("abort", onAbort);
       reader.releaseLock();
-      // If the stream ended due to abort, surface it as a GoOnError
+      // If the stream ended due to abort, yield a structured notification
       if (wasAborted) {
-        throw new GoOnError(0, "Chat stream was aborted");
+        yield { _type: "abort", message: "Chat stream was aborted" } as Record<
+          string,
+          unknown
+        >;
       }
     }
   }

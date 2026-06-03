@@ -118,7 +118,7 @@ global_max_inflight = 128
 
 [phases.done]
 description = "Done — finalize, deliver, complete"
-agents = ["deepseek"]
+agents = []
 fallback = false
 
 [phases.done.options]

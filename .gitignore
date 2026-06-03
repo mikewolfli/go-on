@@ -45,6 +45,9 @@ test_out.txt
 check*.log
 clippy.log
 
+# Kubernetes local secrets (never commit real secrets)
+.secrets.local.env
+
 # Archive directories (should not be committed)
 archive/
 tests/artifacts/

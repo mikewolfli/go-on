@@ -40,9 +40,9 @@ fn local_tokenize(text: &str) -> Vec<String> {
 }
 
 /// Embed text using a minhash-like LSH approach with multiple hash functions.
-/// This is the same algorithm as the original `embed_text` fallback in
-/// `vector.rs`.
-fn local_hash_embed(text: &str, dimensions: usize) -> Vec<f32> {
+/// This is the canonical implementation; consumers should import this rather
+/// than duplicating the algorithm.
+pub fn local_hash_embed(text: &str, dimensions: usize) -> Vec<f32> {
     let mut vector = vec![0_f32; dimensions];
     if dimensions == 0 {
         return vector;
@@ -205,16 +205,11 @@ impl EmbeddingProvider for OpenAiEmbeddingProvider {
                                 vec.len()
                             );
                         } else {
-                            error!(
-                                "OpenAiEmbeddingProvider: unexpected response shape"
-                            );
+                            error!("OpenAiEmbeddingProvider: unexpected response shape");
                         }
                     }
                     Err(e) => {
-                        error!(
-                            "OpenAiEmbeddingProvider: failed to parse response: {}",
-                            e
-                        );
+                        error!("OpenAiEmbeddingProvider: failed to parse response: {}", e);
                     }
                 }
             }
@@ -258,7 +253,8 @@ impl Default for OllamaEmbeddingConfig {
             model: std::env::var("OLLAMA_EMBEDDING_MODEL")
                 .unwrap_or_else(|_| "nomic-embed-text".to_string()),
             dimensions: std::env::var("OLLAMA_EMBEDDING_DIMENSIONS")
-                .ok().and_then(|v| v.parse().ok())
+                .ok()
+                .and_then(|v| v.parse().ok())
                 .unwrap_or(768),
         }
     }
@@ -423,7 +419,8 @@ impl EmbeddingProvider for Qwen3EmbeddingProvider {
                             }
                             error!(
                                 "Qwen3EmbeddingProvider: expected {} dimensions, got {}",
-                                self.config.dimensions, vec.len()
+                                self.config.dimensions,
+                                vec.len()
                             );
                         } else {
                             error!("Qwen3EmbeddingProvider: unexpected response shape");
@@ -435,7 +432,10 @@ impl EmbeddingProvider for Qwen3EmbeddingProvider {
                 }
             }
             Err(e) => {
-                error!("Qwen3EmbeddingProvider: HTTP error: {} — returning zero vector", e);
+                error!(
+                    "Qwen3EmbeddingProvider: HTTP error: {} — returning zero vector",
+                    e
+                );
             }
         }
         vec![0.0; self.config.dimensions]
@@ -500,12 +500,8 @@ impl ConfigurableEmbeddingProvider {
             EmbeddingBackend::OpenAi => {
                 openai_config.as_ref().map(|c| c.dimensions).unwrap_or(1536)
             }
-            EmbeddingBackend::Qwen3 => {
-                qwen3_config.as_ref().map(|c| c.dimensions).unwrap_or(1024)
-            }
-            EmbeddingBackend::Ollama => {
-                ollama_config.as_ref().map(|c| c.dimensions).unwrap_or(768)
-            }
+            EmbeddingBackend::Qwen3 => qwen3_config.as_ref().map(|c| c.dimensions).unwrap_or(1024),
+            EmbeddingBackend::Ollama => ollama_config.as_ref().map(|c| c.dimensions).unwrap_or(768),
         };
         let inner: Box<dyn EmbeddingProvider> = match &backend {
             EmbeddingBackend::Local => {
@@ -635,9 +631,14 @@ pub fn embedding_provider_from_env() -> ConfigurableEmbeddingProvider {
             let model = std::env::var("QWEN_EMBEDDING_MODEL")
                 .unwrap_or_else(|_| "text-embedding-v3".to_string());
             let dims = std::env::var("QWEN_EMBEDDING_DIMENSIONS")
-                .ok().and_then(|v| v.parse().ok())
+                .ok()
+                .and_then(|v| v.parse().ok())
                 .unwrap_or(1024);
-            let config = Qwen3EmbeddingConfig { api_key, model, dimensions: dims };
+            let config = Qwen3EmbeddingConfig {
+                api_key,
+                model,
+                dimensions: dims,
+            };
             ConfigurableEmbeddingProvider::new(EmbeddingBackend::Qwen3, None, Some(config), None)
         }
         "ollama" => {

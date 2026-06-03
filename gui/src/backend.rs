@@ -44,7 +44,6 @@ impl StreamProcessor {
     /// Each parsed value now includes an `"_event_type"` field extracted from
     /// the SSE `event:` line, allowing the caller to distinguish between chunk,
     /// done, telemetry, and other event types emitted by the backend.
-    #[allow(dead_code)]
     pub fn push_chunk(&mut self, chunk: &[u8]) -> Vec<Result<Value, String>> {
         let mut events: Vec<Result<Value, String>> = Vec::new();
 
@@ -211,7 +210,6 @@ impl AbortController {
     }
 
     /// Reset the signal for reuse.
-    #[allow(dead_code)]
     pub fn reset(&self) {
         self.cancelled.store(false, Ordering::SeqCst);
     }
@@ -905,6 +903,11 @@ impl BackendClient {
             .error_for_status()
             .map_err(|e| format!("HTTP error: {}", e))?;
 
+        // Reset abort controller in case it's being reused across requests
+        if let Some(ref ctrl) = abort_ctrl {
+            ctrl.reset();
+        }
+
         // Race the response body against abort signal so the user can cancel
         // an in-flight HTTP request during the response-read phase.
         // Create the futures outside select! to avoid ownership conflicts:
@@ -920,6 +923,22 @@ impl BackendClient {
                 }
                 _ = &mut abort_fut => {
                     // Dropping text_fut will drop `resp` and close the connection.
+                    // Fire-and-forget a JSON-RPC cancel notification so the backend
+                    // can stop processing on its side.
+                    let cancel_url = format!("{}/rpc", self.base_url);
+                    let cancel_body = serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "method": "request.cancel",
+                        "params": {},
+                    });
+                    let cancel_client = self.long_client.clone();
+                    tokio::spawn(async move {
+                        let _ = cancel_client
+                            .post(&cancel_url)
+                            .json(&cancel_body)
+                            .send()
+                            .await;
+                    });
                     return Err("Request cancelled by user".to_string());
                 }
             }
@@ -929,78 +948,72 @@ impl BackendClient {
                 .map_err(|e| format!("SSE body read error: {}", e))?
         };
 
-        // Parse SSE events from the response body
+        // Parse SSE events using StreamProcessor
         let mut response_text = String::new();
         let mut thinking_text = String::new();
         let mut agent_text = String::new();
         let mut selected_model: Option<String> = None;
 
-        for frame in resp_body.split("\n\n") {
-            let mut event_name = String::new();
-            let mut data_payload = String::new();
-            for line in frame.lines() {
-                let stripped = line
-                    .strip_prefix("data: ")
-                    .or_else(|| line.strip_prefix("data:"));
-                if let Some(data) = stripped {
-                    data_payload = data.to_string();
-                }
-                if let Some(rest) = line
-                    .strip_prefix("event: ")
-                    .or_else(|| line.strip_prefix("event:"))
-                {
-                    event_name = rest.trim().to_string();
-                }
-            }
+        let mut processor = StreamProcessor::new();
+        let events = processor.push_chunk(resp_body.as_bytes());
+        for event_result in events {
+            match event_result {
+                Ok(val) => {
+                    // Handle [DONE] sentinel (with or without an event type)
+                    if val.is_string() && val.as_str() == Some("[DONE]") {
+                        break;
+                    }
+                    if val.get("data").and_then(|v| v.as_str()) == Some("[DONE]") {
+                        break;
+                    }
 
-            if data_payload.is_empty() {
-                continue;
-            }
-
-            let data = data_payload.trim();
-            if data == "[DONE]" {
-                break;
-            }
-
-            if let Ok(val) = serde_json::from_str::<Value>(data) {
-                match event_name.as_str() {
-                    "chunk" | "" => {
-                        if let Some(text) = val
-                            .get("token")
-                            .or_else(|| val.get("text"))
-                            .and_then(|v| v.as_str())
-                        {
-                            response_text.push_str(text);
-                        }
-                        if let Some(r) = val.get("reasoning").and_then(|v| v.as_str()) {
-                            thinking_text.push_str(r);
-                        }
-                        // agent field may appear on the first event or the done event
-                        if let Some(agent) = val
-                            .get("agent")
-                            .or_else(|| val.get("selected_agent"))
-                            .and_then(|v| v.as_str())
-                        {
-                            if !agent.is_empty() {
-                                agent_text = agent.to_string();
+                    let event_type = val
+                        .get("_event_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    match event_type {
+                        "chunk" | "" => {
+                            if let Some(text) = val
+                                .get("token")
+                                .or_else(|| val.get("text"))
+                                .and_then(|v| v.as_str())
+                            {
+                                response_text.push_str(text);
+                            }
+                            if let Some(r) = val.get("reasoning").and_then(|v| v.as_str()) {
+                                thinking_text.push_str(r);
+                            }
+                            // agent field may appear on the first event or the done event
+                            if let Some(agent) = val
+                                .get("agent")
+                                .or_else(|| val.get("selected_agent"))
+                                .and_then(|v| v.as_str())
+                            {
+                                if !agent.is_empty() {
+                                    agent_text = agent.to_string();
+                                }
+                            }
+                            if let Some(model) = val.get("selected_model").and_then(|v| v.as_str())
+                            {
+                                if !model.is_empty() {
+                                    selected_model = Some(model.to_string());
+                                }
                             }
                         }
-                        if let Some(model) = val.get("selected_model").and_then(|v| v.as_str()) {
-                            if !model.is_empty() {
-                                selected_model = Some(model.to_string());
+                        "error" => {
+                            if let Some(err_msg) = val
+                                .get("error")
+                                .or_else(|| val.get("message"))
+                                .and_then(|v| v.as_str())
+                            {
+                                return Err(format!("Chat error: {}", err_msg));
                             }
                         }
+                        _ => {}
                     }
-                    "error" => {
-                        if let Some(err_msg) = val
-                            .get("error")
-                            .or_else(|| val.get("message"))
-                            .and_then(|v| v.as_str())
-                        {
-                            return Err(format!("Chat error: {}", err_msg));
-                        }
-                    }
-                    _ => {}
+                }
+                Err(e) => {
+                    return Err(format!("SSE parse error: {}", e));
                 }
             }
         }

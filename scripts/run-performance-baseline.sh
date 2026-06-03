@@ -43,7 +43,7 @@ echo "  1/5 health ..."
 # Use sequential requests to measure latency
 for i in $(seq 1 10); do
     curl -s -o /dev/null -w "%{time_total}\\n" \
-        -X POST http://127.0.0.1:8080/health \
+        -X POST http://127.0.0.1:8090/health \
         >> "$REPORT_DIR/health-latency.txt" 2>/dev/null || echo "failed" >> "$REPORT_DIR/health-latency.txt"
 done
 
@@ -51,7 +51,7 @@ done
 echo "  2/5 governance.status ..."
 for i in $(seq 1 10); do
     curl -s -o /dev/null -w "%{time_total}\\n" \
-        -X POST http://127.0.0.1:8080/governance/status \
+        -X POST http://127.0.0.1:8090/governance/status \
         >> "$REPORT_DIR/governance-latency.txt" 2>/dev/null || echo "failed" >> "$REPORT_DIR/governance-latency.txt"
 done
 
@@ -59,7 +59,7 @@ done
 echo "  3/5 capabilities.list ..."
 for i in $(seq 1 10); do
     curl -s -o /dev/null -w "%{time_total}\\n" \
-        -X POST http://127.0.0.1:8080/capabilities \
+        -X POST http://127.0.0.1:8090/capabilities \
         >> "$REPORT_DIR/capabilities-latency.txt" 2>/dev/null || echo "failed" >> "$REPORT_DIR/capabilities-latency.txt"
 done
 
@@ -67,7 +67,7 @@ done
 echo "  4/5 initialize ..."
 for i in $(seq 1 10); do
     curl -s -o /dev/null -w "%{time_total}\\n" \
-        -X POST http://127.0.0.1:8080/initialize \
+        -X POST http://127.0.0.1:8090/initialize \
         -H "Content-Type: application/json" \
         -d '{"protocol":"acp","version":"1.0"}' \
         >> "$REPORT_DIR/initialize-latency.txt" 2>/dev/null || echo "failed" >> "$REPORT_DIR/initialize-latency.txt"
@@ -77,7 +77,7 @@ done
 echo "  5/5 chat completion ..."
 for i in $(seq 1 5); do
     curl -s -o /dev/null -w "%{time_total}\\n" \
-        -X POST http://127.0.0.1:8080/v1/chat/completions \
+        -X POST http://127.0.0.1:8090/v1/chat/completions \
         -H "Content-Type: application/json" \
         -d '{"model":"test","messages":[{"role":"user","content":"hi"}],"max_tokens":5}' \
         >> "$REPORT_DIR/chat-latency.txt" 2>/dev/null || echo "failed" >> "$REPORT_DIR/chat-latency.txt"

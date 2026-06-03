@@ -549,10 +549,9 @@ pub async fn start_background_tasks(
         advisor.start_digest_schedule();
     }
 
-    // BLUE56-D01: Policy reloader — check for policy file changes every 60 seconds
-    {
-        use crate::governance::reloadable_policy::PolicyReloader;
-        let mut reloader = PolicyReloader::new();
+    // BLUE56-D01: Policy reloader — check for policy file changes every 60 seconds (GAP-B58-D04)
+    if let Some(ref reloader) = server.governance_deps.policy_reloader {
+        let reloader = Arc::clone(reloader);
         let shutdown = shutdown_notify.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_secs(60));
@@ -561,12 +560,16 @@ pub async fn start_background_tasks(
                 tokio::select! {
                     _ = shutdown.notified() => break,
                     _ = ticker.tick() => {
-                        reloader.reload_all();
+                        if let Ok(mut guard) = reloader.lock() {
+                            guard.reload_all();
+                        }
                         debug!("Policy reloader: checked for policy updates");
                     }
                 }
             }
         });
+    } else {
+        tracing::warn!("Policy reloader: no shared reloader available, skipping background task");
     }
 
     // BLUE56-D02: Process timeouts — spawn the full timeout loop
@@ -620,6 +623,8 @@ pub async fn start_background_tasks(
     {
         let shutdown = shutdown_notify.clone();
         tokio::spawn(async move {
+            // The _evolution_agent binding lives for the entire async block scope,
+            // so the agent is held alive until shutdown is notified (GAP-B58-C02/C04).
             let _evolution_agent = crate::agents::self_evolution_agent::SelfEvolutionAgent::new(
                 std::path::PathBuf::from("."),
                 Vec::new(),
@@ -635,14 +640,12 @@ pub async fn start_background_tasks(
     }
 
     // ── LivePerformanceFeed for model observability ────────────────────
-    {
-        let perf_feed = crate::observability::live_performance::LivePerformanceFeed::new(0.3);
-        tracing::info!(
-            target: "observability",
-            "LivePerformanceFeed initialized"
-        );
-        let _ = perf_feed;
-    }
+    // Lives for the full function scope so it is not immediately dropped (GAP-B58-C03/C05).
+    let _perf_feed = crate::observability::live_performance::LivePerformanceFeed::new(0.3);
+    tracing::info!(
+        target: "observability",
+        "LivePerformanceFeed initialized"
+    );
 
     Ok(())
 }

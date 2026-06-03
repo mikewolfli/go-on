@@ -607,7 +607,7 @@ pub struct PolicyEvaluator {
     pub runtime_control: Arc<Mutex<OnlineControllerState>>,
     pub guard: Arc<Mutex<SelfRationalizationGuard>>,
     pub security_governor: Arc<SecurityGovernor>,
-    pub rbac_enforcer: RwLock<Option<RbacEnforcer>>,
+    pub rbac_enforcer: RwLock<Option<Arc<RwLock<RbacEnforcer>>>>,
 }
 
 impl PolicyEvaluator {
@@ -629,6 +629,7 @@ impl PolicyEvaluator {
             idempotency,
             runtime_control,
             guard,
+            rbac_enforcer: RwLock::new(None),
             security_governor: Arc::new({
                 let gov = SecurityGovernor::new(SecurityGovernorConfig {
                     default_action: PolicyAction::Deny,
@@ -695,7 +696,6 @@ impl PolicyEvaluator {
 
                 gov
             }),
-            rbac_enforcer: RwLock::new(None),
         }
     }
 
@@ -1046,11 +1046,15 @@ impl PolicyEvaluator {
             _ => GovernanceAction::Read,
         };
 
-        let rbac_guard = self.rbac_enforcer.read().unwrap_or_else(|poisoned| {
-            tracing::warn!(target: "harness_bus", "rbac_enforcer RwLock poisoned – recovering");
-            poisoned.into_inner()
-        });
-        if let Some(ref rbac) = *rbac_guard {
+        // Lock the outer RwLock to get a clone of the shared Arc, then lock the inner
+        // RwLock to borrow the enforcer. Cloning the Arc is cheap (atomic increment).
+        let shared_arc = self
+            .rbac_enforcer
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone());
+        let inner_guard = shared_arc.as_ref().and_then(|arc| arc.read().ok());
+        if let Some(ref rbac) = inner_guard {
             // Map tool name to Permission.  Write-tools require Write, exec-tools require Execute,
             // everything else requires Read.
             let required_perm = match action {
@@ -1116,15 +1120,14 @@ impl PolicyEvaluator {
         false
     }
 
-    /// Inject an RBAC enforcer for multi-tenant permission checks.
-    pub fn set_rbac_enforcer(&self, enforcer: RbacEnforcer) {
+    /// Inject a shared Arc RBAC enforcer for multi-tenant permission checks.
+    pub fn set_rbac_enforcer(&self, enforcer: Arc<RwLock<RbacEnforcer>>) {
         match self.rbac_enforcer.write() {
             Ok(mut guard) => {
                 *guard = Some(enforcer);
             }
             Err(poisoned) => {
                 tracing::error!(target: "harness_bus", "rbac_enforcer RwLock poisoned – cannot set enforcer");
-                // Recover from poison and set anyway
                 let mut guard = poisoned.into_inner();
                 *guard = Some(enforcer);
             }
@@ -1186,6 +1189,9 @@ impl HarnessBus {
         guard: Arc<Mutex<SelfRationalizationGuard>>,
         storage_path: Option<PathBuf>,
         audit_log: Arc<ThreadSafeAuditLog>,
+        // GAP-B58-C13: Accept external HyperResilienceEngine so AcpServer and
+        // HarnessBus share the same circuit-breaker state.
+        external_resilience_engine: Option<Arc<HyperResilienceEngine>>,
     ) -> Self {
         let feedback_collector = storage_path.map(PuaFeedbackCollector::new);
         let bus = HarnessBus {
@@ -1207,7 +1213,10 @@ impl HarnessBus {
             promotion_registry: Arc::new(Mutex::new(PromotionRegistry::new())),
             token_chain: Arc::new(Mutex::new(TokenLayerChain::new())),
             brain_runner: Arc::new(BrainLoop::new(BrainLoopConfig::default())),
-            resilience_engine: Arc::new(HyperResilienceEngine::new(ResilienceConfig::default())),
+            // GAP-B58-C13: Use shared engine from AcpServer when provided
+            resilience_engine: external_resilience_engine.unwrap_or_else(|| {
+                Arc::new(HyperResilienceEngine::new(ResilienceConfig::default()))
+            }),
             fault_tolerance: Arc::new(FaultToleranceEngine::new(FaultToleranceConfig::default())),
             structured_audit_trail: Arc::new(std::sync::Mutex::new(
                 crate::orchestration::audit::AuditTrail::new("harness-bus", 1000),
@@ -1220,6 +1229,10 @@ impl HarnessBus {
         // This spawns a tokio task that periodically probes circuit breakers
         // and triggers self-healing when degradation is detected.
         bus.resilience_engine.start_health_checks();
+
+        // GAP-B58-C16: Start drift monitor (was defined but never called).
+        // Checks for metric drift every 60 seconds, logging warnings.
+        bus.start_drift_monitor(60);
 
         bus
     }
@@ -1830,8 +1843,8 @@ impl HarnessBus {
         })
     }
 
-    /// Inject an RBAC enforcer into the policy evaluator.
-    pub fn set_rbac_enforcer(&self, enforcer: crate::governance::rbac::RbacEnforcer) {
+    /// Inject a shared Arc RBAC enforcer into the policy evaluator (GAP-B58-D05).
+    pub fn set_rbac_enforcer(&self, enforcer: Arc<RwLock<crate::governance::rbac::RbacEnforcer>>) {
         self.evaluator.set_rbac_enforcer(enforcer);
     }
 
@@ -1913,6 +1926,7 @@ pub fn default_harness_bus(storage_path: Option<PathBuf>) -> HarnessBus {
         guard,
         storage_path,
         audit_log,
+        None,
     )
 }
 
@@ -1995,5 +2009,6 @@ pub fn config_aware_harness_bus(
         guard,
         storage_path,
         audit_log,
+        None,
     )
 }

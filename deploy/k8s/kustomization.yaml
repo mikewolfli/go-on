@@ -20,6 +20,5 @@ configMapGenerator:
 secretGenerator:
   - name: go-on-secrets
     behavior: create
-    literals:
-      - deepseek-api-key=sk-placeholder
-      - server-api-key=change-me-to-a-random-secret
+    envs:
+      - .secrets.local.env
