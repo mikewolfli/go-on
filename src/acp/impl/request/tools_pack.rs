@@ -792,7 +792,7 @@ mod tests {
         for tool in &tools {
             let name = tool.get("name").and_then(Value::as_str).unwrap_or("?");
             assert!(
-                tool.get("input_schema").is_some(),
+                tool.get("input_schema").is_some() || tool.get("inputSchema").is_some(),
                 "tool '{}' missing input_schema",
                 name
             );

@@ -247,6 +247,7 @@ mod tests {
             otel_sample_ratio: sample_ratio,
             otel_exporter: "stdout".to_string(),
             otel_service_name: "go-on-test".to_string(),
+            otel_endpoint: None,
             ..Default::default()
         }
     }

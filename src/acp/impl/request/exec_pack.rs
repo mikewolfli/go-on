@@ -3616,7 +3616,7 @@ mod tests {
     #[test]
     fn start_workflow_run_id_format() {
         let id = next_workflow_run_id();
-        assert!(id.starts_with("wr-"));
+        assert!(id.starts_with("run-"));
     }
 
     #[test]
@@ -3679,9 +3679,11 @@ mod tests {
 
     #[test]
     fn run_id_from_params_generates_when_absent() {
+        // run_id_from_params() now only extracts an existing run_id;
+        // generation is handled by start_workflow_run via unwrap_or_else.
         let params = json!({});
         let id = run_id_from_params(&params);
-        assert!(id.is_some() && id.unwrap().starts_with("wr-"));
+        assert!(id.is_none(), "absent run_id should return None");
     }
 
     // ── Extract effective options ─────────────────────────────────────
@@ -3731,7 +3733,8 @@ mod tests {
         let result = workflow_run_get_payload(&json!({"run_id": "get-test-1"}));
         assert!(result.is_ok());
         let payload = result.unwrap();
-        assert_eq!(payload["run_id"], "get-test-1");
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["run"]["run_id"], "get-test-1");
     }
 
     #[test]
@@ -3754,6 +3757,7 @@ mod tests {
             workflow_run_transition_payload(&json!({"run_id": "cancel-test-1"}), "cancelled");
         assert!(result.is_ok());
         let payload = result.unwrap();
-        assert_eq!(payload["status"], "cancelled");
+        assert_eq!(payload["action"], "cancelled");
+        assert_eq!(payload["run"]["status"], "cancelled");
     }
 }

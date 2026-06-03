@@ -532,7 +532,11 @@ mod tests {
         };
 
         enforce_checkpoint_capacity(&mut state, 2, None);
-        assert_eq!(state.checkpoints.len(), MAX_CHECKPOINTS_PER_CONVERSATION);
+        // After evicting 2 to make room for 2 incoming, we have MAX-2 remaining
+        assert_eq!(
+            state.checkpoints.len(),
+            MAX_CHECKPOINTS_PER_CONVERSATION - 2
+        );
         // Should have removed cp-0 and cp-1 (oldest first)
         assert!(!state.checkpoints.iter().any(|c| c.checkpoint_id == "cp-0"));
         assert!(!state.checkpoints.iter().any(|c| c.checkpoint_id == "cp-1"));

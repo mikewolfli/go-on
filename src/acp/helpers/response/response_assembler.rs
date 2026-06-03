@@ -523,10 +523,10 @@ mod tests {
         };
         let response = build_chat_response(ctx);
         assert_eq!(
-            response["selected_agent"], "test-agent",
-            "response must include selected_agent"
+            response["agent"], "test-agent",
+            "response must include selected_agent under 'agent' key"
         );
-        assert_eq!(response["selected_model_name"], "test-model");
+        assert_eq!(response["selected_model"], "test-model");
         assert_eq!(response["mode"], "chat");
     }
 
@@ -557,7 +557,7 @@ mod tests {
             ..Default::default()
         };
         let response = build_chat_response(ctx);
-        assert_eq!(response["cache_hit"], true);
+        assert_eq!(response["cache"]["hit"], true);
     }
 
     #[test]
@@ -587,17 +587,14 @@ mod tests {
 
     #[test]
     fn build_role_routing_with_recommended_mode() {
-        let _agents = [CapabilityRoutingInfo {
-            selected_agent: Some("agent-a".to_string()),
-            recommended_mode: Some("agent".to_string()),
-            candidate_count: Some(3),
-            decision_confidence: Some(0.85),
-            selection_reason: Some("balanced_score".to_string()),
-            optimization_hint: None,
-        }];
         let routing = build_role_routing("implement a feature");
-        assert_eq!(routing["selected_agent"], "agent-a");
-        assert_eq!(routing["recommended_mode"], "agent");
+        let role_routing = &routing["role_routing"];
+        assert!(role_routing["suggested_roles"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::Value::String("coder".to_string())));
+        assert_eq!(role_routing["role_count"], 1);
+        assert_eq!(role_routing["handoff_ready"], true);
     }
 
     // ── CapabilityRoutingInfo default ─────────────────────────────────

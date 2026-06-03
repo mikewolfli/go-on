@@ -74,17 +74,16 @@ static TIE_BREAKER_ROUND: AtomicU64 = AtomicU64::new(0);
 /// The seed changes after each sort, so over multiple requests the order
 /// rotates fairly among equal-scoring agents.
 fn break_tie(name_a: &str, name_b: &str, seed: u64) -> std::cmp::Ordering {
-    // Use a simple deterministic hash: combine the seed with each name's bytes
-    let hash_a = seed.wrapping_mul(6364136223846793005).wrapping_add(
-        name_a
-            .bytes()
-            .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64)),
-    );
-    let hash_b = seed.wrapping_mul(6364136223846793005).wrapping_add(
-        name_b
-            .bytes()
-            .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64)),
-    );
+    // Use a simple deterministic hash: XOR the seed with each name's hash.
+    // The seed changes after each sort, so over multiple requests the order
+    // rotates fairly among equal-scoring agents.
+    let hash_name = |name: &str| -> u64 {
+        name.bytes().fold(seed, |acc, b| {
+            acc.wrapping_mul(6364136223846793005).wrapping_add(b as u64)
+        })
+    };
+    let hash_a = hash_name(name_a);
+    let hash_b = hash_name(name_b);
     hash_a.cmp(&hash_b)
 }
 

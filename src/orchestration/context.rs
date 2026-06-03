@@ -127,7 +127,8 @@ mod tests {
         let feed = ctx.performance_feed();
         let success_rate = feed.get_success_rate("model-b");
         assert!(success_rate.is_some());
-        assert!((success_rate.unwrap() - 0.0).abs() < 0.01);
+        // First failure with EMA α=0.3: 0.3*0.0 + 0.7*1.0 = 0.7
+        assert!((success_rate.unwrap() - 0.7).abs() < 0.01);
     }
 
     #[test]

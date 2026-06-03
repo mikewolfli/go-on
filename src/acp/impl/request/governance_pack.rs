@@ -47,6 +47,7 @@ pub(crate) fn infer_file_count(params: &Option<Value>) -> usize {
                         .map(|items| items.len())
                 })
         })
+        .filter(|&count| count > 0)
         .unwrap_or(1)
 }
 
@@ -985,26 +986,17 @@ mod tests {
 
     #[test]
     fn infer_task_type_task_execute() {
-        assert_eq!(
-            infer_task_type("task.execute", &None),
-            TaskType::BugFix
-        );
+        assert_eq!(infer_task_type("task.execute", &None), TaskType::BugFix);
     }
 
     #[test]
     fn infer_task_type_mcp_tools_call() {
-        assert_eq!(
-            infer_task_type("mcp.tools.call", &None),
-            TaskType::Refactor
-        );
+        assert_eq!(infer_task_type("mcp.tools.call", &None), TaskType::Refactor);
     }
 
     #[test]
     fn infer_task_type_unknown_method() {
-        assert_eq!(
-            infer_task_type("unknown.method", &None),
-            TaskType::Other
-        );
+        assert_eq!(infer_task_type("unknown.method", &None), TaskType::Other);
     }
 
     // ── infer_file_count ──────────────────────────────────────────────
@@ -1046,9 +1038,7 @@ mod tests {
 
     #[test]
     fn infer_risk_score_default_low() {
-        assert!(
-            (infer_risk_score("session/new", &TaskType::Other) - 0.3).abs() < 1e-6
-        );
+        assert!((infer_risk_score("session/new", &TaskType::Other) - 0.3).abs() < 1e-6);
     }
 
     // ── classify_request_error_kind ───────────────────────────────────
@@ -1223,12 +1213,18 @@ mod tests {
             "medium",
             "passed",
             "commit msg".to_string(),
-            vec!["src/main.rs".to_string(), "README.md".to_string(), "latest-output.json".to_string()],
+            vec![
+                "src/main.rs".to_string(),
+                "README.md".to_string(),
+                "latest-output.json".to_string(),
+            ],
         );
         assert_eq!(bundle["kind"], "execution");
         assert_eq!(bundle["risk"]["level"], "medium");
         assert_eq!(bundle["status"], "passed");
-        assert!(!bundle["rollback_recommendation"]["recommended"].as_bool().unwrap());
+        assert!(!bundle["rollback_recommendation"]["recommended"]
+            .as_bool()
+            .unwrap());
     }
 
     #[test]
@@ -1242,7 +1238,9 @@ mod tests {
             vec![],
         );
         assert_eq!(bundle["status"], "failed");
-        assert!(bundle["rollback_recommendation"]["recommended"].as_bool().unwrap());
+        assert!(bundle["rollback_recommendation"]["recommended"]
+            .as_bool()
+            .unwrap());
     }
 
     #[test]

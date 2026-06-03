@@ -733,10 +733,14 @@ impl SecurityGovernor {
 
     /// Return all recorded audit log entries.
     pub fn audit_log(&self) -> Vec<AuditEntry> {
-        self.inner.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("SecurityGovernor lock poisoned in audit_log, recovering");
-            poisoned.into_inner()
-        }).audit_log.clone()
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("SecurityGovernor lock poisoned in audit_log, recovering");
+                poisoned.into_inner()
+            })
+            .audit_log
+            .clone()
     }
 
     /// Clear the internal audit log.
@@ -750,10 +754,15 @@ impl SecurityGovernor {
 
     /// Return the policy mode configured for this governor.
     pub fn policy_mode(&self) -> String {
-        self.inner.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("SecurityGovernor lock poisoned in policy_mode, recovering");
-            poisoned.into_inner()
-        }).config.policy_mode.clone()
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("SecurityGovernor lock poisoned in policy_mode, recovering");
+                poisoned.into_inner()
+            })
+            .config
+            .policy_mode
+            .clone()
     }
 
     /// Return a [`GovernorProfile`] snapshot of current metrics.
@@ -961,7 +970,7 @@ mod tests {
     }
 
     /// 7. Recording and retrieving audit entries.
-    /// 7. Record and retrieve audit log entries (delegated to ThreadSafeAuditLog).
+    /// 7. Record and retrieve audit log entries.
     #[test]
     fn test_record_audit() {
         let governor = SecurityGovernor::new(SecurityGovernorConfig::default());
@@ -974,17 +983,12 @@ mod tests {
         );
         governor.record_audit(entry);
 
-        // Audit data is now stored via ThreadSafeAuditLog (canonical sink),
-        // so SecurityGovernor.audit_log() returns empty.
         let log = governor.audit_log();
-        assert_eq!(
-            log.len(),
-            0,
-            "audit entries are stored in ThreadSafeAuditLog"
-        );
+        assert_eq!(log.len(), 1, "audit entry should be stored");
+        assert_eq!(log[0].policy_id, "p-audit");
     }
 
-    /// 8. Audit log (no-op since canonical sink is ThreadSafeAuditLog).
+    /// 8. Audit log cap.
     #[test]
     fn test_audit_log_capped() {
         let config = SecurityGovernorConfig {
@@ -994,8 +998,6 @@ mod tests {
         };
         let governor = SecurityGovernor::new(config);
 
-        // Audit entries are stored via ThreadSafeAuditLog; SecurityGovernor
-        // no longer maintains an in-memory ring buffer.
         for i in 0..10 {
             let entry = AuditEntry::new(
                 format!("p-{}", i),
@@ -1008,11 +1010,7 @@ mod tests {
         }
 
         let log = governor.audit_log();
-        assert_eq!(
-            log.len(),
-            0,
-            "audit entries stored in canonical ThreadSafeAuditLog"
-        );
+        assert_eq!(log.len(), 10, "audit entries should be stored");
     }
 
     /// 9. Removing a policy.
@@ -1197,7 +1195,7 @@ mod tests {
         assert!(!v3.required_review);
     }
 
-    /// 15. Clear audit log (no-op — canonical sink is ThreadSafeAuditLog).
+    /// 15. Clear audit log.
     #[test]
     fn test_clear_audit() {
         let governor = SecurityGovernor::new(SecurityGovernorConfig::default());
@@ -1208,8 +1206,7 @@ mod tests {
             "a".into(),
             "d".into(),
         ));
-        // Audit entries are stored via ThreadSafeAuditLog, not in SecurityGovernor.
-        assert_eq!(governor.audit_log().len(), 0);
+        assert_eq!(governor.audit_log().len(), 1);
 
         governor.clear_audit();
         assert_eq!(governor.audit_log().len(), 0);

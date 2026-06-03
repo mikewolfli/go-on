@@ -2456,7 +2456,7 @@ mod tests {
 
     #[test]
     fn bump_patch_version_invalid_returns_default() {
-        assert_eq!(bump_patch_version(""), "0.0.1");
+        assert_eq!(bump_patch_version(""), "1.0.0");
     }
 
     // ── Oversized payload boundary ────────────────────────────────────

@@ -739,6 +739,7 @@ fn elapsed_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn test_node_role_from_str() {
@@ -782,13 +783,17 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_parse_federated_peers_env_empty() {
-        // No env var set -> empty vector.
-        let peers = parse_federated_peers_env();
-        assert!(peers.is_empty());
+        // Explicitly ensure the env var is not set (avoids races with other env tests).
+        temp_env::with_var("FEDERATED_PEERS", None::<&str>, || {
+            let peers = parse_federated_peers_env();
+            assert!(peers.is_empty());
+        });
     }
 
     #[test]
+    #[serial]
     fn test_parse_federated_peers_env_with_mock() {
         // Temporarily set env var and parse.
         temp_env::with_var("FEDERATED_PEERS", Some("id=alpha,addr=10.0.0.1:50051,role=coordinator\nid=beta,addr=10.0.0.2:50051,role=worker,region=us-east"), || {
@@ -807,6 +812,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_parse_federated_peers_skips_comments() {
         temp_env::with_var(
             "FEDERATED_PEERS",
@@ -864,17 +870,27 @@ mod tests {
 }
 
 // Use `temp_env` for env var tests. If not available, the env var tests
-// will simply be skipped at runtime via std::env::set_var.
+// use a stand-in that directly sets/restores the env var.
 #[cfg(not(feature = "temp_env"))]
 mod temp_env_compat {
-    /// A minimal stand-in so tests compile without the `temp_env` crate.
+    /// A stand-in that sets the env var for the duration of the closure and
+    /// restores the previous value afterwards.
     #[allow(dead_code)]
-    pub fn with_var<F>(_key: &str, _value: Option<&str>, f: F)
+    pub fn with_var<F>(key: &str, value: Option<&str>, f: F)
     where
         F: FnOnce(),
     {
-        // Cannot safely mock; just run the closure with the real env.
+        let prev = std::env::var(key).ok();
+        if let Some(val) = value {
+            std::env::set_var(key, val);
+        } else {
+            std::env::remove_var(key);
+        }
         f();
+        match prev {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
     }
 }
 #[cfg(not(feature = "temp_env"))]

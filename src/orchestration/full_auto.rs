@@ -1514,6 +1514,7 @@ mod tests {
             Arc::new(ToolRegistry::new_empty()),
             FullAutoConfig {
                 min_match_score: 5.0,
+                fallback_to_universal_tools: false,
                 ..Default::default()
             },
         );

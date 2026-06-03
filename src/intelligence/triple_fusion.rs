@@ -8,7 +8,7 @@
 //! This creates a closed-loop self-improvement cycle that spans sessions.
 
 use crate::intelligence::consciousness::{AwarenessMetricType, ConsciousnessMetrics};
-use crate::intelligence::metacognitive::{CorrectiveResult, MetacognitiveController};
+use crate::intelligence::metacognitive::MetacognitiveController;
 use crate::orchestration::self_evolution::evolution_loop::{EvolutionTrigger, RegressionDirection};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -138,7 +138,7 @@ impl TripleFusionBridge {
         trigger: &EvolutionTrigger,
         success: bool,
     ) {
-        let observation = metacognitive.record_observation(
+        let obs_id = match metacognitive.record_observation(
             &format!("evolution-{}", trigger.label()),
             "evolution",
             "evolution_cycle",
@@ -148,17 +148,18 @@ impl TripleFusionBridge {
                 trigger.description(),
                 if success { "succeeded" } else { "failed" }
             ),
-        );
-        let _ = observation;
-
-        // Record the corrective result for learning.
-        let result = CorrectiveResult {
-            success,
-            root_cause: format!("Evolution: {}", trigger.label()),
-            preventive_measures: vec![],
-            applied_at: crate::intelligence::now_ms(),
+        ) {
+            Ok(id) => id,
+            Err(_) => return,
         };
-        metacognitive.record_corrective_result(&format!("evo-{}", trigger.label()), result);
+
+        // Record the outcome as an action so total_actions_taken reflects it.
+        let _ = metacognitive.record_action_outcome(
+            "evolution",
+            &obs_id,
+            &format!("Evolution outcome for trigger '{}'", trigger.label()),
+            success,
+        );
     }
 
     /// Run a full fusion cycle: sync → convert → learn.

@@ -167,7 +167,7 @@ impl HotCache {
             entries: HashMap::with_capacity(max_entries),
             lru_order: Vec::with_capacity(max_entries),
             max_entries,
-            ttl: Duration::from_secs(ttl_secs.max(1) as u64),
+            ttl: Duration::from_secs(ttl_secs.max(0) as u64),
         }
     }
 
@@ -778,6 +778,7 @@ impl MemoryPersistence {
         // Check warm.
         if let Some(mut entry) = self.warm.get(id)? {
             entry.touch();
+            entry.tier = MemoryTier::Hot;
             // Promote back to hot on access.
             self.promote_to_hot(entry.clone())?;
             return Ok(Some(entry));
@@ -789,6 +790,7 @@ impl MemoryPersistence {
         let cold_entries = self.cold.read_all()?;
         if let Some(mut entry) = cold_entries.into_iter().find(|e| e.id == id) {
             entry.touch();
+            entry.tier = MemoryTier::Warm;
             // Promote back to warm on access.
             self.promote_to_warm(entry.clone())?;
             return Ok(Some(entry));
@@ -1243,12 +1245,14 @@ mod tests {
 
         let entry = make_entry("prom2", 0.5);
         persistence.store(entry.clone()).unwrap();
-        // Move to warm first, then promote to cold
+        // Move to warm first, then promote to cold.
+        // retrieve() brings entries back to hot on access, so promote
+        // a warm entry directly without going through retrieve.
         persistence.promote_to_warm(entry.clone()).unwrap();
 
-        let entry = persistence.retrieve("prom2").unwrap().unwrap();
-        // Manually set to warm for promote to work
-        let promoted = persistence.promote(&entry).unwrap();
+        let mut warm_entry = entry;
+        warm_entry.tier = MemoryTier::Warm;
+        let promoted = persistence.promote(&warm_entry).unwrap();
         assert!(promoted.is_some());
         assert_eq!(promoted.unwrap().tier, MemoryTier::Cold);
     }

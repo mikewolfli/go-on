@@ -729,12 +729,15 @@ mod tests {
         let hub = WebSocketHub::default();
         let (id, mut rx) = hub.register(ConnectionMetadata::default()).await.unwrap();
 
+        // Stop the heartbeat to prevent ping messages from interfering.
+        hub.stop_heartbeat().await;
+
         hub.subscribe(&id, "test.topic").await;
         hub.unsubscribe(&id, "test.topic").await;
 
         hub.publish("test.topic", test_msg("after-unsub")).await;
 
-        // The receiver should NOT get the message after unsubscribing.
+        // The receiver should NOT get the published message after unsubscribing.
         let result = tokio::time::timeout(Duration::from_millis(100), rx.recv()).await;
         assert!(result.is_err(), "should not receive after unsubscribe");
     }

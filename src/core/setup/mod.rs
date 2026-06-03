@@ -2332,15 +2332,37 @@ fn find_template(name: &str) -> Option<PathBuf> {
 /// This is used when setup is requested with keyring secret mode.
 fn convert_env_placeholders_to_keyring(content: &str) -> String {
     let mut out = content.to_string();
+
+    // Replace keyring-URL env entries (provider specs now use keyring:// refs directly).
     for env_name in provider_secret_env_names() {
         if let Some(reference) = keyring_reference(&env_name) {
             out = out.replace(&env_name, &reference);
         }
     }
-    out = out.replace(
-        "OTHER_PROVIDER_API_KEY",
-        "keyring://go-on/openai_compatible_api_key",
-    );
+
+    // Also handle raw env var names (legacy template format).
+    // Build a reverse mapping from keyring account → raw env var name.
+    let raw_env_names: &[(&str, &str)] = &[
+        ("OPENAI_API_KEY", "keyring://go-on/openai_api_key"),
+        ("ANTHROPIC_API_KEY", "keyring://go-on/anthropic_api_key"),
+        ("DEEPSEEK_API_KEY", "keyring://go-on/deepseek_api_key"),
+        ("DOUBAO_API_KEY", "keyring://go-on/doubao_api_key"),
+        ("WENXIN_API_KEY", "keyring://go-on/wenxin_api_key"),
+        ("WENXIN_SECRET_KEY", "keyring://go-on/wenxin_secret_key"),
+        ("COPILOT_API_KEY", "keyring://go-on/copilot_api_key"),
+        (
+            "GITHUB_COPILOT_TOKEN",
+            "keyring://go-on/github_copilot_token",
+        ),
+        (
+            "OTHER_PROVIDER_API_KEY",
+            "keyring://go-on/openai_compatible_api_key",
+        ),
+    ];
+    for (raw_name, reference) in raw_env_names {
+        out = out.replace(raw_name, reference);
+    }
+
     out
 }
 

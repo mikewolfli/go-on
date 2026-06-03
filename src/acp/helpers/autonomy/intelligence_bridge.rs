@@ -272,14 +272,20 @@ mod tests {
         let ctx = gather_intelligence_context("refactor the authentication module");
         assert!(ctx.intelligence_active);
         assert!(!ctx.recent_insights.is_empty());
-        assert!(ctx.recent_insights.iter().any(|i| i.contains("refactor")));
+        assert!(ctx
+            .recent_insights
+            .iter()
+            .any(|i| i.to_ascii_lowercase().contains("refactor")));
     }
 
     #[test]
     fn test_gather_intelligence_context_bug_fix() {
         let ctx = gather_intelligence_context("fix the login bug");
         assert!(ctx.intelligence_active);
-        assert!(ctx.recent_insights.iter().any(|i| i.contains("bug")));
+        assert!(ctx
+            .recent_insights
+            .iter()
+            .any(|i| i.to_ascii_lowercase().contains("bug")));
     }
 
     #[test]

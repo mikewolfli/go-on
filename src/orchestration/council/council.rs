@@ -1123,7 +1123,10 @@ impl OrchestrationCouncil {
             .ok_or_else(|| anyhow!("Deliberation '{}' not found", deliberation_id))?;
 
         if deliberation.final_decision.is_some() {
-            return Ok(true);
+            return Err(anyhow!(
+                "Deliberation '{}' is already concluded",
+                deliberation_id
+            ));
         }
 
         let current_round = deliberation
