@@ -226,7 +226,6 @@ impl DeterministicVerifier {
 // security implications, and requirement drift.
 
 /// Bias direction for adversarial probing.
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AdversarialBias {
     /// Probe for security vulnerabilities.
@@ -240,7 +239,6 @@ pub enum AdversarialBias {
 }
 
 /// A single adversarial finding.
-#[cfg(test)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdversarialFinding {
     pub category: String,
@@ -250,7 +248,6 @@ pub struct AdversarialFinding {
 }
 
 /// Outcome of an adversarial verification pass.
-#[cfg(test)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdversarialVerdict {
     pub passed: bool,
@@ -261,16 +258,14 @@ pub struct AdversarialVerdict {
 }
 
 /// Independent adversarial verifier that probes for weaknesses.
-#[cfg(test)]
-struct AdversarialVerifier;
+pub struct AdversarialVerifier;
 
-#[cfg(test)]
 impl AdversarialVerifier {
     /// Run an adversarial verification pass with the given bias.
     ///
     /// The verifier examines content from the specified angle and returns
     /// findings along with a pass/fail verdict.
-    fn verify(content: &str, bias: AdversarialBias) -> AdversarialVerdict {
+    pub fn verify(content: &str, bias: AdversarialBias) -> AdversarialVerdict {
         let mut findings: Vec<AdversarialFinding> = Vec::new();
         let lower = content.to_ascii_lowercase();
 
@@ -430,13 +425,60 @@ impl AdversarialVerifier {
     /// Run multi-bias adversarial verification.
     ///
     /// Executes all four biases and returns the combined result.
-    fn verify_all(content: &str) -> Vec<AdversarialVerdict> {
+    pub fn verify_all(content: &str) -> Vec<AdversarialVerdict> {
         vec![
             Self::verify(content, AdversarialBias::Security),
             Self::verify(content, AdversarialBias::Logic),
             Self::verify(content, AdversarialBias::Completeness),
             Self::verify(content, AdversarialBias::Performance),
         ]
+    }
+}
+
+/// Combined verification: run deterministic checks, then adversarial if high risk.
+///
+/// This is the production entry point that wires `DeterministicVerifier` and
+/// `AdversarialVerifier` together.  If the deterministic aggregate verdict
+/// indicates high risk (Reject, Revise, RequiresRepair, or Invalid), the
+/// adversarial verifier is automatically invoked for all four bias angles.
+///
+/// Returns the deterministic verdict, the adversarial verdicts (empty if risk
+/// was low), and the arbitration outcome.
+pub fn verify_with_adversarial_if_high_risk(
+    content: &str,
+) -> (
+    VerificationVerdict,
+    Vec<AdversarialVerdict>,
+    ArbitrationOutcome,
+) {
+    let mut deterministic_signals = vec![
+        DeterministicVerifier::run_syntax_check(content),
+        DeterministicVerifier::run_test_check(content),
+        DeterministicVerifier::run_lint_check(content),
+    ];
+    deterministic_signals.extend(DeterministicVerifier::run_quality_compass_checks(content));
+
+    let primary_verdict = DeterministicVerifier::aggregate(&deterministic_signals);
+
+    // Determine if the content is high-risk
+    let is_high_risk = matches!(
+        primary_verdict,
+        VerificationVerdict::Reject
+            | VerificationVerdict::Revise
+            | VerificationVerdict::RequiresRepair
+            | VerificationVerdict::Invalid
+    );
+
+    if is_high_risk {
+        let adversarial_verdicts = AdversarialVerifier::verify_all(content);
+        let outcome = arbitrate(
+            &primary_verdict,
+            &adversarial_verdicts,
+            &ArbitrationConfig::default(),
+        );
+        (primary_verdict, adversarial_verdicts, outcome)
+    } else {
+        (primary_verdict, vec![], ArbitrationOutcome::AcceptPrimary)
     }
 }
 
@@ -448,9 +490,8 @@ impl AdversarialVerifier {
 // disagree, the arbitration strategy resolves the conflict.
 
 /// Possible arbitration outcomes.
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ArbitrationOutcome {
+pub enum ArbitrationOutcome {
     /// Accept primary verdict.
     AcceptPrimary,
     /// Accept adversarial verdict.
@@ -463,9 +504,8 @@ enum ArbitrationOutcome {
 }
 
 /// Arbitration configuration.
-#[cfg(test)]
 #[derive(Debug, Clone)]
-struct ArbitrationConfig {
+pub struct ArbitrationConfig {
     /// Confidence threshold below which human review is required.
     pub human_review_threshold: f64,
     /// Whether to require adversarial verification on high-risk content.
@@ -473,7 +513,6 @@ struct ArbitrationConfig {
     pub require_adversarial_on_high_risk: bool,
 }
 
-#[cfg(test)]
 impl Default for ArbitrationConfig {
     fn default() -> Self {
         Self {
@@ -494,8 +533,7 @@ impl Default for ArbitrationConfig {
 /// # Returns
 ///
 /// An `ArbitrationOutcome` indicating the resolution.
-#[cfg(test)]
-fn arbitrate(
+pub fn arbitrate(
     primary_verdict: &VerificationVerdict,
     adversarial_verdicts: &[AdversarialVerdict],
     config: &ArbitrationConfig,

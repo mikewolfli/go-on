@@ -273,12 +273,16 @@ impl HotCache {
 #[derive(Debug, Clone)]
 struct ColdStorage {
     base_path: PathBuf,
+    max_shard_size_bytes: u64,
+    max_total_shards: usize,
 }
 
 impl ColdStorage {
     fn new(base_path: &Path) -> Self {
         Self {
             base_path: base_path.to_path_buf(),
+            max_shard_size_bytes: 10 * 1024 * 1024, // 10 MB default
+            max_total_shards: 100,
         }
     }
 
@@ -293,7 +297,44 @@ impl ColdStorage {
             .join(format!("{}.ndjson.gz", shard_id))
     }
 
-    /// Append a single entry to the latest shard for the current month.
+    /// Find the next available shard index within the given year-month directory.
+    fn next_shard_index(&self, year: i32, month: u32, start_index: u32) -> u32 {
+        let dir = self.month_dir(year, month);
+        let mut idx = start_index;
+        loop {
+            let path = dir.join(format!("{:04}-{:02}-{:03}.ndjson.gz", year, month, idx));
+            if !path.exists() {
+                return idx;
+            }
+            idx += 1;
+        }
+    }
+
+    /// Count existing shard files under the base path.
+    fn total_shard_count(&self) -> usize {
+        let mut count = 0;
+        if !self.base_path.exists() {
+            return 0;
+        }
+        if let Ok(dir_iter) = fs::read_dir(&self.base_path) {
+            for entry in dir_iter.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if let Ok(file_iter) = fs::read_dir(&path) {
+                        for file in file_iter.flatten() {
+                            if file.path().extension().and_then(|e| e.to_str()) == Some("gz") {
+                                count += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        count
+    }
+
+    /// Append a single entry to the latest shard for the current month,
+    /// rotating to a new shard when the current one exceeds the size limit.
     fn append_entry(&self, entry: &MemoryEntry) -> Result<()> {
         let now_s = now_secs();
         // Compute year/month from Unix timestamp (simple divisional approach).
@@ -302,8 +343,28 @@ impl ColdStorage {
         let dir = self.month_dir(year, month);
         fs::create_dir_all(&dir).context("failed to create cold storage month directory")?;
 
-        // Use a fixed shard name for simplicity; rotate shards by date.
-        let shard = format!("{:04}-{:02}", year, month);
+        // Determine current active shard for this month.
+        let shard_index = self.next_shard_index(year, month, 0);
+        let shard = if shard_index == 0 {
+            // No shard exists yet; start with index 0.
+            format!("{:04}-{:02}-000", year, month)
+        } else {
+            // Check if the latest shard has room.
+            let latest_idx = shard_index.saturating_sub(1);
+            let latest_path = dir.join(format!(
+                "{:04}-{:02}-{:03}.ndjson.gz",
+                year, month, latest_idx
+            ));
+            let file_size = fs::metadata(&latest_path).map(|m| m.len()).unwrap_or(0);
+            if file_size < self.max_shard_size_bytes {
+                // Reuse existing shard.
+                format!("{:04}-{:02}-{:03}", year, month, latest_idx)
+            } else {
+                // Need a new shard.
+                format!("{:04}-{:02}-{:03}", year, month, shard_index)
+            }
+        };
+
         let path = self.shard_path(year, month, &shard);
 
         let line = serde_json::to_string(entry).context("failed to serialize cold entry")?;
@@ -317,7 +378,38 @@ impl ColdStorage {
         encoder
             .finish()
             .context("failed to finalize cold storage gzip")?;
+
+        // Enforce max total shards: if we just created a new shard, evict oldest.
+        let current_count = self.total_shard_count();
+        if current_count > self.max_total_shards {
+            self.evict_oldest_shards(current_count - self.max_total_shards);
+        }
+
         Ok(())
+    }
+
+    /// Remove the oldest shards (by modification time) until `count` have been removed.
+    fn evict_oldest_shards(&self, count: usize) {
+        let mut shards: Vec<std::path::PathBuf> = Vec::new();
+        if let Ok(dir_iter) = fs::read_dir(&self.base_path) {
+            for entry in dir_iter.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if let Ok(file_iter) = fs::read_dir(&path) {
+                        for file in file_iter.flatten() {
+                            let fp = file.path();
+                            if fp.extension().and_then(|e| e.to_str()) == Some("gz") {
+                                shards.push(fp);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        shards.sort_by_key(|p| fs::metadata(p).and_then(|m| m.modified()).ok());
+        for shard in shards.into_iter().take(count) {
+            let _ = fs::remove_file(&shard);
+        }
     }
 
     /// Read all entries from a specific shard.
@@ -628,9 +720,63 @@ impl WarmStore {
 // Memory Persistence Manager (tier orchestration)
 // ===========================================================================
 
-/// The main persistence manager that orchestrates all three tiers.
+/// No-op WarmStore stub for non-sqlite backends (e.g. postgres).
+#[cfg(not(feature = "backend-sqlite"))]
+#[derive(Debug)]
+pub struct WarmStore {
+    #[allow(dead_code)]
+    max_entries: usize,
+}
+
+#[cfg(not(feature = "backend-sqlite"))]
+impl WarmStore {
+    fn new(_path: &Path, max_entries: usize) -> Result<Self> {
+        Ok(Self { max_entries })
+    }
+
+    fn upsert(&self, _entry: &MemoryEntry) -> Result<()> {
+        Ok(())
+    }
+
+    fn get(&self, _id: &str) -> Result<Option<MemoryEntry>> {
+        Ok(None)
+    }
+
+    /// Retrieve entries by usefulness, ordered descending.
+    pub fn search_by_usefulness(
+        &self,
+        _min_usefulness: f64,
+        _limit: usize,
+    ) -> Result<Vec<MemoryEntry>> {
+        Ok(Vec::new())
+    }
+
+    fn remove(&self, _id: &str) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// Iterate all entries in the warm store (for cold migration).
+    fn iterate_all(&self) -> Result<Vec<MemoryEntry>> {
+        Ok(Vec::new())
+    }
+
+    #[allow(dead_code)]
+    fn search_by_session(&self, _session_id: &str, _limit: usize) -> Result<Vec<MemoryEntry>> {
+        Ok(Vec::new())
+    }
+
+    /// Return the number of entries in the warm store.
+    fn count(&self) -> Result<usize> {
+        Ok(self.len())
+    }
+
+    fn len(&self) -> usize {
+        0
+    }
+}
+
+/// Manages memory persistence across three tiers: hot, warm, cold.
 ///
-/// Responsibilities:
 /// - Insert entries into the appropriate tier.
 /// - Promote hot → warm and warm → cold based on policy.
 /// - Demote cold → warm and warm → hot when accessed.
@@ -647,54 +793,6 @@ pub struct MemoryPersistence {
     policy: MemoryTieringPolicy,
     /// Monotonic sequence for ordering
     sequence: AtomicU64,
-}
-
-/// Non-SQLite placeholder for when the backend-postgres feature is active.
-/// Since the core memory persistence works regardless of backend, we provide
-/// an empty fallback when SQLite is not available.
-#[cfg(not(feature = "backend-sqlite"))]
-#[derive(Debug)]
-pub struct WarmStore;
-
-#[cfg(not(feature = "backend-sqlite"))]
-impl WarmStore {
-    pub fn new(_path: &Path, _max_entries: usize) -> Result<Self> {
-        // Postgres backend variant — stub that logs a warning.
-        tracing::warn!("WarmStore not available: backend-sqlite feature not enabled");
-        Ok(Self)
-    }
-
-    pub fn upsert(&self, _entry: &MemoryEntry) -> Result<()> {
-        Ok(())
-    }
-
-    pub fn get(&self, _id: &str) -> Result<Option<MemoryEntry>> {
-        Ok(None)
-    }
-
-    pub fn remove(&self, _id: &str) -> Result<bool> {
-        Ok(false)
-    }
-
-    pub fn search_by_usefulness(
-        &self,
-        _min_usefulness: f32,
-        _limit: usize,
-    ) -> Result<Vec<MemoryEntry>> {
-        Ok(Vec::new())
-    }
-
-    pub fn count(&self) -> Result<usize> {
-        Ok(0)
-    }
-
-    pub fn iterate_all(&self) -> Result<Vec<MemoryEntry>> {
-        Ok(Vec::new())
-    }
-
-    pub fn search_by_session(&self, _session_id: &str, _limit: usize) -> Result<Vec<MemoryEntry>> {
-        Ok(Vec::new())
-    }
 }
 
 impl MemoryPersistence {
@@ -715,9 +813,6 @@ impl MemoryPersistence {
         fs::create_dir_all(cold_base_path)
             .context("failed to create cold storage base directory")?;
 
-        #[cfg(feature = "backend-sqlite")]
-        let warm = WarmStore::new(db_path, policy.warm_max_entries)?;
-        #[cfg(not(feature = "backend-sqlite"))]
         let warm = WarmStore::new(db_path, policy.warm_max_entries)?;
 
         Ok(Self {
@@ -975,6 +1070,17 @@ impl MemoryPersistence {
             warm: warm_count,
             cold: 0, // Cold count would require scanning all shards; omitted for perf.
         })
+    }
+
+    /// Returns a snapshot of all entries currently in the hot cache.
+    ///
+    /// This enables the retrieval engine to scan L1 (hot cache) entries
+    /// without exposing the internal `HotCache` type.
+    pub fn hot_entries(&self) -> Vec<MemoryEntry> {
+        self.hot
+            .lock()
+            .map(|guard| guard.iter_entries().cloned().collect())
+            .unwrap_or_default()
     }
 
     /// Returns a reference to the warm store for direct querying.

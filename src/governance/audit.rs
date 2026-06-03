@@ -37,6 +37,8 @@ pub struct AuditLogEntry {
     pub compliance_tags: Vec<String>,
     #[serde(default)]
     pub retention_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation_id: Option<String>,
 }
 
 // ─── AuditLog (single-threaded, backward compatible) ────────────────────────
@@ -288,6 +290,126 @@ fn dirs_or_fallback() -> PathBuf {
     base.join("audit.ndjson")
 }
 
+/// Gateway function to record an audit entry, routing to any configured
+/// audit sink (single-threaded or thread-safe).
+///
+/// This is the unified entry point for producing audit log entries across
+/// the system.  It creates an [`AuditLogEntry`] from the provided fields
+/// and records it into the given [`AuditLog`] or [`ThreadSafeAuditLog`].
+///
+/// # Example
+///
+/// ```
+/// use crate::governance::audit::{record_audit, AuditLog};
+///
+/// let mut log = AuditLog::new(100);
+/// record_audit(&mut log, "task-001", "verification", "high_risk_detected", None, None);
+/// ```
+pub fn record_audit(
+    log: &mut AuditLog,
+    task_id: &str,
+    phase: &str,
+    decision: &str,
+    error: Option<String>,
+    correlation_id: Option<String>,
+) {
+    let entry = AuditLogEntry {
+        timestamp: chrono_now(),
+        task_id: task_id.to_string(),
+        phase: phase.to_string(),
+        agent: None,
+        tool: None,
+        decision: decision.to_string(),
+        inputs: serde_json::Value::Null,
+        outputs: None,
+        error,
+        confidence: None,
+        data_classification: None,
+        compliance_tags: vec![],
+        retention_policy: None,
+        correlation_id,
+    };
+    log.record(entry);
+}
+
+/// Thread-safe version of [`record_audit`] for use with [`ThreadSafeAuditLog`].
+pub fn record_audit_threadsafe(
+    log: &ThreadSafeAuditLog,
+    task_id: &str,
+    phase: &str,
+    decision: &str,
+    error: Option<String>,
+    correlation_id: Option<String>,
+) {
+    let entry = AuditLogEntry {
+        timestamp: chrono_now(),
+        task_id: task_id.to_string(),
+        phase: phase.to_string(),
+        agent: None,
+        tool: None,
+        decision: decision.to_string(),
+        inputs: serde_json::Value::Null,
+        outputs: None,
+        error,
+        confidence: None,
+        data_classification: None,
+        compliance_tags: vec![],
+        retention_policy: None,
+        correlation_id,
+    };
+    log.record(entry);
+}
+
+/// Get the current UTC time as an ISO-8601 string.
+fn chrono_now() -> String {
+    // Manual ISO-8601 formatting without pulling in the chrono crate
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = now.as_secs();
+    // Simple breakdown
+    let days = secs / 86400;
+    let time_secs = secs % 86400;
+    let hours = time_secs / 3600;
+    let minutes = (time_secs % 3600) / 60;
+    let seconds = time_secs % 60;
+
+    // Approximate year/month/day from days since epoch (1970-01-01)
+    let mut y = 1970i64;
+    let mut remaining_days = days as i64;
+    loop {
+        let days_in_year = if is_leap(y) { 366 } else { 365 };
+        if remaining_days < days_in_year {
+            break;
+        }
+        remaining_days -= days_in_year;
+        y += 1;
+    }
+    let months_days = if is_leap(y) {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+    let mut m = 1usize;
+    for &md in &months_days {
+        if remaining_days < md {
+            break;
+        }
+        remaining_days -= md;
+        m += 1;
+    }
+    let d = remaining_days + 1;
+
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        y, m, d, hours, minutes, seconds
+    )
+}
+
+fn is_leap(year: i64) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
 /// Redact sensitive fields from a JSON value.
 pub fn redact_sensitive(value: &serde_json::Value) -> serde_json::Value {
     match value {
@@ -344,6 +466,7 @@ mod tests {
             data_classification: None,
             compliance_tags: vec![],
             retention_policy: None,
+            correlation_id: None,
         }
     }
 

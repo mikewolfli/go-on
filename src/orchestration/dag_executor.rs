@@ -1,5 +1,9 @@
 //! Real DAG Executor — topological dependency resolution, parallel group
 //! identification, node output propagation, and failure isolation.
+//!
+//! # Migration
+//! Consider using [`crate::orchestration::core_dag::CoreDag<T>`] for new code.
+//! `CoreDag` is the unified generic DAG that will eventually replace this module.
 
 // F-GAP-51: dead_code allowed on items below when sub-bus-tool-future is disabled
 

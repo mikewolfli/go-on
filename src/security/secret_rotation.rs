@@ -54,6 +54,8 @@ pub struct SecretEntry {
     pub rotated_at_ms: u64,
     pub expires_at_ms: Option<u64>,
     pub metadata: HashMap<String, String>,
+    /// Optional tenant identifier for multi-tenant isolation.
+    pub tenant_id: Option<String>,
 }
 
 impl SecretEntry {
@@ -73,6 +75,7 @@ impl SecretEntry {
             rotated_at_ms: now,
             expires_at_ms: ttl.map(|d| now + d.as_millis() as u64),
             metadata: HashMap::new(),
+            tenant_id: None,
         }
     }
 
@@ -411,6 +414,7 @@ impl KeyRotator for VaultRotator {
                     .as_millis() as u64,
                 expires_at_ms: None,
                 metadata: std::collections::HashMap::new(),
+                tenant_id: None,
             };
             tracing::info!(target: "vault", key = %key_id, "VaultRotator: key created");
             return Ok(entry);
@@ -507,6 +511,7 @@ impl KeyRotator for VaultRotator {
                 rotated_at_ms: 0,
                 expires_at_ms: None,
                 metadata: std::collections::HashMap::new(),
+                tenant_id: None,
             };
             tracing::debug!(target: "vault", key = %key_id, "VaultRotator: key retrieved");
             return Ok(Some(entry));
@@ -595,13 +600,18 @@ impl KeyRotator for VaultRotator {
 // SecretManager
 // ---------------------------------------------------------------------------
 
+/// Default tenant key used when no tenant_id is provided.
+const DEFAULT_TENANT: &str = "_global";
+
 /// Central secret manager that handles key lifecycle, rotation policy,
 /// and delegates storage to a configurable KeyRotator backend.
+///
+/// Supports multi-tenant isolation: each tenant gets its own key namespace.
 pub struct SecretManager {
-    /// In-memory cache of active secrets.
-    secrets: RwLock<HashMap<KeyId, SecretEntry>>,
-    /// Previous key versions (for decryption of old data).
-    previous_versions: RwLock<HashMap<KeyId, Vec<SecretEntry>>>,
+    /// In-memory cache of active secrets, keyed by (tenant → key_id).
+    secrets: RwLock<HashMap<String, HashMap<KeyId, SecretEntry>>>,
+    /// Previous key versions (for decryption of old data), keyed by (tenant → key_id).
+    previous_versions: RwLock<HashMap<String, HashMap<KeyId, Vec<SecretEntry>>>>,
     /// Rotation policy.
     rotation_policy: RotationPolicy,
     /// The backend rotator.
@@ -609,6 +619,10 @@ pub struct SecretManager {
 }
 
 impl SecretManager {
+    fn tenant_key(tenant_id: Option<&str>) -> String {
+        tenant_id.unwrap_or(DEFAULT_TENANT).to_string()
+    }
+
     pub fn new(rotation_policy: RotationPolicy, rotator: Arc<dyn KeyRotator>) -> Self {
         Self {
             secrets: RwLock::new(HashMap::new()),
@@ -619,22 +633,34 @@ impl SecretManager {
     }
 
     /// Register a new key. If it already exists, this is a no-op.
+    ///
+    /// `tenant_id` is optional; when `None`, the key is stored under the `"_global"` namespace.
     pub async fn register_key(
         &self,
         key_id: KeyId,
         algorithm: SecretAlgorithm,
+        tenant_id: Option<&str>,
     ) -> Result<SecretEntry, SecretError> {
+        let tenant = Self::tenant_key(tenant_id);
+
         // Check if already cached
         {
             let secrets = self.secrets.read().await;
-            if let Some(entry) = secrets.get(&key_id) {
-                return Ok(entry.clone());
+            if let Some(tenant_map) = secrets.get(&tenant) {
+                if let Some(entry) = tenant_map.get(&key_id) {
+                    return Ok(entry.clone());
+                }
             }
         }
 
         // Check if the backend already has it
         if let Some(entry) = self.rotator.retrieve_key(&key_id).await? {
-            self.secrets.write().await.insert(key_id, entry.clone());
+            self.secrets
+                .write()
+                .await
+                .entry(tenant.clone())
+                .or_default()
+                .insert(key_id, entry.clone());
             return Ok(entry);
         }
 
@@ -643,19 +669,31 @@ impl SecretManager {
         self.secrets
             .write()
             .await
+            .entry(tenant.clone())
+            .or_default()
             .insert(key_id.clone(), entry.clone());
-        info!(key = %key_id, "New key registered");
+        info!(key = %key_id, tenant = %tenant, "New key registered");
         Ok(entry)
     }
 
     /// Get a key by ID. Auto-rotates if the key is stale according to the policy.
-    pub async fn get_key(&self, key_id: &str) -> Result<SecretEntry, SecretError> {
+    ///
+    /// `tenant_id` is optional; when `None`, looks up the key under the `"_global"` namespace.
+    pub async fn get_key(
+        &self,
+        key_id: &str,
+        tenant_id: Option<&str>,
+    ) -> Result<SecretEntry, SecretError> {
+        let tenant = Self::tenant_key(tenant_id);
+
         // Check cache first
         {
             let secrets = self.secrets.read().await;
-            if let Some(entry) = secrets.get(key_id) {
-                if !self.needs_rotation(entry) {
-                    return Ok(entry.clone());
+            if let Some(tenant_map) = secrets.get(&tenant) {
+                if let Some(entry) = tenant_map.get(key_id) {
+                    if !self.needs_rotation(entry) {
+                        return Ok(entry.clone());
+                    }
                 }
             }
         }
@@ -663,22 +701,35 @@ impl SecretManager {
         // Try backend
         if let Some(entry) = self.rotator.retrieve_key(key_id).await? {
             if self.needs_rotation(&entry) && self.rotation_policy.auto_rotate_on_access {
-                return self.rotate_key(key_id).await;
+                return self.rotate_key(key_id, tenant_id).await;
             }
             self.secrets
                 .write()
                 .await
+                .entry(tenant.clone())
+                .or_default()
                 .insert(key_id.to_string(), entry.clone());
             return Ok(entry);
         }
 
-        Err(SecretError::KeyNotFound(key_id.to_string()))
+        Err(SecretError::KeyNotFound(format!("{}/{}", tenant, key_id)))
     }
 
     /// Rotate a key, generating a new key and retaining the old version.
-    pub async fn rotate_key(&self, key_id: &str) -> Result<SecretEntry, SecretError> {
+    ///
+    /// `tenant_id` is optional; when `None`, operates on the `"_global"` namespace.
+    pub async fn rotate_key(
+        &self,
+        key_id: &str,
+        tenant_id: Option<&str>,
+    ) -> Result<SecretEntry, SecretError> {
+        let tenant = Self::tenant_key(tenant_id);
+
         let algorithm = {
-            let cached = { self.secrets.read().await.get(key_id).cloned() };
+            let cached = {
+                let secrets = self.secrets.read().await;
+                secrets.get(&tenant).and_then(|m| m.get(key_id).cloned())
+            };
             if let Some(entry) = cached {
                 entry.algorithm
             } else if let Ok(Some(entry)) = self.rotator.retrieve_key(key_id).await {
@@ -691,7 +742,8 @@ impl SecretManager {
         // Archive current key as a previous version
         if let Ok(Some(old_entry)) = self.rotator.retrieve_key(key_id).await {
             let mut versions = self.previous_versions.write().await;
-            let versions_list = versions.entry(key_id.to_string()).or_default();
+            let tenant_versions = versions.entry(tenant.clone()).or_default();
+            let versions_list = tenant_versions.entry(key_id.to_string()).or_default();
             versions_list.push(old_entry);
             // Trim to retain_versions
             while versions_list.len() > self.rotation_policy.retain_versions as usize {
@@ -709,18 +761,28 @@ impl SecretManager {
         self.secrets
             .write()
             .await
+            .entry(tenant.clone())
+            .or_default()
             .insert(key_id.to_string(), new_entry.clone());
 
-        info!(key = %key_id, "Key rotated");
+        info!(key = %key_id, tenant = %tenant, "Key rotated");
         Ok(new_entry)
     }
 
     /// Get previous versions of a key (for decrypting data encrypted with old keys).
-    pub async fn get_previous_versions(&self, key_id: &str) -> Vec<SecretEntry> {
+    ///
+    /// `tenant_id` is optional; when `None`, looks up versions under the `"_global"` namespace.
+    pub async fn get_previous_versions(
+        &self,
+        key_id: &str,
+        tenant_id: Option<&str>,
+    ) -> Vec<SecretEntry> {
+        let tenant = Self::tenant_key(tenant_id);
         self.previous_versions
             .read()
             .await
-            .get(key_id)
+            .get(&tenant)
+            .and_then(|m| m.get(key_id))
             .cloned()
             .unwrap_or_default()
     }
@@ -779,12 +841,13 @@ mod tests {
     async fn test_register_and_get_key() {
         let mgr = make_env_manager();
         let entry = mgr
-            .register_key("test-key-1".into(), SecretAlgorithm::Generic)
+            .register_key("test-key-1".into(), SecretAlgorithm::Generic, None)
             .await
             .unwrap();
         assert_eq!(entry.key_id, "test-key-1");
+        assert!(entry.tenant_id.is_none());
 
-        let fetched = mgr.get_key("test-key-1").await.unwrap();
+        let fetched = mgr.get_key("test-key-1", None).await.unwrap();
         assert_eq!(fetched.key_id, "test-key-1");
         assert_eq!(fetched.key_bytes.len(), 32);
     }
@@ -792,7 +855,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_nonexistent_key() {
         let mgr = make_env_manager();
-        let err = mgr.get_key("nonexistent").await.unwrap_err();
+        let err = mgr.get_key("nonexistent", None).await.unwrap_err();
         assert!(matches!(err, SecretError::KeyNotFound(_)));
     }
 
@@ -800,11 +863,11 @@ mod tests {
     async fn test_rotate_key() {
         let mgr = make_env_manager();
         let original = mgr
-            .register_key("rotate-key".into(), SecretAlgorithm::HmacSha256)
+            .register_key("rotate-key".into(), SecretAlgorithm::HmacSha256, None)
             .await
             .unwrap();
 
-        let rotated = mgr.rotate_key("rotate-key").await.unwrap();
+        let rotated = mgr.rotate_key("rotate-key", None).await.unwrap();
         assert_ne!(original.key_bytes, rotated.key_bytes);
     }
 
@@ -812,13 +875,40 @@ mod tests {
     async fn test_previous_versions() {
         let mgr = make_env_manager();
         let _first = mgr
-            .register_key("ver-key".into(), SecretAlgorithm::Generic)
+            .register_key("ver-key".into(), SecretAlgorithm::Generic, None)
             .await
             .unwrap();
-        let _second = mgr.rotate_key("ver-key").await.unwrap();
-        let _third = mgr.rotate_key("ver-key").await.unwrap();
+        let _second = mgr.rotate_key("ver-key", None).await.unwrap();
+        let _third = mgr.rotate_key("ver-key", None).await.unwrap();
 
-        let versions = mgr.get_previous_versions("ver-key").await;
+        let versions = mgr.get_previous_versions("ver-key", None).await;
         assert_eq!(versions.len(), 2); // retain_versions = 2
+    }
+
+    #[tokio::test]
+    async fn test_tenant_isolation() {
+        let mgr = make_env_manager();
+        // Same key_id in two different tenants should not conflict.
+        let _entry_a = mgr
+            .register_key(
+                "shared-key".into(),
+                SecretAlgorithm::Generic,
+                Some("tenant-a"),
+            )
+            .await
+            .unwrap();
+        let _entry_b = mgr
+            .register_key(
+                "shared-key".into(),
+                SecretAlgorithm::Generic,
+                Some("tenant-b"),
+            )
+            .await
+            .unwrap();
+
+        let fetched_a = mgr.get_key("shared-key", Some("tenant-a")).await.unwrap();
+        let fetched_b = mgr.get_key("shared-key", Some("tenant-b")).await.unwrap();
+        // Both should have different key_bytes since they are separate tenants.
+        assert_ne!(fetched_a.key_bytes, fetched_b.key_bytes);
     }
 }

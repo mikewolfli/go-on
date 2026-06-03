@@ -20,6 +20,9 @@ pub struct ProvenanceEntry {
     /// Chain of upstream provenance IDs this output depends on
     pub upstream_ids: Vec<String>,
     pub timestamp_ms: u64,
+    /// Optional human- or agent-readable justification for this entry
+    pub rationale: Option<String>,
+    /// Arbitrary metadata associated with this entry
     pub metadata: serde_json::Value,
 }
 
@@ -202,7 +205,35 @@ pub fn make_entry(
         output_digest: ProvenanceLedger::digest(output),
         upstream_ids,
         timestamp_ms: now_ms(),
-        metadata: serde_json::Value::Null,
+        rationale: None,
+        metadata: serde_json::Value::Object(Default::default()),
+    }
+}
+
+/// Helper to create a provenance entry with an optional rationale.
+#[allow(dead_code, clippy::too_many_arguments)]
+pub fn make_entry_with_rationale(
+    task_id: &str,
+    phase: &str,
+    agent: &str,
+    tool: &str,
+    input: &serde_json::Value,
+    output: &serde_json::Value,
+    upstream_ids: Vec<String>,
+    rationale: Option<String>,
+) -> ProvenanceEntry {
+    ProvenanceEntry {
+        id: uuid_v4(),
+        task_id: task_id.to_string(),
+        phase: phase.to_string(),
+        agent: agent.to_string(),
+        tool: tool.to_string(),
+        input_digest: ProvenanceLedger::digest(input),
+        output_digest: ProvenanceLedger::digest(output),
+        upstream_ids,
+        timestamp_ms: now_ms(),
+        rationale,
+        metadata: serde_json::Value::Object(Default::default()),
     }
 }
 

@@ -7,8 +7,12 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::RwLock;
 use std::time::{Duration, Instant};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::OwnedSemaphorePermit;
+use tokio::sync::Semaphore;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 // ── Permit leak prevention ─────────────────────────────────────────────────
@@ -187,18 +191,34 @@ pub struct SchedulerProfile {
 // Level-1: TaskScheduler (Queue Manager)
 // ──────────────────────────────────────────────
 
+/// Merged state for queues and task_map behind a single RwLock.
+///
+/// ⚠️  DEADLOCK PREVENTION:
+/// Lock ordering across the scheduler:
+///   1. `state` (RwLock on SchedulerState) — highest priority
+///   2. `active` (Mutex) — acquired after state
+///   3. `stats`, `last_aging`, `role_limiters` — acquired independently
+///
+/// Never acquire `active` then `state` in that order.
+struct SchedulerState {
+    /// Per-role priority queues of pending tasks (role → heap)
+    queues: HashMap<String, BinaryHeap<ScheduledTask>>,
+    /// Task lookup by ID (includes both pending and active tasks)
+    task_map: HashMap<String, ScheduledTask>,
+}
+
 pub struct TaskScheduler {
     config: SchedulerConfig,
-    /// Per-role priority queues of pending tasks (role → heap)
-    queues: Mutex<HashMap<String, BinaryHeap<ScheduledTask>>>,
-    /// Task lookup by ID (includes both pending and active tasks)
-    task_map: Mutex<HashMap<String, ScheduledTask>>,
+    /// Merged scheduler state (queues + task_map) protected by a single RwLock.
+    /// Using std::sync::RwLock because all access is from synchronous code;
+    /// tokio::sync::RwLock would require .blocking_*() and a runtime context.
+    state: RwLock<SchedulerState>,
     /// Active task permits: task_id → (global_permit, role_permit).
     /// Holding these permits consumes semaphore capacity.
     /// Dropping the permits returns them to the semaphores.
     active: Mutex<HashMap<String, (OwnedSemaphorePermit, OwnedSemaphorePermit)>>,
     /// Statistics
-    stats: Mutex<SchedulerProfile>,
+    stats: RwLock<SchedulerProfile>,
     /// Last aging update timestamp
     #[allow(dead_code)] // F-GAP-12 — reserved for task scheduling diagnostics
     last_aging: Mutex<Instant>,
@@ -206,6 +226,8 @@ pub struct TaskScheduler {
     concurrency_limiter: Arc<Semaphore>,
     /// Per-role concurrency limiters (role name → semaphore).
     role_limiters: Mutex<HashMap<String, Arc<Semaphore>>>,
+    /// Cancellation token for the aging background task.
+    aging_cancel: Mutex<Option<CancellationToken>>,
     /// Optional persistence for surviving restarts (SQLite-backed)
     #[cfg(feature = "backend-sqlite")]
     persistence: Option<Arc<SchedulerPersistence>>,
@@ -215,10 +237,12 @@ impl TaskScheduler {
     pub fn new(config: SchedulerConfig) -> Self {
         let global_permits = config.global_max_concurrent_tasks;
         Self {
-            queues: Mutex::new(HashMap::new()),
-            task_map: Mutex::new(HashMap::new()),
+            state: RwLock::new(SchedulerState {
+                queues: HashMap::new(),
+                task_map: HashMap::new(),
+            }),
             active: Mutex::new(HashMap::new()),
-            stats: Mutex::new(SchedulerProfile {
+            stats: RwLock::new(SchedulerProfile {
                 l1_queue_depth: 0,
                 l2_active_workers: 0,
                 l2_fan_out_count: 0,
@@ -231,6 +255,7 @@ impl TaskScheduler {
             last_aging: Mutex::new(Instant::now()),
             concurrency_limiter: Arc::new(Semaphore::new(global_permits)),
             role_limiters: Mutex::new(HashMap::new()),
+            aging_cancel: Mutex::new(None),
             #[cfg(feature = "backend-sqlite")]
             persistence: None,
             config,
@@ -254,10 +279,12 @@ impl TaskScheduler {
         };
 
         let scheduler = Self {
-            queues: Mutex::new(HashMap::new()),
-            task_map: Mutex::new(HashMap::new()),
+            state: RwLock::new(SchedulerState {
+                queues: HashMap::new(),
+                task_map: HashMap::new(),
+            }),
             active: Mutex::new(HashMap::new()),
-            stats: Mutex::new(SchedulerProfile {
+            stats: RwLock::new(SchedulerProfile {
                 l1_queue_depth: 0,
                 l2_active_workers: 0,
                 l2_fan_out_count: 0,
@@ -270,6 +297,7 @@ impl TaskScheduler {
             last_aging: Mutex::new(Instant::now()),
             concurrency_limiter: Arc::new(Semaphore::new(global_permits)),
             role_limiters: Mutex::new(HashMap::new()),
+            aging_cancel: Mutex::new(None),
             persistence,
             config,
         };
@@ -306,71 +334,68 @@ impl TaskScheduler {
         let task_id = task.task_id.clone();
         let role = task.role.clone();
 
-        if self
-            .task_map
-            .lock()
-            .map_err(|e| anyhow!("Lock error: {}", e))?
-            .contains_key(&task_id)
         {
-            return Err(anyhow!(tf(
-                "error.scheduler.task_already_submitted",
-                &[("task_id", &task_id)]
-            )));
-        }
-
-        // Check backpressure: reject if total pending queue depth exceeds threshold.
-        let total_pending: usize = self
-            .queues
-            .lock()
-            .map_err(|e| anyhow!("Lock error: {}", e))?
-            .values()
-            .map(|q| q.len())
-            .sum();
-        if total_pending >= self.config.backpressure_queue_depth {
-            let mut stats = self.stats.lock().unwrap_or_else(|poisoned| {
+            let state = self.state.read().unwrap_or_else(|poisoned| {
                 tracing::warn!("lock poisoned, recovering");
                 poisoned.into_inner()
             });
-            stats.backpressure_rejections += 1;
-            return Err(anyhow!(tf(
-                "error.scheduler.backpressure_rejected",
-                &[
-                    ("total_pending", &total_pending.to_string()),
-                    (
-                        "threshold",
-                        &self.config.backpressure_queue_depth.to_string()
-                    ),
-                    ("task_id", &task_id)
-                ]
-            )));
+            if state.task_map.contains_key(&task_id) {
+                return Err(anyhow!(tf(
+                    "error.scheduler.task_already_submitted",
+                    &[("task_id", &task_id)]
+                )));
+            }
+
+            // Check backpressure: reject if total pending queue depth exceeds threshold.
+            let total_pending: usize = state.queues.values().map(|q| q.len()).sum();
+            if total_pending >= self.config.backpressure_queue_depth {
+                drop(state);
+                let mut stats = self.stats.write().unwrap_or_else(|poisoned| {
+                    tracing::warn!("lock poisoned, recovering");
+                    poisoned.into_inner()
+                });
+                stats.backpressure_rejections += 1;
+                return Err(anyhow!(tf(
+                    "error.scheduler.backpressure_rejected",
+                    &[
+                        ("total_pending", &total_pending.to_string()),
+                        (
+                            "threshold",
+                            &self.config.backpressure_queue_depth.to_string()
+                        ),
+                        ("task_id", &task_id)
+                    ]
+                )));
+            }
+        } // Release read lock before acquiring write lock
+
+        // Push into the role-specific heap and insert into task_map in a single write lock
+        {
+            let mut state = self.state.write().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            state.queues.entry(role).or_default().push(task.clone());
+            state.task_map.insert(task_id.clone(), task);
         }
 
-        // Push into the role-specific heap
-        self.queues
-            .lock()
-            .map_err(|e| anyhow!("Lock error: {}", e))?
-            .entry(role)
-            .or_default()
-            .push(task.clone());
-
-        self.task_map
-            .lock()
-            .map_err(|e| anyhow!("Lock error: {}", e))?
-            .insert(task_id.clone(), task);
-        self.stats
-            .lock()
-            .map_err(|e| anyhow!("Lock error: {}", e))?
-            .total_submitted += 1;
+        {
+            let mut stats = self.stats.write().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            stats.total_submitted += 1;
+        }
         debug!("Submitted task {}", task_id);
 
         // Persist the task if persistence is enabled
         #[cfg(feature = "backend-sqlite")]
         if let Some(ref p) = self.persistence {
-            let task_map = self.task_map.lock().unwrap_or_else(|poisoned| {
+            let state = self.state.read().unwrap_or_else(|poisoned| {
                 tracing::warn!("lock poisoned, recovering");
                 poisoned.into_inner()
             });
-            if let Some(saved) = task_map.get(&task_id) {
+            if let Some(saved) = state.task_map.get(&task_id) {
                 if let Err(e) = p.save_task(saved) {
                     warn!("Failed to persist task {}: {}", task_id, e);
                 }
@@ -456,15 +481,15 @@ impl TaskScheduler {
         }
 
         // Pop the highest-priority task from the role-specific heap — O(log n).
-        // Use recoverable lock: if the Mutex is poisoned, recover the data and
+        // Use recoverable lock: if the RwLock is poisoned, recover the data and
         // continue rather than silently discarding the error.
         let task = {
-            let mut queues = self.queues.lock().unwrap_or_else(|poisoned| {
+            let mut state = self.state.write().unwrap_or_else(|poisoned| {
                 let guard = poisoned.into_inner();
-                warn!(target: "scheduler", "queues Mutex poisoned – recovered data");
+                warn!(target: "scheduler", "state RwLock poisoned – recovered data");
                 guard
             });
-            queues.get_mut(role)?.pop()?
+            state.queues.get_mut(role)?.pop()?
         };
 
         let role_str = task.role.clone();
@@ -474,12 +499,12 @@ impl TaskScheduler {
             Ok(p) => p,
             Err(_) => {
                 // Should not happen (we checked above), but roll back.
-                let mut queues = self.queues.lock().unwrap_or_else(|poisoned| {
+                let mut state = self.state.write().unwrap_or_else(|poisoned| {
                     let guard = poisoned.into_inner();
-                    warn!(target: "scheduler", "queues Mutex poisoned – recovered data");
+                    warn!(target: "scheduler", "state RwLock poisoned – recovered data");
                     guard
                 });
-                queues.entry(role_str).or_default().push(task);
+                state.queues.entry(role_str).or_default().push(task);
                 return None;
             }
         };
@@ -500,12 +525,12 @@ impl TaskScheduler {
                 Err(_) => {
                     // Roll back the global permit.
                     drop(global_permit);
-                    let mut queues = self.queues.lock().unwrap_or_else(|poisoned| {
+                    let mut state = self.state.write().unwrap_or_else(|poisoned| {
                         let guard = poisoned.into_inner();
-                        warn!(target: "scheduler", "queues Mutex poisoned – recovered data");
+                        warn!(target: "scheduler", "state RwLock poisoned – recovered data");
                         guard
                     });
-                    queues.entry(role_str).or_default().push(task);
+                    state.queues.entry(role_str).or_default().push(task);
                     return None;
                 }
             }
@@ -533,19 +558,19 @@ impl TaskScheduler {
         // Remove completed task from task_map — recover from poison instead of
         // propagating the error, so the task is never leaked.
         {
-            let mut task_map = self.task_map.lock().unwrap_or_else(|poisoned| {
+            let mut state = self.state.write().unwrap_or_else(|poisoned| {
                 let guard = poisoned.into_inner();
-                warn!(target: "scheduler", "task_map Mutex poisoned – recovered data");
+                warn!(target: "scheduler", "state RwLock poisoned – recovered data");
                 guard
             });
-            task_map.remove(task_id);
+            state.task_map.remove(task_id);
         }
 
         // Update stats — recover from poison.
         {
-            let mut stats = self.stats.lock().unwrap_or_else(|poisoned| {
+            let mut stats = self.stats.write().unwrap_or_else(|poisoned| {
                 let guard = poisoned.into_inner();
-                warn!(target: "scheduler", "stats Mutex poisoned – recovered data");
+                warn!(target: "scheduler", "stats RwLock poisoned – recovered data");
                 guard
             });
             stats.total_completed += 1;
@@ -581,25 +606,24 @@ impl TaskScheduler {
         // and stat bookkeeping.
 
         if requeue {
-            // ── Single lock scope: task_map read + queues write ────────────
-            // Holding task_map prevents a concurrent complete() from removing
-            // the task while we re-enqueue it.
-            let mut task_map = self.task_map.lock().unwrap_or_else(|poisoned| {
+            // ── Single lock scope: state write ─────────────────────────────
+            // Holding the state write lock across task_map read + queues write
+            // prevents a concurrent complete() from removing the task between
+            // the retry check and the re-enqueue.
+            let mut state = self.state.write().unwrap_or_else(|poisoned| {
                 tracing::warn!("lock poisoned, recovering");
                 poisoned.into_inner()
             });
-            if let Some(task) = task_map.get_mut(task_id) {
+            if let Some(task) = state.task_map.get_mut(task_id) {
                 if task.retries < task.max_retries {
                     task.retries += 1;
                     let updated_task = task.clone();
                     let role = task.role.clone();
-                    // While still holding task_map lock, push to queues
-                    let mut queues = self.queues.lock().unwrap_or_else(|poisoned| {
-                        tracing::warn!("lock poisoned, recovering");
-                        poisoned.into_inner()
-                    });
-                    queues.entry(role).or_default().push(updated_task);
-                    let mut stats = self.stats.lock().unwrap_or_else(|poisoned| {
+                    let retries = task.retries;
+                    let max_retries = task.max_retries;
+                    state.queues.entry(role).or_default().push(updated_task);
+                    drop(state);
+                    let mut stats = self.stats.write().unwrap_or_else(|poisoned| {
                         tracing::warn!("lock poisoned, recovering");
                         poisoned.into_inner()
                     });
@@ -610,31 +634,35 @@ impl TaskScheduler {
                             "status.scheduler.task_requeued",
                             &[
                                 ("task_id", task_id),
-                                ("retries", &task.retries.to_string()),
-                                ("max_retries", &task.max_retries.to_string()),
+                                ("retries", &retries.to_string()),
+                                ("max_retries", &max_retries.to_string()),
                             ]
                         )
                     );
                     return Ok(());
                 }
             }
-            // Drop task_map lock before the permanent-removal path below
-            drop(task_map);
+            // Drop state lock before the permanent-removal path below
+            drop(state);
         }
 
         // ── Single lock scope: read + remove from task_map ─────────────
         // Prevents a concurrent modification between the read and remove.
         let max_retries = {
-            let mut task_map = self
-                .task_map
-                .lock()
+            let mut state = self
+                .state
+                .write()
                 .map_err(|e| anyhow!("Lock error: {}", e))?;
-            let max_r = task_map.get(task_id).map(|t| t.max_retries).unwrap_or(0);
-            task_map.remove(task_id);
+            let max_r = state
+                .task_map
+                .get(task_id)
+                .map(|t| t.max_retries)
+                .unwrap_or(0);
+            state.task_map.remove(task_id);
             max_r
         };
         self.stats
-            .lock()
+            .write()
             .map_err(|e| anyhow!("Lock error: {}", e))?
             .total_failed += 1;
         error!(
@@ -661,17 +689,46 @@ impl TaskScheduler {
     /// queued tasks, preventing starvation by boosting the priority of
     /// long-waiting tasks.
     ///
-    /// The timer runs until the scheduler is dropped (tokio task is
-    /// cancelled). Errors from `apply_aging` are logged as warnings.
-    pub fn start_aging_timer(self: &Arc<Self>, interval: Duration) {
+    /// Returns a `JoinHandle` that can be aborted. The task will also stop
+    /// when the stored `CancellationToken` is cancelled via `shutdown()`.
+    /// Errors from `apply_aging` are logged as warnings.
+    pub fn start_aging_timer(self: &Arc<Self>, interval: Duration) -> JoinHandle<()> {
+        let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
+        // Store the token so shutdown() can cancel this task.
+        if let Ok(mut stored) = self.aging_cancel.lock() {
+            *stored = Some(cancel);
+        }
         let sched = self.clone();
         tokio::spawn(async move {
             let mut timer = tokio::time::interval(interval);
             loop {
-                timer.tick().await;
-                sched.apply_aging();
+                tokio::select! {
+                    _ = timer.tick() => {
+                        sched.apply_aging();
+                    }
+                    _ = cancel_clone.cancelled() => {
+                        info!("Aging timer cancelled");
+                        break;
+                    }
+                }
             }
-        });
+        })
+    }
+
+    /// Gracefully stop the aging background task.
+    ///
+    /// Cancels the `CancellationToken` that was stored by `start_aging_timer()`.
+    /// The background task will exit on the next tick after cancellation.
+    /// This is safe to call multiple times; subsequent calls are no-ops.
+    #[allow(dead_code)] // Reserved for graceful server shutdown
+    pub fn shutdown(&self) {
+        if let Ok(mut stored) = self.aging_cancel.lock() {
+            if let Some(token) = stored.take() {
+                token.cancel();
+                info!("Scheduler shutdown initiated");
+            }
+        }
     }
 
     /// Apply aging bonus to all pending (non-active) tasks.
@@ -702,16 +759,16 @@ impl TaskScheduler {
         // Aging threshold for starvation prevention tracking
         let starvation_threshold = 2.0;
 
-        // ── Snapshot phase: single task_map + active lock scope ────────
+        // ── Snapshot phase: single state + active lock scope ───────────
         //
-        // ⚠️  LOCK ORDERING: task_map → active (both acquired here, task_map
-        //     first).  Never acquire `active` then `task_map` — doing so
+        // ⚠️  LOCK ORDERING: state → active (both acquired here, state
+        //     first).  Never acquire `active` then `state` — doing so
         //     creates a potential deadlock if another code path takes those
         //     locks in the opposite order.
         //
         // Update aging_bonus in place AND snapshot pending tasks atomically.
         let (pending_tasks, starvation_events) = {
-            let mut task_map = self.task_map.lock().unwrap_or_else(|poisoned| {
+            let mut state = self.state.write().unwrap_or_else(|poisoned| {
                 tracing::warn!("lock poisoned, recovering");
                 poisoned.into_inner()
             });
@@ -721,7 +778,7 @@ impl TaskScheduler {
             });
 
             let mut starvation_events = 0u64;
-            for task in task_map.values_mut() {
+            for task in state.task_map.values_mut() {
                 let old_bonus = task.aging_bonus;
                 let bonus = (task.aging_bonus + aging_rate * elapsed_secs).min(max_bonus);
                 task.aging_bonus = bonus;
@@ -732,18 +789,19 @@ impl TaskScheduler {
             }
 
             // Snapshot non-active tasks while still holding the locks
-            let pending: Vec<ScheduledTask> = task_map
+            let pending: Vec<ScheduledTask> = state
+                .task_map
                 .values()
                 .filter(|t| !active.contains_key(&t.task_id))
                 .cloned()
                 .collect();
 
             (pending, starvation_events)
-        }; // task_map and active locks released here
+        }; // state and active locks released here
 
         // Update stats
         if starvation_events > 0 {
-            let mut stats = self.stats.lock().unwrap_or_else(|poisoned| {
+            let mut stats = self.stats.write().unwrap_or_else(|poisoned| {
                 tracing::warn!("lock poisoned, recovering");
                 poisoned.into_inner()
             });
@@ -754,14 +812,15 @@ impl TaskScheduler {
             );
         }
 
-        // ── Rebuild phase: single queues lock scope ───────────────────
-        let mut queues = self.queues.lock().unwrap_or_else(|poisoned| {
+        // ── Rebuild phase: single state write scope ───────────────────
+        let mut state = self.state.write().unwrap_or_else(|poisoned| {
             tracing::warn!("lock poisoned, recovering");
             poisoned.into_inner()
         });
-        queues.clear();
+        state.queues.clear();
         for task in &pending_tasks {
-            queues
+            state
+                .queues
                 .entry(task.role.clone())
                 .or_default()
                 .push(task.clone());
@@ -777,7 +836,7 @@ impl TaskScheduler {
     pub fn profile(&self) -> SchedulerProfile {
         let mut profile = self
             .stats
-            .lock()
+            .read()
             .map(|s| s.clone())
             .unwrap_or(SchedulerProfile {
                 l1_queue_depth: 0,
@@ -789,20 +848,16 @@ impl TaskScheduler {
                 starvation_events_prevented: 0,
                 backpressure_rejections: 0,
             });
-        let queues = self.queues.lock().unwrap_or_else(|poisoned| {
+        let state = self.state.read().unwrap_or_else(|poisoned| {
             tracing::warn!("lock poisoned, recovering");
             poisoned.into_inner()
         });
-        profile.l1_queue_depth = queues.values().map(|q| q.len() as u32).sum();
+        profile.l1_queue_depth = state.queues.values().map(|q| q.len() as u32).sum();
         // active workers are now tracked via outstanding TaskPermitGuard instances.
         // Since those are dropped on complete/fail, we can approximate active count
         // from the task_map minus pending queue entries.
-        let pending_count: u32 = self
-            .queues
-            .lock()
-            .map(|q| q.values().map(|h| h.len() as u32).sum())
-            .unwrap_or(0);
-        let total_in_map: u32 = self.task_map.lock().map(|m| m.len() as u32).unwrap_or(0);
+        let pending_count: u32 = state.queues.values().map(|h| h.len() as u32).sum();
+        let total_in_map: u32 = state.task_map.len() as u32;
         profile.l2_active_workers = total_in_map.saturating_sub(pending_count);
         profile
     }
@@ -861,11 +916,11 @@ impl TaskScheduler {
     #[cfg(feature = "backend-sqlite")]
     pub fn persist_all(&self) -> Result<()> {
         if let Some(ref p) = self.persistence {
-            let task_map = self
-                .task_map
-                .lock()
+            let state = self
+                .state
+                .read()
                 .map_err(|e| anyhow!("Lock error: {}", e))?;
-            let tasks: Vec<ScheduledTask> = task_map.values().cloned().collect();
+            let tasks: Vec<ScheduledTask> = state.task_map.values().cloned().collect();
             p.snapshot_queue(&tasks)?;
             info!("Persisted {} tasks to storage", tasks.len());
         }
@@ -1248,7 +1303,7 @@ impl AgentWorkerScheduler {
             .insert(group_id.clone(), task_ids);
 
         // Update stats
-        let mut stats = self.level1.stats.lock().unwrap_or_else(|poisoned| {
+        let mut stats = self.level1.stats.write().unwrap_or_else(|poisoned| {
             tracing::warn!("lock poisoned, recovering");
             poisoned.into_inner()
         });
@@ -1278,11 +1333,12 @@ impl AgentWorkerScheduler {
         })?;
         let total = task_ids.len();
 
-        let task_map = self
+        let state = self
             .level1
-            .task_map
-            .lock()
+            .state
+            .read()
             .map_err(|e| anyhow!("Lock error: {}", e))?;
+        let task_map = &state.task_map;
         // Count tasks that are no longer in task_map (completed) or are not active
         let completed = task_ids
             .iter()
@@ -1443,9 +1499,10 @@ mod tests {
         scheduler.submit(make_task("t1", "role", 1, 10.0)).unwrap();
         assert_eq!(
             scheduler
-                .task_map
-                .lock()
+                .state
+                .read()
                 .unwrap()
+                .task_map
                 .get("t1")
                 .unwrap()
                 .aging_bonus,
@@ -1461,9 +1518,10 @@ mod tests {
         scheduler.apply_aging();
 
         let bonus = scheduler
-            .task_map
-            .lock()
+            .state
+            .read()
             .unwrap()
+            .task_map
             .get("t1")
             .unwrap()
             .aging_bonus;
@@ -1503,8 +1561,8 @@ mod tests {
         // Without aging, high-prio would be dequeued first.
         // With aging, the aged low-prio task may surpass it.
         let aged_bonus = {
-            let task_map = scheduler.task_map.lock().unwrap();
-            task_map.get("low-prio").unwrap().aging_bonus
+            let state = scheduler.state.read().unwrap();
+            state.task_map.get("low-prio").unwrap().aging_bonus
         };
 
         // Since 10 + aged_bonus < 1000 (aging_rate * 10s = 1000, capped at 500),
@@ -1518,9 +1576,10 @@ mod tests {
 
         // But the low-prio task should have a significant aging bonus
         let bonus = scheduler
-            .task_map
-            .lock()
+            .state
+            .read()
             .unwrap()
+            .task_map
             .get("low-prio")
             .unwrap()
             .aging_bonus;
@@ -1557,13 +1616,14 @@ mod tests {
         // Fail with requeue
         drop(_g2);
         scheduler.fail("t2", true).unwrap();
-        assert!(scheduler.task_map.lock().unwrap().contains_key("t2"));
+        assert!(scheduler.state.read().unwrap().task_map.contains_key("t2"));
 
         // Verify retry count incremented
         let retries = scheduler
-            .task_map
-            .lock()
+            .state
+            .read()
             .unwrap()
+            .task_map
             .get("t2")
             .unwrap()
             .retries;
@@ -1573,14 +1633,14 @@ mod tests {
         let (_t2b, _g2b) = scheduler.dequeue("role").unwrap();
         drop(_g2b);
         scheduler.complete("t2").unwrap();
-        assert!(!scheduler.task_map.lock().unwrap().contains_key("t2"));
+        assert!(!scheduler.state.read().unwrap().task_map.contains_key("t2"));
 
         // Test fail without requeue
         scheduler.submit(make_task("t3", "role", 3, 30.0)).unwrap();
         let (_t3, _g3) = scheduler.dequeue("role").unwrap();
         drop(_g3);
         scheduler.fail("t3", false).unwrap();
-        assert!(!scheduler.task_map.lock().unwrap().contains_key("t3"));
+        assert!(!scheduler.state.read().unwrap().task_map.contains_key("t3"));
         let profile = scheduler.profile();
         assert_eq!(profile.total_failed, 2);
     }

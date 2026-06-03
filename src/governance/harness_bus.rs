@@ -1364,6 +1364,7 @@ impl HarnessBus {
             data_classification: None,
             compliance_tags: vec![],
             retention_policy: None,
+            correlation_id: None,
         };
         self.audit_log.record(audit_entry);
 
@@ -1458,6 +1459,7 @@ impl HarnessBus {
             data_classification: None,
             compliance_tags: vec![],
             retention_policy: None,
+            correlation_id: None,
         });
 
         // Write to local governance audit trail.

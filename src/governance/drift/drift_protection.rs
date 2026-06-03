@@ -237,23 +237,12 @@ impl DriftProtectionEngine {
     /// Evaluates all recorded metrics against registered policies and returns
     /// any newly triggered alerts. Previously triggered alerts that should be
     /// auto-resolved based on time-out are resolved first.
+    ///
+    /// If a policy has `auto_remediate` enabled, detected drift will automatically
+    /// invoke `suggest_remediation()` and record the remediation in the audit log.
     pub fn check_for_drift(&self) -> Vec<DriftAlert> {
         let now_ms = current_time_ms();
         let config = &self.config;
-
-        // Auto-resolve stale alerts before checking again.
-        let mut alerts = self.alerts.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!(target: "drift_protection", "alerts Mutex poisoned – recovering");
-            poisoned.into_inner()
-        });
-        for alert in alerts.iter_mut() {
-            if !alert.resolved
-                && now_ms.saturating_sub(alert.triggered_ms) >= config.auto_resolve_after_ms
-            {
-                alert.resolved = true;
-                alert.resolved_ms = Some(now_ms);
-            }
-        }
 
         let policies = self
             .policies
@@ -271,12 +260,25 @@ impl DriftProtectionEngine {
                 poisoned.into_inner()
             })
             .clone();
+
+        // Single lock for both auto-resolve and alert creation (reducing 3 locks to 1).
         let mut alerts = self.alerts.lock().unwrap_or_else(|poisoned| {
             tracing::warn!(target: "drift_protection", "alerts Mutex poisoned – recovering");
             poisoned.into_inner()
         });
 
+        // Auto-resolve stale alerts before checking again.
+        for alert in alerts.iter_mut() {
+            if !alert.resolved
+                && now_ms.saturating_sub(alert.triggered_ms) >= config.auto_resolve_after_ms
+            {
+                alert.resolved = true;
+                alert.resolved_ms = Some(now_ms);
+            }
+        }
+
         let mut new_alerts: Vec<DriftAlert> = Vec::new();
+        let mut auto_remediation_actions: Vec<String> = Vec::new();
 
         for metric in metrics.values() {
             for policy in policies.values() {
@@ -359,7 +361,32 @@ impl DriftProtectionEngine {
                 if alerts.len() > config.max_alerts {
                     alerts.remove(0);
                 }
+
+                // Auto-remediate: if the policy allows it, invoke remediation.
+                if policy.auto_remediate {
+                    let remediation_suggestions = self.suggest_remediation();
+                    for suggestion in &remediation_suggestions {
+                        tracing::info!(
+                            target: "drift_protection",
+                            policy = %policy.name,
+                            metric = %metric.name,
+                            suggestion = %suggestion,
+                            "Auto-remediation triggered"
+                        );
+                        auto_remediation_actions.push(suggestion.clone());
+                    }
+                }
             }
+        }
+
+        // Log aggregated auto-remediation actions.
+        if !auto_remediation_actions.is_empty() {
+            tracing::info!(
+                target: "drift_protection",
+                actions = ?auto_remediation_actions,
+                "Auto-remediation completed with {} action(s)",
+                auto_remediation_actions.len()
+            );
         }
 
         new_alerts

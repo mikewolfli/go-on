@@ -9,10 +9,10 @@ use crate::i18n::{t, tf};
 use crate::intelligence::lock_guard;
 use crate::intelligence::now_ms;
 use anyhow::Result;
-use tokio::sync::mpsc;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
+use tokio::sync::mpsc;
 
 // ── Corrective result ──────────────────────────────────────────────────────
 
@@ -85,7 +85,23 @@ pub struct ExecutionObservation {
     pub is_resolved: bool,
 }
 
-/// A corrective action proposed in response to an observation.
+/// A structured, actionable insight with an impact score.
+///
+/// Used by [`get_actionable_insights()`] and [`get_structured_feedback()`]
+/// to return machine-parseable suggestions to the autonomy loop.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SuggestedAction {
+    /// High-level category of the action (e.g. "adjust_timeout", "reroute").
+    pub action_type: String,
+    /// Human-readable prompt or description for the action.
+    pub prompt: String,
+    /// Severity level ("high" or "critical").
+    pub severity: String,
+    /// Numeric impact score from 0.0 (no impact) to 1.0 (critical impact).
+    pub impact_score: f64,
+}
+
+/// Corrective action proposed in response to an observation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CorrectiveAction {
     /// Unique action identifier.
@@ -224,7 +240,10 @@ impl std::fmt::Debug for MetacognitiveController {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MetacognitiveController")
             .field("inner", &self.inner)
-            .field("llm_agent", &self.llm_agent.as_ref().map(|_| "Some(Arc<dyn Agent>)"))
+            .field(
+                "llm_agent",
+                &self.llm_agent.as_ref().map(|_| "Some(Arc<dyn Agent>)"),
+            )
             .finish()
     }
 }
@@ -714,7 +733,12 @@ impl MetacognitiveController {
             if !task_observations.is_empty() {
                 let obs_summary: String = task_observations
                     .iter()
-                    .map(|o| format!("- [{}] {}: {} (severity: {})", o.id, o.observation_type, o.description, o.severity))
+                    .map(|o| {
+                        format!(
+                            "- [{}] {}: {} (severity: {})",
+                            o.id, o.observation_type, o.description, o.severity
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join("\n");
 
@@ -733,8 +757,14 @@ impl MetacognitiveController {
                 let sender = StreamingSender::new(tx);
 
                 let messages = vec![
-                    Message { role: "system".to_string(), content: "You are an expert metacognitive analysis system.".to_string() },
-                    Message { role: "user".to_string(), content: prompt },
+                    Message {
+                        role: "system".to_string(),
+                        content: "You are an expert metacognitive analysis system.".to_string(),
+                    },
+                    Message {
+                        role: "user".to_string(),
+                        content: prompt,
+                    },
                 ];
 
                 match agent.chat(messages, None, None, sender).await {
@@ -844,9 +874,12 @@ impl MetacognitiveController {
     /// Convert high-severity unresolved observations into actionable insight
     /// prompts that can be consumed by the autonomy loop to drive behavior.
     ///
-    /// Returns a vector of (action_type, prompt, severity) tuples where
-    /// severity is "high" or "critical".
-    pub fn get_actionable_insights(&self, task_id: &str) -> Vec<(String, String, String)> {
+    /// Returns actionable insights as structured [`SuggestedAction`] items.
+    ///
+    /// Only observations that are unresolved and have severity "high" or
+    /// "critical" are included.  Each action includes an `impact_score`
+    /// derived from the severity.
+    pub fn get_actionable_insights(&self, task_id: &str) -> Vec<SuggestedAction> {
         let inner = lock_guard(&self.inner);
 
         let mut insights = Vec::new();
@@ -906,11 +939,31 @@ impl MetacognitiveController {
                             ),
                         ),
                     };
-                    insights.push((action_type.to_string(), prompt, severity_lower));
+                    let impact_score = match severity_lower.as_str() {
+                        "critical" => 1.0,
+                        "high" => 0.7,
+                        _ => 0.3,
+                    };
+                    insights.push(SuggestedAction {
+                        action_type: action_type.to_string(),
+                        prompt,
+                        severity: severity_lower,
+                        impact_score,
+                    });
                 }
             }
         }
         insights
+    }
+
+    /// Return structured feedback with impact scores for all unresolved
+    /// high-severity observations under the given task.
+    ///
+    /// This is the production-friendly counterpart of
+    /// [`get_actionable_insights`] that enriches each action with an
+    /// `impact_score` and can be serialized to JSON for downstream consumers.
+    pub fn get_structured_feedback(&self, task_id: &str) -> Vec<SuggestedAction> {
+        self.get_actionable_insights(task_id)
     }
 
     /// Record the outcome of an applied actionable insight for effectiveness tracking.

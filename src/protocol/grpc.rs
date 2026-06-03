@@ -7,7 +7,21 @@
 #![allow(dead_code)] // Reserved—wired via distributed execution in multi-user profile
 
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
+
+/// Atomic counter for generating JSON-RPC 2.0 request IDs.
+///
+/// Per JSON-RPC 2.0 specification (§3.1), request IDs should be unique.
+/// Using `Ordering::Relaxed` because the only requirement is that IDs
+/// are non-zero and unique within the current process; there is no need
+/// for strict happens-before ordering between different callers.
+static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Generate a monotonically increasing request ID.
+fn next_request_id() -> u64 {
+    NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 /// Shared reqwest client reused across all gRPC calls to avoid creating
 /// a new HTTP client (and TLS session) on every request.
@@ -108,7 +122,7 @@ pub async fn call_execute_remote(
         jsonrpc: "2.0".to_string(),
         method: "execute".to_string(),
         params: params.clone(),
-        id: 1,
+        id: next_request_id(),
     };
 
     let url = format!("{}/jsonrpc", base_url.trim_end_matches('/'));
@@ -152,7 +166,7 @@ pub async fn call_health_check(
         params: HealthCheckParams {
             node_id: node_id.to_string(),
         },
-        id: 1,
+        id: next_request_id(),
     };
 
     let url = format!("{}/jsonrpc", base_url.trim_end_matches('/'));

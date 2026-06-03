@@ -12,6 +12,8 @@ use notify::{Config, Event, EventKind, RecursiveMode, Watcher};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
+use crate::governance::audit::{record_audit_threadsafe, ThreadSafeAuditLog};
+
 // ─── ReloadablePolicy trait ────────────────────────────────────────────────
 
 /// A policy that can be hot-reloaded at runtime.
@@ -26,7 +28,6 @@ pub trait ReloadablePolicy: Send + Sync {
     fn reload(&mut self) -> Result<()>;
 
     /// Returns the last known good version timestamp (milliseconds since epoch).
-    #[allow(dead_code)]
     fn last_reload_ms(&self) -> u64;
 }
 
@@ -40,7 +41,6 @@ pub struct PolicyReloader {
     /// Registered hot-reloadable policies.
     policies: Vec<Box<dyn ReloadablePolicy>>,
     /// Optional filesystem watcher for automatic reloads.
-    #[allow(dead_code)] // Set during construction, used by background reload task
     watcher: Option<notify::RecommendedWatcher>,
     /// The directory path being watched (if watcher is active).
     watch_path: Option<String>,
@@ -48,6 +48,8 @@ pub struct PolicyReloader {
     on_reload: Option<Box<dyn Fn() + Send + Sync + 'static>>,
     /// Channel sender for notifying consumers about reload events.
     notify_tx: Option<std::sync::mpsc::Sender<()>>,
+    /// Optional audit log for recording reload events.
+    audit_log: Option<ThreadSafeAuditLog>,
 }
 
 impl Default for PolicyReloader {
@@ -65,6 +67,7 @@ impl PolicyReloader {
             watch_path: None,
             on_reload: None,
             notify_tx: None,
+            audit_log: None,
         }
     }
 
@@ -84,6 +87,11 @@ impl PolicyReloader {
         self.notify_tx = Some(tx);
     }
 
+    /// Set an audit log for recording reload events.
+    pub fn set_audit_log(&mut self, log: ThreadSafeAuditLog) {
+        self.audit_log = Some(log);
+    }
+
     /// Drain the notification channel, returning the number of pending reload events.
     /// This can be polled from a background task.
     pub fn drain_notifications(&self, rx: &std::sync::mpsc::Receiver<()>) -> usize {
@@ -96,15 +104,39 @@ impl PolicyReloader {
 
     /// Reload all registered policies. Errors are logged per-policy but
     /// do not prevent other policies from reloading.
+    ///
+    /// If an audit log is configured, a reload event is recorded.
     pub fn reload_all(&mut self) {
+        let policy_count = self.policies.len();
+        let mut errors: Vec<String> = Vec::new();
+
         for policy in self.policies.iter_mut() {
             if let Err(e) = policy.reload() {
                 error!("policy reload failed after error: {e}");
+                errors.push(format!("{e}"));
             } else {
                 debug!("policy reloaded successfully");
             }
         }
-        info!("reload_all complete for {} policies", self.policies.len());
+
+        info!("reload_all complete for {} policies", policy_count);
+
+        // Record reload event to audit log if configured
+        if let Some(ref audit) = self.audit_log {
+            let error_msg = if errors.is_empty() {
+                None
+            } else {
+                Some(errors.join("; "))
+            };
+            record_audit_threadsafe(
+                audit,
+                "governance",
+                "policy_reload",
+                &format!("reloaded {} policies", policy_count),
+                error_msg,
+                Some(format!("reload-{}", now_ms())),
+            );
+        }
     }
 
     /// Return the number of registered policies.
@@ -123,7 +155,6 @@ impl PolicyReloader {
     }
 
     /// Get a mutable reference to all registered policies.
-    #[allow(dead_code)] // Reserved for production governance wiring
     pub fn policies_mut(&mut self) -> &mut [Box<dyn ReloadablePolicy>] {
         &mut self.policies
     }
@@ -133,7 +164,6 @@ impl PolicyReloader {
     /// When a file modification event is detected, all registered policies
     /// are reloaded automatically. This is best-effort: watcher errors are
     /// logged but do not crash the process.
-    #[allow(dead_code)] // Reserved for production governance wiring
     pub fn start_watching(&mut self, watch_dir: impl AsRef<Path>) -> Result<()> {
         let watch_dir = watch_dir.as_ref().to_path_buf();
         let watch_path = watch_dir.to_string_lossy().to_string();
@@ -180,7 +210,6 @@ impl PolicyReloader {
     }
 
     /// Stop the filesystem watcher, if one is active.
-    #[allow(dead_code)] // Reserved for production governance wiring
     pub fn stop_watching(&mut self) {
         if let Some(watcher) = self.watcher.take() {
             // Dropping the watcher stops it
@@ -191,7 +220,6 @@ impl PolicyReloader {
     }
 
     /// Returns the path being watched, if any.
-    #[allow(dead_code)] // Reserved for production governance wiring
     pub fn watch_path(&self) -> Option<&str> {
         self.watch_path.as_deref()
     }
@@ -210,7 +238,6 @@ impl PolicyReloader {
     /// // … later …
     /// handle.abort();
     /// ```
-    #[allow(dead_code)] // Reserved for production governance wiring
     pub fn start_background_reload(mut self, interval_secs: u64) -> JoinHandle<()> {
         let duration = std::time::Duration::from_secs(interval_secs);
         tokio::spawn(async move {
@@ -236,6 +263,15 @@ impl std::fmt::Debug for PolicyReloader {
 
 // ─── Utility: time helpers ────────────────────────────────────────────────
 
+/// Compute a SHA-256 digest of the given bytes, returning the raw 32-byte hash.
+/// Used by reloadable policies for checksum validation.
+pub fn sha256_digest(data: &[u8]) -> Vec<u8> {
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(data);
+    hasher.finalize().to_vec()
+}
+
 /// Returns the current time in milliseconds since the Unix epoch.
 pub fn now_ms() -> u64 {
     SystemTime::now()
@@ -247,27 +283,49 @@ pub fn now_ms() -> u64 {
 // ─── Concrete reloadable policy wrappers ────────────────────────────────────
 
 /// A reloadable policy that reads a TOML-based red-line configuration file.
-#[allow(dead_code)]
 pub struct RedLinePolicy {
     path: std::path::PathBuf,
     last_reload: u64,
+    /// SHA-256 checksum of the last loaded file content, used to skip
+    /// redundant reloads when the file hasn't actually changed.
+    checksum: Option<Vec<u8>>,
 }
 
 impl RedLinePolicy {
-    #[allow(dead_code)]
     pub fn new(path: impl Into<std::path::PathBuf>) -> Self {
         Self {
             path: path.into(),
             last_reload: 0,
+            checksum: None,
         }
     }
 }
 
 impl ReloadablePolicy for RedLinePolicy {
     fn reload(&mut self) -> Result<()> {
+        // Path validation: ensure the file exists and is readable
+        if !self.path.exists() {
+            anyhow::bail!("RedLine policy file not found: {}", self.path.display());
+        }
+        if !self.path.is_file() {
+            anyhow::bail!("RedLine policy path is not a file: {}", self.path.display());
+        }
+
         let content = std::fs::read_to_string(&self.path)?;
+
+        // Checksum validation: skip reload if content hasn't changed
+        let new_checksum = sha256_digest(content.as_bytes());
+        if self.checksum.as_ref() == Some(&new_checksum) {
+            debug!(
+                "RedLine policy unchanged, skipping reload: {}",
+                self.path.display()
+            );
+            return Ok(());
+        }
+
         let _config: serde_json::Value = toml::from_str(&content)?;
         self.last_reload = now_ms();
+        self.checksum = Some(new_checksum);
         info!("RedLine policy reloaded from {}", self.path.display());
         Ok(())
     }
@@ -278,27 +336,54 @@ impl ReloadablePolicy for RedLinePolicy {
 }
 
 /// A reloadable policy that reads a TOML-based quality-compass configuration file.
-#[allow(dead_code)]
 pub struct QualityCompassPolicy {
     path: std::path::PathBuf,
     last_reload: u64,
+    /// SHA-256 checksum of the last loaded file content.
+    checksum: Option<Vec<u8>>,
 }
 
 impl QualityCompassPolicy {
-    #[allow(dead_code)]
     pub fn new(path: impl Into<std::path::PathBuf>) -> Self {
         Self {
             path: path.into(),
             last_reload: 0,
+            checksum: None,
         }
     }
 }
 
 impl ReloadablePolicy for QualityCompassPolicy {
     fn reload(&mut self) -> Result<()> {
+        // Path validation: ensure the file exists and is readable
+        if !self.path.exists() {
+            anyhow::bail!(
+                "QualityCompass policy file not found: {}",
+                self.path.display()
+            );
+        }
+        if !self.path.is_file() {
+            anyhow::bail!(
+                "QualityCompass policy path is not a file: {}",
+                self.path.display()
+            );
+        }
+
         let content = std::fs::read_to_string(&self.path)?;
+
+        // Checksum validation: skip reload if content hasn't changed
+        let new_checksum = sha256_digest(content.as_bytes());
+        if self.checksum.as_ref() == Some(&new_checksum) {
+            debug!(
+                "QualityCompass policy unchanged, skipping reload: {}",
+                self.path.display()
+            );
+            return Ok(());
+        }
+
         let _config: serde_json::Value = toml::from_str(&content)?;
         self.last_reload = now_ms();
+        self.checksum = Some(new_checksum);
         info!(
             "QualityCompass policy reloaded from {}",
             self.path.display()
@@ -312,27 +397,48 @@ impl ReloadablePolicy for QualityCompassPolicy {
 }
 
 /// A reloadable policy that reads a TOML-based sandbox configuration file.
-#[allow(dead_code)]
 pub struct SandboxPolicyReloadable {
     path: std::path::PathBuf,
     last_reload: u64,
+    /// SHA-256 checksum of the last loaded file content.
+    checksum: Option<Vec<u8>>,
 }
 
 impl SandboxPolicyReloadable {
-    #[allow(dead_code)]
     pub fn new(path: impl Into<std::path::PathBuf>) -> Self {
         Self {
             path: path.into(),
             last_reload: 0,
+            checksum: None,
         }
     }
 }
 
 impl ReloadablePolicy for SandboxPolicyReloadable {
     fn reload(&mut self) -> Result<()> {
+        // Path validation: ensure the file exists and is readable
+        if !self.path.exists() {
+            anyhow::bail!("Sandbox policy file not found: {}", self.path.display());
+        }
+        if !self.path.is_file() {
+            anyhow::bail!("Sandbox policy path is not a file: {}", self.path.display());
+        }
+
         let content = std::fs::read_to_string(&self.path)?;
+
+        // Checksum validation: skip reload if content hasn't changed
+        let new_checksum = sha256_digest(content.as_bytes());
+        if self.checksum.as_ref() == Some(&new_checksum) {
+            debug!(
+                "Sandbox policy unchanged, skipping reload: {}",
+                self.path.display()
+            );
+            return Ok(());
+        }
+
         let _config: serde_json::Value = toml::from_str(&content)?;
         self.last_reload = now_ms();
+        self.checksum = Some(new_checksum);
         info!("Sandbox policy reloaded from {}", self.path.display());
         Ok(())
     }

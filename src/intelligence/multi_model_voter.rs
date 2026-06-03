@@ -739,108 +739,7 @@ impl MultiModelVoter {
     pub async fn vote(&self, prompt: &str, agents: &[Arc<dyn Agent>]) -> Result<VotingOutcome> {
         let start = Instant::now();
 
-        if agents.is_empty() {
-            return Err(anyhow::anyhow!(tf("voter.no_agents_available", &[])));
-        }
-
-        if agents.len() < self.min_voters {
-            warn!(
-                "MultiModelVoter: only {} agent(s) available, need at least {} — proceeding anyway",
-                agents.len(),
-                self.min_voters
-            );
-        }
-
-        let deadline = std::time::Duration::from_millis(self.per_model_timeout_ms);
-
-        // ── Launch concurrent tasks ────────────────────────────────────
-
-        let mut handles = Vec::with_capacity(agents.len());
-
-        for (idx, agent_ref) in agents.iter().enumerate() {
-            let agent = Arc::clone(agent_ref);
-            let prompt = prompt.to_string();
-
-            let handle = tokio::spawn(async move {
-                let model_name = agent
-                    .default_model()
-                    .map(|m| m.name.clone())
-                    .unwrap_or_else(|| format!("agent-{}", idx));
-
-                let vote_start = Instant::now();
-
-                let response = tokio::time::timeout(deadline, async {
-                    let (tx, mut rx) = mpsc::channel::<String>(256);
-                    let sender = StreamingSender::new(tx);
-
-                    let messages = vec![Message {
-                        role: "user".to_string(),
-                        content: prompt.clone(),
-                    }];
-
-                    agent
-                        .chat(messages, None, None, sender)
-                        .await
-                        .map_err(|e| anyhow::anyhow!("chat failed: {}", e))?;
-
-                    // Drop the original sender so rx.recv() eventually returns None
-                    drop(agent); // but we need to keep the channel alive
-                                 // Actually we already sent the message; collect remaining tokens
-                    let mut buf = String::new();
-                    while let Some(token) = rx.recv().await {
-                        buf.push_str(&token);
-                    }
-                    Ok::<String, anyhow::Error>(buf)
-                })
-                .await;
-
-                let latency_ms = vote_start.elapsed().as_millis() as u64;
-
-                match response {
-                    Ok(Ok(text)) => Some(ModelVoteResult {
-                        model_name,
-                        response: text,
-                        confidence: 0.5, // neutral default; caller can refine
-                        latency_ms,
-                    }),
-                    Ok(Err(e)) => {
-                        warn!(
-                            "MultiModelVoter: agent '{}' returned error: {}",
-                            model_name, e
-                        );
-                        None
-                    }
-                    Err(_elapsed) => {
-                        warn!(
-                            "MultiModelVoter: agent '{}' timed out after {}ms",
-                            model_name, latency_ms
-                        );
-                        None
-                    }
-                }
-            });
-
-            handles.push(handle);
-        }
-
-        // ── Collect results ────────────────────────────────────────────
-
-        let mut votes: Vec<ModelVoteResult> = Vec::with_capacity(agents.len());
-        for handle in handles {
-            match handle.await {
-                Ok(Some(vote)) => votes.push(vote),
-                Ok(None) => { /* agent failed or timed out — already logged */ }
-                Err(join_err) => {
-                    warn!("MultiModelVoter: spawned task panicked: {}", join_err);
-                }
-            }
-        }
-
-        if votes.is_empty() {
-            return Err(anyhow::anyhow!(tf("voter.all_models_failed", &[])));
-        }
-
-        // ── Apply strategy ─────────────────────────────────────────────
+        let votes = self.collect_votes(prompt, agents).await?;
 
         let total_duration_ms = start.elapsed().as_millis() as u64;
         let consensus = Self::consensus_score(&votes);
@@ -856,6 +755,74 @@ impl MultiModelVoter {
         );
 
         Ok(outcome)
+    }
+
+    /// Adaptive voting: attempts the configured strategy but automatically
+    /// falls back to more robust strategies when ties are detected:
+    ///   - Majority tie → Weighted
+    ///   - Weighted tie → Fusion
+    ///
+    /// This ensures a deterministic outcome is always produced.
+    pub async fn adaptive_vote(
+        &self,
+        prompt: &str,
+        agents: &[Arc<dyn Agent>],
+    ) -> Result<VotingOutcome> {
+        let start = Instant::now();
+        let votes = self.collect_votes(prompt, agents).await?;
+        let total_duration_ms = start.elapsed().as_millis() as u64;
+        let consensus = Self::consensus_score(&votes);
+
+        // Try the configured strategy first
+        let outcome = self.apply_strategy(votes.clone(), consensus, total_duration_ms);
+
+        // Check if the outcome has a tie and needs fallback
+        if !outcome.tie_breaker_used {
+            info!(
+                "MultiModelVoter: adaptive vote succeeded with strategy={:?} winner={}",
+                self.strategy, outcome.winner_model
+            );
+            return Ok(outcome);
+        }
+
+        // ── Fallback chain ────────────────────────────────────────────
+        let mut fallback_strategy = self.strategy;
+
+        // Fallback 1: If Majority produced a tie → try Weighted
+        if matches!(fallback_strategy, VotingStrategy::Majority) {
+            warn!("MultiModelVoter: Majority tie detected, falling back to Weighted strategy");
+            let weighted = self.weighted_outcome(votes.clone(), consensus, total_duration_ms);
+            if !weighted.tie_breaker_used {
+                return Ok(weighted);
+            }
+            fallback_strategy = VotingStrategy::Weighted;
+        }
+
+        // Fallback 2: If Weighted produced a tie (or we started with Weighted and it tied) → try Fusion
+        if matches!(fallback_strategy, VotingStrategy::Weighted)
+            || matches!(self.strategy, VotingStrategy::Weighted)
+        {
+            warn!("MultiModelVoter: Weighted tie detected, falling back to Fusion strategy");
+            let engine = FusionEngine {
+                fusion_model_enabled: self.fusion_agent.is_some(),
+                model_weights: self.model_weights.clone(),
+                fusion_agent: None,
+            };
+            let mut fused = engine.fuse(votes.clone());
+            fused.total_duration_ms = total_duration_ms;
+            return Ok(fused);
+        }
+
+        // Ultimate fallback: use Fusion unconditionally
+        warn!("MultiModelVoter: all strategy fallbacks exhausted, using Fusion");
+        let engine = FusionEngine {
+            fusion_model_enabled: self.fusion_agent.is_some(),
+            model_weights: self.model_weights.clone(),
+            fusion_agent: None,
+        };
+        let mut fused = engine.fuse(votes);
+        fused.total_duration_ms = total_duration_ms;
+        Ok(fused)
     }
 
     /// Vote with fusion engine: collect responses and fuse them into a single

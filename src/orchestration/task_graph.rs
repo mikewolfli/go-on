@@ -1,3 +1,9 @@
+//! Task graph DAG for checkpoint and restore workflows.
+//!
+//! # Migration
+//! Consider using [`crate::orchestration::core_dag::CoreDag<T>`] for new code.
+//! `CoreDag` is the unified generic DAG that will eventually replace this module.
+
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 

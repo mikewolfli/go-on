@@ -386,10 +386,10 @@ impl MemoryRetrievalEngine {
 
     /// Collect all entries currently in the hot cache.
     fn collect_hot_entries(&self) -> Vec<MemoryEntry> {
-        // This is a best-effort snapshot; hot cache isn't directly iterable
-        // from outside. In practice we'd expose an iterator, but for now
-        // we retrieve by scanning known IDs — or delegate to persistence.
-        Vec::new()
+        // Snapshot all hot-tier entries via the persistence layer, which
+        // exposes hot entries through `hot_entries()`. This enables L1 cache
+        // scanning for the retrieval engine.
+        self.persistence.hot_entries()
     }
 
     /// Simple token-overlap matching. Returns true if any query token

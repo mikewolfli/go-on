@@ -328,6 +328,7 @@ pub fn build_audit_entry(
         data_classification: None,
         compliance_tags: vec![],
         retention_policy: None,
+        correlation_id: None,
     }
 }
 

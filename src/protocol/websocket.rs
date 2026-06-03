@@ -128,8 +128,28 @@ impl WsSender {
     }
 
     /// Increment the reconnect counter.
+    ///
+    /// Includes a decay mechanism: if the connection has been alive and stable
+    /// for more than 60 seconds since the last heartbeat, the counter is
+    /// reset to 0 before incrementing. This prevents unbounded backoff growth
+    /// on intermittently flaky connections that later stabilise.
     pub fn record_reconnect(&mut self) {
-        self.reconnect_count += 1;
+        const DECAY_THRESHOLD_SECS: u64 = 60;
+        // If the connection has been stable for longer than the threshold,
+        // treat this as a fresh reconnection rather than a continuation of
+        // an old backoff series.
+        if self.last_heartbeat.elapsed().as_secs() >= DECAY_THRESHOLD_SECS {
+            self.reconnect_count = 0;
+        }
+        self.reconnect_count = self.reconnect_count.saturating_add(1);
+    }
+
+    /// Reset the reconnect counter to zero.
+    ///
+    /// Call this after a successful long-lived connection has been
+    /// re-established to allow the backoff strategy to start fresh.
+    pub fn reset_reconnect_count(&mut self) {
+        self.reconnect_count = 0;
     }
 }
 
@@ -302,6 +322,7 @@ impl WebSocketHub {
 
         let handle: JoinHandle<()> = tokio::spawn(async move {
             let mut ticker = tokio::time::interval(interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 ticker.tick().await;
 
@@ -575,6 +596,17 @@ impl WebSocketHub {
         let mut conns = self.inner.connections.write().await;
         if let Some(sender) = conns.get_mut(connection_id) {
             sender.record_reconnect();
+        }
+    }
+
+    /// Reset the reconnect count for a connection to zero.
+    ///
+    /// Call this after a successful reconnection to prevent unbounded
+    /// exponential backoff growth.
+    pub async fn reset_reconnect(&self, connection_id: &str) {
+        let mut conns = self.inner.connections.write().await;
+        if let Some(sender) = conns.get_mut(connection_id) {
+            sender.reset_reconnect_count();
         }
     }
 

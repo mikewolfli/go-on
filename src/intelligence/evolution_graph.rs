@@ -100,6 +100,8 @@ pub struct EvolutionGraph {
     max_records: usize,
     /// Max versions to retain per record before evicting the oldest.
     max_versions_per_record: usize,
+    /// Slope tolerance threshold below which the trend is considered Stable.
+    trend_tolerance: f64,
 }
 
 impl EvolutionGraph {
@@ -110,7 +112,18 @@ impl EvolutionGraph {
             version_counter: 0,
             max_records: 5000,
             max_versions_per_record: 100,
+            trend_tolerance: 0.02,
         }
+    }
+
+    /// Returns the current trend tolerance.
+    pub fn trend_tolerance(&self) -> f64 {
+        self.trend_tolerance
+    }
+
+    /// Sets the trend tolerance threshold.
+    pub fn set_trend_tolerance(&mut self, tolerance: f64) {
+        self.trend_tolerance = tolerance;
     }
 
     /// Register a new capability for an agent at the given initial stage.
@@ -133,9 +146,7 @@ impl EvolutionGraph {
             if let Some(oldest_key) = self
                 .records
                 .iter()
-                .min_by_key(|(_, rec)| {
-                    rec.versions.last().map(|v| v.created_ms).unwrap_or(0)
-                })
+                .min_by_key(|(_, rec)| rec.versions.last().map(|v| v.created_ms).unwrap_or(0))
                 .map(|(k, _)| k.clone())
             {
                 self.records.remove(&oldest_key);
@@ -192,7 +203,7 @@ impl EvolutionGraph {
         }
 
         record.versions.push(version.clone());
-        record.trend = calculate_trend(&record.versions);
+        record.trend = calculate_trend(&record.versions, self.trend_tolerance);
         Ok(version)
     }
 
@@ -347,30 +358,29 @@ fn is_valid_transition(from: EvolutionStage, to: EvolutionStage) -> bool {
 
 // ─── Trend calculation ──────────────────────────────────────────────────────
 
-/// Slope tolerance threshold below which the trend is considered Stable.
-const TREND_TOLERANCE: f64 = 0.01;
-
 /// Calculate the trend direction from a list of versions.
 ///
 /// Uses simple linear regression on the success rate over time.
 /// Returns `Unknown` when there are fewer than 2 data points.
-fn calculate_trend(versions: &[CapabilityVersion]) -> TrendDirection {
+fn calculate_trend(versions: &[CapabilityVersion], tolerance: f64) -> TrendDirection {
     if versions.len() < 2 {
         return TrendDirection::Unknown;
     }
     let slope = linear_regression_slope(versions);
 
-    if slope > TREND_TOLERANCE {
+    if slope > tolerance {
         TrendDirection::Improving
-    } else if slope < -TREND_TOLERANCE {
+    } else if slope < -tolerance {
         TrendDirection::Degrading
     } else {
         TrendDirection::Stable
     }
 }
 
-/// Compute the linear regression slope of success rate vs. version index.
+/// Compute the linear regression slope of success rate vs. `created_ms` timestamps.
 ///
+/// Uses real timestamps for the x-axis. If all timestamps are identical
+/// (e.g. in tests), falls back to using version index (0..n).
 /// Returns the slope coefficient. A positive value means improving,
 /// negative means degrading.
 fn linear_regression_slope(versions: &[CapabilityVersion]) -> f64 {
@@ -379,15 +389,26 @@ fn linear_regression_slope(versions: &[CapabilityVersion]) -> f64 {
         return 0.0;
     }
 
-    let indices: Vec<f64> = (0..versions.len()).map(|i| i as f64).collect();
+    // Use timestamps; if they are all identical, fall back to index.
+    let use_timestamps = {
+        let min_ts = versions.iter().map(|v| v.created_ms).min().unwrap_or(0);
+        let max_ts = versions.iter().map(|v| v.created_ms).max().unwrap_or(0);
+        min_ts != max_ts
+    };
+
+    let x_vals: Vec<f64> = if use_timestamps {
+        versions.iter().map(|v| v.created_ms as f64).collect()
+    } else {
+        (0..versions.len()).map(|i| i as f64).collect()
+    };
     let rates: Vec<f64> = versions.iter().map(|v| v.success_rate).collect();
 
-    let mean_x = indices.iter().sum::<f64>() / n;
+    let mean_x = x_vals.iter().sum::<f64>() / n;
     let mean_y = rates.iter().sum::<f64>() / n;
 
     let mut num = 0.0;
     let mut den = 0.0;
-    for (x, y) in indices.iter().zip(rates.iter()) {
+    for (x, y) in x_vals.iter().zip(rates.iter()) {
         let dx = x - mean_x;
         num += dx * (y - mean_y);
         den += dx * dx;

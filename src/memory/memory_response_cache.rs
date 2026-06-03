@@ -83,15 +83,17 @@ impl MemoryResponseCache {
         );
 
         // Keep L1 cache bounded to avoid unbounded memory growth.
+        // Eviction strategy: first purge expired entries (O(n)), then
+        // drain excess entries arbitrarily without sorting (O(excess)).
+        // This avoids the O(n log n) sort on every insert over the limit.
         if guard.len() > 2048 {
-            let mut entries: Vec<(String, i64)> = guard
-                .iter()
-                .map(|(k, v)| (k.clone(), v.expires_at))
-                .collect();
-            entries.sort_by_key(|(_, expires_at)| *expires_at);
-            let remove_count = guard.len() - 2048;
-            for (k, _) in entries.into_iter().take(remove_count) {
-                guard.remove(&k);
+            guard.retain(|_, v| v.expires_at > now_ts());
+            if guard.len() > 2048 {
+                let excess = guard.len() - 2048;
+                let keys: Vec<String> = guard.keys().take(excess).cloned().collect();
+                for k in keys {
+                    guard.remove(&k);
+                }
             }
         }
     }

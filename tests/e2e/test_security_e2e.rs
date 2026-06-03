@@ -182,7 +182,7 @@ async fn test_security_all_controls() {
 
     // Register a key.
     let key = secret_mgr
-        .register_key("api-key-e2e".into(), SecretAlgorithm::HmacSha256)
+        .register_key("api-key-e2e".into(), SecretAlgorithm::HmacSha256, None)
         .await
         .expect("key registration must succeed");
     assert_eq!(key.key_id, "api-key-e2e");
@@ -190,7 +190,7 @@ async fn test_security_all_controls() {
 
     // Rotate the key via SecretManager.
     let rotated = secret_mgr
-        .rotate_key("api-key-e2e")
+        .rotate_key("api-key-e2e", None)
         .await
         .expect("rotation must succeed");
     assert_ne!(
@@ -201,7 +201,7 @@ async fn test_security_all_controls() {
 
     // Retrieve & verify via get_key.
     let retrieved = secret_mgr
-        .get_key("api-key-e2e")
+        .get_key("api-key-e2e", None)
         .await
         .expect("get_key must succeed");
     assert_eq!(retrieved.key_id, "api-key-e2e");
@@ -261,14 +261,14 @@ async fn test_security_secret_rotation_ed25519() {
     );
 
     let key = secret_mgr
-        .register_key("ed25519-key-e2e".into(), SecretAlgorithm::Ed25519)
+        .register_key("ed25519-key-e2e".into(), SecretAlgorithm::Ed25519, None)
         .await
         .expect("Ed25519 key registration must succeed");
     assert_eq!(key.algorithm, SecretAlgorithm::Ed25519);
 
     // Rotate
     let rotated = secret_mgr
-        .rotate_key("ed25519-key-e2e")
+        .rotate_key("ed25519-key-e2e", None)
         .await
         .expect("Ed25519 key rotation must succeed");
     assert_ne!(rotated.key_bytes, key.key_bytes);

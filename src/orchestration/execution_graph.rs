@@ -3,6 +3,10 @@
 //! Extends the basic TaskGraph with Branch nodes (fan-out to parallel paths),
 //! Join nodes (sync point after parallel execution), and Condition nodes
 //! (branching based on condition evaluation). Designed for F-GAP-04.
+//!
+//! # Migration
+//! Consider using [`crate::orchestration::core_dag::CoreDag<T>`] for new code.
+//! `CoreDag` is the unified generic DAG that will eventually replace this module.
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};

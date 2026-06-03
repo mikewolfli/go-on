@@ -5,8 +5,8 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
+use std::sync::{Mutex, MutexGuard};
 
 /// Lock a Mutex, recovering from poison with a log.
 fn lock_guard<T>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -732,7 +732,7 @@ impl MultiChannelTransport {
         payload: &str,
     ) -> TransportMessage {
         TransportMessage {
-            id: format!("msg-{}", Self::next_id()),
+            id: generate_message_id(),
             channel,
             priority: MessagePriority::Normal,
             qos: QosLevel::AtMostOnce,
@@ -744,18 +744,20 @@ impl MultiChannelTransport {
             delivery_attempts: 0,
         }
     }
-
-    /// Atomically increment and return the next message id counter.
-    fn next_id() -> u64 {
-        NEXT_MSG_ID.fetch_add(1, Ordering::Relaxed)
-    }
 }
 
 // ---------------------------------------------------------------------------
 // Static helpers
 // ---------------------------------------------------------------------------
 
-static NEXT_MSG_ID: AtomicU64 = AtomicU64::new(1);
+/// Generate a non-predictable message ID using a UUID v4.
+///
+/// Uses a mixed strategy: a human-readable prefix followed by a UUID v4
+/// hex string. This makes message IDs globally unique and unpredictable
+/// while remaining debuggable in logs.
+pub fn generate_message_id() -> String {
+    format!("msg-{}", uuid::Uuid::new_v4())
+}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -798,7 +800,7 @@ mod tests {
         let now = MultiChannelTransport::now_ms();
         let channel_name = channel.to_string();
         TransportMessage {
-            id: format!("msg-{}", MultiChannelTransport::next_id()),
+            id: generate_message_id(),
             channel,
             priority,
             qos: QosLevel::AtMostOnce,

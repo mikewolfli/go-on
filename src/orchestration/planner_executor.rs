@@ -14,7 +14,9 @@ use crate::agent::{AgentRegistry, AgentTaskEnvelope, AgentTaskResult};
 use crate::i18n::runtime::tf;
 use crate::orchestration::mode::{ModeKind, ModeRuntime};
 use crate::orchestration::planner_embedding::EmbeddingTaskClassifier;
+use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 /// A single step in an execution plan
@@ -437,6 +439,19 @@ impl Executor {
         _registry: &AgentRegistry,
         runtimes: &[(ModeKind, Box<dyn ModeRuntime>)],
     ) -> Vec<(String, Result<AgentTaskResult, String>)> {
+        Self::execute_with_cancel(plan, _registry, runtimes, CancellationToken::new()).await
+    }
+
+    /// Execute an execution plan with cooperative cancellation support.
+    ///
+    /// Parallel groups respect the `CancellationToken` — when cancelled,
+    /// remaining steps are recorded as failures rather than spawned.
+    pub async fn execute_with_cancel(
+        plan: &ExecutionPlan,
+        _registry: &AgentRegistry,
+        runtimes: &[(ModeKind, Box<dyn ModeRuntime>)],
+        cancel: CancellationToken,
+    ) -> Vec<(String, Result<AgentTaskResult, String>)> {
         let mut results: Vec<(String, Result<AgentTaskResult, String>)> = Vec::new();
         let mut completed: HashSet<String> = HashSet::new();
         let mut failed: HashSet<String> = HashSet::new();
@@ -590,72 +605,112 @@ impl Executor {
                             }
                         }
                     } else {
-                        // Multiple ready steps — execute concurrently using block_in_place
-                        // to allow the synchronous ModeRuntime::run calls to coexist without
-                        // blocking the async runtime's worker thread.
+                        // Multiple ready steps — execute concurrently using spawn_blocking
+                        // and futures::future::join_all, avoiding block_in_place on the async
+                        // worker thread.
                         let plan_id = plan.plan_id.clone();
-                        let mut parallel_results = Vec::with_capacity(group_ready.len());
 
-                        tokio::task::block_in_place(|| {
-                            std::thread::scope(|s| {
-                                let mut handles = Vec::with_capacity(group_ready.len());
-                                for gs in &group_ready {
-                                    let runtime =
-                                        runtimes.iter().find(|(kind, _)| *kind == gs.mode);
-                                    let step_id = gs.step_id.clone();
-                                    match runtime {
-                                        Some((_kind, rt)) => {
-                                            let envelope = AgentTaskEnvelope {
-                                                task_id: format!("plan-{}_{}", plan_id, gs.step_id),
-                                                phase: "execution".to_string(),
-                                                role: gs
-                                                    .agent
-                                                    .clone()
-                                                    .unwrap_or_else(|| "agent".to_string()),
-                                                objective: gs.description.clone(),
-                                                constraints: None,
-                                                evidence: None,
-                                                input: serde_json::json!({
-                                                    "step": &gs.step_id,
-                                                    "mode": format!("{:?}", gs.mode),
-                                                }),
-                                            };
-                                            handles.push(s.spawn(|| {
-                                                let result = rt.run(envelope).map_err(|e| {
-                                                    tf(
-                                                        "error.planner.runtime_failed",
-                                                        &[("detail", &e.to_string())],
-                                                    )
-                                                });
-                                                (step_id, result)
-                                            }));
-                                        }
-                                        None => {
-                                            parallel_results.push((
-                                                step_id,
-                                                Err(tf(
-                                                    "error.planner.no_runtime_found",
-                                                    &[("mode", &format!("{:?}", gs.mode))],
-                                                )),
-                                            ));
-                                        }
-                                    }
+                        // Pre-collect owned data for each step so that spawn_blocking
+                        // closures can capture 'static values.
+                        let step_infos: Vec<(String, String, String, ModeKind, Option<String>)> =
+                            group_ready
+                                .iter()
+                                .map(|gs| {
+                                    (
+                                        gs.step_id.clone(),
+                                        format!("plan-{}_{}", plan_id, gs.step_id),
+                                        gs.description.clone(),
+                                        gs.mode.clone(),
+                                        gs.agent.clone(),
+                                    )
+                                })
+                                .collect();
+
+                        let mut blocking_tasks = Vec::with_capacity(step_infos.len());
+
+                        for (step_id, task_id, description, mode, agent) in step_infos {
+                            // Check cancellation before spawning
+                            if cancel.is_cancelled() {
+                                let sid = step_id.clone();
+                                failed.insert(sid.clone());
+                                results.push((sid, Err("cancelled by shutdown token".to_string())));
+                                continue;
+                            }
+
+                            let runtime = runtimes.iter().find(|(kind, _)| *kind == mode);
+                            match runtime {
+                                Some((_kind, rt)) => {
+                                    let envelope = AgentTaskEnvelope {
+                                        task_id: task_id.clone(),
+                                        phase: "execution".to_string(),
+                                        role: agent.clone().unwrap_or_else(|| "agent".to_string()),
+                                        objective: description.clone(),
+                                        constraints: None,
+                                        evidence: None,
+                                        input: serde_json::json!({
+                                            "step": &step_id,
+                                            "mode": format!("{:?}", mode),
+                                        }),
+                                    };
+                                    // SAFETY: The runtimes slice lives for the duration of
+                                    // execute(), and we await all spawn_blocking handles before
+                                    // returning, so the reference remains valid.
+                                    let rt_pair: [usize; 2] = unsafe {
+                                        std::mem::transmute::<
+                                            *const (dyn ModeRuntime + 'static),
+                                            [usize; 2],
+                                        >(
+                                            rt.as_ref() as *const (dyn ModeRuntime + 'static)
+                                        )
+                                    };
+                                    blocking_tasks.push(tokio::task::spawn_blocking(move || {
+                                        // SAFETY: rt_pair was created from a valid reference
+                                        // that outlives this spawn_blocking task.
+                                        let rt_ref: *const (dyn ModeRuntime + 'static) = unsafe {
+                                            std::mem::transmute::<[usize; 2], _>(rt_pair)
+                                        };
+                                        let rt: &dyn ModeRuntime = unsafe { &*rt_ref };
+                                        let result = rt.run(envelope).map_err(|e| {
+                                            tf(
+                                                "error.planner.runtime_failed",
+                                                &[("detail", &e.to_string())],
+                                            )
+                                        });
+                                        (step_id, result)
+                                    }));
                                 }
-                                for handle in handles {
-                                    // Handle thread join; a panic in a parallel step is a
-                                    // genuine bug in the runtime and should not propagate via
-                                    // panic! — log the error and record a step failure instead.
-                                    match handle.join() {
-                                        Ok(result) => parallel_results.push(result),
-                                        Err(e) => {
-                                            tracing::error!("parallel group step panicked: {:?}", e);
-                                            // Use a placeholder step ID; group cleanup below
-                                            // handles removing remaining group members.
-                                        }
-                                    }
+                                None => {
+                                    blocking_tasks.push(tokio::task::spawn_blocking(move || {
+                                        (
+                                            step_id,
+                                            Err(tf(
+                                                "error.planner.no_runtime_found",
+                                                &[("mode", &format!("{:?}", mode))],
+                                            )),
+                                        )
+                                    }));
                                 }
-                            });
-                        });
+                            }
+                        }
+
+                        let parallel_results: Vec<(String, Result<AgentTaskResult, String>)> =
+                            join_all(blocking_tasks)
+                                .await
+                                .into_iter()
+                                .filter_map(|r| match r {
+                                    Ok(inner) => Some(inner),
+                                    Err(join_err) => {
+                                        tracing::error!(
+                                            "parallel group spawn_blocking panicked: {:?}",
+                                            join_err
+                                        );
+                                        // A join error means the blocking task panicked.
+                                        // We lose the step_id because the closure was dropped.
+                                        // Mark all remaining group members as failed instead.
+                                        None
+                                    }
+                                })
+                                .collect();
 
                         for (sid, result) in parallel_results {
                             remaining.remove(&sid);

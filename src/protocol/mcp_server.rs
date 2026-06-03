@@ -336,6 +336,26 @@ async fn handle_http_connection(
         anyhow::anyhow!("{}", t("error.http_missing_path"))
     })?;
 
+    // ── Content-Length validation (before any auth processing) ────────
+    // Check Content-Length before allocating buffers to prevent OOM.
+    const MAX_BODY_SIZE: usize = 10 * 1024 * 1024; // 10MB
+    let content_length = extract_content_length(header_part).unwrap_or(0);
+    if content_length > MAX_BODY_SIZE {
+        let error_body = inject_platform_profiles_if_absent(
+            serde_json::json!({
+                "error": tf("error.http_body_too_large", &[
+                    ("size", &content_length.to_string()),
+                    ("max", &MAX_BODY_SIZE.to_string())
+                ]),
+                "code": "PAYLOAD_TOO_LARGE"
+            }),
+            "mcp.payload_too_large",
+        );
+        let cors = compute_mcp_cors_headers(header_part, &acp_server);
+        write_http_json_response(socket, 413, error_body, &cors).await?;
+        return Ok(());
+    }
+
     // ── CORS headers ─────────────────────────────────────────────────────
     let cors_headers = compute_mcp_cors_headers(header_part, &acp_server);
 
@@ -499,20 +519,7 @@ async fn handle_http_connection(
         }
     }
 
-    const MAX_BODY_SIZE: usize = 10 * 1024 * 1024; // 10MB
     let content_length = extract_content_length(header_part).unwrap_or(0);
-    if content_length > MAX_BODY_SIZE {
-        anyhow::bail!(
-            "{}",
-            tf(
-                "error.http_body_too_large",
-                &[
-                    ("size", &content_length.to_string()),
-                    ("max", &MAX_BODY_SIZE.to_string())
-                ]
-            )
-        );
-    }
     let mut body_bytes = body_initial_part.as_bytes().to_vec();
     if body_bytes.len() < content_length {
         let mut remaining = vec![0u8; content_length - body_bytes.len()];
@@ -615,6 +622,7 @@ async fn write_http_json_response(
         400 => "Bad Request",
         401 => "Unauthorized",
         403 => "Forbidden",
+        413 => "Payload Too Large",
         405 => "Method Not Allowed",
         500 => "Internal Server Error",
         503 => "Service Unavailable",

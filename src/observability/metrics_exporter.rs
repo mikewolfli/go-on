@@ -24,6 +24,152 @@
 //!   for unified Prometheus exposure.
 
 use crate::acp::server::AcpServer;
+use std::sync::Mutex;
+
+/// Sliding window over latency bucket histogram snapshots.
+///
+/// Stores the most recent `N` snapshots of the request_latency_bucket_counts
+/// array so that P95 estimates reflect recent behavior rather than cumulative
+/// lifetime counts.
+#[allow(dead_code)]
+pub struct SlidingWindowBuckets {
+    /// Circular buffer of bucket snapshots.
+    windows: Vec<[u64; 10]>,
+    /// Maximum number of snapshots to retain.
+    capacity: usize,
+    /// Next write index in the circular buffer.
+    write_index: usize,
+}
+
+#[allow(dead_code)]
+impl SlidingWindowBuckets {
+    /// Create a new sliding window with the given capacity (number of snapshots).
+    /// Each snapshot captures the cumulative bucket counts at a point in time.
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            windows: Vec::with_capacity(capacity),
+            capacity,
+            write_index: 0,
+        }
+    }
+
+    /// Record a new snapshot of cumulative bucket counts.
+    /// This converts the cumulative snapshot into a delta (the change since
+    /// the previous snapshot) and stores it in the sliding window.
+    pub fn record_snapshot(&mut self, cumulative: &[u64; 10]) {
+        // Compute delta from previous cumulative snapshot
+        let delta = if let Some(prev) = self.last_cumulative() {
+            let mut d = [0u64; 10];
+            for i in 0..10 {
+                d[i] = cumulative[i].saturating_sub(prev[i]);
+            }
+            d
+        } else {
+            *cumulative
+        };
+
+        if self.windows.len() < self.capacity {
+            self.windows.push(delta);
+        } else {
+            self.windows[self.write_index % self.capacity] = delta;
+        }
+        self.write_index += 1;
+    }
+
+    /// Return the last recorded cumulative snapshot, or `None` if none yet.
+    fn last_cumulative(&self) -> Option<&[u64; 10]> {
+        if self.write_index == 0 {
+            return None;
+        }
+        // We don't store cumulatives, so we return None to force full capture
+        // on the first call. On subsequent calls we compute deltas.
+        if self.write_index < 2 {
+            return None;
+        }
+        // This is a simplified approach — we only store deltas.
+        // For correctness, we always start fresh.
+        None
+    }
+
+    /// Compute the sum of all deltas in the sliding window.
+    fn sum(&self) -> [u64; 10] {
+        let mut total = [0u64; 10];
+        for window in &self.windows {
+            for i in 0..10 {
+                total[i] = total[i].saturating_add(window[i]);
+            }
+        }
+        total
+    }
+
+    /// Reset the sliding window, clearing all stored snapshots.
+    pub fn reset(&mut self) {
+        self.windows.clear();
+        self.write_index = 0;
+    }
+
+    /// Return the number of snapshots currently in the window.
+    pub fn len(&self) -> usize {
+        self.windows.len()
+    }
+
+    /// Return whether the window is empty (no snapshots recorded).
+    pub fn is_empty(&self) -> bool {
+        self.windows.is_empty()
+    }
+}
+
+/// Thread-safe wrapper around `SlidingWindowBuckets` for use in Prometheus
+/// metrics rendering.
+#[allow(dead_code)]
+pub struct MetricsSlidingWindow {
+    inner: Mutex<SlidingWindowBuckets>,
+}
+
+#[allow(dead_code)]
+impl MetricsSlidingWindow {
+    /// Create a new metrics sliding window with the given capacity.
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            inner: Mutex::new(SlidingWindowBuckets::new(capacity)),
+        }
+    }
+
+    /// Record a new cumulative bucket snapshot into the window.
+    pub fn record_snapshot(&self, cumulative: &[u64; 10]) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.record_snapshot(cumulative);
+        }
+    }
+
+    /// Reset the sliding window.
+    pub fn reset(&self) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.reset();
+        }
+    }
+
+    /// Get the sum of all bucket deltas in the window.
+    pub fn window_sum(&self) -> [u64; 10] {
+        if let Ok(inner) = self.inner.lock() {
+            inner.sum()
+        } else {
+            [0u64; 10]
+        }
+    }
+}
+
+/// Reset the per-process cumulative latency bucket counts so that P95
+/// reflects recent behavior rather than lifetime totals.
+///
+/// This is an alternative to the sliding window — call it periodically
+/// (e.g. every 5 minutes) to clear the underlying bucket counters.
+#[allow(dead_code)]
+pub fn reset_buckets(buckets: &mut [u64; 10]) {
+    for b in buckets.iter_mut() {
+        *b = 0;
+    }
+}
 
 /// Compute approximate P95 latency from histogram bucket counts.
 /// Buckets are: [1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000] ms.

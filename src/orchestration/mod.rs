@@ -7,6 +7,7 @@ pub mod capabilities_registry;
 pub mod capability_signals; // BLUE41: Structured capability decision data
 pub mod complexity_estimator;
 pub mod context;
+pub mod core_dag; // DAG-UNIFY: Unified generic DAG — prefer over dag_executor, task_graph, execution_graph
 #[cfg(any(
     feature = "sub-bus-tool",
     feature = "profile-simple-server",

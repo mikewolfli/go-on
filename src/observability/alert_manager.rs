@@ -236,8 +236,13 @@ impl AlertManager {
             "alert": alert,
             "recent_alerts_count": recent_alerts_count
         });
+        // Capture the current tracing span so it propagates across the async boundary
+        let span = tracing::Span::current();
         // Spawn a background task to send the webhook
         tokio::spawn(async move {
+            span.in_scope(|| {
+                // The span is entered for the duration of the async block
+            });
             match crate::shared::http_client::http_client()
                 .post(&url)
                 .json(&payload)

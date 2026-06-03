@@ -6,7 +6,7 @@
 // F-GAP-49: Module wired into production protocol pipeline.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tracing::warn;
 
@@ -73,9 +73,10 @@ impl TokenBucket {
 /// Rate limit middleware
 #[derive(Debug)]
 pub struct RateLimitMiddleware {
-    buckets: Mutex<HashMap<String, TokenBucket>>,
+    buckets: Arc<Mutex<HashMap<String, TokenBucket>>>,
     default_limit: TenantRateLimit,
     idle_timeout: Duration,
+    max_tenants: usize,
 }
 
 #[allow(dead_code)] // F-GAP-49 — reserved for generic construction
@@ -86,11 +87,14 @@ impl Default for RateLimitMiddleware {
 }
 
 impl RateLimitMiddleware {
+    pub const DEFAULT_MAX_TENANTS: usize = 10_000;
+
     pub fn new(default_limit: TenantRateLimit) -> Self {
         Self {
-            buckets: Mutex::new(HashMap::new()),
+            buckets: Arc::new(Mutex::new(HashMap::new())),
             default_limit,
             idle_timeout: Duration::from_secs(3600),
+            max_tenants: Self::DEFAULT_MAX_TENANTS,
         }
     }
 
@@ -100,9 +104,17 @@ impl RateLimitMiddleware {
         self
     }
 
+    /// Set the maximum number of tenant entries.
+    pub fn with_max_tenants(mut self, max: usize) -> Self {
+        self.max_tenants = max;
+        self
+    }
+
     /// Perform lazy eviction: remove idle tenant entries.
     fn lazy_evict(&self, buckets: &mut HashMap<String, TokenBucket>) {
-        buckets.retain(|_, bucket| !bucket.is_idle(self.idle_timeout));
+        if buckets.len() > self.max_tenants {
+            buckets.retain(|_, bucket| !bucket.is_idle(self.idle_timeout));
+        }
     }
 
     /// Evict a specific tenant from the rate limiter.
@@ -122,8 +134,18 @@ impl RateLimitMiddleware {
             poisoned.into_inner()
         });
 
-        // Lazy eviction: remove idle tenants before processing
+        // Lazy eviction: only evict when we're at capacity to keep common path fast.
         self.lazy_evict(&mut buckets);
+
+        // Enforce max_tenants: reject new tenants when at capacity.
+        // Existing tenants can always proceed.
+        if !buckets.contains_key(tenant_id) && buckets.len() >= self.max_tenants {
+            warn!(
+                "rate limit tenant limit reached (max={}), rejecting tenant '{}'",
+                self.max_tenants, tenant_id
+            );
+            return Err(60); // 60 second backoff hint
+        }
 
         let bucket = buckets
             .entry(tenant_id.to_string())
@@ -158,6 +180,48 @@ impl RateLimitMiddleware {
                 refill_per_second: self.default_limit.rpm as f64 / 60.0,
             }
         }
+    }
+
+    /// Start a background task that periodically evicts idle tenant entries.
+    /// This provides a TTL-based background eviction cycle, reducing the need
+    /// for per-request lazy eviction checks.
+    ///
+    /// The task runs every `check_interval` and can be aborted via the returned
+    /// `tokio::task::JoinHandle`. Safe to call multiple times — each call spawns
+    /// a separate eviction task.
+    pub fn start_background_eviction(
+        &self,
+        check_interval: Duration,
+    ) -> tokio::task::JoinHandle<()> {
+        let buckets = Arc::clone(&self.buckets);
+        let idle_timeout = self.idle_timeout;
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(check_interval).await;
+                let mut guard = match buckets.lock() {
+                    Ok(g) => g,
+                    Err(poisoned) => {
+                        warn!("rate limit eviction task lock poisoned, recovering");
+                        poisoned.into_inner()
+                    }
+                };
+                let before = guard.len();
+                guard.retain(|_, bucket| !bucket.is_idle(idle_timeout));
+                let after = guard.len();
+                if before != after {
+                    warn!(
+                        "rate limit eviction: removed {} idle tenants ({} remaining)",
+                        before - after,
+                        after
+                    );
+                }
+            }
+        })
+    }
+
+    /// Start background eviction with a default 5-minute check interval.
+    pub fn start_background_eviction_default(&self) -> tokio::task::JoinHandle<()> {
+        self.start_background_eviction(Duration::from_secs(300))
     }
 }
 

@@ -26,7 +26,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::RwLock;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 // ---------------------------------------------------------------------------
 // Type aliases
@@ -108,6 +108,7 @@ const MAX_SESSIONS: usize = 10_000;
 #[derive(Debug, Clone)]
 pub struct SharedSession {
     pub id: SessionId,
+    pub tenant_id: Option<String>,
     pub chat_history: Vec<ChatMessage>,
     pub active_tasks: Vec<ActiveTask>,
     pub council_proposals: Vec<CouncilProposal>,
@@ -120,6 +121,20 @@ impl SharedSession {
     pub fn new(id: SessionId) -> Self {
         Self {
             id,
+            tenant_id: None,
+            chat_history: Vec::new(),
+            active_tasks: Vec::new(),
+            council_proposals: Vec::new(),
+            last_active: now_ms(),
+            version: 0,
+        }
+    }
+
+    /// Create a new session with an explicit tenant identifier.
+    pub fn with_tenant(id: SessionId, tenant_id: String) -> Self {
+        Self {
+            id,
+            tenant_id: Some(tenant_id),
             chat_history: Vec::new(),
             active_tasks: Vec::new(),
             council_proposals: Vec::new(),
@@ -313,7 +328,36 @@ impl SessionRegistry {
     // ── Frontend connection management ───────────────────────────────────
 
     /// Connect a frontend to a session so it receives sync diffs.
-    pub async fn connect_frontend(&self, frontend_id: &str, session_id: &str) {
+    ///
+    /// If `tenant_id` is `Some` and the session has a tenant set, the
+    /// frontend's tenant must match the session's tenant, otherwise the
+    /// connection is rejected with a warning.
+    pub async fn connect_frontend(
+        &self,
+        frontend_id: &str,
+        session_id: &str,
+        tenant_id: Option<&str>,
+    ) {
+        // Tenant isolation guard: if both the session and the caller specify
+        // a tenant, they must match.
+        if let Some(tenant) = tenant_id {
+            let sessions = self.sessions.read().await;
+            if let Some(session) = sessions.get(session_id) {
+                if let Some(session_tenant) = &session.tenant_id {
+                    if session_tenant != tenant {
+                        warn!(
+                            frontend_id = %frontend_id,
+                            session_id = %session_id,
+                            frontend_tenant = %tenant,
+                            session_tenant = %session_tenant,
+                            "tenant mismatch – frontend connection rejected"
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+
         let mut fe_conns = self.frontend_connections.write().await;
         fe_conns
             .entry(frontend_id.to_string())
@@ -546,29 +590,38 @@ impl SessionRegistry {
 
     /// Run a single pass of session cleanup. Returns the number of sessions
     /// that were removed.
+    ///
+    /// The stale check and deletion are performed under a single write lock
+    /// to eliminate the TOCTOU race condition: without this, a session could
+    /// be touched (become active) between the read-lock check and the
+    /// write-lock deletion, yet still be removed. By using one write-lock
+    /// transaction, we guarantee consistency.
     pub async fn cleanup_inactive_sessions(&self, max_age: Duration) -> usize {
         let threshold = now_ms().saturating_sub(max_age.as_millis() as u64);
-        let stale_ids: Vec<SessionId> = {
-            let sessions = self.sessions.read().await;
-            sessions
-                .iter()
-                .filter(|(_, s)| s.last_active < threshold)
-                .map(|(id, _)| id.clone())
-                .collect()
-        };
+
+        // Perform stale check AND deletion under a single write lock to
+        // prevent TOCTOU races.
+        let mut sessions = self.sessions.write().await;
+        let stale_ids: Vec<SessionId> = sessions
+            .iter()
+            .filter(|(_, s)| s.last_active < threshold)
+            .map(|(id, _)| id.clone())
+            .collect();
 
         let count = stale_ids.len();
         if count > 0 {
-            let mut sessions = self.sessions.write().await;
             for id in &stale_ids {
                 sessions.remove(id);
             }
+            // Drop sessions lock before acquiring frontend_connections lock
+            // to avoid potential lock-ordering issues.
+            drop(sessions);
 
             // Clean up orphaned frontend connections.
             let mut fe_conns = self.frontend_connections.write().await;
-            fe_conns.retain(|_, sessions| {
-                sessions.retain(|sid| !stale_ids.contains(sid));
-                !sessions.is_empty()
+            fe_conns.retain(|_, conn_sessions| {
+                conn_sessions.retain(|sid| !stale_ids.contains(sid));
+                !conn_sessions.is_empty()
             });
 
             debug!(removed = count, "inactive sessions cleaned up");
@@ -672,7 +725,7 @@ mod tests {
     async fn test_connect_frontend() {
         let registry = SessionRegistry::new();
         let sid = registry.create_session().await.unwrap();
-        registry.connect_frontend("fe1", &sid).await;
+        registry.connect_frontend("fe1", &sid, None).await;
         assert_eq!(registry.frontend_count().await, 1);
     }
 
@@ -680,7 +733,7 @@ mod tests {
     async fn test_disconnect_frontend() {
         let registry = SessionRegistry::new();
         let sid = registry.create_session().await.unwrap();
-        registry.connect_frontend("fe1", &sid).await;
+        registry.connect_frontend("fe1", &sid, None).await;
         assert_eq!(registry.frontend_count().await, 1);
 
         registry.disconnect_frontend("fe1", &sid).await;
@@ -692,8 +745,8 @@ mod tests {
         let registry = SessionRegistry::new();
         let sid1 = registry.create_session().await.unwrap();
         let sid2 = registry.create_session().await.unwrap();
-        registry.connect_frontend("fe1", &sid1).await;
-        registry.connect_frontend("fe1", &sid2).await;
+        registry.connect_frontend("fe1", &sid1, None).await;
+        registry.connect_frontend("fe1", &sid2, None).await;
 
         registry.disconnect_frontend_all("fe1").await;
         assert_eq!(registry.frontend_count().await, 0);
@@ -703,7 +756,7 @@ mod tests {
     async fn test_deleting_session_removes_frontend_bindings() {
         let registry = SessionRegistry::new();
         let sid = registry.create_session().await.unwrap();
-        registry.connect_frontend("fe1", &sid).await;
+        registry.connect_frontend("fe1", &sid, None).await;
 
         registry.delete_session(&sid).await;
 
@@ -851,7 +904,7 @@ mod tests {
             .await
             .unwrap();
 
-        registry.connect_frontend("fe1", &sid).await;
+        registry.connect_frontend("fe1", &sid, None).await;
         let diffs = registry.get_sync_diff("fe1", &sid).await;
 
         assert!(!diffs.is_empty(), "should have at least one SyncDiff");
@@ -947,7 +1000,7 @@ mod tests {
     async fn test_cleanup_removes_orphaned_frontend_bindings() {
         let registry = SessionRegistry::new();
         let sid = registry.create_session().await.unwrap();
-        registry.connect_frontend("fe1", &sid).await;
+        registry.connect_frontend("fe1", &sid, None).await;
 
         // Set session as stale.
         {

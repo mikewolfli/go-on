@@ -75,6 +75,8 @@ pub struct RequestSignature {
 
 impl RequestSignature {
     /// Create a new RequestSignature with the current timestamp.
+    /// Deprecated: construct directly with fields instead (timestamp must match signing_payload).
+    #[allow(dead_code)]
     pub fn new(
         signature: Vec<u8>,
         algorithm: SigningAlgorithm,
@@ -112,9 +114,10 @@ pub fn sign_request(
     algorithm: SigningAlgorithm,
     key_id: &str,
 ) -> Result<RequestSignature, SigningError> {
-    let to_sign = signing_payload(body, current_timestamp_ms());
+    let timestamp_ms = current_timestamp_ms();
+    let to_sign = signing_payload(body, timestamp_ms);
 
-    let signature = match algorithm {
+    let signature_bytes = match algorithm {
         SigningAlgorithm::Ed25519 => {
             use ed25519_dalek::Signer;
             // Try 64-byte keypair first, then 32-byte seed
@@ -145,12 +148,13 @@ pub fn sign_request(
         }
     };
 
-    Ok(RequestSignature::new(
-        signature,
+    Ok(RequestSignature {
+        signature: base64::engine::general_purpose::STANDARD.encode(&signature_bytes),
         algorithm,
-        key_id.to_string(),
-        body,
-    ))
+        key_id: key_id.to_string(),
+        timestamp_ms,
+        body_hash: base64::engine::general_purpose::STANDARD.encode(sha256(body)),
+    })
 }
 
 /// Verify a request signature against the provided public key and body.

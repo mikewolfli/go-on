@@ -499,6 +499,7 @@ pub struct EmbeddingSemanticCache {
     entries: Arc<RwLock<Vec<EmbeddingCacheEntry>>>,
     cosine_threshold: f64,
     embedding_dim: usize,
+    max_entries: usize,
     cancellation_token: Arc<Mutex<Option<tokio_util::sync::CancellationToken>>>,
 }
 
@@ -510,8 +511,15 @@ impl EmbeddingSemanticCache {
             entries: Arc::new(RwLock::new(Vec::new())),
             cosine_threshold: config.cosine_threshold,
             embedding_dim: config.embedding_dim,
+            max_entries: 2048,
             cancellation_token: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Set the maximum number of entries.
+    pub fn with_max_entries(mut self, max_entries: usize) -> Self {
+        self.max_entries = max_entries;
+        self
     }
 
     /// Get a cached response.
@@ -575,6 +583,7 @@ impl EmbeddingSemanticCache {
     ///
     /// If an entry with the same request hash already exists it is replaced.
     /// Otherwise the new entry is appended.
+    /// If the cache exceeds `max_entries`, the least recently used entry is evicted.
     pub fn set(&self, request: &str, value: Value, ttl_secs: u64) {
         let embedding = self.compute_embedding(request);
         let entry = EmbeddingCacheEntry {
@@ -591,6 +600,15 @@ impl EmbeddingSemanticCache {
             if let Some(pos) = entries.iter().position(|e| request_hash(&e.key) == hash) {
                 entries[pos] = entry;
             } else {
+                // Enforce max_entries limit before inserting
+                if entries.len() >= self.max_entries {
+                    drop(entries);
+                    self.evict_lru();
+                    if let Ok(mut entries) = self.entries.write() {
+                        entries.push(entry);
+                    }
+                    return;
+                }
                 entries.push(entry);
             }
         }
@@ -712,6 +730,7 @@ impl EmbeddingSemanticCache {
 pub struct SimpleEmbeddingCache {
     entries: Arc<RwLock<Vec<EmbeddingCacheEntry>>>,
     cosine_threshold: f64,
+    max_entries: usize,
     /// Global document frequency map: term → number of documents containing it
     df: Arc<RwLock<HashMap<String, usize>>>,
     /// Total number of documents in the corpus
@@ -725,9 +744,16 @@ impl SimpleEmbeddingCache {
         Self {
             entries: Arc::new(RwLock::new(Vec::new())),
             cosine_threshold: config.cosine_threshold,
+            max_entries: 2048,
             df: Arc::new(RwLock::new(HashMap::new())),
             total_docs: Arc::new(RwLock::new(0)),
         }
+    }
+
+    /// Set the maximum number of entries.
+    pub fn with_max_entries(mut self, max_entries: usize) -> Self {
+        self.max_entries = max_entries;
+        self
     }
 
     /// Get a cached response by exact hash then TF-IDF cosine similarity.
@@ -787,6 +813,7 @@ impl SimpleEmbeddingCache {
     }
 
     /// Store a response, computing its character-hash embedding.
+    /// If the cache exceeds `max_entries`, the least recently used entry is evicted.
     pub fn set(&self, request: &str, value: Value, ttl_secs: u64) {
         let embedding = compute_embedding_inner(request, self.embedding_dim());
 
@@ -804,6 +831,15 @@ impl SimpleEmbeddingCache {
             if let Some(pos) = entries.iter().position(|e| request_hash(&e.key) == hash) {
                 entries[pos] = entry;
             } else {
+                // Enforce max_entries limit before inserting
+                if entries.len() >= self.max_entries {
+                    drop(entries);
+                    self.evict_lru();
+                    if let Ok(mut entries) = self.entries.write() {
+                        entries.push(entry);
+                    }
+                    return;
+                }
                 entries.push(entry);
             }
         }

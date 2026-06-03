@@ -216,6 +216,13 @@ fn init_metrics(config: &TelemetryConfig) -> anyhow::Result<()> {
 /// Requires an OTLP-compatible endpoint (e.g., Jaeger, Grafana Tempo, Datadog Agent).
 /// If the endpoint is not configured via `OTEL_EXPORTER_OTLP_ENDPOINT` environment
 /// variable, tracing is initialized but logs a warning.
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Tracks whether the global tracer provider has been initialized by this
+/// module to prevent double-initialization when `telemetry.rs` has already
+/// called `global::set_tracer_provider()`.
+static TRACER_INITIALIZED: AtomicBool = AtomicBool::new(false);
+
 fn init_tracing(config: &TelemetryConfig) -> anyhow::Result<()> {
     use opentelemetry::global;
     use opentelemetry::KeyValue;
@@ -224,6 +231,18 @@ fn init_tracing(config: &TelemetryConfig) -> anyhow::Result<()> {
     // TracerProvider is constructed via SdkTracerProvider::builder()
 
     use tracing::warn;
+
+    // ── Guard: avoid re-initializing the global tracer provider ───────
+    // `telemetry.rs::init_otel_provider` may have already called
+    // `global::set_tracer_provider()`. Check before setting again to
+    // prevent the second call from silently replacing the first.
+    if TRACER_INITIALIZED.load(Ordering::Relaxed) {
+        info!(
+            "OpenTelemetry tracer provider already initialized; \
+             skipping re-initialization"
+        );
+        return Ok(());
+    }
 
     // Check if an OTLP endpoint is configured
     let otlp_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok();
@@ -249,6 +268,7 @@ fn init_tracing(config: &TelemetryConfig) -> anyhow::Result<()> {
             .build();
 
         global::set_tracer_provider(tracer_provider);
+        TRACER_INITIALIZED.store(true, Ordering::Release);
 
         info!(
             service_name = config.service_name,
@@ -524,18 +544,30 @@ impl HealthMetrics {
             self.consecutive_successes = 0;
             if self.consecutive_failures >= 3 {
                 self.is_healthy = false;
-                error!("health_check_failed ({} consecutive)", self.consecutive_failures);
+                error!(
+                    "health_check_failed ({} consecutive)",
+                    self.consecutive_failures
+                );
             } else {
-                error!("health_check_failed (transient, {}/3 consecutive)", self.consecutive_failures);
+                error!(
+                    "health_check_failed (transient, {}/3 consecutive)",
+                    self.consecutive_failures
+                );
             }
         } else {
             self.consecutive_successes += 1;
             self.consecutive_failures = 0;
             if self.consecutive_successes >= 3 {
                 self.is_healthy = true;
-                trace!("health_check_passed ({} consecutive)", self.consecutive_successes);
+                trace!(
+                    "health_check_passed ({} consecutive)",
+                    self.consecutive_successes
+                );
             } else {
-                trace!("health_check_passed (recovering, {}/3 consecutive)", self.consecutive_successes);
+                trace!(
+                    "health_check_passed (recovering, {}/3 consecutive)",
+                    self.consecutive_successes
+                );
             }
         }
     }
@@ -707,11 +739,17 @@ mod tests {
 
         // 1 success — still unhealthy (recovering)
         health.record_check(true);
-        assert!(!health.is_healthy, "1 success after 3 fails: still unhealthy");
+        assert!(
+            !health.is_healthy,
+            "1 success after 3 fails: still unhealthy"
+        );
 
         // 2 successes — still unhealthy (recovering)
         health.record_check(true);
-        assert!(!health.is_healthy, "2 successes after 3 fails: still unhealthy");
+        assert!(
+            !health.is_healthy,
+            "2 successes after 3 fails: still unhealthy"
+        );
 
         // 3 successes — becomes healthy again
         health.record_check(true);

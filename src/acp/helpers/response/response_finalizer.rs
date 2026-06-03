@@ -183,6 +183,7 @@ fn collect_agent_outputs(
             ),
             upstream_ids: Vec::new(),
             timestamp_ms,
+            rationale: None,
             metadata: json!({
                 "route_input": route_input,
                 "route_output": route_output,
