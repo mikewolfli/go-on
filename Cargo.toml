@@ -24,7 +24,6 @@ tokio-stream = "0.1"
 tokio-test = "0.4"
 tokio-util = { version = "0.7", features = ["rt"] }
 tempfile = "3"
-wiremock = "0.6"
 fastrand = "2"
 
 [package]
@@ -170,7 +169,6 @@ async-trait = "0.1"
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 opentelemetry-stdout = "0.31"
-lazy_static = "1.4"
 rusqlite = { version = "0.31.0", features = ["bundled"], optional = true }
 sha2 = "0.10"
 uuid.workspace = true
@@ -192,7 +190,7 @@ subtle = "2"
 notify = { version = "6", features = ["macos_kqueue"] }
 
 # ── Security / Signing / mTLS (GAP-B52) ────────────────────────────────────
-ed25519-dalek = { version = "2", features = ["default"] }
+ed25519-dalek = { version = "2", default-features = false, features = ["signature"] }
 hmac = "0.12"
 rand = "0.8"
 hex = "0.4"
@@ -215,3 +213,15 @@ tempfile.workspace = true
 fs2 = "0.4"
 serial_test = "3"
 temp-env = "0.3"
+
+# ── Optimisation profiles ──────────────────────────────────────────────────
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+opt-level = 3
+
+[profile.dev]
+opt-level = 0
+debug = true

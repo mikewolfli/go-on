@@ -1,6 +1,5 @@
 #![allow(clippy::await_holding_lock)]
 
-use fs2::FileExt;
 /// Transport parity gate — BLUE25
 ///
 /// Verifies that all four transport paths inject `platform_context` consistently:
@@ -25,34 +24,9 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tempfile::tempdir;
 
-// ---------------------------------------------------------------------------
-// Cross-process file lock — serialises go-on child-process creation across
-// all test binaries so that integration tests cannot stack concurrent child
-// processes that contend for CPU and ports.
-// ---------------------------------------------------------------------------
+pub mod common;
+use common::CrossProcessLock;
 
-struct CrossProcessLock {
-    _file: std::fs::File,
-}
-
-impl CrossProcessLock {
-    fn lock(path: &Path) -> Self {
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .read(true)
-            .write(true)
-            .open(path)
-            .expect("failed to open/create cross-process lock file");
-        file.lock_exclusive()
-            .expect("failed to acquire cross-process lock");
-        Self { _file: file }
-    }
-}
-
-fn cross_process_lock_path() -> PathBuf {
-    std::env::temp_dir().join(".go-on-integration-suite.lock")
-}
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -116,7 +90,7 @@ impl HttpHarness {
     }
 
     fn spawn_with_mode(config_path: &Path, bind_addr: String, mode: &str) -> Self {
-        let lock = CrossProcessLock::lock(&cross_process_lock_path());
+        let lock = CrossProcessLock::new("transport-parity", 60);
         Self::spawn_with_mode_and_lock(config_path, bind_addr, mode, lock)
     }
 

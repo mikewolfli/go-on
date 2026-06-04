@@ -68,6 +68,7 @@
 //! - **Datadog**: Metrics and traces can be sent to Datadog
 //! - **New Relic**: Metrics and traces can be sent to New Relic
 
+use std::sync::Once;
 use tracing::{debug, error, info, trace, warn};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
@@ -105,6 +106,12 @@ impl Default for TelemetryConfig {
     }
 }
 
+/// Guard to prevent `init_telemetry` from running more than once,
+/// protecting against double initialization of the global tracing subscriber
+/// and the OTLP tracer provider (which could otherwise overwrite a provider
+/// already set by `telemetry.rs::init_otel_provider`).
+static INIT_TELEMETRY: Once = Once::new();
+
 /// Initialize telemetry system
 ///
 /// # Arguments
@@ -113,56 +120,67 @@ impl Default for TelemetryConfig {
 /// # Returns
 /// * `Result<()>` - Returns Ok if initialization succeeds, or an error if something goes wrong
 ///
-/// # Panics / Errors
+/// # Idempotency
 ///
-/// The underlying `tracing_subscriber::registry().with(...).try_init()` will return an error
-/// on the **second** call because a global tracing subscriber can only be set once (it is a
-/// singleton). This is expected behavior — the fn is designed to be called once at startup.
-/// In test contexts, the resulting `Err` from a duplicate call is harmless and confirms that
-/// the subscriber is already active.
+/// This function is safe to call multiple times — only the first call performs initialization.
+/// Subsequent calls are no-ops that return `Ok(())`. This prevents double initialization of
+/// the global tracing subscriber and the OTLP tracer provider, which could otherwise
+/// overwrite a provider already set by `telemetry.rs::init_otel_provider`.
 pub fn init_telemetry(config: &TelemetryConfig) -> anyhow::Result<()> {
-    let mut layers = Vec::new();
+    let mut result = Ok(());
+    INIT_TELEMETRY.call_once(|| {
+        let mut layers = Vec::new();
 
-    // Configure logging layer
-    if config.enable_logging {
-        let fmt_layer = fmt::layer()
-            .with_writer(std::io::stderr)
-            .with_target(true)
-            .with_thread_ids(true)
-            .with_thread_names(true)
-            .with_span_events(FmtSpan::CLOSE)
-            .compact();
+        // Configure logging layer
+        if config.enable_logging {
+            let fmt_layer = fmt::layer()
+                .with_writer(std::io::stderr)
+                .with_target(true)
+                .with_thread_ids(true)
+                .with_thread_names(true)
+                .with_span_events(FmtSpan::CLOSE)
+                .compact();
 
-        let filter_layer =
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.log_level));
+            let filter_layer = EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new(&config.log_level));
 
-        layers.push(fmt_layer.with_filter(filter_layer).boxed());
-    }
+            layers.push(fmt_layer.with_filter(filter_layer).boxed());
+        }
 
-    // Initialize the subscriber with all layers BEFORE metrics/tracing init
-    // so that info!()/warn!() calls in init_metrics() and init_tracing() are captured.
-    tracing_subscriber::registry()
-        .with(layers)
-        .try_init()
-        .map_err(|err| anyhow::anyhow!("failed to initialize tracing subscriber: {}", err))?;
+        // Initialize the subscriber with all layers BEFORE metrics/tracing init
+        // so that info!()/warn!() calls in init_metrics() and init_tracing() are captured.
+        if let Err(err) = tracing_subscriber::registry()
+            .with(layers)
+            .try_init()
+            .map_err(|err| anyhow::anyhow!("failed to initialize tracing subscriber: {}", err))
+        {
+            result = Err(err);
+            return;
+        }
 
-    // Configure metrics layer if enabled
-    if config.enable_metrics {
-        init_metrics(config)?;
-    }
+        // Configure metrics layer if enabled
+        if config.enable_metrics {
+            if let Err(err) = init_metrics(config) {
+                result = Err(err);
+                return;
+            }
+        }
 
-    // Configure tracing layer if enabled
-    if config.enable_tracing {
-        init_tracing(config)?;
-    }
+        // Configure tracing layer if enabled
+        if config.enable_tracing {
+            if let Err(err) = init_tracing(config) {
+                result = Err(err);
+                return;
+            }
+        }
 
-    info!(
-        service_name = config.service_name,
-        service_version = config.service_version,
-        "telemetry initialized"
-    );
-
-    Ok(())
+        info!(
+            service_name = config.service_name,
+            service_version = config.service_version,
+            "telemetry initialized"
+        );
+    });
+    result
 }
 
 /// Initialize metrics collection using OpenTelemetry.
@@ -426,6 +444,22 @@ impl Default for MetricsRecorder {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Global singleton `MetricsRecorder` for use across the observability stack.
+///
+/// This allows the Prometheus metrics exporter bridge to access the OTLP
+/// metrics recorder without needing to pass it through every constructor.
+static GLOBAL_METRICS_RECORDER: std::sync::LazyLock<MetricsRecorder> =
+    std::sync::LazyLock::new(MetricsRecorder::new);
+
+/// Return a reference to the global `MetricsRecorder` singleton.
+///
+/// The recorder is lazily initialized on first access and can be safely
+/// shared across threads for recording requests, cache operations, and
+/// exporting metrics snapshots.
+pub fn global_metrics_recorder() -> &'static MetricsRecorder {
+    &GLOBAL_METRICS_RECORDER
 }
 
 /// Structured logging macros for common patterns

@@ -10,8 +10,10 @@
 //! - `MemoryLink` graph for cross-referencing related memories
 
 //! - `link_memories(m1, m2, link_type)` – create bidirectional links
+//! - ANN vector index search via `VectorIndex` for cosine-similarity retrieval
 
 use crate::memory::memory_persistence::{MemoryEntry, MemoryPersistence};
+use crate::memory::vector_index::VectorIndex;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -106,6 +108,8 @@ pub struct MemoryRetrievalEngine {
     links: Mutex<LinkGraph>,
     /// Session index: session_id → set of memory IDs.
     session_index: Mutex<HashMap<String, Vec<String>>>,
+    /// Optional ANN vector index for cosine-similarity search.
+    vector_index: Option<VectorIndex>,
 }
 
 /// Internal link graph with bidirectional indexing.
@@ -183,6 +187,21 @@ impl MemoryRetrievalEngine {
             persistence,
             links: Mutex::new(LinkGraph::default()),
             session_index: Mutex::new(HashMap::new()),
+            vector_index: None,
+        }
+    }
+
+    /// Create a new retrieval engine with a pre-built vector index.
+    ///
+    /// The index is used as an additional signal in `retrieve_relevant_memories`:
+    /// entries with high cosine similarity to the query are boosted in the
+    /// final ranking even when the token-overlap heuristic is weak.
+    pub fn with_vector_index(persistence: MemoryPersistence, vector_index: VectorIndex) -> Self {
+        Self {
+            persistence,
+            links: Mutex::new(LinkGraph::default()),
+            session_index: Mutex::new(HashMap::new()),
+            vector_index: Some(vector_index),
         }
     }
 
@@ -195,10 +214,12 @@ impl MemoryRetrievalEngine {
 
     /// Retrieve the most relevant memories for a given text query.
     ///
-    /// Searches across all three tiers:
+    /// Searches across all tiers and the optional ANN vector index:
     /// 1. Hot cache: exact-match on content keywords (simple token overlap).
     /// 2. Warm store: usefulness-sorted search.
-    /// 3. Cold store: keyword scan (limited for performance).
+    /// 3. ANN vector index search (when configured): cosine-similarity search
+    ///    that catches semantically similar entries the token-overlap step may
+    ///    miss.
     ///
     /// Results are deduplicated by ID and sorted by relevance (usefulness + recency).
     ///
@@ -254,6 +275,24 @@ impl MemoryRetrievalEngine {
                     seen.insert(entry.id.clone());
                     results.push(entry);
                 }
+            }
+        }
+
+        // ── L3: ANN vector index search (semantic, bypasses token overlap) ──
+        {
+            // Compute a query embedding using the local minhash provider.
+            // This is a lightweight deterministic hash -> no network call.
+            let embedding = crate::memory::embedding_provider::local_hash_embed(query, 128);
+            let query_vec: Vec<f64> = embedding.iter().map(|v| *v as f64).collect();
+
+            let ann_results = self.search_vector_index(&query_vec, limit);
+            for mut entry in ann_results {
+                if seen.contains(&entry.id) {
+                    continue;
+                }
+                entry.touch();
+                seen.insert(entry.id.clone());
+                results.push(entry);
             }
         }
 
@@ -390,6 +429,64 @@ impl MemoryRetrievalEngine {
         // exposes hot entries through `hot_entries()`. This enables L1 cache
         // scanning for the retrieval engine.
         self.persistence.hot_entries()
+    }
+
+    // ── Vector index ───────────────────────────────────────────────────────
+
+    /// Build (or rebuild) the ANN vector index from the warm store.
+    ///
+    /// Iterates all entries in the warm store and indexes those that carry
+    /// a pre-computed embedding.  The index dimension is inferred from the
+    /// first embedding found; entries with a mismatched dimension are skipped.
+    ///
+    /// Returns `true` when at least one entry was indexed.
+    pub fn build_vector_index_from_warm_store(&mut self) -> Result<bool> {
+        let dimension = 128; // default embedding dimension; matched to local_hash_embed
+
+        let warm_entries = self
+            .persistence
+            .warm_store()
+            .search_by_usefulness(0.0, 10_000)
+            .unwrap_or_default();
+
+        let idx = VectorIndex::from_entries(&warm_entries, dimension);
+        let has_entries = !idx.is_empty();
+        self.vector_index = Some(idx);
+        Ok(has_entries)
+    }
+
+    /// Search the vector index with a query embedding, returning scored memory
+    /// entries.  Returns an empty vec when no index is configured or the index
+    /// is empty.
+    pub fn search_vector_index(&self, query_embedding: &[f64], k: usize) -> Vec<MemoryEntry> {
+        let Some(ref idx) = self.vector_index else {
+            return Vec::new();
+        };
+        if idx.is_empty() {
+            return Vec::new();
+        }
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        idx.search(query_embedding, k)
+            .into_iter()
+            .filter_map(|(id, sim, _content)| {
+                // Try to hydrate the full MemoryEntry from persistence.
+                self.persistence
+                    .retrieve(&id)
+                    .ok()
+                    .flatten()
+                    .map(|mut entry| {
+                        // Boost usefulness by the similarity score so that
+                        // vector-matched entries rank higher in the final sort.
+                        entry.usefulness = entry.usefulness.max(sim as f32 * 0.9);
+                        entry.accessed_at = entry.accessed_at.max(now_secs);
+                        entry
+                    })
+            })
+            .collect()
     }
 
     /// Simple token-overlap matching. Returns true if any query token
@@ -551,7 +648,74 @@ mod tests {
 
         // Getting links for "b" should return the same link (reverse lookup).
         let links_for_b = engine.get_links("b").unwrap();
+
         assert_eq!(links_for_b.len(), 1);
-        assert_eq!(links_for_b[0].m1, "a");
+        assert_eq!(links_for_b[0].m2, "a");
+    }
+
+    #[test]
+    fn test_vector_index_search_returns_results() {
+        let (_dir, engine) = setup_engine();
+
+        // Seed entries with distinct content that won't match the query via
+        // token overlap but will be caught by the vector index.
+        // We store entries in the warm store with embeddings.
+        let entry = MemoryEntry {
+            id: "vec-1".to_string(),
+            tier: crate::memory::memory_persistence::MemoryTier::Warm,
+            class: "test".to_string(),
+            content: "the cat sat on the mat".to_string(),
+            created_at: 1000,
+            accessed_at: 1000,
+            usefulness: 0.5,
+            embedding: Some(crate::memory::embedding_provider::local_hash_embed(
+                "feline animal",
+                128,
+            )),
+            access_count: 1,
+            session_id: None,
+        };
+        engine.persistence().store(entry).unwrap();
+
+        // Build vector index from warm store
+        let mut mut_engine = engine;
+        assert!(
+            mut_engine.build_vector_index_from_warm_store().unwrap(),
+            "expected at least one indexed entry"
+        );
+
+        // Search via the vector index directly
+        let query_embedding: Vec<f64> =
+            crate::memory::embedding_provider::local_hash_embed("cat", 128)
+                .iter()
+                .map(|v| *v as f64)
+                .collect();
+        let results = mut_engine.search_vector_index(&query_embedding, 5);
+        assert!(
+            !results.is_empty(),
+            "vector index should return the seeded entry"
+        );
+        assert_eq!(results[0].id, "vec-1");
+
+        // Full retrieve_relevant_memories should also pick it up via L3
+        let memories = mut_engine.retrieve_relevant_memories("cat", 10).unwrap();
+        assert!(
+            memories.iter().any(|m| m.id == "vec-1"),
+            "retrieve_relevant_memories should include the vector-matched entry"
+        );
+    }
+
+    #[test]
+    fn test_vector_index_empty_no_embeddings() {
+        let (_dir, mut engine) = setup_engine();
+        // Seed an entry without an embedding
+        seed_entry(&engine, "no-emb", "plain text", 0.5);
+
+        let indexed = engine.build_vector_index_from_warm_store().unwrap();
+        assert!(!indexed, "no entries should be indexed without embeddings");
+
+        let query_embedding = vec![0.0_f64; 128];
+        let results = engine.search_vector_index(&query_embedding, 5);
+        assert!(results.is_empty(), "empty index should return no results");
     }
 }

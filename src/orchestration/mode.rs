@@ -9,20 +9,11 @@ use crate::agent::{
 };
 use crate::pua::mode_execution_report;
 use anyhow::Result;
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::sync::LazyLock;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
-
-/// Shared tokio runtime for CLI synchronous mode execution.
-///
-/// Instead of creating a new `tokio::runtime::Runtime` on every
-/// `run()` call (which is expensive and leaks worker threads), we
-/// create a single shared runtime once and reuse it across calls.
-static SHARED_CLI_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
-    tokio::runtime::Runtime::new().expect("failed to create shared CLI tokio runtime")
-});
 
 /// Supported chat/agent modes
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -54,6 +45,7 @@ pub enum AutoDegradePolicy {
 ///
 /// All implementations should instrument `run` for tracing and performance monitoring
 /// in the implementation, not on the trait itself.
+#[async_trait]
 pub trait ModeRuntime: Send + Sync {
     /// Returns the mode kind.
     fn kind(&self) -> ModeKind;
@@ -66,9 +58,7 @@ pub trait ModeRuntime: Send + Sync {
     /// Whether the given objective is high risk.
     fn is_high_risk_operation(&self, objective: &str) -> bool;
     /// Run the mode orchestration for a given agent task.
-    /// Safe to call from both sync and async contexts (uses Handle::current()
-    /// when inside a tokio runtime to avoid nested runtime panic).
-    fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult>;
+    async fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult>;
 }
 
 /// Resolve a mode string ("ask", "edit", "agent", "full_auto", "safeguard") into
@@ -240,7 +230,7 @@ impl BaseModeRuntime {
     /// 3. Attempt real agent execution (chat or run_task as determined by strategy).
     /// 4. Fall through to a placeholder response when no agent is available.
     ///
-    pub fn run(
+    pub async fn run(
         &self,
         strategy: &dyn ModeStrategy,
         task: AgentTaskEnvelope,
@@ -267,30 +257,10 @@ impl BaseModeRuntime {
 
             if let Some(name) = agent_name {
                 if let Some(agent) = registry.get(&name) {
-                    // CLI sync wrapper — if called from inside a tokio runtime,
-                    // warn and return a default; don't block a worker thread.
-                    if tokio::runtime::Handle::try_current().is_ok() {
-                        warn!(
-                            "[{} Mode] Called from inside a tokio runtime — returning fallback",
-                            strategy.mode_name(),
-                        );
-                        return Ok(strategy.fallback_result(&task_id, &objective, &phase, &role));
-                    }
-
-                    // No active runtime — use the shared CLI runtime.
-                    // This avoids creating a new tokio runtime on every call,
-                    // which is expensive and leaks worker threads.
-                    let rt = &*SHARED_CLI_RUNTIME;
-
                     if strategy.use_chat() {
                         let messages = build_chat_messages(&task);
-                        let agent_clone = agent.clone();
-                        let result = rt.block_on(execute_agent_chat_async(
-                            agent_clone.as_ref(),
-                            messages,
-                            None,
-                            None,
-                        ));
+                        let result =
+                            execute_agent_chat_async(agent.as_ref(), messages, None, None).await;
                         match result {
                             Ok(output) => {
                                 return Ok(AgentTaskResult {
@@ -327,9 +297,7 @@ impl BaseModeRuntime {
                             }
                         }
                     } else {
-                        let agent_clone = agent.clone();
-                        let result =
-                            rt.block_on(execute_agent_run_task_async(agent_clone.as_ref(), task));
+                        let result = execute_agent_run_task_async(agent.as_ref(), task).await;
                         match result {
                             Ok(result) => {
                                 return Ok(AgentTaskResult {
@@ -430,6 +398,7 @@ impl ModeStrategy for AskModeRuntime {
     }
 }
 
+#[async_trait]
 impl ModeRuntime for AskModeRuntime {
     fn kind(&self) -> ModeKind {
         ModeKind::Ask
@@ -446,9 +415,9 @@ impl ModeRuntime for AskModeRuntime {
     fn is_high_risk_operation(&self, _objective: &str) -> bool {
         false
     }
-    fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult> {
+    async fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult> {
         let base = BaseModeRuntime::new(self.agent_registry.clone(), self.agent_name.clone());
-        base.run(self, task)
+        base.run(self, task).await
     }
 }
 
@@ -517,6 +486,7 @@ impl ModeStrategy for EditModeRuntime {
     }
 }
 
+#[async_trait]
 impl ModeRuntime for EditModeRuntime {
     fn kind(&self) -> ModeKind {
         ModeKind::Edit
@@ -537,9 +507,9 @@ impl ModeRuntime for EditModeRuntime {
     fn is_high_risk_operation(&self, _objective: &str) -> bool {
         false
     }
-    fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult> {
+    async fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult> {
         let base = BaseModeRuntime::new(self.agent_registry.clone(), self.agent_name.clone());
-        base.run(self, task)
+        base.run(self, task).await
     }
 }
 
@@ -644,6 +614,7 @@ impl ModeStrategy for AgentModeRuntime {
     }
 }
 
+#[async_trait]
 impl ModeRuntime for AgentModeRuntime {
     fn kind(&self) -> ModeKind {
         ModeKind::Agent
@@ -670,9 +641,9 @@ impl ModeRuntime for AgentModeRuntime {
             || lower.contains("drop")
             || lower.contains("truncate")
     }
-    fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult> {
+    async fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult> {
         let base = BaseModeRuntime::new(self.agent_registry.clone(), self.agent_name.clone());
-        base.run(self, task)
+        base.run(self, task).await
     }
 }
 
@@ -743,6 +714,7 @@ impl ModeStrategy for FullAutoModeRuntime {
     }
 }
 
+#[async_trait]
 impl ModeRuntime for FullAutoModeRuntime {
     fn kind(&self) -> ModeKind {
         ModeKind::FullAuto
@@ -765,9 +737,9 @@ impl ModeRuntime for FullAutoModeRuntime {
     fn is_high_risk_operation(&self, _objective: &str) -> bool {
         false
     }
-    fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult> {
+    async fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult> {
         let base = BaseModeRuntime::new(self.agent_registry.clone(), self.agent_name.clone());
-        base.run(self, task)
+        base.run(self, task).await
     }
 }
 
@@ -1024,6 +996,7 @@ impl ModeStrategy for SafeGuardModeRuntime {
     }
 }
 
+#[async_trait]
 impl ModeRuntime for SafeGuardModeRuntime {
     fn kind(&self) -> ModeKind {
         ModeKind::SafeGuard
@@ -1046,9 +1019,9 @@ impl ModeRuntime for SafeGuardModeRuntime {
     fn is_high_risk_operation(&self, objective: &str) -> bool {
         self.compute_risk_score(objective) > 0.15
     }
-    fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult> {
+    async fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult> {
         let base = BaseModeRuntime::new(self.agent_registry.clone(), self.agent_name.clone());
-        base.run(self, task)
+        base.run(self, task).await
     }
 }
 

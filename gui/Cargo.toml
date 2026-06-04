@@ -22,6 +22,7 @@ image = { version = "0.25", default-features = false, features = ["ico"] }
 webbrowser = "1"
 tokio-stream.workspace = true
 fastrand.workspace = true
+tempfile.workspace = true
 
 [package.metadata.bundle]
 name = "Go-On GUI"

@@ -171,16 +171,14 @@ fn collect_agent_outputs(
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        ledger.append(crate::observability::provenance::ProvenanceEntry {
+        ledger.append(crate::shared::provenance_helpers::ProvenanceEntry {
             id: format!("routing:{}", trace.request_id),
             task_id: trace.request_id.clone(),
             phase: phase_name.to_string(),
             agent: selected_agent.to_string(),
             tool: "routing.deliberation".to_string(),
-            input_digest: crate::observability::provenance::ProvenanceLedger::digest(&route_input),
-            output_digest: crate::observability::provenance::ProvenanceLedger::digest(
-                &route_output,
-            ),
+            input_digest: crate::shared::provenance_helpers::digest(&route_input),
+            output_digest: crate::shared::provenance_helpers::digest(&route_output),
             upstream_ids: Vec::new(),
             timestamp_ms,
             rationale: None,

@@ -227,6 +227,33 @@ fn read_guard<T>(lock: &RwLock<T>) -> tokio::sync::RwLockReadGuard<'_, T> {
     lock.blocking_read()
 }
 
+/// Configuration for cluster health threshold calculations.
+///
+/// Used by `cluster_health_from_counts` to determine whether the cluster
+/// is Healthy, Degraded, or Critical based on node offline/degraded ratios.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClusterHealthConfig {
+    /// Ratio of offline nodes above which the cluster is considered healthy.
+    /// Default: 0.5
+    pub healthy_threshold: f64,
+    /// Ratio of offline nodes above which the cluster is considered degraded (when combined
+    /// with degraded ratio). Default: 0.2
+    pub degraded_threshold: f64,
+    /// Ratio of degraded nodes above which the cluster is considered degraded.
+    /// Default: 0.3
+    pub unhealthy_threshold: f64,
+}
+
+impl Default for ClusterHealthConfig {
+    fn default() -> Self {
+        Self {
+            healthy_threshold: 0.5,
+            degraded_threshold: 0.2,
+            unhealthy_threshold: 0.3,
+        }
+    }
+}
+
 /// Compute cluster health from raw counts (shared by `profile` and `cluster_health`).
 fn cluster_health_from_counts(
     total_nodes: usize,
@@ -234,14 +261,33 @@ fn cluster_health_from_counts(
     degraded_nodes: usize,
     active_faults: usize,
 ) -> ClusterHealth {
+    cluster_health_from_counts_with_config(
+        total_nodes,
+        offline_nodes,
+        degraded_nodes,
+        active_faults,
+        &ClusterHealthConfig::default(),
+    )
+}
+
+/// Compute cluster health from raw counts using the provided configuration.
+fn cluster_health_from_counts_with_config(
+    total_nodes: usize,
+    offline_nodes: usize,
+    degraded_nodes: usize,
+    active_faults: usize,
+    config: &ClusterHealthConfig,
+) -> ClusterHealth {
     if total_nodes == 0 {
         return ClusterHealth::Down;
     }
     let offline_ratio = offline_nodes as f64 / total_nodes as f64;
     let degraded_ratio = degraded_nodes as f64 / total_nodes as f64;
-    if offline_ratio >= 0.5 || active_faults >= 10 {
+    if offline_ratio >= config.healthy_threshold || active_faults >= 10 {
         ClusterHealth::Critical
-    } else if (offline_ratio >= 0.2 || degraded_ratio >= 0.3 || active_faults >= 5)
+    } else if (offline_ratio >= config.degraded_threshold
+        || degraded_ratio >= config.unhealthy_threshold
+        || active_faults >= 5)
         || offline_nodes > 0
         || degraded_nodes > 0
     {

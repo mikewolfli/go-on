@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use crate::intelligence::self_model::SelfModelCore;
+use crate::shared::execution_recorder::ExecutionRecorder;
 use tracing::debug;
 
 /// Inner state wrapped in a single Mutex.
@@ -29,8 +29,8 @@ pub struct LivePerformanceFeed {
     inner: Mutex<LivePerformanceInner>,
     /// Exponential smoothing factor α (higher = more weight on recent).
     pub ema_alpha: f64,
-    /// Optional reference to the self-model core for dynamic scoring.
-    self_model: Option<SelfModelCore>,
+    /// Optional execution recorder for dynamic capability scoring.
+    self_model: Option<Box<dyn ExecutionRecorder>>,
 }
 
 impl LivePerformanceFeed {
@@ -52,8 +52,8 @@ impl LivePerformanceFeed {
         }
     }
 
-    /// Create a new feed linked to a [`SelfModelCore`] for dynamic scoring.
-    pub fn new_with_self_model(ema_alpha: f64, self_model: SelfModelCore) -> Self {
+    /// Create a new feed linked to an [`ExecutionRecorder`] for dynamic scoring.
+    pub fn new_with_self_model(ema_alpha: f64, self_model: Box<dyn ExecutionRecorder>) -> Self {
         Self {
             inner: Mutex::new(LivePerformanceInner {
                 model_latency: HashMap::new(),

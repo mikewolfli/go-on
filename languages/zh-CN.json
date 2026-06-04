@@ -154,6 +154,7 @@
     "learner.experience_updated": "经验已更新",
     "learner.pattern_recognized": "识别到模式",
     "learner.strategy_improved": "策略已改进",
+    "prompts.skill_system": "\n\n## 技能系统\n\n你有权限使用 {count} 个已注册的技能。技能是可复用的模板，用于自动化常见任务。\n\n### 如何使用技能\n1. **发现本地技能** \u2014 调用 `skill-finder(query, top_k)` 搜索与用户意图匹配的本地技能。\n2. **搜索 GitHub** \u2014 调用 `github_search_skills(query, max_results)` 在 GitHub 上搜索社区技能。\n3. **导入** \u2014 找到合适的 GitHub 仓库后，使用 `import_skill` 并传入 {{ \"source\": {{ \"kind\": \"github\", \"repo\": \"owner/repo\", \"ref\": \"main\" }} }} 来安装它。\n4. **创建** \u2014 如果没有现成的技能符合需求，通过 `skill-creator(name, description, prompt_template, input_schema)` 创建新技能。\n\n### 重要规则\n- 当多个技能看起来相关时，选择得分最高的那个。\n- 当用户请求可能匹配多个技能时，先调用 `skill-finder`，然后选择最佳匹配。\n- 如果最佳匹配的得分 < 0.4，请不要使用它。改为向用户请求澄清或创建新技能。\n- 切勿为同一请求同时调用多个技能。选择一个并执行它。",
     "settings.language": "语言",
     "settings.auto_update": "自动更新",
     "settings.log_level": "日志级别",

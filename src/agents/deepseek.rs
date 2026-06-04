@@ -2,6 +2,7 @@
 //! Auto-generated English doc: module overview.
 //!
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -185,12 +186,21 @@ impl Agent for DeepSeekAgent {
     ) -> crate::core::error::Result<()> {
         let mut last_error: Option<anyhow::Error> = None;
 
+        // Wrap in Arc so retries share the underlying data via cheap
+        // Arc::clone (refcount increment) instead of deep-cloning the
+        // entire Vec/HashMap on each attempt. The first attempt still
+        // pays one deep clone (for chat_once ownership), but retries
+        // avoid re-allocating the outer containers.
+        let messages = Arc::new(messages);
+        let principles = Arc::new(principles);
+        let options = Arc::new(options);
+
         for attempt in 0..=2 {
             match self
                 .chat_once(
-                    messages.clone(),
-                    principles.clone(),
-                    options.clone(),
+                    (*messages).clone(),
+                    (*principles).clone(),
+                    (*options).clone(),
                     sender.clone(),
                 )
                 .await

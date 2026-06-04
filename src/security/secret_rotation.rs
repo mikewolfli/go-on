@@ -216,8 +216,17 @@ impl KeyRotator for MemoryRotator {
     }
 
     async fn delete_key(&self, key_id: &str) -> Result<(), SecretError> {
-        self.keys.write().await.remove(key_id);
-        info!(key = %key_id, "Deleted from memory");
+        // Zero the key bytes in memory before dropping (S-FIX10)
+        let mut keys = self.keys.write().await;
+        if let Some(entry) = keys.get_mut(key_id) {
+            for byte in entry.key_bytes.iter_mut() {
+                unsafe {
+                    std::ptr::write_volatile(byte, 0u8);
+                }
+            }
+        }
+        keys.remove(key_id);
+        info!(key = %key_id, "Deleted from memory (zeroed)");
         Ok(())
     }
 
@@ -847,6 +856,18 @@ impl SecretManager {
     pub fn set_rotation_policy(&mut self, policy: RotationPolicy) {
         self.rotation_policy = policy;
     }
+}
+
+/// Securely remove a key from the store by zeroing its bytes before dropping (S-FIX10).
+pub fn secure_remove(store: &mut HashMap<String, Vec<u8>>, key: &str) {
+    if let Some(value) = store.get_mut(key) {
+        for byte in value.iter_mut() {
+            unsafe {
+                std::ptr::write_volatile(byte, 0u8);
+            }
+        }
+    }
+    store.remove(key);
 }
 
 // ---------------------------------------------------------------------------

@@ -567,6 +567,31 @@ pub async fn handle_request(
         }
     }
 
+    // ── Rate limiting (S-FIX1) ───────────────────────────────────────────
+    // Apply global and per-tenant rate limits before dispatching the request.
+    {
+        let rate_limiter = crate::security::rate_limiter::global_rate_limiter();
+
+        // Acquire a global concurrency permit (semaphore-based).
+        let _permit = rate_limiter
+            .global_semaphore
+            .acquire()
+            .await
+            .map_err(|_| anyhow::anyhow!("rate limit exceeded"))?;
+
+        // Extract tenant_id from request params for per-tenant throttling.
+        let tenant_id = request
+            .params
+            .as_ref()
+            .and_then(|p| p.get("tenant_id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("default");
+
+        if !rate_limiter.try_consume_tenant(tenant_id, 1.0) {
+            anyhow::bail!("rate limit exceeded for tenant: {}", tenant_id);
+        }
+    }
+
     // Adaptive protocol dispatch: route to ACP, MCP, or Auto based on config.
     let protocol_mode = get_protocol_mode(server);
     let request_method = request.method.clone();
@@ -772,6 +797,8 @@ pub async fn handle_request(
             // B51-28: Try the MethodRouter first; fall through to legacy match
             // if no handler is registered.
             if let Some(router_result) = method_router::global_method_router()
+                .lock()
+                .await
                 .dispatch(
                     method.as_ref(),
                     server,

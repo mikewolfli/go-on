@@ -22,9 +22,8 @@ Thumbs.db
 config/acp_*.sqlite3*
 config/*.json
 
-# Docker
-**/Dockerfile*
-**/docker-compose*
+# Docker (only block docker-compose files in deploy/, not the main Dockerfile)
+deploy/**/docker-compose*
 
 # Git
 .git/

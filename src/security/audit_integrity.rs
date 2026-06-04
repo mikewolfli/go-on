@@ -189,6 +189,7 @@ impl AuditEntry {
 ///
 /// Each appended entry is cryptographically linked to the previous one,
 /// making any retroactive modification detectable.
+#[derive(Debug)]
 pub struct HashChainAuditor {
     /// Path to the chain file (newline-delimited JSON).
     chain_file: PathBuf,
@@ -599,17 +600,29 @@ mod tests {
         let auditor = HashChainAuditor::new(auditor.chain_file.clone()).unwrap();
 
         // Verify with correct public key -- should pass
-        let violations = auditor.verify_integrity(Some(&verifying_key.to_bytes())).unwrap();
-        assert!(violations.is_empty(), "Chain with valid signatures should be intact: {:?}", violations);
+        let violations = auditor
+            .verify_integrity(Some(&verifying_key.to_bytes()))
+            .unwrap();
+        assert!(
+            violations.is_empty(),
+            "Chain with valid signatures should be intact: {:?}",
+            violations
+        );
 
         // Verify with wrong public key -- should report signature violations
         let wrong_pk = [0u8; 32];
         let violations = auditor.verify_integrity(Some(&wrong_pk)).unwrap();
-        assert!(!violations.is_empty(), "Wrong public key should detect signature violations");
+        assert!(
+            !violations.is_empty(),
+            "Wrong public key should detect signature violations"
+        );
 
         // Verify with no public key -- should pass (skips signature check)
         let violations = auditor.verify_integrity(None).unwrap();
-        assert!(violations.is_empty(), "Chain should be intact when skipping signature check");
+        assert!(
+            violations.is_empty(),
+            "Chain should be intact when skipping signature check"
+        );
     }
 
     #[test]

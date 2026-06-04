@@ -11,6 +11,8 @@ use crate::intelligence::consciousness::{AwarenessMetricType, ConsciousnessMetri
 use crate::intelligence::metacognitive::MetacognitiveController;
 use crate::orchestration::self_evolution::evolution_loop::{EvolutionTrigger, RegressionDirection};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
+use tokio::sync::Mutex;
 
 /// Configuration for the triple fusion bridge.
 #[derive(Debug, Clone)]
@@ -40,6 +42,21 @@ pub struct TripleFusionBridge {
     config: TripleFusionConfig,
     /// Running count of fusion cycles executed (atomic for interior mutability).
     fusion_cycles: AtomicU64,
+}
+
+// ── Global singleton ──────────────────────────────────────────────────────
+
+/// Global singleton bridge shared across all requests so fusion cycles accumulate.
+static GLOBAL_TRIPLE_FUSION: OnceLock<Arc<Mutex<TripleFusionBridge>>> = OnceLock::new();
+
+/// Returns a reference to the global `TripleFusionBridge` singleton, initialising
+/// it once with default configuration.
+pub fn global_triple_fusion_bridge() -> &'static Arc<Mutex<TripleFusionBridge>> {
+    GLOBAL_TRIPLE_FUSION.get_or_init(|| {
+        Arc::new(Mutex::new(TripleFusionBridge::new(
+            TripleFusionConfig::default(),
+        )))
+    })
 }
 
 #[allow(unused)]

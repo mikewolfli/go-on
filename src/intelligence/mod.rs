@@ -16,7 +16,7 @@
 /// Many intelligence sub-modules previously defined their own `now_ms()` or `now_ts()`
 /// with identical bodies. Use this shared helper instead of duplicating.
 pub fn now_ms() -> u64 {
-    crate::acp::prelude::now_ts_ms() as u64
+    crate::shared::timestamps::now_ts_ms() as u64
 }
 
 /// Acquire a lock on a `Mutex`, recovering from a poisoned state with a warning.
@@ -83,6 +83,7 @@ pub mod evolution_graph;
 
 pub mod hub;
 pub mod triple_fusion;
+pub mod weighted_vote;
 pub mod world_model;
 
 // Multi-model voter for high-stakes decision consensus.

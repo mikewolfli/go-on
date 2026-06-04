@@ -7,59 +7,14 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use fs2::FileExt;
 use serde_json::{json, Value};
 use serial_test::serial;
 use tempfile::tempdir;
 
-// ---------------------------------------------------------------------------
-// Cross-process file lock — serialises go-on child-process creation across
-// all test binaries so that integration tests cannot stack concurrent child
-// processes that contend for CPU and cause artificial timeouts.
-// ---------------------------------------------------------------------------
+pub mod common;
+use common::CrossProcessLock;
 
-/// An exclusive advisory file lock held across the lifetime of a test harness.
-/// Because all test binaries build the same lock-file path, processes from
-/// *different* test files serialise against each other (the in-process
-/// `Mutex` only serialises threads within the same binary).
-struct CrossProcessLock {
-    _file: std::fs::File,
-}
-
-impl CrossProcessLock {
-    /// Acquire an exclusive lock, blocking until it is available.
-    /// Uses `fs2::FileExt::lock_exclusive` which calls `flock(LOCK_EX)` on Unix
-    /// or `LockFile` on Windows.
-    fn lock(path: &Path) -> Self {
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            // Do NOT use .truncate(true) here — truncating the file after
-            // creation can break flock() on some filesystems (NFS, certain
-            // Linux kernel configs). .create(true) alone is sufficient.
-            .read(true)
-            .write(true)
-            .open(path)
-            .expect("failed to open/create cross-process lock file");
-
-        file.lock_exclusive()
-            .expect("failed to acquire cross-process lock");
-
-        Self { _file: file }
-    }
-}
-
-// The lock is released automatically when `_file` is dropped because
-// `fs2::FileExt::lock_exclusive` holds the lock on the fd and closing
-// the fd (via `Drop`) releases the lock on Unix.
-
-/// Return the path of the shared cross-process lock file.
-///
-/// Uses the system temporary directory so that all test binaries (which run
-/// as separate OS processes) see the same lock file path.
-fn cross_process_lock_path() -> PathBuf {
-    std::env::temp_dir().join(".go-on-integration-suite.lock")
-}
+const LOCK_NAME: &str = "acp-rpc";
 
 /// A guard that wraps a child process spawned directly (without RpcHarness).
 ///
@@ -74,8 +29,7 @@ struct ChildGuard {
 
 impl ChildGuard {
     fn spawn(command: &mut Command) -> Self {
-        let lock_path = cross_process_lock_path();
-        let _cross_process_lock = CrossProcessLock::lock(&lock_path);
+        let _cross_process_lock = CrossProcessLock::new(LOCK_NAME, 60);
         let child = command.spawn().expect("failed to spawn child process");
         Self {
             child: Some(child),
@@ -131,8 +85,7 @@ impl RpcHarness {
         // Acquire the cross-process lock BEFORE spawning the child.
         // This guarantees that only one go-on process runs at a time across
         // all test binaries, eliminating CPU-starvation-induced timeouts.
-        let lock_path = cross_process_lock_path();
-        let _cross_process_lock = CrossProcessLock::lock(&lock_path);
+        let _cross_process_lock = CrossProcessLock::new(LOCK_NAME, 60);
 
         let mut child = Command::new(binary_path())
             .arg("--config")

@@ -9,6 +9,9 @@ pub struct AppConfig {
     pub backend_url: String,
     pub language: String,
     pub theme: String,
+    /// Font scale factor for accessibility. 1.0 = default size.
+    #[serde(default = "default_font_scale")]
+    pub font_scale: f64,
     /// Protocol mode for backend connection.
     /// Allowed: "adaptive", "acp_http", "mcp_http", "acp_stdio", "mcp_stdio"
     #[serde(default = "default_protocol_mode")]
@@ -22,6 +25,10 @@ pub struct AppConfig {
 
 fn default_protocol_mode() -> String {
     "acp_http".to_string()
+}
+
+fn default_font_scale() -> f64 {
+    1.0
 }
 
 fn default_true() -> bool {
@@ -174,7 +181,7 @@ pub struct ProviderConfig {
     /// API key — stored securely in system keyring, never serialized to config JSON.
     /// When deserializing from old configs, this field is loaded for migration
     /// to keyring but is cleared before saving.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[serde(skip)]
     pub api_key: String,
     /// Secret key — same as api_key; only stored in keyring, never in config JSON.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -194,6 +201,7 @@ impl Default for AppConfig {
             backend_url: "http://127.0.0.1:8090".to_string(),
             language: "en".to_string(),
             theme: "简约".to_string(),
+            font_scale: 1.0,
             protocol_mode: "acp_http".to_string(),
             ui_stability: UiStabilityConfig::default(),
             features: FeatureToggles::default(),

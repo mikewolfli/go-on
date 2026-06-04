@@ -53,7 +53,7 @@ services:
       - DB_PASS=${DB_PASS:?must be set}
       - DB_NAME=goon
       - GO_ON_ENTRY_API_KEY=${GO_ON_ENTRY_API_KEY:?must be set}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:?must be set}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     healthcheck:

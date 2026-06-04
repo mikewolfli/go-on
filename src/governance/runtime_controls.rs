@@ -5,6 +5,54 @@
 
 use std::collections::{HashMap, VecDeque};
 
+/// Streaming P95 latency estimator using reservoir sampling.
+/// Avoids cloning+sorting the entire VecDeque on every call.
+#[derive(Debug, Clone)]
+pub struct LatencyQuantileEstimator {
+    samples: Vec<f64>,
+    max_samples: usize,
+    count: u64,
+}
+
+impl LatencyQuantileEstimator {
+    pub fn new(max_samples: usize) -> Self {
+        Self {
+            samples: Vec::with_capacity(max_samples),
+            max_samples,
+            count: 0,
+        }
+    }
+
+    pub fn record(&mut self, latency_ms: f64) {
+        self.count += 1;
+        if self.samples.len() < self.max_samples {
+            self.samples.push(latency_ms);
+        } else {
+            // Reservoir sampling: replace a random element
+            let idx = fastrand::usize(..self.count.min(self.max_samples as u64) as usize);
+            if idx < self.samples.len() {
+                self.samples[idx] = latency_ms;
+            }
+        }
+    }
+
+    pub fn p95(&self) -> f64 {
+        if self.samples.is_empty() {
+            return 0.0;
+        }
+        let mut sorted = self.samples.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let idx = ((sorted.len() as f64) * 0.95).ceil() as usize - 1;
+        sorted[idx.min(sorted.len() - 1)]
+    }
+}
+
+impl Default for LatencyQuantileEstimator {
+    fn default() -> Self {
+        Self::new(ONLINE_CONTROLLER_WINDOW)
+    }
+}
+
 const ONLINE_CONTROLLER_WINDOW: usize = 64;
 const ONLINE_CONTROLLER_FAILURE_ESCALATION: f64 = 0.25;
 const ONLINE_CONTROLLER_P95_LATENCY_MS_ESCALATION: u64 = 15_000;
@@ -14,7 +62,7 @@ const ONLINE_CONTROLLER_BANDIT_EXPLORATION: f64 = 1.4;
 #[derive(Debug, Default, Clone)]
 struct AgentSignalWindow {
     recent_failures: VecDeque<bool>,
-    recent_latency_ms: VecDeque<u64>,
+    latency_estimator: LatencyQuantileEstimator,
     attempts: u64,
 }
 
@@ -56,10 +104,7 @@ impl AgentSignalWindow {
         }
         self.recent_failures.push_back(!success);
 
-        if self.recent_latency_ms.len() >= ONLINE_CONTROLLER_WINDOW {
-            self.recent_latency_ms.pop_front();
-        }
-        self.recent_latency_ms.push_back(duration_ms);
+        self.latency_estimator.record(duration_ms as f64);
         self.attempts = self.attempts.saturating_add(1);
     }
 
@@ -76,12 +121,7 @@ impl AgentSignalWindow {
     }
 
     fn latency_p95_ms(&self) -> u64 {
-        if self.recent_latency_ms.is_empty() {
-            return 0;
-        }
-        let mut samples = self.recent_latency_ms.iter().copied().collect::<Vec<_>>();
-        samples.sort_unstable();
-        percentile(&samples, 95.0)
+        self.latency_estimator.p95() as u64
     }
 
     fn reliability_score(&self) -> Option<f64> {
@@ -104,7 +144,7 @@ impl AgentSignalWindow {
 #[derive(Debug, Default, Clone)]
 pub struct OnlineControllerState {
     recent_failures: VecDeque<bool>,
-    recent_latency_ms: VecDeque<u64>,
+    latency_estimator: LatencyQuantileEstimator,
     agent_windows: HashMap<String, AgentSignalWindow>,
     phase_agent_windows: HashMap<String, AgentSignalWindow>,
     phase_windows: HashMap<String, AgentSignalWindow>,
@@ -114,7 +154,11 @@ pub struct OnlineControllerState {
 
 impl OnlineControllerState {
     fn phase_agent_key(phase_name: &str, agent_name: &str) -> String {
-        format!("{}::{}", phase_name, agent_name)
+        let mut key = String::with_capacity(phase_name.len() + 2 + agent_name.len());
+        key.push_str(phase_name);
+        key.push_str("::");
+        key.push_str(agent_name);
+        key
     }
 
     pub(crate) fn record(&mut self, success: bool, duration_ms: u64) {
@@ -123,10 +167,7 @@ impl OnlineControllerState {
         }
         self.recent_failures.push_back(!success);
 
-        if self.recent_latency_ms.len() >= ONLINE_CONTROLLER_WINDOW {
-            self.recent_latency_ms.pop_front();
-        }
-        self.recent_latency_ms.push_back(duration_ms);
+        self.latency_estimator.record(duration_ms as f64);
     }
 
     pub(crate) fn record_agent_outcome(
@@ -293,12 +334,7 @@ impl OnlineControllerState {
     }
 
     pub(crate) fn latency_p95_ms(&self) -> u64 {
-        if self.recent_latency_ms.is_empty() {
-            return 0;
-        }
-        let mut samples = self.recent_latency_ms.iter().copied().collect::<Vec<_>>();
-        samples.sort_unstable();
-        percentile(&samples, 95.0)
+        self.latency_estimator.p95() as u64
     }
 
     /// Derive a human-readable control mode string from the current state.

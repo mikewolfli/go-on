@@ -36,6 +36,11 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Returns the primary (first) workspace folder, or undefined when none is open. */
+function getPrimaryWorkspaceFolder(): vscode.WorkspaceFolder | undefined {
+  return vscode.workspace.workspaceFolders?.[0];
+}
+
 async function ensureRunning(deps: CoreCommandRegistryDeps): Promise<boolean> {
   if (!deps.isRunning()) {
     await vscode.window.showErrorMessage(
@@ -59,7 +64,7 @@ export function registerCoreCommands(
       output.appendLine(`Time: ${new Date().toISOString()}`);
 
       const config = vscode.workspace.getConfiguration("go-on");
-      const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+      const workspaceFolder = getPrimaryWorkspaceFolder();
       if (!workspaceFolder) {
         output.appendLine(
           `✗ ${i18n.getMessage(MessageKeys.noWorkspaceFolderOpen)}`,
@@ -147,7 +152,7 @@ export function registerCoreCommands(
         "configPath",
         "./config.toml",
       );
-      const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+      const workspaceFolder = getPrimaryWorkspaceFolder();
       if (!workspaceFolder) {
         vscode.window.showErrorMessage(
           i18n.getMessage(MessageKeys.noWorkspaceFolderOpen),
@@ -238,19 +243,55 @@ export function registerCoreCommands(
         return;
       }
 
-      const message = await vscode.window.showInputBox({
-        prompt: i18n.getMessage(MessageKeys.enterMessage),
-        placeHolder: i18n.getMessage(MessageKeys.messagePlaceholder),
+      // Ask for the RPC method to call
+      const method = await vscode.window.showInputBox({
+        prompt: "Enter the RPC method to call",
+        placeHolder: "e.g. chat, runtime.health, config.status",
+        value: "chat",
       });
 
-      if (!message) {
+      if (!method) {
         return;
       }
 
+      // Confirm destructive operations before executing
+      const DESTRUCTIVE_METHODS = [
+        "chat.delete",
+        "config.reset",
+        "session.clear",
+        "memory.clear",
+        "agent.remove",
+      ];
+      if (DESTRUCTIVE_METHODS.includes(method)) {
+        const confirmed = await vscode.window.showWarningMessage(
+          `Confirm executing '${method}'?`,
+          { modal: true },
+          "Confirm",
+        );
+        if (confirmed !== "Confirm") {
+          return;
+        }
+      }
+
+      const paramsInput = await vscode.window.showInputBox({
+        prompt: "Enter JSON params for the RPC call (or leave empty)",
+        placeHolder: '{"key": "value"}',
+      });
+
+      let params: unknown;
+      if (paramsInput && paramsInput.trim()) {
+        try {
+          params = JSON.parse(paramsInput);
+        } catch {
+          vscode.window.showErrorMessage(
+            "Invalid JSON params. Please provide valid JSON or leave empty.",
+          );
+          return;
+        }
+      }
+
       try {
-        const result = await deps.sendRequest("chat", {
-          messages: [{ role: "user", content: message }],
-        });
+        const result = await deps.sendRequest(method, params);
         vscode.window.showInformationMessage(
           i18n.getMessage(MessageKeys.responseLabel, [JSON.stringify(result)]),
         );

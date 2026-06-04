@@ -10,6 +10,11 @@ pub enum Theme {
 }
 
 impl Theme {
+    /// Compute a font size from a base size and a scale factor.
+    /// Apply this to all font sizes for accessibility (user-configurable scaling).
+    pub fn font_size(base: f32, scale: f64) -> f32 {
+        base * scale as f32
+    }
     pub fn all() -> &'static [(Theme, &'static str)] {
         &[
             (Theme::Minimal, "简约"),
@@ -44,31 +49,33 @@ impl Theme {
         }
     }
 
-    pub fn apply(&self, ctx: &egui::Context) {
+    pub fn apply(&self, ctx: &egui::Context, scale: f64) {
         let mut style = (*ctx.style()).clone();
         // Common base: typography + spacing + interaction density
+        // All font sizes are scaled by the user-configurable `scale` factor.
         style.text_styles.insert(
             TextStyle::Heading,
-            FontId::new(25.0, FontFamily::Proportional),
+            FontId::new(Self::font_size(25.0, scale), FontFamily::Proportional),
         );
         style.text_styles.insert(
             TextStyle::Name("Title".into()),
-            FontId::new(21.0, FontFamily::Proportional),
+            FontId::new(Self::font_size(21.0, scale), FontFamily::Proportional),
         );
-        style
-            .text_styles
-            .insert(TextStyle::Body, FontId::new(16.0, FontFamily::Proportional));
+        style.text_styles.insert(
+            TextStyle::Body,
+            FontId::new(Self::font_size(16.0, scale), FontFamily::Proportional),
+        );
         style.text_styles.insert(
             TextStyle::Button,
-            FontId::new(15.0, FontFamily::Proportional),
+            FontId::new(Self::font_size(15.0, scale), FontFamily::Proportional),
         );
         style.text_styles.insert(
             TextStyle::Monospace,
-            FontId::new(14.0, FontFamily::Monospace),
+            FontId::new(Self::font_size(14.0, scale), FontFamily::Monospace),
         );
         style.text_styles.insert(
             TextStyle::Small,
-            FontId::new(13.0, FontFamily::Proportional),
+            FontId::new(Self::font_size(13.0, scale), FontFamily::Proportional),
         );
 
         style.spacing.item_spacing = Vec2::new(10.0, 8.0);

@@ -104,7 +104,7 @@ i18n_default_language = "en-US"
 
 [agents.deepseek]
 type = "deepseek"
-api_key_env = "keyring://go-on/deepseek_api_key"
+api_key_env = "DEEPSEEK_API_KEY"
 model = "deepseek-v4-flash"
 supports_system = true
 

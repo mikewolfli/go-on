@@ -232,7 +232,7 @@ impl AgentMemoryBus {
             };
         }
 
-        // Fallback: linear substring/tag scan
+        // Fallback: linear substring/tag scan with recency/importance weighting
         let store = match self.store.lock() {
             Ok(s) => s,
             Err(poisoned) => {
@@ -248,33 +248,47 @@ impl AgentMemoryBus {
             return Vec::new();
         }
 
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+
         let query_lower = query.to_lowercase();
         let query_tags: Vec<&str> = query_lower
             .split(|c: char| c.is_whitespace() || c == ',' || c == '.')
             .filter(|t| t.len() >= 2)
             .collect();
 
-        // Score each entry by how many of the query tags appear in its content.
-        let mut scored: Vec<(f32, &MemoryEntry)> = all
+        // Score each entry using recency, importance, and keyword relevance.
+        // The combined score = 0.3 * recency + 0.4 * importance + 0.3 * keyword_match
+        // so that more recent, highly important, and semantically matching memories
+        // are ranked highest — true short-term memory recall.
+        let mut scored: Vec<(f64, &MemoryEntry)> = all
             .iter()
             .map(|entry| {
-                let content_lower = entry.content.to_lowercase();
-                let score = query_tags
-                    .iter()
-                    .filter(|tag| content_lower.contains(*tag))
-                    .count() as f32
-                    / query_tags.len().max(1) as f32;
+                let timestamp: u64 = entry.timestamp.parse().unwrap_or(0);
+                let age_ms = now_ms.saturating_sub(timestamp);
+                // Recency: linear decay over 1 day (86,400,000 ms).
+                let recency = 1.0 - (age_ms as f64 / 86400000.0).min(1.0);
+                let importance = entry.usefulness as f64;
+                let keyword_score = if query_tags.is_empty() {
+                    // When there are no meaningful query tokens, rely on recency + importance.
+                    0.0
+                } else {
+                    let matches = query_tags
+                        .iter()
+                        .filter(|tag| entry.content.to_lowercase().contains(*tag))
+                        .count();
+                    matches as f64 / query_tags.len() as f64
+                };
+                let score = 0.3 * recency + 0.4 * importance + 0.3 * keyword_score;
                 (score, entry)
             })
             .filter(|(score, _)| *score > 0.0)
             .collect();
 
-        // Sort descending by score, then by usefulness (highest first).
-        scored.sort_by(|a, b| {
-            b.0.partial_cmp(&a.0)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| b.1.usefulness.total_cmp(&a.1.usefulness))
-        });
+        // Sort descending by score.
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
         scored
             .into_iter()

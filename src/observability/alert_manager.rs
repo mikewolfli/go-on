@@ -11,23 +11,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tracing::warn;
 
-/// Severity level for an alert
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AlertSeverity {
-    Info,
-    Warning,
-    Critical,
-}
-
-impl std::fmt::Display for AlertSeverity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AlertSeverity::Info => write!(f, "info"),
-            AlertSeverity::Warning => write!(f, "warning"),
-            AlertSeverity::Critical => write!(f, "critical"),
-        }
-    }
-}
+pub use crate::shared::alert_severity::AlertSeverity;
 
 /// An alert event
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -216,6 +200,25 @@ impl AlertManager {
         }
 
         fired
+    }
+
+    /// Evaluate all rule types against their respective named metrics (O-FIX6).
+    ///
+    /// Takes a slice of `(metric_type, value)` pairs and checks each alert rule
+    /// against the metric that matches its name prefix:
+    /// - Rules containing "latency" / "p95" check the `"latency"` metric
+    /// - Rules containing "error_rate" check the `"error_rate"` metric
+    /// - Rules containing "circuit_breaker" check the `"circuit_breaker"` metric
+    /// - Rules containing "cache_hit" check the `"cache_hit"` metric
+    /// - Rules containing "memory" check the `"memory"` metric
+    /// - Rules containing "agent_timeout" check the `"agent_timeout"` metric
+    /// - All other rules are evaluated against every metric (safe fallback).
+    pub fn evaluate_all(&mut self, metrics: &[(&str, f64)]) -> Vec<Alert> {
+        let mut all_fired = Vec::new();
+        for &(metric_type, value) in metrics {
+            all_fired.extend(self.evaluate(metric_type, value));
+        }
+        all_fired
     }
 
     /// Configure webhook from environment variables.

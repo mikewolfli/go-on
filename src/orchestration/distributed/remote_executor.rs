@@ -48,11 +48,73 @@ pub enum RemoteExecutionError {
 
 /// Unique identifier for a distributed node.
 #[allow(dead_code)]
-pub type NodeId = String;
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct NodeId(pub String);
+
+impl std::fmt::Display for NodeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<String> for NodeId {
+    fn from(s: String) -> Self {
+        NodeId(s)
+    }
+}
+
+impl From<&str> for NodeId {
+    fn from(s: &str) -> Self {
+        NodeId(s.to_string())
+    }
+}
+
+impl std::borrow::Borrow<str> for NodeId {
+    fn borrow(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl std::borrow::Borrow<String> for NodeId {
+    fn borrow(&self) -> &String {
+        &self.0
+    }
+}
 
 /// Unique identifier for a DAG instance.
 #[allow(dead_code)]
-pub type DagId = String;
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct DagId(pub String);
+
+impl std::fmt::Display for DagId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<String> for DagId {
+    fn from(s: String) -> Self {
+        DagId(s)
+    }
+}
+
+impl From<&str> for DagId {
+    fn from(s: &str) -> Self {
+        DagId(s.to_string())
+    }
+}
+
+impl std::borrow::Borrow<str> for DagId {
+    fn borrow(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl std::borrow::Borrow<String> for DagId {
+    fn borrow(&self) -> &String {
+        &self.0
+    }
+}
 
 // ---------------------------------------------------------------------------
 // TaskPacket
@@ -360,14 +422,14 @@ impl RemoteExecutor for InProcessRemoteExecutor {
         // Verify the node is registered
         let reg = self
             .registry
-            .get(&node_id)
+            .get(node_id.0.as_str())
             .await
-            .ok_or_else(|| RemoteExecutionError::NodeNotFound(node_id.clone()))?;
+            .ok_or_else(|| RemoteExecutionError::NodeNotFound(node_id.clone().0))?; // ✅ use .0 for inner string
 
         // Verify capability
         if !reg.capabilities.supports_tool(&tool_name) {
             return Err(RemoteExecutionError::CapabilityMismatch(
-                node_id,
+                node_id.0.clone(),
                 format!("tool '{}' not in supported set", tool_name),
             ));
         }
@@ -381,7 +443,7 @@ impl RemoteExecutor for InProcessRemoteExecutor {
 
         // Build ToolInput from the TaskPacket for real execution.
         let tool_input = ToolInput {
-            task_id: dag_id.clone(),
+            task_id: dag_id.clone().0,
             phase: "remote_execution".to_string(),
             agent_role: "remote_executor".to_string(),
             objective: String::new(),
@@ -398,14 +460,14 @@ impl RemoteExecutor for InProcessRemoteExecutor {
         // Execute the tool through the ToolRegistry; fail if tool not found.
         let tool = self.tool_registry.get(&tool_name).ok_or_else(|| {
             RemoteExecutionError::ExecutionFailed(
-                node_id.clone(),
+                node_id.0.clone(),
                 format!("tool '{}' not found in registry", tool_name),
             )
         })?;
 
         let tool_output = tool.run(&tool_input).map_err(|e| {
             RemoteExecutionError::ExecutionFailed(
-                node_id.clone(),
+                node_id.0.clone(),
                 format!("tool '{}' execution error: {}", tool_name, e),
             )
         })?;
@@ -509,15 +571,15 @@ impl GrpcRemoteExecutor {
     /// Resolve the gRPC address for a node.
     #[allow(dead_code)]
     async fn resolve_addr(&self, node_id: &NodeId) -> Result<String, RemoteExecutionError> {
-        if let Some(addr) = self.channels.read().await.get(node_id) {
+        if let Some(addr) = self.channels.read().await.get(node_id.0.as_str()) {
             return Ok(addr.clone());
         }
         // Fallback: look up from registry
         let reg = self
             .registry
-            .get(node_id)
+            .get(node_id.0.as_str())
             .await
-            .ok_or_else(|| RemoteExecutionError::NodeNotFound(node_id.clone()))?;
+            .ok_or_else(|| RemoteExecutionError::NodeNotFound(node_id.0.clone()))?;
         let addr = format!("http://{}", reg.addr());
         self.channels
             .write()
@@ -612,7 +674,7 @@ mod tests {
 
         let output = executor.execute_remote(packet).await.unwrap();
         assert!(output.success);
-        assert_eq!(output.node_id, "node-1");
+        assert_eq!(output.node_id.0, "node-1");
     }
 
     #[tokio::test]
@@ -624,7 +686,7 @@ mod tests {
 
         let nodes = registry.list().await;
         assert_eq!(nodes.len(), 1);
-        assert_eq!(nodes[0].node_id, "node-2");
+        assert_eq!(nodes[0].node_id.0, "node-2");
 
         let caps = registry.capabilities("node-2").await;
         assert!(caps.is_some());
@@ -652,9 +714,6 @@ mod tests {
         );
 
         let err = executor.execute_remote(packet).await.unwrap_err();
-        assert!(matches!(
-            err,
-            RemoteExecutionError::CapabilityMismatch(_, _)
-        ));
+        assert!(matches!(err, RemoteExecutionError::CapabilityMismatch(..)));
     }
 }

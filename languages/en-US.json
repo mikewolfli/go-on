@@ -155,6 +155,7 @@
     "diagnostic.performance_summary": "Performance summary",
     "diagnostic.optimization_suggestions": "Optimization suggestions",
     "diagnostic.decision_chain": "Decision chain",
+    "prompts.skill_system": "\n\n## Skill System\n\nYou have access to {count} registered skill(s). Skills are reusable templates that automate common tasks.\n\n### How to Use Skills\n1. **Discover Local** \u2014 Call `skill-finder(query, top_k)` to search LOCAL skills matching the user\u2019s intent.\n2. **Search GitHub** \u2014 Call `github_search_skills(query, max_results)` to search GitHub for community skills.\n3. **Import** \u2014 Once you find a suitable GitHub repo, use `import_skill` with {{ \"source\": {{ \"kind\": \"github\", \"repo\": \"owner/repo\", \"ref\": \"main\" }} }} to install it.\n4. **Create** \u2014 If no existing skill fits, create one via `skill-creator(name, description, prompt_template, input_schema)`.\n\n### Important Rules\n- When multiple skills seem relevant, pick the one with the HIGHEST score.\n- When a user request could match several skills, call `skill-finder` first, then choose the single best match.\n- If the best match has score < 0.4, do NOT use it. Instead, ask the user for clarification or create a new skill.\n- NEVER call multiple skills at once for the same request. Pick one and execute it.",
     "learner.experience_updated": "Experience updated",
     "learner.pattern_recognized": "Pattern recognized",
     "learner.strategy_improved": "Strategy improved",

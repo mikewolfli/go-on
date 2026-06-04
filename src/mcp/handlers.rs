@@ -1,5 +1,7 @@
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{info, warn};
 
@@ -67,6 +69,67 @@ fn request_cancelled_error(request_id: &str) -> anyhow::Error {
         super::error_codes::REQUEST_CANCELLED,
         format!("Request '{}' was cancelled by client", request_id),
     )
+}
+
+// ── MCP sampling/createMessage types ──────────────────────────────────
+
+/// Content item within a sampling result.
+#[derive(Debug, Serialize)]
+pub struct ContentItem {
+    #[serde(rename = "type")]
+    pub type_: String,
+    pub text: String,
+}
+
+/// A single message in a sampling request.
+#[derive(Debug, Deserialize)]
+pub struct SamplingMessage {
+    pub role: String,
+    pub content: Value,
+}
+
+/// Model preference hints for sampling.
+#[derive(Debug, Deserialize)]
+pub struct ModelHint {
+    pub name: Option<String>,
+}
+
+/// Model preferences for sampling.
+#[derive(Debug, Deserialize)]
+pub struct ModelPreferences {
+    #[serde(default)]
+    pub hints: Option<Vec<ModelHint>>,
+    #[serde(default)]
+    pub cost_priority: Option<f64>,
+    #[serde(default)]
+    pub speed_priority: Option<f64>,
+    #[serde(default)]
+    pub intelligence_priority: Option<f64>,
+}
+
+/// Request for `sampling/createMessage`.
+#[derive(Debug, Deserialize)]
+pub struct CreateMessageRequest {
+    pub messages: Vec<SamplingMessage>,
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+    pub max_tokens: u32,
+    #[serde(default)]
+    pub stop_sequences: Vec<String>,
+    #[serde(default)]
+    pub model_preferences: Option<ModelPreferences>,
+    #[serde(default)]
+    pub metadata: Option<HashMap<String, Value>>,
+}
+
+/// Result for `sampling/createMessage`.
+#[derive(Debug, Serialize)]
+pub struct CreateMessageResult {
+    pub role: String,
+    pub content: ContentItem,
+    pub model: String,
+    #[serde(rename = "stopReason")]
+    pub stop_reason: String,
 }
 
 fn request_id_key(id: &Value) -> String {
@@ -339,19 +402,7 @@ impl McpServer {
                     }
                 }))
             }
-            "sampling/createMessage" => {
-                warn!("MCP: sampling/createMessage is not supported");
-                return Ok(JsonRpcResponse {
-                    jsonrpc: JSONRPC_VERSION.to_string(),
-                    result: None,
-                    error: Some(JsonRpcError {
-                        code: super::error_codes::METHOD_NOT_FOUND,
-                        message: "sampling/createMessage is not supported — use the ACP protocol or configure a provider directly".to_string(),
-                        data: None,
-                    }),
-                    id: request.id,
-                });
-            }
+            "sampling/createMessage" => self.handle_sampling_create_message(&request).await,
             "models/list" => Ok(self.handle_list_models(&request).await),
             _ => {
                 warn!("MCP: unknown method '{}'", request.method);
@@ -781,6 +832,104 @@ impl McpServer {
             })
             .collect::<Vec<_>>();
         json!({ "models": models })
+    }
+
+    /// Handler for `sampling/createMessage`.
+    ///
+    /// Routes the sampling request through the agent system to get a completion.
+    /// Messages are converted from MCP format to internal agent format,
+    /// and the streaming response is collected into a single result.
+    async fn handle_sampling_create_message(&self, request: &JsonRpcRequest) -> Result<Value> {
+        let params = request
+            .params
+            .as_ref()
+            .ok_or_else(|| invalid_params("Missing parameters"))?;
+
+        let create_request: CreateMessageRequest = serde_json::from_value(params.clone())
+            .map_err(|e| invalid_params(format!("Invalid sampling request: {}", e)))?;
+
+        // Determine which agent to use based on model preferences
+        let agent_name = create_request
+            .model_preferences
+            .as_ref()
+            .and_then(|prefs| prefs.hints.as_ref())
+            .and_then(|hints| hints.first())
+            .and_then(|hint| hint.name.as_ref())
+            .cloned()
+            .unwrap_or_else(|| "primary".to_string());
+
+        let agent = self
+            .agent_registry
+            .get(&agent_name)
+            .ok_or_else(|| invalid_params(format!("Agent '{}' not found", agent_name)))?;
+
+        // Convert MCP messages to internal agent Messages
+        let mut agent_messages: Vec<crate::agents::agent::Message> = Vec::new();
+
+        if let Some(ref system_prompt) = create_request.system_prompt {
+            agent_messages.push(crate::agents::agent::Message {
+                role: "system".to_string(),
+                content: system_prompt.clone(),
+            });
+        }
+
+        for msg in &create_request.messages {
+            let text = msg
+                .content
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            agent_messages.push(crate::agents::agent::Message {
+                role: msg.role.clone(),
+                content: text,
+            });
+        }
+
+        // Build options
+        let mut options = HashMap::new();
+        options.insert("max_tokens".to_string(), json!(create_request.max_tokens));
+        if !create_request.stop_sequences.is_empty() {
+            options.insert("stop".to_string(), json!(create_request.stop_sequences));
+        }
+
+        // Channel to collect streaming response
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(1024);
+        let sender = crate::agents::agent::StreamingSender::new(tx);
+
+        let model_name = agent
+            .default_model()
+            .map(|m| m.id.clone())
+            .unwrap_or_else(|| agent_name.clone());
+
+        // Call the agent
+        agent
+            .chat(agent_messages, None, Some(options), sender)
+            .await
+            .map_err(|e| anyhow::anyhow!("Sampling request failed: {}", e))?;
+
+        // Collect streaming tokens
+        let mut full_text = String::new();
+        while let Some(token) = rx.recv().await {
+            full_text.push_str(&token);
+        }
+
+        info!(
+            "MCP: sampling/createMessage completed ({} chars generated)",
+            full_text.len()
+        );
+
+        let result = CreateMessageResult {
+            role: "assistant".to_string(),
+            content: ContentItem {
+                type_: "text".to_string(),
+                text: full_text,
+            },
+            model: model_name,
+            stop_reason: "endTurn".to_string(),
+        };
+
+        Ok(serde_json::to_value(result)?)
     }
 
     /// Handler for `prompts/list`.

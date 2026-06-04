@@ -11,6 +11,7 @@ use crate::acp::server::AcpServer;
 use crate::rpc_protocol::RequestTraceContext;
 use anyhow::Result;
 use serde_json::Value;
+use tokio::sync::Mutex;
 
 /// A handler for a single JSON-RPC method.
 ///
@@ -45,9 +46,13 @@ impl MethodRouter {
     }
 
     /// Register a handler for the given method name.
-    #[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
     pub fn register(&mut self, method: &'static str, handler: Box<dyn MethodHandler>) {
         self.handlers.insert(method, handler);
+    }
+
+    /// Find a handler for the given method (synchronous lookup, no lock held).
+    pub fn find_handler(&self, method: &str) -> Option<&Box<dyn MethodHandler>> {
+        self.handlers.get(method)
     }
 
     /// Dispatch to a registered handler.
@@ -72,11 +77,11 @@ impl MethodRouter {
 }
 
 /// Global method router singleton, lazily initialised on first access.
-static GLOBAL_ROUTER: OnceLock<MethodRouter> = OnceLock::new();
+static GLOBAL_ROUTER: OnceLock<Mutex<MethodRouter>> = OnceLock::new();
 
 /// Get the global method router, initialising it with default handlers on
 /// first call.
-pub fn global_method_router() -> &'static MethodRouter {
+pub fn global_method_router() -> &'static Mutex<MethodRouter> {
     GLOBAL_ROUTER.get_or_init(|| {
         let router = MethodRouter::new();
         // ── Built-in registrations ──────────────────────────────────────
@@ -87,22 +92,16 @@ pub fn global_method_router() -> &'static MethodRouter {
         // (Additional handlers will be migrated incrementally from the
         //  legacy match in `handle_request`.)
 
-        router
+        Mutex::new(router)
     })
 }
 
 /// Convenience: register a handler on the global router at startup.
-#[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
 pub fn register_method_handler(method: &'static str, handler: Box<dyn MethodHandler>) {
-    // Get-or-init guarantees we get the same instance to modify.
-    let router = GLOBAL_ROUTER.get_or_init(MethodRouter::new);
-    // Safety: we only call this during single-threaded startup (before any
-    // dispatch calls), so a direct mutable access via the raw pointer is
-    // sound here.  In practice this is called from `fn init_method_router()`.
-    unsafe {
-        let ptr = router as *const MethodRouter as *mut MethodRouter;
-        (*ptr).register(method, handler);
-    }
+    let router = GLOBAL_ROUTER.get_or_init(|| Mutex::new(MethodRouter::new()));
+    // blocking_lock is safe here because this is only called during
+    // single-threaded startup, before any async dispatch happens.
+    router.blocking_lock().register(method, handler);
     // Register on the static table as well so that `is_acp_request`
     // continues to recognise the method.
     register_acp_method(method);
@@ -110,16 +109,13 @@ pub fn register_method_handler(method: &'static str, handler: Box<dyn MethodHand
 
 // ── ACP method-name tracking ──────────────────────────────────────────────
 
-#[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
 static ACP_METHOD_REGISTRY: OnceLock<std::sync::Mutex<Vec<&'static str>>> = OnceLock::new();
 
-#[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
 fn acp_method_registry() -> &'static std::sync::Mutex<Vec<&'static str>> {
     ACP_METHOD_REGISTRY.get_or_init(|| std::sync::Mutex::new(Vec::new()))
 }
 
 /// Register an ACP method name so that `is_acp_request` recognises it.
-#[allow(dead_code)] // activated, formerly F-GAP-51 — public API surface
 pub fn register_acp_method(method: &'static str) {
     if let Ok(mut guard) = acp_method_registry().lock() {
         guard.push(method);

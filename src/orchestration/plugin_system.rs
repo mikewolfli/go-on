@@ -6,9 +6,10 @@
 //!
 //! # Built-in plugins
 //!
-//! Four [`NoOpPlugin`] instances are registered at startup under distinct
-//! IDs (`builtin:tool`, `builtin:skill`, `builtin:mode`, `builtin:policy`).
-//! They serve as placeholder entries until real implementations arrive.
+//! Two `NoOpPlugin` instances are registered at startup as fallback
+//! placeholders for mode and policy. Two real plugin implementations
+//! — `TelemetryPlugin` and `MetricsPlugin` — are registered for tool
+//! and skill, providing lifecycle hooks for observability.
 //! External plugins implement [`Plugin`] directly.
 
 use async_trait::async_trait;
@@ -80,6 +81,31 @@ impl PluginState {
 // Plugin trait
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// PluginContext / PluginResult — lifecycle event payloads
+// ---------------------------------------------------------------------------
+
+/// Context passed to plugin lifecycle hooks.
+#[derive(Debug, Clone)]
+pub struct PluginContext {
+    pub agent_name: String,
+    pub task_id: String,
+    pub session_id: Option<String>,
+}
+
+/// Result returned by an agent execution, passed to plugin completion hooks.
+#[derive(Debug, Clone)]
+pub struct PluginResult {
+    pub success: bool,
+    pub error: Option<String>,
+    pub duration_ms: u64,
+    pub tool_call_count: u64,
+}
+
+// ---------------------------------------------------------------------------
+// Plugin trait
+// ---------------------------------------------------------------------------
+
 /// Core trait that all plugins must implement.
 #[async_trait]
 #[allow(dead_code)] // F-GAP-12 — reserved for plugin system integration
@@ -95,16 +121,211 @@ pub trait Plugin: Send + Sync {
 
     /// Get the current plugin state.
     fn state(&self) -> PluginState;
+
+    // ── Lifecycle hooks (all have default no-op impls) ────────────────────
+
+    /// Called when an agent starts executing a task.
+    fn on_agent_start(&self, _ctx: &PluginContext) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Called when an agent completes a task (success or failure).
+    fn on_agent_complete(
+        &self,
+        _ctx: &PluginContext,
+        _result: &PluginResult,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Called before a tool is executed. Return `false` to block the call.
+    fn on_tool_execute(&self, _tool_name: &str) -> anyhow::Result<bool> {
+        Ok(true)
+    }
+
+    /// Called when an error occurs during agent execution.
+    fn on_error(&self, _ctx: &PluginContext, _error: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
-// NoOpPlugin — single implementation for all built-in plugin types
+// TelemetryPlugin — logging/telemetry for agent lifecycle events
+// ---------------------------------------------------------------------------
+
+/// A plugin that records agent lifecycle events via `tracing::info!`.
+///
+/// Registered under the ID `builtin:tool` at startup. Provides
+/// real implementations of `on_agent_start` and `on_agent_complete`
+/// so that operators can observe agent execution flow through structured
+/// log output without external monitoring infrastructure.
+pub struct TelemetryPlugin {
+    manifest: PluginManifest,
+    state: PluginState,
+}
+
+impl TelemetryPlugin {
+    pub fn new(manifest: PluginManifest) -> Self {
+        Self {
+            manifest,
+            state: PluginState::Registered,
+        }
+    }
+}
+
+#[async_trait]
+impl Plugin for TelemetryPlugin {
+    fn manifest(&self) -> &PluginManifest {
+        &self.manifest
+    }
+
+    async fn initialize(&mut self) -> anyhow::Result<()> {
+        self.state = PluginState::Active;
+        tracing::info!(target: "plugin", "{} initialized", self.manifest.name);
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> anyhow::Result<()> {
+        self.state = PluginState::Unloaded;
+        tracing::info!(target: "plugin", "{} shut down", self.manifest.name);
+        Ok(())
+    }
+
+    fn state(&self) -> PluginState {
+        self.state
+    }
+
+    fn on_agent_start(&self, ctx: &PluginContext) -> anyhow::Result<()> {
+        tracing::info!(
+            target: "plugin",
+            event = "agent_start",
+            agent = %ctx.agent_name,
+            task = %ctx.task_id,
+            session = %ctx.session_id.as_deref().unwrap_or("none"),
+            "Agent started"
+        );
+        Ok(())
+    }
+
+    fn on_agent_complete(&self, ctx: &PluginContext, result: &PluginResult) -> anyhow::Result<()> {
+        tracing::info!(
+            target: "plugin",
+            event = "agent_complete",
+            agent = %ctx.agent_name,
+            task = %ctx.task_id,
+            success = %result.success,
+            duration_ms = %result.duration_ms,
+            tool_calls = %result.tool_call_count,
+            error = %result.error.as_deref().unwrap_or("none"),
+            "Agent completed"
+        );
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MetricsPlugin — execution stats recording for plugin events
+// ---------------------------------------------------------------------------
+
+/// A plugin that records agent execution metrics via `tracing::info!`.
+///
+/// Registered under the ID `builtin:skill` at startup. Provides
+/// implementations of `on_agent_start`, `on_agent_complete`, and
+/// `on_tool_execute` to emit structured metrics that can be consumed
+/// by observability pipelines.
+pub struct MetricsPlugin {
+    manifest: PluginManifest,
+    state: PluginState,
+}
+
+impl MetricsPlugin {
+    pub fn new(manifest: PluginManifest) -> Self {
+        Self {
+            manifest,
+            state: PluginState::Registered,
+        }
+    }
+}
+
+#[async_trait]
+impl Plugin for MetricsPlugin {
+    fn manifest(&self) -> &PluginManifest {
+        &self.manifest
+    }
+
+    async fn initialize(&mut self) -> anyhow::Result<()> {
+        self.state = PluginState::Active;
+        tracing::info!(target: "plugin", "{} initialized", self.manifest.name);
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> anyhow::Result<()> {
+        self.state = PluginState::Unloaded;
+        tracing::info!(target: "plugin", "{} shut down", self.manifest.name);
+        Ok(())
+    }
+
+    fn state(&self) -> PluginState {
+        self.state
+    }
+
+    fn on_agent_start(&self, ctx: &PluginContext) -> anyhow::Result<()> {
+        tracing::info!(
+            target: "plugin",
+            metric = "agent_start_count",
+            agent = %ctx.agent_name,
+            value = 1u64,
+            "[METRIC] agent_start_count"
+        );
+        Ok(())
+    }
+
+    fn on_agent_complete(&self, ctx: &PluginContext, result: &PluginResult) -> anyhow::Result<()> {
+        tracing::info!(
+            target: "plugin",
+            metric = "agent_complete_count",
+            agent = %ctx.agent_name,
+            success = %result.success,
+            value = 1u64,
+            "[METRIC] agent_complete_count"
+        );
+        tracing::info!(
+            target: "plugin",
+            metric = "agent_duration_ms_total",
+            agent = %ctx.agent_name,
+            value = %result.duration_ms,
+            "[METRIC] agent_duration_ms_total"
+        );
+        tracing::info!(
+            target: "plugin",
+            metric = "agent_tool_calls_total",
+            agent = %ctx.agent_name,
+            value = %result.tool_call_count,
+            "[METRIC] agent_tool_calls_total"
+        );
+        Ok(())
+    }
+
+    fn on_tool_execute(&self, tool_name: &str) -> anyhow::Result<bool> {
+        tracing::info!(
+            target: "plugin",
+            metric = "tool_execute_count",
+            tool = %tool_name,
+            value = 1u64,
+            "[METRIC] tool_execute_count"
+        );
+        Ok(true)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// NoOpPlugin — default placeholder for built-in plugin types
 // ---------------------------------------------------------------------------
 
 /// A no-operation plugin that implements [`Plugin`] with minimal behavior.
 ///
-/// Four instances are registered at startup (tool, skill, mode, policy),
-/// each with a distinct manifest. All instances share the same initialization
+/// Two instances are registered at startup (mode, policy) as fallback
+/// placeholders. All instances share the same initialization
 /// and shutdown logic: mark the plugin as Active on init, Unloaded on shutdown,
 /// and log a trace message.
 ///
@@ -182,18 +403,26 @@ impl PluginRegistry {
     /// This should be called once at startup after creating the registry.
     pub fn register_builtin_plugins(&self) {
         let builtins: Vec<Box<dyn Plugin>> = vec![
-            Box::new(NoOpPlugin::builtin(
-                "tool",
-                "Tool Plugin",
-                "Provides tool execution capabilities for the agent runtime",
-                "tool",
-            )),
-            Box::new(NoOpPlugin::builtin(
-                "skill",
-                "Skill Plugin",
-                "Provides skill discovery and execution for agent workflows",
-                "skill",
-            )),
+            Box::new(TelemetryPlugin::new(PluginManifest {
+                id: "builtin:tool".to_string(),
+                name: "Telemetry Plugin".to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on core".to_string(),
+                description: "Records agent lifecycle events via tracing".to_string(),
+                min_go_on_version: "1.0.0".to_string(),
+                provides: vec!["tool".to_string()],
+                dependencies: HashMap::new(),
+            })),
+            Box::new(MetricsPlugin::new(PluginManifest {
+                id: "builtin:skill".to_string(),
+                name: "Metrics Plugin".to_string(),
+                version: "1.0.0".to_string(),
+                author: "go-on core".to_string(),
+                description: "Records agent execution metrics via tracing".to_string(),
+                min_go_on_version: "1.0.0".to_string(),
+                provides: vec!["skill".to_string()],
+                dependencies: HashMap::new(),
+            })),
             Box::new(NoOpPlugin::builtin(
                 "mode",
                 "Mode Plugin",

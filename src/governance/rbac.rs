@@ -111,6 +111,62 @@ impl Permission {
     }
 }
 
+/// Role hierarchy levels for built-in roles (G-FIX6).
+///
+/// Higher-level roles inherit permissions from all lower-level roles.
+/// # Hierarchy
+///
+/// | Level | Role   | Inherits from         |
+/// |-------|--------|-----------------------|
+/// | 2     | Admin  | User, Viewer          |
+/// | 1     | User   | Viewer                |
+/// | 0     | Viewer | —                     |
+///
+/// # Note
+/// `Monitor` is a non-hierarchical role and sits outside this chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum RoleLevel {
+    Viewer = 0,
+    User = 1,
+    Admin = 2,
+}
+
+impl RoleLevel {
+    /// Returns `true` if `self` inherits permissions from `other`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// assert!(RoleLevel::Admin.inherits(&RoleLevel::Viewer));
+    /// assert!(RoleLevel::Admin.inherits(&RoleLevel::User));
+    /// assert!(RoleLevel::User.inherits(&RoleLevel::Viewer));
+    /// assert!(!RoleLevel::Viewer.inherits(&RoleLevel::User));
+    /// assert!(!RoleLevel::User.inherits(&RoleLevel::Admin));
+    /// ```
+    pub fn inherits(&self, other: &RoleLevel) -> bool {
+        *self as u8 >= *other as u8
+    }
+
+    /// Map a built-in role name string to its `RoleLevel`, if applicable.
+    pub fn from_role_name(name: &str) -> Option<Self> {
+        match name {
+            "admin" => Some(RoleLevel::Admin),
+            "user" => Some(RoleLevel::User),
+            "viewer" => Some(RoleLevel::Viewer),
+            _ => None,
+        }
+    }
+
+    /// Return the names of all roles that this level inherits from.
+    fn inherited_role_names(&self) -> &'static [&'static str] {
+        match self {
+            RoleLevel::Admin => &["user", "viewer"],
+            RoleLevel::User => &["viewer"],
+            RoleLevel::Viewer => &[],
+        }
+    }
+}
+
 /// A user/principal in the RBAC system
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Principal {
@@ -306,16 +362,17 @@ impl RbacEnforcer {
             }
         }
 
-        // Check role-based permissions
+        // Check role-based permissions with hierarchy inheritance (G-FIX6).
+        // Higher-level roles (e.g. Admin) inherit permissions from lower-level
+        // roles (User, Viewer) through `collect_inherited_permissions`.
         for role_name in &principal.roles {
-            if let Some(perms) = self.role_permissions.get(role_name) {
-                if perms.contains(required_perm) {
-                    return AccessDecision::Allow;
-                }
-                // If they have Admin, they get everything
-                if perms.contains(&Permission::Admin) {
-                    return AccessDecision::Allow;
-                }
+            let effective_perms = self.collect_inherited_permissions(role_name);
+            if effective_perms.contains(required_perm) {
+                return AccessDecision::Allow;
+            }
+            // If they have Admin, they get everything
+            if effective_perms.contains(&Permission::Admin) {
+                return AccessDecision::Allow;
             }
         }
 
@@ -374,15 +431,42 @@ impl RbacEnforcer {
         }
     }
 
-    /// Resolve a principal's permissions from their roles
+    /// Resolve a principal's permissions from their roles, including inherited
+    /// permissions from the role hierarchy (G-FIX6).
     pub fn resolve_permissions(&self, principal: &mut Principal) {
         for role_name in &principal.roles {
-            if let Some(perms) = self.role_permissions.get(role_name) {
-                for perm in perms.iter() {
-                    principal.permissions.insert(perm.clone());
+            let effective_perms = self.collect_inherited_permissions(role_name);
+            for perm in effective_perms {
+                principal.permissions.insert(perm);
+            }
+        }
+    }
+
+    /// Collect all effective permissions for a role, including inherited
+    /// permissions from lower-level roles in the hierarchy.
+    ///
+    /// For example, `"admin"` returns the union of Admin, User, and Viewer
+    /// permissions; `"user"` returns the union of User and Viewer; `"viewer"`
+    /// returns only Viewer permissions.
+    /// Non-hierarchical roles (e.g. `"monitor"`) return only their own permissions.
+    fn collect_inherited_permissions(&self, role_name: &str) -> HashSet<Permission> {
+        let mut perms = HashSet::new();
+
+        // Add this role's own permissions.
+        if let Some(own) = self.role_permissions.get(role_name) {
+            perms.extend(own.iter().cloned());
+        }
+
+        // Add inherited permissions from lower-level roles in the hierarchy.
+        if let Some(level) = RoleLevel::from_role_name(role_name) {
+            for inherited_name in level.inherited_role_names() {
+                if let Some(inherited) = self.role_permissions.get(*inherited_name) {
+                    perms.extend(inherited.iter().cloned());
                 }
             }
         }
+
+        perms
     }
 
     #[cfg(test)]

@@ -89,7 +89,14 @@ pub struct ScheduledTask {
 
 impl ScheduledTask {
     pub fn effective_priority(&self) -> f64 {
-        self.base_score + self.aging_bonus
+        let base = self.base_score * (1.0 + self.aging_bonus);
+        let urgency_factor = self.urgency * 2.0;
+        let deadline_factor = if self.deadline_pressure > 0.0 {
+            self.deadline_pressure * 3.0
+        } else {
+            0.0
+        };
+        base + urgency_factor + deadline_factor
     }
 }
 

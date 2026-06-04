@@ -13,17 +13,11 @@
     "Other"
   ],
   "activationEvents": [
-    "onView:go-on-chat",
-    "onView:go-on-settings",
-    "onView:go-on-workflow",
-    "onView:go-on-process-flow",
-    "onCommand:go-on.keyringSet",
-    "onCommand:go-on.keyringGet",
-    "onCommand:go-on.keyringDelete",
-    "onCommand:go-on.keyringList",
-    "onCommand:go-on.applyDefaultConfig",
-    "onCommand:go-on.updateWorkflowMapping",
-    "onCommand:go-on.updateRules"
+    "onCommand:go-on.chat",
+    "onCommand:go-on.start",
+    "onCommand:go-on.stop",
+    "onCommand:go-on.status",
+    "onStartupFinished"
   ],
   "main": "./out/extension.js",
   "repository": {
@@ -660,12 +654,18 @@
           "enum": [
             "auto",
             "light",
-            "dark"
+            "dark",
+            "dracula",
+            "nord",
+            "solarized"
           ],
           "enumDescriptions": [
             "Follow VS Code theme",
             "Light theme",
-            "Dark theme"
+            "Dark theme",
+            "Dracula theme",
+            "Nord theme",
+            "Solarized theme"
           ],
           "description": "UI theme for the extension"
         },

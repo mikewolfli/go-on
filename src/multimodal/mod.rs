@@ -5,7 +5,6 @@
 //!
 //! | Module | Description |
 //! |--------|-------------|
-#![allow(unused_imports)]
 //! | [`document_parser`] | Extracts text, images, tables, and metadata from PDF, DOCX, HTML, Markdown |
 //! | [`audio_processor`] | Speech-to-text transcription with speaker diarization support |
 //!
@@ -273,6 +272,20 @@ impl MultimodalProcessor {
     /// (i.e. `None`). Use the builder-style setters to enable them.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create a `MultimodalProcessor` with all sub-processors enabled using
+    /// their default configuration.
+    ///
+    /// This is the recommended constructor when the multimodal feature set is
+    /// active (feature `sub-bus-multimodal` or `profile-full`).
+    pub fn new_with_all_processors() -> Self {
+        Self {
+            document_parser: Some(DocumentParser::default()),
+            audio_processor: Some(AudioProcessor::new(AudioProcessorConfig::default())),
+            video_processor: Some(VideoProcessor::new(VideoProcessorConfig::default())),
+            repo_analyzer: Some(RepoAnalyzer::default()),
+        }
     }
 
     /// Convenience constructor that wires a pre-built `DocumentParser`.

@@ -9,110 +9,70 @@
         "title": "解释代码",
         "description": "详细代码解释，覆盖控制流、数据结构和风险",
         "content": "请详细解释下面的代码，说明控制流、关键数据结构，以及潜在风险或权衡。\n\n{{input}}",
-        "tags": [
-          "代码",
-          "分析",
-          "学习"
-        ]
+        "tags": ["代码", "分析", "学习"]
       },
       {
         "id": "code_review",
         "title": "代码审查",
         "description": "全面的代码审查，发现缺陷并给出改进建议",
         "content": "审查以下代码，找出其中的错误、安全漏洞、性能问题和风格违规。针对每个问题提供可操作的建议。\n\n{{input}}",
-        "tags": [
-          "代码",
-          "审查",
-          "质量"
-        ]
+        "tags": ["代码", "审查", "质量"]
       },
       {
         "id": "refactor_suggestion",
         "title": "重构建议",
         "description": "为提升可维护性提供重构改进方案",
         "content": "分析以下代码并提出重构改进建议。重点在于降低复杂度、提高可读性，并在适当的地方应用设计模式。\n\n{{input}}",
-        "tags": [
-          "重构",
-          "设计模式",
-          "可维护性"
-        ]
+        "tags": ["重构", "设计模式", "可维护性"]
       },
       {
         "id": "generate_unit_tests",
         "title": "生成单元测试",
         "description": "生成覆盖各种场景的全面单元测试",
         "content": "为以下代码编写全面的单元测试。包括正常情况、边缘情况、错误处理和边界条件的测试用例。使用适合该语言的测试框架。\n\n{{input}}",
-        "tags": [
-          "测试",
-          "单元测试",
-          "质量"
-        ]
+        "tags": ["测试", "单元测试", "质量"]
       },
       {
         "id": "debug_error",
         "title": "调试错误信息",
         "description": "分析错误信息并建议修复方案",
         "content": "分析以下错误信息和相关代码片段。找出根本原因并提供逐步解决方案。\n\n错误：{{input}}",
-        "tags": [
-          "调试",
-          "错误",
-          "故障排查"
-        ]
+        "tags": ["调试", "错误", "故障排查"]
       },
       {
         "id": "api_design",
         "title": "API 设计审查",
         "description": "审查 API 设计中的 RESTful 最佳实践",
         "content": "审查以下 API 设计。检查是否符合 RESTful 规范、HTTP 方法使用是否恰当、状态码是否正确、错误响应格式是否合理以及安全考虑是否周全。\n\n{{input}}",
-        "tags": [
-          "API",
-          "REST",
-          "设计"
-        ]
+        "tags": ["API", "REST", "设计"]
       },
       {
         "id": "architecture_review",
         "title": "架构审查",
         "description": "评估系统架构的可扩展性和可靠性",
         "content": "评估以下系统架构。分析其可扩展性、可靠性、可维护性和潜在瓶颈，基于行业最佳实践提出改进建议。\n\n{{input}}",
-        "tags": [
-          "架构",
-          "可扩展性",
-          "设计"
-        ]
+        "tags": ["架构", "可扩展性", "设计"]
       },
       {
         "id": "generate_unit_test",
-        "title": "Generate Unit Tests",
-        "description": "Comprehensive unit test generation for functions or modules",
-        "content": "Write thorough unit tests for the following code. Cover edge cases, error conditions, and happy paths. Use {{test_framework}} if applicable.\n\n{{input}}",
-        "tags": [
-          "testing",
-          "unit-test",
-          "code-generation"
-        ]
+        "title": "生成单元测试",
+        "description": "为函数或模块生成全面的单元测试",
+        "content": "为以下代码编写全面的单元测试。覆盖边缘情况、错误条件和正常路径。如果适用，请使用 {{test_framework}}。\n\n{{input}}",
+        "tags": ["测试", "单元测试", "代码生成"]
       },
       {
         "id": "generate_documentation",
-        "title": "Generate Documentation",
-        "description": "Generate comprehensive API or function documentation",
-        "content": "Write clear and comprehensive documentation for the following code. Include parameter descriptions, return values, examples, and caveats.\n\n{{input}}",
-        "tags": [
-          "documentation",
-          "code-generation",
-          "api-docs"
-        ]
+        "title": "生成文档",
+        "description": "生成全面的 API 或函数文档",
+        "content": "为以下代码编写清晰全面的文档。包含参数说明、返回值、示例和注意事项。\n\n{{input}}",
+        "tags": ["文档", "代码生成", "API文档"]
       },
       {
         "id": "architecture_design",
-        "title": "Architecture Design",
-        "description": "Design system architecture for given requirements",
-        "content": "Design a software architecture for the following requirements. Discuss component boundaries, data flow, communication protocols, and tradeoffs.\n\n{{input}}",
-        "tags": [
-          "architecture",
-          "design",
-          "system-design"
-        ]
+        "title": "架构设计",
+        "description": "根据需求设计系统架构",
+        "content": "为以下需求设计软件架构。讨论组件边界、数据流、通信协议和权衡取舍。\n\n{{input}}",
+        "tags": ["架构", "设计", "系统设计"]
       }
     ]
   },
@@ -126,132 +86,84 @@
         "title": "校对与润色",
         "description": "检查语法、风格和清晰度",
         "content": "校对以下文本。修正语法、拼写和标点错误。改进句子结构和清晰度，同时保留原文的语气和风格。\n\n{{input}}",
-        "tags": [
-          "校对",
-          "语法",
-          "编辑"
-        ]
+        "tags": ["校对", "语法", "编辑"]
       },
       {
         "id": "rewrite_tone",
         "title": "按特定语气重写",
         "description": "以指定语气（正式、随意、有说服力）重写内容",
         "content": "以{{tone}}的语气重写以下内容。保持关键信息和事实准确性，同时适当调整风格。\n\n{{input}}",
-        "tags": [
-          "重写",
-          "语气",
-          "风格"
-        ]
+        "tags": ["重写", "语气", "风格"]
       },
       {
         "id": "outline_article",
         "title": "文章大纲",
         "description": "创建包含主要观点和子要点的结构大纲",
         "content": "为以下主题的文章创建详细大纲。包括引人入胜的引言、3-5个核心部分（带有支撑论据）以及有力的结论。\n\n主题：{{input}}",
-        "tags": [
-          "大纲",
-          "结构",
-          "规划"
-        ]
+        "tags": ["大纲", "结构", "规划"]
       },
       {
         "id": "creative_story",
         "title": "创意写作提示",
         "description": "根据提示生成短篇故事",
         "content": "根据以下提示创作一个短篇故事。包含生动的描写、人物塑造和令人满意的叙事弧线。\n\n提示：{{input}}",
-        "tags": [
-          "创意",
-          "故事",
-          "小说"
-        ]
+        "tags": ["创意", "故事", "小说"]
       },
       {
         "id": "summarize_content",
         "title": "内容摘要",
         "description": "将长内容浓缩为简洁摘要",
         "content": "将以下内容总结为简洁版本。抓住主要观点、关键论点和重要结论，长度约为原文的三分之一。\n\n{{input}}",
-        "tags": [
-          "摘要",
-          "浓缩",
-          "要点"
-        ]
+        "tags": ["摘要", "浓缩", "要点"]
       },
       {
         "id": "headline_generator",
         "title": "标题生成器",
         "description": "生成吸引眼球的标题",
         "content": "为以下文章或主题生成10个引人注目的标题。使用多样化的风格：直接式、提问式、列表式、教程式和引发思考式。\n\n主题：{{input}}",
-        "tags": [
-          "标题",
-          "题目",
-          "营销"
-        ]
+        "tags": ["标题", "题目", "营销"]
       },
       {
         "id": "email_draft",
         "title": "撰写专业邮件",
         "description": "撰写结构得体的专业邮件",
         "content": "根据以下背景撰写一封专业邮件。包括清晰的主题行、恰当的称呼、结构合理的正文和得体的结束语。\n\n背景：{{input}}",
-        "tags": [
-          "邮件",
-          "专业",
-          "沟通"
-        ]
+        "tags": ["邮件", "专业", "沟通"]
       },
       {
         "id": "blog_post_outline",
-        "title": "Blog Post Outline",
-        "description": "Create a structured outline for a blog article",
-        "content": "Create a detailed outline for a blog post on the following topic. Include an engaging title suggestion, introduction, main sections with key points, and a conclusion with call-to-action.\n\n{{input}}",
-        "tags": [
-          "blogging",
-          "outline",
-          "content-planning"
-        ]
+        "title": "博客文章大纲",
+        "description": "为博客文章创建结构化大纲",
+        "content": "为以下主题的博客文章创建详细大纲。包括吸引人的标题建议、引言、带要点的核心段落，以及包含行动号召的结论。\n\n{{input}}",
+        "tags": ["博客", "大纲", "内容规划"]
       },
       {
         "id": "proofread_text",
-        "title": "Proofread & Polish",
-        "description": "Grammar, style, and clarity improvement for any text",
-        "content": "Proofread and polish the following text. Fix grammar, spelling, and punctuation errors. Improve sentence structure and clarity while preserving the original tone and meaning.\n\n{{input}}",
-        "tags": [
-          "proofreading",
-          "editing",
-          "grammar"
-        ]
+        "title": "校对与润色",
+        "description": "改善任意文本的语法、风格和清晰度",
+        "content": "校对并润色以下文本。修正语法、拼写和标点错误。改进句子结构和清晰度，同时保留原文的语气和含义。\n\n{{input}}",
+        "tags": ["校对", "编辑", "语法"]
       },
       {
         "id": "copywriting_slogan",
-        "title": "Copywriting & Slogans",
-        "description": "Compelling marketing copy and tagline generation",
-        "content": "Write persuasive copy and catchy slogans for the following product or service. Highlight unique value propositions and appeal to the target audience.\n\n{{input}}",
-        "tags": [
-          "copywriting",
-          "marketing",
-          "branding"
-        ]
+        "title": "广告文案与口号",
+        "description": "生成有说服力的营销文案和广告语",
+        "content": "为以下产品或服务撰写有说服力的文案和吸引人的口号。突出独特价值主张并吸引目标受众。\n\n{{input}}",
+        "tags": ["文案", "营销", "品牌"]
       },
       {
         "id": "email_template",
-        "title": "Email Template",
-        "description": "Professional email writing for various contexts",
-        "content": "Write a professional email for the following scenario. Maintain appropriate tone, include a clear subject line, and ensure the message achieves its intended purpose.\n\n{{input}}",
-        "tags": [
-          "email",
-          "professional",
-          "communication"
-        ]
+        "title": "邮件模板",
+        "description": "为不同场景编写专业邮件",
+        "content": "为以下场景撰写一封专业邮件。保持适当的语气，包含清晰的主题行，并确保信息达到预期目的。\n\n{{input}}",
+        "tags": ["邮件", "专业", "沟通"]
       },
       {
         "id": "technical_writing",
-        "title": "Technical Writing",
-        "description": "Translate complex technical concepts into clear prose",
-        "content": "Explain the following technical concept in clear, accessible language suitable for {{audience}}. Use analogies and examples where appropriate.\n\n{{input}}",
-        "tags": [
-          "technical-writing",
-          "documentation",
-          "explanation"
-        ]
+        "title": "技术写作",
+        "description": "将复杂技术概念转化为清晰的文字",
+        "content": "用适合{{audience}}的清晰易懂的语言解释以下技术概念。适当使用类比和示例。\n\n{{input}}",
+        "tags": ["技术写作", "文档", "解释"]
       }
     ]
   },
@@ -265,88 +177,56 @@
         "title": "文献综述",
         "description": "总结和综合某一主题的学术资料",
         "content": "对以下研究主题进行文献综述。总结主要论文的关键发现，识别趋势和争论点，并指出当前研究中的空白。\n\n研究主题：{{input}}",
-        "tags": [
-          "文献",
-          "综述",
-          "研究"
-        ]
+        "tags": ["文献", "综述", "研究"]
       },
       {
         "id": "abstract_generation",
         "title": "生成摘要",
         "description": "撰写简洁的学术摘要",
         "content": "根据以下研究内容撰写一篇简洁的学术摘要。包含背景、目的、方法、主要发现和结论，控制在250字以内。\n\n{{input}}",
-        "tags": [
-          "摘要",
-          "论文",
-          "总结"
-        ]
+        "tags": ["摘要", "论文", "总结"]
       },
       {
         "id": "research_methodology",
         "title": "研究方法设计",
         "description": "设计适当的研究方法",
         "content": "为以下研究设计一套研究方法。推荐合适的研究设计、数据收集方法、抽样策略和分析技术，并说明每个选择的合理性。\n\n研究问题：{{input}}",
-        "tags": [
-          "方法",
-          "研究设计",
-          "数据收集"
-        ]
+        "tags": ["方法", "研究设计", "数据收集"]
       },
       {
         "id": "peer_review",
         "title": "同行评审回复",
         "description": "帮助撰写对审稿意见的回复",
         "content": "帮助撰写专业且全面的同行评审意见回复。针对每条意见给出清晰解释或描述所做的修改。\n\n审稿意见：{{input}}",
-        "tags": [
-          "同行评审",
-          "修订",
-          "回复"
-        ]
+        "tags": ["同行评审", "修订", "回复"]
       },
       {
         "id": "citation_format",
         "title": "引用格式格式化",
         "description": "按各种学术风格格式化引用",
         "content": "将以下参考文献格式化为{{style}}引用风格（如 APA、MLA、Chicago、IEEE）。确保作者、标题、期刊、卷号、页码和 DOI 格式正确。\n\n参考文献：{{input}}",
-        "tags": [
-          "引用",
-          "格式化",
-          "参考文献"
-        ]
+        "tags": ["引用", "格式化", "参考文献"]
       },
       {
         "id": "thesis_statement",
         "title": "论文论点提炼",
         "description": "改进和强化论文论点",
         "content": "改进以下论文论点，使其更加具体、可辩论和简洁。提供3个不同角度或侧重点的替代版本。\n\n草稿论点：{{input}}",
-        "tags": [
-          "论点",
-          "论证",
-          "写作"
-        ]
+        "tags": ["论点", "论证", "写作"]
       },
       {
         "id": "data_analysis_interpretation",
         "title": "数据分析解读",
         "description": "为学术写作解释统计结果",
         "content": "解释以下学术论文的统计结果。用通俗语言说明数据的含义，讨论其重要性，并建议如何有效呈现。\n\n结果：{{input}}",
-        "tags": [
-          "统计",
-          "解读",
-          "分析"
-        ]
+        "tags": ["统计", "解读", "分析"]
       },
       {
         "id": "research_proposal",
-        "title": "Research Proposal Outline",
-        "description": "Structure a compelling research funding proposal",
-        "content": "Help structure a research proposal for the following topic. Include problem statement, research questions, methodology, expected outcomes, and timeline.\n\n{{input}}",
-        "tags": [
-          "proposal",
-          "research",
-          "funding"
-        ]
+        "title": "研究计划书大纲",
+        "description": "构建有说服力的研究资助提案",
+        "content": "为以下主题构建研究计划书。包括问题陈述、研究问题、研究方法、预期成果和时间表。\n\n{{input}}",
+        "tags": ["计划书", "研究", "资助"]
       }
     ]
   },
@@ -360,99 +240,63 @@
         "title": "SWOT 分析",
         "description": "进行全面的优势、劣势、机会、威胁分析",
         "content": "对以下业务或项目进行 SWOT 分析。识别关键的优势、劣势、机会和威胁，并基于分析结果提供战略建议。\n\n业务/项目：{{input}}",
-        "tags": [
-          "SWOT",
-          "战略",
-          "分析"
-        ]
+        "tags": ["SWOT", "战略", "分析"]
       },
       {
         "id": "business_plan",
         "title": "商业计划书大纲",
         "description": "创建结构化的商业计划",
         "content": "为以下商业创意创建详细的商业计划书大纲。包括执行摘要、公司描述、市场分析、组织架构、产品线、营销策略、资金需求和财务预测。\n\n商业创意：{{input}}",
-        "tags": [
-          "商业计划",
-          "创业",
-          "战略"
-        ]
+        "tags": ["商业计划", "创业", "战略"]
       },
       {
         "id": "competitive_analysis",
         "title": "竞争分析",
         "description": "分析竞争对手和市场定位",
         "content": "分析以下产品或服务的竞争格局。识别主要竞争对手，比较功能和定价，评估市场份额，并推荐差异化策略。\n\n产品/服务：{{input}}",
-        "tags": [
-          "竞争",
-          "市场",
-          "战略"
-        ]
+        "tags": ["竞争", "市场", "战略"]
       },
       {
         "id": "meeting_agenda",
         "title": "会议议程与纪要",
         "description": "生成结构化的会议议程",
         "content": "根据以下背景创建结构化的会议议程。包括会议目标、带时间分配的讨论主题、所需参会人员和准备材料。\n\n背景：{{input}}",
-        "tags": [
-          "会议",
-          "议程",
-          "效率"
-        ]
+        "tags": ["会议", "议程", "效率"]
       },
       {
         "id": "cost_benefit",
         "title": "成本效益分析",
         "description": "评估商业决策的成本与收益",
         "content": "对以下商业决策进行成本效益分析。识别所有直接和间接成本，量化预期收益，计算投资回报率（ROI），并评估风险。\n\n决策：{{input}}",
-        "tags": [
-          "成本效益",
-          "回报率",
-          "分析"
-        ]
+        "tags": ["成本效益", "回报率", "分析"]
       },
       {
         "id": "executive_summary",
         "title": "执行摘要撰写",
         "description": "撰写商业文档的执行摘要",
         "content": "为以下商业文档撰写有说服力的执行摘要。用1-2段话概括问题陈述、解决方案、关键指标和预期成果。\n\n文档：{{input}}",
-        "tags": [
-          "执行摘要",
-          "简报",
-          "报告"
-        ]
+        "tags": ["执行摘要", "简报", "报告"]
       },
       {
         "id": "pitch_deck",
         "title": "融资演示文稿大纲",
         "description": "构建投资者路演演示文稿",
         "content": "为投资者路演创建逐页大纲。包括问题、解决方案、市场规模、商业模式、发展势头、团队、竞争分析和财务预测。\n\n公司：{{input}}",
-        "tags": [
-          "路演",
-          "投资者",
-          "融资"
-        ]
+        "tags": ["路演", "投资者", "融资"]
       },
       {
         "id": "risk_assessment",
-        "title": "Risk Assessment",
-        "description": "Identify and evaluate business risks",
-        "content": "Identify and assess risks for the following business initiative. Categorize risks by likelihood and impact, and propose mitigation strategies for each.\n\n{{input}}",
-        "tags": [
-          "risk-management",
-          "assessment",
-          "business"
-        ]
+        "title": "风险评估",
+        "description": "识别和评估商业风险",
+        "content": "识别并评估以下商业计划的风险。按可能性和影响对风险进行分类，并为每个风险提出缓解策略。\n\n{{input}}",
+        "tags": ["风险管理", "评估", "商业"]
       },
       {
         "id": "presentation_outline",
-        "title": "Presentation Outline",
-        "description": "Structure a compelling business presentation",
-        "content": "Outline a business presentation on the following topic. Structure the narrative arc, design key slides, and suggest visual aids and delivery techniques.\n\n{{input}}",
-        "tags": [
-          "presentation",
-          "slides",
-          "communication"
-        ]
+        "title": "演示文稿大纲",
+        "description": "构建有说服力的商业演示",
+        "content": "为以下主题规划商业演示文稿。构建叙事弧线，设计关键幻灯片，并建议视觉辅助工具和演示技巧。\n\n{{input}}",
+        "tags": ["演示", "幻灯片", "沟通"]
       }
     ]
   },
@@ -466,143 +310,91 @@
         "title": "社交媒体文案",
         "description": "生成针对平台优化的社交媒体帖子",
         "content": "为{{platform}}平台撰写一篇关于以下主题的社交媒体帖子。针对平台的最佳实践、字符限制和受众期望进行优化，包含相关的话题标签。\n\n主题：{{input}}",
-        "tags": [
-          "社交媒体",
-          "文案",
-          "内容"
-        ]
+        "tags": ["社交媒体", "文案", "内容"]
       },
       {
         "id": "seo_content",
         "title": "SEO 优化内容",
         "description": "创建针对搜索引擎优化的内容",
         "content": "为以下关键词创建 SEO 优化的内容。包括合理的标题结构、元描述、关键词密度、内部链接建议和易于排名的吸引人文案。\n\n关键词：{{input}}",
-        "tags": [
-          "SEO",
-          "内容",
-          "关键词"
-        ]
+        "tags": ["SEO", "内容", "关键词"]
       },
       {
         "id": "email_campaign",
         "title": "邮件营销活动",
         "description": "设计多封邮件的营销序列",
         "content": "为以下产品或优惠设计一个5封邮件的营销序列。包括欢迎邮件、价值邮件、社交证明邮件、优惠邮件和跟进邮件，每封配以有吸引力的主题行。\n\n产品/优惠：{{input}}",
-        "tags": [
-          "邮件",
-          "活动",
-          "营销"
-        ]
+        "tags": ["邮件", "活动", "营销"]
       },
       {
         "id": "ad_copy",
         "title": "广告文案生成器",
         "description": "创建有说服力的广告文案",
         "content": "为{{platform}}平台针对{{audience}}受众创建有说服力的广告文案。写3个不同版本的标题和正文，突出独特卖点并包含清晰的行动号召。\n\n产品：{{input}}",
-        "tags": [
-          "广告",
-          "文案",
-          "竞价"
-        ]
+        "tags": ["广告", "文案", "竞价"]
       },
       {
         "id": "brand_voice",
         "title": "品牌语调指南",
         "description": "定义一致的品牌语调和风格",
         "content": "为以下公司定义品牌语调指南。描述个性特征、语言风格、注意事项，并提供不同场景（社交、客服、营销、正式场合）的示例。\n\n公司：{{input}}",
-        "tags": [
-          "品牌",
-          "语调",
-          "指南"
-        ]
+        "tags": ["品牌", "语调", "指南"]
       },
       {
         "id": "content_calendar",
         "title": "内容日历",
         "description": "规划月度内容日历",
         "content": "为以下主题或品牌创建一个4周的内容日历。包括内容主题、帖子类型、发布平台、发布排期和每篇内容的关键绩效指标。\n\n主题/品牌：{{input}}",
-        "tags": [
-          "日历",
-          "规划",
-          "内容策略"
-        ]
+        "tags": ["日历", "规划", "内容策略"]
       },
       {
         "id": "landing_page",
         "title": "着陆页文案",
         "description": "撰写高转化率的着陆页内容",
         "content": "撰写高转化率着陆页的文案。包括引人注目的标题、副标题、优势说明、社交证明、异议处理和强有力的行动号召。\n\n产品/服务：{{input}}",
-        "tags": [
-          "着陆页",
-          "转化",
-          "文案"
-        ]
+        "tags": ["着陆页", "转化", "文案"]
       },
       {
         "id": "marketing_strategy",
-        "title": "Marketing Strategy",
-        "description": "Develop a comprehensive go-to-market strategy",
-        "content": "Develop a marketing strategy for the following product or service. Define target personas, key messaging, channels, budget allocation, and success metrics.\n\n{{input}}",
-        "tags": [
-          "strategy",
-          "go-to-market",
-          "marketing"
-        ]
+        "title": "营销策略",
+        "description": "制定全面的上市策略",
+        "content": "为以下产品或服务制定营销策略。定义目标用户画像、核心信息、渠道、预算分配和成功指标。\n\n{{input}}",
+        "tags": ["策略", "上市", "营销"]
       },
       {
         "id": "social_media_content",
-        "title": "Social Media Content",
-        "description": "Create engaging posts for social media platforms",
-        "content": "Create {{num_posts}} social media posts for {{platform}} about the following topic. Use appropriate tone, hashtags, and formats for the platform. Include calls-to-action.\n\n{{input}}",
-        "tags": [
-          "social-media",
-          "content",
-          "engagement"
-        ]
+        "title": "社交媒体内容",
+        "description": "为社交媒体平台创建吸引人的帖子",
+        "content": "为{{platform}}平台创建{{num_posts}}篇关于以下主题的社交媒体帖子。使用适合平台的语气、话题标签和格式，并包含行动号召。\n\n{{input}}",
+        "tags": ["社交媒体", "内容", "互动"]
       },
       {
         "id": "seo_optimization",
-        "title": "SEO Content Optimization",
-        "description": "Optimize web content for search engines",
-        "content": "Optimize the following content for search engines. Suggest primary and secondary keywords, improve meta descriptions, headers, and internal linking structure.\n\n{{input}}",
-        "tags": [
-          "seo",
-          "keywords",
-          "content-optimization"
-        ]
+        "title": "SEO 内容优化",
+        "description": "为搜索引擎优化网页内容",
+        "content": "优化以下搜索引擎内容。建议主要和次要关键词，改进元描述、标题和内部链接结构。\n\n{{input}}",
+        "tags": ["SEO", "关键词", "内容优化"]
       },
       {
         "id": "landing_page_copy",
-        "title": "Landing Page Copy",
-        "description": "Conversion-focused landing page text",
-        "content": "Write persuasive landing page copy for the following offer. Craft a compelling headline, subheadline, benefit-driven body, and a strong call-to-action.\n\n{{input}}",
-        "tags": [
-          "landing-page",
-          "conversion",
-          "copywriting"
-        ]
+        "title": "着陆页文案",
+        "description": "以转化为核心的着陆页文案",
+        "content": "为以下产品撰写有说服力的着陆页文案。创作引人注目的标题、副标题、以利益为核心的正文和强有力的行动号召。\n\n{{input}}",
+        "tags": ["着陆页", "转化", "文案"]
       },
       {
         "id": "email_marketing",
-        "title": "Email Marketing Campaign",
-        "description": "Draft a multi-email marketing sequence",
-        "content": "Draft an email marketing sequence for the following campaign. Include a welcome email, nurture emails, and a conversion email with compelling subject lines and CTA.\n\n{{input}}",
-        "tags": [
-          "email-marketing",
-          "campaign",
-          "automation"
-        ]
+        "title": "邮件营销活动",
+        "description": "起草多封邮件的营销序列",
+        "content": "为以下活动起草邮件营销序列。包括欢迎邮件、培育邮件和转化邮件，每封配有吸引人的主题行和行动号召。\n\n{{input}}",
+        "tags": ["邮件营销", "活动", "自动化"]
       },
       {
         "id": "brand_voice_guide",
-        "title": "Brand Voice Guide",
-        "description": "Define a consistent brand voice and tone",
-        "content": "Define a brand voice guide for the following company. Specify tone characteristics, do and don't examples, and how to adapt the voice across different channels.\n\n{{input}}",
-        "tags": [
-          "branding",
-          "voice",
-          "guidelines"
-        ]
+        "title": "品牌语调指南",
+        "description": "定义一致的品牌语调和风格",
+        "content": "为以下公司定义品牌语调指南。指定语调特征、做与不做的示例，以及如何在不同的渠道中调整语调。\n\n{{input}}",
+        "tags": ["品牌", "语调", "指南"]
       }
     ]
   },
@@ -616,121 +408,77 @@
         "title": "合同审查清单",
         "description": "审查合同的关键条款和风险",
         "content": "审查以下合同或合同摘要。识别关键条款、义务、责任、终止条件和潜在风险。指出任何不利条款并提出修改建议。\n\n合同：{{input}}",
-        "tags": [
-          "合同",
-          "审查",
-          "法律"
-        ]
+        "tags": ["合同", "审查", "法律"]
       },
       {
         "id": "legal_memo",
         "title": "法律备忘录",
         "description": "撰写结构化的法律备忘录",
         "content": "就以下法律问题撰写法律备忘录。包括事实陈述、法律问题、简要答案、适用法律分析、事实应用和结论。\n\n法律问题：{{input}}",
-        "tags": [
-          "备忘录",
-          "法律研究",
-          "写作"
-        ]
+        "tags": ["备忘录", "法律研究", "写作"]
       },
       {
         "id": "privacy_policy",
         "title": "隐私政策摘要",
         "description": "总结隐私政策以供合规审查",
         "content": "总结以下隐私政策的关键方面。识别数据收集实践、用户权利、数据共享、安全措施以及是否符合 GDPR 或 CCPA 等法规。\n\n政策：{{input}}",
-        "tags": [
-          "隐私",
-          "GDPR",
-          "合规"
-        ]
+        "tags": ["隐私", "GDPR", "合规"]
       },
       {
         "id": "terms_of_service",
         "title": "服务条款起草",
         "description": "起草全面的服务条款",
         "content": "为以下类型的平台或服务起草全面的服务条款。涵盖用户权利与责任、知识产权、免责声明、责任限制、终止和争议解决。\n\n平台/服务：{{input}}",
-        "tags": [
-          "条款",
-          "服务条款",
-          "法律"
-        ]
+        "tags": ["条款", "服务条款", "法律"]
       },
       {
         "id": "case_brief",
         "title": "案例摘要",
         "description": "总结法律案例，包含关键裁决",
         "content": "总结以下法律案例。包括案例名称、法院、引注、关键事实、程序经过、法律问题、裁决、推理和任何反对意见。\n\n案例：{{input}}",
-        "tags": [
-          "判例法",
-          "摘要",
-          "总结"
-        ]
+        "tags": ["判例法", "摘要", "总结"]
       },
       {
         "id": "compliance_checklist",
         "title": "合规检查清单",
         "description": "生成特定法规的合规检查清单",
         "content": "为以下法规或标准（如 GDPR、HIPAA、SOX、PCI-DSS）生成合规检查清单。包括具体要求、实施步骤、文档需求和审计准备提示。\n\n法规：{{input}}",
-        "tags": [
-          "合规",
-          "检查清单",
-          "法规"
-        ]
+        "tags": ["合规", "检查清单", "法规"]
       },
       {
         "id": "nda_draft",
         "title": "保密协议起草",
         "description": "起草保密协议",
         "content": "为以下各方和目的起草保密协议。包括保密信息的定义、义务、排除条款、期限、管辖法律和救济措施。\n\n各方与目的：{{input}}",
-        "tags": [
-          "保密协议",
-          "保密",
-          "协议"
-        ]
+        "tags": ["保密协议", "保密", "协议"]
       },
       {
         "id": "contract_clause",
-        "title": "Contract Clause Drafting",
-        "description": "Draft or review specific contract clauses",
-        "content": "Draft a {{clause_type}} clause for the following contract context. Ensure clarity, enforceability, and alignment with applicable laws.\n\n{{input}}",
-        "tags": [
-          "contracts",
-          "clauses",
-          "legal-drafting"
-        ]
+        "title": "合同条款起草",
+        "description": "起草或审查特定合同条款",
+        "content": "为以下合同场景起草{{clause_type}}条款。确保清晰性、可执行性并符合适用法律。\n\n{{input}}",
+        "tags": ["合同", "条款", "法律起草"]
       },
       {
         "id": "legal_disclaimer",
-        "title": "Legal Disclaimer",
-        "description": "Generate appropriate disclaimers for products or services",
-        "content": "Draft a legal disclaimer for the following product, service, or content. Cover liability limitations and comply with relevant regulations.\n\n{{input}}",
-        "tags": [
-          "disclaimer",
-          "liability",
-          "compliance"
-        ]
+        "title": "法律免责声明",
+        "description": "为产品或服务生成适当的免责声明",
+        "content": "为以下产品、服务或内容起草法律免责声明。涵盖责任限制并符合相关法规。\n\n{{input}}",
+        "tags": ["免责声明", "责任", "合规"]
       },
       {
         "id": "privacy_policy_summary",
-        "title": "Privacy Policy Summary",
-        "description": "Summarize privacy policies in plain language",
-        "content": "Summarize the following privacy policy in plain, understandable language. Highlight key data collection, usage, sharing practices, and user rights.\n\n{{input}}",
-        "tags": [
-          "privacy",
-          "gdpr",
-          "policy"
-        ]
+        "title": "隐私政策摘要",
+        "description": "用通俗语言总结隐私政策",
+        "content": "用通俗易懂的语言总结以下隐私政策。突出关键的数据收集、使用、共享实践和用户权利。\n\n{{input}}",
+        "tags": ["隐私", "GDPR", "政策"]
       },
       {
         "id": "cease_and_desist",
-        "title": "Cease and Desist Draft",
-        "description": "Draft cease and desist correspondence",
-        "content": "Draft a cease and desist letter for the following situation. Clearly state the infringement, demand specific actions, and specify a response deadline.\n\n{{input}}",
-        "tags": [
-          "legal-notice",
-          "cease-and-desist",
-          "enforcement"
-        ]
+        "title": "停止侵权函起草",
+        "description": "起草停止侵权函件",
+        "content": "为以下情况起草停止侵权函。明确指出侵权行为，要求具体行动，并指定回复截止日期。\n\n{{input}}",
+        "tags": ["法律通知", "停止侵权", "执行"]
       }
     ]
   },
@@ -744,88 +492,56 @@
         "title": "症状分析",
         "description": "分析症状并提供鉴别诊断",
         "content": "分析以下症状和病史。提供鉴别诊断列表，建议相关检查，并识别需要立即关注的危险信号。注意：仅供教育参考，不能替代专业医疗建议。\n\n症状：{{input}}",
-        "tags": [
-          "症状",
-          "诊断",
-          "医疗"
-        ]
+        "tags": ["症状", "诊断", "医疗"]
       },
       {
         "id": "research_summary",
         "title": "医学研究摘要",
         "description": "总结近期医学研究论文",
         "content": "总结以下医学研究论文或临床试验。包括研究设计、样本量、方法学、主要发现、统计显著性、局限性和临床意义。\n\n研究：{{input}}",
-        "tags": [
-          "研究",
-          "临床试验",
-          "总结"
-        ]
+        "tags": ["研究", "临床试验", "总结"]
       },
       {
         "id": "patient_education",
         "title": "患者教育材料",
         "description": "创建通俗易懂的患者教育内容",
         "content": "为以下医疗状况或手术创建患者教育材料。使用通俗语言，解释病因和症状，描述治疗方案，并提供自我护理建议。\n\n状况/手术：{{input}}",
-        "tags": [
-          "患者",
-          "教育",
-          "健康素养"
-        ]
+        "tags": ["患者", "教育", "健康素养"]
       },
       {
         "id": "treatment_plan",
         "title": "治疗方案大纲",
         "description": "制定结构化的治疗方案",
         "content": "为以下诊断制定治疗方案大纲。包括治疗目标、药物选择及剂量、生活方式调整、随访安排和监测参数。注意：仅供教育参考。\n\n诊断：{{input}}",
-        "tags": [
-          "治疗",
-          "方案",
-          "医疗"
-        ]
+        "tags": ["治疗", "方案", "医疗"]
       },
       {
         "id": "clinical_notes",
         "title": "临床笔记格式化",
         "description": "使用 SOAP 结构格式化临床笔记",
         "content": "将以下临床信息格式化为规范的 SOAP（主观、客观、评估、计划）笔记。确保所有部分结构清晰，使用适当的医学术语。\n\n临床信息：{{input}}",
-        "tags": [
-          "临床",
-          "SOAP笔记",
-          "文档"
-        ]
+        "tags": ["临床", "SOAP笔记", "文档"]
       },
       {
         "id": "drug_interaction",
         "title": "药物相互作用检查",
         "description": "检查潜在的药物相互作用",
         "content": "审查以下药物列表中的潜在药物相互作用。识别重度、中度和轻度相互作用，解释作用机制，并建议替代方案或监测策略。仅供教育目的。\n\n药物：{{input}}",
-        "tags": [
-          "药物",
-          "相互作用",
-          "药理学"
-        ]
+        "tags": ["药物", "相互作用", "药理学"]
       },
       {
         "id": "public_health",
         "title": "公共卫生传播",
         "description": "起草公共卫生公告和指南",
         "content": "起草一份关于以下主题的公共卫生宣传材料。包括关键事实、预防措施、何时就医以及可靠信息来源。使用清晰易懂的语言。\n\n主题：{{input}}",
-        "tags": [
-          "公共卫生",
-          "传播",
-          "指南"
-        ]
+        "tags": ["公共卫生", "传播", "指南"]
       },
       {
         "id": "medication_guide",
-        "title": "Medication Guide",
-        "description": "Explain medication usage, side effects, and interactions",
-        "content": "Provide a clear guide for the following medication. Cover dosage, administration, common and serious side effects, drug interactions, and contraindications.\n\n{{input}}",
-        "tags": [
-          "medication",
-          "pharmacology",
-          "safety"
-        ]
+        "title": "用药指南",
+        "description": "说明药物用法、副作用和相互作用",
+        "content": "为以下药物提供清晰的指南。涵盖剂量、给药方式、常见和严重副作用、药物相互作用和禁忌症。\n\n{{input}}",
+        "tags": ["药物", "药理学", "安全"]
       }
     ]
   },
@@ -839,110 +555,70 @@
         "title": "教案创建",
         "description": "创建结构化的教案",
         "content": "为以下主题创建详细的教案。包括学习目标、所需材料、带时间分配的教学流程、评估方法、差异化策略和课后作业。\n\n主题：{{input}}",
-        "tags": [
-          "教案",
-          "教学",
-          "课程"
-        ]
+        "tags": ["教案", "教学", "课程"]
       },
       {
         "id": "quiz_generator",
         "title": "测验生成器",
         "description": "生成包含多种题型的测验",
         "content": "为以下主题创建一份测验。包含10道题目，混合选择题、判断题、简答题和论述题。提供带解释的答案。\n\n主题：{{input}}",
-        "tags": [
-          "测验",
-          "考试",
-          "评估"
-        ]
+        "tags": ["测验", "考试", "评估"]
       },
       {
         "id": "study_guide",
         "title": "学习指南创建",
         "description": "创建全面的学习指南",
         "content": "为以下科目或考试创建全面的学习指南。整理关键概念、定义、公式、例题和练习题，包含记忆技巧和学习建议。\n\n科目/考试：{{input}}",
-        "tags": [
-          "学习指南",
-          "备考",
-          "学习"
-        ]
+        "tags": ["学习指南", "备考", "学习"]
       },
       {
         "id": "course_syllabus",
         "title": "课程大纲设计",
         "description": "设计完整的课程大纲",
         "content": "为以下课程设计完整的课程大纲。包括课程描述、学习成果、所需材料、每周主题与阅读材料的进度表、评分政策和学术诚信指南。\n\n课程：{{input}}",
-        "tags": [
-          "大纲",
-          "课程设计",
-          "课程"
-        ]
+        "tags": ["大纲", "课程设计", "课程"]
       },
       {
         "id": "explain_concept",
         "title": "用简单方式解释",
         "description": "简化复杂概念以便理解",
         "content": "用简单的语言解释以下概念。使用类比和日常生活中的例子。先给出一个句子总结，再提供更多细节，最后举一个实际应用的例子。\n\n概念：{{input}}",
-        "tags": [
-          "解释",
-          "简化",
-          "教学"
-        ]
+        "tags": ["解释", "简化", "教学"]
       },
       {
         "id": "feedback_on_assignment",
         "title": "作业反馈",
         "description": "对学生作业提供建设性反馈",
         "content": "对以下学生作业提供建设性反馈。指出优点，通过具体例子指出需要改进的地方，并建议下一步的行动。\n\n作业：{{input}}",
-        "tags": [
-          "反馈",
-          "评分",
-          "评估"
-        ]
+        "tags": ["反馈", "评分", "评估"]
       },
       {
         "id": "discussion_prompts",
         "title": "讨论问题生成",
         "description": "生成有启发性的讨论问题",
         "content": "为以下主题生成8个引人入胜的讨论问题。包括开放式问题、批判性思考提示、辩论话题和反思性问题，鼓励积极参与。\n\n主题：{{input}}",
-        "tags": [
-          "讨论",
-          "问题",
-          "参与"
-        ]
+        "tags": ["讨论", "问题", "参与"]
       },
       {
         "id": "quiz_generation",
-        "title": "Quiz Generation",
-        "description": "Create quizzes and assessments on any topic",
-        "content": "Create a {{num_questions}}-question quiz on the following topic. Include a mix of multiple-choice, true/false, and short-answer questions with an answer key.\n\n{{input}}",
-        "tags": [
-          "quiz",
-          "assessment",
-          "testing"
-        ]
+        "title": "测验生成",
+        "description": "创建任何主题的测验和评估",
+        "content": "为以下主题创建包含{{num_questions}}道题的测验。混合使用选择题、判断题和简答题，并提供答案。\n\n{{input}}",
+        "tags": ["测验", "评估", "测试"]
       },
       {
         "id": "assignment_feedback",
-        "title": "Assignment Feedback",
-        "description": "Constructive feedback on student assignments",
-        "content": "Provide constructive feedback on the following student assignment. Highlight strengths, identify areas for improvement, and suggest specific next steps for learning.\n\n{{input}}",
-        "tags": [
-          "feedback",
-          "grading",
-          "assessment"
-        ]
+        "title": "作业反馈",
+        "description": "对学生作业提供建设性反馈",
+        "content": "对以下学生作业提供建设性反馈。指出优点，识别需要改进的领域，并建议具体的学习下一步行动。\n\n{{input}}",
+        "tags": ["反馈", "评分", "评估"]
       },
       {
         "id": "syllabus_design",
-        "title": "Syllabus Design",
-        "description": "Design a course syllabus with schedule and policies",
-        "content": "Design a syllabus for a course on the following subject. Include course description, learning outcomes, weekly schedule, grading policy, and required materials.\n\n{{input}}",
-        "tags": [
-          "syllabus",
-          "course-design",
-          "academic"
-        ]
+        "title": "课程大纲设计",
+        "description": "设计包含进度和政策的课程大纲",
+        "content": "为以下科目设计课程大纲。包括课程描述、学习成果、每周进度表、评分政策和所需材料。\n\n{{input}}",
+        "tags": ["大纲", "课程设计", "学术"]
       }
     ]
   },
@@ -956,121 +632,77 @@
         "title": "投资分析",
         "description": "使用关键指标分析投资机会",
         "content": "分析以下投资机会。评估关键财务指标（市盈率、EBITDA、ROI、增长率），评估市场状况，识别风险，并提供买入/持有/卖出建议。\n\n投资：{{input}}",
-        "tags": [
-          "投资",
-          "分析",
-          "估值"
-        ]
+        "tags": ["投资", "分析", "估值"]
       },
       {
         "id": "financial_report",
         "title": "财务报告摘要",
         "description": "总结财务报表和报告",
         "content": "总结以下财务报告或报表。突出收入趋势、利润率、现金流状况、债务水平和关键财务比率，与行业基准进行比较。\n\n报告：{{input}}",
-        "tags": [
-          "财务报告",
-          "总结",
-          "分析"
-        ]
+        "tags": ["财务报告", "总结", "分析"]
       },
       {
         "id": "budget_planner",
         "title": "预算规划",
         "description": "创建个人或企业预算方案",
         "content": "为以下场景创建详细的预算方案。对收入和支出进行分类，推荐储蓄目标，识别削减成本的机会，并预测未来的财务状况。\n\n场景：{{input}}",
-        "tags": [
-          "预算",
-          "规划",
-          "个人理财"
-        ]
+        "tags": ["预算", "规划", "个人理财"]
       },
       {
         "id": "retirement_planning",
         "title": "退休规划",
         "description": "制定退休储蓄策略",
         "content": "根据以下信息制定退休规划策略。计算所需储蓄，推荐按年龄阶段的投资配置，考虑税务影响，并建议提取策略。\n\n信息：{{input}}",
-        "tags": [
-          "退休",
-          "储蓄",
-          "长期"
-        ]
+        "tags": ["退休", "储蓄", "长期"]
       },
       {
         "id": "risk_assessment",
         "title": "风险评估",
         "description": "评估金融风险与缓释策略",
         "content": "评估以下投资或商业决策的金融风险。识别市场风险、信用风险、流动性风险和操作风险，并推荐风险缓释策略。\n\n决策：{{input}}",
-        "tags": [
-          "风险",
-          "评估",
-          "缓释"
-        ]
+        "tags": ["风险", "评估", "缓释"]
       },
       {
         "id": "tax_planning",
         "title": "税务规划策略",
         "description": "制定节税策略",
         "content": "为以下财务状况提供税务规划策略。建议扣除项、税收抵免、税收优惠账户、时机策略和实体结构，以最小化税务负担。\n\n状况：{{input}}",
-        "tags": [
-          "税务",
-          "规划",
-          "策略"
-        ]
+        "tags": ["税务", "规划", "策略"]
       },
       {
         "id": "portfolio_review",
         "title": "投资组合审查",
         "description": "审查和再平衡投资组合",
         "content": "审查以下投资组合。分析资产配置、多元化程度、风险水平、相对基准的业绩表现，并建议再平衡调整方案。\n\n投资组合：{{input}}",
-        "tags": [
-          "投资组合",
-          "多元化",
-          "再平衡"
-        ]
+        "tags": ["投资组合", "多元化", "再平衡"]
       },
       {
         "id": "financial_modeling",
-        "title": "Financial Modeling",
-        "description": "Structure financial projections and models",
-        "content": "Help structure a financial model for the following business scenario. Outline revenue drivers, cost structure, cash flow projections, and key assumptions. Suggest sensitivity analysis variables.\n\n{{input}}",
-        "tags": [
-          "financial-modeling",
-          "forecasting",
-          "valuation"
-        ]
+        "title": "财务建模",
+        "description": "构建财务预测和模型",
+        "content": "为以下商业场景构建财务模型。概述收入驱动因素、成本结构、现金流预测和关键假设，并建议敏感性分析变量。\n\n{{input}}",
+        "tags": ["财务建模", "预测", "估值"]
       },
       {
         "id": "budget_planning",
-        "title": "Budget Planning",
-        "description": "Personal or business budget creation and optimization",
-        "content": "Create a detailed budget plan for the following financial situation. Categorize income and expenses, identify saving opportunities, and set realistic financial goals.\n\n{{input}}",
-        "tags": [
-          "budget",
-          "planning",
-          "personal-finance"
-        ]
+        "title": "预算规划",
+        "description": "创建和优化个人或企业预算",
+        "content": "为以下财务状况创建详细的预算计划。对收入和支出进行分类，识别储蓄机会，并设定切合实际的财务目标。\n\n{{input}}",
+        "tags": ["预算", "规划", "个人理财"]
       },
       {
         "id": "tax_guidance",
-        "title": "Tax Guidance",
-        "description": "Explain tax implications and planning strategies",
-        "content": "Explain the tax implications of the following financial scenario. Discuss applicable deductions, credits, and compliance requirements under {{tax_jurisdiction}} tax law.\n\n{{input}}",
-        "tags": [
-          "tax",
-          "planning",
-          "compliance"
-        ]
+        "title": "税务指导",
+        "description": "解释税务影响和规划策略",
+        "content": "解释以下财务场景的税务影响。根据{{tax_jurisdiction}}税法讨论适用的扣除项、抵免和合规要求。\n\n{{input}}",
+        "tags": ["税务", "规划", "合规"]
       },
       {
         "id": "financial_report_analysis",
-        "title": "Financial Report Analysis",
-        "description": "Analyze income statements, balance sheets, cash flow",
-        "content": "Analyze the following financial report. Discuss revenue trends, profitability ratios, liquidity position, debt levels, and overall financial health. Highlight key metrics.\n\n{{input}}",
-        "tags": [
-          "financial-analysis",
-          "reporting",
-          "ratios"
-        ]
+        "title": "财务报告分析",
+        "description": "分析利润表、资产负债表和现金流",
+        "content": "分析以下财务报告。讨论收入趋势、盈利比率、流动性状况、债务水平和整体财务健康度，突出关键指标。\n\n{{input}}",
+        "tags": ["财务分析", "报告", "比率"]
       }
     ]
   },
@@ -1084,121 +716,77 @@
         "title": "探索性数据分析",
         "description": "规划和指导数据集上的 EDA",
         "content": "为以下数据集设计探索性数据分析计划。建议使用的摘要统计量、可视化类型、相关性分析、异常值检测方法和需要检验的初始假设。\n\n数据集描述：{{input}}",
-        "tags": [
-          "探索性分析",
-          "数据分析",
-          "统计"
-        ]
+        "tags": ["探索性分析", "数据分析", "统计"]
       },
       {
         "id": "model_selection",
         "title": "模型选择指南",
         "description": "根据问题类型推荐机器学习模型",
         "content": "为以下问题推荐合适的机器学习模型。考虑数据量、特征类型、可解释性需求、计算约束和性能要求，并为每个推荐提供理由。\n\n问题：{{input}}",
-        "tags": [
-          "机器学习",
-          "模型选择",
-          "AI"
-        ]
+        "tags": ["机器学习", "模型选择", "AI"]
       },
       {
         "id": "feature_engineering",
         "title": "特征工程建议",
         "description": "建议特征工程技术",
         "content": "为以下数据集建议特征工程技术。包括数值变换、类别编码、文本特征、时间特征、交互项和降维方法。\n\n数据集：{{input}}",
-        "tags": [
-          "特征",
-          "工程",
-          "数据预处理"
-        ]
+        "tags": ["特征", "工程", "数据预处理"]
       },
       {
         "id": "evaluate_results",
         "title": "模型评估与解读",
         "description": "评估和解读模型性能",
         "content": "评估以下机器学习模型的结果。分析混淆矩阵、精确率/召回率、ROC-AUC、特征重要性、错误分析，并建议改进策略。\n\n结果：{{input}}",
-        "tags": [
-          "评估",
-          "解读",
-          "指标"
-        ]
+        "tags": ["评估", "解读", "指标"]
       },
       {
         "id": "sql_query",
         "title": "SQL 查询生成器",
         "description": "从自然语言生成复杂 SQL 查询",
         "content": "为以下数据请求编写 SQL 查询。包括适当的 JOIN、WHERE 子句、聚合函数、窗口函数，并进行性能优化。\n\n数据请求：{{input}}",
-        "tags": [
-          "SQL",
-          "查询",
-          "数据库"
-        ]
+        "tags": ["SQL", "查询", "数据库"]
       },
       {
         "id": "visualization_design",
         "title": "数据可视化设计",
         "description": "设计有效的数据可视化",
         "content": "为以下分析设计数据可视化方案。推荐图表类型、配色方案、布局、交互性和注释策略，以有效传达洞察。\n\n分析：{{input}}",
-        "tags": [
-          "可视化",
-          "图表",
-          "设计"
-        ]
+        "tags": ["可视化", "图表", "设计"]
       },
       {
         "id": "ab_testing",
         "title": "A/B 测试设计",
         "description": "设计严谨的 A/B 测试并分析结果",
         "content": "为以下实验设计 A/B 测试。定义假设，确定样本量，选择显著性水平，设计测试结构，并提供解读结果的分析方案。\n\n实验：{{input}}",
-        "tags": [
-          "A/B测试",
-          "实验",
-          "统计"
-        ]
+        "tags": ["A/B测试", "实验", "统计"]
       },
       {
         "id": "eda_plan",
-        "title": "Exploratory Data Analysis Plan",
-        "description": "Plan a structured EDA approach for a dataset",
-        "content": "Design an exploratory data analysis plan for the following dataset. Include data cleaning steps, statistical summaries, visualization suggestions, and hypotheses to investigate.\n\n{{input}}",
-        "tags": [
-          "eda",
-          "data-analysis",
-          "statistics"
-        ]
+        "title": "探索性数据分析计划",
+        "description": "为数据集规划结构化的 EDA 方法",
+        "content": "为以下数据集设计探索性数据分析计划。包括数据清洗步骤、统计摘要、可视化建议和需要检验的假设。\n\n{{input}}",
+        "tags": ["EDA", "数据分析", "统计"]
       },
       {
         "id": "visualization_recipe",
-        "title": "Data Visualization Recipe",
-        "description": "Choose and design effective data visualizations",
-        "content": "Recommend data visualizations for the following analysis goals. Specify chart types, encoding choices, color schemes, and layout for maximum clarity and impact.\n\n{{input}}",
-        "tags": [
-          "visualization",
-          "charting",
-          "data-storytelling"
-        ]
+        "title": "数据可视化方案",
+        "description": "选择并设计有效的数据可视化",
+        "content": "为以下分析目标推荐数据可视化方案。指定图表类型、编码选择、配色方案和布局，以实现最大的清晰度和影响力。\n\n{{input}}",
+        "tags": ["可视化", "制图", "数据故事"]
       },
       {
         "id": "experiment_design",
-        "title": "A/B Test & Experiment Design",
-        "description": "Design statistically sound experiments",
-        "content": "Design an experiment to test the following hypothesis. Define the null and alternative hypotheses, determine sample size, randomization procedure, success metrics, and analysis method.\n\n{{input}}",
-        "tags": [
-          "a-b-testing",
-          "experiment-design",
-          "statistics"
-        ]
+        "title": "A/B 测试与实验设计",
+        "description": "设计统计上可靠的实验",
+        "content": "设计一个实验来检验以下假设。定义零假设和备择假设，确定样本量、随机化流程、成功指标和分析方法。\n\n{{input}}",
+        "tags": ["A/B测试", "实验设计", "统计"]
       },
       {
         "id": "results_interpretation",
-        "title": "Model Results Interpretation",
-        "description": "Interpret model outputs and metrics",
-        "content": "Interpret the following model results. Explain the metrics (accuracy, precision, recall, F1, AUC-ROC, etc.), feature importance, and limitations. Provide actionable insights.\n\n{{input}}",
-        "tags": [
-          "model-interpretation",
-          "metrics",
-          "reporting"
-        ]
+        "title": "模型结果解读",
+        "description": "解读模型输出和指标",
+        "content": "解读以下模型结果。解释各项指标（准确率、精确率、召回率、F1、AUC-ROC 等）、特征重要性和局限性，并提供可操作的见解。\n\n{{input}}",
+        "tags": ["模型解读", "指标", "报告"]
       }
     ]
   },
@@ -1212,121 +800,77 @@
         "title": "UI/UX 审查",
         "description": "审查用户界面的可用性最佳实践",
         "content": "审查以下 UI 设计或描述。评估布局、视觉层级、色彩对比、排版、可访问性、交互模式和一致性，提出改进建议。\n\n设计：{{input}}",
-        "tags": [
-          "UI",
-          "UX",
-          "可用性"
-        ]
+        "tags": ["UI", "UX", "可用性"]
       },
       {
         "id": "color_palette",
         "title": "配色方案生成器",
         "description": "为项目生成和谐的配色方案",
         "content": "为以下项目生成统一的配色方案。包括主色、辅色、强调色、中性色和状态色，提供十六进制色码并解释每个选择的理由。\n\n项目：{{input}}",
-        "tags": [
-          "颜色",
-          "配色",
-          "设计"
-        ]
+        "tags": ["颜色", "配色", "设计"]
       },
       {
         "id": "design_system",
         "title": "设计系统文档",
         "description": "记录设计系统组件和指南",
         "content": "为以下组件库或设计语言创建设计系统文档。包括排版尺度、间距网格、颜色令牌、组件状态和使用指南。\n\n系统：{{input}}",
-        "tags": [
-          "设计系统",
-          "文档",
-          "组件"
-        ]
+        "tags": ["设计系统", "文档", "组件"]
       },
       {
         "id": "wireframe_desc",
         "title": "线框图描述",
         "description": "描述线框图布局用于开发交接",
         "content": "描述以下屏幕/页面的线框图或原型。详细说明布局结构、组件位置、内容层级、用户流程和交互元素，用于开发交接。\n\n屏幕/页面：{{input}}",
-        "tags": [
-          "线框图",
-          "原型",
-          "交接"
-        ]
+        "tags": ["线框图", "原型", "交接"]
       },
       {
         "id": "typography_guide",
         "title": "字体选择指南",
         "description": "为设计项目选择和搭配字体",
         "content": "为以下项目推荐字体选择。建议标题和正文字体搭配，指定字号和字重，考虑跨设备的可读性并解释理由。\n\n项目：{{input}}",
-        "tags": [
-          "排版",
-          "字体",
-          "设计"
-        ]
+        "tags": ["排版", "字体", "设计"]
       },
       {
         "id": "accessibility_audit",
         "title": "无障碍审计",
         "description": "评估设计的无障碍合规性",
         "content": "对以下设计或界面进行无障碍审计。检查是否符合 WCAG 标准的色彩对比、键盘导航、屏幕阅读器兼容性、焦点指示器和替代文本要求。\n\n设计：{{input}}",
-        "tags": [
-          "无障碍",
-          "WCAG",
-          "包容性设计"
-        ]
+        "tags": ["无障碍", "WCAG", "包容性设计"]
       },
       {
         "id": "brand_identity",
         "title": "品牌视觉识别指南",
         "description": "定义视觉品牌识别元素",
         "content": "为以下品牌定义视觉品牌识别指南。涵盖标志使用、配色方案、排版、图像风格、图标设计和在不同媒介上的应用。\n\n品牌：{{input}}",
-        "tags": [
-          "品牌",
-          "识别",
-          "指南"
-        ]
+        "tags": ["品牌", "识别", "指南"]
       },
       {
         "id": "ux_review",
-        "title": "UX Review",
-        "description": "Evaluate user experience and suggest improvements",
-        "content": "Review the user experience of the following interface or flow. Evaluate usability, accessibility, information architecture, and visual hierarchy. Suggest concrete improvements.\n\n{{input}}",
-        "tags": [
-          "ux",
-          "usability",
-          "review"
-        ]
+        "title": "用户体验审查",
+        "description": "评估用户体验并提出改进建议",
+        "content": "审查以下界面或流程的用户体验。评估可用性、可访问性、信息架构和视觉层级，并提出具体的改进建议。\n\n{{input}}",
+        "tags": ["用户体验", "可用性", "审查"]
       },
       {
         "id": "design_brief",
-        "title": "Design Brief",
-        "description": "Create a comprehensive design brief for a project",
-        "content": "Create a design brief for the following project. Include project overview, target audience, design goals, brand guidelines, deliverables, timeline, and success criteria.\n\n{{input}}",
-        "tags": [
-          "design-brief",
-          "creative-brief",
-          "planning"
-        ]
+        "title": "设计简报",
+        "description": "为项目创建全面的设计简报",
+        "content": "为以下项目创建设计简报。包括项目概况、目标受众、设计目标、品牌指南、交付物、时间表和成功标准。\n\n{{input}}",
+        "tags": ["设计简报", "创意简报", "规划"]
       },
       {
         "id": "prototype_feedback",
-        "title": "Prototype Feedback",
-        "description": "Detailed feedback on design prototypes",
-        "content": "Provide detailed feedback on the following design prototype. Evaluate layout, navigation, visual consistency, interaction design, and alignment with user goals.\n\n{{input}}",
-        "tags": [
-          "prototype",
-          "feedback",
-          "design-review"
-        ]
+        "title": "原型反馈",
+        "description": "对设计原型提供详细反馈",
+        "content": "对以下设计原型提供详细反馈。评估布局、导航、视觉一致性、交互设计以及与用户目标的对齐情况。\n\n{{input}}",
+        "tags": ["原型", "反馈", "设计审查"]
       },
       {
         "id": "design_system_component",
-        "title": "Design System Component",
-        "description": "Define a reusable design system component",
-        "content": "Define a reusable {{component_type}} component for a design system. Specify visual states (default, hover, active, disabled, error), usage guidelines, and accessibility requirements.\n\n{{input}}",
-        "tags": [
-          "design-system",
-          "components",
-          "ui"
-        ]
+        "title": "设计系统组件",
+        "description": "定义可复用的设计系统组件",
+        "content": "为设计系统定义一个可复用的{{component_type}}组件。指定视觉状态（默认、悬停、激活、禁用、错误）、使用指南和无障碍要求。\n\n{{input}}",
+        "tags": ["设计系统", "组件", "UI"]
       }
     ]
   },
@@ -1340,110 +884,70 @@
         "title": "事件响应计划",
         "description": "创建结构化的事件响应流程",
         "content": "为以下场景创建事件响应计划。包括检测步骤、遏制策略、根除流程、恢复程序和事后复盘分析。\n\n场景：{{input}}",
-        "tags": [
-          "事件",
-          "响应",
-          "安全"
-        ]
+        "tags": ["事件", "响应", "安全"]
       },
       {
         "id": "deployment_pipeline",
         "title": "CI/CD 流水线设计",
         "description": "设计持续集成和持续部署流水线",
         "content": "为以下项目设计 CI/CD 流水线。包括构建阶段、测试自动化、安全扫描、制品管理、部署策略（蓝绿部署、金丝雀发布）和回滚流程。\n\n项目：{{input}}",
-        "tags": [
-          "CI/CD",
-          "DevOps",
-          "部署"
-        ]
+        "tags": ["CI/CD", "DevOps", "部署"]
       },
       {
         "id": "monitoring_setup",
         "title": "监控与告警设置",
         "description": "设计监控和告警基础设施",
         "content": "为以下系统设计监控和告警方案。推荐需要收集的指标、阈值、告警渠道、仪表盘布局和值班轮换流程。\n\n系统：{{input}}",
-        "tags": [
-          "监控",
-          "告警",
-          "可观测性"
-        ]
+        "tags": ["监控", "告警", "可观测性"]
       },
       {
         "id": "backup_strategy",
         "title": "备份与灾难恢复",
         "description": "设计全面的备份和灾难恢复策略",
         "content": "为以下基础设施设计备份和灾难恢复策略。包括备份时间表、保留策略、存储位置、恢复时间目标（RTO）和恢复点目标（RPO）。\n\n基础设施：{{input}}",
-        "tags": [
-          "备份",
-          "灾难恢复",
-          "可靠性"
-        ]
+        "tags": ["备份", "灾难恢复", "可靠性"]
       },
       {
         "id": "security_hardening",
         "title": "安全加固检查清单",
         "description": "生成服务器安全加固检查清单",
         "content": "为以下服务器或服务生成安全加固检查清单。涵盖操作系统加固、网络安全、访问控制、加密、日志记录和定期维护任务。\n\n服务器/服务：{{input}}",
-        "tags": [
-          "安全",
-          "加固",
-          "服务器"
-        ]
+        "tags": ["安全", "加固", "服务器"]
       },
       {
         "id": "container_orchestration",
         "title": "容器编排指南",
         "description": "设计容器编排配置",
         "content": "为以下应用设计容器编排配置。涵盖容器镜像、资源限制、服务发现、扩缩容策略、持久化存储和网络配置。\n\n应用：{{input}}",
-        "tags": [
-          "Docker",
-          "Kubernetes",
-          "容器"
-        ]
+        "tags": ["Docker", "Kubernetes", "容器"]
       },
       {
         "id": "performance_tuning",
         "title": "性能调优",
         "description": "诊断和优化系统性能",
         "content": "分析以下系统性能问题。识别瓶颈，建议配置更改，推荐资源扩展方案，并提出针对 CPU、内存、磁盘和网络的优化技术。\n\n问题：{{input}}",
-        "tags": [
-          "性能",
-          "优化",
-          "故障排查"
-        ]
+        "tags": ["性能", "优化", "故障排查"]
       },
       {
         "id": "infrastructure_design",
-        "title": "Infrastructure Design",
-        "description": "Design scalable and reliable system infrastructure",
-        "content": "Design a infrastructure architecture for the following requirements. Discuss compute, networking, storage, redundancy, scaling strategy, and disaster recovery.\n\n{{input}}",
-        "tags": [
-          "infrastructure",
-          "architecture",
-          "devops"
-        ]
+        "title": "基础设施设计",
+        "description": "设计可扩展且可靠的系统基础设施",
+        "content": "为以下需求设计基础设施架构。讨论计算、网络、存储、冗余、扩展策略和灾难恢复。\n\n{{input}}",
+        "tags": ["基础设施", "架构", "运维"]
       },
       {
         "id": "ci_cd_pipeline",
-        "title": "CI/CD Pipeline Design",
-        "description": "Design continuous integration and deployment pipelines",
-        "content": "Design a CI/CD pipeline for the following project. Specify build stages, test automation, artifact management, deployment environments, and approval gates.\n\n{{input}}",
-        "tags": [
-          "ci-cd",
-          "automation",
-          "devops"
-        ]
+        "title": "CI/CD 流水线设计",
+        "description": "设计持续集成和持续部署流水线",
+        "content": "为以下项目设计 CI/CD 流水线。指定构建阶段、测试自动化、制品管理、部署环境和审批门。\n\n{{input}}",
+        "tags": ["CI/CD", "自动化", "运维"]
       },
       {
         "id": "security_audit",
-        "title": "Security Audit Checklist",
-        "description": "Systematic security review for servers and services",
-        "content": "Create a security audit checklist for the following system. Cover authentication, authorization, network security, data protection, logging, and patch management.\n\n{{input}}",
-        "tags": [
-          "security",
-          "audit",
-          "hardening"
-        ]
+        "title": "安全审计检查清单",
+        "description": "对服务器和服务进行系统性安全审查",
+        "content": "为以下系统创建安全审计检查清单。涵盖身份验证、授权、网络安全、数据保护、日志记录和补丁管理。\n\n{{input}}",
+        "tags": ["安全", "审计", "加固"]
       }
     ]
   },
@@ -1457,88 +961,56 @@
         "title": "需求拆解",
         "description": "将目标拆解为可执行需求",
         "content": "将以下目标拆解为清晰的功能需求、非功能需求、假设、约束和验收标准，并以结构化清单输出。\n\n{{input}}",
-        "tags": [
-          "需求",
-          "规划",
-          "产品"
-        ]
+        "tags": ["需求", "规划", "产品"]
       },
       {
         "id": "prd_draft",
         "title": "PRD 草案",
         "description": "生成简洁实用的产品需求文档",
         "content": "为以下功能撰写 PRD 草案。包含问题陈述、目标用户、用户故事、范围（包含/不包含）、成功指标、风险、里程碑和待确认问题。\n\n{{input}}",
-        "tags": [
-          "PRD",
-          "产品管理",
-          "文档"
-        ]
+        "tags": ["PRD", "产品管理", "文档"]
       },
       {
         "id": "task_decomposition",
         "title": "任务分解",
         "description": "将工作拆分为 Epic、任务与依赖",
         "content": "将以下项目拆分为 Epic 与任务。每个任务请给出负责角色、工作量预估、依赖关系和完成定义（DoD）。\n\n{{input}}",
-        "tags": [
-          "任务",
-          "执行",
-          "项目管理"
-        ]
+        "tags": ["任务", "执行", "项目管理"]
       },
       {
         "id": "meeting_minutes",
         "title": "会议纪要整理",
         "description": "将杂乱笔记整理成结构化纪要",
         "content": "将以下会议笔记整理为结构化纪要，包括：背景、关键决策、行动项、负责人、截止时间、未决问题。\n\n{{input}}",
-        "tags": [
-          "会议",
-          "纪要",
-          "协作"
-        ]
+        "tags": ["会议", "纪要", "协作"]
       },
       {
         "id": "status_report",
         "title": "周报生成",
         "description": "生成面向干系人的周度状态报告",
         "content": "根据以下内容撰写周报，包含：本周亮点、已完成事项、当前重点、阻塞/风险、下周计划。语言简洁、适合管理层快速阅读。\n\n{{input}}",
-        "tags": [
-          "周报",
-          "状态",
-          "干系人"
-        ]
+        "tags": ["周报", "状态", "干系人"]
       },
       {
         "id": "decision_record",
         "title": "决策记录",
         "description": "记录决策依据与影响",
         "content": "根据以下上下文生成决策记录，包含：决策结论、备选方案、决策依据、权衡、影响后果、复盘时间。\n\n{{input}}",
-        "tags": [
-          "决策",
-          "ADR",
-          "治理"
-        ]
+        "tags": ["决策", "ADR", "治理"]
       },
       {
         "id": "risk_register",
         "title": "风险清单",
         "description": "生成可落地的项目风险台账",
         "content": "为以下项目生成风险台账。每条风险包含：发生概率、影响程度、预警信号、缓解措施、应急预案、责任人。\n\n{{input}}",
-        "tags": [
-          "风险",
-          "项目",
-          "缓解"
-        ]
+        "tags": ["风险", "项目", "缓解"]
       },
       {
         "id": "retro_facilitation",
         "title": "复盘引导",
         "description": "设计高质量迭代复盘流程",
         "content": "基于以下迭代背景设计复盘议程，包含：热身、做得好的地方、待改进点、根因追问引导、3 条可执行改进行动。\n\n{{input}}",
-        "tags": [
-          "复盘",
-          "敏捷",
-          "团队改进"
-        ]
+        "tags": ["复盘", "敏捷", "团队改进"]
       }
     ]
   },
@@ -1552,66 +1024,42 @@
         "title": "缺陷报告模板",
         "description": "生成完整且可复现的 Bug 报告",
         "content": "根据以下信息生成高质量缺陷报告。包含：摘要、环境信息、复现步骤、期望结果、实际结果、严重级别、影响范围、日志信息和下一步排查建议。\n\n{{input}}",
-        "tags": [
-          "缺陷",
-          "质量",
-          "分诊"
-        ]
+        "tags": ["缺陷", "质量", "分诊"]
       },
       {
         "id": "release_notes",
         "title": "发布说明",
         "description": "生成清晰的用户向发布说明",
         "content": "为以下版本更新撰写发布说明。包含：新功能、改进项、修复项、已知问题、升级注意事项和回滚提示。语气面向最终用户。\n\n{{input}}",
-        "tags": [
-          "发布",
-          "变更日志",
-          "沟通"
-        ]
+        "tags": ["发布", "变更日志", "沟通"]
       },
       {
         "id": "rca_report",
         "title": "根因分析报告",
         "description": "生成结构化事故复盘与 RCA",
         "content": "针对以下事故生成 RCA 报告。包含：时间线、影响范围、根因、促成因素、发现与监控缺口、已完成修复、预防措施（含负责人和截止时间）。\n\n{{input}}",
-        "tags": [
-          "RCA",
-          "事故",
-          "可靠性"
-        ]
+        "tags": ["RCA", "事故", "可靠性"]
       },
       {
         "id": "test_plan",
         "title": "测试计划",
         "description": "制定可执行的测试策略与覆盖方案",
         "content": "为以下功能制定测试计划。包含：测试范围、测试层级（单元/集成/端到端）、关键场景、边界场景、测试数据、环境准备、准入/准出标准和风险优先级。\n\n{{input}}",
-        "tags": [
-          "测试",
-          "质量保障",
-          "覆盖"
-        ]
+        "tags": ["测试", "质量保障", "覆盖"]
       },
       {
         "id": "rollback_plan",
         "title": "回滚预案",
         "description": "制定安全的回滚与恢复流程",
         "content": "为以下发布制定回滚预案。包含：触发条件、回滚步骤、数据一致性校验、沟通路径、验证清单和决策责任人。\n\n{{input}}",
-        "tags": [
-          "回滚",
-          "发布",
-          "安全"
-        ]
+        "tags": ["回滚", "发布", "安全"]
       },
       {
         "id": "change_announcement",
         "title": "变更公告",
         "description": "清晰说明技术变更及用户影响",
         "content": "为以下更新撰写变更公告。说明：变更内容、变更原因、用户影响、需要用户执行的操作、时间安排和支持渠道。语气简洁且稳定预期。\n\n{{input}}",
-        "tags": [
-          "变更管理",
-          "公告",
-          "干系人"
-        ]
+        "tags": ["变更管理", "公告", "干系人"]
       }
     ]
   },
@@ -1625,66 +1073,42 @@
         "title": "客服回复",
         "description": "生成专业且有同理心的回复",
         "content": "针对以下工单撰写客服回复。语气需有同理心且清晰，包含：问题理解、当前处理状态、后续步骤、预计时间（如有）和升级路径（如需）。\n\n{{input}}",
-        "tags": [
-          "客服",
-          "客户",
-          "沟通"
-        ]
+        "tags": ["客服", "客户", "沟通"]
       },
       {
         "id": "kb_article",
         "title": "知识库文章",
         "description": "将重复问题沉淀为可复用知识",
         "content": "针对以下问题生成知识库文章。包含：现象描述、常见原因、前置条件、分步解决方案、结果验证、预防建议。\n\n{{input}}",
-        "tags": [
-          "知识库",
-          "自助服务",
-          "排障"
-        ]
+        "tags": ["知识库", "自助服务", "排障"]
       },
       {
         "id": "sla_response_plan",
         "title": "SLA 响应策略",
         "description": "按优先级制定 SLA 响应目标",
         "content": "为以下支持场景制定 SLA 响应策略。定义优先级分层、首次响应时限、解决时限、跨团队流转规则和超时处置流程。\n\n{{input}}",
-        "tags": [
-          "SLA",
-          "支持运营",
-          "流程"
-        ]
+        "tags": ["SLA", "支持运营", "流程"]
       },
       {
         "id": "faq_builder",
         "title": "FAQ 生成",
         "description": "为产品或政策生成高频问答",
         "content": "围绕以下产品或政策主题生成 FAQ。输出 10 个高频问题及对应简洁、准确、用户友好的回答。\n\n{{input}}",
-        "tags": [
-          "FAQ",
-          "文档",
-          "用户教育"
-        ]
+        "tags": ["FAQ", "文档", "用户教育"]
       },
       {
         "id": "oncall_handover",
         "title": "值班交接",
         "description": "生成清晰的值班交接记录",
         "content": "根据以下上下文生成值班交接记录。包含：进行中的事故、当前缓解措施、待办事项、风险关注点和下一班次的优先事项。\n\n{{input}}",
-        "tags": [
-          "值班",
-          "交接",
-          "运营"
-        ]
+        "tags": ["值班", "交接", "运营"]
       },
       {
         "id": "support_metric_review",
         "title": "客服指标复盘",
         "description": "解读支持指标并给出改进动作",
         "content": "分析以下客服指标并输出可执行复盘。覆盖：工单量趋势、响应时长、解决时长、满意度、积压健康度、主要根因和优先改进动作。\n\n{{input}}",
-        "tags": [
-          "指标",
-          "KPI",
-          "持续改进"
-        ]
+        "tags": ["指标", "KPI", "持续改进"]
       }
     ]
   }

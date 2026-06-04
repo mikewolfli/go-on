@@ -7,6 +7,7 @@
 use crate::i18n::runtime::tf;
 use crate::intelligence::lock_guard;
 use crate::intelligence::now_ms;
+use crate::shared::execution_recorder::ExecutionRecorder;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -529,6 +530,16 @@ impl SelfModelCore {
             total_samples,
             avg_latency_ms: avg_lat,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Trait implementations
+// ---------------------------------------------------------------------------
+
+impl ExecutionRecorder for SelfModelCore {
+    fn record_execution_result(&self, capability_name: &str, success: bool, latency: u64) {
+        self.record_execution_result(capability_name, success, latency);
     }
 }
 

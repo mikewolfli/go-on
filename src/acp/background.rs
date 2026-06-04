@@ -619,13 +619,38 @@ pub async fn start_background_tasks(
         });
     }
 
+    // ── Metacognitive auto-reflexion every 30 seconds (BLUE56-B10) ───────
+    {
+        let shutdown = shutdown_notify.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(30_000));
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = shutdown.notified() => break,
+                    _ = interval.tick() => {}
+                }
+                let report_ids =
+                    crate::intelligence::metacognitive::global_metacognitive_controller()
+                        .autoreflect();
+                if !report_ids.is_empty() {
+                    tracing::info!(
+                        target: "intelligence",
+                        count = report_ids.len(),
+                        "Metacognitive auto-reflexion generated reports"
+                    );
+                }
+            }
+        });
+    }
+
     // ── SelfEvolutionAgent instantiation (BLUE56-B03) ──────────────────
     {
         let shutdown = shutdown_notify.clone();
         tokio::spawn(async move {
-            // The _evolution_agent binding lives for the entire async block scope,
+            // The evolution_agent binding lives for the entire async block scope,
             // so the agent is held alive until shutdown is notified (GAP-B58-C02/C04).
-            let _evolution_agent = crate::agents::self_evolution_agent::SelfEvolutionAgent::new(
+            let evolution_agent = crate::agents::self_evolution_agent::SelfEvolutionAgent::new(
                 std::path::PathBuf::from("."),
                 Vec::new(),
             )
@@ -646,6 +671,59 @@ pub async fn start_background_tasks(
         target: "observability",
         "LivePerformanceFeed initialized"
     );
+
+    // ── BLUE56-GAP-C04: Hyper-resilience health checks ─────────────────
+    // Start background health checks for circuit breaker self-healing.
+    // The health check interval is configured in ResilienceConfig.
+    server.hyper_resilience.start_health_checks();
+    tracing::info!(
+        target: "resilience",
+        "HyperResilienceEngine health checks started"
+    );
+
+    // ── Fault tolerance recovery cycle (F-GAP-28) ───────────────────-
+    // Periodically check heartbeats, detect failed nodes, create recovery
+    // plans, and attempt automatic reintegration every 30 seconds.
+    if let Some(ref harness_bus) = server.governance_deps.harness_bus {
+        let ft = Arc::clone(&harness_bus.fault_tolerance);
+        let shutdown = shutdown_notify.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(30));
+            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            // Skip first tick to give startup time
+            interval.tick().await;
+            loop {
+                tokio::select! {
+                    _ = shutdown.notified() => {
+                        tracing::info!(target: "fault_tolerance", "recovery cycle shutting down");
+                        break;
+                    }
+                    _ = interval.tick() => {
+                        let summary = ft.run_recovery_cycle();
+                        if !summary.offenders.is_empty() || summary.plans_created > 0 {
+                            tracing::info!(
+                                target: "fault_tolerance",
+                                offenders = summary.offenders.len(),
+                                plans_created = summary.plans_created,
+                                plans_activated = summary.plans_activated,
+                                cluster_health = ?summary.cluster_health,
+                                "fault tolerance recovery cycle complete"
+                            );
+                        }
+                    }
+                }
+            }
+        });
+        tracing::info!(
+            target: "fault_tolerance",
+            "FaultToleranceEngine recovery cycle started (interval=30s)"
+        );
+    } else {
+        tracing::warn!(
+            target: "fault_tolerance",
+            "harness_bus is None — fault tolerance recovery cycle not started"
+        );
+    }
 
     Ok(())
 }

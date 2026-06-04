@@ -1,14 +1,21 @@
-//! Extracted phases for process_chat_request (BLUE62 ARCH-1)
+//! Cognitive-loop phases for process_chat_request (BLUE62 ARCH-1)
 //!
 //! This module breaks the monolithic `process_chat_request` function into
-//! four distinct phases, each <300 lines of orchestration logic. Internal
+//! four cognitive-loop phases, each <300 lines of orchestration logic. Internal
 //! helpers within each phase handle deeper decomposition.
 //!
 //! Phase breakdown:
-//!   1. `resolve_phase`           — input validation, model resolution, context building
-//!   2. `agent_routing_phase`     — agent selection, delegation logic, memory injection
-//!   3. `execution_phase`         — scheduler, cache, autonomy, fallback, vote, persistence
-//!   4. `response_assembly_phase` — mode runtime, full-auto, final response construction
+//!   1. `observe_phase` — Observe current state: input validation, multimodal detection,
+//!                         prompt injection check, context gathering, memory recall,
+//!                         capability sensing
+//!   2. `think_phase`   — Think about the situation: model resolution, agent selection,
+//!                         routing, planning, capability analysis, risk assessment,
+//!                         metacognitive evaluation
+//!   3. `act_phase`     — Execute actions: LLM calls, tool execution, autonomy loop,
+//!                         fallback, vote, cache operations, scheduler
+//!   4. `reflect_phase` — Reflect on outcomes: response assembly, error handling,
+//!                         knowledge persistence, metacognitive updates, threshold learning,
+//!                         capability bus feedback, BrainLoop reflection
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
@@ -50,6 +57,7 @@ use crate::i18n::runtime::tf;
 use crate::intelligence::token_cache::{
     estimate_messages_token_count, messages_to_text, ContextLengthClass,
 };
+use crate::observability::performance::record_global_operation;
 use crate::orchestration::dag_executor::TaskContext;
 use crate::orchestration::flow::ResolvedPhase;
 use crate::orchestration::mode::{resolve_mode_runtime, ModeKind};
@@ -61,8 +69,8 @@ use crate::rpc_protocol::{child_trace_context, RequestTraceContext};
 // Phase Result Types
 // ═════════════════════════════════════════════════════════════════════
 
-/// Collected output from the resolve phase.
-pub(crate) struct ResolveOutput {
+/// Collected output from the observe phase.
+pub(crate) struct ObserveOutput {
     pub _flow: Arc<FlowManager>,
     pub _registry: Arc<crate::agent::AgentRegistry>,
     pub tenant_id: String,
@@ -80,8 +88,8 @@ pub(crate) struct ResolveOutput {
     pub multimodal_context: Option<String>,
 }
 
-/// Collected output from the agent routing phase.
-pub(crate) struct AgentRoutingOutput {
+/// Collected output from the think phase.
+pub(crate) struct ThinkOutput {
     pub capability_selected_agent: Option<String>,
     pub capability_recommended_mode: Option<String>,
     pub capability_candidate_count: Option<u64>,
@@ -111,8 +119,8 @@ pub(crate) struct AgentRoutingOutput {
     pub vector_context: VectorContext,
 }
 
-/// Collected output from the execution phase.
-pub(crate) struct ExecutionOutput {
+/// Collected output from the act phase.
+pub(crate) struct ActOutput {
     pub selected_agent: String,
     pub response_text: String,
     pub reasoning_text: String,
@@ -142,16 +150,17 @@ static CHAT_THRESHOLD_LEARNER: OnceLock<
 > = OnceLock::new();
 
 // ═════════════════════════════════════════════════════════════════════
-// Phase 1: Resolve
+// Phase 1: Observe
 // ═════════════════════════════════════════════════════════════════════
 
-/// Phase 1: Input validation, model resolution, context building.
-pub(crate) async fn resolve_phase(
+/// Phase 1: Observe current state: input validation, multimodal detection,
+/// prompt injection check, context gathering, memory recall, capability sensing.
+pub(crate) async fn observe_phase(
     server: &AcpServer,
     params: &ChatParams,
     trace: &RequestTraceContext,
     ctx: ChatRequestContext,
-) -> Result<ResolveOutput> {
+) -> Result<ObserveOutput> {
     clear_task_description_cache();
     let (flow, registry) = routing_handles(server)?;
     let tenant_id = ctx.tenant_id.clone();
@@ -209,7 +218,7 @@ pub(crate) async fn resolve_phase(
     });
     let _ = _capability_sensing;
 
-    Ok(ResolveOutput {
+    Ok(ObserveOutput {
         _flow: flow,
         _registry: registry,
         tenant_id,
@@ -351,16 +360,17 @@ async fn process_file_uri(
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// Phase 2: Agent Routing
+// Phase 2: Think
 // ═════════════════════════════════════════════════════════════════════
 
-/// Phase 2: Agent selection, delegation logic, context injection.
-pub(crate) async fn agent_routing_phase(
+/// Phase 2: Think about the situation: model resolution, agent selection,
+/// routing, planning, capability analysis, risk assessment, metacognitive evaluation.
+pub(crate) async fn think_phase(
     server: &AcpServer,
     params: &ChatParams,
-    resolve_out: &mut ResolveOutput,
+    resolve_out: &mut ObserveOutput,
     trace: &RequestTraceContext,
-) -> Result<AgentRoutingOutput> {
+) -> Result<ThinkOutput> {
     let agent_sel = select_and_score_agents(
         server,
         params,
@@ -396,7 +406,7 @@ pub(crate) async fn agent_routing_phase(
         &mut agent_messages,
     );
 
-    Ok(AgentRoutingOutput {
+    Ok(ThinkOutput {
         capability_selected_agent: agent_sel.capability_selected_agent,
         capability_recommended_mode: agent_sel.capability_recommended_mode,
         capability_candidate_count: agent_sel.capability_candidate_count,
@@ -455,19 +465,21 @@ fn inject_agent_memory_bus(
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// Phase 3: Execution
+// Phase 3: Act
 // ═════════════════════════════════════════════════════════════════════
 
-/// Phase 3: LLM call, tool execution, autonomy loop, fallback, vote.
-pub(crate) async fn execution_phase(
+/// Phase 3: Execute actions: LLM calls, tool execution, autonomy loop,
+/// fallback, vote, cache operations, scheduler.
+pub(crate) async fn act_phase(
     server: &AcpServer,
     params: &ChatParams,
     trace: &RequestTraceContext,
     stream_observer: Option<StreamObserver>,
     started: Instant,
-    resolve_out: &ResolveOutput,
-    routing_out: &AgentRoutingOutput,
-) -> Result<ExecutionOutput> {
+    resolve_out: &ObserveOutput,
+    routing_out: &ThinkOutput,
+) -> Result<ActOutput> {
+    let act_started = Instant::now();
     let mut selected_agent = String::new();
     let mut response_text = String::new();
     let mut reasoning_text = String::new();
@@ -481,7 +493,7 @@ pub(crate) async fn execution_phase(
     let sched_task_id = trace.request_id.clone();
 
     // Scheduler
-    submit_to_scheduler(server, &resolve_out.resolved, &sched_task_id).await;
+    observe_submit_to_scheduler(server, &resolve_out.resolved, &sched_task_id).await;
 
     // Token cache
     let input_text = messages_to_text(&routing_out.agent_messages);
@@ -580,6 +592,14 @@ pub(crate) async fn execution_phase(
     agent_attempts.extend(autonomy_outcome.agent_attempts);
     let autonomy_loop_executed = autonomy_outcome.autonomy_loop_executed;
 
+    // BLUE56-GAP-C04: Record autonomy round execution in hyper-resilience engine
+    if autonomy_loop_executed {
+        let success = !response_text.is_empty() && last_err.is_none();
+        server
+            .hyper_resilience
+            .record_execution(&selected_agent, success);
+    }
+
     // TaskContext propagation
     if autonomy_loop_executed && !response_text.is_empty() {
         let mut ctx = TaskContext::new(format!(
@@ -666,6 +686,12 @@ pub(crate) async fn execution_phase(
         };
 
         // Error handling
+        // BLUE56-GAP-C04: Record execution in hyper-resilience engine before error handling
+        server.hyper_resilience.record_execution(
+            &selected_agent,
+            !response_text.is_empty() && last_err.is_none(),
+        );
+
         if let Some(_early_value) = handle_execution_errors(
             server,
             params,
@@ -687,7 +713,7 @@ pub(crate) async fn execution_phase(
         )
         .await?
         {
-            return Ok(ExecutionOutput {
+            return Ok(ActOutput {
                 selected_agent,
                 response_text,
                 reasoning_text,
@@ -703,7 +729,7 @@ pub(crate) async fn execution_phase(
                 used_multi_model_vote,
                 used_multi_agent_vote,
                 review_required,
-                checkpoint: empty_checkpoint(),
+                checkpoint: cognitive_empty_checkpoint(),
                 knowledge: Value::Null,
                 metacognitive_loop: Value::Null,
                 distillation: Value::Null,
@@ -743,6 +769,17 @@ pub(crate) async fn execution_phase(
                 started.elapsed().as_millis() as u64,
             )
         });
+
+        // BLUE56-GAP-C04: Record fallback/vote execution in hyper-resilience engine
+        server.hyper_resilience.record_execution(
+            &selected_agent,
+            !response_text.is_empty() && last_err.is_none(),
+        );
+
+        // O-FIX4: Record global performance metric for this operation
+        let success = !response_text.is_empty() && last_err.is_none();
+        let elapsed_ms = act_started.elapsed().as_secs_f64() * 1000.0;
+        record_global_operation(success, elapsed_ms);
 
         // Persistence
         persist_vector_memory(
@@ -846,7 +883,12 @@ pub(crate) async fn execution_phase(
             }
         }
 
-        return Ok(ExecutionOutput {
+        // O-FIX4: Record global performance metric for the primary execution path
+        let success = !response_text.is_empty() && last_err.is_none();
+        let elapsed_ms = act_started.elapsed().as_secs_f64() * 1000.0;
+        record_global_operation(success, elapsed_ms);
+
+        return Ok(ActOutput {
             selected_agent,
             response_text,
             reasoning_text,
@@ -874,7 +916,12 @@ pub(crate) async fn execution_phase(
         });
     }
 
-    Ok(ExecutionOutput {
+    // O-FIX4: Record global performance metric (cache-hit or fallback-early path)
+    let success = !response_text.is_empty() && last_err.is_none();
+    let elapsed_ms = act_started.elapsed().as_secs_f64() * 1000.0;
+    record_global_operation(success, elapsed_ms);
+
+    Ok(ActOutput {
         selected_agent,
         response_text,
         reasoning_text,
@@ -890,7 +937,7 @@ pub(crate) async fn execution_phase(
         used_multi_model_vote: false,
         used_multi_agent_vote: false,
         review_required: false,
-        checkpoint: empty_checkpoint(),
+        checkpoint: cognitive_empty_checkpoint(),
         knowledge: Value::Null,
         metacognitive_loop: Value::Null,
         distillation: Value::Null,
@@ -902,7 +949,7 @@ pub(crate) async fn execution_phase(
     })
 }
 
-fn empty_checkpoint() -> crate::acp::ConversationCheckpoint {
+fn cognitive_empty_checkpoint() -> crate::acp::ConversationCheckpoint {
     crate::acp::ConversationCheckpoint {
         checkpoint_id: String::new(),
         conversation_id: String::new(),
@@ -917,7 +964,7 @@ fn empty_checkpoint() -> crate::acp::ConversationCheckpoint {
 
 // ── Execution internal helpers ──────────────────────────────────────────
 
-async fn submit_to_scheduler(
+async fn observe_submit_to_scheduler(
     server: &AcpServer,
     resolved: &crate::orchestration::flow::ResolvedRouting,
     sched_task_id: &str,
@@ -994,8 +1041,8 @@ async fn stream_cache_response(
 async fn execute_fallback_with_vote(
     server: &AcpServer,
     _params: &ChatParams,
-    resolve_out: &ResolveOutput,
-    routing_out: &AgentRoutingOutput,
+    resolve_out: &ObserveOutput,
+    routing_out: &ThinkOutput,
     trace: &RequestTraceContext,
     stream_observer: Option<StreamObserver>,
     _agent_attempts: Vec<Value>,
@@ -1124,21 +1171,23 @@ async fn handle_execution_errors(
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// Phase 4: Response Assembly
+// Phase 4: Reflect
 // ═════════════════════════════════════════════════════════════════════
 
-/// Phase 4: Response construction, error wrapping, post-processing.
+/// Phase 4: Reflect on outcomes: response assembly, error handling,
+/// knowledge persistence, metacognitive updates, threshold learning,
+/// capability bus feedback, BrainLoop reflection.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn response_assembly_phase(
+pub(crate) async fn reflect_phase(
     server: &AcpServer,
     params: &ChatParams,
     trace: &RequestTraceContext,
     span: Option<&OtelContext>,
     started: Instant,
     _stream_observer: Option<StreamObserver>,
-    resolve_out: &ResolveOutput,
-    routing_out: &AgentRoutingOutput,
-    exec_out: &mut ExecutionOutput,
+    resolve_out: &ObserveOutput,
+    routing_out: &ThinkOutput,
+    exec_out: &mut ActOutput,
 ) -> Result<serde_json::Value> {
     let sched_task_id = trace.request_id.clone();
 
@@ -1368,6 +1417,20 @@ pub(crate) async fn response_assembly_phase(
         }
     }
 
+    // ── Provenance recording ────────────────────────────────────────
+    // Record a high-level provenance entry for this chat execution.
+    if let Some(ref ledger) = server.governance_deps.provenance_ledger {
+        let _ = ledger
+            .record_provenance(
+                &trace.trace_id,
+                &extract_task_description(&params.messages),
+                &exec_out.selected_agent,
+                exec_out.last_err.is_none(),
+                started.elapsed().as_millis() as u64,
+            )
+            .await;
+    }
+
     Ok(result)
 }
 
@@ -1380,7 +1443,7 @@ async fn run_mode_runtime_and_multi_agent(
     phase_name: &str,
     _phase: &ResolvedPhase,
     resolved: &crate::orchestration::flow::ResolvedRouting,
-    exec_out: &mut ExecutionOutput,
+    exec_out: &mut ActOutput,
 ) {
     let mode_runtime = resolve_mode_runtime(
         &params.mode,
@@ -1405,7 +1468,7 @@ async fn run_mode_runtime_and_multi_agent(
             ),
             input: json!({"response_text": exec_out.response_text, "reasoning_text": exec_out.reasoning_text}),
         };
-        if mode_runtime.run(envelope).is_ok() {
+        if mode_runtime.run(envelope).await.is_ok() {
             if let Some(ref cb) = server.governance_deps.capability_bus {
                 let _ = cb.continuous_learning.lock().map(|cl| {
                     cl.schedule_review(&crate::intelligence::continuous_learning::ConsolidatedMemory {
@@ -1435,7 +1498,7 @@ async fn run_multi_agent_pipeline(
     server: &AcpServer,
     params: &ChatParams,
     resolved: &crate::orchestration::flow::ResolvedRouting,
-    exec_out: &mut ExecutionOutput,
+    exec_out: &mut ActOutput,
     _phase_name: &str,
 ) {
     let task_chars = TaskCharacteristics {

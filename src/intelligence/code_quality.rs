@@ -4,8 +4,6 @@
 //! style violations) and generate evolution triggers for the self-improvement
 //! loop. Hooks run periodically and on plan completion.
 
-#![allow(dead_code)] // Reserved—wired via evolution loop in production
-
 use crate::orchestration::self_evolution::evolution_loop::EvolutionTrigger;
 use serde::{Deserialize, Serialize};
 

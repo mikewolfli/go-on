@@ -248,6 +248,32 @@ impl std::fmt::Debug for MetacognitiveController {
     }
 }
 
+// ── Global singleton ──────────────────────────────────────────────────────
+
+use std::sync::OnceLock;
+
+/// Global singleton metacognitive controller, shared across the system so
+/// observations, actions, and reflection state accumulate across requests.
+static GLOBAL_META: OnceLock<MetacognitiveController> = OnceLock::new();
+
+/// Get or initialise the global `MetacognitiveController` singleton.
+/// All callers receive the same `&'static` reference backed by the same
+/// `Arc<Mutex<Inner>>`, so state is shared process-wide.
+pub fn global_metacognitive_controller() -> &'static MetacognitiveController {
+    GLOBAL_META.get_or_init(|| MetacognitiveController::new(MetacognitiveConfig::default()))
+}
+
+/// Create a new `MetacognitiveController` that shares its inner state with
+/// the global singleton.  The returned instance owns a separate `llm_agent`
+/// field so callers can inject an LLM agent without affecting the global.
+pub fn shared_metacognitive_controller() -> MetacognitiveController {
+    let global = global_metacognitive_controller();
+    MetacognitiveController {
+        inner: Arc::clone(&global.inner),
+        llm_agent: None,
+    }
+}
+
 impl MetacognitiveController {
     /// Create a new metacognitive controller with the given configuration.
     pub fn new(config: MetacognitiveConfig) -> Self {

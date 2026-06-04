@@ -86,13 +86,13 @@ pub fn select_mode_runtime_with_registry(
 ///
 /// Uses `select_mode_runtime_with_registry` so the runtime has access to
 /// real agents.
-pub fn execute_with_mode(
+pub async fn execute_with_mode(
     mode: &str,
     registry: Arc<AgentRegistry>,
     task: AgentTaskEnvelope,
 ) -> Result<AgentTaskResult> {
     let runtime = select_mode_runtime_with_registry(mode, registry);
-    runtime.run(task)
+    runtime.run(task).await
 }
 
 // ---------------------------------------------------------------------------

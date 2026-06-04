@@ -1,3 +1,5 @@
+#![deprecated(note = "Use cognitive loop in chat_phases.rs instead")]
+
 //! # Brain Loop — Plan → Execute → Reflect → Replan
 //!
 //! Implements FUTURE5.MD M5 "脑回路（Plan→Execute→Reflect→Replan）",

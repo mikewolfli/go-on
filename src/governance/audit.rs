@@ -15,6 +15,29 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum AuditError {
+    #[error("Storage error: {0}")]
+    Storage(String),
+    #[error("Serialization error: {0}")]
+    Serialization(String),
+    #[error("Integrity error: {0}")]
+    Integrity(String),
+}
+
+impl From<std::io::Error> for AuditError {
+    fn from(e: std::io::Error) -> Self {
+        AuditError::Storage(e.to_string())
+    }
+}
+
+impl From<serde_json::Error> for AuditError {
+    fn from(e: serde_json::Error) -> Self {
+        AuditError::Serialization(e.to_string())
+    }
+}
 
 // ─── AuditLogEntry (unchanged) ──────────────────────────────────────────────
 
@@ -232,10 +255,7 @@ impl ThreadSafeAuditLog {
 ///
 /// If the file exceeds 100 MB, it is automatically compressed into a gzip
 /// archive (`<filename>.1.gz`) and a fresh file is started.
-fn append_ndjson_entry(
-    path: &Path,
-    entry: &AuditLogEntry,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn append_ndjson_entry(path: &Path, entry: &AuditLogEntry) -> Result<(), AuditError> {
     // File rotation: compress+gzip archive when >100 MB
     if path.exists() && fs::metadata(path)?.len() > 100 * 1024 * 1024 {
         rotate_file(path)?;
@@ -247,7 +267,7 @@ fn append_ndjson_entry(
 }
 
 /// Rotate a file by compressing it to a gzip archive and starting fresh.
-fn rotate_file(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn rotate_file(path: &Path) -> Result<(), AuditError> {
     use std::io::Read;
 
     let archive_path = path.with_extension("ndjson.1.gz");

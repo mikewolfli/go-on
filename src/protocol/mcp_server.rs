@@ -4,6 +4,7 @@
 //! implementing the Model Context Protocol specification.
 
 use anyhow::Result;
+use serde_json::json;
 use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -116,25 +117,15 @@ impl McpStdioServer {
                     }
                 }
                 Err(parse_error) => {
-                    let error_response = JsonRpcResponse {
-                        jsonrpc: "2.0".to_string(),
-                        result: None,
-                        error: Some(crate::mcp::JsonRpcError {
-                            code: crate::mcp::error_codes::PARSE_ERROR,
-                            message: tf(
-                                "error.parse_error",
-                                &[("error", &format!("{}", parse_error))],
-                            ),
-                            data: None,
-                        }),
-                        id: None,
-                    };
-
+                    warn!(
+                        "{}",
+                        tf(
+                            "error.parse_error",
+                            &[("error", &format!("{}", parse_error))],
+                        )
+                    );
                     let mut stdout = stdout.lock().await;
-                    let response_line = serde_json::to_string(&error_response)?;
-                    stdout.write_all(response_line.as_bytes()).await?;
-                    stdout.write_all(b"\n").await?;
-                    stdout.flush().await?;
+                    send_parse_error(&mut *stdout).await?;
                 }
             }
         }
@@ -842,6 +833,27 @@ fn parse_request_target_for_test(raw_request: &str) -> Option<(String, String)> 
 #[cfg(test)]
 fn content_length_for_test(headers: &str) -> Option<usize> {
     extract_content_length(headers)
+}
+
+/// Send a JSON-RPC Parse error response (-32700) to the client.
+///
+/// Per the JSON-RPC 2.0 specification, when a request cannot be parsed
+/// as valid JSON, the server must respond with a Parse error.
+async fn send_parse_error(writer: &mut (impl tokio::io::AsyncWrite + Unpin)) -> std::io::Result<()> {
+    let error = json!({
+        "jsonrpc": "2.0",
+        "id": null,
+        "error": {
+            "code": -32700,
+            "message": "Parse error"
+        }
+    });
+    let line =
+        serde_json::to_string(&error).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    writer.write_all(line.as_bytes()).await?;
+    writer.write_all(b"\n").await?;
+    writer.flush().await?;
+    Ok(())
 }
 
 #[cfg(test)]

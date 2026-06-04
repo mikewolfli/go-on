@@ -68,6 +68,16 @@ impl TokenBucket {
             false
         }
     }
+
+    /// Return the wait time in milliseconds until a single token is available.
+    fn wait_time_ms(&self) -> u64 {
+        if self.tokens >= 1.0 {
+            return 0;
+        }
+        let deficit = 1.0 - self.tokens;
+        let secs = (deficit / self.refill_rate).ceil();
+        (secs * 1000.0) as u64
+    }
 }
 
 /// Rate limit middleware
@@ -179,6 +189,25 @@ impl RateLimitMiddleware {
                 capacity: self.default_limit.burst,
                 refill_per_second: self.default_limit.rpm as f64 / 60.0,
             }
+        }
+    }
+
+    /// Compute the `Retry-After` header value (in seconds) for the given tenant.
+    ///
+    /// Returns the number of seconds the client should wait before making
+    /// another request.  Useful for constructing a 429 response with the
+    /// `Retry-After` HTTP header.
+    pub fn retry_after(&self, tenant_id: &str) -> u64 {
+        let buckets = self.buckets.lock().unwrap_or_else(|poisoned| {
+            warn!("rate limit retry_after lock poisoned, recovering");
+            poisoned.into_inner()
+        });
+
+        if let Some(bucket) = buckets.get(tenant_id) {
+            let wait_ms = bucket.wait_time_ms();
+            (wait_ms / 1000).max(1)
+        } else {
+            0 // No rate limit state yet for this tenant
         }
     }
 

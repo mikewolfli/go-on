@@ -5,7 +5,7 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::observability::observability::push_metric_header;
+use crate::shared::metrics_helpers::push_metric_header;
 
 /// Histogram bucket boundaries for latency monitoring (seconds)
 #[allow(dead_code)] // F-GAP-49 — Infrastructure — reserved for future histogram metric exposure

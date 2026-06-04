@@ -1166,10 +1166,15 @@ pub(crate) fn controller_recommended_phase(
 ///
 /// This function is now a thin orchestrator that splits the request lifecycle
 /// into four phases, each in `chat_phases.rs`:
-///   1. `resolve_phase`           — input validation, model resolution, context building
-///   2. `agent_routing_phase`     — agent selection, delegation logic, memory injection
-///   3. `execution_phase`         — scheduler, cache, autonomy, fallback, vote, persistence
-///   4. `response_assembly_phase` — mode runtime, full-auto, final response construction
+///   1. `observe_phase` — input validation, multimodal detection, prompt injection check,
+///                        context gathering, memory recall, capability sensing
+///   2. `think_phase`   — model resolution, agent selection, routing, planning,
+///                        capability analysis, risk assessment, metacognitive evaluation
+///   3. `act_phase`     — LLM calls, tool execution, autonomy loop, fallback, vote,
+///                        cache operations, scheduler
+///   4. `reflect_phase` — response assembly, error handling, knowledge persistence,
+///                        metacognitive updates, threshold learning, capability bus feedback,
+///                        BrainLoop reflection
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) async fn process_chat_request(
     server: &AcpServer,
@@ -1179,20 +1184,18 @@ pub(crate) async fn process_chat_request(
     span: Option<&OtelContext>,
     ctx: Option<ChatRequestContext>,
 ) -> Result<serde_json::Value> {
-    use crate::acp::r#impl::chat_phases::{
-        agent_routing_phase, execution_phase, resolve_phase, response_assembly_phase,
-    };
+    use crate::acp::r#impl::chat_phases::{act_phase, observe_phase, reflect_phase, think_phase};
     let started = std::time::Instant::now();
     let ctx = ctx.unwrap_or_else(|| ChatRequestContext::new(None));
 
-    // ── Phase 1: Resolve ──────────────────────────────────────────
-    let mut resolve_out = resolve_phase(server, params, trace, ctx).await?;
+    // ── Phase 1: Observe ──────────────────────────────────────────
+    let mut resolve_out = observe_phase(server, params, trace, ctx).await?;
 
-    // ── Phase 2: Agent Routing ────────────────────────────────────
-    let routing_out = agent_routing_phase(server, params, &mut resolve_out, trace).await?;
+    // ── Phase 2: Think ────────────────────────────────────────────
+    let routing_out = think_phase(server, params, &mut resolve_out, trace).await?;
 
-    // ── Phase 3: Execution ────────────────────────────────────────
-    let mut exec_out = execution_phase(
+    // ── Phase 3: Act ──────────────────────────────────────────────
+    let mut exec_out = act_phase(
         server,
         params,
         trace,
@@ -1203,8 +1206,8 @@ pub(crate) async fn process_chat_request(
     )
     .await?;
 
-    // ── Phase 4: Response Assembly ────────────────────────────────
-    response_assembly_phase(
+    // ── Phase 4: Reflect ──────────────────────────────────────────
+    reflect_phase(
         server,
         params,
         trace,
@@ -1583,25 +1586,9 @@ pub(crate) async fn select_and_score_agents(
                 poisoned.into_inner()
             });
         let skill_count = reg_guard.list().len();
-        let skill_instruction = format!(
-            r#"
-
-## Skill System
-
-You have access to {} registered skill(s). Skills are reusable templates that automate common tasks.
-
-### How to Use Skills
-1. **Discover Local** — Call `skill-finder(query, top_k)` to search LOCAL skills matching the user's intent.
-2. **Search GitHub** — Call `github_search_skills(query, max_results)` to search GitHub for community skills.
-3. **Import** — Once you find a suitable GitHub repo, use `import_skill` with {{ "source": {{ "kind": "github", "repo": "owner/repo", "ref": "main" }} }} to install it.
-4. **Create** — If no existing skill fits, create one via `skill-creator(name, description, prompt_template, input_schema)`.
-
-### Important Rules
-- When multiple skills seem relevant, pick the one with the HIGHEST score.
-- When a user request could match several skills, call `skill-finder` first, then choose the single best match.
-- If the best match has score < 0.4, do NOT use it. Instead, ask the user for clarification or create a new skill.
-- NEVER call multiple skills at once for the same request. Pick one and execute it."#,
-            skill_count
+        let skill_instruction = tf(
+            "prompts.skill_system",
+            &[("count", &skill_count.to_string())],
         );
         merge_context_into_messages(&agent_messages, Some(skill_instruction))
     };
@@ -2041,12 +2028,13 @@ pub(crate) async fn execute_fallback_agents(
                             cb.world_model
                                 .record_event("agent_execution", &agent_name, payload);
                         // BLUE56-B09: Run TripleFusion fusion cycle after execution
+                        // Uses the shared global singleton so fusion_cycles accumulate across requests.
                         let fusion_bridge =
-                            crate::intelligence::triple_fusion::TripleFusionBridge::new(
-                                Default::default(),
-                            );
-                        let triggers =
-                            fusion_bridge.run_fusion_cycle(&cb.metacognitive, &cb.consciousness);
+                            crate::intelligence::triple_fusion::global_triple_fusion_bridge();
+                        let triggers = fusion_bridge
+                            .lock()
+                            .await
+                            .run_fusion_cycle(&cb.metacognitive, &cb.consciousness);
                         if !triggers.is_empty() {
                             tracing::info!(
                                 target: "triple_fusion",

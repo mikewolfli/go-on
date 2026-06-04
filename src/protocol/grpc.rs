@@ -4,8 +4,6 @@
 //! over HTTP using `reqwest`. This keeps dependencies minimal while still
 //! enabling remote node communication for DAG task dispatch.
 
-#![allow(dead_code)] // Reserved—wired via distributed execution in multi-user profile
-
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::LazyLock;
@@ -264,11 +262,15 @@ pub async fn call_health_check(
 impl From<&crate::orchestration::distributed::remote_executor::TaskPacket> for ExecuteParams {
     fn from(packet: &crate::orchestration::distributed::remote_executor::TaskPacket) -> Self {
         Self {
-            node_id: packet.node_id.clone(),
-            dag_id: packet.dag_id.clone(),
+            node_id: packet.node_id.to_string(),
+            dag_id: packet.dag_id.to_string(),
             tool_name: packet.tool_name.clone(),
             input: packet.input.clone(),
-            dep_outputs: packet.dep_outputs.clone(),
+            dep_outputs: packet
+                .dep_outputs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
             retry_count: packet.retry_count,
             max_retries: packet.max_retries,
         }
@@ -278,8 +280,8 @@ impl From<&crate::orchestration::distributed::remote_executor::TaskPacket> for E
 impl From<ExecuteResult> for crate::orchestration::distributed::remote_executor::NodeOutput {
     fn from(res: ExecuteResult) -> Self {
         Self {
-            node_id: res.node_id,
-            dag_id: res.dag_id,
+            node_id: crate::orchestration::distributed::remote_executor::NodeId(res.node_id),
+            dag_id: crate::orchestration::distributed::remote_executor::DagId(res.dag_id),
             tool_name: res.tool_name,
             success: res.success,
             output: res.output,

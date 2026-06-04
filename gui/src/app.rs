@@ -326,22 +326,27 @@ impl GoOnApp {
                 }
             }
             for name in &all_names {
-                let config_key = config
+                let config_has_key = config
                     .providers
                     .iter()
-                    .find(|p| p.name.to_lowercase() == *name)
-                    .map(|p| {
-                        if p.api_key.is_empty() {
-                            "(empty)".to_string()
-                        } else {
-                            format!("{}...", &p.api_key[..4.min(p.api_key.len())])
-                        }
-                    })
-                    .unwrap_or_else(|| "(not in config)".to_string());
-                let keyring_key = crate::keyring_util::get_api_key(name)
-                    .map(|k| format!("{}...", &k[..4.min(k.len())]))
-                    .unwrap_or_else(|| "(not in keyring)".to_string());
-                eprintln!("  {}: config={}, keyring={}", name, config_key, keyring_key);
+                    .any(|p| p.name.to_lowercase() == *name && !p.api_key.is_empty());
+                let keyring_has_key = crate::keyring_util::get_api_key(name)
+                    .map(|k| !k.is_empty())
+                    .unwrap_or(false);
+                eprintln!(
+                    "  {}: config={}, keyring={}",
+                    name,
+                    if config_has_key {
+                        "(present)"
+                    } else {
+                        "(empty)"
+                    },
+                    if keyring_has_key {
+                        "(present)"
+                    } else {
+                        "(not in keyring)"
+                    }
+                );
             }
             eprintln!("=== END DIAGNOSTIC ===");
         }
@@ -366,8 +371,16 @@ impl GoOnApp {
                     Some(parent) => std::borrow::Cow::Borrowed(parent),
                     None => {
                         let home = std::env::var("HOME")
-                            .or_else(|_| std::env::var("USERPROFILE"))
-                            .unwrap_or_else(|_| ".".to_string());
+                            .or_else(|_| std::env::var("USERPROFILE")) // Windows
+                            .unwrap_or_else(|_| {
+                                // Last resort: use current executable directory
+                                std::env::current_exe()
+                                    .ok()
+                                    .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+                                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                                    .to_string_lossy()
+                                    .to_string()
+                            });
                         std::borrow::Cow::Owned(std::path::PathBuf::from(home))
                     }
                 };
@@ -897,8 +910,20 @@ state_path = "acp_autotune_state.json"
             agent_section = agent_section,
         );
 
-        match std::fs::write(path, &toml) {
-            Ok(_) => eprintln!("backend: wrote config.toml to {}", path.display()),
+        // Atomic write: write to temp file, then rename
+        match tempfile::NamedTempFile::new_in(path.parent().unwrap_or(std::path::Path::new("."))) {
+            Ok(mut tmp) => {
+                use std::io::Write;
+                match (|| -> Result<(), std::io::Error> {
+                    tmp.write_all(toml.as_bytes())?;
+                    tmp.flush()?;
+                    tmp.persist(path)?;
+                    Ok(())
+                })() {
+                    Ok(_) => eprintln!("backend: wrote config.toml to {}", path.display()),
+                    Err(e) => eprintln!("backend: failed to write config.toml: {}", e),
+                }
+            }
             Err(e) => eprintln!("backend: failed to write config.toml: {}", e),
         }
 
@@ -938,8 +963,25 @@ top_k = 2
 {agent_section}"#,
                     agent_section = agent_section,
                 );
-                match std::fs::write(zed_path, &zed_toml) {
-                    Ok(_) => eprintln!("backend: wrote zed-config.toml to {}", zed_path.display()),
+                // Atomic write: write to temp file, then rename
+                match tempfile::NamedTempFile::new_in(
+                    zed_path.parent().unwrap_or(std::path::Path::new(".")),
+                ) {
+                    Ok(mut tmp) => {
+                        use std::io::Write;
+                        match (|| -> Result<(), std::io::Error> {
+                            tmp.write_all(zed_toml.as_bytes())?;
+                            tmp.flush()?;
+                            tmp.persist(zed_path)?;
+                            Ok(())
+                        })() {
+                            Ok(_) => eprintln!(
+                                "backend: wrote zed-config.toml to {}",
+                                zed_path.display()
+                            ),
+                            Err(e) => eprintln!("backend: failed to write zed-config.toml: {}", e),
+                        }
+                    }
                     Err(e) => eprintln!("backend: failed to write zed-config.toml: {}", e),
                 }
             }
@@ -1344,7 +1386,7 @@ impl eframe::App for GoOnApp {
         if self.last_applied_theme != self.config_shared.theme {
             self.last_applied_theme = self.config_shared.theme.clone();
             let theme = crate::theme::Theme::from_name(&self.config_shared.theme);
-            theme.apply(ctx);
+            theme.apply(ctx, self.config.font_scale);
         }
 
         // ── Minimal repaint governor ────────────────────────────────

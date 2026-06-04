@@ -1,5 +1,10 @@
+pub mod alert_severity;
+pub mod execution_recorder;
 pub mod http_client;
 pub mod lock_utils;
+pub mod metrics_helpers;
 pub mod protocol_mode;
+pub mod provenance_helpers;
 pub mod secret_override;
+pub mod timestamps;
 pub mod tool_descriptors;

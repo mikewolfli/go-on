@@ -170,6 +170,15 @@ pub struct CurriculumStage {
     pub mastery_threshold: f64,
 }
 
+/// A recorded agent task result used for adaptive curriculum adjustment.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentResult {
+    /// Whether the task was completed successfully.
+    pub success: bool,
+    /// Epoch millisecond when the result was recorded.
+    pub timestamp_ms: u64,
+}
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -254,6 +263,8 @@ struct CenterState {
     forgetting_curves: HashMap<String, ForgettingCurve>,
     forgetting_risks: HashMap<String, ForgettingRiskRecord>,
     curriculum: Vec<CurriculumStage>,
+    /// Per-agent historical results for adaptive curriculum thresholds.
+    agent_history: HashMap<String, Vec<AgentResult>>,
     next_task_id: u64,
     next_memory_id: u64,
 }
@@ -282,6 +293,7 @@ impl ContinuousLearningCenter {
                 forgetting_curves: HashMap::new(),
                 forgetting_risks: HashMap::new(),
                 curriculum,
+                agent_history: HashMap::new(),
                 next_task_id: 1,
                 next_memory_id: 1,
             })),
@@ -492,9 +504,45 @@ impl ContinuousLearningCenter {
 
     // ── Curriculum ─────────────────────────────────────────────────────────
 
+    /// Records an agent task result for adaptive curriculum adjustment.
+    pub fn record_agent_result(&self, agent: &str, success: bool) {
+        let mut state = lock_guard(&self.state);
+        state
+            .agent_history
+            .entry(agent.to_string())
+            .or_default()
+            .push(AgentResult {
+                success,
+                timestamp_ms: now_ms(),
+            });
+    }
+
+    /// Computes an adaptive mastery threshold based on the agent's historical
+    /// performance. High-performing agents get a lower (harder) threshold;
+    /// struggling agents get a higher (easier) threshold.
+    pub fn compute_adaptive_threshold(&self, agent: &str) -> f64 {
+        let state = lock_guard(&self.state);
+        let history = state.agent_history.get(agent);
+        let history = match history {
+            Some(h) if !h.is_empty() => h,
+            _ => return 0.5, // default for unknown agents
+        };
+        let avg_success: f64 = history
+            .iter()
+            .map(|r| if r.success { 1.0 } else { 0.0 })
+            .sum::<f64>()
+            / history.len() as f64;
+        // Lower threshold for high-performing agents (harder curriculum)
+        // Higher threshold for struggling agents (easier curriculum)
+        1.0 - avg_success
+    }
+
     /// Returns the current curriculum stage, advancing to the next stage if
     /// the current one has reached the mastery threshold.
-    pub fn apply_curriculum(&self) -> Result<CurriculumStage> {
+    ///
+    /// Uses adaptive difficulty: the mastery threshold is computed from the
+    /// named agent's historical performance rather than a fixed constant.
+    pub fn apply_curriculum(&self, agent: &str) -> Result<CurriculumStage> {
         let mut state = lock_guard(&self.state);
         if state.curriculum.is_empty() {
             // All stages completed; return a terminal stage.
@@ -522,7 +570,10 @@ impl ContinuousLearningCenter {
             }
         }
 
-        Ok(state.curriculum[0].clone())
+        // Apply adaptive mastery threshold based on agent performance.
+        let mut stage = state.curriculum[0].clone();
+        stage.mastery_threshold = self.compute_adaptive_threshold(agent);
+        Ok(stage)
     }
 
     // ── Experience replay ──────────────────────────────────────────────────
@@ -956,7 +1007,7 @@ mod tests {
         let center = ContinuousLearningCenter::new(config);
 
         // Stage 0 should be current initially.
-        let stage = center.apply_curriculum()?;
+        let stage = center.apply_curriculum("test_agent")?;
         assert_eq!(stage.stage, 0);
         assert_eq!(stage.tasks_completed, 0);
 
@@ -966,7 +1017,7 @@ mod tests {
         center.update_task_status(&t1, LearningStatus::Completed)?;
         center.update_task_status(&t2, LearningStatus::Completed)?;
 
-        let stage = center.apply_curriculum()?;
+        let stage = center.apply_curriculum("test_agent")?;
         assert_eq!(stage.stage, 1);
 
         Ok(())

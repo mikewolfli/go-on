@@ -43,7 +43,7 @@ async function runGoOnSecretCommand(
   secretValue?: string,
 ): Promise<string> {
   const config = vscode.workspace.getConfiguration("go-on");
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const workspaceRoot = getPrimaryWorkspaceRoot()?.fsPath;
   const runtime = await ensureGoOnBinary(workspaceRoot, config, context);
 
   const args: string[] = ["--secret", action];
@@ -121,6 +121,23 @@ async function runGoOnSecretCommand(
  * Larger files are rejected to prevent OOM on malformed responses.
  */
 const MAX_TOML_SIZE = 1024 * 1024;
+
+/**
+ * Returns all workspace folder URIs. Falls back to an empty array if no
+ * workspace is open, making multi-root workspace scenarios first-class.
+ */
+function getWorkspaceRoots(): vscode.Uri[] {
+  return vscode.workspace.workspaceFolders?.map((f) => f.uri) ?? [];
+}
+
+/**
+ * Returns the primary (first) workspace root URI, or undefined if no
+ * workspace is open. Use this when a single workspace root is needed
+ * for operations like starting the runtime or resolving config paths.
+ */
+function getPrimaryWorkspaceRoot(): vscode.Uri | undefined {
+  return vscode.workspace.workspaceFolders?.[0]?.uri;
+}
 
 /**
  * Guard and parse TOML content. Throws if content exceeds MAX_TOML_SIZE.
@@ -270,7 +287,7 @@ async function resolveConfigFilePath(
   context: vscode.ExtensionContext,
   configuredConfigPath?: string,
 ): Promise<{ workspaceRoot: string; configPath: string; runtimeDir: string }> {
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const workspaceRoot = getPrimaryWorkspaceRoot()?.fsPath;
   if (!workspaceRoot) {
     throw new Error("No workspace folder open.");
   }
@@ -459,6 +476,22 @@ export function activate(context: vscode.ExtensionContext) {
   const config = vscode.workspace.getConfiguration("go-on");
   const configPath = config.get<string>("configPath", "./config.toml");
 
+  /**
+   * Re-evaluate the config file path based on the current workspace roots
+   * and re-initialize the config manager. Called when workspace folders change.
+   */
+  async function updateConfigPath(): Promise<void> {
+    const cfg = vscode.workspace.getConfiguration("go-on");
+    const newPath = cfg.get<string>("configPath", "./config.toml");
+    goOnOutput.appendLine(`Config path updated: ${newPath}`);
+    try {
+      await configManager.initialize(newPath);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      goOnOutput.appendLine(`warn: config manager re-init failed: ${errMsg}`);
+    }
+  }
+
   // Initialize config manager and GoOnManager
   (async () => {
     try {
@@ -576,8 +609,7 @@ export function activate(context: vscode.ExtensionContext) {
       revealGoOnView,
       ensureBinaryReady: async () => {
         const config = vscode.workspace.getConfiguration("go-on");
-        const workspaceRoot =
-          vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const workspaceRoot = getPrimaryWorkspaceRoot()?.fsPath;
         await ensureGoOnBinary(workspaceRoot, config, context);
       },
       prepareRuntimeAfterChatOpen: async () =>
@@ -816,9 +848,33 @@ export function activate(context: vscode.ExtensionContext) {
         new vscode.Disposable(() => clearTimeout(autoOpenTimer)),
       );
     }
+
+    // Listen for workspace folder changes and re-evaluate config path
+    context.subscriptions.push(
+      vscode.workspace.onDidChangeWorkspaceFolders((event) => {
+        console.log(
+          `Workspace folders changed: ${event.added.length} added, ${event.removed.length} removed`,
+        );
+        // Re-evaluate the config file path based on new workspace roots
+        updateConfigPath();
+      }),
+    );
   })().catch((err) => {
+    const diagnosticData = {
+      error: String(err),
+      workspaceFolders: vscode.workspace.workspaceFolders?.map(
+        (f) => f.uri.fsPath,
+      ),
+      extensionVersion: context.extension.packageJSON.version,
+      platform: process.platform,
+      timestamp: new Date().toISOString(),
+    };
     // eslint-disable-next-line no-console
-    console.error("go-on activation error:", err);
+    console.error(
+      "Activation failed:",
+      JSON.stringify(diagnosticData, null, 2),
+    );
+    vscode.window.showErrorMessage(`go-on activation failed: ${err}`);
   });
 }
 

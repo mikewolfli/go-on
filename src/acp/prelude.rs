@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -583,20 +583,14 @@ pub struct RoutingDecision {
 // Utility Functions
 // ============================================================================
 
-/// Get current timestamp in seconds
+/// Get current timestamp in seconds (delegates to `crate::shared::timestamps`).
 pub fn now_ts() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
+    crate::shared::timestamps::now_ts()
 }
 
-/// Get current timestamp in milliseconds
+/// Get current timestamp in milliseconds (delegates to `crate::shared::timestamps`).
 pub fn now_ts_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
+    crate::shared::timestamps::now_ts_ms()
 }
 
 /// Calculate checkpoint message characters

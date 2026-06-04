@@ -4,8 +4,6 @@
 //! consciousness metrics, and code quality scans into a comprehensive
 //! self-improvement report.
 
-#![allow(dead_code)] // Reserved—wired via evolution loop in production
-
 use crate::intelligence::code_quality::CodeQualityReport;
 use crate::intelligence::consciousness::ConsciousnessProfile;
 use crate::intelligence::metacognitive::MetacognitiveProfile;

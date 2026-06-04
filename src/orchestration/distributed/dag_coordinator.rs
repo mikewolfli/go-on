@@ -560,15 +560,19 @@ impl DistributedDAGCoordinator {
         let mut states = self.dag_states.write().await;
         let state = states
             .get_mut(dag_id)
-            .ok_or_else(|| DagCoordinatorError::DagNotFound(dag_id.to_string()))?;
+            .ok_or_else(|| DagCoordinatorError::DagNotFound(DagId(dag_id.to_string())))?;
 
         if !state.nodes.contains_key(node_id) {
-            return Err(DagCoordinatorError::NodeNotFound(node_id.to_string()));
+            return Err(DagCoordinatorError::NodeNotFound(NodeId(
+                node_id.to_string(),
+            )));
         }
 
         let node_state = &state.nodes[node_id].state;
         if *node_state != NodeState::Online {
-            return Err(DagCoordinatorError::NodeOffline(node_id.to_string()));
+            return Err(DagCoordinatorError::NodeOffline(NodeId(
+                node_id.to_string(),
+            )));
         }
 
         if let Some(assign) = state
@@ -577,14 +581,14 @@ impl DistributedDAGCoordinator {
             .iter_mut()
             .find(|a| a.dag_node_id == dag_node_id)
         {
-            assign.assigned_node_id = Some(node_id.to_string());
+            assign.assigned_node_id = Some(NodeId(node_id.to_string()));
             debug!(dag = %dag_id, dag_node = %dag_node_id, node = %node_id, "Node assigned");
         }
 
         // Append to Raft log
         self.append_raft_log(RaftCommand::AssignNode {
             dag_node_id: dag_node_id.to_string(),
-            node_id: node_id.to_string(),
+            node_id: NodeId(node_id.to_string()),
         })
         .await;
 
@@ -636,7 +640,7 @@ impl DistributedDAGCoordinator {
         }
 
         self.append_raft_log(RaftCommand::Heartbeat {
-            node_id: node_id.to_string(),
+            node_id: node_id.clone(),
         })
         .await;
         Ok(())
@@ -709,15 +713,19 @@ impl DistributedDAGCoordinator {
         let mut states = self.dag_states.write().await;
         let state = states
             .get_mut(dag_id)
-            .ok_or_else(|| DagCoordinatorError::DagNotFound(dag_id.to_string()))?;
+            .ok_or_else(|| DagCoordinatorError::DagNotFound(DagId(dag_id.to_string())))?;
 
         let to_node_str = to_node.to_string();
         if !state.nodes.contains_key(&to_node_str) {
-            return Err(DagCoordinatorError::NodeNotFound(to_node.to_string()));
+            return Err(DagCoordinatorError::NodeNotFound(NodeId(
+                to_node.to_string(),
+            )));
         }
 
         if state.nodes[&to_node_str].state != NodeState::Online {
-            return Err(DagCoordinatorError::NodeOffline(to_node.to_string()));
+            return Err(DagCoordinatorError::NodeOffline(NodeId(
+                to_node.to_string(),
+            )));
         }
 
         if let Some(assign) = state
@@ -726,7 +734,7 @@ impl DistributedDAGCoordinator {
             .iter_mut()
             .find(|a| a.dag_node_id == dag_node_id)
         {
-            assign.assigned_node_id = Some(to_node.to_string());
+            assign.assigned_node_id = Some(NodeId(to_node.to_string()));
             assign.completed = false;
             assign.output = None;
             assign.error = None;
@@ -739,8 +747,8 @@ impl DistributedDAGCoordinator {
 
         self.append_raft_log(RaftCommand::ReassignNode {
             dag_node_id: dag_node_id.to_string(),
-            from: from_node.to_string(),
-            to: to_node.to_string(),
+            from: NodeId(from_node.to_string()),
+            to: NodeId(to_node.to_string()),
         })
         .await;
 
@@ -752,7 +760,7 @@ impl DistributedDAGCoordinator {
         let states = self.dag_states.read().await;
         let state = states
             .get(dag_id)
-            .ok_or_else(|| DagCoordinatorError::DagNotFound(dag_id.to_string()))?;
+            .ok_or_else(|| DagCoordinatorError::DagNotFound(DagId(dag_id.to_string())))?;
         Ok(state.plan.status.clone())
     }
 
@@ -766,7 +774,7 @@ impl DistributedDAGCoordinator {
         let states = self.dag_states.read().await;
         let state = states
             .get(dag_id)
-            .ok_or_else(|| DagCoordinatorError::DagNotFound(dag_id.to_string()))?;
+            .ok_or_else(|| DagCoordinatorError::DagNotFound(DagId(dag_id.to_string())))?;
         Ok(state.nodes.values().cloned().collect())
     }
 
@@ -818,7 +826,8 @@ impl DistributedDAGCoordinator {
                         drop(states);
 
                         for (dag_node_id, from_node) in reassignments {
-                            let nodes = coord.get_nodes(&dag_id).await.unwrap_or_default();
+                            let nodes =
+                                coord.get_nodes(dag_id.0.as_str()).await.unwrap_or_default();
                             let healthy: Vec<&NodeInfo> = nodes
                                 .iter()
                                 .filter(|n| n.state == NodeState::Online && n.node_id != from_node)
@@ -827,10 +836,10 @@ impl DistributedDAGCoordinator {
                             if let Some(target) = healthy.first() {
                                 let _ = coord
                                     .reassign_node(
-                                        &dag_id,
+                                        dag_id.0.as_str(),
                                         &dag_node_id,
-                                        &from_node,
-                                        &target.node_id,
+                                        &from_node.to_string(),
+                                        &target.node_id.to_string(),
                                     )
                                     .await;
                             }

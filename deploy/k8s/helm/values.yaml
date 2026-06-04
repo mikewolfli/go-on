@@ -1,0 +1,109 @@
+# -- Number of replicas to run
+replicaCount: 2
+
+# -- Image settings
+image:
+  repository: go-on-server
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# -- Name overrides
+nameOverride: ""
+fullnameOverride: ""
+
+# -- Service account configuration
+serviceAccount:
+  create: true
+  name: go-on
+  annotations: {}
+
+# -- Pod security context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  fsGroup: 1001
+
+# -- Container security context
+containerSecurityContext: {}
+
+# -- Service configuration
+service:
+  type: ClusterIP
+  port: 8090
+  targetPort: http
+  protocol: TCP
+  name: http
+
+# -- Ingress configuration
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  host: go-on.example.com
+  path: /
+  pathType: Prefix
+  tls: []
+
+# -- Resource requests and limits
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: 2000m
+    memory: 2Gi
+
+# -- Persistent volume
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 1Gi
+
+# -- Autoscaling
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+
+# -- Probes
+probes:
+  startup:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 30
+  liveness:
+    initialDelaySeconds: 10
+    periodSeconds: 30
+    timeoutSeconds: 5
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+
+# -- Prometheus scraping annotations
+prometheus:
+  scrape: true
+  port: "8090"
+  path: "/metrics/prometheus"
+
+# -- Environment variables from secrets
+envFrom:
+  - secretRef:
+      name: go-on-secrets
+      optional: true
+
+# -- Config map name to mount
+configMapName: go-on-config
+
+# -- Command arguments
+args:
+  - -c
+  - /etc/go-on/config.toml
+  - --mode
+  - acp_http
+  - --bind
+  - 0.0.0.0:8090

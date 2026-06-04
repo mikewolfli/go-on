@@ -24,8 +24,9 @@
 //!   `MetricsRecorder` values into `RuntimeMetrics` for unified Prometheus
 //!   exposure.
 
+use crate::acp::prelude::RuntimeMetrics;
 use crate::acp::server::AcpServer;
-use crate::observability::telemetry_enhanced::MetricsRecorder;
+use crate::observability::telemetry_enhanced::{global_metrics_recorder, MetricsRecorder};
 use std::sync::LazyLock;
 use std::sync::Mutex;
 
@@ -220,6 +221,10 @@ fn estimate_p95_latency(buckets: &[u64; 10]) -> f64 {
 
 /// Build a Prometheus-formatted metrics string from the server status.
 pub fn build_prometheus_metrics(server: &AcpServer) -> String {
+    // Bridge OTLP MetricsRecorder values into the Prometheus RuntimeMetrics
+    // on every scrape, so that manual metric recordings are visible via /metrics.
+    bridge_metrics_recorder(&server.observability.metrics, global_metrics_recorder());
+
     let status = server.get_status();
     let m = &status.metrics;
     let lifecycle = &status.lifecycle;
@@ -375,11 +380,7 @@ pub fn build_prometheus_metrics(server: &AcpServer) -> String {
 /// Call this periodically (e.g. every metrics scrape) to synchronize the
 /// two metric systems. Only writes fields that `MetricsRecorder` tracks
 /// and `RuntimeMetrics` also exposes.
-#[allow(dead_code)]
-pub fn bridge_metrics_recorder(
-    runtime_metrics: &crate::acp::prelude::RuntimeMetrics,
-    recorder: &MetricsRecorder,
-) {
+pub fn bridge_metrics_recorder(runtime_metrics: &RuntimeMetrics, recorder: &MetricsRecorder) {
     let app = recorder.get_metrics();
 
     runtime_metrics.update_snapshot(|snap| {
@@ -406,4 +407,66 @@ pub fn bridge_metrics_recorder(
             snap.memory_usage_bytes = app.memory_usage_bytes;
         }
     });
+}
+
+/// A metrics recorder that bridges the OTLP `MetricsRecorder` path with the
+/// Prometheus `RuntimeMetrics` path.
+///
+/// Wraps a `MetricsRecorder` and provides the same recording API. Call
+/// [`PrometheusMetricsRecorder::bridge_to`] periodically (or on each metrics
+/// scrape) to synchronize recorder values into a `RuntimeMetrics` snapshot
+/// for Prometheus exposure.
+pub struct PrometheusMetricsRecorder {
+    inner: MetricsRecorder,
+}
+
+impl PrometheusMetricsRecorder {
+    /// Create a new `PrometheusMetricsRecorder`.
+    pub fn new() -> Self {
+        Self {
+            inner: MetricsRecorder::new(),
+        }
+    }
+
+    /// Record a request outcome.
+    pub fn record_request(&self, success: bool, latency_ms: f64) {
+        self.inner.record_request(success, latency_ms);
+    }
+
+    /// Record a cache hit.
+    pub fn record_cache_hit(&self) {
+        self.inner.record_cache_hit();
+    }
+
+    /// Record a cache miss.
+    pub fn record_cache_miss(&self) {
+        self.inner.record_cache_miss();
+    }
+
+    /// Update the active connection count.
+    pub fn update_active_connections(&self, count: u64) {
+        self.inner.update_active_connections(count);
+    }
+
+    /// Update the memory usage in bytes.
+    pub fn update_memory_usage(&self, bytes: u64) {
+        self.inner.update_memory_usage(bytes);
+    }
+
+    /// Get the inner `AppMetrics` snapshot.
+    pub fn get_metrics(&self) -> crate::observability::telemetry_enhanced::AppMetrics {
+        self.inner.get_metrics()
+    }
+
+    /// Bridge the values recorded in this recorder into the given
+    /// `RuntimeMetrics` for Prometheus exposure.
+    pub fn bridge_to(&self, runtime_metrics: &RuntimeMetrics) {
+        bridge_metrics_recorder(runtime_metrics, &self.inner);
+    }
+}
+
+impl Default for PrometheusMetricsRecorder {
+    fn default() -> Self {
+        Self::new()
+    }
 }

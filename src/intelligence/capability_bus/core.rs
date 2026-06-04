@@ -62,7 +62,7 @@ use crate::intelligence::reputation::ReputationStore;
 use crate::intelligence::self_model::SelfModelCore;
 use crate::intelligence::world_model::WorldModel;
 use crate::intelligence::{lock_guard, read_guard, write_guard};
-use crate::observability::provenance::{make_entry, ProvenanceLedger};
+use crate::observability::provenance::ProvenanceLedger;
 #[cfg(any(
     feature = "sub-bus-tool",
     feature = "profile-simple-server",
@@ -73,6 +73,7 @@ use crate::orchestration::task_schema::SchemaRegistry;
 use crate::orchestration::workflow_optimizer::OptimizerRegistry;
 use crate::orchestration::workflow_registry::WorkflowRegistry;
 use crate::protocol::transport::MultiChannelTransport;
+use crate::shared::provenance_helpers::make_entry;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -713,10 +714,10 @@ impl CapabilityBus {
             distributed_memory_bus: DistributedMemoryBus::new(5000),
             max_event_history: 100,
             consciousness: ConsciousnessMetrics::new(Default::default()),
-            // BLUE56-GAP-B02: `MetacognitiveController::with_llm(Default::default(), llm_agent)`
-                        // should be used here when an LLM agent is available at bus construction.
-                        // `with_metacognitive_llm()` builder method also exists for post-hoc injection.
-                        metacognitive: MetacognitiveController::new(Default::default()),
+            // BLUE56-GAP-B02: Uses the global-shared singleton so inner state
+                        // (observations, actions, reports) is shared across the system.
+                        // `with_metacognitive_llm()` builder method sets the per-instance llm_agent.
+                        metacognitive: crate::intelligence::metacognitive::shared_metacognitive_controller(),
             world_model: WorldModel::new(Default::default()),
             self_model: SelfModelCore::new(Default::default()),
             federated_rl: FederatedRL::new(Default::default()),

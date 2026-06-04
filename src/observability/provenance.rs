@@ -3,28 +3,12 @@
 //! Appends an immutable provenance record for every tool call, showing the
 //! data lineage chain: input → tool → output → consumer.
 
-use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-/// A single provenance entry
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProvenanceEntry {
-    pub id: String,
-    pub task_id: String,
-    pub phase: String,
-    pub agent: String,
-    pub tool: String,
-    pub input_digest: String,
-    pub output_digest: String,
-    /// Chain of upstream provenance IDs this output depends on
-    pub upstream_ids: Vec<String>,
-    pub timestamp_ms: u64,
-    /// Optional human- or agent-readable justification for this entry
-    pub rationale: Option<String>,
-    /// Arbitrary metadata associated with this entry
-    pub metadata: serde_json::Value,
-}
+pub use crate::shared::provenance_helpers::{
+    make_entry, make_entry_with_rationale, ProvenanceEntry, ProvenanceEntryBuilder,
+};
 
 /// In-process provenance ledger (append-only, bounded)
 #[derive(Debug, Clone)]
@@ -83,13 +67,7 @@ impl ProvenanceLedger {
     /// Build a digest of the input value (SHA-256 hex).
     /// Uses the `sha2` crate to produce a deterministic cryptographic hash.
     pub fn digest(value: &serde_json::Value) -> String {
-        use sha2::{Digest, Sha256};
-        let s = value.to_string();
-        let hash = Sha256::digest(s.as_bytes());
-        hash.iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<Vec<_>>()
-            .concat()
+        crate::shared::provenance_helpers::digest(value)
     }
 
     pub fn len(&self) -> usize {
@@ -175,6 +153,63 @@ impl ProvenanceLedger {
             .collect()
     }
 
+    /// Record a high-level provenance entry for a chat request execution.
+    ///
+    /// This is the canonical entry point for recording provenance in the
+    /// chat request path. It creates a single `ProvenanceEntry` summarising
+    /// the overall execution outcome of a chat request.
+    ///
+    /// # Arguments
+    ///
+    /// * `task_id`         – Unique trace/request identifier.
+    /// * `task_description`– Natural-language description of the user's request.
+    /// * `agent`           – The agent that handled the request.
+    /// * `success`         – Whether the request completed without error.
+    /// * `duration_ms`     – Total elapsed time for the request in milliseconds.
+    pub async fn record_provenance(
+        &self,
+        task_id: &str,
+        task_description: &str,
+        agent: &str,
+        success: bool,
+        duration_ms: u64,
+    ) -> Result<(), anyhow::Error> {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let entry = ProvenanceEntry {
+            id: format!("prov-{}-{}", task_id, now_ms),
+            task_id: task_id.to_string(),
+            phase: "chat_execution".to_string(),
+            agent: agent.to_string(),
+            tool: "chat".to_string(),
+            input_digest: Self::digest(&serde_json::json!({
+                "description": task_description
+            })),
+            output_digest: Self::digest(&serde_json::json!({
+                "success": success,
+                "duration_ms": duration_ms,
+            })),
+            upstream_ids: Vec::new(),
+            timestamp_ms: now_ms,
+            rationale: Some(format!(
+                "Chat execution by agent '{}': {}",
+                agent,
+                if success { "success" } else { "failed" }
+            )),
+            metadata: serde_json::json!({
+                "success": success,
+                "duration_ms": duration_ms,
+                "task_description": task_description,
+            }),
+        };
+
+        self.append(entry);
+        Ok(())
+    }
+
     /// Clear all entries (for testing / reset).
     pub fn clear(&self) {
         let mut inner = self.inner.lock().unwrap_or_else(|poisoned| {
@@ -185,152 +220,8 @@ impl ProvenanceLedger {
     }
 }
 
-// ── ProvenanceEntryBuilder ──────────────────────────────────────────────────
-
-/// Builder for [`ProvenanceEntry`] that avoids long argument lists.
-///
-/// # Usage
-///
-/// ```ignore
-/// use crate::observability::provenance::ProvenanceEntryBuilder;
-///
-/// let entry = ProvenanceEntryBuilder::new("task-001", "chat", "agent-a", "read_file")
-///     .input(&serde_json::json!({"path": "/foo"}))
-///     .output(&serde_json::json!({"content": "..."}))
-///     .upstream_ids(vec!["prev-id".to_string()])
-///     .build();
-/// ```
-#[allow(dead_code)] // Public API — reserved for adoption over the old positional functions
-pub struct ProvenanceEntryBuilder {
-    task_id: String,
-    phase: String,
-    agent: String,
-    tool: String,
-    input: serde_json::Value,
-    output: serde_json::Value,
-    upstream_ids: Vec<String>,
-    rationale: Option<String>,
-    metadata: serde_json::Value,
-}
-
-#[allow(dead_code)] // Public API — reserved for adoption over the old positional functions
-impl ProvenanceEntryBuilder {
-    /// Start building a provenance entry with the minimum required fields.
-    /// `input` and `output` default to `serde_json::Value::Null`; call
-    /// `.input()` / `.output()` to override.
-    pub fn new(task_id: &str, phase: &str, agent: &str, tool: &str) -> Self {
-        Self {
-            task_id: task_id.to_string(),
-            phase: phase.to_string(),
-            agent: agent.to_string(),
-            tool: tool.to_string(),
-            input: serde_json::Value::Null,
-            output: serde_json::Value::Null,
-            upstream_ids: vec![],
-            rationale: None,
-            metadata: serde_json::Value::Object(Default::default()),
-        }
-    }
-
-    /// Set the input value (used to compute `input_digest`).
-    pub fn input(mut self, value: &serde_json::Value) -> Self {
-        self.input = value.clone();
-        self
-    }
-
-    /// Set the output value (used to compute `output_digest`).
-    pub fn output(mut self, value: &serde_json::Value) -> Self {
-        self.output = value.clone();
-        self
-    }
-
-    /// Set the upstream provenance IDs.
-    pub fn upstream_ids(mut self, ids: Vec<String>) -> Self {
-        self.upstream_ids = ids;
-        self
-    }
-
-    /// Attach an optional rationale string.
-    pub fn rationale(mut self, rationale: &str) -> Self {
-        self.rationale = Some(rationale.to_string());
-        self
-    }
-
-    /// Set arbitrary metadata.
-    pub fn metadata(mut self, meta: serde_json::Value) -> Self {
-        self.metadata = meta;
-        self
-    }
-
-    /// Consume the builder and produce a [`ProvenanceEntry`].
-    pub fn build(self) -> ProvenanceEntry {
-        ProvenanceEntry {
-            id: uuid_v4(),
-            task_id: self.task_id,
-            phase: self.phase,
-            agent: self.agent,
-            tool: self.tool,
-            input_digest: ProvenanceLedger::digest(&self.input),
-            output_digest: ProvenanceLedger::digest(&self.output),
-            upstream_ids: self.upstream_ids,
-            timestamp_ms: now_ms(),
-            rationale: self.rationale,
-            metadata: self.metadata,
-        }
-    }
-}
-
-/// Helper to create a provenance entry.
-///
-/// Prefer [`ProvenanceEntryBuilder`] for new code — it avoids the long
-/// parameter list and makes call sites self-documenting.
-pub fn make_entry(
-    task_id: &str,
-    phase: &str,
-    agent: &str,
-    tool: &str,
-    input: &serde_json::Value,
-    output: &serde_json::Value,
-    upstream_ids: Vec<String>,
-) -> ProvenanceEntry {
-    ProvenanceEntryBuilder::new(task_id, phase, agent, tool)
-        .input(input)
-        .output(output)
-        .upstream_ids(upstream_ids)
-        .build()
-}
-
-/// Helper to create a provenance entry with an optional rationale.
-///
-/// Prefer [`ProvenanceEntryBuilder`] for new code — it avoids the long
-/// parameter list and makes call sites self-documenting.
-#[allow(dead_code, clippy::too_many_arguments)] // Reserved for future wiring — callers will adopt ProvenanceEntryBuilder
-pub fn make_entry_with_rationale(
-    task_id: &str,
-    phase: &str,
-    agent: &str,
-    tool: &str,
-    input: &serde_json::Value,
-    output: &serde_json::Value,
-    upstream_ids: Vec<String>,
-    rationale: Option<String>,
-) -> ProvenanceEntry {
-    let mut builder = ProvenanceEntryBuilder::new(task_id, phase, agent, tool)
-        .input(input)
-        .output(output)
-        .upstream_ids(upstream_ids);
-    if let Some(r) = rationale {
-        builder = builder.rationale(&r);
-    }
-    builder.build()
-}
-
-fn uuid_v4() -> String {
-    uuid::Uuid::new_v4().to_string()
-}
-
 fn now_ms() -> u64 {
-    crate::acp::prelude::now_ts_ms() as u64
+    crate::shared::timestamps::now_ts_ms() as u64
 }
 
 #[cfg(test)]

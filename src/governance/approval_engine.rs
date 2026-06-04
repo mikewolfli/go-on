@@ -203,11 +203,60 @@ impl EscalationChain {
 }
 
 // ---------------------------------------------------------------------------
-// ApprovalEngine
+// ApproverResolver trait + ApproverRegistry
 // ---------------------------------------------------------------------------
 
-/// Type alias for the complex approver ID resolver closure.
-type ApproverIdResolver = Box<dyn Fn(&str) -> Option<String> + Send + Sync>;
+/// Trait for resolving approver role names to approver identities.
+///
+/// Implementations can look up approver IDs from any source:
+/// a directory service, a config file, or static mappings.
+pub trait ApproverResolver: Send + Sync {
+    /// Resolve an approver role (e.g. "manager", "director") to an approver
+    /// identity string (e.g. "alice@example.com"). Return `None` if unknown.
+    fn resolve_approver_id(&self, request: &ApprovalRequest) -> Option<String>;
+}
+
+/// A registry of multiple [`ApproverResolver`] instances.
+///
+/// When asked to resolve a role, each registered resolver is tried in
+/// registration order until one returns `Some(...)`.
+pub struct ApproverRegistry {
+    resolvers: Vec<Box<dyn ApproverResolver>>,
+}
+
+impl ApproverRegistry {
+    /// Create an empty registry.
+    pub fn new() -> Self {
+        Self {
+            resolvers: Vec::new(),
+        }
+    }
+
+    /// Register a new resolver.
+    pub fn register(&mut self, resolver: Box<dyn ApproverResolver>) {
+        self.resolvers.push(resolver);
+    }
+
+    /// Try each resolver in order, returning the first non-`None` result.
+    pub fn resolve(&self, request: &ApprovalRequest) -> Option<String> {
+        for resolver in &self.resolvers {
+            if let Some(id) = resolver.resolve_approver_id(request) {
+                return Some(id);
+            }
+        }
+        None
+    }
+}
+
+impl Default for ApproverRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ApprovalEngine
+// ---------------------------------------------------------------------------
 
 pub struct ApprovalEngine {
     queue: Vec<ApprovalRequest>,
@@ -216,9 +265,11 @@ pub struct ApprovalEngine {
     pua_engine: Arc<Mutex<PuaRuleEngine>>,
     /// Optional preference learner that records decisions for auto-approval analysis.
     learner: Option<Arc<StdRwLock<ApprovalPreferenceLearner>>>,
-    /// Optional resolver for mapping approver roles to approver identities.
+    /// Registry of approver ID resolvers.
     /// Called when building escalation chains to fill `approver_id`.
-    approver_id_resolver: Option<ApproverIdResolver>,
+    approver_registry: ApproverRegistry,
+    /// Optional SQLite database path for persistent approval queue.
+    db_path: Option<String>,
 }
 
 impl std::fmt::Debug for ApprovalEngine {
@@ -229,7 +280,8 @@ impl std::fmt::Debug for ApprovalEngine {
             .field("timeout_policy", &self.timeout_policy)
             .field("pua_engine", &self.pua_engine)
             .field("learner", &self.learner)
-            .field("approver_id_resolver", &"<closure>")
+            .field("approver_registry", &"<ApproverRegistry>")
+            .field("db_path", &self.db_path)
             .finish()
     }
 }
@@ -237,14 +289,132 @@ impl std::fmt::Debug for ApprovalEngine {
 impl ApprovalEngine {
     /// Create a new ApprovalEngine with the given PUA rule engine and timeout policy.
     pub fn new(pua_engine: Arc<Mutex<PuaRuleEngine>>, timeout_policy: TimeoutPolicy) -> Self {
-        Self {
+        let engine = Self {
             queue: Vec::new(),
             escalation_chains: HashMap::new(),
             timeout_policy,
             pua_engine,
             learner: None,
-            approver_id_resolver: None,
+            approver_registry: ApproverRegistry::new(),
+            db_path: None,
+        };
+        engine
+    }
+
+    /// Set the SQLite database path for persistent approval queue storage.
+    /// When set, the engine will create the `approval_queue` table on init
+    /// and reload any pending approvals from the database.
+    pub fn with_db_path(mut self, db_path: String) -> Self {
+        self.db_path = Some(db_path.clone());
+        #[cfg(feature = "backend-sqlite")]
+        {
+            if let Err(e) = Self::init_sqlite(&db_path) {
+                tracing::warn!(error = %e, db_path = %db_path, "Failed to initialize SQLite approval queue");
+            } else if let Ok(requests) = Self::load_pending_from_sqlite(&db_path) {
+                tracing::info!(
+                    count = requests.len(),
+                    "Reloaded pending approvals from SQLite"
+                );
+                self.queue = requests;
+            }
         }
+        self
+    }
+
+    // ── SQLite helpers (gated behind backend-sqlite) ────────────────────────
+
+    /// Create the `approval_queue` table if it doesn't exist.
+    #[cfg(feature = "backend-sqlite")]
+    fn init_sqlite(db_path: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let conn = rusqlite::Connection::open(db_path)?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS approval_queue (
+                id TEXT PRIMARY KEY,
+                data TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending'
+            );",
+        )?;
+        Ok(())
+    }
+
+    /// Load all pending (non-finalized) approval requests from SQLite.
+    #[cfg(feature = "backend-sqlite")]
+    fn load_pending_from_sqlite(
+        db_path: &str,
+    ) -> Result<Vec<ApprovalRequest>, Box<dyn std::error::Error + Send + Sync>> {
+        let conn = rusqlite::Connection::open(db_path)?;
+        let mut stmt = conn.prepare("SELECT data FROM approval_queue WHERE status = 'pending'")?;
+        let rows = stmt.query_map([], |row| {
+            let data: String = row.get(0)?;
+            Ok(data)
+        })?;
+
+        let mut requests = Vec::new();
+        for row in rows {
+            let data = row?;
+            if let Ok(req) = serde_json::from_str::<ApprovalRequest>(&data) {
+                requests.push(req);
+            }
+        }
+        Ok(requests)
+    }
+
+    /// Insert or update an approval request in SQLite.
+    #[cfg(feature = "backend-sqlite")]
+    fn upsert_sqlite(
+        db_path: &str,
+        request: &ApprovalRequest,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let conn = rusqlite::Connection::open(db_path)?;
+        let data = serde_json::to_string(request)?;
+        let status = match &request.status {
+            ApprovalStatus::Pending => "pending",
+            ApprovalStatus::Approved { .. } => "approved",
+            ApprovalStatus::Rejected { .. } => "rejected",
+            ApprovalStatus::EscalatedToManager { .. } => "escalated",
+            ApprovalStatus::AutoDenied { .. } => "auto_denied",
+        };
+        conn.execute(
+            "INSERT OR REPLACE INTO approval_queue (id, data, status) VALUES (?1, ?2, ?3)",
+            rusqlite::params![request.id, data, status],
+        )?;
+        Ok(())
+    }
+
+    /// Update only the status column in SQLite (used on approve/reject).
+    #[cfg(feature = "backend-sqlite")]
+    fn update_status_sqlite(
+        db_path: &str,
+        request: &ApprovalRequest,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let conn = rusqlite::Connection::open(db_path)?;
+        let data = serde_json::to_string(request)?;
+        let status = match &request.status {
+            ApprovalStatus::Pending => "pending",
+            ApprovalStatus::Approved { .. } => "approved",
+            ApprovalStatus::Rejected { .. } => "rejected",
+            ApprovalStatus::EscalatedToManager { .. } => "escalated",
+            ApprovalStatus::AutoDenied { .. } => "auto_denied",
+        };
+        conn.execute(
+            "UPDATE approval_queue SET data = ?1, status = ?2 WHERE id = ?3",
+            rusqlite::params![data, status, request.id],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a finalized request from SQLite.
+    #[cfg(feature = "backend-sqlite")]
+    fn delete_from_sqlite(
+        db_path: &str,
+        id: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let conn = rusqlite::Connection::open(db_path)?;
+        conn.execute(
+            "DELETE FROM approval_queue WHERE id = ?1",
+            rusqlite::params![id],
+        )?;
+        Ok(())
     }
 
     /// Attach an approval preference learner to record decisions.
@@ -258,21 +428,24 @@ impl ApprovalEngine {
         self.learner = Some(learner);
     }
 
-    /// Set an approver ID resolver to fill `approver_id` in escalation steps.
+    /// Register an approver ID resolver.
     ///
-    /// The resolver receives an `approver_role` string (e.g. "manager", "director")
-    /// and should return the corresponding approver identity, or `None` if unknown.
+    /// The resolver receives an `ApprovalRequest` reference and should return
+    /// the corresponding approver identity, or `None` if unknown.
     ///
     /// Example:
     /// ```ignore
-    /// engine.with_approver_resolver(|role| match role {
-    ///     "manager" => Some("alice@example.com".into()),
-    ///     "director" => Some("bob@example.com".into()),
-    ///     _ => None,
-    /// });
+    /// use std::collections::HashMap;
+    /// struct MyResolver { mapping: HashMap<String, String> }
+    /// impl ApproverResolver for MyResolver {
+    ///     fn resolve_approver_id(&self, request: &ApprovalRequest) -> Option<String> {
+    ///         self.mapping.get(&request.user).cloned()
+    ///     }
+    /// }
+    /// engine.register_approver_resolver(Box::new(MyResolver { mapping: HashMap::new() }));
     /// ```
-    pub fn with_approver_resolver(&mut self, resolver: ApproverIdResolver) {
-        self.approver_id_resolver = Some(resolver);
+    pub fn register_approver_resolver(&mut self, resolver: Box<dyn ApproverResolver>) {
+        self.approver_registry.register(resolver);
     }
 
     // ── Submission ──────────────────────────────────────────────────────────
@@ -283,30 +456,34 @@ impl ApprovalEngine {
         debug!(%id, action = %request.action, "Approval request submitted");
 
         // Build a default escalation chain for this request.
-        // Use the approver ID resolver (if configured) to fill `approver_id`.
-        let resolve = |role: &str| -> Option<String> {
-            self.approver_id_resolver
-                .as_ref()
-                .and_then(|resolver| resolver(role))
-        };
+        // Use the approver ID registry to fill `approver_id`.
 
         let steps = vec![
             EscalationStep {
                 level: 1,
                 approver_role: "manager".to_string(),
-                approver_id: resolve("manager"),
+                approver_id: self.approver_registry.resolve(&request),
                 comment: None,
             },
             EscalationStep {
                 level: 2,
                 approver_role: "director".to_string(),
-                approver_id: resolve("director"),
+                approver_id: self.approver_registry.resolve(&request),
                 comment: None,
             },
         ];
         self.escalation_chains
             .insert(id.clone(), EscalationChain::new(steps));
-        self.queue.push(request);
+        self.queue.push(request.clone());
+
+        // Persist to SQLite if configured.
+        if let Some(ref db_path) = self.db_path {
+            #[cfg(feature = "backend-sqlite")]
+            if let Err(e) = Self::upsert_sqlite(db_path, &request) {
+                tracing::warn!(error = %e, id = %id, "Failed to persist approval request to SQLite");
+            }
+        }
+
         id
     }
 
@@ -345,6 +522,15 @@ impl ApprovalEngine {
         info!(%id, approver = %approver, "Approval request approved");
         self.feedback_to_pua(&status);
         self.feedback_to_learner(&status);
+
+        // Update SQLite if configured.
+        if let Some(ref db_path) = self.db_path {
+            #[cfg(feature = "backend-sqlite")]
+            if let Err(e) = Self::update_status_sqlite(db_path, &status) {
+                tracing::warn!(error = %e, id = %id, "Failed to update approval in SQLite");
+            }
+        }
+
         Ok(())
     }
 
@@ -376,6 +562,15 @@ impl ApprovalEngine {
         warn!(%id, approver = %approver, reason = %reason, "Approval request rejected");
         self.feedback_to_pua(&request_clone);
         self.feedback_to_learner(&request_clone);
+
+        // Update SQLite if configured.
+        if let Some(ref db_path) = self.db_path {
+            #[cfg(feature = "backend-sqlite")]
+            if let Err(e) = Self::update_status_sqlite(db_path, &request_clone) {
+                tracing::warn!(error = %e, id = %id, "Failed to update rejection in SQLite");
+            }
+        }
+
         Ok(())
     }
 
@@ -463,11 +658,23 @@ impl ApprovalEngine {
             }
         }
 
-        // Apply collected updates and send feedback
+        // Apply collected updates, send feedback, and persist to SQLite
         for (idx, updated_request) in &actions {
             self.queue[*idx].status = updated_request.status.clone();
             self.queue[*idx].escalated_from = updated_request.escalated_from.clone();
             self.feedback_to_pua(updated_request);
+
+            // Persist status change to SQLite if configured.
+            if let Some(ref db_path) = self.db_path {
+                #[cfg(feature = "backend-sqlite")]
+                if let Err(e) = Self::update_status_sqlite(db_path, updated_request) {
+                    tracing::warn!(
+                        error = %e,
+                        id = %updated_request.id,
+                        "Failed to persist timeout status to SQLite"
+                    );
+                }
+            }
         }
 
         changed
@@ -501,6 +708,12 @@ impl ApprovalEngine {
     /// Remove finalized requests older than the specified duration.
     pub fn purge_old(&mut self, max_age: Duration) {
         let cutoff = current_timestamp_ms().saturating_sub(max_age.as_millis() as u64);
+        let old_ids: Vec<String> = self
+            .queue
+            .iter()
+            .filter(|r| r.created_at_ms < cutoff && r.status.is_finalized())
+            .map(|r| r.id.clone())
+            .collect();
         self.queue.retain(|r| {
             if r.created_at_ms < cutoff && r.status.is_finalized() {
                 self.escalation_chains.remove(&r.id);
@@ -509,6 +722,16 @@ impl ApprovalEngine {
                 true
             }
         });
+
+        // Remove from SQLite if configured.
+        if let Some(ref db_path) = self.db_path {
+            for id in &old_ids {
+                #[cfg(feature = "backend-sqlite")]
+                if let Err(e) = Self::delete_from_sqlite(db_path, id) {
+                    tracing::warn!(error = %e, id = %id, "Failed to remove purged approval from SQLite");
+                }
+            }
+        }
     }
 
     // ── Feedback ─────────────────────────────────────────────────────────────

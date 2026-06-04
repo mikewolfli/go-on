@@ -394,7 +394,7 @@ pub struct PolicyBundle {
     pub max_autonomy: String,      // "ask", "edit", "agent", "full_auto"
     pub require_approval_for_write: bool,
     pub enable_code_execution: bool,
-    pub sandbox_level: String, // "none", "basic", "strict"
+    pub sandbox_level: SandboxLevel,
 }
 
 impl PolicyBundle {
@@ -405,7 +405,7 @@ impl PolicyBundle {
             max_autonomy: "edit".to_string(),
             require_approval_for_write: false,
             enable_code_execution: true,
-            sandbox_level: "none".to_string(),
+            sandbox_level: SandboxLevel::None,
         }
     }
 
@@ -416,7 +416,7 @@ impl PolicyBundle {
             max_autonomy: "agent".to_string(),
             require_approval_for_write: true,
             enable_code_execution: true,
-            sandbox_level: "basic".to_string(),
+            sandbox_level: SandboxLevel::Basic,
         }
     }
 
@@ -427,7 +427,7 @@ impl PolicyBundle {
             max_autonomy: "edit".to_string(),
             require_approval_for_write: true,
             enable_code_execution: false,
-            sandbox_level: "strict".to_string(),
+            sandbox_level: SandboxLevel::Strict,
         }
     }
 
@@ -438,7 +438,7 @@ impl PolicyBundle {
             max_autonomy: "agent".to_string(),
             require_approval_for_write: true,
             enable_code_execution: false,
-            sandbox_level: "isolated".to_string(),
+            sandbox_level: SandboxLevel::Isolated,
         }
     }
 }
@@ -650,57 +650,104 @@ impl IdempotencyCache {
     }
 }
 
+/// Sandbox level for governance policy enforcement.
+///
+/// Higher levels represent stricter isolation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SandboxLevel {
+    /// No sandbox — all operations allowed.
+    None,
+    /// Basic sandbox — advisory warnings, some restrictions.
+    Basic,
+    /// Strict sandbox — enforced restrictions, read-only for dangerous ops.
+    Strict,
+    /// Isolated sandbox — maximum security, data exfiltration prevented.
+    Isolated,
+}
+
+impl std::fmt::Display for SandboxLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SandboxLevel::None => write!(f, "none"),
+            SandboxLevel::Basic => write!(f, "basic"),
+            SandboxLevel::Strict => write!(f, "strict"),
+            SandboxLevel::Isolated => write!(f, "isolated"),
+        }
+    }
+}
+
+impl SandboxLevel {
+    /// Returns the numeric index of the sandbox level.
+    /// Higher values represent stricter isolation.
+    pub fn level_index(&self) -> u8 {
+        match self {
+            SandboxLevel::None => 0,
+            SandboxLevel::Basic => 1,
+            SandboxLevel::Strict => 2,
+            SandboxLevel::Isolated => 3,
+        }
+    }
+}
+
 pub struct SandboxPolicy;
 impl SandboxPolicy {
     /// Check if read_file operations are allowed at this security level
-    ///
-    /// Security levels: "none" (unrestricted) -> "basic" (limited) -> "strict" (standard) -> "isolated" (production)
-    pub fn can_execute_read_file(level: &str) -> bool {
+    pub fn can_execute_read_file(level: SandboxLevel) -> bool {
         match level {
-            "none" => true,     // Unrestricted: allow all read operations
-            "basic" => true,    // Basic: allow read (safe, read-only operation)
-            "strict" => true,   // Strict: still allow reads (non-destructive)
-            "isolated" => true, // Isolated: allow reads (safe, read-only)
-            _ => false,         // Unknown level: deny by default (fail-safe)
+            SandboxLevel::None => true,
+            SandboxLevel::Basic => true,
+            SandboxLevel::Strict => true,
+            SandboxLevel::Isolated => true,
         }
     }
 
     /// Check if file search/pattern matching operations are allowed at this security level
     ///
-    /// Search is a read-only operation, safe across all levels
-    pub fn can_execute_search(level: &str) -> bool {
+    /// Search is a read-only operation, safe across most levels
+    pub fn can_execute_search(level: SandboxLevel) -> bool {
         match level {
-            "none" => true,     // Unrestricted: allow all searches
-            "basic" => true,    // Basic: allow search (read-only, safe operation)
-            "strict" => true,   // Strict: allow search (read-only, non-destructive)
-            "isolated" => true, // Isolated: allow search (read-only, non-destructive)
-            _ => false,         // Unknown level: deny by default
+            SandboxLevel::None => true,
+            SandboxLevel::Basic => true,
+            SandboxLevel::Strict => true,
+            SandboxLevel::Isolated => true,
         }
     }
 
     /// Check if write/modification/file-creation operations are allowed
     ///
     /// Write operations are potentially dangerous and scope-limited by level
-    pub fn can_execute_write(level: &str) -> bool {
+    pub fn can_execute_write(level: SandboxLevel) -> bool {
         match level {
-            "none" => true,      // Unrestricted: allow all writes
-            "basic" => true,     // Basic: allow writes (but with audit/approval gates)
-            "strict" => false,   // Strict: deny writes (read-only enforcement)
-            "isolated" => false, // Isolated: deny writes (read-only enforcement, prod hardened)
-            _ => false,          // Unknown level: deny by default (fail-safe)
+            SandboxLevel::None => true,
+            SandboxLevel::Basic => true,
+            SandboxLevel::Strict => false,
+            SandboxLevel::Isolated => false,
         }
     }
 
     /// Check if shell/command/code execution is allowed at this security level
     ///
     /// Shell execution is most dangerous and only allowed in unrestricted mode
-    pub fn can_execute_shell(level: &str) -> bool {
+    pub fn can_execute_shell(level: SandboxLevel) -> bool {
         match level {
-            "none" => true,      // Unrestricted: allow shell/code execution
-            "basic" => false,    // Basic: deny shell (too dangerous, use restricted APIs)
-            "strict" => false,   // Strict: deny shell execution (locked down)
-            "isolated" => false, // Isolated: deny shell execution (locked down, production)
-            _ => false,          // Unknown level: deny by default (fail-safe)
+            SandboxLevel::None => true,
+            SandboxLevel::Basic => false,
+            SandboxLevel::Strict => false,
+            SandboxLevel::Isolated => false,
+        }
+    }
+
+    /// Check whether a given operation is allowed at the given sandbox level,
+    /// delegating to the specific `can_execute_*` method based on the operation name.
+    pub fn check(level: SandboxLevel, operation: &str) -> bool {
+        match operation {
+            "read" | "read_file" => Self::can_execute_read_file(level),
+            "search" | "grep" | "find_path" => Self::can_execute_search(level),
+            "write" | "write_file" | "apply_patch" | "create_directory" => {
+                Self::can_execute_write(level)
+            }
+            "shell" | "execute_command" | "terminal" | "bash" => Self::can_execute_shell(level),
+            _ => false,
         }
     }
 }
@@ -718,7 +765,7 @@ pub struct HardeningDecision {
     pub allowed: bool,
     pub reason: String,
     pub policy_name: String,
-    pub sandbox_level: String,
+    pub sandbox_level: SandboxLevel,
 }
 
 /// Resolve policy bundle from deployment target.
@@ -734,10 +781,10 @@ pub fn policy_bundle_for_target(target: Option<&str>) -> PolicyBundle {
 /// Enforce sandbox policy on a concrete action.
 pub fn enforce_action(policy: &PolicyBundle, action: GovernanceAction) -> HardeningDecision {
     let allowed = match action {
-        GovernanceAction::Read => SandboxPolicy::can_execute_read_file(&policy.sandbox_level),
-        GovernanceAction::Search => SandboxPolicy::can_execute_search(&policy.sandbox_level),
-        GovernanceAction::Write => SandboxPolicy::can_execute_write(&policy.sandbox_level),
-        GovernanceAction::Shell => SandboxPolicy::can_execute_shell(&policy.sandbox_level),
+        GovernanceAction::Read => SandboxPolicy::can_execute_read_file(policy.sandbox_level),
+        GovernanceAction::Search => SandboxPolicy::can_execute_search(policy.sandbox_level),
+        GovernanceAction::Write => SandboxPolicy::can_execute_write(policy.sandbox_level),
+        GovernanceAction::Shell => SandboxPolicy::can_execute_shell(policy.sandbox_level),
     };
 
     let action_label = match action {
@@ -758,7 +805,7 @@ pub fn enforce_action(policy: &PolicyBundle, action: GovernanceAction) -> Harden
             )
         },
         policy_name: policy.name.clone(),
-        sandbox_level: policy.sandbox_level.clone(),
+        sandbox_level: policy.sandbox_level,
     }
 }
 
@@ -787,10 +834,13 @@ mod tests {
 
     #[test]
     fn policy_bundle_for_target_maps_ci_and_managed() {
-        assert_eq!(policy_bundle_for_target(Some("ci")).sandbox_level, "basic");
+        assert_eq!(
+            policy_bundle_for_target(Some("ci")).sandbox_level,
+            SandboxLevel::Basic
+        );
         assert_eq!(
             policy_bundle_for_target(Some("managed-service")).sandbox_level,
-            "strict"
+            SandboxLevel::Strict
         );
     }
 

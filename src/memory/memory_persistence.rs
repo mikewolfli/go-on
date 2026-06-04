@@ -1,7 +1,7 @@
 //! GAP-B52-11: Memory Persistence with Hot/Warm/Cold Tiering
 //!
 //! Implements a three-tier memory persistence system:
-//! - **Hot (L1)**: In-memory LRU cache (max 2048 entries, 5-minute TTL)
+//! - **Hot (L1)**: In-memory LRU cache (max 2048 entries, 30-minute TTL)
 //! - **Warm (L2)**: SQLite-backed vector store (30-day retention)
 //! - **Cold (L3)**: gzip-compressed NDJSON files on disk for long-term archival
 //!
@@ -24,7 +24,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// The memory tier an entry resides in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MemoryTier {
-    /// L1: In-memory LRU cache. 2048 max entries, 5-minute TTL.
+    /// L1: In-memory LRU cache. 2048 max entries, 30-minute TTL (configurable).
     Hot,
     /// L2: SQLite vector store with 30-day retention.
     Warm,
@@ -133,7 +133,7 @@ impl Default for MemoryTieringPolicy {
         Self {
             hot_threshold: 0.3,
             warm_threshold: 0.6,
-            hot_ttl_secs: 300,        // 5 minutes
+            hot_ttl_secs: 1800,       // 30 minutes — short-term "cognitive" memory
             warm_ttl_secs: 2_592_000, // 30 days
             hot_max_entries: 2048,
             warm_max_entries: 100_000,
@@ -1227,7 +1227,7 @@ mod tests {
     fn test_memory_tiering_policy_defaults() {
         let policy = MemoryTieringPolicy::default();
         assert_eq!(policy.hot_max_entries, 2048);
-        assert_eq!(policy.hot_ttl_secs, 300);
+        assert_eq!(policy.hot_ttl_secs, 1800);
         assert_eq!(policy.warm_ttl_secs, 2_592_000);
     }
 

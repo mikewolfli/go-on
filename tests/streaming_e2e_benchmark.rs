@@ -18,35 +18,12 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use fs2::FileExt;
 use serde_json::{json, Value};
 
-// ---------------------------------------------------------------------------
-// Cross-process file lock
-// ---------------------------------------------------------------------------
+pub mod common;
+use common::CrossProcessLock;
 
-struct CrossProcessLock {
-    _file: std::fs::File,
-}
-
-impl CrossProcessLock {
-    fn lock(path: &Path) -> Self {
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .read(true)
-            .write(true)
-            .open(path)
-            .expect("failed to open/create cross-process lock file");
-        file.lock_exclusive()
-            .expect("failed to acquire cross-process lock");
-        Self { _file: file }
-    }
-}
-
-fn cross_process_lock_path() -> PathBuf {
-    std::env::temp_dir().join(".go-on-streaming-bench.lock")
-}
+const LOCK_NAME: &str = "streaming-bench";
 
 static BENCH_SUITE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -80,7 +57,7 @@ impl BenchHarness {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        let _cross_process_lock = CrossProcessLock::lock(&cross_process_lock_path());
+        let _cross_process_lock = CrossProcessLock::new(LOCK_NAME, 60);
 
         let mut child = Command::new(binary_path())
             .stdin(Stdio::piped())

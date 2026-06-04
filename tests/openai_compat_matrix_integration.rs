@@ -4,40 +4,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use fs2::FileExt;
 use reqwest::header::CONTENT_TYPE;
 use serde_json::{json, Value};
 use serial_test::serial;
 use tempfile::tempdir;
 
-// ---------------------------------------------------------------------------
-// Cross-process file lock — serialises go-on child-process creation across
-// all test binaries so that integration tests cannot stack concurrent child
-// processes that contend for CPU and ports.
-// ---------------------------------------------------------------------------
+pub mod common;
+use common::CrossProcessLock;
 
-struct CrossProcessLock {
-    _file: std::fs::File,
-}
-
-impl CrossProcessLock {
-    fn lock(path: &Path) -> Self {
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .read(true)
-            .write(true)
-            .open(path)
-            .expect("failed to open/create cross-process lock file");
-        file.lock_exclusive()
-            .expect("failed to acquire cross-process lock");
-        Self { _file: file }
-    }
-}
-
-fn cross_process_lock_path() -> PathBuf {
-    std::env::temp_dir().join(".go-on-integration-suite.lock")
-}
 
 struct HttpHarness {
     child: Child,
@@ -47,7 +21,7 @@ struct HttpHarness {
 
 impl HttpHarness {
     fn spawn(config_path: &Path, bind_addr: String) -> Self {
-        let lock = CrossProcessLock::lock(&cross_process_lock_path());
+        let lock = CrossProcessLock::new("openai-compat", 60);
         let child = Command::new(binary_path())
             .arg("--config")
             .arg(config_path)

@@ -469,8 +469,8 @@ impl Executor {
         // Track which steps have been dispatched to avoid double-processing
         let mut dispatched: HashSet<String> = HashSet::new();
 
-        /// Execute a single step synchronously (shared by sequential and parallel paths).
-        fn run_step(
+        /// Execute a single step (shared by sequential and parallel paths).
+        async fn run_step(
             step: &PlanStep,
             plan_id: &str,
             rt: &dyn ModeRuntime,
@@ -487,7 +487,7 @@ impl Executor {
                     "mode": format!("{:?}", step.mode),
                 }),
             };
-            rt.run(envelope).map_err(|e| {
+            rt.run(envelope).await.map_err(|e| {
                 tf(
                     "error.planner.runtime_failed",
                     &[("detail", &e.to_string())],
@@ -581,7 +581,7 @@ impl Executor {
                         let runtime = runtimes.iter().find(|(kind, _)| *kind == step.mode);
                         match runtime {
                             Some((_kind, rt)) => {
-                                let result = run_step(step, &plan.plan_id, rt.as_ref());
+                                let result = run_step(step, &plan.plan_id, rt.as_ref()).await;
                                 match result {
                                     Ok(agent_result) => {
                                         completed.insert(step_id.clone());
@@ -654,11 +654,9 @@ impl Executor {
                                             "mode": format!("{:?}", mode),
                                         }),
                                     };
-                                    // Clone the Arc so spawn_blocking can safely own the
-                                    // reference without any unsafe transmute.
                                     let rt_clone = Arc::clone(rt);
-                                    blocking_tasks.push(tokio::task::spawn_blocking(move || {
-                                        let result = rt_clone.run(envelope).map_err(|e| {
+                                    blocking_tasks.push(tokio::task::spawn(async move {
+                                        let result = rt_clone.run(envelope).await.map_err(|e| {
                                             tf(
                                                 "error.planner.runtime_failed",
                                                 &[("detail", &e.to_string())],
@@ -668,7 +666,7 @@ impl Executor {
                                     }));
                                 }
                                 None => {
-                                    blocking_tasks.push(tokio::task::spawn_blocking(move || {
+                                    blocking_tasks.push(tokio::task::spawn(async move {
                                         (
                                             step_id,
                                             Err(tf(
@@ -726,7 +724,7 @@ impl Executor {
                     let runtime = runtimes.iter().find(|(kind, _)| *kind == step.mode);
                     match runtime {
                         Some((_kind, rt)) => {
-                            let result = run_step(step, &plan.plan_id, rt.as_ref());
+                            let result = run_step(step, &plan.plan_id, rt.as_ref()).await;
                             match result {
                                 Ok(agent_result) => {
                                     completed.insert(step_id.clone());

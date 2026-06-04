@@ -5,7 +5,8 @@ pub mod context;
 pub mod error;
 pub mod onboarding;
 pub mod provider;
+pub mod providers;
 pub mod setup;
 
-// Provider specs are fully hardcoded in `built_in_provider_specs()`
-// within `config.rs` and `setup.rs`. No external TOML file needed.
+// Provider specs are now in a single location: `core::providers`. See also
+// `core::provider` for the `OrchestrationProvider` trait.

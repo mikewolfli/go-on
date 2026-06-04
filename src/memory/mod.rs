@@ -19,6 +19,8 @@ pub mod memory_persistence;
 pub mod memory_response_cache;
 pub mod memory_retrieval;
 pub mod semantic_cache;
+pub mod summarization;
+pub mod vector_index;
 
 // NOTE: MemoryRetrievalEngine (GAP-B52-13) is implemented and ready for
 // integration. It should be injected into AcpServer via ServerBuilder once

@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 
 use tracing;
 
-use crate::intelligence::metacognitive::{MetacognitiveConfig, MetacognitiveController};
+use crate::intelligence::metacognitive::MetacognitiveController;
 use crate::intelligence::self_model::{SelfModelConfig, SelfModelCore};
 use crate::intelligence::world_model::{EntityType, WorldModel, WorldModelConfig};
 
@@ -21,12 +21,14 @@ pub(crate) struct PostCheckOutcome {
     pub corrective_actions: Vec<String>,
 }
 
-static META_CTRL: OnceLock<MetacognitiveController> = OnceLock::new();
 static WORLD_MODEL: OnceLock<WorldModel> = OnceLock::new();
 static SELF_MODEL: OnceLock<SelfModelCore> = OnceLock::new();
 
+/// Returns the global shared MetacognitiveController singleton.
+/// Uses the central singleton defined in `crate::intelligence::metacognitive`
+/// so all consumers share the same observation/action/report state.
 fn metacognitive() -> &'static MetacognitiveController {
-    META_CTRL.get_or_init(|| MetacognitiveController::new(MetacognitiveConfig::default()))
+    crate::intelligence::metacognitive::global_metacognitive_controller()
 }
 
 fn world_model() -> &'static WorldModel {

@@ -10,11 +10,15 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex as StdMutex};
+use std::time::Duration;
 
 /// Serializes concurrent `/rpc` calls to prevent pipe-swapping race conditions.
 /// `server.output` is a global singleton — without this guard, two concurrent
 /// `/rpc` requests would corrupt each other's response capture pipes.
 static RPC_SERIAL: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+/// Limits concurrent ACP HTTP connections to prevent unbounded tokio task growth.
+static CONNECTION_SEMAPHORE: Semaphore = Semaphore::const_new(1000);
 
 use anyhow::Result;
 use reqwest;
@@ -22,7 +26,7 @@ use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::signal;
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{Mutex, Notify, Semaphore};
 use tracing::{debug, error, info, warn};
 
 use crate::acp::background::start_background_tasks;
@@ -367,6 +371,13 @@ pub fn new_acp_server(
     };
 
     // Wire multimodal processor for document, audio, video, and repo analysis (GAP-B55-110)
+    // MM-FIX1: Activate all sub-processors when multimodal features are available.
+    #[cfg(any(feature = "sub-bus-multimodal", feature = "profile-full"))]
+    {
+        use crate::multimodal::MultimodalProcessor;
+        builder = builder.with_multimodal_processor(MultimodalProcessor::new_with_all_processors());
+    }
+    #[cfg(not(any(feature = "sub-bus-multimodal", feature = "profile-full")))]
     {
         use crate::multimodal::MultimodalProcessor;
         builder = builder.with_multimodal_processor(MultimodalProcessor::default());
@@ -426,7 +437,7 @@ pub fn new_acp_server(
                 });
                 let alert_manager = Arc::clone(&server.observability.alert_manager);
                 tokio::spawn(async move {
-                    use crate::observability::alert_manager::AlertSeverity;
+                    use crate::shared::alert_severity::AlertSeverity;
                     while let Some(security_alert) = alert_rx.recv().await {
                         let _severity = match &security_alert.severity {
                             crate::security::vulnerability_scan::Severity::Critical => {
@@ -877,6 +888,12 @@ fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
         "memory health monitor started (interval: {}s)",
         crate::observability::memory_health::MEMORY_MONITOR_INTERVAL_SECS
     );
+
+    // ── Wire security subsystems (GAP-B52, S-FIX3) ────────────────────
+    crate::security::wire_content_safety(&server.runtime_config);
+    crate::security::wire_prompt_injection(&server.runtime_config);
+    crate::security::wire_cert_monitor(&server.runtime_config);
+    crate::security::start_secret_rotation_if_configured(&server.runtime_config);
 }
 
 /// Run the ACP server
@@ -905,16 +922,26 @@ pub async fn run_acp_server(server: &mut AcpServer) -> Result<()> {
 
     let shutdown_notify = Arc::clone(&server.shutdown_notify);
 
-    // ── Wire security subsystems (GAP-B52) ──────────────────────────────
-    crate::security::wire_content_safety(&server.runtime_config);
-    crate::security::wire_prompt_injection(&server.runtime_config);
-    crate::security::wire_cert_monitor(&server.runtime_config);
-    crate::security::start_secret_rotation_if_configured(&server.runtime_config);
-
     // Start background tasks
     if let Err(e) = start_background_tasks(server, Arc::clone(&shutdown_notify)).await {
         error!("Failed to start background tasks: {}", e);
         return Err(e);
+    }
+
+    // ── Spawn EvolutionLoop (BLUE56-B03) ─────────────────────────────
+    if let Some(ref evo) = server.governance_deps.evolution_loop {
+        let evo_clone = Arc::clone(evo);
+        tokio::spawn(async move {
+            loop {
+                let mut guard = evo_clone.lock().await;
+                if let Err(e) = guard.run().await {
+                    tracing::warn!("Evolution loop cycle ended: {}; retrying after 60s", e);
+                }
+                drop(guard);
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            }
+        });
+        tracing::info!(target: "intelligence", "EvolutionLoop spawned");
     }
 
     info!("ACP server running");
@@ -1020,12 +1047,6 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
 
     let shutdown_notify = Arc::clone(&server.shutdown_notify);
 
-    // ── Wire security subsystems (GAP-B52) ──────────────────────────────
-    crate::security::wire_content_safety(&server.runtime_config);
-    crate::security::wire_prompt_injection(&server.runtime_config);
-    crate::security::wire_cert_monitor(&server.runtime_config);
-    crate::security::start_secret_rotation_if_configured(&server.runtime_config);
-
     if let Err(err) = start_background_tasks(server.as_ref(), Arc::clone(&shutdown_notify)).await {
         error!("Failed to start background tasks: {}", err);
         return Err(err);
@@ -1102,6 +1123,102 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
         }
     };
 
+    // ── Plain TLS acceptor (non-mTLS, env-var configured) ───────────────
+    // Reads GO_ON_TLS_CERT and GO_ON_TLS_KEY environment variables.
+    // If both are set, wraps the TCP connection with TLS before handing off
+    // to the plain HTTP handler. Falls back to plain TCP if unset.
+    let tls_acceptor: Option<tokio_rustls::TlsAcceptor> = {
+        let tls_cert = std::env::var("GO_ON_TLS_CERT").ok();
+        let tls_key = std::env::var("GO_ON_TLS_KEY").ok();
+
+        match (tls_cert, tls_key) {
+            (Some(cert_path), Some(key_path)) => {
+                let certs = match std::fs::File::open(&cert_path) {
+                    Ok(file) => {
+                        let mut reader = std::io::BufReader::new(file);
+                        match rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>() {
+                            Ok(certs) => certs,
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to read TLS certs from {}: {} — falling back to plain TCP",
+                                    cert_path,
+                                    e
+                                );
+                                return Err(anyhow::anyhow!("failed to read TLS certs: {}", e));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to open TLS cert file {}: {} — falling back to plain TCP",
+                            cert_path,
+                            e
+                        );
+                        return Err(anyhow::anyhow!("failed to open TLS cert: {}", e));
+                    }
+                };
+
+                let key = match std::fs::File::open(&key_path) {
+                    Ok(file) => {
+                        let mut reader = std::io::BufReader::new(file);
+                        match rustls_pemfile::private_key(&mut reader) {
+                            Ok(Some(key)) => key,
+                            Ok(None) => {
+                                tracing::warn!(
+                                    "No private key found in {} — falling back to plain TCP",
+                                    key_path
+                                );
+                                return Err(anyhow::anyhow!(
+                                    "no private key found in {}",
+                                    key_path
+                                ));
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to read TLS key from {}: {} — falling back to plain TCP",
+                                    key_path,
+                                    e
+                                );
+                                return Err(anyhow::anyhow!("failed to read TLS key: {}", e));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to open TLS key file {}: {} — falling back to plain TCP",
+                            key_path,
+                            e
+                        );
+                        return Err(anyhow::anyhow!("failed to open TLS key: {}", e));
+                    }
+                };
+
+                match rustls::ServerConfig::builder()
+                    .with_no_client_auth()
+                    .with_single_cert(certs, key)
+                {
+                    Ok(tls_config) => {
+                        tracing::info!("TLS enabled (cert={}, key={})", cert_path, key_path);
+                        Some(tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(
+                            tls_config,
+                        )))
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to build TLS config: {} — falling back to plain TCP",
+                            e
+                        );
+                        return Err(anyhow::anyhow!("failed to build TLS config: {}", e));
+                    }
+                }
+            }
+            _ => {
+                // One or both env vars not set — plain TCP
+                None
+            }
+        }
+    };
+
     // Set up signal watchers for graceful shutdown
     let mut sigterm = std::pin::pin!(async {
         #[cfg(unix)]
@@ -1139,6 +1256,9 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
                     drop(incoming);
                     continue;
                 }
+                // Bound concurrent connections — backpressure if we already have
+                // 1000 active connections, preventing unbounded tokio task growth.
+                let _permit = CONNECTION_SEMAPHORE.acquire().await;
                 let (socket, peer_addr) = incoming?;
                 let server_ref = Arc::clone(&server);
                 if let Some(ref acceptor) = mtls_acceptor {
@@ -1146,6 +1266,7 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
                     // the dedicated mTLS HTTP handler.
                     let acceptor_clone = acceptor.clone();
                     tokio::spawn(async move {
+                        let _permit = _permit;
                         if let Err(err) = handle_mtls_http_connection(
                             &acceptor_clone,
                             socket,
@@ -1157,9 +1278,27 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
                             warn!("ACP mTLS connection {} failed: {}", peer_addr, err);
                         }
                     });
+                } else if let Some(ref acceptor) = tls_acceptor {
+                    // Plain TLS path: perform TLS handshake, then handle
+                    // through the same HTTP handler (no client cert).
+                    let acceptor_clone = acceptor.clone();
+                    tokio::spawn(async move {
+                        let _permit = _permit;
+                        if let Err(err) = handle_tls_http_connection(
+                            &acceptor_clone,
+                            socket,
+                            server_ref,
+                            peer_addr,
+                        )
+                        .await
+                        {
+                            warn!("ACP TLS connection {} failed: {}", peer_addr, err);
+                        }
+                    });
                 } else {
                     // Plain TCP path
                     tokio::spawn(async move {
+                        let _permit = _permit;
                         let mut socket = socket;
                         if let Err(err) =
                             handle_http_connection(&mut socket, server_ref, peer_addr).await
@@ -4344,6 +4483,21 @@ async fn handle_mtls_http_connection(
         &cors_headers,
     )
     .await
+}
+
+/// Handle an HTTP connection secured by plain TLS (non-mTLS).
+///
+/// Performs TLS handshake (without client cert), then delegates to the
+/// same HTTP routing logic used by the mTLS handler — the only difference
+/// is that mTLS may also validate client certificates, while this function
+/// only performs server-side TLS.
+async fn handle_tls_http_connection(
+    tls_acceptor: &tokio_rustls::TlsAcceptor,
+    socket: TcpStream,
+    server: Arc<AcpServer>,
+    peer_addr: SocketAddr,
+) -> Result<()> {
+    handle_mtls_http_connection(tls_acceptor, socket, server, peer_addr).await
 }
 
 fn infer_adaptive_signal(method: &str, path: &str, headers: &str) -> &'static str {

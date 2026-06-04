@@ -336,10 +336,11 @@ impl VideoProcessor {
         )
         .await;
 
-        // Stub: real implementation would decode audio via ffmpeg.
-        // Return a minimal PCM placeholder to validate the pipeline.
-        let placeholder_pcm = vec![0u8; 1024]; // 512 samples of silence
-        Ok(placeholder_pcm)
+        // MM-FIX4: Return an explicit error instead of fake PCM silence.
+        // Real video audio extraction requires ffmpeg or similar system tool.
+        return Err(VideoProcessorError::AudioExtractionFailed(
+            "Audio extraction requires a system tool such as ffmpeg; not yet integrated".into(),
+        ));
     }
 
     /// Analyze the extracted frames and produce scene descriptions.

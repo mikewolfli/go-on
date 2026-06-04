@@ -154,6 +154,30 @@ pub(crate) struct ProviderSpec {
     pub(crate) supports_system: Option<bool>,
     #[serde(default)]
     pub(crate) supports_vision: Option<bool>,
+    #[serde(default)]
+    pub(crate) region: Option<String>,
+    #[serde(default)]
+    pub(crate) recommended_default_phase: Option<String>,
+    #[serde(default)]
+    pub(crate) recommended_request_timeout_seconds: Option<u64>,
+    #[serde(default)]
+    pub(crate) recommended_review_timeout_seconds: Option<u64>,
+    #[serde(default)]
+    pub(crate) recommended_cache_enabled: Option<bool>,
+    #[serde(default)]
+    pub(crate) recommended_vector_enabled: Option<bool>,
+    #[serde(default)]
+    pub(crate) recommended_phase_max_inflight: Option<usize>,
+    #[serde(default)]
+    pub(crate) recommended_global_max_inflight: Option<usize>,
+    #[serde(default)]
+    pub(crate) recommended_planning_request_timeout_seconds: Option<u64>,
+    #[serde(default)]
+    pub(crate) recommended_coding_request_timeout_seconds: Option<u64>,
+    #[serde(default)]
+    pub(crate) recommended_review_request_timeout_seconds: Option<u64>,
+    #[serde(default)]
+    pub(crate) recommended_delivery_request_timeout_seconds: Option<u64>,
 }
 
 impl ProviderSpec {

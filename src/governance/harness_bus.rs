@@ -45,7 +45,7 @@ use crate::governance::drift::drift_protection::{
 };
 use crate::governance::hardening::{
     rbac_fallback_allows_action, BudgetTracker, GovernanceAction, IdempotencyCache, PolicyBundle,
-    SandboxPolicy, TaskBudget,
+    SandboxLevel, SandboxPolicy, TaskBudget,
 };
 use crate::governance::pua::{PuaFeedbackCollector, PuaRuleEngine, TaskContext, TaskType};
 use crate::governance::rationalization::{RationalizationAnnotation, SelfRationalizationGuard};
@@ -76,6 +76,7 @@ use crate::resilience::hyper_resilience::{
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -268,28 +269,6 @@ impl Default for ExecutionPolicy {
                 max_api_calls: 256,
             },
             audit_level: AuditLevel::default(),
-        }
-    }
-}
-
-/// SandboxLevel for governance
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub enum SandboxLevel {
-    None,
-    Basic,
-    Strict,
-    Isolated,
-}
-
-impl SandboxLevel {
-    /// Returns the numeric index of the sandbox level.
-    /// Higher values represent stricter isolation.
-    pub fn level_index(&self) -> u8 {
-        match self {
-            SandboxLevel::None => 0,
-            SandboxLevel::Basic => 1,
-            SandboxLevel::Strict => 2,
-            SandboxLevel::Isolated => 3,
         }
     }
 }
@@ -523,13 +502,28 @@ pub struct AuditEntry {
 /// Maximum number of audit entries retained in memory to prevent unbounded growth.
 const MAX_AUDIT_ENTRIES: usize = 10_000;
 
-#[derive(Debug, Default, Clone)]
+/// HarnessAuditTrail — in-memory audit log for governance events.
+///
+/// Optionally delegates to a HashChainAuditor for tamper-evident persistence.
+#[derive(Debug, Clone)]
 pub struct HarnessAuditTrail {
     pub entries: Vec<AuditEntry>,
+    /// Optional hash-chain auditor for tamper-evident disk persistence.
+    pub hash_chain: Option<Arc<Mutex<crate::security::audit_integrity::HashChainAuditor>>>,
+}
+
+impl Default for HarnessAuditTrail {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            hash_chain: None,
+        }
+    }
 }
 
 impl HarnessAuditTrail {
     /// Push an entry, evicting the oldest if the cap is exceeded.
+    /// Also forwards to the HashChainAuditor if configured.
     pub fn push(&mut self, entry: AuditEntry) {
         if self.entries.len() >= MAX_AUDIT_ENTRIES {
             // Evict oldest half to amortize cost.
@@ -537,7 +531,36 @@ impl HarnessAuditTrail {
             let drain_end = self.entries.len() - keep;
             self.entries.drain(0..drain_end);
         }
-        self.entries.push(entry);
+        self.entries.push(entry.clone());
+
+        // Delegate to hash-chain auditor for tamper-evident persistence.
+        if let Some(ref hash_chain) = self.hash_chain {
+            if let Ok(mut guard) = hash_chain.lock() {
+                let payload = serde_json::json!({
+                    "timestamp": entry.timestamp,
+                    "request_id": entry.request_id,
+                    "stage": entry.stage,
+                    "verdict": entry.verdict,
+                    "dispatch_policy": entry.dispatch_policy,
+                    "execution_policy": entry.execution_policy,
+                    "governance_policy": entry.governance_policy,
+                    "violations": entry.violations,
+                    "context_snapshot": entry.context_snapshot,
+                });
+                if let Err(e) = guard.append(payload) {
+                    tracing::warn!(error = %e, "Failed to append to hash-chain auditor");
+                }
+            }
+        }
+    }
+
+    /// Set the hash-chain auditor for this trail.
+    pub fn with_hash_chain(
+        mut self,
+        auditor: Arc<Mutex<crate::security::audit_integrity::HashChainAuditor>>,
+    ) -> Self {
+        self.hash_chain = Some(auditor);
+        self
     }
 }
 
@@ -594,6 +617,10 @@ impl Default for PuaGovernanceProfile {
 // PolicyEvaluator — the core of HarnessBus
 // ---------------------------------------------------------------------------
 
+/// Runtime-registerable policy: takes a TaskContext and returns None if no opinion,
+/// or Some(PolicyVerdict) to short-circuit the normal evaluation flow.
+pub type PolicyFn = Box<dyn Fn(&TaskContext) -> Option<PolicyVerdict> + Send + Sync>;
+
 /// PolicyEvaluator composites all governance components into a single
 /// evaluate/validate/verify suite.
 pub struct PolicyEvaluator {
@@ -601,19 +628,22 @@ pub struct PolicyEvaluator {
     pub execution: ExecutionPolicy,
     pub governance: GovernancePolicy,
     pub rule_engine: Arc<Mutex<PuaRuleEngine>>,
-    pub sandbox_level: Arc<Mutex<String>>,
+    pub sandbox_level: Arc<Mutex<SandboxLevel>>,
     pub budget: Arc<Mutex<BudgetTracker>>,
     pub idempotency: Arc<Mutex<IdempotencyCache>>,
     pub runtime_control: Arc<Mutex<OnlineControllerState>>,
     pub guard: Arc<Mutex<SelfRationalizationGuard>>,
     pub security_governor: Arc<SecurityGovernor>,
     pub rbac_enforcer: RwLock<Option<Arc<RwLock<RbacEnforcer>>>>,
+    /// Thread-safe, runtime-registerable policies keyed by name.
+    /// Evaluated after the built-in checks; the first matching policy short-circuits.
+    pub policies: Arc<RwLock<HashMap<String, PolicyFn>>>,
 }
 
 impl PolicyEvaluator {
     pub fn new(
         rule_engine: Arc<Mutex<PuaRuleEngine>>,
-        sandbox_level: Arc<Mutex<String>>,
+        sandbox_level: Arc<Mutex<SandboxLevel>>,
         budget: Arc<Mutex<BudgetTracker>>,
         idempotency: Arc<Mutex<IdempotencyCache>>,
         runtime_control: Arc<Mutex<OnlineControllerState>>,
@@ -630,6 +660,7 @@ impl PolicyEvaluator {
             runtime_control,
             guard,
             rbac_enforcer: RwLock::new(None),
+            policies: Arc::new(RwLock::new(HashMap::new())),
             security_governor: Arc::new({
                 let gov = SecurityGovernor::new(SecurityGovernorConfig {
                     default_action: PolicyAction::Deny,
@@ -699,10 +730,37 @@ impl PolicyEvaluator {
         }
     }
 
+    /// Register a runtime policy. The closure is invoked during evaluate();
+    /// if it returns Some(verdict) the evaluation short-circuits.
+    pub fn register_policy(&self, name: &str, policy: PolicyFn) {
+        if let Ok(mut guard) = self.policies.write() {
+            guard.insert(name.to_string(), policy);
+            tracing::debug!(policy = %name, "Runtime policy registered");
+        }
+    }
+
+    /// Deregister a previously registered runtime policy.
+    pub fn deregister_policy(&self, name: &str) {
+        if let Ok(mut guard) = self.policies.write() {
+            guard.remove(name);
+            tracing::debug!(policy = %name, "Runtime policy deregistered");
+        }
+    }
+
     /// Pre-route composite evaluation.
     /// Returns a PolicyVerdict that the caller (CapabilityBus) should respect.
     pub fn evaluate(&self, ctx: &TaskContext) -> PolicyVerdict {
         let _start = Instant::now();
+
+        // 0. Check runtime-registerable policies first (short-circuit on match).
+        if let Ok(guard) = self.policies.read() {
+            for (name, policy) in guard.iter() {
+                if let Some(verdict) = policy(ctx) {
+                    tracing::debug!(policy = %name, verdict = ?verdict, "Runtime policy matched");
+                    return verdict;
+                }
+            }
+        }
 
         // 1. Red-line check (hard block)
         let engine = self.rule_engine.lock().unwrap_or_else(|poisoned| {
@@ -941,17 +999,17 @@ impl PolicyEvaluator {
             | "goon_provider_capabilities"
             | "prompts_list"
             | "prompts_get"
-            | "skill-finder" => SandboxPolicy::can_execute_read_file(&level),
+            | "skill-finder" => SandboxPolicy::can_execute_read_file(level),
             // Read-only search operations — separately governed by can_execute_search
             // to allow finer-grained control over content discovery vs file reads.
-            "grep" | "find_path" | "semantic_search" => SandboxPolicy::can_execute_search(&level),
+            "grep" | "find_path" | "semantic_search" => SandboxPolicy::can_execute_search(level),
             // Write operations
             "write_file" | "apply_patch" | "create_directory" | "delete_path" | "move_path" | "copy_path" => {
-                SandboxPolicy::can_execute_write(&level)
+                SandboxPolicy::can_execute_write(level)
             }
             // Shell/execute operations
             "run_tests" | "execute_command" | "terminal" | "bash" => {
-                SandboxPolicy::can_execute_shell(&level)
+                SandboxPolicy::can_execute_shell(level)
             }
             _ => false,
         };
@@ -1094,12 +1152,11 @@ impl PolicyEvaluator {
             let deployment_hint = self
                 .sandbox_level
                 .lock()
-                .map(|level| match level.as_str() {
-                    "none" => "local-dev",
-                    "basic" => "ci",
-                    "strict" => "managed-service",
-                    "isolated" => "production",
-                    _ => "managed-service",
+                .map(|level| match *level {
+                    SandboxLevel::None => "local-dev",
+                    SandboxLevel::Basic => "ci",
+                    SandboxLevel::Strict => "managed-service",
+                    SandboxLevel::Isolated => "production",
                 })
                 .unwrap_or("managed-service");
             let decision = rbac_fallback_allows_action(Some(deployment_hint), action);
@@ -1182,7 +1239,7 @@ impl HarnessBus {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         rule_engine: Arc<Mutex<PuaRuleEngine>>,
-        sandbox_level: Arc<Mutex<String>>,
+        sandbox_level: Arc<Mutex<SandboxLevel>>,
         budget: Arc<Mutex<BudgetTracker>>,
         idempotency: Arc<Mutex<IdempotencyCache>>,
         runtime_control: Arc<Mutex<OnlineControllerState>>,
@@ -1586,7 +1643,7 @@ impl HarnessBus {
                         tracing::warn!("sandbox_level lock poisoned in enforce_action(Read)");
                         poisoned.into_inner()
                     });
-                if level.eq_ignore_ascii_case("isolated") {
+                if *level == SandboxLevel::Isolated {
                     return false;
                 }
                 true
@@ -1604,8 +1661,7 @@ impl HarnessBus {
                         tracing::warn!("sandbox_level lock poisoned in enforce_action(Search)");
                         poisoned.into_inner()
                     });
-                let l = level.to_lowercase();
-                if l == "strict" || l == "isolated" {
+                if *level == SandboxLevel::Strict || *level == SandboxLevel::Isolated {
                     return false;
                 }
                 true
@@ -1905,7 +1961,7 @@ pub fn default_harness_bus(storage_path: Option<PathBuf>) -> HarnessBus {
         crate::governance::pua::PuaEnforcementPlan::default(),
     ));
     let rule_engine = Arc::new(Mutex::new(PuaRuleEngine::new(pua_plan)));
-    let sandbox_level = Arc::new(Mutex::new("none".to_string()));
+    let sandbox_level = Arc::new(Mutex::new(SandboxLevel::None));
     let budget = Arc::new(Mutex::new(BudgetTracker::new(TaskBudget {
         max_tokens: 120_000,
         max_wall_clock_seconds: 3600,
@@ -1952,26 +2008,27 @@ pub fn config_aware_harness_bus(
     let rule_engine = Arc::new(Mutex::new(PuaRuleEngine::new(pua_plan)));
 
     // Derive sandbox level from compliance config
-    let sandbox_level_str = config
-        .compliance
-        .as_ref()
-        .map(|c| {
-            if c.enabled {
-                // Compliance enabled → at least "read" sandbox
-                if c.standards
-                    .iter()
-                    .any(|s| s.eq_ignore_ascii_case("hipaa") || s.eq_ignore_ascii_case("pci"))
-                {
-                    "strict"
+    let sandbox_level = Arc::new(Mutex::new(
+        config
+            .compliance
+            .as_ref()
+            .map(|c| {
+                if c.enabled {
+                    // Compliance enabled → at least "read" sandbox
+                    if c.standards
+                        .iter()
+                        .any(|s| s.eq_ignore_ascii_case("hipaa") || s.eq_ignore_ascii_case("pci"))
+                    {
+                        SandboxLevel::Strict
+                    } else {
+                        SandboxLevel::Basic
+                    }
                 } else {
-                    "read"
+                    SandboxLevel::None
                 }
-            } else {
-                "none"
-            }
-        })
-        .unwrap_or("none");
-    let sandbox_level = Arc::new(Mutex::new(sandbox_level_str.to_string()));
+            })
+            .unwrap_or(SandboxLevel::None),
+    ));
 
     // Scale budget based on scheduler worker slots
     let worker_factor = config

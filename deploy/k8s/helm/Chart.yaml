@@ -1,0 +1,16 @@
+apiVersion: v2
+name: go-on
+description: A Helm chart for deploying go-on multi-users server on Kubernetes
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - go-on
+  - acp
+  - ai
+home: https://github.com/example/go-on
+sources:
+  - https://github.com/example/go-on
+maintainers:
+  - name: go-on team
+    email: team@go-on.example.com

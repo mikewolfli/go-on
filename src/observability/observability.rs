@@ -1,30 +1,5 @@
 use crate::observability::performance::PerformanceMetrics;
 
-pub(crate) fn push_metric_header(
-    lines: &mut Vec<String>,
-    name: &str,
-    metric_type: &str,
-    help: &str,
-) {
-    lines.push(format!("# HELP {} {}", name, help));
-    lines.push(format!("# TYPE {} {}", name, metric_type));
-}
-
-// F-GAP-49: Reserved for future metrics reporting — not yet wired into the hot path.
-// `push_scalar_metric` is a convenience wrapper around `push_metric_header` + value line.
-// Once a consumer calls it from the Prometheus endpoint builder, remove this annotation.
-#[allow(dead_code)] // F-GAP-49 — reserved observability feature
-pub(crate) fn push_scalar_metric(
-    lines: &mut Vec<String>,
-    name: &str,
-    metric_type: &str,
-    help: &str,
-    value: impl std::fmt::Display,
-) {
-    push_metric_header(lines, name, metric_type, help);
-    lines.push(format!("{} {}", name, value));
-}
-
 /// Bridge ACP RuntimeMetrics into the observability-layer PerformanceMetrics.
 ///
 /// Reads the current snapshot from the ACP runtime metrics system and converts
