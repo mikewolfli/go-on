@@ -63,6 +63,37 @@ impl BuiltinRole {
     }
 }
 
+/// G10: Newtype wrapper for permission strings, providing type-safe
+/// permission identifiers instead of raw `&str` parameters.
+///
+/// Unlike the `Permission` enum (which has a fixed set of variants),
+/// `PermissionStr` can represent arbitrary permission identifiers
+/// (e.g. "namespace::action") for extensibility.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct PermissionStr(pub String);
+
+impl PermissionStr {
+    pub fn new(s: &str) -> Self {
+        Self(s.to_string())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for PermissionStr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<&str> for PermissionStr {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
 /// Permissions for the RBAC system
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum Permission {

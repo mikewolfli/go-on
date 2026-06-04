@@ -156,6 +156,10 @@ impl PerformanceMonitor {
 
         // Get memory usage (simplified - in real implementation, use system APIs)
         let memory_usage = get_memory_usage();
+        // O8: Read CPU usage from /proc/stat + /proc/stat on Linux, or
+        // use `ps -o %cpu=` on macOS.  The default 0.0 is returned when
+        // no platform-specific backend is available.
+        let cpu_usage = get_cpu_usage();
 
         PerformanceMetrics {
             total_ops,
@@ -166,7 +170,7 @@ impl PerformanceMonitor {
             p99_latency_ms: p99_latency,
             memory_usage_bytes: memory_usage,
             cache_hit_rate,
-            cpu_usage_percent: 0.0, // Would require system-specific APIs
+            cpu_usage_percent: cpu_usage,
         }
     }
 
@@ -517,6 +521,90 @@ fn get_memory_usage() -> u64 {
 #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 fn get_memory_usage() -> u64 {
     0
+}
+
+// ── O8: CPU usage (percent) ────────────────────────────────────────────────
+//
+// Implementation guidance:
+//   Linux:   Read /proc/stat for delta in 'cpu' line (user+nice+system+idle).
+//            Compute utilisation as 100 * (total_delta - idle_delta) / total_delta.
+//   macOS:   Use `host_cpu_load_info()` from libc via `mach_host_self()`.
+//   Windows: Use `GetSystemTimes()` from kernel32.
+//
+// When none of the above is available, returns 0.0.
+
+/// Returns the current overall CPU usage percentage (0.0 … 100.0).
+///
+/// On Linux this reads `/proc/stat` and performs a delta-based calculation
+/// similar to `top(1)`.  On other platforms a best-effort approach is used;
+/// returns 0.0 when no platform-specific implementation exists.
+fn get_cpu_usage() -> f64 {
+    #[cfg(target_os = "linux")]
+    {
+        // Linux: delta-based CPU usage from /proc/stat
+        use std::fs;
+        use std::sync::Mutex;
+
+        static PREV: Mutex<Option<(u64, u64)>> = Mutex::new(None);
+
+        let Ok(content) = fs::read_to_string("/proc/stat") else {
+            return 0.0;
+        };
+        let Some(cpu_line) = content.lines().find(|l| l.starts_with("cpu ")) else {
+            return 0.0;
+        };
+        let fields: Vec<u64> = cpu_line
+            .split_whitespace()
+            .skip(1)
+            .filter_map(|s| s.parse::<u64>().ok())
+            .collect();
+        if fields.len() < 4 {
+            return 0.0;
+        }
+        // user(0) + nice(1) + system(2) + idle(3)
+        let total: u64 = fields[0] + fields[1] + fields[2] + fields[3];
+        let idle = fields[3];
+
+        let mut prev = PREV.lock().unwrap();
+        if let Some((prev_total, prev_idle)) = *prev {
+            let total_delta = total.saturating_sub(prev_total);
+            let idle_delta = idle.saturating_sub(prev_idle);
+            *prev = Some((total, idle));
+            if total_delta > 0 {
+                return 100.0 * (total_delta.saturating_sub(idle_delta)) as f64
+                    / total_delta as f64;
+            }
+        } else {
+            *prev = Some((total, idle));
+        }
+        0.0
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // macOS: use `ps` to get aggregate CPU
+        if let Ok(output) = std::process::Command::new("ps")
+            .args(["-A", "-o", "%cpu="])
+            .output()
+        {
+            if let Ok(stdout) = String::from_utf8(output.stdout) {
+                let total: f64 = stdout
+                    .lines()
+                    .filter_map(|l| l.trim().parse::<f64>().ok())
+                    .sum();
+                // Number of logical CPUs ≈ rough estimate
+                let ncpus = std::thread::available_parallelism()
+                    .map(|n| n.get() as f64)
+                    .unwrap_or(1.0);
+                return (total / ncpus).min(100.0);
+            }
+        }
+        0.0
+    }
+
+    // Default: no platform-specific impl available
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    0.0
 }
 
 /// Performance optimization utilities

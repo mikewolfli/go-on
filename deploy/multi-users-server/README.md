@@ -273,12 +273,25 @@ See `otel-collector-config.yaml` for configuration.
 
 ### Horizontal
 
-go-on multi-users server is single-process. For horizontal scaling:
+go-on multi-users server is a single-process stateful service backed by PostgreSQL.
+Horizontal scale-out requires a shared-nothing approach:
 
 ```bash
-# DNS round-robin + multiple go-on instances
-# Each instance connects to the same PostgreSQL
-# Note: cache and vector store are local SQLite, not shared
+# 1. Deploy an L7 load balancer (e.g. Nginx, HAProxy, or a cloud LB) with
+#    session affinity (sticky sessions / cookie-based routing) so that
+#    consecutive requests from the same user land on the same instance.
+#
+# 2. Run multiple go-on instances behind the load balancer.  Each instance
+#    connects to the same PostgreSQL cluster.
+#
+# 3. IMPORTANT: The local SQLite cache and vector store are **not shared**
+#    between instances.  You may either:
+#    a) Accept per-instance cache warmup (simpler, recommended for ≤5 nodes), or
+#    b) Replace the local caches with a distributed cache (e.g. Redis via the
+#       `runtime.cache_backend` option) for a fully shared cache layer.
+#
+# 4. Monitor connection pool usage on PostgreSQL — each instance consumes
+#    DB connections proportional to its thread pool size.
 ```
 
 ## 10. Security Hardening

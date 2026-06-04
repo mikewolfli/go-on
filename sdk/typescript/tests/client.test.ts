@@ -112,11 +112,11 @@ describe("GoOnClient", () => {
       headers: new Headers(),
     } as Response);
 
-    const chunks: string[] = [];
-    for await (const chunk of client.chatStream(
-      { messages: [{ role: "user", content: "Hi" }] },
-    )) {
-      chunks.push(chunk as string);
+    const chunks: Record<string, unknown>[] = [];
+    for await (const chunk of client.chatStream({
+      messages: [{ role: "user", content: "Hi" }],
+    })) {
+      chunks.push(chunk);
     }
     expect(chunks.length).toBeGreaterThanOrEqual(2);
   });

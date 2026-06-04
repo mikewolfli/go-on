@@ -126,7 +126,7 @@ const MAX_TOML_SIZE = 1024 * 1024;
  * Returns all workspace folder URIs. Falls back to an empty array if no
  * workspace is open, making multi-root workspace scenarios first-class.
  */
-function getWorkspaceRoots(): vscode.Uri[] {
+function _getWorkspaceRoots(): vscode.Uri[] {
   return vscode.workspace.workspaceFolders?.map((f) => f.uri) ?? [];
 }
 
@@ -852,7 +852,7 @@ export function activate(context: vscode.ExtensionContext) {
     // Listen for workspace folder changes and re-evaluate config path
     context.subscriptions.push(
       vscode.workspace.onDidChangeWorkspaceFolders((event) => {
-        console.log(
+        goOnOutput.appendLine(
           `Workspace folders changed: ${event.added.length} added, ${event.removed.length} removed`,
         );
         // Re-evaluate the config file path based on new workspace roots

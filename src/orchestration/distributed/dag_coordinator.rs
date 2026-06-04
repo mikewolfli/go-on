@@ -887,7 +887,7 @@ mod tests {
         let coord = make_coordinator();
         coord.create_dag("dag-test-1".into()).await.unwrap();
         let dags = coord.list_dags().await;
-        assert!(dags.contains(&"dag-test-1".to_string()));
+        assert!(dags.contains(&"dag-test-1".to_string().into()));
     }
 
     #[tokio::test]
@@ -901,7 +901,7 @@ mod tests {
 
         let nodes = coord.get_nodes("dag-hb").await.unwrap();
         assert_eq!(nodes.len(), 1);
-        assert_eq!(nodes[0].node_id, "node-a");
+        assert_eq!(nodes[0].node_id, "node-a".into());
         assert_eq!(nodes[0].state, NodeState::Online);
 
         // Heartbeat should refresh lease
@@ -933,7 +933,7 @@ mod tests {
 
         let failed = coord.check_leases().await;
         assert!(
-            failed.contains(&"node-b".to_string()),
+            failed.contains(&"node-b".to_string().into()),
             "node-b should be marked as failed"
         );
     }

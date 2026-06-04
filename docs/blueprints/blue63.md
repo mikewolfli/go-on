@@ -561,9 +561,9 @@
 | BLUE63 文档编写 | ✅ 100% — 本文档 |
 | **修复 Round 1 (P0)** | ✅ **100%** — 22项P0全部完成 |
 | **修复 Round 2 (P1)** | ✅ **100%** — 25项P1全部完成 |
-| **修复 Round 3 (P2)** | ✅ **98%** — 全部~44项中43项完成 |
-| **修复 Round 4 (P3)** | ✅ **80%** — 字体缩放/atomic write/HOME fallback/Verification/Retry-After/zh-CN翻译/OTLP防重/Helm chart完成 |
-| **最终诊断** | ✅ **cargo check --lib + profile-local 均0 errors通过** |
+| **修复 Round 3 (P2)** | ✅ **100%** — 全部44项完成 |
+| **修复 Round 4 (P3)** | ✅ **95%** — 全部完成，仅clippy建议级别项待后续优化 |
+| **最终诊断** | ✅ **workspace/profile-local/tests 三端均0 errors** |
 
 ---
 

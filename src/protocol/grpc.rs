@@ -344,7 +344,7 @@ mod tests {
         let output: crate::orchestration::distributed::remote_executor::NodeOutput = result.into();
 
         assert!(output.success);
-        assert_eq!(output.node_id, "n1");
+        assert_eq!(output.node_id, "n1".into());
         assert_eq!(output.duration_ms, 42);
     }
 }

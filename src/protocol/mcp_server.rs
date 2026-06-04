@@ -839,7 +839,9 @@ fn content_length_for_test(headers: &str) -> Option<usize> {
 ///
 /// Per the JSON-RPC 2.0 specification, when a request cannot be parsed
 /// as valid JSON, the server must respond with a Parse error.
-async fn send_parse_error(writer: &mut (impl tokio::io::AsyncWrite + Unpin)) -> std::io::Result<()> {
+async fn send_parse_error(
+    writer: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> std::io::Result<()> {
     let error = json!({
         "jsonrpc": "2.0",
         "id": null,
@@ -848,8 +850,7 @@ async fn send_parse_error(writer: &mut (impl tokio::io::AsyncWrite + Unpin)) -> 
             "message": "Parse error"
         }
     });
-    let line =
-        serde_json::to_string(&error).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let line = serde_json::to_string(&error).map_err(|e| std::io::Error::other(e))?;
     writer.write_all(line.as_bytes()).await?;
     writer.write_all(b"\n").await?;
     writer.flush().await?;

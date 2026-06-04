@@ -650,7 +650,7 @@ pub async fn start_background_tasks(
         tokio::spawn(async move {
             // The evolution_agent binding lives for the entire async block scope,
             // so the agent is held alive until shutdown is notified (GAP-B58-C02/C04).
-            let evolution_agent = crate::agents::self_evolution_agent::SelfEvolutionAgent::new(
+            let _evolution_agent = crate::agents::self_evolution_agent::SelfEvolutionAgent::new(
                 std::path::PathBuf::from("."),
                 Vec::new(),
             )

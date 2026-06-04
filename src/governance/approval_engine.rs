@@ -658,23 +658,44 @@ impl ApprovalEngine {
             }
         }
 
-        // Apply collected updates, send feedback, and persist to SQLite
+        // Apply collected updates to queue (single-threaded, shared state).
         for (idx, updated_request) in &actions {
             self.queue[*idx].status = updated_request.status.clone();
             self.queue[*idx].escalated_from = updated_request.escalated_from.clone();
-            self.feedback_to_pua(updated_request);
+        }
 
-            // Persist status change to SQLite if configured.
-            if let Some(ref db_path) = self.db_path {
-                #[cfg(feature = "backend-sqlite")]
-                if let Err(e) = Self::update_status_sqlite(db_path, updated_request) {
-                    tracing::warn!(
-                        error = %e,
-                        id = %updated_request.id,
-                        "Failed to persist timeout status to SQLite"
-                    );
+        // ── G8: Concurrent feedback & persistence ────────────────────────
+        // Fire feedback (already async via tokio::spawn) and persistence
+        // calls concurrently so that multiple escalation notifications are
+        // not serialised.  The feedback_to_pua method already spawns a
+        // tokio task internally; for persistence we spawn per-request
+        // threads to achieve parallel SQLite writes.
+        let snapshots: Vec<ApprovalRequest> = actions.iter().map(|(_, r)| r.clone()).collect();
+        {
+            let db_path = self.db_path.clone();
+            std::thread::scope(|scope| {
+                for req in &snapshots {
+                    // Persist to SQLite concurrently per request.
+                    if let Some(ref db_path) = db_path {
+                        scope.spawn(|| {
+                            #[cfg(feature = "backend-sqlite")]
+                            if let Err(e) = Self::update_status_sqlite(db_path, req) {
+                                tracing::warn!(
+                                    error = %e,
+                                    id = %req.id,
+                                    "Failed to persist timeout status to SQLite"
+                                );
+                            }
+                        });
+                    }
                 }
-            }
+            });
+        }
+        // Serial feedback calls — each `feedback_to_pua()` internally spawns
+        // a tokio task, so they are effectively fire-and-forget.
+        for req in &snapshots {
+            self.feedback_to_pua(req);
+            self.feedback_to_learner(req);
         }
 
         changed
@@ -714,14 +735,18 @@ impl ApprovalEngine {
             .filter(|r| r.created_at_ms < cutoff && r.status.is_finalized())
             .map(|r| r.id.clone())
             .collect();
-        self.queue.retain(|r| {
-            if r.created_at_ms < cutoff && r.status.is_finalized() {
-                self.escalation_chains.remove(&r.id);
-                false
-            } else {
-                true
+        // G9: Use swap_remove for O(1) removal when order doesn't matter.
+        // Iterate from the end so that swap_remove indices are stable.
+        let mut i = self.queue.len();
+        while i > 0 {
+            i -= 1;
+            let remove =
+                self.queue[i].created_at_ms < cutoff && self.queue[i].status.is_finalized();
+            if remove {
+                self.escalation_chains.remove(&self.queue[i].id);
+                self.queue.swap_remove(i);
             }
-        });
+        }
 
         // Remove from SQLite if configured.
         if let Some(ref db_path) = self.db_path {

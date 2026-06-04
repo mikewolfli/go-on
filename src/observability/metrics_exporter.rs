@@ -220,6 +220,10 @@ fn estimate_p95_latency(buckets: &[u64; 10]) -> f64 {
 }
 
 /// Build a Prometheus-formatted metrics string from the server status.
+///
+/// O7: Circuit breaker metrics are sourced from `HyperResilienceEngine`
+/// (the canonical resilience authority) rather than the legacy
+/// `CircuitBreakerRegistry` on `AcpServer`.
 pub fn build_prometheus_metrics(server: &AcpServer) -> String {
     // Bridge OTLP MetricsRecorder values into the Prometheus RuntimeMetrics
     // on every scrape, so that manual metric recordings are visible via /metrics.
@@ -229,12 +233,10 @@ pub fn build_prometheus_metrics(server: &AcpServer) -> String {
     let m = &status.metrics;
     let lifecycle = &status.lifecycle;
     let maintenance = &status.maintenance;
-    let circuit_breakers = &status.circuit_breakers;
+    // ── O7: Read from HyperResilienceEngine instead of legacy registry ──
+    let resilience_profile = server.hyper_resilience.profile();
+    let circuit_breaker_open_count = resilience_profile.open_circuits;
     let is_draining = server.drain_guard.is_draining();
-    let circuit_breaker_open_count = circuit_breakers
-        .iter()
-        .filter(|c| c.state == "open")
-        .count();
     let cache_hit_ratio = if m.chat_requests_total > 0 {
         m.cache_hit_rate
     } else {

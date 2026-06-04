@@ -473,6 +473,21 @@
           "command": "go-on.openSettings",
           "when": "viewContainer == go-on",
           "group": "navigation@2"
+        },
+        {
+          "command": "go-on.start",
+          "when": "viewContainer == go-on",
+          "group": "navigation@3"
+        },
+        {
+          "command": "go-on.stop",
+          "when": "viewContainer == go-on",
+          "group": "navigation@4"
+        },
+        {
+          "command": "go-on.refreshStatusMonitor",
+          "when": "viewContainer == go-on",
+          "group": "navigation@5"
         }
       ],
       "view/title": [
@@ -500,6 +515,132 @@
           "command": "go-on.exportChat",
           "when": "view == go-on-chat",
           "group": "navigation"
+        },
+        {
+          "command": "go-on.healthCheck",
+          "when": "view == go-on",
+          "group": "navigation"
+        },
+        {
+          "command": "go-on.diagnose",
+          "when": "view == go-on",
+          "group": "navigation"
+        },
+        {
+          "command": "go-on.breakerStatus",
+          "when": "view == go-on",
+          "group": "navigation"
+        },
+        {
+          "command": "go-on.cacheClear",
+          "when": "view == go-on",
+          "group": "navigation"
+        },
+        {
+          "command": "go-on.configReload",
+          "when": "view == go-on",
+          "group": "navigation"
+        },
+        {
+          "command": "go-on.newSession",
+          "when": "view == go-on-chat",
+          "group": "navigation"
+        },
+        {
+          "command": "go-on.switchSession",
+          "when": "view == go-on-chat",
+          "group": "navigation"
+        },
+        {
+          "command": "go-on.createWorkflow",
+          "when": "view == go-on",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "go-on.start",
+          "when": "viewContainer == go-on"
+        },
+        {
+          "command": "go-on.stop",
+          "when": "viewContainer == go-on"
+        },
+        {
+          "command": "go-on.healthCheck",
+          "when": "viewContainer == go-on"
+        },
+        {
+          "command": "go-on.healthProbes",
+          "when": "viewContainer == go-on"
+        },
+        {
+          "command": "go-on.diagnose",
+          "when": "viewContainer == go-on"
+        },
+        {
+          "command": "go-on.breakerStatus",
+          "when": "viewContainer == go-on"
+        },
+        {
+          "command": "go-on.cacheClear",
+          "when": "viewContainer == go-on"
+        },
+        {
+          "command": "go-on.vectorClear",
+          "when": "viewContainer == go-on"
+        },
+        {
+          "command": "go-on.configReload",
+          "when": "viewContainer == go-on"
+        },
+        {
+          "command": "go-on.sendRequest",
+          "when": "view == go-on-chat"
+        },
+        {
+          "command": "go-on.newSession",
+          "when": "view == go-on-chat"
+        },
+        {
+          "command": "go-on.switchSession",
+          "when": "view == go-on-chat"
+        },
+        {
+          "command": "go-on.createWorkflow",
+          "when": "viewContainer == go-on"
+        },
+        {
+          "command": "go-on.runWorkflow",
+          "when": "viewContainer == go-on"
+        },
+        {
+          "command": "go-on.editCode",
+          "when": "viewContainer == go-on"
+        },
+        {
+          "command": "go-on.refactorCode",
+          "when": "viewContainer == go-on"
+        },
+        {
+          "command": "go-on.shutdown",
+          "when": "viewContainer == go-on"
+        },
+        {
+          "command": "go-on.refreshStatusMonitor",
+          "when": "viewContainer == go-on"
+        },
+        {
+          "command": "go-on.selectorStatus",
+          "when": "viewContainer == go-on"
+        },
+        {
+          "command": "go-on.metricsGet",
+          "when": "viewContainer == go-on"
+        },
+        {
+          "command": "go-on.metricsReset",
+          "when": "viewContainer == go-on"
         }
       ]
     },

@@ -1,4 +1,5 @@
 #![recursion_limit = "2048"]
+#![allow(deprecated)]
 
 //! go-on – ACP runtime proxy with integrated multi-agent orchestration.
 //!

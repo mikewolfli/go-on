@@ -187,7 +187,8 @@ sqlite-vec = { version = "0.1.9", optional = true }
 flate2 = "1"
 fastrand = "2"
 subtle = "2"
-notify = { version = "6", features = ["macos_kqueue"] }
+# C7: notify is available on all platforms; macos_kqueue feature is macOS-only.
+notify = "6"
 
 # ── Security / Signing / mTLS (GAP-B52) ────────────────────────────────────
 ed25519-dalek = { version = "2", default-features = false, features = ["signature"] }
@@ -204,6 +205,9 @@ lopdf = { version = "0.34", optional = true }
 docx-rs = { version = "0.4", optional = true }
 scraper = { version = "0.20", optional = true }
 comrak = { version = "0.30", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+notify = { version = "6", features = ["macos_kqueue"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_ProcessStatus", "Win32_System_Threading"] }

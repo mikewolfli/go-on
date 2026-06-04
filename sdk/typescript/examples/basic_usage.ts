@@ -1,24 +1,20 @@
-import { GoOnClient } from 'go-on-sdk';
+import { GoOnClient } from "../src/client";
 
 async function main() {
-  const client = new GoOnClient({ baseUrl: 'http://localhost:8090' });
+  const client = new GoOnClient("http://localhost:8090");
 
-  // Send a chat message
-  const response = await client.chat({
-    messages: [{ role: 'user', content: 'Hello!' }]
-  });
-  console.log('Response:', response);
+  // Check runtime health
+  const health = await client.health();
+  console.log("Health:", JSON.stringify(health, null, 2));
 
   // Stream a chat
   const stream = client.chatStream({
-    messages: [{ role: 'user', content: 'Tell me a story' }]
+    messages: [{ role: "user", content: "Tell me a story" }],
   });
   for await (const chunk of stream) {
-    process.stdout.write(chunk);
+    console.log("Chunk:", JSON.stringify(chunk));
   }
-  console.log();
-
-  await client.close();
+  console.log("Stream finished");
 }
 
 main().catch(console.error);

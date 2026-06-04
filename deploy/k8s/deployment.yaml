@@ -7,8 +7,6 @@ metadata:
     app: go-on
     component: server
 spec:
-  # TODO: Replace with HPA configuration once a metrics server (e.g. Prometheus + metrics-server) is deployed on the cluster.
-  #       The HPA should target CPU/memory utilization or custom Prometheus metrics.
   replicas: 2
   selector:
     matchLabels:
@@ -105,3 +103,47 @@ spec:
     requests:
       storage: 1Gi
   # storageClassName: standard  # uncomment if your cluster requires an explicit class
+---
+# ── D4: HorizontalPodAutoscaler ──────────────────────────────────────────────
+# Scales go-on replicas based on CPU and memory utilization.
+# Requires a metrics server (e.g. Prometheus + metrics-server) to be deployed.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: go-on-hpa
+  labels:
+    app: go-on
+    component: server
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: go-on
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 120
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120

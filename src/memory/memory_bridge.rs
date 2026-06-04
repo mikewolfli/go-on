@@ -34,17 +34,27 @@ use crate::memory::memory_persistence::{
 
 impl From<CanonicalEntry> for PersistenceEntry {
     fn from(entry: CanonicalEntry) -> Self {
+        // M8: Parse timestamp string -> i64 with multiple fallback strategies.
+        //     1. Try i64 (whole seconds / milliseconds).
+        //     2. Try f64 (float seconds, e.g. 1700000000.123).
+        //     3. Fall back to current wall-clock time.
+        let created_at = entry
+            .timestamp
+            .parse::<i64>()
+            .or_else(|_| entry.timestamp.parse::<f64>().map(|t| t as i64))
+            .unwrap_or_else(|_| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0)
+            });
+
         Self {
             id: entry.id,
             tier: MemoryTier::Hot,
             class: format!("{:?}", entry.class),
             content: entry.content,
-            created_at: entry.timestamp.parse::<i64>().unwrap_or_else(|_| {
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0)
-            }),
+            created_at,
             accessed_at: 0,
             usefulness: entry.usefulness,
             embedding: None,

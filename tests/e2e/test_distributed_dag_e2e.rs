@@ -38,7 +38,7 @@ impl DistributedDagE2eContext {
 /// Create a minimal DAG execution plan for e2e testing.
 fn make_test_plan(dag_id: &str) -> DagExecutionPlan {
     DagExecutionPlan {
-        dag_id: dag_id.to_string(),
+        dag_id: dag_id.into(),
         assignments: vec![
             DagNodeAssignment {
                 dag_node_id: "fetch-data".into(),
@@ -91,7 +91,7 @@ async fn test_distributed_dag_failure_recovery() {
     let node1 = NodeInfo::new("node-1".into(), "127.0.0.1".into(), 9301);
     let node2 = NodeInfo::new("node-2".into(), "127.0.0.1".into(), 9302);
 
-    assert_eq!(node1.node_id, "node-1");
+    assert_eq!(node1.node_id, "node-1".into());
     assert_eq!(node1.state, NodeState::Online);
     assert_eq!(node2.port, 9302);
     assert!(
@@ -100,9 +100,9 @@ async fn test_distributed_dag_failure_recovery() {
     );
 
     // ── 2. DAG construction ────────────────────────────────────────────
-    let dag_id: DagId = "dag-e2e-001".to_string();
-    let plan = make_test_plan(&dag_id);
-    ctx.dag_id = Some(dag_id.clone());
+    let dag_id: DagId = "dag-e2e-001".into();
+    let plan = make_test_plan(&dag_id.to_string());
+    ctx.dag_id = Some(dag_id.to_string());
 
     assert_eq!(plan.status, DagStatus::Pending);
     assert!(!plan.assignments.is_empty());
@@ -199,7 +199,9 @@ async fn test_distributed_dag_failure_recovery() {
         .plan
         .assignments
         .iter()
-        .filter(|a| !a.completed && a.assigned_node_id.as_deref() == Some("node-2"))
+        .filter(|a| {
+            !a.completed && a.assigned_node_id.as_ref().map(|n| n.0.as_str()) == Some("node-2")
+        })
         .map(|a| a.dag_node_id.clone())
         .collect();
     // The "parse-json" assignment was assigned to node-2 but not completed,
