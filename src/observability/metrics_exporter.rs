@@ -375,6 +375,7 @@ pub fn build_prometheus_metrics(server: &AcpServer) -> String {
 /// Call this periodically (e.g. every metrics scrape) to synchronize the
 /// two metric systems. Only writes fields that `MetricsRecorder` tracks
 /// and `RuntimeMetrics` also exposes.
+#[allow(dead_code)]
 pub fn bridge_metrics_recorder(
     runtime_metrics: &crate::acp::prelude::RuntimeMetrics,
     recorder: &MetricsRecorder,

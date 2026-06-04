@@ -325,6 +325,7 @@ async fn execute_with_plan_topology(
 /// `preferred_tools` constrains the tools that `execute_loop` will consider;
 /// when non-empty it replaces the old hardcoded `&[]` (which meant "all reg tools").
 /// `concurrency_semaphore` caps the number of simultaneously-executing tasks.
+#[allow(clippy::too_many_arguments)]
 fn create_tool_jobs(
     registry: &Arc<ToolRegistry>,
     objective: &str,

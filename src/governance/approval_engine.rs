@@ -206,6 +206,9 @@ impl EscalationChain {
 // ApprovalEngine
 // ---------------------------------------------------------------------------
 
+/// Type alias for the complex approver ID resolver closure.
+type ApproverIdResolver = Box<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
 pub struct ApprovalEngine {
     queue: Vec<ApprovalRequest>,
     escalation_chains: HashMap<String, EscalationChain>,
@@ -215,7 +218,7 @@ pub struct ApprovalEngine {
     learner: Option<Arc<StdRwLock<ApprovalPreferenceLearner>>>,
     /// Optional resolver for mapping approver roles to approver identities.
     /// Called when building escalation chains to fill `approver_id`.
-    approver_id_resolver: Option<Box<dyn Fn(&str) -> Option<String> + Send + Sync>>,
+    approver_id_resolver: Option<ApproverIdResolver>,
 }
 
 impl std::fmt::Debug for ApprovalEngine {
@@ -268,10 +271,7 @@ impl ApprovalEngine {
     ///     _ => None,
     /// });
     /// ```
-    pub fn with_approver_resolver(
-        &mut self,
-        resolver: Box<dyn Fn(&str) -> Option<String> + Send + Sync>,
-    ) {
+    pub fn with_approver_resolver(&mut self, resolver: ApproverIdResolver) {
         self.approver_id_resolver = Some(resolver);
     }
 

@@ -150,7 +150,7 @@ impl McpStdioServer {
 /// the handler function signatures across all call sites.
 enum MaybeTlsStream {
     Plain(tokio::net::TcpStream),
-    Tls(tokio_rustls::server::TlsStream<tokio::net::TcpStream>),
+    Tls(Box<tokio_rustls::server::TlsStream<tokio::net::TcpStream>>),
 }
 
 impl AsyncRead for MaybeTlsStream {
@@ -161,7 +161,7 @@ impl AsyncRead for MaybeTlsStream {
     ) -> Poll<io::Result<()>> {
         match self.get_mut() {
             MaybeTlsStream::Plain(s) => Pin::new(s).poll_read(cx, buf),
-            MaybeTlsStream::Tls(s) => Pin::new(s).poll_read(cx, buf),
+            MaybeTlsStream::Tls(s) => Pin::new(s.as_mut()).poll_read(cx, buf),
         }
     }
 }
@@ -174,21 +174,21 @@ impl AsyncWrite for MaybeTlsStream {
     ) -> Poll<io::Result<usize>> {
         match self.get_mut() {
             MaybeTlsStream::Plain(s) => Pin::new(s).poll_write(cx, buf),
-            MaybeTlsStream::Tls(s) => Pin::new(s).poll_write(cx, buf),
+            MaybeTlsStream::Tls(s) => Pin::new(s.as_mut()).poll_write(cx, buf),
         }
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
             MaybeTlsStream::Plain(s) => Pin::new(s).poll_flush(cx),
-            MaybeTlsStream::Tls(s) => Pin::new(s).poll_flush(cx),
+            MaybeTlsStream::Tls(s) => Pin::new(s.as_mut()).poll_flush(cx),
         }
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
             MaybeTlsStream::Plain(s) => Pin::new(s).poll_shutdown(cx),
-            MaybeTlsStream::Tls(s) => Pin::new(s).poll_shutdown(cx),
+            MaybeTlsStream::Tls(s) => Pin::new(s.as_mut()).poll_shutdown(cx),
         }
     }
 }
@@ -319,7 +319,7 @@ impl McpHttpServer {
                         let mut stream = match tls_acceptor {
                             Some(ref acceptor) => {
                                 match acceptor.accept(socket).await {
-                                    Ok(tls) => MaybeTlsStream::Tls(tls),
+                                    Ok(tls) => MaybeTlsStream::Tls(Box::new(tls)),
                                     Err(e) => {
                                         warn!(
                                             "{}",

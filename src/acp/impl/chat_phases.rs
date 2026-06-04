@@ -561,7 +561,6 @@ pub(crate) async fn execution_phase(
     }
 
     // Autonomy round
-    let autonomy_loop_executed;
     let mut task_contexts: Vec<TaskContext> = Vec::new();
     let autonomy_outcome = execute_autonomy_round(
         server,
@@ -579,7 +578,7 @@ pub(crate) async fn execution_phase(
         response_text = autonomy_outcome.response_text;
     }
     agent_attempts.extend(autonomy_outcome.agent_attempts);
-    autonomy_loop_executed = autonomy_outcome.autonomy_loop_executed;
+    let autonomy_loop_executed = autonomy_outcome.autonomy_loop_executed;
 
     // TaskContext propagation
     if autonomy_loop_executed && !response_text.is_empty() {
@@ -979,7 +978,7 @@ async fn stream_cache_response(
     text: &str,
     model: &Option<String>,
 ) -> Result<()> {
-    if let Some(ref o) = observer {
+    if let Some(o) = observer {
         let meta = StreamEventMeta {
             agent_name: agent,
             phase_name: phase,
@@ -1129,6 +1128,7 @@ async fn handle_execution_errors(
 // ═════════════════════════════════════════════════════════════════════
 
 /// Phase 4: Response construction, error wrapping, post-processing.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn response_assembly_phase(
     server: &AcpServer,
     params: &ChatParams,
@@ -1405,7 +1405,7 @@ async fn run_mode_runtime_and_multi_agent(
             ),
             input: json!({"response_text": exec_out.response_text, "reasoning_text": exec_out.reasoning_text}),
         };
-        if let Ok(_) = mode_runtime.run(envelope) {
+        if mode_runtime.run(envelope).is_ok() {
             if let Some(ref cb) = server.governance_deps.capability_bus {
                 let _ = cb.continuous_learning.lock().map(|cl| {
                     cl.schedule_review(&crate::intelligence::continuous_learning::ConsolidatedMemory {
@@ -1475,6 +1475,7 @@ async fn run_multi_agent_pipeline(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn capability_bus_feedback(
     server: &AcpServer,
     trace: &RequestTraceContext,
@@ -1502,7 +1503,7 @@ fn capability_bus_feedback(
 
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if count > 0 && count % cb.config.evolve_interval == 0 {
+        if count > 0 && count.is_multiple_of(cb.config.evolve_interval) {
             let (c, a, p) = (
                 cb.clone(),
                 selected_agent.to_string(),

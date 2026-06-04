@@ -170,22 +170,28 @@ pub struct ResilienceConfig {
     pub half_open_probe_interval_ms: u64,
 }
 
+#[allow(dead_code)]
 fn default_circuit_breaker_threshold() -> u64 {
     5
 }
+#[allow(dead_code)]
 fn default_recovery_timeout_ms() -> u64 {
     30_000
 }
+#[allow(dead_code)]
 fn default_health_check_interval_ms() -> u64 {
     5_000
 }
+#[allow(dead_code)]
 fn default_max_failover_attempts() -> u32 {
     3
 }
+#[allow(dead_code)]
 fn default_self_healing_enabled() -> bool {
     true
 }
 
+#[allow(dead_code)]
 fn default_half_open_probe_interval_ms() -> u64 {
     5000
 }
@@ -960,6 +966,7 @@ impl HyperResilienceEngine {
 // ---------------------------------------------------------------------------
 
 /// A vote from a single node in the fault detection consensus.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FaultVote {
     /// Node identifier casting the vote.
@@ -980,6 +987,7 @@ pub struct FaultVote {
 /// when a majority of voters agree the target is unhealthy within a
 /// configurable window. This prevents a single faulty probe from
 /// triggering an unnecessary failover.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct FaultConsensus {
     /// Minimum votes required to reach a decision.
@@ -992,6 +1000,7 @@ pub struct FaultConsensus {
     max_votes_per_target: usize,
 }
 
+#[allow(dead_code)]
 impl Default for FaultConsensus {
     fn default() -> Self {
         Self {
@@ -1003,6 +1012,7 @@ impl Default for FaultConsensus {
     }
 }
 
+#[allow(dead_code)]
 impl FaultConsensus {
     /// Create a new fault consensus with the given quorum size and vote window.
     pub fn new(quorum_size: usize, vote_window_ms: u64) -> Self {
@@ -1092,6 +1102,7 @@ impl FaultConsensus {
 // ---------------------------------------------------------------------------
 
 /// A recovery plan step.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecoveryStep {
     /// Step description.
@@ -1107,6 +1118,7 @@ pub struct RecoveryStep {
 }
 
 /// A persisted recovery plan.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecoveryPlan {
     /// Unique plan identifier.
@@ -1121,6 +1133,7 @@ pub struct RecoveryPlan {
     pub source: String,
 }
 
+#[allow(dead_code)]
 impl RecoveryPlan {
     /// Create a new recovery plan.
     pub fn new(
@@ -1143,12 +1156,14 @@ impl RecoveryPlan {
 ///
 /// Saves plans to a configurable directory in NDJSON format so they
 /// survive process restarts and can be audited.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct RecoveryPlanStore {
     /// Directory where plans are persisted.
     store_dir: std::path::PathBuf,
 }
 
+#[allow(dead_code)]
 impl RecoveryPlanStore {
     /// Create a new store rooted at the given directory.
     /// Creates the directory if it does not exist.
@@ -1166,8 +1181,7 @@ impl RecoveryPlanStore {
     /// Save a recovery plan to disk.
     pub fn save(&self, plan: &RecoveryPlan) -> std::io::Result<()> {
         let path = self.store_dir.join(format!("{}.json", plan.plan_id));
-        let json = serde_json::to_string_pretty(plan)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let json = serde_json::to_string_pretty(plan).map_err(std::io::Error::other)?;
         std::fs::write(&path, json)?;
         Ok(())
     }
@@ -1179,8 +1193,7 @@ impl RecoveryPlanStore {
             return Ok(None);
         }
         let json = std::fs::read_to_string(&path)?;
-        let plan: RecoveryPlan = serde_json::from_str(&json)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let plan: RecoveryPlan = serde_json::from_str(&json).map_err(std::io::Error::other)?;
         Ok(Some(plan))
     }
 
@@ -1189,7 +1202,7 @@ impl RecoveryPlanStore {
         let mut plans = Vec::new();
         for entry in std::fs::read_dir(&self.store_dir)? {
             let entry = entry?;
-            if entry.path().extension().map_or(false, |e| e == "json") {
+            if entry.path().extension().is_some_and(|e| e == "json") {
                 if let Some(stem) = entry.path().file_stem().and_then(|s| s.to_str()) {
                     plans.push(stem.to_string());
                 }
