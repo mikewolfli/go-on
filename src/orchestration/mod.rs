@@ -14,11 +14,16 @@ pub mod core_dag; // DAG-UNIFY: Unified generic DAG — prefer over dag_executor
     feature = "profile-multi-users-server"
 ))]
 pub mod council; // F-GAP-15
-pub mod dag_driver; // BLUE42: DAG execution driver for autonomy loop
-pub mod dag_execution; // AUTON-07: DAG-driven execution adapter
-pub mod dag_executor; // GAP-46-02: Real topological DAG executor
-#[allow(unused_imports)]
-pub use dag_executor::TaskContext; // GAP-B50-05: TaskContext re-export for chain-of-thought propagation
+                 // DAG modules — all deprecated in favor of `core_dag`.
+                 // New code should use `crate::orchestration::core_dag` directly.
+#[allow(deprecated)]
+pub mod dag_driver; // BLUE42 (deprecated — use core_dag)
+#[allow(deprecated)]
+pub mod dag_execution; // AUTON-07 (deprecated — use core_dag)
+#[allow(deprecated)]
+pub mod dag_executor; // GAP-46-02 (deprecated — use core_dag)
+#[allow(unused_imports, deprecated)]
+pub use dag_executor::TaskContext; // GAP-B50-05 (deprecated — migrated to core_dag)
 pub mod diagnostic_feedback;
 pub mod distributed; // GAP-B52-21/22
 pub mod distributed_tx; // BLUE45 item 4: Two-Phase Commit (2PC) over multiple nodes

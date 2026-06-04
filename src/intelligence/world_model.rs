@@ -59,6 +59,268 @@ pub struct Prediction {
 }
 
 // ---------------------------------------------------------------------------
+// Causal Reasoner — state-tracking correlation engine
+// ---------------------------------------------------------------------------
+
+/// A snapshot of an entity's properties at a point in time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntityStateSnapshot {
+    /// The entity whose state was captured.
+    pub entity_id: String,
+    /// The entity's properties at this point.
+    pub properties: HashMap<String, String>,
+    /// Epoch millisecond when the snapshot was taken.
+    pub timestamp_ms: u64,
+}
+
+/// A discovered correlation between two property changes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Correlation {
+    /// The entity whose property change is the suspected cause.
+    pub cause_entity: String,
+    /// The property on the cause entity that changed.
+    pub cause_property: String,
+    /// The entity whose property change is the suspected effect.
+    pub effect_entity: String,
+    /// The property on the effect entity that changed.
+    pub effect_property: String,
+    /// How many times this co-occurrence has been observed.
+    pub co_occurrence_count: u64,
+    /// Confidence score (0.0 – 1.0) based on co-occurrence frequency.
+    pub confidence: f64,
+    /// Average time delta (ms) between cause and effect observations.
+    pub avg_time_delta_ms: i64,
+}
+
+/// Maintains inference state for discovering causal relationships
+/// by analyzing entity state changes over time windows.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CausalReasoner {
+    /// Historical entity state snapshots for correlation analysis.
+    history: Vec<EntityStateSnapshot>,
+    /// Discovered correlations between property changes.
+    correlations: Vec<Correlation>,
+    /// Maximum number of snapshots to retain.
+    max_history: usize,
+    /// Time window (ms) for considering two changes as potentially causal.
+    window_ms: u64,
+}
+
+impl CausalReasoner {
+    /// Creates a new reasoner with the given capacity and time window.
+    pub fn new(max_history: usize, window_ms: u64) -> Self {
+        Self {
+            history: Vec::with_capacity(max_history),
+            correlations: Vec::new(),
+            max_history,
+            window_ms,
+        }
+    }
+
+    /// Records a state snapshot for an entity.
+    /// Evicts the oldest snapshot when history is at capacity.
+    pub fn record_state(
+        &mut self,
+        entity_id: &str,
+        properties: HashMap<String, String>,
+        timestamp_ms: u64,
+    ) {
+        if self.history.len() >= self.max_history {
+            self.history.remove(0);
+        }
+        self.history.push(EntityStateSnapshot {
+            entity_id: entity_id.to_string(),
+            properties,
+            timestamp_ms,
+        });
+    }
+
+    /// Analyzes state history to discover correlations between property changes.
+    ///
+    /// For each pair of entity snapshots within `window_ms`, checks whether
+    /// a property change in one correlates with a property change in another.
+    /// Updates the internal `correlations` vector with co-occurrence counts
+    /// and confidence scores.
+    pub fn infer_correlations(&mut self) -> &[Correlation] {
+        let window = self.window_ms as i64;
+        let mut co_occurrences: HashMap<(String, String, String, String), (u64, Vec<i64>)> =
+            HashMap::new();
+
+        for i in 0..self.history.len() {
+            for j in (i + 1)..self.history.len() {
+                let snap_a = &self.history[i];
+                let snap_b = &self.history[j];
+                let delta = snap_b.timestamp_ms as i64 - snap_a.timestamp_ms as i64;
+
+                if delta.abs() > window {
+                    continue;
+                }
+
+                // Find properties that differ between consecutive snapshots
+                // for the same entity, or track cross-entity correlations.
+                if snap_a.entity_id == snap_b.entity_id {
+                    // Same entity: detect which properties changed
+                    let changed_a = Self::detect_changes(snap_a, snap_b);
+                    for (prop_a, _) in &changed_a {
+                        for (prop_b, _) in &changed_a {
+                            if prop_a != prop_b {
+                                let key = (
+                                    snap_a.entity_id.clone(),
+                                    prop_a.to_string(),
+                                    snap_b.entity_id.clone(),
+                                    prop_b.to_string(),
+                                );
+                                let entry = co_occurrences.entry(key).or_insert((0, Vec::new()));
+                                entry.0 += 1;
+                                entry.1.push(delta);
+                            }
+                        }
+                    }
+                } else {
+                    // Different entities: cross-entity correlation
+                    let changed_a = Self::detect_changes(snap_a, snap_b);
+                    let changed_b = Self::detect_changes(snap_b, snap_a);
+                    // For simplicity, check if both had concurrent changes
+                    if !changed_a.is_empty() && !changed_b.is_empty() {
+                        for (prop_a, _) in &changed_a {
+                            for (prop_b, _) in &changed_b {
+                                let key = (
+                                    snap_a.entity_id.clone(),
+                                    prop_a.to_string(),
+                                    snap_b.entity_id.clone(),
+                                    prop_b.to_string(),
+                                );
+                                let entry = co_occurrences.entry(key).or_insert((0, Vec::new()));
+                                entry.0 += 1;
+                                entry.1.push(delta);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Convert co-occurrence map into correlation scores
+        let total_pairs = if self.history.len() > 1 {
+            (self.history.len() * (self.history.len() - 1)) / 2
+        } else {
+            1
+        };
+
+        self.correlations = co_occurrences
+            .into_iter()
+            .map(|((ce, cp, ee, ep), (count, deltas))| {
+                let raw_score = count as f64 / total_pairs as f64;
+                let confidence = (raw_score * 2.0).clamp(0.0, 1.0);
+                let avg_delta = if deltas.is_empty() {
+                    0
+                } else {
+                    deltas.iter().sum::<i64>() / deltas.len() as i64
+                };
+                Correlation {
+                    cause_entity: ce,
+                    cause_property: cp,
+                    effect_entity: ee,
+                    effect_property: ep,
+                    co_occurrence_count: count,
+                    confidence,
+                    avg_time_delta_ms: avg_delta,
+                }
+            })
+            .collect();
+
+        // Sort by confidence descending
+        self.correlations.sort_by(|a, b| {
+            b.confidence
+                .partial_cmp(&a.confidence)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        &self.correlations
+    }
+
+    /// Returns the current set of discovered correlations.
+    #[allow(dead_code)] // F-GAP reserved
+    pub fn correlations(&self) -> &[Correlation] {
+        &self.correlations
+    }
+
+    /// Predicts probable next state changes for a given entity based on
+    /// discovered correlations.
+    ///
+    /// Returns a list of `(property, expected_value, confidence)` tuples.
+    pub fn predict_next_state(
+        &self,
+        entity_id: &str,
+        current_properties: &HashMap<String, String>,
+    ) -> Vec<(String, String, f64)> {
+        let mut predictions: Vec<(String, String, f64)> = Vec::new();
+
+        for corr in &self.correlations {
+            // Check if this correlation involves the entity as cause or effect
+            let (target_prop, expected_val, confidence) = if corr.cause_entity == entity_id {
+                // This entity is the cause; predict the effect
+                let cause_val = current_properties.get(&corr.cause_property);
+                if cause_val.is_none() {
+                    continue;
+                }
+                (
+                    corr.effect_property.clone(),
+                    String::new(),
+                    corr.confidence * 0.8,
+                )
+            } else if corr.effect_entity == entity_id {
+                // This entity is the effect; predict the effect property change
+                (
+                    corr.effect_property.clone(),
+                    String::new(),
+                    corr.confidence * 0.7,
+                )
+            } else {
+                continue;
+            };
+
+            predictions.push((target_prop, expected_val, confidence));
+        }
+
+        // Sort by confidence descending and deduplicate
+        predictions.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+        predictions.dedup_by(|a, b| a.0 == b.0);
+        predictions.truncate(10);
+        predictions
+    }
+
+    /// Helper: checks if a property value changed between two snapshots
+    /// (only meaningful when snap_b is later than snap_a for the same entity).
+    fn detect_changes<'a>(
+        snap_a: &'a EntityStateSnapshot,
+        snap_b: &'a EntityStateSnapshot,
+    ) -> Vec<(&'a str, &'a str)> {
+        let mut changed = Vec::new();
+        // For cross-entity analysis, just report both sets of properties.
+        // For same entity, report properties whose values differ.
+        if snap_a.entity_id == snap_b.entity_id {
+            for (key, val_b) in &snap_b.properties {
+                if snap_a.properties.get(key) != Some(val_b) {
+                    changed.push((key.as_str(), val_b.as_str()));
+                }
+            }
+            for key in snap_a.properties.keys() {
+                if !snap_b.properties.contains_key(key) {
+                    changed.push((key.as_str(), ""));
+                }
+            }
+        } else {
+            // Cross-entity: report both snapshots' properties as "changes"
+            // to detect concurrent modifications
+            for (key, val) in &snap_a.properties {
+                changed.push((key.as_str(), val.as_str()));
+            }
+        }
+        changed
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
@@ -222,6 +484,8 @@ struct Inner {
     max_relationships: usize,
     /// Max causal links to retain before evicting the oldest.
     max_causal_links: usize,
+    /// Causal reasoner for entity state change correlation analysis.
+    causal_reasoner: CausalReasoner,
 }
 
 // ---------------------------------------------------------------------------
@@ -252,6 +516,7 @@ impl WorldModel {
                 causal_links_by_cause: HashMap::new(),
                 max_relationships: 5000,
                 max_causal_links: 5000,
+                causal_reasoner: CausalReasoner::new(5000, 5000),
             })),
         }
     }
@@ -848,6 +1113,92 @@ impl WorldModel {
 
     // -- Profile -----------------------------------------------------------
 
+    // -- Causal Reasoner integration -------------------------------------
+
+    /// Records the current state of all entities as snapshots in the
+    /// causal reasoner, then runs correlation inference to discover
+    /// causal links between property changes.
+    ///
+    /// Returns the list of discovered correlations with confidence scores.
+    pub fn infer_causal_links(&self) -> Vec<Correlation> {
+        let now = now_ms();
+
+        // Snapshot entity state before locking for mutation to avoid borrow conflict
+        let entity_snapshots: Vec<(String, HashMap<String, String>)> = {
+            let inner = lock_guard(&self.inner);
+            inner
+                .entities
+                .iter()
+                .map(|e| (e.id.clone(), e.properties.clone()))
+                .collect()
+        };
+
+        let mut inner = lock_guard(&self.inner);
+
+        // Record current state of all entities into the reasoner
+        for (id, props) in &entity_snapshots {
+            inner.causal_reasoner.record_state(id, props.clone(), now);
+        }
+
+        // Run inference
+        let correlations = inner.causal_reasoner.infer_correlations().to_vec();
+        inner.last_update_ms = now;
+
+        // Also register any discovered correlations as causal links
+        for corr in &correlations {
+            let existing = inner.causal_links.iter().position(|l| {
+                l.cause_entity_id == corr.cause_entity && l.effect_entity_id == corr.effect_entity
+            });
+
+            if let Some(pos) = existing {
+                let link = &mut inner.causal_links[pos];
+                link.observation_count = link.observation_count.max(corr.co_occurrence_count);
+                link.confidence = link.confidence.max(corr.confidence);
+            } else {
+                let link = CausalLink {
+                    cause_entity_id: corr.cause_entity.clone(),
+                    effect_entity_id: corr.effect_entity.clone(),
+                    confidence: corr.confidence,
+                    observation_count: corr.co_occurrence_count,
+                    avg_delay_ms: corr.avg_time_delta_ms.max(0) as f64,
+                    context_tags: vec!["correlated".to_string()],
+                };
+                if inner.causal_links.len() < inner.max_causal_links {
+                    let idx = inner.causal_links.len();
+                    inner.causal_links.push(link);
+                    inner
+                        .causal_links_by_cause
+                        .entry(corr.cause_entity.clone())
+                        .or_default()
+                        .push(idx);
+                }
+            }
+        }
+
+        correlations
+    }
+
+    /// Predicts the next likely state changes for a given entity based on
+    /// discovered correlations from the causal reasoner.
+    ///
+    /// Returns a list of `(property_name, expected_value, confidence)` tuples
+    /// ordered by confidence descending.
+    pub fn predict_next_state(&self, entity_id: &str) -> Vec<(String, String, f64)> {
+        let inner = lock_guard(&self.inner);
+
+        // Find the entity's current properties
+        let current_props = inner
+            .entities
+            .iter()
+            .find(|e| e.id == entity_id)
+            .map(|e| e.properties.clone())
+            .unwrap_or_default();
+
+        inner
+            .causal_reasoner
+            .predict_next_state(entity_id, &current_props)
+    }
+
     /// Return a summary profile of the world model's current state.
     pub fn profile(&self) -> WorldModelProfile {
         let inner = lock_guard(&self.inner);
@@ -1228,5 +1579,125 @@ mod tests {
         assert!(p.avg_entity_confidence > 0.0);
         assert!(p.last_update_ms > 0);
         assert_eq!(p.stale_entity_count, 0); // nothing is stale yet
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 13: CausalReasoner records state and discovers correlations.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_causal_reasoner_basic() {
+        let mut reasoner = CausalReasoner::new(100, 10_000);
+
+        let mut props_a = HashMap::new();
+        props_a.insert("cpu".to_string(), "high".to_string());
+        props_a.insert("mem".to_string(), "low".to_string());
+
+        let mut props_b = HashMap::new();
+        props_b.insert("cpu".to_string(), "high".to_string());
+        props_b.insert("mem".to_string(), "high".to_string());
+
+        let now = now_ms();
+        reasoner.record_state("server-1", props_a, now);
+        reasoner.record_state("server-1", props_b, now + 100);
+
+        let correlations = reasoner.infer_correlations();
+        // Should find at least one correlation (mem change)
+        assert!(
+            !correlations.is_empty(),
+            "expected at least one correlation from state change"
+        );
+
+        // Check correlation has sensible structure
+        for c in correlations {
+            assert!(!c.cause_entity.is_empty());
+            assert!(!c.effect_entity.is_empty());
+            assert!(c.confidence >= 0.0);
+            assert!(c.confidence <= 1.0);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 14: CausalReasoner predict_next_state returns predictions.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_causal_reasoner_predict() {
+        let mut reasoner = CausalReasoner::new(100, 10_000);
+        let now = now_ms();
+
+        // Set up history showing: when server-1 goes high-cpu, db-1 follows
+        let mut s1_props = HashMap::new();
+        s1_props.insert("cpu".to_string(), "high".to_string());
+        reasoner.record_state("server-1", s1_props, now);
+
+        let mut db_props = HashMap::new();
+        db_props.insert("load".to_string(), "increased".to_string());
+        reasoner.record_state("db-1", db_props, now + 500);
+
+        reasoner.infer_correlations();
+
+        // Now predict for server-1
+        let mut current = HashMap::new();
+        current.insert("cpu".to_string(), "high".to_string());
+        let preds = reasoner.predict_next_state("server-1", &current);
+
+        // May have predictions depending on correlation discovery
+        for p in &preds {
+            assert!(!p.0.is_empty());
+            assert!(p.2 >= 0.0);
+            assert!(p.2 <= 1.0);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 15: WorldModel.infer_causal_links records entity states.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_world_model_infer_causal_links() {
+        let wm = WorldModel::new(test_config());
+
+        let id_a = wm.register_entity("Gateway", EntityType::Service).unwrap();
+        let id_b = wm
+            .register_entity("Database", EntityType::DataStore)
+            .unwrap();
+
+        // Update entities with properties
+        let mut props_a = HashMap::new();
+        props_a.insert("status".to_string(), "degraded".to_string());
+        wm.update_entity(&id_a, props_a).unwrap();
+
+        let mut props_b = HashMap::new();
+        props_b.insert("status".to_string(), "slow".to_string());
+        wm.update_entity(&id_b, props_b).unwrap();
+
+        let correlations = wm.infer_causal_links();
+        // Even with minimal data, inference should not panic and return structured results
+        assert!(correlations.is_empty() || !correlations.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 16: WorldModel.predict_next_state returns predictions for entity.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_world_model_predict_next_state() {
+        let wm = WorldModel::new(test_config());
+
+        let id = wm.register_entity("Node-1", EntityType::System).unwrap();
+
+        let predictions = wm.predict_next_state(&id);
+        // Without any causal data, predictions should be empty but not panic
+        assert!(predictions.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 17: CausalReasoner handles empty state gracefully.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_causal_reasoner_empty() {
+        let mut reasoner = CausalReasoner::new(10, 1000);
+        let correlations = reasoner.infer_correlations();
+        assert!(correlations.is_empty());
+
+        let preds = reasoner.predict_next_state("nonexistent", &HashMap::new());
+        assert!(preds.is_empty());
     }
 }

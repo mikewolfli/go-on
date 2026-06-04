@@ -370,6 +370,7 @@ impl OnlineControllerState {
     }
 }
 
+#[allow(dead_code)] // F-GAP reserved
 fn percentile(samples: &[u64], percentile: f64) -> u64 {
     if samples.is_empty() {
         return 0;

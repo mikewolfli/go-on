@@ -100,10 +100,13 @@ pub struct ModelPreferences {
     #[serde(default)]
     pub hints: Option<Vec<ModelHint>>,
     #[serde(default)]
+    #[allow(dead_code)] // F-GAP reserved
     pub cost_priority: Option<f64>,
     #[serde(default)]
+    #[allow(dead_code)] // F-GAP reserved
     pub speed_priority: Option<f64>,
     #[serde(default)]
+    #[allow(dead_code)] // F-GAP reserved
     pub intelligence_priority: Option<f64>,
 }
 
@@ -119,6 +122,7 @@ pub struct CreateMessageRequest {
     #[serde(default)]
     pub model_preferences: Option<ModelPreferences>,
     #[serde(default)]
+    #[allow(dead_code)] // F-GAP reserved
     pub metadata: Option<HashMap<String, Value>>,
 }
 

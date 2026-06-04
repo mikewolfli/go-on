@@ -1,9 +1,15 @@
-//! Real DAG Executor — topological dependency resolution, parallel group
-//! identification, node output propagation, and failure isolation.
+//! Deprecated wrapper around [`crate::orchestration::core_dag::CoreDag<T>`].
 //!
-//! # Migration
-//! Consider using [`crate::orchestration::core_dag::CoreDag<T>`] for new code.
-//! `CoreDag` is the unified generic DAG that will eventually replace this module.
+//! This module is a legacy implementation that provides tool-specific DAG
+//! types (`DagNode`, `DagGraph`, `DagExecutor`, `TaskContext`). Internally it
+//! mirrors the structure of [`CoreDag<T>`](crate::orchestration::core_dag::CoreDag)
+//! and conversion impls are provided to bridge between the two.
+//!
+//! # Deprecated
+//! Use [`crate::orchestration::core_dag::CoreDag<T>`] for new code.
+//! `CoreDag` is the unified generic DAG that replaces this module.
+
+#![deprecated(note = "Use core_dag::CoreDag instead")]
 
 // F-GAP-51: dead_code allowed on items below when sub-bus-tool-future is disabled
 
@@ -17,6 +23,7 @@ use tokio::sync::Semaphore;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
+use crate::orchestration::core_dag as core_dag_impl;
 use crate::orchestration::tool::{ToolInput, ToolRegistry};
 
 // ---------------------------------------------------------------------------
@@ -694,6 +701,35 @@ pub fn build_dag_from_tool_calls(tool_calls: &[(String, Value)]) -> DagGraph {
     // Recompute topological metrics
     let _ = graph.topological_sort();
     graph
+}
+
+// ---------------------------------------------------------------------------
+// Conversion impls: DagGraph ↔ core_dag::CoreDag<DagNode>
+// ---------------------------------------------------------------------------
+
+/// Convert a [`core_dag::CoreDag<DagNode>`] into a [`DagGraph`].
+impl From<core_dag_impl::CoreDag<DagNode>> for DagGraph {
+    fn from(dag: core_dag_impl::CoreDag<DagNode>) -> Self {
+        let mut graph = DagGraph::new();
+        for (_id, node) in dag.nodes {
+            let data: DagNode = node.data;
+            graph.add_node(node.id, data.tool_name, data.input, data.dependencies);
+        }
+        let _ = graph.topological_sort();
+        graph
+    }
+}
+
+/// Convert a [`DagGraph`] into a [`core_dag::CoreDag<DagNode>`].
+impl From<DagGraph> for core_dag_impl::CoreDag<DagNode> {
+    fn from(graph: DagGraph) -> Self {
+        let mut dag = core_dag_impl::CoreDag::new();
+        for (id, node) in graph.nodes {
+            let deps = node.dependencies.clone();
+            dag.add_node(id.clone(), node, deps);
+        }
+        dag
+    }
 }
 
 #[cfg(test)]

@@ -418,10 +418,12 @@ pub fn bridge_metrics_recorder(runtime_metrics: &RuntimeMetrics, recorder: &Metr
 /// [`PrometheusMetricsRecorder::bridge_to`] periodically (or on each metrics
 /// scrape) to synchronize recorder values into a `RuntimeMetrics` snapshot
 /// for Prometheus exposure.
+#[allow(dead_code)] // F-GAP reserved
 pub struct PrometheusMetricsRecorder {
     inner: MetricsRecorder,
 }
 
+#[allow(dead_code)] // F-GAP reserved
 impl PrometheusMetricsRecorder {
     /// Create a new `PrometheusMetricsRecorder`.
     pub fn new() -> Self {

@@ -1,8 +1,16 @@
-//! BLUE42 ORCH-FIN-04: ExecutionGraph-driven tool execution.
+//! Deprecated wrapper around [`crate::orchestration::core_dag::CoreDag<T>`].
 //!
-//! Uses ExecutionGraph nodes (Branch/Join/Condition) to express tool execution
-//! as a DAG with fan-out, synchronization, and state tracking. Node states are
-//! exposed for governance.status observability.
+//! Provides `build_tool_execution_dag`, `execute_tool_dag`, and
+//! `dag_trace_to_observability` — legacy functions that use
+//! [`dag_executor::DagGraph`](crate::orchestration::dag_executor::DagGraph)
+//! (which itself wraps `CoreDag`) plus
+//! [`ExecutionGraph`](crate::orchestration::execution_graph::ExecutionGraph)
+//! integration. New code should use `CoreDag<T>` directly.
+//!
+//! # Deprecated
+//! Use [`crate::orchestration::core_dag::CoreDag<T>`] for new code.
+
+#![deprecated(note = "Use core_dag::CoreDag instead")]
 
 use std::sync::Arc;
 

@@ -8,7 +8,7 @@
 
 use crate::i18n::{t, tf};
 use crate::intelligence::now_ms;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -108,6 +108,22 @@ pub struct ConsolidatedMemory {
     pub access_count: u64,
     /// Epoch millisecond of the last access.
     pub last_accessed_ms: u64,
+}
+
+/// A semantic pattern extracted from consolidated memory data via LLM-like distillation.
+///
+/// Captures the key terms (keywords) that characterize a memory's content,
+/// along with a confidence score and observation frequency.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SemanticPattern {
+    /// Unique identifier for this pattern
+    pub pattern_id: String,
+    /// Top-ranked keywords that define this semantic pattern
+    pub keywords: Vec<String>,
+    /// Confidence in the extracted pattern (0.0 – 1.0)
+    pub confidence: f64,
+    /// How many times this pattern has been observed
+    pub frequency: usize,
 }
 
 /// The forgetting curve for a given memory, modelling strength decay over time.
@@ -265,8 +281,11 @@ struct CenterState {
     curriculum: Vec<CurriculumStage>,
     /// Per-agent historical results for adaptive curriculum thresholds.
     agent_history: HashMap<String, Vec<AgentResult>>,
+    /// Extracted semantic patterns from LLM distillation
+    semantic_patterns: HashMap<String, SemanticPattern>,
     next_task_id: u64,
     next_memory_id: u64,
+    next_pattern_id: u64,
 }
 
 impl ContinuousLearningCenter {
@@ -294,8 +313,10 @@ impl ContinuousLearningCenter {
                 forgetting_risks: HashMap::new(),
                 curriculum,
                 agent_history: HashMap::new(),
+                semantic_patterns: HashMap::new(),
                 next_task_id: 1,
                 next_memory_id: 1,
+                next_pattern_id: 1,
             })),
         }
     }
@@ -429,6 +450,132 @@ impl ContinuousLearningCenter {
         state.memories.insert(id.clone(), memory);
         state.forgetting_curves.insert(id.clone(), curve);
         Ok(id)
+    }
+
+    // ── LLM Distillation ───────────────────────────────────────────────────
+
+    /// Distills consolidated memories into semantic patterns using TF-IDF-like
+    /// keyword extraction.
+    ///
+    /// This simulates an LLM distillation step: it analyzes stored memories,
+    /// extracts salient keywords via term-frequency / inverse-document-frequency
+    /// scoring, and persists the resulting `SemanticPattern`s into the store.
+    ///
+    /// Returns the number of new patterns extracted.
+    pub fn llm_distill(&self) -> usize {
+        let patterns = self.extract_semantic_patterns();
+        patterns.len()
+    }
+
+    /// Analyzes all stored memories and extracts semantic patterns using
+    /// TF-IDF scoring.
+    ///
+    /// Internal steps:
+    /// 1. Tokenize each memory's `data` field into lowercase alphanumeric terms
+    /// 2. Compute term frequency (TF) per memory
+    /// 3. Compute inverse document frequency (IDF) across all memories
+    /// 4. Score each term as TF × IDF
+    /// 5. Keep the top-5 keywords per memory as a `SemanticPattern`
+    ///
+    /// Extracted patterns are both returned and persisted in the center's
+    /// semantic pattern store.
+    fn extract_semantic_patterns(&self) -> Vec<SemanticPattern> {
+        // Collect memory data into owned Vec to avoid borrow conflicts
+        // when mutating state later.
+        let memory_snapshots: Vec<(String, String)> = {
+            let state = lock_guard(&self.state);
+            state
+                .memories
+                .values()
+                .map(|m| (m.id.clone(), m.data.clone()))
+                .collect()
+        };
+
+        if memory_snapshots.is_empty() {
+            return Vec::new();
+        }
+
+        // Tokenize all memories and compute document frequency.
+        let mut all_tokens: Vec<Vec<String>> = Vec::with_capacity(memory_snapshots.len());
+        let mut doc_freq: HashMap<String, usize> = HashMap::new();
+
+        for (_, data) in &memory_snapshots {
+            let tokens: Vec<String> = data
+                .to_lowercase()
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|s| !s.is_empty() && s.len() > 2)
+                .map(|s| s.to_string())
+                .collect();
+
+            let unique_tokens: HashSet<&str> = tokens.iter().map(|s| s.as_str()).collect();
+            for token in unique_tokens {
+                *doc_freq.entry(token.to_string()).or_insert(0) += 1;
+            }
+            all_tokens.push(tokens);
+        }
+
+        let n_docs = memory_snapshots.len() as f64;
+        let mut patterns = Vec::new();
+
+        for (i, (mem_id, data)) in memory_snapshots.iter().enumerate() {
+            let tokens = &all_tokens[i];
+            let total_terms = tokens.len() as f64;
+            if total_terms < 1.0 {
+                continue;
+            }
+
+            let mut term_freq: HashMap<&str, usize> = HashMap::new();
+            for token in tokens {
+                *term_freq.entry(token).or_insert(0) += 1;
+            }
+
+            let mut scored: Vec<(String, f64)> = term_freq
+                .iter()
+                .map(|(term, &freq)| {
+                    let tf = freq as f64 / total_terms;
+                    let df = doc_freq.get(*term).copied().unwrap_or(1) as f64;
+                    let idf = (n_docs / df).ln() + 1.0;
+                    let score = tf * idf;
+                    (term.to_string(), score)
+                })
+                .collect();
+
+            scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+            let top_k: Vec<(String, f64)> = scored.into_iter().take(5).collect();
+            if top_k.is_empty() {
+                continue;
+            }
+
+            let avg_confidence = top_k.iter().map(|(_, s)| s).sum::<f64>() / top_k.len() as f64;
+
+            // Now lock state for mutation — no outstanding immutable borrows.
+            let mut state = lock_guard(&self.state);
+
+            let pattern = SemanticPattern {
+                pattern_id: format!("pat-{}", state.next_pattern_id),
+                keywords: top_k.into_iter().map(|(k, _)| k).collect(),
+                confidence: avg_confidence.clamp(0.0, 1.0),
+                frequency: state
+                    .semantic_patterns
+                    .values()
+                    .filter(|p| {
+                        data.to_lowercase()
+                            .contains(&p.keywords.first().cloned().unwrap_or_default())
+                    })
+                    .count()
+                    .max(1),
+            };
+
+            state.next_pattern_id += 1;
+            state
+                .semantic_patterns
+                .insert(pattern.pattern_id.clone(), pattern.clone());
+            patterns.push(pattern);
+            let _ = mem_id;
+        }
+
+        patterns
     }
 
     /// Reinforces a memory by resetting its forgetting curve strength.
@@ -971,7 +1118,65 @@ mod tests {
         Ok(())
     }
 
-    // ── 5. Detect forgetting ──────────────────────────────────────────────
+    // ── 5. LLM Distillation ────────────────────────────────────────────────
+
+    #[test]
+    fn test_semantic_pattern_struct() {
+        let pattern = SemanticPattern {
+            pattern_id: "pat-1".to_string(),
+            keywords: vec!["error".to_string(), "timeout".to_string()],
+            confidence: 0.85,
+            frequency: 3,
+        };
+        assert_eq!(pattern.pattern_id, "pat-1");
+        assert_eq!(pattern.keywords.len(), 2);
+        assert!((pattern.confidence - 0.85).abs() < 1e-9);
+        assert_eq!(pattern.frequency, 3);
+    }
+
+    #[test]
+    fn test_llm_distill_empty_center() {
+        let center = test_center();
+        let count = center.llm_distill();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_llm_distill_extracts_patterns() -> Result<()> {
+        let center = test_center();
+        center.consolidate_experience(
+            "sys-error",
+            "system timeout error detected during database connection",
+            0.9,
+        )?;
+        center.consolidate_experience(
+            "net-fail",
+            "network failure timeout connecting to remote host",
+            0.7,
+        )?;
+        center.consolidate_experience(
+            "auth-ok",
+            "user authentication successful session token issued",
+            0.5,
+        )?;
+
+        let count = center.llm_distill();
+        // Each of the 3 memories should produce a pattern
+        assert_eq!(count, 3);
+
+        // Check patterns are queryable from center state
+        let state = lock_guard(&center.state);
+        assert_eq!(state.semantic_patterns.len(), 3);
+        for pattern in state.semantic_patterns.values() {
+            assert!(!pattern.keywords.is_empty());
+            assert!(pattern.confidence >= 0.0);
+            assert!(pattern.confidence <= 1.0);
+            assert!(pattern.frequency >= 1);
+        }
+        Ok(())
+    }
+
+    // ── 6. Detect forgetting ──────────────────────────────────────────────
 
     #[test]
     fn test_detect_forgetting() -> Result<()> {

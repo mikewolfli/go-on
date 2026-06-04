@@ -340,12 +340,14 @@ pub struct DagMetrics {
 ///     }
 /// }
 /// ```
+#[allow(dead_code)] // F-GAP reserved
 pub trait FromCoreDag<T, Target> {
     /// Convert a `CoreDag<T>` into `Target`.
     fn from_core_dag(dag: CoreDag<T>) -> Target;
 }
 
 /// Trait for converting from another DAG type into a `CoreDag<T>`.
+#[allow(dead_code)] // F-GAP reserved
 pub trait IntoCoreDag<T, Source> {
     /// Convert `Source` into a `CoreDag<T>`.
     fn into_core_dag(source: Source) -> CoreDag<T>;

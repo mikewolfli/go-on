@@ -7,6 +7,7 @@
 use crate::memory::memory_persistence::{MemoryEntry, MemoryTier};
 
 /// Configuration for memory summarization.
+#[allow(dead_code)] // F-GAP reserved
 #[derive(Debug, Clone)]
 pub struct SummarizationConfig {
     /// Maximum number of entries before summarization is triggered.
@@ -30,12 +31,14 @@ impl Default for SummarizationConfig {
 /// A progressive memory summarizer that compresses groups of entries
 /// into a compact summary when the group size exceeds the configured
 /// threshold.
+#[allow(dead_code)] // F-GAP reserved
 pub struct MemorySummarizer {
     config: SummarizationConfig,
 }
 
 impl MemorySummarizer {
     /// Create a new summarizer with the given configuration.
+    #[allow(dead_code)] // F-GAP reserved
     pub fn new(config: SummarizationConfig) -> Self {
         Self { config }
     }
@@ -46,6 +49,7 @@ impl MemorySummarizer {
     /// returned as-is (`SummarizedMemory::Full`).  Above the threshold, the
     /// most useful / most recently accessed entries are retained and a synthetic
     /// summary entry is appended (`SummarizedMemory::Compressed`).
+    #[allow(dead_code)] // F-GAP reserved
     pub fn summarize(&self, entries: &[MemoryEntry]) -> SummarizedMemory {
         if entries.len() <= self.config.max_entries_before_summary {
             return SummarizedMemory::Full(entries.to_vec());
@@ -99,12 +103,14 @@ impl MemorySummarizer {
 
     /// Convenience: return `true` when the entry count exceeds the threshold
     /// and summarization would actually reduce the set.
+    #[allow(dead_code)] // F-GAP reserved
     pub fn should_summarize(&self, entry_count: usize) -> bool {
         entry_count > self.config.max_entries_before_summary
     }
 }
 
 /// The result of a summarization operation.
+#[allow(dead_code)] // F-GAP reserved
 #[derive(Debug, Clone)]
 pub enum SummarizedMemory {
     /// The original set of entries was small enough to keep as-is.

@@ -67,6 +67,7 @@ impl TenantBucket {
 /// Global rate limiter instance.
 pub struct GlobalRateLimiter {
     /// Maximum number of concurrent requests allowed globally.
+    #[allow(dead_code)] // F-GAP reserved
     pub global_max: usize,
     config: RateLimitConfig,
     tenants: Mutex<HashMap<String, TenantBucket>>,
@@ -96,6 +97,7 @@ impl GlobalRateLimiter {
         bucket.try_consume(tokens)
     }
 
+    #[allow(dead_code)] // F-GAP reserved
     pub fn config(&self) -> &RateLimitConfig {
         &self.config
     }
@@ -107,6 +109,7 @@ pub fn global_rate_limiter() -> &'static GlobalRateLimiter {
     GLOBAL_RATE_LIMITER.get_or_init(|| GlobalRateLimiter::new(RateLimitConfig::default()))
 }
 
+#[allow(dead_code)] // F-GAP reserved
 pub fn init_rate_limiter(config: RateLimitConfig) {
     let _ = GLOBAL_RATE_LIMITER.set(GlobalRateLimiter::new(config));
 }

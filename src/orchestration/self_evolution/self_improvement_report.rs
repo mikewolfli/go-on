@@ -11,6 +11,7 @@ use crate::orchestration::self_evolution::evolution_history::EvolutionHistory;
 use serde::{Deserialize, Serialize};
 
 /// Comprehensive self-improvement report spanning all subsystems.
+#[allow(dead_code)] // F-GAP reserved
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelfImprovementReport {
     /// When the report was generated.
@@ -49,6 +50,7 @@ pub struct SelfImprovementReport {
 
 impl SelfImprovementReport {
     /// Generate an empty/inert report for bootstrapping.
+    #[allow(dead_code)] // F-GAP reserved
     pub fn empty() -> Self {
         Self {
             generated_at_ms: crate::intelligence::now_ms(),
@@ -66,6 +68,7 @@ impl SelfImprovementReport {
     }
 
     /// Generate a report from available subsystem data.
+    #[allow(dead_code)] // F-GAP reserved
     pub async fn generate(
         history: Option<&EvolutionHistory>,
         metacognitive_profile: Option<MetacognitiveProfile>,
@@ -182,6 +185,7 @@ impl SelfImprovementReport {
     }
 
     /// Render the report as a formatted markdown string.
+    #[allow(dead_code)] // F-GAP reserved
     pub fn to_markdown(&self) -> String {
         let mut md = String::new();
 

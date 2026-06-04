@@ -6,9 +6,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-pub use crate::shared::provenance_helpers::{
-    make_entry, make_entry_with_rationale, ProvenanceEntry, ProvenanceEntryBuilder,
-};
+pub use crate::shared::provenance_helpers::ProvenanceEntry;
 
 /// In-process provenance ledger (append-only, bounded)
 #[derive(Debug, Clone)]
@@ -220,6 +218,7 @@ impl ProvenanceLedger {
     }
 }
 
+#[allow(dead_code)] // F-GAP reserved
 fn now_ms() -> u64 {
     crate::shared::timestamps::now_ts_ms() as u64
 }
@@ -227,6 +226,7 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::provenance_helpers::make_entry;
     use serde_json::json;
 
     fn make_test_entry(

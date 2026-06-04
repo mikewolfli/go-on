@@ -44,6 +44,7 @@ use crate::agent::{Agent, AgentRegistry, Message, StreamingSender};
 use crate::agents::progress_reporter::ProgressReporter;
 use crate::intelligence::metacognitive::{CorrectiveStatus, MetacognitiveController};
 use crate::intelligence::world_model::{EntityType, WorldModel, WorldModelConfig};
+#[allow(deprecated)] // TODO: migrate to crate::orchestration::core_dag
 use crate::orchestration::dag_executor::TaskContext;
 
 use std::time::{SystemTime, UNIX_EPOCH};

@@ -859,6 +859,7 @@ impl SecretManager {
 }
 
 /// Securely remove a key from the store by zeroing its bytes before dropping (S-FIX10).
+#[allow(dead_code)] // F-GAP reserved
 pub fn secure_remove(store: &mut HashMap<String, Vec<u8>>, key: &str) {
     if let Some(value) = store.get_mut(key) {
         for byte in value.iter_mut() {

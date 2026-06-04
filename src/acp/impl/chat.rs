@@ -8,13 +8,13 @@
 use std::collections::HashMap;
 
 use std::sync::Arc;
-use std::sync::{Mutex as StdMutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::Instant;
 use std::{fs, path::Path};
 
 use anyhow::Result;
 use opentelemetry::{Context as OtelContext, KeyValue};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio::time::Duration;
@@ -41,7 +41,6 @@ use crate::acp::helpers::response_assembler::{
     build_chat_response, build_role_routing, build_task_graph_checkpoint, ChatResponseContext,
 };
 use crate::acp::helpers::review_gate::{run_enhanced_verification, run_review_gate};
-use crate::acp::r#impl::UserSession;
 use crate::acp::server::AcpServer;
 use crate::agent::Message;
 use crate::config::PhaseOptions;
@@ -63,75 +62,21 @@ use crate::memory_module::{MemoryClass, MemoryEntry, MemoryPolicy, MemoryStore};
 use crate::reinforcement::{
     build_task_plan, build_workflow_generated_artifact, persist_knowledge_insight_event,
     persist_workflow_generated, persist_workflow_learning_event, ArtifactLedger,
-    ExecutionDecisionCandidate, KnowledgeBusArtifact, KnowledgeInsightArtifact,
-    RequirementContractArtifact, TaskPlanArtifact, WorkflowLearningEvent,
+    KnowledgeBusArtifact, KnowledgeInsightArtifact, RequirementContractArtifact,
+    WorkflowLearningEvent,
 };
 use crate::rpc_protocol::{chat_trace_context, child_trace_context, RequestTraceContext};
 
-/// Chat parameters structure
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ChatParams {
-    /// Chat mode (e.g., "ask", "edit", "agent", "safeguard", "full_auto").
-    /// When absent or empty (e.g., from external clients like Zed),
-    /// defaults to "ask" (the safest general-purpose mode).
-    #[serde(default)]
-    pub mode: String,
-    /// Messages to process
-    pub messages: Vec<Message>,
-    /// Optional conversation ID for continuation
-    pub conversation_id: Option<String>,
-    /// Optional branch ID for tree-based history
-    pub branch_id: Option<String>,
-    /// Optional phase to force
-    pub phase: Option<String>,
-    /// Optional options for phase configuration
-    pub options: Option<PhaseOptions>,
-    /// Optional requirement contract
-    pub requirement_contract: Option<RequirementContractArtifact>,
-    /// Optional task plan
-    pub plan: Option<TaskPlanArtifact>,
-    /// Optional vector search hits
-    pub vector_hits: Option<Vec<serde_json::Value>>,
-    /// Optional execution decision candidate
-    pub execution_decision_candidate: Option<ExecutionDecisionCandidate>,
-}
-
-/// Context for a chat request, including authentication and tenant info.
-#[derive(Debug, Clone)]
-pub struct ChatRequestContext {
-    /// Authenticated user session, if user auth is enabled.
-    #[allow(dead_code)] // F-GAP-49 — Public API — reserved for audit logging and in-chat RBAC
-    pub user_session: Option<UserSession>,
-    /// Resolved tenant ID (from user session, or conversation_id, or default).
-    pub tenant_id: String,
-}
-
-impl ChatRequestContext {
-    /// Create a new context with optional user session.
-    pub fn new(user_session: Option<UserSession>) -> Self {
-        let tenant_id = user_session
-            .as_ref()
-            .and_then(|s| s.tenant_id.clone())
-            .unwrap_or_else(|| "default-tenant".to_string());
-        Self {
-            user_session,
-            tenant_id,
-        }
-    }
-}
-
-#[derive(Default)]
-pub(crate) struct AgentSwitchState {
-    pub forced_agent_by_phase: HashMap<String, String>,
-    #[allow(dead_code)] // F-GAP-49 — reserved for agent switch state extensibility
-    pub primary_agent_by_phase: HashMap<String, String>,
-}
-
-static AGENT_SWITCH_STATE: OnceLock<StdMutex<AgentSwitchState>> = OnceLock::new();
-
-pub(crate) fn agent_switch_state() -> &'static StdMutex<AgentSwitchState> {
-    AGENT_SWITCH_STATE.get_or_init(|| StdMutex::new(AgentSwitchState::default()))
-}
+pub mod params;
+pub mod voting;
+pub(crate) use self::params::agent_switch_state;
+pub use self::params::ChatParams;
+pub use self::params::ChatRequestContext;
+pub(crate) use self::voting::{
+    assess_high_risk, build_risk_vote_policy, normalize_vote_key, option_bool,
+    select_strong_model_id, select_top_models, AgentStrongVoteOutcome, AgentVoteSource,
+    HighRiskVoteAttemptResult, RiskAssessment, RiskVotePolicy,
+};
 
 fn round_metric(value: f64) -> f64 {
     (value * 10_000.0).round() / 10_000.0
@@ -196,189 +141,6 @@ pub(crate) fn is_quota_or_token_limit_error(error_text: &str) -> bool {
         || text.contains("credit") && text.contains("insufficient")
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct RiskVotePolicy {
-    pub(crate) enabled: bool,
-    threshold: usize,
-    domain_keywords: Vec<String>,
-    decision_keywords: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RiskAssessment {
-    pub(crate) score: usize,
-    pub(crate) is_high_risk: bool,
-    pub(crate) reasons: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct AgentStrongVoteOutcome {
-    pub(crate) agent: String,
-    pub(crate) model: Option<String>,
-    pub(crate) response: String,
-    pub(crate) reasoning: String,
-}
-
-pub(crate) type AgentVoteSource = (String, Arc<dyn crate::agent::Agent>, HashMap<String, Value>);
-
-pub(crate) fn option_bool(options: &HashMap<String, Value>, key: &str, default: bool) -> bool {
-    options.get(key).and_then(Value::as_bool).unwrap_or(default)
-}
-
-fn option_usize(options: &HashMap<String, Value>, key: &str, default: usize) -> usize {
-    options
-        .get(key)
-        .and_then(Value::as_u64)
-        .map(|v| v as usize)
-        .unwrap_or(default)
-}
-
-fn option_keywords(options: &HashMap<String, Value>, key: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    if let Some(value) = options.get(key) {
-        if let Some(items) = value.as_array() {
-            for item in items {
-                if let Some(text) = item.as_str() {
-                    let trimmed = text.trim().to_ascii_lowercase();
-                    if !trimmed.is_empty() {
-                        out.push(trimmed);
-                    }
-                }
-            }
-        } else if let Some(text) = value.as_str() {
-            for token in text.split(',') {
-                let trimmed = token.trim().to_ascii_lowercase();
-                if !trimmed.is_empty() {
-                    out.push(trimmed);
-                }
-            }
-        }
-    }
-    out
-}
-
-fn build_risk_vote_policy(options: &HashMap<String, Value>) -> RiskVotePolicy {
-    const DEFAULT_DOMAIN_KEYWORDS: &[&str] = &[
-        "medical",
-        "diagnosis",
-        "clinical",
-        "prescription",
-        "treatment",
-        "surgery",
-        "healthcare",
-        "legal",
-        "contract",
-        "compliance",
-        "regulation",
-        "litigation",
-        "finance",
-        "financial",
-        "investment",
-        "portfolio",
-        "credit",
-        "loan",
-        "underwriting",
-        "fraud",
-        "aml",
-        "tax",
-        "audit",
-        "insurance",
-        "privacy",
-        "security incident",
-        "safety-critical",
-    ];
-    const DEFAULT_DECISION_KEYWORDS: &[&str] = &[
-        "approve",
-        "reject",
-        "deny",
-        "diagnose",
-        "prescribe",
-        "recommendation",
-        "risk control",
-        "decision",
-        "compliance decision",
-        "legal advice",
-        "medical advice",
-        "financial advice",
-    ];
-
-    let mut domain_keywords = DEFAULT_DOMAIN_KEYWORDS
-        .iter()
-        .map(|item| (*item).to_string())
-        .collect::<Vec<_>>();
-    domain_keywords.extend(option_keywords(options, "high_risk_domain_keywords"));
-    domain_keywords.sort();
-    domain_keywords.dedup();
-
-    let mut decision_keywords = DEFAULT_DECISION_KEYWORDS
-        .iter()
-        .map(|item| (*item).to_string())
-        .collect::<Vec<_>>();
-    decision_keywords.extend(option_keywords(options, "high_risk_decision_keywords"));
-    decision_keywords.sort();
-    decision_keywords.dedup();
-
-    RiskVotePolicy {
-        enabled: option_bool(options, "high_risk_vote_enabled", true),
-        threshold: option_usize(options, "high_risk_vote_threshold", 2).clamp(1, 10),
-        domain_keywords,
-        decision_keywords,
-    }
-}
-
-fn assess_high_risk(messages: &[Message], mode: &str, policy: &RiskVotePolicy) -> RiskAssessment {
-    let corpus = messages
-        .iter()
-        .filter(|message| message.role.eq_ignore_ascii_case("user"))
-        .map(|message| message.content.to_ascii_lowercase())
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let mut score = 0usize;
-    let mut reasons = Vec::new();
-
-    for keyword in &policy.domain_keywords {
-        if corpus.contains(keyword) {
-            score += 2;
-            reasons.push(format!("domain:{keyword}"));
-        }
-    }
-    for keyword in &policy.decision_keywords {
-        if corpus.contains(keyword) {
-            score += 1;
-            reasons.push(format!("decision:{keyword}"));
-        }
-    }
-    if matches!(mode, "safeguard" | "full_auto") {
-        score += 1;
-        reasons.push(format!("mode:{mode}"));
-    }
-
-    reasons.sort();
-    reasons.dedup();
-
-    RiskAssessment {
-        score,
-        is_high_risk: score >= policy.threshold,
-        reasons,
-    }
-}
-
-pub(crate) fn normalize_vote_key(text: &str) -> String {
-    text.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_ascii_lowercase()
-}
-
-pub(crate) struct HighRiskVoteAttemptResult {
-    pub(crate) attempt_log: Value,
-    pub(crate) candidate: Option<AgentStrongVoteOutcome>,
-    pub(crate) source: Option<AgentVoteSource>,
-    pub(crate) failure: Option<Value>,
-}
-
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_high_risk_vote_attempt(
     server: &AcpServer,
     phase_name: &str,
@@ -489,63 +251,6 @@ pub(crate) async fn run_high_risk_vote_attempt(
             }
         }
     }
-}
-
-pub(crate) fn select_strong_model_id(agent: &dyn crate::agent::Agent) -> Option<String> {
-    let mut models = agent
-        .available_models()
-        .into_iter()
-        .filter(|model| !model.id.trim().is_empty())
-        .collect::<Vec<_>>();
-
-    if models.is_empty() {
-        return agent.default_model().map(|model| model.id);
-    }
-
-    models.sort_by(|left, right| {
-        right
-            .context_window
-            .unwrap_or(0)
-            .cmp(&left.context_window.unwrap_or(0))
-            .then_with(|| right.capabilities.len().cmp(&left.capabilities.len()))
-            .then_with(|| right.is_default.cmp(&left.is_default))
-    });
-
-    models.first().map(|model| model.id.clone())
-}
-
-pub(crate) fn select_top_models(agent: &dyn crate::agent::Agent, max_models: usize) -> Vec<String> {
-    let mut models = agent
-        .available_models()
-        .into_iter()
-        .filter(|model| !model.id.trim().is_empty())
-        .collect::<Vec<_>>();
-
-    if models.is_empty() {
-        return agent
-            .default_model()
-            .map(|model| vec![model.id])
-            .unwrap_or_default();
-    }
-
-    models.sort_by(|left, right| {
-        right
-            .context_window
-            .unwrap_or(0)
-            .cmp(&left.context_window.unwrap_or(0))
-            .then_with(|| right.capabilities.len().cmp(&left.capabilities.len()))
-            .then_with(|| right.is_default.cmp(&left.is_default))
-    });
-
-    let ordered = models.into_iter().map(|model| model.id).collect::<Vec<_>>();
-    let mut selected = Vec::new();
-    for model_id in ordered {
-        if !selected.iter().any(|existing| existing == &model_id) {
-            selected.push(model_id);
-        }
-    }
-    selected.truncate(max_models.max(1));
-    selected
 }
 
 pub(crate) fn reorder_agents_with_priority(

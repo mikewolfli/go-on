@@ -1,11 +1,15 @@
-//! DAG-driven execution adapter for the autonomy loop.
+//! Deprecated wrapper around [`crate::orchestration::core_dag::CoreDag<T>`].
 //!
-//! Converts `PlannerExecutionBridge` (which wraps an `ExecutionGraph` DAG) into
-//! the phased execution order format that `execute_runtime_subtasks` expects.
-//! This wires AUTON-07: the DAG step ordering actually drives execution.
+//! Provides `dag_execution_order`, `dag_progress_with_suggested_next`, and
+//! `dag_is_stalled` — legacy adapter functions that convert a
+//! [`PlannerExecutionBridge`](crate::orchestration::planner_execution_graph::PlannerExecutionBridge)
+//! into phased execution orders.
+//! New code should use `CoreDag<T>` directly.
 //!
-//! Rather than modifying large files (exec_pack.rs, chat.rs), this adapter
-//! is called at the boundary between planning and execution.
+//! # Deprecated
+//! Use [`crate::orchestration::core_dag::CoreDag<T>`] for new code.
+
+#![deprecated(note = "Use core_dag::CoreDag instead")]
 
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap, HashSet};

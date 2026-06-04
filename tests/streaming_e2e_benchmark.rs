@@ -11,7 +11,7 @@
 /// Regression detection: TTFT p50 > baseline × 1.5
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};

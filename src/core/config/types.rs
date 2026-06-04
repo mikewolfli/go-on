@@ -132,52 +132,52 @@ pub struct ConversationContext {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ProviderSpec {
-    pub(crate) name: String,
+pub struct ProviderSpec {
+    pub name: String,
     #[serde(rename = "type")]
-    pub(crate) agent_type: String,
+    pub agent_type: String,
     #[serde(default)]
-    pub(crate) url: Option<String>,
+    pub url: Option<String>,
     #[serde(default)]
-    pub(crate) chat_path: Option<String>,
+    pub chat_path: Option<String>,
     #[serde(default)]
-    pub(crate) model: Option<String>,
+    pub model: Option<String>,
     #[serde(default)]
-    pub(crate) api_key_env: Option<String>,
+    pub api_key_env: Option<String>,
     #[serde(default)]
-    pub(crate) secret_key_env: Option<String>,
+    pub secret_key_env: Option<String>,
     #[serde(default)]
-    pub(crate) anthropic_version: Option<String>,
+    pub anthropic_version: Option<String>,
     #[serde(default)]
-    pub(crate) max_tokens: Option<u32>,
+    pub max_tokens: Option<u32>,
     #[serde(default)]
-    pub(crate) supports_system: Option<bool>,
+    pub supports_system: Option<bool>,
     #[serde(default)]
-    pub(crate) supports_vision: Option<bool>,
+    pub supports_vision: Option<bool>,
     #[serde(default)]
-    pub(crate) region: Option<String>,
+    pub region: Option<String>,
     #[serde(default)]
-    pub(crate) recommended_default_phase: Option<String>,
+    pub recommended_default_phase: Option<String>,
     #[serde(default)]
-    pub(crate) recommended_request_timeout_seconds: Option<u64>,
+    pub recommended_request_timeout_seconds: Option<u64>,
     #[serde(default)]
-    pub(crate) recommended_review_timeout_seconds: Option<u64>,
+    pub recommended_review_timeout_seconds: Option<u64>,
     #[serde(default)]
-    pub(crate) recommended_cache_enabled: Option<bool>,
+    pub recommended_cache_enabled: Option<bool>,
     #[serde(default)]
-    pub(crate) recommended_vector_enabled: Option<bool>,
+    pub recommended_vector_enabled: Option<bool>,
     #[serde(default)]
-    pub(crate) recommended_phase_max_inflight: Option<usize>,
+    pub recommended_phase_max_inflight: Option<usize>,
     #[serde(default)]
-    pub(crate) recommended_global_max_inflight: Option<usize>,
+    pub recommended_global_max_inflight: Option<usize>,
     #[serde(default)]
-    pub(crate) recommended_planning_request_timeout_seconds: Option<u64>,
+    pub recommended_planning_request_timeout_seconds: Option<u64>,
     #[serde(default)]
-    pub(crate) recommended_coding_request_timeout_seconds: Option<u64>,
+    pub recommended_coding_request_timeout_seconds: Option<u64>,
     #[serde(default)]
-    pub(crate) recommended_review_request_timeout_seconds: Option<u64>,
+    pub recommended_review_request_timeout_seconds: Option<u64>,
     #[serde(default)]
-    pub(crate) recommended_delivery_request_timeout_seconds: Option<u64>,
+    pub recommended_delivery_request_timeout_seconds: Option<u64>,
 }
 
 impl ProviderSpec {

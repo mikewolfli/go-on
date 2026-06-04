@@ -58,6 +58,7 @@ use crate::intelligence::token_cache::{
     estimate_messages_token_count, messages_to_text, ContextLengthClass,
 };
 use crate::observability::performance::record_global_operation;
+#[allow(deprecated)] // TODO: migrate to crate::orchestration::core_dag
 use crate::orchestration::dag_executor::TaskContext;
 use crate::orchestration::flow::ResolvedPhase;
 use crate::orchestration::mode::{resolve_mode_runtime, ModeKind};

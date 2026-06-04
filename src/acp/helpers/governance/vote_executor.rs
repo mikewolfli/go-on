@@ -392,6 +392,7 @@ pub(crate) async fn execute_high_risk_vote(
 // ── Upgraded: Weighted & Delphi-Debate Voting ───────────────────────────────
 
 /// Voting mode for the upgraded high-risk vote executor.
+#[allow(dead_code)] // F-GAP reserved
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VoteMode {
     /// Original count-based voting with reputation tiebreaker (default).
@@ -411,6 +412,7 @@ impl Default for VoteMode {
 }
 
 /// Configuration for the upgraded voting executor.
+#[allow(dead_code)] // F-GAP reserved
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VoteExecutionConfig {
     /// Which voting mode to use.
@@ -439,6 +441,7 @@ impl Default for VoteExecutionConfig {
 }
 
 /// A weighted vote entry for computing reputation-weighted outcomes.
+#[allow(dead_code)] // F-GAP reserved
 #[derive(Debug, Clone)]
 struct WeightedBallot {
     /// Index into the original candidates/ballots list.
@@ -454,6 +457,7 @@ struct WeightedBallot {
 /// Instead of counting each candidate's response equally, each response's
 /// vote weight is the sum of reputation scores of agents who gave that response.
 /// The response with the highest total reputation weight wins.
+#[allow(dead_code)] // F-GAP reserved
 fn compute_weighted_winner(
     candidates: &[AgentStrongVoteOutcome],
     reputation_scores: &HashMap<String, f64>,
@@ -522,6 +526,7 @@ fn compute_weighted_winner(
 /// * `vote_config` – [`VoteExecutionConfig`] controlling mode and threshold.
 ///
 /// Returns the same [`HighRiskVoteExecutionResult`] structure.
+#[allow(dead_code)] // F-GAP reserved
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::type_complexity)]
 pub(crate) async fn execute_high_risk_vote_weighted(

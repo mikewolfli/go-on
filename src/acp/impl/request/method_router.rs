@@ -46,11 +46,13 @@ impl MethodRouter {
     }
 
     /// Register a handler for the given method name.
+    #[allow(dead_code)] // F-GAP reserved
     pub fn register(&mut self, method: &'static str, handler: Box<dyn MethodHandler>) {
         self.handlers.insert(method, handler);
     }
 
     /// Find a handler for the given method (synchronous lookup, no lock held).
+    #[allow(dead_code)] // F-GAP reserved
     pub fn find_handler(&self, method: &str) -> Option<&Box<dyn MethodHandler>> {
         self.handlers.get(method)
     }
@@ -97,6 +99,7 @@ pub fn global_method_router() -> &'static Mutex<MethodRouter> {
 }
 
 /// Convenience: register a handler on the global router at startup.
+#[allow(dead_code)] // F-GAP reserved
 pub fn register_method_handler(method: &'static str, handler: Box<dyn MethodHandler>) {
     let router = GLOBAL_ROUTER.get_or_init(|| Mutex::new(MethodRouter::new()));
     // blocking_lock is safe here because this is only called during
@@ -116,6 +119,7 @@ fn acp_method_registry() -> &'static std::sync::Mutex<Vec<&'static str>> {
 }
 
 /// Register an ACP method name so that `is_acp_request` recognises it.
+#[allow(dead_code)] // F-GAP reserved
 pub fn register_acp_method(method: &'static str) {
     if let Ok(mut guard) = acp_method_registry().lock() {
         guard.push(method);
