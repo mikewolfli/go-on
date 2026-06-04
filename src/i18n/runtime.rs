@@ -308,10 +308,11 @@ impl I18nManager {
     }
 }
 
-lazy_static::lazy_static! {
-    /// Global i18n manager instance
-    pub static ref I18N: Arc<RwLock<Option<I18nManager>>> = Arc::new(RwLock::new(None));
-}
+use std::sync::LazyLock;
+
+/// Global i18n manager instance
+pub static I18N: LazyLock<Arc<RwLock<Option<I18nManager>>>> =
+    LazyLock::new(|| Arc::new(RwLock::new(None)));
 
 /// Initialize global i18n system
 ///

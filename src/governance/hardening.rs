@@ -142,7 +142,67 @@ impl TenantBudgetEnforcer {
         Ok(())
     }
 
+    /// Atomically check whether a tenant can start a new task and, if so,
+    /// record that the task has started. This eliminates the TOCTOU race
+    /// present when callers invoke check_can_start() and start_task() separately.
+    pub fn check_and_start_task(&mut self, tenant_id: &str) -> Result<(), String> {
+        self.reset_daily_if_day_changed();
+        let quota = self
+            .quotas
+            .get(tenant_id)
+            .ok_or_else(|| format!("no quota configured for tenant '{}'", tenant_id))?;
+
+        let current_tasks = self.active_tasks.get(tenant_id).copied().unwrap_or(0);
+        if current_tasks >= quota.concurrent_tasks_limit {
+            return Err(format!(
+                "tenant '{}' at concurrent task limit ({}/{})",
+                tenant_id, current_tasks, quota.concurrent_tasks_limit
+            ));
+        }
+
+        let guard_tokens = match self.token_usage.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                tracing::warn!("token_usage lock poisoned, recovering");
+                poisoned.into_inner()
+            }
+        };
+        let tokens = guard_tokens.get(tenant_id).copied().unwrap_or(0);
+        if tokens >= quota.daily_token_limit {
+            return Err(format!(
+                "tenant '{}' exceeded daily token limit ({}/{})",
+                tenant_id, tokens, quota.daily_token_limit
+            ));
+        }
+
+        let guard_calls = match self.api_call_usage.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                tracing::warn!("api_call_usage lock poisoned, recovering");
+                poisoned.into_inner()
+            }
+        };
+        let calls = guard_calls.get(tenant_id).copied().unwrap_or(0);
+        if calls >= quota.daily_api_call_limit {
+            return Err(tf(
+                "error.tenant_limit_exceeded",
+                &[
+                    ("tenant_id", tenant_id),
+                    ("calls", &calls.to_string()),
+                    ("limit", &quota.daily_api_call_limit.to_string()),
+                ],
+            ));
+        }
+
+        // All checks passed — atomically consume the slot.
+        *self.active_tasks.entry(tenant_id.to_string()).or_insert(0) += 1;
+        Ok(())
+    }
+
     /// Record that a tenant started a task.
+    ///
+    /// Prefer [`check_and_start_task`] over calling this separately after
+    /// [`check_can_start`] to avoid TOCTOU races.
     pub fn start_task(&mut self, tenant_id: &str) {
         *self.active_tasks.entry(tenant_id.to_string()).or_insert(0) += 1;
     }
@@ -398,10 +458,32 @@ pub struct IdempotentResult {
     pub cached_at: Instant,
 }
 
+/// Per-tenant LRU-limited idempotency cache.
+///
+/// Each tenant gets an LRU cap (`max_entries_per_tenant`) so that one tenant
+/// cannot evict another's entries. Within a tenant, when the cap is reached,
+/// the oldest entry (by insertion order) is evicted.
+///
+/// Key format: `"{tenant_id}:{operation_key}"` — callers embed the tenant
+/// in the key so that `insert` and `get` are single-lookup operations.
 #[derive(Debug, Clone)]
 pub struct IdempotencyCache {
     results: HashMap<String, IdempotentResult>,
+    /// Per-tenant insertion order queue for LRU eviction.
+    tenant_keys: HashMap<String, Vec<String>>,
     ttl: Duration,
+    /// Maximum entries per tenant before LRU eviction kicks in.
+    /// Defaults to `MAX_ENTRIES_PER_TENANT` (1000).
+    max_entries_per_tenant: usize,
+}
+
+/// Default maximum entries per tenant for [`IdempotencyCache`].
+const MAX_ENTRIES_PER_TENANT: usize = 1000;
+
+/// Extract the tenant prefix from a cache key.
+/// Returns `"_default"` if no colon separator is found.
+fn tenant_from_key(key: &str) -> &str {
+    key.split(':').next().unwrap_or("_default")
 }
 
 #[derive(Debug, Clone)]
@@ -489,8 +571,25 @@ impl IdempotencyCache {
     pub fn new(ttl: Duration) -> Self {
         Self {
             results: HashMap::new(),
+            tenant_keys: HashMap::new(),
             ttl,
+            max_entries_per_tenant: MAX_ENTRIES_PER_TENANT,
         }
+    }
+
+    /// Create a cache with a custom per-tenant LRU limit.
+    pub fn with_max_per_tenant(ttl: Duration, max_entries_per_tenant: usize) -> Self {
+        Self {
+            results: HashMap::new(),
+            tenant_keys: HashMap::new(),
+            ttl,
+            max_entries_per_tenant,
+        }
+    }
+
+    /// Set a custom per-tenant LRU limit on an existing cache.
+    pub fn set_max_per_tenant(&mut self, max: usize) {
+        self.max_entries_per_tenant = max;
     }
 
     pub fn get(&self, key: &str) -> Option<&IdempotentResult> {
@@ -502,6 +601,27 @@ impl IdempotencyCache {
     }
 
     pub fn insert(&mut self, key: String, response: Value) {
+        let tenant = tenant_from_key(&key).to_string();
+
+        // Enforce per-tenant LRU cap: evict oldest entries for this tenant
+        // until we're under the limit (plus one for the new entry).
+        let keys_for_tenant = self.tenant_keys.entry(tenant.clone()).or_default();
+        if keys_for_tenant.len() >= self.max_entries_per_tenant {
+            let to_evict = keys_for_tenant
+                .len()
+                .saturating_sub(self.max_entries_per_tenant)
+                + 1;
+            for _ in 0..to_evict {
+                if let Some(oldest) = keys_for_tenant.first().cloned() {
+                    self.results.remove(&oldest);
+                    keys_for_tenant.remove(0);
+                }
+            }
+        }
+
+        // Record the insertion order for LRU eviction.
+        keys_for_tenant.push(key.clone());
+
         self.results.insert(
             key,
             IdempotentResult {
@@ -513,8 +633,20 @@ impl IdempotencyCache {
 
     pub fn evict_expired(&mut self) {
         let ttl = self.ttl;
-        self.results
-            .retain(|_, value| value.cached_at.elapsed() <= ttl);
+        let expired_keys: Vec<String> = self
+            .results
+            .iter()
+            .filter(|(_, v)| v.cached_at.elapsed() > ttl)
+            .map(|(k, _)| k.clone())
+            .collect();
+
+        for key in &expired_keys {
+            let tenant = tenant_from_key(key).to_string();
+            self.results.remove(key);
+            if let Some(keys_for_tenant) = self.tenant_keys.get_mut(&tenant) {
+                keys_for_tenant.retain(|k| k != key);
+            }
+        }
     }
 }
 

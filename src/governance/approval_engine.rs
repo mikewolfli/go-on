@@ -206,7 +206,6 @@ impl EscalationChain {
 // ApprovalEngine
 // ---------------------------------------------------------------------------
 
-#[derive(Debug)]
 pub struct ApprovalEngine {
     queue: Vec<ApprovalRequest>,
     escalation_chains: HashMap<String, EscalationChain>,
@@ -214,6 +213,22 @@ pub struct ApprovalEngine {
     pua_engine: Arc<Mutex<PuaRuleEngine>>,
     /// Optional preference learner that records decisions for auto-approval analysis.
     learner: Option<Arc<StdRwLock<ApprovalPreferenceLearner>>>,
+    /// Optional resolver for mapping approver roles to approver identities.
+    /// Called when building escalation chains to fill `approver_id`.
+    approver_id_resolver: Option<Box<dyn Fn(&str) -> Option<String> + Send + Sync>>,
+}
+
+impl std::fmt::Debug for ApprovalEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ApprovalEngine")
+            .field("queue", &self.queue)
+            .field("escalation_chains", &self.escalation_chains)
+            .field("timeout_policy", &self.timeout_policy)
+            .field("pua_engine", &self.pua_engine)
+            .field("learner", &self.learner)
+            .field("approver_id_resolver", &"<closure>")
+            .finish()
+    }
 }
 
 impl ApprovalEngine {
@@ -225,6 +240,7 @@ impl ApprovalEngine {
             timeout_policy,
             pua_engine,
             learner: None,
+            approver_id_resolver: None,
         }
     }
 
@@ -239,6 +255,26 @@ impl ApprovalEngine {
         self.learner = Some(learner);
     }
 
+    /// Set an approver ID resolver to fill `approver_id` in escalation steps.
+    ///
+    /// The resolver receives an `approver_role` string (e.g. "manager", "director")
+    /// and should return the corresponding approver identity, or `None` if unknown.
+    ///
+    /// Example:
+    /// ```ignore
+    /// engine.with_approver_resolver(|role| match role {
+    ///     "manager" => Some("alice@example.com".into()),
+    ///     "director" => Some("bob@example.com".into()),
+    ///     _ => None,
+    /// });
+    /// ```
+    pub fn with_approver_resolver(
+        &mut self,
+        resolver: Box<dyn Fn(&str) -> Option<String> + Send + Sync>,
+    ) {
+        self.approver_id_resolver = Some(resolver);
+    }
+
     // ── Submission ──────────────────────────────────────────────────────────
 
     /// Submit a request for approval. Returns the generated request id.
@@ -246,18 +282,25 @@ impl ApprovalEngine {
         let id = request.id.clone();
         debug!(%id, action = %request.action, "Approval request submitted");
 
-        // Build a default escalation chain for this request
+        // Build a default escalation chain for this request.
+        // Use the approver ID resolver (if configured) to fill `approver_id`.
+        let resolve = |role: &str| -> Option<String> {
+            self.approver_id_resolver
+                .as_ref()
+                .and_then(|resolver| resolver(role))
+        };
+
         let steps = vec![
             EscalationStep {
                 level: 1,
                 approver_role: "manager".to_string(),
-                approver_id: None,
+                approver_id: resolve("manager"),
                 comment: None,
             },
             EscalationStep {
                 level: 2,
                 approver_role: "director".to_string(),
-                approver_id: None,
+                approver_id: resolve("director"),
                 comment: None,
             },
         ];

@@ -1513,16 +1513,21 @@ impl eframe::App for GoOnApp {
                     );
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let status = if is_connected {
-                            self.i18n.t("status.connected")
+                        // ── GU3: Connection indicator (connecting/connected/disconnected) ──
+                        let has_health = self.monitor_view.health.is_some();
+                        let status_color;
+                        let status_text;
+                        if !has_health {
+                            // No health check result yet — backend is starting
+                            status_color = egui::Color32::from_rgb(180, 180, 60);
+                            status_text = self.i18n.t("app.connecting");
+                        } else if is_connected {
+                            status_color = egui::Color32::from_rgb(60, 180, 80);
+                            status_text = self.i18n.t("status.connected");
                         } else {
-                            self.i18n.t("status.disconnected")
-                        };
-                        let status_color = if is_connected {
-                            egui::Color32::from_rgb(60, 180, 80)
-                        } else {
-                            egui::Color32::from_rgb(220, 80, 80)
-                        };
+                            status_color = egui::Color32::from_rgb(220, 80, 80);
+                            status_text = self.i18n.t("status.disconnected");
+                        }
                         let pid_info = self
                             .backend_child
                             .as_ref()
@@ -1535,27 +1540,67 @@ impl eframe::App for GoOnApp {
                             .inner_margin(egui::Margin::symmetric(10i8, 4i8))
                             .show(ui, |ui| {
                                 ui.label(
-                                    egui::RichText::new(format!("{}{}", status, pid_info))
+                                    egui::RichText::new(format!("{}{}", status_text, pid_info))
                                         .color(status_color)
                                         .strong(),
                                 );
                             });
-                    });
 
-                    // Reserve a fixed spinner slot to avoid toolbar width shifts.
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(20.0, 20.0),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            if self.pending_refresh {
-                                ui.add(egui::Label::new(
-                                    egui::RichText::new("⟳")
-                                        .color(egui::Color32::from_rgb(100, 180, 255))
-                                        .size(16.0),
-                                ));
-                            }
-                        },
-                    );
+                        // ── GU2: Backend crash badge ──
+                        if self.backend_child.is_none()
+                            && self.backend_crash_count > 0
+                            && self.backend_crash_time.is_some()
+                        {
+                            let crash_color = egui::Color32::from_rgb(200, 40, 40);
+                            egui::Frame::new()
+                                .fill(crash_color.gamma_multiply(0.20))
+                                .corner_radius(12.0)
+                                .inner_margin(egui::Margin::symmetric(8i8, 3i8))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "💥 {}x",
+                                            self.backend_crash_count
+                                        ))
+                                        .color(crash_color)
+                                        .size(12.0)
+                                        .strong(),
+                                    );
+                                });
+                        }
+
+                        // ── GU1: Stale models warning ──
+                        if self.backend.stale_models() {
+                            let warn_color = egui::Color32::from_rgb(200, 160, 30);
+                            egui::Frame::new()
+                                .fill(warn_color.gamma_multiply(0.15))
+                                .corner_radius(12.0)
+                                .inner_margin(egui::Margin::symmetric(8i8, 3i8))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(self.i18n.t("status.staleData"))
+                                            .color(warn_color)
+                                            .size(12.0)
+                                            .strong(),
+                                    );
+                                });
+                        }
+
+                        // Spinner (when backend is starting or refreshing)
+                        if !has_health || self.pending_refresh {
+                            let spin_color = egui::Color32::from_rgb(100, 180, 255);
+                            ui.add(egui::Label::new(
+                                egui::RichText::new("⟳").color(spin_color).size(16.0),
+                            ));
+                        } else {
+                            // Reserve fixed-width slot to avoid toolbar width shifts
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(20.0, 20.0),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |_| {},
+                            );
+                        }
+                    });
                 });
             });
         });

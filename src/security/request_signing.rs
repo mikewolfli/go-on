@@ -108,6 +108,7 @@ pub const MAX_CLOCK_SKEW_MS: u64 = MAX_CLOCK_SKEW_S * 1000;
 ///
 /// For Ed25519, `private_key` must be a 32-byte seed or 64-byte expanded key pair.
 /// For HmacSha256, `private_key` is the HMAC shared secret.
+#[allow(dead_code)]
 pub fn sign_request(
     private_key: &[u8],
     body: &[u8],

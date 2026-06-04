@@ -165,6 +165,9 @@ pub struct RbacEnforcer {
     role_permissions: HashMap<String, HashSet<Permission>>,
     /// Tenants (optional multi-tenant support)
     pub(crate) tenants: HashSet<String>,
+    /// Whether tenant mode has been explicitly enabled (true once add_tenant is called).
+    /// When true and tenants is empty, access is denied rather than silently bypassed.
+    tenant_mode_enabled: bool,
 }
 
 impl Default for RbacEnforcer {
@@ -178,6 +181,7 @@ impl RbacEnforcer {
         let mut enforcer = Self {
             role_permissions: HashMap::new(),
             tenants: HashSet::new(),
+            tenant_mode_enabled: false,
         };
         enforcer.init_builtin_roles();
         enforcer
@@ -218,6 +222,7 @@ impl RbacEnforcer {
     /// Add a tenant
     pub fn add_tenant(&mut self, tenant_id: &str) {
         self.tenants.insert(tenant_id.to_string());
+        self.tenant_mode_enabled = true;
     }
 
     /// Register tenants from the GO_ON_TENANTS environment variable.
@@ -275,7 +280,16 @@ impl RbacEnforcer {
         principal: &Principal,
         required_perm: &Permission,
     ) -> AccessDecision {
-        if !self.tenants.is_empty() {
+        if self.tenant_mode_enabled {
+            if self.tenants.is_empty() {
+                return AccessDecision::Deny {
+                    reason: tf(
+                        "error.rbac.no_tenants_configured",
+                        &[("principal", &principal.id)],
+                    ),
+                };
+            }
+
             let Some(tenant_id) = principal.tenant_id.as_deref() else {
                 return AccessDecision::Deny {
                     reason: tf("error.rbac.missing_tenant", &[("principal", &principal.id)]),
@@ -381,6 +395,9 @@ impl RbacEnforcer {
     /// Check access and tenant budget in a single call.
     /// Returns `Ok(())` when both RBAC access and tenant budget allow the operation.
     /// Returns `Err` with a human-readable reason when either check fails.
+    ///
+    /// Budget check and consumption happen atomically under the same mutex lock,
+    /// eliminating the TOCTOU race present in earlier separate check/consume calls.
     pub fn check_access_with_budget(
         &self,
         principal: &Principal,
@@ -401,9 +418,9 @@ impl RbacEnforcer {
             }
         }
 
-        // 2. Tenant budget check (when a budget enforcer is available and principal has a tenant)
+        // 2. Tenant budget check + consume (atomically under the same mutex lock)
         if let (Some(mutex), Some(tenant_id)) = (budget_enforcer, principal.tenant_id.as_deref()) {
-            let enforcer = match mutex.lock() {
+            let mut enforcer = match mutex.lock() {
                 Ok(guard) => guard,
                 Err(poisoned) => {
                     tracing::warn!(
@@ -415,7 +432,7 @@ impl RbacEnforcer {
             // If the tenant is not registered in the budget enforcer yet, auto-provision is expected
             // to have happened at startup; if it's still missing, let it through.
             if enforcer.quotas().contains_key(tenant_id) {
-                enforcer.check_can_start(tenant_id).map_err(|e| {
+                enforcer.check_and_start_task(tenant_id).map_err(|e| {
                     tf(
                         "error.rbac.budget_exceeded",
                         &[("tenant", tenant_id), ("detail", &e)],
@@ -425,27 +442,6 @@ impl RbacEnforcer {
         }
 
         Ok(())
-    }
-
-    /// Mark a task as started for a tenant (used after a successful budget check).
-    pub fn start_tenant_task(
-        &self,
-        principal: &Principal,
-        budget_enforcer: Option<
-            &std::sync::Mutex<crate::governance::hardening::TenantBudgetEnforcer>,
-        >,
-    ) {
-        if let (Some(enforcer), Some(tenant_id)) = (budget_enforcer, principal.tenant_id.as_deref())
-        {
-            match enforcer.lock() {
-                Ok(mut guard) => guard.start_task(tenant_id),
-                Err(poisoned) => {
-                    tracing::warn!("tenant budget enforcer mutex poisoned in start_tenant_task");
-                    let mut guard = poisoned.into_inner();
-                    guard.start_task(tenant_id);
-                }
-            }
-        }
     }
 
     /// Record resource usage for a tenant after a task completes.

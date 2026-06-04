@@ -1492,6 +1492,19 @@ impl RuntimeMetrics {
             guard.review_latency_bucket_counts[bucket_idx].saturating_add(1);
     }
 
+    /// Get the snapshot directly with a mutable guard.
+    ///
+    /// This is used by the metrics bridge to update multiple fields
+    /// atomically. Prefer individual setter methods for single-field updates.
+    pub fn update_snapshot<F>(&self, f: F)
+    where
+        F: FnOnce(&mut MetricsSnapshot),
+    {
+        if let Ok(mut guard) = self.inner.lock() {
+            f(&mut guard);
+        }
+    }
+
     pub fn snapshot(&self) -> MetricsSnapshot {
         self.inner
             .lock()

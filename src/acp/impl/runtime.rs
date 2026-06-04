@@ -289,14 +289,16 @@ pub fn new_acp_server(
 
     // Wire memory persistence and memory retrieval engine (GAP-B58-D03)
     {
+        use crate::memory::memory_bridge::memory_base_path;
         use crate::memory::memory_persistence::MemoryPersistence;
         use crate::memory::memory_retrieval::MemoryRetrievalEngine;
-        let db_path = std::path::Path::new(".goon/memory/warm.db");
-        let cold_path = std::path::Path::new(".goon/memory/cold");
-        if let Ok(mp) = MemoryPersistence::new(db_path, cold_path, None) {
+        let base = memory_base_path();
+        let db_path = base.join("warm.db");
+        let cold_path = base.join("cold");
+        if let Ok(mp) = MemoryPersistence::new(&db_path, &cold_path, None) {
             // Create a separate MemoryPersistence for the retrieval engine.
             // Both instances share the same underlying SQLite database store.
-            let retrieval_engine = MemoryPersistence::new(db_path, cold_path, None)
+            let retrieval_engine = MemoryPersistence::new(&db_path, &cold_path, None)
                 .ok()
                 .map(|retrieval_mp| Arc::new(MemoryRetrievalEngine::new(retrieval_mp)));
             let mp = Arc::new(mp);

@@ -181,8 +181,21 @@ pub struct RoleOutput {
     pub artifacts: Vec<String>,
 }
 
+/// Built-in role specifications, annotated for integration with the dynamic
+/// [`RoleRegistry`].
+///
+/// When a role is not found in the registry, these hardcoded specifications
+/// serve as the fallback defaults. The dynamic registry (populated from
+/// `[[agents.custom_roles]]` config) can override or extend these.
+///
+/// # Integration
+/// - [`role_registry()`] provides runtime access to dynamic role definitions
+/// - [`role_registry_keywords_for()`] resolves keywords from the registry
+/// - Custom roles in the registry take priority over built-in specifications
 pub struct RoleSpecifications;
 impl RoleSpecifications {
+    /// Returns the `planner` role specification.
+    /// Falls back to built-in defaults if no custom role is registered.
     pub fn planner() -> RoleSpecification {
         RoleSpecification {
             role: AgentRole::Planner,
@@ -194,6 +207,8 @@ impl RoleSpecifications {
         }
     }
 
+    /// Returns the `researcher` role specification.
+    /// Falls back to built-in defaults if no custom role is registered.
     pub fn researcher() -> RoleSpecification {
         RoleSpecification {
             role: AgentRole::Researcher,
@@ -205,6 +220,8 @@ impl RoleSpecifications {
         }
     }
 
+    /// Returns the `coder` role specification.
+    /// Falls back to built-in defaults if no custom role is registered.
     pub fn coder() -> RoleSpecification {
         RoleSpecification {
             role: AgentRole::Coder,
@@ -216,6 +233,8 @@ impl RoleSpecifications {
         }
     }
 
+    /// Returns the `tester` role specification.
+    /// Falls back to built-in defaults if no custom role is registered.
     pub fn tester() -> RoleSpecification {
         RoleSpecification {
             role: AgentRole::Tester,
@@ -227,6 +246,8 @@ impl RoleSpecifications {
         }
     }
 
+    /// Returns the `reviewer` role specification.
+    /// Falls back to built-in defaults if no custom role is registered.
     pub fn reviewer() -> RoleSpecification {
         RoleSpecification {
             role: AgentRole::Reviewer,

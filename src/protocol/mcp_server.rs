@@ -4,9 +4,14 @@
 //! implementing the Model Context Protocol specification.
 
 use anyhow::Result;
+use std::io;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{
+    AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, ReadBuf,
+};
 use tokio::net::TcpListener;
 use tokio::signal;
 use tokio::sync::{Mutex, Notify, Semaphore};
@@ -139,12 +144,65 @@ impl McpStdioServer {
 }
 
 /// MCP Server with HTTP transport
+/// A stream that is either plain TCP or wrapped in TLS.
+///
+/// Enables optional TLS on MCP HTTP connections without changing
+/// the handler function signatures across all call sites.
+enum MaybeTlsStream {
+    Plain(tokio::net::TcpStream),
+    Tls(tokio_rustls::server::TlsStream<tokio::net::TcpStream>),
+}
+
+impl AsyncRead for MaybeTlsStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            MaybeTlsStream::Plain(s) => Pin::new(s).poll_read(cx, buf),
+            MaybeTlsStream::Tls(s) => Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for MaybeTlsStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        match self.get_mut() {
+            MaybeTlsStream::Plain(s) => Pin::new(s).poll_write(cx, buf),
+            MaybeTlsStream::Tls(s) => Pin::new(s).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            MaybeTlsStream::Plain(s) => Pin::new(s).poll_flush(cx),
+            MaybeTlsStream::Tls(s) => Pin::new(s).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            MaybeTlsStream::Plain(s) => Pin::new(s).poll_shutdown(cx),
+            MaybeTlsStream::Tls(s) => Pin::new(s).poll_shutdown(cx),
+        }
+    }
+}
+
 pub struct McpHttpServer {
     mcp_server: Arc<McpServer>,
     bind_addr: String,
     shutdown_notify: Arc<Notify>,
     connection_semaphore: Arc<Semaphore>,
     acp_server: Option<Arc<AcpServer>>,
+    /// Optional TLS acceptor. When `Some`, all accepted TCP streams are
+    /// wrapped with TLS before handling HTTP requests. Defaults to `None`
+    /// for local development / plaintext operation.
+    tls_acceptor: Option<tokio_rustls::TlsAcceptor>,
 }
 
 impl McpHttpServer {
@@ -163,6 +221,7 @@ impl McpHttpServer {
             shutdown_notify: Arc::new(Notify::new()),
             connection_semaphore: Arc::new(Semaphore::new(256)),
             acp_server: None,
+            tls_acceptor: None,
         }
     }
 
@@ -188,6 +247,7 @@ impl McpHttpServer {
             shutdown_notify: Arc::new(Notify::new()),
             connection_semaphore: Arc::new(Semaphore::new(256)),
             acp_server,
+            tls_acceptor: None,
         }
     }
 
@@ -248,14 +308,36 @@ impl McpHttpServer {
                         Ok(p) => p,
                         Err(_) => break,
                     };
-                    let (mut socket, peer_addr) = result?;
+                    let (socket, peer_addr) = result?;
                     let mcp_server = Arc::clone(&self.mcp_server);
                     let acp_server = self.acp_server.clone();
+                    let tls_acceptor = self.tls_acceptor.clone();
 
                     tokio::spawn(async move {
                         // Hold permit for the whole connection handler lifetime.
                         let _permit = permit_guard;
-                        if let Err(err) = handle_http_connection(&mut socket, mcp_server, acp_server).await {
+                        let mut stream = match tls_acceptor {
+                            Some(ref acceptor) => {
+                                match acceptor.accept(socket).await {
+                                    Ok(tls) => MaybeTlsStream::Tls(tls),
+                                    Err(e) => {
+                                        warn!(
+                                            "{}",
+                                            tf(
+                                                "error.tls_handshake",
+                                                &[
+                                                    ("address", &peer_addr.to_string()),
+                                                    ("error", &format!("{}", e))
+                                                ]
+                                            )
+                                        );
+                                        return;
+                                    }
+                                }
+                            }
+                            None => MaybeTlsStream::Plain(socket),
+                        };
+                        if let Err(err) = handle_http_connection(&mut stream, mcp_server, acp_server).await {
                             warn!(
                                 "{}",
                                 tf(
@@ -287,6 +369,19 @@ impl McpHttpServer {
         Ok(())
     }
 
+    /// Configure this server with a TLS acceptor, enabling TLS on all
+    /// accepted connections.
+    ///
+    /// This is a builder-style method that consumes `self` and returns
+    /// the updated server. Call it after construction:
+    /// ```ignore
+    /// let server = McpHttpServer::new(...).with_tls_acceptor(acceptor);
+    /// ```
+    pub fn with_tls_acceptor(mut self, acceptor: tokio_rustls::TlsAcceptor) -> Self {
+        self.tls_acceptor = Some(acceptor);
+        self
+    }
+
     /// Request a graceful shutdown of the HTTP server.
     pub fn shutdown(&self) {
         self.shutdown_notify.notify_waiters();
@@ -294,7 +389,7 @@ impl McpHttpServer {
 }
 
 async fn handle_http_connection(
-    socket: &mut tokio::net::TcpStream,
+    socket: &mut MaybeTlsStream,
     mcp_server: Arc<McpServer>,
     acp_server: Option<Arc<AcpServer>>,
 ) -> Result<()> {
@@ -610,7 +705,7 @@ fn extract_content_length(headers: &str) -> Option<usize> {
 }
 
 async fn write_http_json_response(
-    socket: &mut tokio::net::TcpStream,
+    socket: &mut MaybeTlsStream,
     status: u16,
     body: serde_json::Value,
     extra_headers: &str,

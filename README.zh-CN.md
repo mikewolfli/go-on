@@ -1,5 +1,5 @@
 ﻿<p align="center">
-  <img src="snapshots/chat.png" alt="go-on" width="600">
+  <img src="snapshots/head.png" alt="go-on" width="600">
 </p>
 
 <p align="center">

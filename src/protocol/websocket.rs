@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,8 @@ use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
+
+use crate::governance::rbac::{AccessDecision, Permission, Principal, RbacEnforcer};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -95,6 +98,24 @@ impl Default for ConnectionMetadata {
 // WsSender
 // ---------------------------------------------------------------------------
 
+/// Per-connection rate-limit state (interior mutability via `Mutex`).
+#[derive(Debug)]
+struct RateLimitState {
+    /// Number of messages sent in the current time window.
+    msg_count: u64,
+    /// Start of the current rate-limit window.
+    window_start: Instant,
+}
+
+impl RateLimitState {
+    fn new() -> Self {
+        Self {
+            msg_count: 0,
+            window_start: Instant::now(),
+        }
+    }
+}
+
 /// Channel wrapper for sending messages to a single WebSocket connection.
 // activated, formerly F-GAP-51
 #[derive(Debug)]
@@ -103,21 +124,31 @@ pub struct WsSender {
     pub sender: UnboundedSender<WsMessage>,
     /// Connection metadata.
     pub metadata: ConnectionMetadata,
+    /// Authenticated principal (empty/anonymous when RBAC is not configured).
+    pub principal: Principal,
     /// Number of reconnection attempts (0 = first connection).
     pub reconnect_count: u64,
     /// Timestamp of the last heartbeat ping sent to this connection.
     pub last_heartbeat: Instant,
+    /// Per-connection rate limiting state.
+    rate_limit: Mutex<RateLimitState>,
 }
 
 // activated, formerly F-GAP-51
 impl WsSender {
     /// Create a new `WsSender` wrapping the given channel sender.
-    pub fn new(sender: UnboundedSender<WsMessage>, metadata: ConnectionMetadata) -> Self {
+    pub fn new(
+        sender: UnboundedSender<WsMessage>,
+        metadata: ConnectionMetadata,
+        principal: Principal,
+    ) -> Self {
         Self {
             sender,
             metadata,
+            principal,
             reconnect_count: 0,
             last_heartbeat: Instant::now(),
+            rate_limit: Mutex::new(RateLimitState::new()),
         }
     }
 
@@ -125,6 +156,23 @@ impl WsSender {
     /// successfully enqueued, `false` if the receiver has been dropped.
     pub fn send(&self, message: WsMessage) -> bool {
         self.sender.send(message).is_ok()
+    }
+
+    /// Check whether this connection is within its per-second message rate limit
+    /// (enforced by `max_messages_per_sec`). Returns `true` if the message may
+    /// be forwarded, `false` if the limit has been exceeded.
+    pub fn check_rate_limit(&self, max_per_sec: u64) -> bool {
+        let mut state = self.rate_limit.lock().expect("rate_limit lock");
+        let now = Instant::now();
+        if now.duration_since(state.window_start).as_secs() >= 1 {
+            state.msg_count = 0;
+            state.window_start = now;
+        }
+        if state.msg_count >= max_per_sec {
+            return false;
+        }
+        state.msg_count += 1;
+        true
     }
 
     /// Increment the reconnect counter.
@@ -167,6 +215,14 @@ pub struct WebSocketConfig {
     pub heartbeat_interval_secs: u64,
     /// Maximum number of buffered messages per connection (default 256).
     pub message_buffer_size: usize,
+    /// Maximum number of messages allowed per connection per second (0 = unlimited).
+    pub max_messages_per_sec: u64,
+    /// When `true`, reject connections that do not present a valid
+    /// authenticated [`Principal`]. This prevents protocol downgrade
+    /// attacks where a client negotiates an unauthenticated session
+    /// after an auth-capable handshake (default: `false` to preserve
+    /// backward compatibility).
+    pub require_auth: bool,
 }
 
 // activated, formerly F-GAP-51
@@ -176,6 +232,8 @@ impl Default for WebSocketConfig {
             max_connections: 1000,
             heartbeat_interval_secs: 30,
             message_buffer_size: 256,
+            max_messages_per_sec: 60,
+            require_auth: false,
         }
     }
 }
@@ -277,6 +335,8 @@ struct WebSocketHubInner {
     heartbeat_handle: RwLock<Option<JoinHandle<()>>>,
     /// Monotonically increasing heartbeat sequence counter.
     heartbeat_seq: RwLock<u64>,
+    /// Optional RBAC enforcer for authentication/authorization.
+    rbac_enforcer: RwLock<Option<Arc<RbacEnforcer>>>,
 }
 
 // activated, formerly F-GAP-51
@@ -293,8 +353,32 @@ impl WebSocketHub {
                 config,
                 heartbeat_handle: RwLock::new(None),
                 heartbeat_seq: RwLock::new(0),
+                rbac_enforcer: RwLock::new(None),
             }),
         }
+    }
+
+    /// Create a new hub with the given configuration and RBAC enforcer.
+    ///
+    /// When an enforcer is present, [`register`] will validate the caller's
+    /// [`Principal`] against `check_access(Execute)` before admitting the connection.
+    pub fn with_rbac(config: WebSocketConfig, rbac_enforcer: Arc<RbacEnforcer>) -> Self {
+        Self {
+            inner: Arc::new(WebSocketHubInner {
+                connections: RwLock::new(HashMap::new()),
+                topic_subscriptions: RwLock::new(HashMap::new()),
+                config,
+                heartbeat_handle: RwLock::new(None),
+                heartbeat_seq: RwLock::new(0),
+                rbac_enforcer: RwLock::new(Some(rbac_enforcer)),
+            }),
+        }
+    }
+
+    /// Attach an RBAC enforcer after construction (e.g. after loading config).
+    pub async fn set_rbac_enforcer(&self, enforcer: Arc<RbacEnforcer>) {
+        let mut lock = self.inner.rbac_enforcer.write().await;
+        *lock = Some(enforcer);
     }
 }
 
@@ -394,16 +478,66 @@ impl WebSocketHub {
 
     /// Register a new connection with the hub.
     ///
+    /// The caller must supply both [`ConnectionMetadata`] and an authenticated
+    /// [`Principal`]. If an RBAC enforcer has been configured, the principal's
+    /// `Execute` permission is verified before the connection is admitted.
+    ///
     /// Returns an `UnboundedReceiver<WsMessage>` that the caller should use
     /// to forward messages to the actual WebSocket transport.
     ///
     /// # Errors
-    ///
-    /// Returns an error if the maximum number of connections has been reached.
+    /// - [`WebSocketError::MaxConnectionsReached`] if the hub is full.
+    /// - [`WebSocketError::AuthorizationDenied`] if RBAC denies access.
     pub async fn register(
         &self,
         metadata: ConnectionMetadata,
+        principal: Principal,
     ) -> Result<(ConnectionId, UnboundedReceiver<WsMessage>), WebSocketError> {
+        // ── Step 0: Auth downgrade guard ────────────────────────────────
+        if self.inner.config.require_auth {
+            let rbac = self.inner.rbac_enforcer.read().await;
+            if rbac.is_none() {
+                return Err(WebSocketError::AuthorizationDenied(
+                    "auth required but no RBAC enforcer configured".into(),
+                ));
+            }
+            drop(rbac);
+        }
+
+        // ── Step 1: RBAC authorization ──────────────────────────────────
+        let rbac = self.inner.rbac_enforcer.read().await;
+        if let Some(enforcer) = rbac.as_ref() {
+            match enforcer.check_access(&principal, &Permission::Execute) {
+                AccessDecision::Allow => {
+                    debug!(
+                        principal_id = %principal.id,
+                        "RBAC: connection authorized"
+                    );
+                }
+                AccessDecision::Deny { reason } => {
+                    warn!(
+                        principal_id = %principal.id,
+                        reason = %reason,
+                        "RBAC: connection denied"
+                    );
+                    return Err(WebSocketError::AuthorizationDenied(reason));
+                }
+                AccessDecision::Escalate { required_role } => {
+                    warn!(
+                        principal_id = %principal.id,
+                        required_role = %required_role,
+                        "RBAC: connection requires escalation"
+                    );
+                    return Err(WebSocketError::AuthorizationDenied(format!(
+                        "requires role: {}",
+                        required_role
+                    )));
+                }
+            }
+        }
+        drop(rbac);
+
+        // ── Step 2: Connection capacity check ──────────────────────────
         let mut conns = self.inner.connections.write().await;
 
         if conns.len() >= self.inner.config.max_connections {
@@ -412,9 +546,10 @@ impl WebSocketHub {
             ));
         }
 
+        // ── Step 3: Create the connection ──────────────────────────────
         let connection_id = Uuid::new_v4().to_string();
         let (tx, rx) = unbounded_channel();
-        let sender = WsSender::new(tx, metadata);
+        let sender = WsSender::new(tx, metadata, principal);
 
         conns.insert(connection_id.clone(), sender);
 
@@ -528,19 +663,28 @@ impl WebSocketHub {
 
         drop(subs);
 
-        // Send to each target.
+        // Send to each target (respecting per-connection rate limits).
+        let max = self.inner.config.max_messages_per_sec;
+        let mut sent_count = 0usize;
+        let mut skipped_count = 0usize;
         for conn_id in &targets {
             if let Some(sender) = conns.get(conn_id) {
-                sender.send(message.clone());
+                if max > 0 && !sender.check_rate_limit(max) {
+                    skipped_count += 1;
+                    continue;
+                }
+                if sender.send(message.clone()) {
+                    sent_count += 1;
+                }
             }
         }
 
-        let sent_count = targets.len();
         drop(conns);
 
         debug!(
             topic = %topic,
             recipients = sent_count,
+            skipped = skipped_count,
             "message published"
         );
     }
@@ -548,9 +692,19 @@ impl WebSocketHub {
     /// Send a message directly to a specific connection.
     ///
     /// Returns `true` if the connection exists and the message was enqueued.
+    /// If rate limiting is configured and the connection exceeds its limit, the
+    /// message is silently dropped and `false` is returned.
     pub async fn send(&self, connection_id: &str, message: WsMessage) -> bool {
         let conns = self.inner.connections.read().await;
         if let Some(sender) = conns.get(connection_id) {
+            let max = self.inner.config.max_messages_per_sec;
+            if max > 0 && !sender.check_rate_limit(max) {
+                warn!(
+                    connection_id = %connection_id,
+                    "rate limit exceeded for connection"
+                );
+                return false;
+            }
             sender.send(message)
         } else {
             false
@@ -558,14 +712,28 @@ impl WebSocketHub {
     }
 
     /// Broadcast a message to every connected client.
+    ///
+    /// Connections that exceed their per-second rate limit are skipped.
     pub async fn broadcast(&self, message: WsMessage) {
         let conns = self.inner.connections.read().await;
-        let count = conns.len();
+        let max = self.inner.config.max_messages_per_sec;
+        let mut sent_count = 0usize;
+        let mut skipped_count = 0usize;
         for (_conn_id, sender) in conns.iter() {
-            sender.send(message.clone());
+            if max > 0 && !sender.check_rate_limit(max) {
+                skipped_count += 1;
+                continue;
+            }
+            if sender.send(message.clone()) {
+                sent_count += 1;
+            }
         }
         drop(conns);
-        debug!(recipients = count, "message broadcast");
+        debug!(
+            recipients = sent_count,
+            skipped = skipped_count,
+            "message broadcast"
+        );
     }
 
     /// Return the number of active connections.
@@ -588,6 +756,30 @@ impl WebSocketHub {
     pub async fn get_connection_metadata(&self, connection_id: &str) -> Option<ConnectionMetadata> {
         let conns = self.inner.connections.read().await;
         conns.get(connection_id).map(|s| s.metadata.clone())
+    }
+
+    /// Check whether a connection is within its per-second message rate limit.
+    ///
+    /// Call this for **each incoming message** from the client (before processing).
+    /// Returns `true` if the message is allowed, `false` if the rate limit
+    /// has been exceeded and the message should be dropped.
+    pub async fn check_rate_limit(&self, connection_id: &str) -> bool {
+        let conns = self.inner.connections.read().await;
+        let max = self.inner.config.max_messages_per_sec;
+        if max == 0 {
+            return true;
+        }
+        if let Some(sender) = conns.get(connection_id) {
+            sender.check_rate_limit(max)
+        } else {
+            false
+        }
+    }
+
+    /// Return the [`Principal`] associated with a connection, if it exists.
+    pub async fn get_principal(&self, connection_id: &str) -> Option<Principal> {
+        let conns = self.inner.connections.read().await;
+        conns.get(connection_id).map(|s| s.principal.clone())
     }
 
     /// Update the reconnect count for a connection (used when a client
@@ -653,6 +845,14 @@ pub enum WebSocketError {
     /// The maximum number of concurrent connections has been reached.
     #[error("max connections reached ({0})")]
     MaxConnectionsReached(usize),
+
+    /// Authentication or authorization failed.
+    #[error("authorization denied: {0}")]
+    AuthorizationDenied(String),
+
+    /// Per-connection message rate limit exceeded.
+    #[error("rate limit exceeded")]
+    RateLimitExceeded,
 }
 
 // ---------------------------------------------------------------------------
@@ -668,13 +868,18 @@ mod tests {
         WsMessage::new("test.event", json!({"data": payload}))
     }
 
+    /// Test helper: an anonymous principal that passes unchecked RBAC (no enforcer).
+    fn test_principal() -> Principal {
+        Principal::new("test-user", vec!["admin"], None)
+    }
+
     #[tokio::test]
     async fn test_register_and_connection_count() {
         let hub = WebSocketHub::default();
         assert_eq!(hub.get_connection_count().await, 0);
 
         let (id, _rx) = hub
-            .register(ConnectionMetadata::default())
+            .register(ConnectionMetadata::default(), test_principal())
             .await
             .expect("register should succeed");
         assert_eq!(hub.get_connection_count().await, 1);
@@ -693,11 +898,17 @@ mod tests {
         };
         let hub = WebSocketHub::new(config);
 
-        let (_id1, _rx1) = hub.register(ConnectionMetadata::default()).await.unwrap();
-        let (_id2, _rx2) = hub.register(ConnectionMetadata::default()).await.unwrap();
+        let (_id1, _rx1) = hub
+            .register(ConnectionMetadata::default(), test_principal())
+            .await
+            .unwrap();
+        let (_id2, _rx2) = hub
+            .register(ConnectionMetadata::default(), test_principal())
+            .await
+            .unwrap();
 
         let err = hub
-            .register(ConnectionMetadata::default())
+            .register(ConnectionMetadata::default(), test_principal())
             .await
             .unwrap_err();
         assert!(matches!(err, WebSocketError::MaxConnectionsReached(2)));
@@ -706,7 +917,10 @@ mod tests {
     #[tokio::test]
     async fn test_send_to_specific_connection() {
         let hub = WebSocketHub::default();
-        let (id, mut rx) = hub.register(ConnectionMetadata::default()).await.unwrap();
+        let (id, mut rx) = hub
+            .register(ConnectionMetadata::default(), test_principal())
+            .await
+            .unwrap();
 
         let msg = test_msg("hello");
         let sent = hub.send(&id, msg.clone()).await;
@@ -726,8 +940,14 @@ mod tests {
     #[tokio::test]
     async fn test_broadcast() {
         let hub = WebSocketHub::default();
-        let (_id1, mut rx1) = hub.register(ConnectionMetadata::default()).await.unwrap();
-        let (_id2, mut rx2) = hub.register(ConnectionMetadata::default()).await.unwrap();
+        let (_id1, mut rx1) = hub
+            .register(ConnectionMetadata::default(), test_principal())
+            .await
+            .unwrap();
+        let (_id2, mut rx2) = hub
+            .register(ConnectionMetadata::default(), test_principal())
+            .await
+            .unwrap();
 
         let msg = test_msg("broadcast");
         hub.broadcast(msg).await;
@@ -741,8 +961,14 @@ mod tests {
     #[tokio::test]
     async fn test_topic_publish_and_subscribe() {
         let hub = WebSocketHub::default();
-        let (id1, mut rx1) = hub.register(ConnectionMetadata::default()).await.unwrap();
-        let (id2, mut rx2) = hub.register(ConnectionMetadata::default()).await.unwrap();
+        let (id1, mut rx1) = hub
+            .register(ConnectionMetadata::default(), test_principal())
+            .await
+            .unwrap();
+        let (id2, mut rx2) = hub
+            .register(ConnectionMetadata::default(), test_principal())
+            .await
+            .unwrap();
 
         hub.subscribe(&id1, "task.abc.progress").await;
         hub.subscribe(&id2, "task.abc.progress").await;
@@ -759,7 +985,10 @@ mod tests {
     #[tokio::test]
     async fn test_unsubscribe() {
         let hub = WebSocketHub::default();
-        let (id, mut rx) = hub.register(ConnectionMetadata::default()).await.unwrap();
+        let (id, mut rx) = hub
+            .register(ConnectionMetadata::default(), test_principal())
+            .await
+            .unwrap();
 
         // Stop the heartbeat to prevent ping messages from interfering.
         hub.stop_heartbeat().await;
@@ -784,7 +1013,10 @@ mod tests {
     #[tokio::test]
     async fn test_unregister_removes_subscriptions() {
         let hub = WebSocketHub::default();
-        let (id, _rx) = hub.register(ConnectionMetadata::default()).await.unwrap();
+        let (id, _rx) = hub
+            .register(ConnectionMetadata::default(), test_principal())
+            .await
+            .unwrap();
         hub.subscribe(&id, "my.topic").await;
 
         hub.unregister(&id).await;
@@ -796,8 +1028,14 @@ mod tests {
     #[tokio::test]
     async fn test_get_active_topics() {
         let hub = WebSocketHub::default();
-        let (id1, _rx1) = hub.register(ConnectionMetadata::default()).await.unwrap();
-        let (id2, _rx2) = hub.register(ConnectionMetadata::default()).await.unwrap();
+        let (id1, _rx1) = hub
+            .register(ConnectionMetadata::default(), test_principal())
+            .await
+            .unwrap();
+        let (id2, _rx2) = hub
+            .register(ConnectionMetadata::default(), test_principal())
+            .await
+            .unwrap();
 
         hub.subscribe(&id1, "alpha").await;
         hub.subscribe(&id2, "beta").await;
@@ -816,7 +1054,10 @@ mod tests {
             user_agent: "Mozilla/5.0".into(),
             ..Default::default()
         };
-        let (id, _rx) = hub.register(metadata.clone()).await.unwrap();
+        let (id, _rx) = hub
+            .register(metadata.clone(), test_principal())
+            .await
+            .unwrap();
 
         let retrieved = hub
             .get_connection_metadata(&id)
@@ -829,7 +1070,10 @@ mod tests {
     #[tokio::test]
     async fn test_reconnect_hint() {
         let hub = WebSocketHub::default();
-        let (id, _rx) = hub.register(ConnectionMetadata::default()).await.unwrap();
+        let (id, _rx) = hub
+            .register(ConnectionMetadata::default(), test_principal())
+            .await
+            .unwrap();
 
         // Initial reconnect count is 0.
         let hint = hub
@@ -895,7 +1139,10 @@ mod tests {
         let hub = WebSocketHub::default();
         let hub2 = hub.clone();
 
-        let (id, _rx) = hub.register(ConnectionMetadata::default()).await.unwrap();
+        let (id, _rx) = hub
+            .register(ConnectionMetadata::default(), test_principal())
+            .await
+            .unwrap();
         assert!(hub2.is_connected(&id).await);
     }
 
@@ -912,7 +1159,10 @@ mod tests {
     #[tokio::test]
     async fn test_wildcard_subscription() {
         let hub = WebSocketHub::default();
-        let (id, mut rx) = hub.register(ConnectionMetadata::default()).await.unwrap();
+        let (id, mut rx) = hub
+            .register(ConnectionMetadata::default(), test_principal())
+            .await
+            .unwrap();
 
         // Subscribe with a wildcard pattern `task.*`
         hub.subscribe(&id, "task.*").await;
@@ -929,7 +1179,10 @@ mod tests {
     #[tokio::test]
     async fn test_multiple_publishes_to_subscriber() {
         let hub = WebSocketHub::default();
-        let (id, mut rx) = hub.register(ConnectionMetadata::default()).await.unwrap();
+        let (id, mut rx) = hub
+            .register(ConnectionMetadata::default(), test_principal())
+            .await
+            .unwrap();
         hub.subscribe(&id, "updates").await;
 
         for i in 0..5 {

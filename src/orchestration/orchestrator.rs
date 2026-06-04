@@ -82,39 +82,16 @@ pub fn select_mode_runtime_with_registry(
 }
 
 /// Deprecated: returns runtimes with no agent registry.
-/// Use `select_mode_runtime_with_registry` instead.
-#[deprecated(note = "use select_mode_runtime_with_registry instead")]
-pub fn select_mode_runtime(mode: &str) -> Box<dyn ModeRuntime> {
-    match mode {
-        "ask" => Box::new(AskModeRuntime::default()),
-        "edit" => Box::new(EditModeRuntime::default()),
-        "agent" => Box::new(AgentModeRuntime::default()),
-        "full_auto" => Box::new(FullAutoModeRuntime::default()),
-        "safeguard" => Box::new(SafeGuardModeRuntime::default()),
-        _ => Box::new(AskModeRuntime::default()),
-    }
-}
-
 /// Execute task using selected mode with a provided agent registry.
 ///
 /// Uses `select_mode_runtime_with_registry` so the runtime has access to
 /// real agents.
-pub fn execute_with_mode_with_registry(
+pub fn execute_with_mode(
     mode: &str,
     registry: Arc<AgentRegistry>,
     task: AgentTaskEnvelope,
 ) -> Result<AgentTaskResult> {
     let runtime = select_mode_runtime_with_registry(mode, registry);
-    runtime.run(task)
-}
-
-/// Execute task using selected mode (deprecated — no agent registry).
-///
-/// Regard as a placeholder; prefer `execute_with_mode_with_registry`.
-#[deprecated(note = "use execute_with_mode_with_registry instead")]
-#[allow(deprecated)]
-pub fn execute_with_mode(mode: &str, task: AgentTaskEnvelope) -> Result<AgentTaskResult> {
-    let runtime = select_mode_runtime(mode);
     runtime.run(task)
 }
 
@@ -428,14 +405,14 @@ pub fn estimate_context_window(caps: &[String]) -> usize {
 mod tests {
     use super::*;
 
-    #[allow(deprecated)]
     #[test]
-    fn test_select_mode_runtime() {
-        let ask = select_mode_runtime("ask");
-        let edit = select_mode_runtime("edit");
-        let agent = select_mode_runtime("agent");
-        let full_auto = select_mode_runtime("full_auto");
-        let unknown = select_mode_runtime("unknown");
+    fn test_select_mode_runtime_with_registry() {
+        let registry = Arc::new(AgentRegistry::new());
+        let ask = select_mode_runtime_with_registry("ask", Arc::clone(&registry));
+        let edit = select_mode_runtime_with_registry("edit", Arc::clone(&registry));
+        let agent = select_mode_runtime_with_registry("agent", Arc::clone(&registry));
+        let full_auto = select_mode_runtime_with_registry("full_auto", Arc::clone(&registry));
+        let unknown = select_mode_runtime_with_registry("unknown", registry);
 
         // Verify all modes return valid runtimes with correct kinds
         assert_eq!(ask.kind(), ModeKind::Ask);
@@ -508,18 +485,18 @@ mod tests {
         assert!(result.is_some());
     }
 
-    #[allow(deprecated)]
     #[test]
     fn test_safeguard_mode_selection() {
-        let safeguard = select_mode_runtime("safeguard");
+        let registry = Arc::new(AgentRegistry::new());
+        let safeguard = select_mode_runtime_with_registry("safeguard", registry);
         assert_eq!(safeguard.kind(), ModeKind::SafeGuard);
         assert!(!safeguard.user_approval_required()); // Base requirement is false
     }
 
-    #[allow(deprecated)]
     #[test]
     fn test_safeguard_mode_detects_high_risk_operations() {
-        let safeguard = select_mode_runtime("safeguard");
+        let registry = Arc::new(AgentRegistry::new());
+        let safeguard = select_mode_runtime_with_registry("safeguard", registry);
 
         // Should detect delete operations
         assert!(safeguard.is_high_risk_operation("delete user data"));
@@ -539,13 +516,13 @@ mod tests {
         assert!(!safeguard.is_high_risk_operation("apply patch"));
     }
 
-    #[allow(deprecated)]
     #[test]
     fn test_other_modes_dont_flag_high_risk() {
-        let ask = select_mode_runtime("ask");
-        let edit = select_mode_runtime("edit");
-        let agent = select_mode_runtime("agent");
-        let full_auto = select_mode_runtime("full_auto");
+        let base = Arc::new(AgentRegistry::new());
+        let ask = select_mode_runtime_with_registry("ask", Arc::clone(&base));
+        let edit = select_mode_runtime_with_registry("edit", Arc::clone(&base));
+        let agent = select_mode_runtime_with_registry("agent", Arc::clone(&base));
+        let full_auto = select_mode_runtime_with_registry("full_auto", base);
 
         // Only Agent mode has some high-risk detection (for delete operations)
         // but Ask, Edit, and FullAuto rely on approval settings instead

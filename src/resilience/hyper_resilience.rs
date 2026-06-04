@@ -956,6 +956,259 @@ impl HyperResilienceEngine {
 }
 
 // ---------------------------------------------------------------------------
+// RS3: Fault detection with distributed consensus
+// ---------------------------------------------------------------------------
+
+/// A vote from a single node in the fault detection consensus.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FaultVote {
+    /// Node identifier casting the vote.
+    pub voter_id: String,
+    /// Target node being voted on.
+    pub target_id: String,
+    /// Whether the voter considers the target healthy.
+    pub healthy: bool,
+    /// Unix millis when the vote was cast.
+    pub timestamp_ms: u64,
+    /// Optional evidence (e.g. probe latency, error message).
+    pub evidence: Option<String>,
+}
+
+/// Quorum-based fault detection consensus.
+///
+/// Nodes cast votes on whether a target is healthy. A fault is declared
+/// when a majority of voters agree the target is unhealthy within a
+/// configurable window. This prevents a single faulty probe from
+/// triggering an unnecessary failover.
+#[derive(Debug, Clone)]
+pub struct FaultConsensus {
+    /// Minimum votes required to reach a decision.
+    quorum_size: usize,
+    /// Votes are considered stale after this duration (ms).
+    vote_window_ms: u64,
+    /// In-memory vote log (bounded to avoid unbounded growth).
+    votes: Vec<FaultVote>,
+    /// Maximum number of votes to retain per target.
+    max_votes_per_target: usize,
+}
+
+impl Default for FaultConsensus {
+    fn default() -> Self {
+        Self {
+            quorum_size: 3,
+            vote_window_ms: 10_000, // 10 seconds
+            votes: Vec::with_capacity(128),
+            max_votes_per_target: 100,
+        }
+    }
+}
+
+impl FaultConsensus {
+    /// Create a new fault consensus with the given quorum size and vote window.
+    pub fn new(quorum_size: usize, vote_window_ms: u64) -> Self {
+        Self {
+            quorum_size,
+            vote_window_ms,
+            votes: Vec::with_capacity(128),
+            max_votes_per_target: 100,
+        }
+    }
+
+    /// Record a vote from a peer node.
+    /// Automatically prunes stale votes and enforces the per-target cap.
+    pub fn record_vote(&mut self, vote: FaultVote) {
+        // Prune stale votes before inserting.
+        let now = now_millis();
+        self.votes
+            .retain(|v| now.saturating_sub(v.timestamp_ms) < self.vote_window_ms);
+
+        // Enforce per-target cap: keep the most recent votes.
+        let target_count = self
+            .votes
+            .iter()
+            .filter(|v| v.target_id == vote.target_id)
+            .count();
+        if target_count >= self.max_votes_per_target {
+            // Remove the oldest vote for this target.
+            if let Some(pos) = self
+                .votes
+                .iter()
+                .position(|v| v.target_id == vote.target_id)
+            {
+                self.votes.remove(pos);
+            }
+        }
+
+        self.votes.push(vote);
+    }
+
+    /// Determine if a fault is declared for the target based on quorum.
+    ///
+    /// Returns `(declared_fault, unhealthy_votes, total_votes)`.
+    pub fn evaluate(&self, target_id: &str) -> (bool, usize, usize) {
+        let now = now_millis();
+        let relevant: Vec<&FaultVote> = self
+            .votes
+            .iter()
+            .filter(|v| {
+                v.target_id == target_id && now.saturating_sub(v.timestamp_ms) < self.vote_window_ms
+            })
+            .collect();
+
+        let total = relevant.len();
+        let unhealthy = relevant.iter().filter(|v| !v.healthy).count();
+
+        // Declare fault when a quorum of voters report unhealthy AND
+        // at least half of all voters agree.
+        let declared = unhealthy >= self.quorum_size && unhealthy > total / 2;
+
+        (declared, unhealthy, total)
+    }
+
+    /// Prune stale votes (call periodically or on each record_vote).
+    pub fn evict_stale(&mut self) {
+        let now = now_millis();
+        self.votes
+            .retain(|v| now.saturating_sub(v.timestamp_ms) < self.vote_window_ms);
+    }
+
+    /// Number of unique targets being tracked.
+    pub fn tracked_targets(&self) -> usize {
+        let mut targets: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for v in &self.votes {
+            targets.insert(v.target_id.as_str());
+        }
+        targets.len()
+    }
+
+    /// Total number of votes stored.
+    pub fn total_votes(&self) -> usize {
+        self.votes.len()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RS5: Recovery plan persistence
+// ---------------------------------------------------------------------------
+
+/// A recovery plan step.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoveryStep {
+    /// Step description.
+    pub description: String,
+    /// Action to take.
+    pub action: SelfHealingAction,
+    /// Target node or component.
+    pub target: String,
+    /// Step timeout in milliseconds.
+    pub timeout_ms: u64,
+    /// Whether this step is reversible.
+    pub reversible: bool,
+}
+
+/// A persisted recovery plan.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoveryPlan {
+    /// Unique plan identifier.
+    pub plan_id: String,
+    /// Human-readable description of the recovery.
+    pub description: String,
+    /// Ordered steps to execute.
+    pub steps: Vec<RecoveryStep>,
+    /// Unix millis when the plan was created.
+    pub created_at_ms: u64,
+    /// Source of the plan (e.g. "auto", "operator").
+    pub source: String,
+}
+
+impl RecoveryPlan {
+    /// Create a new recovery plan.
+    pub fn new(
+        plan_id: String,
+        description: String,
+        source: String,
+        steps: Vec<RecoveryStep>,
+    ) -> Self {
+        Self {
+            plan_id,
+            description,
+            steps,
+            created_at_ms: now_millis(),
+            source,
+        }
+    }
+}
+
+/// Persistence for recovery plans.
+///
+/// Saves plans to a configurable directory in NDJSON format so they
+/// survive process restarts and can be audited.
+#[derive(Debug, Clone)]
+pub struct RecoveryPlanStore {
+    /// Directory where plans are persisted.
+    store_dir: std::path::PathBuf,
+}
+
+impl RecoveryPlanStore {
+    /// Create a new store rooted at the given directory.
+    /// Creates the directory if it does not exist.
+    pub fn new(store_dir: impl Into<std::path::PathBuf>) -> std::io::Result<Self> {
+        let store_dir = store_dir.into();
+        std::fs::create_dir_all(&store_dir)?;
+        Ok(Self { store_dir })
+    }
+
+    /// Create a store with a default path (`./.goon/recovery-plans/`).
+    pub fn with_default_path() -> std::io::Result<Self> {
+        Self::new(std::path::PathBuf::from("./.goon/recovery-plans"))
+    }
+
+    /// Save a recovery plan to disk.
+    pub fn save(&self, plan: &RecoveryPlan) -> std::io::Result<()> {
+        let path = self.store_dir.join(format!("{}.json", plan.plan_id));
+        let json = serde_json::to_string_pretty(plan)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        std::fs::write(&path, json)?;
+        Ok(())
+    }
+
+    /// Load a specific recovery plan by ID.
+    pub fn load(&self, plan_id: &str) -> std::io::Result<Option<RecoveryPlan>> {
+        let path = self.store_dir.join(format!("{}.json", plan_id));
+        if !path.exists() {
+            return Ok(None);
+        }
+        let json = std::fs::read_to_string(&path)?;
+        let plan: RecoveryPlan = serde_json::from_str(&json)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        Ok(Some(plan))
+    }
+
+    /// List all stored plan IDs.
+    pub fn list(&self) -> std::io::Result<Vec<String>> {
+        let mut plans = Vec::new();
+        for entry in std::fs::read_dir(&self.store_dir)? {
+            let entry = entry?;
+            if entry.path().extension().map_or(false, |e| e == "json") {
+                if let Some(stem) = entry.path().file_stem().and_then(|s| s.to_str()) {
+                    plans.push(stem.to_string());
+                }
+            }
+        }
+        Ok(plans)
+    }
+
+    /// Delete a persisted plan.
+    pub fn delete(&self, plan_id: &str) -> std::io::Result<()> {
+        let path = self.store_dir.join(format!("{}.json", plan_id));
+        if path.exists() {
+            std::fs::remove_file(path)?;
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

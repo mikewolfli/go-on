@@ -21,6 +21,7 @@ import {
   pathExists,
   resolveConfigPath,
 } from "./runtimeBinaryService";
+import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import {
   buildPlaceholderEnvValues,
   parseMissingEnvVariableNames,
@@ -115,56 +116,6 @@ async function runGoOnSecretCommand(
   });
 }
 
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function formatTomlStringList(items: string[]): string {
-  return `[${items.map((item) => `"${item}"`).join(", ")}]`;
-}
-
-function formatTomlMultilineStringList(items: string[]): string {
-  const lines = items.map((item) => `    "${item.replace(/"/g, '\\"')}"`);
-  return `[
-${lines.join(",\n")}
-]`;
-}
-
-function upsertSectionLine(
-  section: string,
-  lineRegex: RegExp,
-  line: string,
-): string {
-  if (lineRegex.test(section)) {
-    return section.replace(lineRegex, line);
-  }
-  const lines = section.split("\n");
-  lines.splice(1, 0, line);
-  return lines.join("\n");
-}
-
-function upsertTopLevelString(
-  content: string,
-  key: string,
-  value: string,
-): string {
-  const regex = new RegExp(`^${escapeRegex(key)}\\s*=\\s*".*"\\s*$`, "m");
-  const replacement = `${key} = "${value}"`;
-  if (regex.test(content)) {
-    return content.replace(regex, replacement);
-  }
-  return `${replacement}\n${content}`;
-}
-
-/**
- * ── TOML manipulation functions ──
- * NOTE: These functions are duplicated (with variations) from
- * settingsView.ts (escapeRegex, upsertSectionLine, upsertPhaseAgents).
- * The extension.ts copies operate on TOML at the workspace level while
- * settingsView.ts operates within the settings panel webview context.
- * Consider consolidating into a shared utility module.
- */
-
 /**
  * Maximum TOML file size to process (1MB).
  * Larger files are rejected to prevent OOM on malformed responses.
@@ -172,155 +123,147 @@ function upsertTopLevelString(
 const MAX_TOML_SIZE = 1024 * 1024;
 
 /**
- * Upserts the `phases` list in the `[flow]` section of a TOML config.
- *
- * NOTE: This uses regex-based TOML manipulation which has known limitations:
- * - Inline table values inside `[...]` brackets can confuse section detection
- * - Multi-line strings with embedded `[` characters may cause false positives
- * - Nested table arrays (`[[...]]`) are not well-supported
- * For production use, consider a proper TOML parser library.
+ * Guard and parse TOML content. Throws if content exceeds MAX_TOML_SIZE.
  */
-function upsertFlowPhases(content: string, phases: string[]): string {
-  // Guard: reject content that exceeds MAX_TOML_SIZE
+function guardedParse(content: string): Record<string, unknown> {
   if (content.length > MAX_TOML_SIZE) {
     throw new Error(
       `TOML content exceeds maximum size of ${MAX_TOML_SIZE} bytes`,
     );
   }
-
-  // Strip TOML comments (lines starting with #) to avoid inline [`] bracket confusion
-  // in the regex. Commented-out `[` characters could otherwise be misinterpreted as
-  // section headers, breaking the flowSectionRegex lookahead.
-  const cleaned = content
-    .split("\n")
-    .map((line) => (line.trimStart().startsWith("#") ? "" : line))
-    .join("\n");
-
-  const flowSectionRegex = /\[flow\][\s\S]*?(?=\n\[[^\]]+\]|$)/;
-  const phasesLine = `phases = ${formatTomlStringList(phases)}`;
-  if (flowSectionRegex.test(cleaned)) {
-    return cleaned.replace(flowSectionRegex, (section) => {
-      const phasesRegex = /^phases\s*=\s*\[[^\]]*\]\s*$/m;
-      if (phasesRegex.test(section)) {
-        return section.replace(phasesRegex, phasesLine);
-      }
-      const trimmed = section.trimEnd();
-      return `${trimmed}\n${phasesLine}\n`;
-    });
-  }
-
-  return `${cleaned.trimEnd()}\n\n[flow]\nname = "Configured Flow"\n${phasesLine}\n`;
+  return parseToml(content) as Record<string, unknown>;
 }
 
+/**
+ * Upserts a top-level string key-value pair in a TOML config.
+ * Uses the proper smol-toml parser/stringifier instead of regex.
+ */
+function upsertTopLevelString(
+  content: string,
+  key: string,
+  value: string,
+): string {
+  const doc = guardedParse(content);
+  doc[key] = value;
+  return stringifyToml(doc);
+}
+
+/**
+ * Upserts the `phases` list in the `[flow]` section of a TOML config.
+ * Uses the proper smol-toml parser/stringifier.
+ */
+function upsertFlowPhases(content: string, phases: string[]): string {
+  const doc = guardedParse(content);
+  if (!doc.flow || typeof doc.flow !== "object") {
+    doc.flow = { name: "Configured Flow" };
+  }
+  (doc.flow as Record<string, unknown>).phases = phases;
+  return stringifyToml(doc);
+}
+
+/**
+ * Upserts the `agents` list in a `[phases.{phase}]` section.
+ * Uses the proper smol-toml parser/stringifier.
+ */
 function upsertPhaseAgents(
   content: string,
   phase: string,
   agents: string[],
 ): string {
-  const header = `[phases.${phase}]`;
-  const escapedHeader = escapeRegex(header);
-  const sectionRegex = new RegExp(
-    `^${escapedHeader}[\\s\\S]*?(?=^\\[[^\\]]+\\]|\\Z)`,
-    "m",
-  );
-  const agentsLine = `agents = ${formatTomlStringList(agents)}`;
-
-  if (sectionRegex.test(content)) {
-    return content.replace(sectionRegex, (section) => {
-      const agentsRegex = /^agents\s*=\s*\[[^\]]*\]\s*$/m;
-      if (agentsRegex.test(section)) {
-        return section.replace(agentsRegex, agentsLine);
-      }
-      const lines = section.split("\n");
-      lines.splice(1, 0, agentsLine);
-      return lines.join("\n");
-    });
+  const doc = guardedParse(content);
+  if (!doc.phases || typeof doc.phases !== "object") {
+    doc.phases = {};
   }
-
-  return `${content.trimEnd()}\n\n${header}\ndescription = "${phase} phase"\n${agentsLine}\nfallback = true\n`;
+  const phases = doc.phases as Record<string, unknown>;
+  if (!phases[phase] || typeof phases[phase] !== "object") {
+    phases[phase] = {
+      description: `${phase} phase`,
+      fallback: true,
+      agents,
+    };
+  } else {
+    (phases[phase] as Record<string, unknown>).agents = agents;
+  }
+  return stringifyToml(doc);
 }
 
+/**
+ * Upserts the `fallback` boolean in a `[phases.{phase}]` section.
+ * Uses the proper smol-toml parser/stringifier.
+ */
 function upsertPhaseFallback(
   content: string,
   phase: string,
   fallback: boolean,
 ): string {
-  const header = `[phases.${phase}]`;
-  const escapedHeader = escapeRegex(header);
-  const sectionRegex = new RegExp(
-    `^${escapedHeader}[\\s\\S]*?(?=^\\[[^\\]]+\\]|\\Z)`,
-    "m",
-  );
-  const fallbackLine = `fallback = ${fallback ? "true" : "false"}`;
-
-  if (sectionRegex.test(content)) {
-    return content.replace(sectionRegex, (section) =>
-      upsertSectionLine(
-        section,
-        /^fallback\s*=\s*(true|false)\s*$/m,
-        fallbackLine,
-      ),
-    );
+  const doc = guardedParse(content);
+  if (!doc.phases || typeof doc.phases !== "object") {
+    doc.phases = {};
   }
-
-  return `${content.trimEnd()}\n\n${header}\ndescription = "${phase} phase"\nagents = ["copilot"]\n${fallbackLine}\n`;
+  const phases = doc.phases as Record<string, unknown>;
+  if (!phases[phase] || typeof phases[phase] !== "object") {
+    phases[phase] = {
+      description: `${phase} phase`,
+      agents: ["copilot"],
+      fallback,
+    };
+  } else {
+    (phases[phase] as Record<string, unknown>).fallback = fallback;
+  }
+  return stringifyToml(doc);
 }
 
+/**
+ * Upserts the `principles` list in a `[phases.{phase}]` section.
+ * Uses the proper smol-toml parser/stringifier.
+ */
 function upsertPhasePrinciples(
   content: string,
   phase: string,
   principles: string[],
 ): string {
-  const header = `[phases.${phase}]`;
-  const escapedHeader = escapeRegex(header);
-  const sectionRegex = new RegExp(
-    `^${escapedHeader}[\\s\\S]*?(?=^\\[[^\\]]+\\]|\\Z)`,
-    "m",
-  );
-  const principlesLine = `principles = ${formatTomlMultilineStringList(principles)}`;
-
-  if (sectionRegex.test(content)) {
-    return content.replace(sectionRegex, (section) => {
-      const principlesRegex = /^principles\s*=\s*\[[\s\S]*?\]\s*$/m;
-      if (principlesRegex.test(section)) {
-        return section.replace(principlesRegex, principlesLine);
-      }
-      return upsertSectionLine(
-        section,
-        /^principles\s*=\s*\[[\s\S]*?\]\s*$/m,
-        principlesLine,
-      );
-    });
+  const doc = guardedParse(content);
+  if (!doc.phases || typeof doc.phases !== "object") {
+    doc.phases = {};
   }
-
-  return `${content.trimEnd()}\n\n${header}\ndescription = "${phase} phase"\nagents = ["copilot"]\nfallback = true\n${principlesLine}\n`;
+  const phases = doc.phases as Record<string, unknown>;
+  if (!phases[phase] || typeof phases[phase] !== "object") {
+    phases[phase] = {
+      description: `${phase} phase`,
+      agents: ["copilot"],
+      fallback: true,
+      principles,
+    };
+  } else {
+    (phases[phase] as Record<string, unknown>).principles = principles;
+  }
+  return stringifyToml(doc);
 }
 
+/**
+ * Upserts a numeric option key in a `[phases.{phase}.options]` section.
+ * Uses the proper smol-toml parser/stringifier.
+ */
 function upsertPhaseOptionNumber(
   content: string,
   phase: string,
   optionKey: string,
   value: number,
 ): string {
-  const optionHeader = `[phases.${phase}.options]`;
-  const escapedOptionHeader = escapeRegex(optionHeader);
-  const optionSectionRegex = new RegExp(
-    `^${escapedOptionHeader}[\\s\\S]*?(?=^\\[[^\\]]+\\]|\\Z)`,
-    "m",
-  );
-  const optionLine = `${optionKey} = ${value}`;
-  const keyRegex = new RegExp(
-    `^${escapeRegex(optionKey)}\\s*=\\s*\\d+\\s*$`,
-    "m",
-  );
-
-  if (optionSectionRegex.test(content)) {
-    return content.replace(optionSectionRegex, (section) =>
-      upsertSectionLine(section, keyRegex, optionLine),
-    );
+  const doc = guardedParse(content);
+  if (!doc.phases || typeof doc.phases !== "object") {
+    doc.phases = {};
   }
-
-  return `${content.trimEnd()}\n\n${optionHeader}\n${optionLine}\n`;
+  const phases = doc.phases as Record<string, unknown>;
+  if (!phases[phase] || typeof phases[phase] !== "object") {
+    phases[phase] = {};
+  }
+  const phaseObj = phases[phase] as Record<string, unknown>;
+  if (!phaseObj.options || typeof phaseObj.options !== "object") {
+    phaseObj.options = {};
+  }
+  (phaseObj.options as Record<string, unknown>)[optionKey] = value;
+  return stringifyToml(doc);
 }
 
 async function resolveConfigFilePath(

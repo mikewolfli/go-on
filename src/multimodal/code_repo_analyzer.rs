@@ -573,9 +573,19 @@ impl RepoAnalyzer {
         let lower = question.to_lowercase();
         let mut references = Vec::new();
 
+        // Tokenize the question into words for keyword matching.
+        // This avoids false positives from substring matches (e.g. "typewriter"
+        // matching when user asks about "type").
+        let question_words: std::collections::HashSet<&str> = lower
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .collect();
+
         // Heuristic: if the question mentions a type name, look it up.
+        // Use word-boundary matching instead of substring contains.
         for entry in &repo.type_index.entries {
-            if lower.contains(&entry.name.to_lowercase()) {
+            let name_lower = entry.name.to_lowercase();
+            if question_words.contains(name_lower.as_str()) {
                 if let Some(file) = repo.repo_map.files.get(entry.file_id) {
                     references.push(SourceRef {
                         file: file.clone(),
@@ -586,17 +596,31 @@ impl RepoAnalyzer {
             }
         }
 
+        // Detect question intent via token overlap.
+        let has_file_intent = question_words.contains("files")
+            && (question_words.contains("how")
+                || question_words.contains("many")
+                || question_words.contains("count"));
+        let has_symbol_intent = question_words.contains("symbols")
+            || question_words.contains("types")
+            || question_words.contains("definitions")
+            || question_words.contains("defs")
+            || question_words.contains("classes")
+            || question_words.contains("functions");
+        let has_lang_intent =
+            question_words.contains("language") || question_words.contains("programming");
+        let has_loc_intent = question_words.contains("lines")
+            || question_words.contains("loc")
+            || question_words.contains("size");
+
         // Heuristic: if asking "how many files" or "total loc", answer directly.
-        let text = if lower.contains("how many files") || lower.contains("file count") {
+        let text = if has_file_intent || has_loc_intent {
             format!(
                 "The repository has {} files with a total of {} lines of code.",
                 repo.repo_map.file_count(),
                 repo.repo_map.total_loc()
             )
-        } else if lower.contains("symbols")
-            || lower.contains("types")
-            || lower.contains("definitions")
-        {
+        } else if has_symbol_intent {
             let by_kind: Vec<String> = repo
                 .type_index
                 .by_kind
@@ -608,7 +632,7 @@ impl RepoAnalyzer {
                 repo.type_index.len(),
                 by_kind.join("\n")
             )
-        } else if lower.contains("language") || lower.contains("programming language") {
+        } else if has_lang_intent {
             let mut stats: Vec<_> = repo.language_stats.iter().collect();
             stats.sort_by(|a, b| b.1.cmp(a.1));
             let lines: Vec<String> = stats

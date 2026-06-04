@@ -133,6 +133,9 @@ use crate::agent::AgentRegistry;
 use crate::config::{validate_runtime_readiness, AppConfig, ConfigWarning};
 use crate::i18n::runtime::{t, tf};
 use crate::intelligence::capability_graph::CapabilityGraph;
+use crate::intelligence::continuous_learning::{
+    ContinuousLearningCenter, ContinuousLearningConfig,
+};
 
 use crate::protocol::access_mode::resolve_access_selection;
 use crate::protocol::negotiator::{ProtocolMode as NegProtocolMode, ProtocolNegotiator};
@@ -1045,6 +1048,35 @@ async fn run() -> Result<()> {
     // The engine is pre-warmed at startup if PreWarmConfig::warm_at_startup is true.
     let cache_engine = crate::orchestration::orchestrator::init_cache_warming();
     tracing::info!("CacheWarmingEngine initialized and ready");
+
+    // ── ContinuousLearningCenter background task ─────────────────────
+    // Start a periodic review cycle that consolidates experiences, detects
+    // forgetting, and advances the curriculum in the background.
+    let learning_center = ContinuousLearningCenter::new(ContinuousLearningConfig::default());
+    let cl_shutdown = shutdown_notify.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300)); // 5 min
+        tracing::info!("ContinuousLearningCenter background task started");
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    // Run a review cycle: detect forgetting, replay important memories,
+                    // and advance curriculum stage when ready.
+                    let (replayed, evicted) = learning_center.review_cycle();
+                    if replayed > 0 || evicted > 0 {
+                        tracing::debug!(
+                            "ContinuousLearningCenter review: {replayed} replayed, {evicted} evicted"
+                        );
+                    }
+                }
+                _ = cl_shutdown.notified() => {
+                    tracing::info!("ContinuousLearningCenter background task shutting down");
+                    break;
+                }
+            }
+        }
+    });
+    tracing::info!("ContinuousLearningCenter background task spawned");
 
     // Delegate interactive agent onboarding to the onboarding module
     let onboarding_cfg = crate::core::onboarding::OnboardingConfig {

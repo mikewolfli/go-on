@@ -271,6 +271,8 @@ pub struct BackendClient {
     next_id: Arc<AtomicU64>,
     /// Model list cache with timestamp
     models_cache: ModelsCache,
+    /// Flag set when fetch_models falls back to expired cache
+    stale_models_flag: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -374,6 +376,7 @@ impl BackendClient {
             base_url: base_url.trim_end_matches('/').to_string(),
             next_id: Arc::new(AtomicU64::new(1)),
             models_cache: Arc::new(std::sync::Mutex::new((None, std::time::Instant::now()))),
+            stale_models_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -406,6 +409,7 @@ impl BackendClient {
                 eprintln!(
                     "[fetch_models] models.list timed out after 500ms, returning stale cache"
                 );
+                self.stale_models_flag.store(true, Ordering::SeqCst);
                 return stale_cached.unwrap_or_default();
             }
         };
@@ -434,6 +438,7 @@ impl BackendClient {
             }
             Err(_) => {
                 // If refresh fails, keep showing stale data instead of blanking the model list.
+                self.stale_models_flag.store(true, Ordering::SeqCst);
                 return stale_cached.unwrap_or_default();
             }
         };
@@ -480,6 +485,9 @@ impl BackendClient {
             cache.1 = std::time::Instant::now();
         }
 
+        // Clear stale flag: fresh data successfully retrieved.
+        self.stale_models_flag.store(false, Ordering::SeqCst);
+
         result
     }
 
@@ -490,6 +498,11 @@ impl BackendClient {
             cache.0 = None;
             cache.1 = std::time::Instant::now();
         }
+    }
+
+    /// Returns `true` if the last model list fetch fell back to expired cache.
+    pub fn stale_models(&self) -> bool {
+        self.stale_models_flag.load(Ordering::SeqCst)
     }
 
     pub fn base_url(&self) -> &str {

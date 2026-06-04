@@ -16,6 +16,19 @@
 //!
 //! Once all call sites have migrated, the three legacy implementations
 //! will be removed and `CoreDag<T>` will become the sole DAG type.
+//!
+//! # Migration
+//!
+//! ## Active usages
+//! - Exported via `crate::orchestration::mod.rs` for new code
+//! - Referenced in doc comments by `dag_executor.rs`, `execution_graph.rs`, `task_graph.rs`
+//!
+//! ## Migration plan
+//! 1. Implement `FromCoreDag` / `IntoCoreDag` for all legacy DAG types
+//! 2. Update call sites in `dag_executor.rs`, `task_graph.rs`, `execution_graph.rs`
+//! 3. Remove legacy modules once call sites are migrated
+//!
+//! This module is **active** — do not delete. Prefer `CoreDag<T>` for new DAG code.
 
 // Allow dead_code for this module — it provides foundational types that are
 // not yet integrated across all call sites.

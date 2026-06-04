@@ -19,6 +19,8 @@ pub mod storage;
 pub mod cors;
 // User session management
 pub mod session;
+// Extracted chat phases (BLUE62 ARCH-1)
+pub mod chat_phases;
 
 #[cfg(test)]
 #[allow(clippy::duplicate_mod)] // lib+bin dual compilation; both need this module

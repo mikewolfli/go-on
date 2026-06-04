@@ -5,6 +5,7 @@
 //! a timestamp, and an optional signature. The chain can be verified
 //! for integrity and exported as a report.
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
@@ -116,21 +117,66 @@ impl AuditEntry {
         hex::encode(hasher.finalize())
     }
 
-    /// Sign this entry using the provided key.
+    /// Sign this entry using the provided Ed25519 private key.
     /// This sets the `signature` and `key_id` fields.
-    pub fn sign(
-        &mut self,
-        key_id: &str,
-        private_key: &[u8],
-        algorithm: crate::security::request_signing::SigningAlgorithm,
-    ) -> Result<(), AuditError> {
+    /// The signature covers the entry's canonical hash (`compute_hash()`).
+    pub fn sign(&mut self, key_id: &str, private_key: &[u8]) -> Result<(), AuditError> {
         let body = self.compute_hash().into_bytes();
-        let sig =
-            crate::security::request_signing::sign_request(private_key, &body, algorithm, key_id)
-                .map_err(|e| AuditError::SignatureVerificationFailed(e.to_string()))?;
 
-        self.signature = Some(sig.signature);
-        self.key_id = Some(sig.key_id);
+        use ed25519_dalek::Signer;
+        let signing_key = if private_key.len() == 64 {
+            let arr: &[u8; 64] = private_key.try_into().map_err(|_| {
+                AuditError::SignatureVerificationFailed("Ed25519 keypair must be 64 bytes".into())
+            })?;
+            ed25519_dalek::SigningKey::from_keypair_bytes(arr)
+                .map_err(|e| AuditError::SignatureVerificationFailed(e.to_string()))?
+        } else if private_key.len() == 32 {
+            let arr: &[u8; 32] = private_key.try_into().map_err(|_| {
+                AuditError::SignatureVerificationFailed("Ed25519 seed must be 32 bytes".into())
+            })?;
+            ed25519_dalek::SigningKey::from_bytes(arr)
+        } else {
+            return Err(AuditError::SignatureVerificationFailed(
+                "Ed25519 key must be 32 (seed) or 64 (keypair) bytes".into(),
+            ));
+        };
+
+        let signature_bytes = signing_key.sign(&body).to_bytes().to_vec();
+        self.signature = Some(base64::engine::general_purpose::STANDARD.encode(&signature_bytes));
+        self.key_id = Some(key_id.to_string());
+        Ok(())
+    }
+
+    /// Verify this entry's Ed25519 signature against the provided public key.
+    ///
+    /// The signature must have been created by [`AuditEntry::sign`] (i.e., it covers
+    /// the entry's canonical hash returned by [`compute_hash`]).
+    pub fn verify_signature(&self, public_key: &[u8]) -> Result<(), AuditError> {
+        let sig_b64 = self.signature.as_ref().ok_or_else(|| {
+            AuditError::SignatureVerificationFailed("entry has no signature".to_string())
+        })?;
+
+        let body = self.compute_hash().into_bytes();
+        let sig_bytes = base64::engine::general_purpose::STANDARD
+            .decode(sig_b64)
+            .map_err(|e| AuditError::SignatureVerificationFailed(e.to_string()))?;
+
+        let pub_key_bytes: &[u8; 32] = public_key.try_into().map_err(|_| {
+            AuditError::SignatureVerificationFailed("public key must be 32 bytes".to_string())
+        })?;
+        let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(pub_key_bytes)
+            .map_err(|e| AuditError::SignatureVerificationFailed(e.to_string()))?;
+
+        let sig_arr: &[u8; 64] = sig_bytes.as_slice().try_into().map_err(|_| {
+            AuditError::SignatureVerificationFailed("signature must be 64 bytes".to_string())
+        })?;
+        let sig = ed25519_dalek::Signature::from_bytes(sig_arr);
+
+        use ed25519_dalek::Verifier;
+        verifying_key
+            .verify(&body, &sig)
+            .map_err(|e| AuditError::SignatureVerificationFailed(e.to_string()))?;
+
         Ok(())
     }
 }
@@ -202,9 +248,21 @@ impl HashChainAuditor {
         Ok(entry)
     }
 
-    /// Verify the integrity of the entire hash chain.
+    /// Verify the integrity of the entire hash chain and optionally verify
+    /// Ed25519 signatures.
+    ///
+    /// Hash chain validation checks:
+    /// - `prev_hash` continuity between consecutive entries
+    /// - `payload_hash` consistency with the stored payload
+    ///
+    /// If `public_key` is provided and an entry carries a signature, the entry's
+    /// Ed25519 signature is verified against its canonical hash.
+    ///
     /// Returns a list of violations (empty if the chain is intact).
-    pub fn verify_integrity(&self) -> Result<Vec<IntegrityViolation>, AuditError> {
+    pub fn verify_integrity(
+        &self,
+        public_key: Option<&[u8]>,
+    ) -> Result<Vec<IntegrityViolation>, AuditError> {
         let entries = Self::load_all_entries(&self.chain_file)?;
         let mut violations = Vec::new();
         let mut expected_prev_hash = Self::genesis_hash();
@@ -240,17 +298,35 @@ impl HashChainAuditor {
                 });
             }
 
-            // Verify the entry's own hash chain (optional signature check would go here)
-            let computed_hash = entry.compute_hash();
+            // Verify Ed25519 signature when a public key is provided
+            if entry.signature.is_some() {
+                if let Some(pk) = public_key {
+                    if let Err(e) = entry.verify_signature(pk) {
+                        violations.push(IntegrityViolation {
+                            entry_id: entry.entry_id.clone(),
+                            expected_prev_hash: expected_prev_hash.clone(),
+                            actual_prev_hash: entry.prev_hash.clone(),
+                            reason: format!("signature verification failed: {e}"),
+                            entry: Some(entry.clone()),
+                        });
+                    }
+                }
+            }
+
             // Store this entry's hash as the expected prev_hash for the next entry
-            expected_prev_hash = computed_hash;
+            expected_prev_hash = entry.compute_hash();
         }
 
         Ok(violations)
     }
 
     /// Export an audit report for entries within a time range.
-    pub fn export_audit_report(&self, from_ms: u64, to_ms: u64) -> Result<AuditReport, AuditError> {
+    pub fn export_audit_report(
+        &self,
+        from_ms: u64,
+        to_ms: u64,
+        public_key: Option<&[u8]>,
+    ) -> Result<AuditReport, AuditError> {
         let all_entries = Self::load_all_entries(&self.chain_file)?;
 
         let filtered: Vec<AuditEntry> = all_entries
@@ -258,7 +334,7 @@ impl HashChainAuditor {
             .filter(|e| e.timestamp_ms >= from_ms && e.timestamp_ms <= to_ms)
             .collect();
 
-        let violations = self.verify_integrity()?;
+        let violations = self.verify_integrity(public_key)?;
         let is_chain_intact = violations.is_empty();
 
         Ok(AuditReport {
@@ -372,7 +448,7 @@ mod tests {
             .unwrap();
         assert_eq!(auditor.last_entry_id(), Some(entry.entry_id.as_str()));
 
-        let violations = auditor.verify_integrity().unwrap();
+        let violations = auditor.verify_integrity(None).unwrap();
         assert!(violations.is_empty(), "Chain should be intact");
     }
 
@@ -391,7 +467,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(auditor.entry_count().unwrap(), 3);
-        let violations = auditor.verify_integrity().unwrap();
+        let violations = auditor.verify_integrity(None).unwrap();
         assert!(violations.is_empty());
     }
 
@@ -414,7 +490,7 @@ mod tests {
         let tampered = content.replace("login", "admin_login");
         fs::write(&auditor.chain_file, tampered).unwrap();
 
-        let violations = auditor.verify_integrity().unwrap();
+        let violations = auditor.verify_integrity(None).unwrap();
         assert!(!violations.is_empty(), "Tampering should be detected");
     }
 
@@ -427,9 +503,113 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(10));
         let later = current_timestamp_ms();
 
-        let report = auditor.export_audit_report(now, later).unwrap();
+        let report = auditor.export_audit_report(now, later, None).unwrap();
         // At minimum, the "old" event should be within range
         assert!(report.entry_count >= 1);
+    }
+
+    #[test]
+    fn test_sign_and_verify_signature() {
+        let (_dir, mut auditor) = setup_auditor();
+
+        // Generate an Ed25519 key pair
+        let mut seed = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut seed);
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+        let verifying_key = signing_key.verifying_key();
+
+        // Append an entry and manually sign it
+        let mut entry = auditor
+            .append(serde_json::json!({"event": "sensitive_operation"}))
+            .unwrap();
+        entry
+            .sign("ed25519-key-1", &signing_key.to_keypair_bytes())
+            .unwrap();
+
+        // Verify the signature with the correct public key
+        assert!(entry.verify_signature(&verifying_key.to_bytes()).is_ok());
+
+        // Verify with a wrong public key fails
+        let wrong_pk = [0u8; 32];
+        assert!(entry.verify_signature(&wrong_pk).is_err());
+    }
+
+    #[test]
+    fn test_signature_tampering_detected() {
+        let (_dir, mut auditor) = setup_auditor();
+
+        // Generate an Ed25519 key pair
+        let mut seed = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut seed);
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+        let verifying_key = signing_key.verifying_key();
+
+        // Append a signed entry
+        let mut entry = auditor
+            .append(serde_json::json!({"event": "deploy"}))
+            .unwrap();
+        entry
+            .sign("ed25519-key-1", &signing_key.to_keypair_bytes())
+            .unwrap();
+
+        // Tamper with the payload (changes compute_hash)
+        entry.payload = serde_json::json!({"event": "deploy_tampered"});
+
+        // Signature should now fail
+        assert!(entry.verify_signature(&verifying_key.to_bytes()).is_err());
+    }
+
+    #[test]
+    fn test_verify_integrity_with_signatures() {
+        let (_dir, mut auditor) = setup_auditor();
+
+        // Generate an Ed25519 key pair
+        let mut seed = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut seed);
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+        let verifying_key = signing_key.verifying_key();
+
+        // Append unsigned entries first
+        auditor
+            .append(serde_json::json!({"event": "first"}))
+            .unwrap();
+
+        // Append a signed entry (manually create and overwrite)
+        let mut entry = auditor
+            .append(serde_json::json!({"event": "signed_event"}))
+            .unwrap();
+        entry
+            .sign("ed25519-key-1", &signing_key.to_keypair_bytes())
+            .unwrap();
+
+        // We have to replace the entry in the chain file for verify_integrity to see it
+        // Re-read all entries, update the last one, and write back
+        let all_entries = HashChainAuditor::load_all_entries(&auditor.chain_file).unwrap();
+        let mut updated = all_entries;
+        updated.pop(); // remove unsigned version
+        updated.push(entry); // add signed version
+
+        let mut file = fs::File::create(&auditor.chain_file).unwrap();
+        for e in &updated {
+            writeln!(file, "{}", serde_json::to_string(e).unwrap()).unwrap();
+        }
+        drop(file);
+
+        // Re-create auditor to pick up signed entries
+        let auditor = HashChainAuditor::new(auditor.chain_file.clone()).unwrap();
+
+        // Verify with correct public key -- should pass
+        let violations = auditor.verify_integrity(Some(&verifying_key.to_bytes())).unwrap();
+        assert!(violations.is_empty(), "Chain with valid signatures should be intact: {:?}", violations);
+
+        // Verify with wrong public key -- should report signature violations
+        let wrong_pk = [0u8; 32];
+        let violations = auditor.verify_integrity(Some(&wrong_pk)).unwrap();
+        assert!(!violations.is_empty(), "Wrong public key should detect signature violations");
+
+        // Verify with no public key -- should pass (skips signature check)
+        let violations = auditor.verify_integrity(None).unwrap();
+        assert!(violations.is_empty(), "Chain should be intact when skipping signature check");
     }
 
     #[test]

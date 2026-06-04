@@ -116,7 +116,23 @@ async function verifyArchiveChecksum(
   repository: string,
   tag: string,
   assetName: string,
+  trustedSha256: string | null = null,
 ): Promise<void> {
+  // Compute SHA-256 of the downloaded archive once
+  const archiveBuffer = await fsPromises.readFile(archivePath);
+  const hash = crypto.createHash("sha256").update(archiveBuffer).digest("hex");
+
+  if (trustedSha256 !== null) {
+    // Verify against the hardcoded pinned hash (eliminates MITM risk)
+    if (hash.toLowerCase() !== trustedSha256.toLowerCase()) {
+      throw new Error(
+        `Checksum mismatch for ${assetName}: trusted hash ${trustedSha256}, got ${hash}`,
+      );
+    }
+    return;
+  }
+
+  // Fall back to checksums.txt downloaded from the same release
   const checksumsUrl = buildReleaseAssetUrl(repository, tag, "checksums.txt");
   const checksumsPath = archivePath + ".checksums.txt";
 
@@ -140,13 +156,6 @@ async function verifyArchiveChecksum(
     if (!expectedChecksum) {
       throw new Error(`Checksum for ${assetName} not found in checksums.txt`);
     }
-
-    // Compute SHA-256 of the downloaded archive
-    const archiveBuffer = await fsPromises.readFile(archivePath);
-    const hash = crypto
-      .createHash("sha256")
-      .update(archiveBuffer)
-      .digest("hex");
 
     if (hash.toLowerCase() !== expectedChecksum.toLowerCase()) {
       throw new Error(
@@ -487,24 +496,24 @@ export async function ensureGoOnBinary(
       releaseTag,
     ]),
   );
-  // SHA-256 verification relies on checksums.txt downloaded from the same release server.
-  // To eliminate the MITM risk, set TRUSTED_RUNTIME_SHA256 above to a known-good hash.
   if (TRUSTED_RUNTIME_SHA256 === null) {
     void vscode.window.showWarningMessage(
       "[go-on] SHA-256 verification relies on checksums.txt from the same release server. " +
-        "Set TRUSTED_RUNTIME_SHA256 in runtimeBinaryService.ts for stronger security.",
+        "Set TRUSTED_RUNTIME_SHA256 at the top of runtimeBinaryService.ts for a pinned hash that " +
+        "eliminates MITM risk.",
     );
   }
 
   try {
     await downloadFile(downloadUrl, archivePath);
 
-    // Verify the downloaded archive against checksums.txt
+    // Verify the downloaded archive (trusted hash if set, otherwise checksums.txt)
     await verifyArchiveChecksum(
       archivePath,
       releaseRepository,
       releaseTag,
       assetName,
+      TRUSTED_RUNTIME_SHA256,
     );
 
     await extractArchive(archivePath, runtimeDir);

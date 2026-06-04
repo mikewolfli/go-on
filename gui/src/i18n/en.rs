@@ -195,6 +195,7 @@ pub fn all() -> &'static [(&'static str, &'static str)] {
         ("status.connected", "Connected"),
         ("status.disconnected", "Disconnected"),
         ("status.error", "Error"),
+        ("status.staleData", "⚠ Stale data"),
         ("skills.none", "No skills configured yet. Create or import one to get started."),
         ("skills.create.title", "Create New Skill"),
         ("skills.create.name", "Name"),

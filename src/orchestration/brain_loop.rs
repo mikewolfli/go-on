@@ -198,8 +198,8 @@ pub struct BrainLoopConfig {
     /// When `None`, the default planner model is used.
     pub deep_reasoning_model: Option<String>,
     /// Whether to query the world model for environment entities during
-    /// planning (GAP-B50-06). Stub ready for Step 7 integration.
-    /// Default: `false`
+    /// planning (GAP-B50-06).
+    /// Default: `true`
     pub world_model_integration: bool,
 }
 
@@ -216,7 +216,7 @@ impl Default for BrainLoopConfig {
             enable_deep_reasoning: false,
             max_deep_reasoning_tokens: 4096,
             deep_reasoning_model: None,
-            world_model_integration: false,
+            world_model_integration: true,
         }
     }
 }
@@ -1524,11 +1524,11 @@ impl BrainLoop {
                     p.world_model_data = enriched.world_model_data;
                 }
             }
+        }
 
-            // Query world model if integration is enabled (stub for Step 7).
-            if world_model_int {
-                self.query_world_model(&plan_id).await;
-            }
+        // ── World-model context query (runs regardless of deep reasoning) ──
+        if world_model_int {
+            self.query_world_model(&plan_id).await;
         }
 
         // ── Main Plan → Execute → Reflect → Replan loop ──────────────
@@ -1784,7 +1784,7 @@ mod tests {
             enable_deep_reasoning: false,
             max_deep_reasoning_tokens: 4096,
             deep_reasoning_model: None,
-            world_model_integration: false,
+            world_model_integration: true,
         }
     }
 
@@ -2390,7 +2390,7 @@ mod tests {
         let cfg = BrainLoopConfig::default();
         assert_eq!(cfg.max_deep_reasoning_tokens, 4096);
         assert!(cfg.deep_reasoning_model.is_none());
-        assert!(!cfg.world_model_integration);
+        assert!(cfg.world_model_integration);
     }
 
     // -----------------------------------------------------------------------
@@ -2677,8 +2677,8 @@ mod tests {
             "deep_reasoning_model should default to None"
         );
         assert!(
-            !config.world_model_integration,
-            "world_model_integration should default to false"
+            config.world_model_integration,
+            "world_model_integration should default to true"
         );
     }
 }

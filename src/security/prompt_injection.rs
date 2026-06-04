@@ -155,7 +155,10 @@ impl Default for DetectionConfig {
     fn default() -> Self {
         Self {
             threshold: 0.7,
-            enable_model_check: false,
+            // Enable LLM-assisted detection by default; it is the most
+            // effective defense against novel/zero-day prompt injection.
+            // Set to `false` if latency is a concern.
+            enable_model_check: true,
             model_check_max_len: 4096,
             contamination_threshold: 0.5,
             enable_contamination_check: true,

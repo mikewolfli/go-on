@@ -14,7 +14,11 @@ use crate::intelligence::token_cache::{CacheEntry, TokenMultiLevelCache};
 #[derive(Debug, Clone)]
 pub enum CacheDecision {
     /// Use cached response
-    Hit { response: String, level: String },
+    Hit {
+        response: String,
+        #[allow(dead_code)]
+        level: String,
+    },
     /// Cache hit but refused (execution-like request)
     Refused { level: String, reason: String },
     /// No cache entry
@@ -125,6 +129,7 @@ impl CacheStrategy {
     }
 
     /// Build a structured agent_attempt entry for cache outcomes.
+    #[allow(dead_code)]
     pub fn attempt_entry(decision: &CacheDecision) -> Value {
         match decision {
             CacheDecision::Hit { level, .. } => serde_json::json!({

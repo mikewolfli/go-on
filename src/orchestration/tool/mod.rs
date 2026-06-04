@@ -102,6 +102,16 @@ pub struct ToolRegistry {
     profiles: HashMap<&'static str, ToolCapabilityProfile>,
 }
 
+impl std::fmt::Debug for ToolRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let tool_names: Vec<&str> = self.tools.iter().map(|t| t.name()).collect();
+        f.debug_struct("ToolRegistry")
+            .field("tools", &tool_names)
+            .field("profiles", &self.profiles)
+            .finish()
+    }
+}
+
 impl ToolRegistry {
     /// Create an empty tool registry (no built-in tools registered).
     pub fn new_empty() -> Self {

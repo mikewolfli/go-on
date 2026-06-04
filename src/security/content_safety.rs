@@ -174,6 +174,28 @@ impl SafetyChecker {
     pub fn check(&self, text: &str) -> Vec<SafetyViolation> {
         let mut violations = Vec::new();
 
+        // Normalize the text to defend against common regex bypass techniques:
+        // 1. Lowercase folding — the regex crate only folds ASCII with `(?i)`;
+        //    we pre-fold to catch mixed-case and Unicode case variants.
+        // 2. Whitespace collapsing — normalizes varied whitespace that
+        //    might break `\s` or `\b` boundaries.
+        let mut normalized = String::with_capacity(text.len());
+        let mut in_space = false;
+        for ch in text.chars() {
+            if ch.is_whitespace() {
+                if !in_space {
+                    normalized.push(' ');
+                    in_space = true;
+                }
+            } else {
+                // Fold to lowercase for case-insensitive matching.
+                for lower in ch.to_lowercase() {
+                    normalized.push(lower);
+                }
+                in_space = false;
+            }
+        }
+
         for rule in &self.rules {
             if !self.config.check_categories.contains(&rule.category) {
                 continue;
@@ -183,7 +205,7 @@ impl SafetyChecker {
                 continue;
             }
 
-            for mat in rule.regex.find_iter(text) {
+            for mat in rule.regex.find_iter(&normalized) {
                 violations.push(SafetyViolation {
                     category: rule.category.clone(),
                     severity: rule.severity.clone(),

@@ -10,6 +10,7 @@ use crate::i18n::runtime::tf;
 use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::sync::Semaphore;
 use tracing::warn;
 
 use crate::orchestration::dag_executor::{build_dag_from_tool_calls, DagGraph};
@@ -93,6 +94,9 @@ pub async fn execute_tool_dag(
 }
 
 /// Execute all tool calls in parallel with no dependency ordering (flat fan-out).
+///
+/// A Semaphore limits concurrent tool execution to avoid overwhelming the system.
+/// Max concurrency defaults to 10, configurable via `GO_ON_DAG_FANOUT_CONCURRENCY` env var.
 async fn execute_flat_fanout(
     registry: Arc<ToolRegistry>,
     objective: &str,
@@ -101,6 +105,16 @@ async fn execute_flat_fanout(
 ) -> (Vec<DagNodeResult>, DagExecutionTrace) {
     use std::time::Instant;
     let dag_start = Instant::now();
+
+    // Limit concurrent tool execution to avoid overwhelming the system.
+    let max_concurrency: usize = std::env::var("GO_ON_DAG_FANOUT_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
+    let concurrency_semaphore = Arc::new(Semaphore::new(max_concurrency));
+
+    // Collect fallback tool names from the tool calls themselves.
+    let preferred_tools: Vec<String> = tool_calls.iter().map(|(name, _)| name.clone()).collect();
 
     let (_branch_id, tool_node_ids) = build_tool_execution_dag(tool_calls);
     let num_tools = tool_calls.len();
@@ -114,6 +128,8 @@ async fn execute_flat_fanout(
         tool_calls,
         &tool_node_ids,
         None,
+        &preferred_tools,
+        Some(Arc::clone(&concurrency_semaphore)),
     );
 
     let results: Vec<DagNodeResult> = join_all(jobs)
@@ -152,6 +168,16 @@ async fn execute_with_plan_topology(
 ) -> (Vec<DagNodeResult>, DagExecutionTrace) {
     use std::time::Instant;
     let dag_start = Instant::now();
+
+    // Limit concurrent tool execution within each topological level.
+    let max_concurrency: usize = std::env::var("GO_ON_DAG_FANOUT_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
+    let concurrency_semaphore = Arc::new(Semaphore::new(max_concurrency));
+
+    // Collect fallback tool names from the tool calls.
+    let preferred_tools: Vec<String> = tool_calls.iter().map(|(name, _)| name.clone()).collect();
 
     // Build a DagGraph from plan steps to extract topological levels
     let mut graph = DagGraph::new();
@@ -246,6 +272,8 @@ async fn execute_with_plan_topology(
             &level_tool_calls,
             &level_node_ids,
             dependency_evidence.clone(),
+            &preferred_tools,
+            Some(Arc::clone(&concurrency_semaphore)),
         );
 
         // Track panicked tasks so the information is not lost.
@@ -294,6 +322,9 @@ async fn execute_with_plan_topology(
 ///
 /// `dependency_evidence` is injected as the `evidence` field in ToolInput
 /// when present, allowing downstream tools to consume prior outputs.
+/// `preferred_tools` constrains the tools that `execute_loop` will consider;
+/// when non-empty it replaces the old hardcoded `&[]` (which meant "all reg tools").
+/// `concurrency_semaphore` caps the number of simultaneously-executing tasks.
 fn create_tool_jobs(
     registry: &Arc<ToolRegistry>,
     objective: &str,
@@ -301,6 +332,8 @@ fn create_tool_jobs(
     tool_calls: &[(String, String)],
     node_ids: &[ExNodeId],
     dependency_evidence: Option<serde_json::Value>,
+    preferred_tools: &[String],
+    concurrency_semaphore: Option<Arc<Semaphore>>,
 ) -> Vec<tokio::task::JoinHandle<DagNodeResult>> {
     use std::time::Instant;
 
@@ -318,8 +351,20 @@ fn create_tool_jobs(
                 .cloned()
                 .unwrap_or_else(|| format!("tool-{}-{}", tool_name, i));
             let evidence = dependency_evidence.clone();
+            let semaphore = concurrency_semaphore.clone();
+            let pref_tools = preferred_tools.to_vec();
 
             tokio::spawn(async move {
+                // Acquire concurrency permit before starting work.
+                let _permit = match semaphore {
+                    Some(ref sem) => Some(
+                        sem.acquire()
+                            .await
+                            .expect("DAG concurrency semaphore was closed"),
+                    ),
+                    None => None,
+                };
+
                 let node_start = Instant::now();
                 let parsed_args: Value =
                     serde_json::from_str(&tool_args_str).unwrap_or(serde_json::json!({}));
@@ -339,10 +384,9 @@ fn create_tool_jobs(
                     enable_fallback: false,
                     verify_output: None,
                 };
-                // NOTE: fallback tools (`&[]`) is hardcoded to empty —
-                // no retry/fallback tools are injected. Future work should
-                // wire in fallback tool definitions from the plan.
-                let (decision, _trace) = execute_loop(&tool_name, &registry, &input, &[], &cfg);
+                // Use preferred_tools (tool names from the plan) instead of hardcoded `&[]`.
+                let (decision, _trace) =
+                    execute_loop(&tool_name, &registry, &input, &pref_tools, &cfg);
                 let (state, tool_output, error_payload) = match decision {
                     LoopDecision::Complete(ref output) => {
                         (ExNodeState::Completed, output.result.clone(), None)

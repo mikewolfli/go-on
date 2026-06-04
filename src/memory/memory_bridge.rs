@@ -128,8 +128,13 @@ pub fn start_auto_migrate_task(
 /// [`MemoryEntry`](PersistenceEntry) and call `MemoryPersistence::store()`.
 ///
 /// Returns the persistence operation result.
-#[allow(dead_code)] // Reserved bridge API; wired via runtime.rs startup
-pub fn persist_store(persistence: &MemoryPersistence, entry: CanonicalEntry) -> anyhow::Result<()> {
+///
+/// Reserved bridge API — prefixed with `_` to suppress dead-code warnings
+/// until it is wired into production flow.
+pub fn _persist_store(
+    persistence: &MemoryPersistence,
+    entry: CanonicalEntry,
+) -> anyhow::Result<()> {
     let p_entry: PersistenceEntry = entry.into();
     persistence.store(p_entry)
 }
@@ -143,8 +148,10 @@ pub fn persist_store(persistence: &MemoryPersistence, entry: CanonicalEntry) -> 
 ///
 /// Returns an error if the persistence `store()` call fails.  The entry
 /// will still have been added to the in-memory store.
-#[allow(dead_code)] // Reserved bridge API; wired via runtime.rs startup
-pub fn bridge_store(
+///
+/// Reserved bridge API — prefixed with `_` to suppress dead-code warnings
+/// until it is wired into production flow.
+pub fn _bridge_store(
     memory_store: &StdMutex<MemoryStore>,
     persistence: &MemoryPersistence,
     entry: CanonicalEntry,
@@ -160,7 +167,7 @@ pub fn bridge_store(
     store.store(entry.clone());
 
     // Step 2: persistence (conversion via `From` impl)
-    persist_store(persistence, entry)?;
+    _persist_store(persistence, entry)?;
 
     Ok(())
 }
@@ -198,6 +205,15 @@ pub fn bridge_promote(
     Ok(report)
 }
 
+// ── Memory base path ─────────────────────────────────────────────────────
+
+/// Return the memory base directory, sourced from the `GO_ON_MEMORY_PATH`
+/// environment variable, falling back to `.goon/memory/`.
+pub fn memory_base_path() -> std::path::PathBuf {
+    let base = std::env::var("GO_ON_MEMORY_PATH").unwrap_or_else(|_| ".goon/memory/".to_string());
+    std::path::PathBuf::from(base)
+}
+
 // ── Convenience initialiser ──────────────────────────────────────────────
 
 /// Create a [`MemoryPersistence`] with the default paths and wire up the
@@ -209,10 +225,11 @@ pub fn bridge_promote(
 pub fn init_memory_persistence_with_auto_migrate(
     cancel: Option<CancellationToken>,
 ) -> Option<Arc<MemoryPersistence>> {
-    let db_path = std::path::Path::new(".goon/memory/warm.db");
-    let cold_path = std::path::Path::new(".goon/memory/cold");
+    let base = memory_base_path();
+    let db_path = base.join("warm.db");
+    let cold_path = base.join("cold");
 
-    match MemoryPersistence::new(db_path, cold_path, None) {
+    match MemoryPersistence::new(&db_path, &cold_path, None) {
         Ok(mp) => {
             let mp = Arc::new(mp);
             let task = start_auto_migrate_task(Arc::clone(&mp), cancel);
@@ -257,7 +274,7 @@ mod tests {
 
         // Store an entry via the bridge
         let entry = make_canonical("bridge-test-1", MemoryClass::Observation, 0.80);
-        bridge_store(&store, &persistence, entry).unwrap();
+        _bridge_store(&store, &persistence, entry).unwrap();
 
         // Promote via the bridge
         let report = bridge_promote(&store, &persistence).unwrap();

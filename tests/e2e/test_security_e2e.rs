@@ -33,7 +33,10 @@ struct SecurityE2eContext {
 
 impl SecurityE2eContext {
     fn new() -> Self {
-        let cert_dir = std::env::temp_dir().join("go-on-e2e-certs");
+        // Use a UUID per test instance so parallel test executions
+        // don't race on the same filesystem path.
+        let unique_id = uuid::Uuid::new_v4();
+        let cert_dir = std::env::temp_dir().join(format!("go-on-e2e-certs-{}", unique_id));
         let _ = std::fs::create_dir_all(&cert_dir);
         Self {
             cert_dir: Some(cert_dir),
@@ -175,7 +178,7 @@ async fn test_security_all_controls() {
 
     // Verify the chain is intact.
     let violations = auditor
-        .verify_integrity()
+        .verify_integrity(None)
         .expect("verify_integrity must succeed");
     assert!(
         violations.is_empty(),
@@ -249,7 +252,7 @@ async fn test_security_audit_tamper_detection() {
 
     // Verify the chain is intact before tampering.
     let violations_before = auditor
-        .verify_integrity()
+        .verify_integrity(None)
         .expect("verify_integrity must succeed");
     assert!(
         violations_before.is_empty(),
@@ -269,7 +272,7 @@ async fn test_security_audit_tamper_detection() {
         .expect("HashChainAuditor re-creation must succeed");
 
     let violations = auditor_after
-        .verify_integrity()
+        .verify_integrity(None)
         .expect("verify_integrity must succeed");
     // After tampering, there should be at least 1 integrity violation.
     assert!(

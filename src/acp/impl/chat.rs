@@ -6,7 +6,7 @@
 //! compatibility with the original implementation.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+
 use std::sync::Arc;
 use std::sync::{Mutex as StdMutex, OnceLock};
 use std::time::Instant;
@@ -29,9 +29,7 @@ use crate::acp::helpers::autonomy_metrics::{
     record_planner_guided_route, record_reputation_routing_applied, record_tool_followup_attempt,
     record_tool_followup_fallback, record_tool_followup_success,
 };
-use crate::acp::helpers::cache_strategy::{
-    should_bypass_for_execution, store_async, CacheDecision, CacheStrategy,
-};
+use crate::acp::helpers::cache_strategy::store_async;
 use crate::acp::helpers::context::{
     probe_agent_runtime_readiness, request_timeout, run_with_optional_timeout,
     AgentRuntimeReadiness,
@@ -47,21 +45,18 @@ use crate::acp::r#impl::UserSession;
 use crate::acp::server::AcpServer;
 use crate::agent::Message;
 use crate::config::PhaseOptions;
-use crate::evaluation::TraceEvent;
 use crate::flow::FlowManager;
 use crate::i18n::runtime::{t, tf};
-use crate::intelligence::token_cache::ContextLengthClass;
 use crate::orchestration::autonomy_runtime::{
     build_tool_execution_followup_message, build_tool_result_block,
 };
 use crate::orchestration::mode::{resolve_mode_runtime, ModeKind};
-use crate::orchestration::multi_agent_pipeline::{AgentAssignment, MultiAgentPipeline};
 
 use crate::agents::sse_optimizer::SseBufferPool;
 use crate::orchestration::prompt_layers::PromptAssembler;
 use crate::orchestration::session_compressor::SessionCompressor;
 use crate::orchestration::session_context::SessionContextManager;
-use crate::orchestration::task_router::{TaskCharacteristics, TaskRouter, TaskType};
+use crate::orchestration::task_router::{TaskRouter, TaskType};
 use crate::orchestration::tool::{execute_loop, LoopConfig, LoopDecision, ToolInput, ToolRegistry};
 
 use crate::memory_module::{MemoryClass, MemoryEntry, MemoryPolicy, MemoryStore};
@@ -126,15 +121,15 @@ impl ChatRequestContext {
 }
 
 #[derive(Default)]
-struct AgentSwitchState {
-    forced_agent_by_phase: HashMap<String, String>,
+pub(crate) struct AgentSwitchState {
+    pub forced_agent_by_phase: HashMap<String, String>,
     #[allow(dead_code)] // F-GAP-49 — reserved for agent switch state extensibility
-    primary_agent_by_phase: HashMap<String, String>,
+    pub primary_agent_by_phase: HashMap<String, String>,
 }
 
 static AGENT_SWITCH_STATE: OnceLock<StdMutex<AgentSwitchState>> = OnceLock::new();
 
-fn agent_switch_state() -> &'static StdMutex<AgentSwitchState> {
+pub(crate) fn agent_switch_state() -> &'static StdMutex<AgentSwitchState> {
     AGENT_SWITCH_STATE.get_or_init(|| StdMutex::new(AgentSwitchState::default()))
 }
 
@@ -1060,7 +1055,7 @@ pub async fn should_escalate_approval_strategy(
         || phase_requires_escalation)
 }
 
-async fn filter_runtime_ready_agents(
+pub(crate) async fn filter_runtime_ready_agents(
     server: &AcpServer,
     config: &crate::config::AppConfig,
     agents: &mut Vec<(String, Arc<dyn crate::agent::Agent>)>,
@@ -1087,7 +1082,7 @@ async fn filter_runtime_ready_agents(
     unavailable
 }
 
-fn has_flow_phase(config: &crate::config::AppConfig, phase: &str) -> bool {
+pub(crate) fn has_flow_phase(config: &crate::config::AppConfig, phase: &str) -> bool {
     config
         .flow
         .phases
@@ -1096,7 +1091,7 @@ fn has_flow_phase(config: &crate::config::AppConfig, phase: &str) -> bool {
         || config.phases.contains_key(phase)
 }
 
-fn infer_adaptive_phase(
+pub(crate) fn infer_adaptive_phase(
     config: &crate::config::AppConfig,
     mode: &str,
     messages: &[Message],
@@ -1138,7 +1133,7 @@ fn infer_adaptive_phase(
         .map(str::to_string)
 }
 
-fn controller_recommended_phase(
+pub(crate) fn controller_recommended_phase(
     server: &AcpServer,
     config: &crate::config::AppConfig,
     mode: &str,
@@ -1167,7 +1162,14 @@ fn controller_recommended_phase(
 // Section: Chat Request Lifecycle
 // ============================================================================
 
-/// Process chat request
+/// Process chat request (orchestrator — delegates to extracted phases)
+///
+/// This function is now a thin orchestrator that splits the request lifecycle
+/// into four phases, each in `chat_phases.rs`:
+///   1. `resolve_phase`           — input validation, model resolution, context building
+///   2. `agent_routing_phase`     — agent selection, delegation logic, memory injection
+///   3. `execution_phase`         — scheduler, cache, autonomy, fallback, vote, persistence
+///   4. `response_assembly_phase` — mode runtime, full-auto, final response construction
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) async fn process_chat_request(
     server: &AcpServer,
@@ -1177,1288 +1179,43 @@ pub(crate) async fn process_chat_request(
     span: Option<&OtelContext>,
     ctx: Option<ChatRequestContext>,
 ) -> Result<serde_json::Value> {
+    use crate::acp::r#impl::chat_phases::{
+        agent_routing_phase, execution_phase, resolve_phase, response_assembly_phase,
+    };
     let started = std::time::Instant::now();
     let ctx = ctx.unwrap_or_else(|| ChatRequestContext::new(None));
-    // Clear per-request cache to ensure fresh task description computation
-    clear_task_description_cache();
-    let (flow, registry) = routing_handles(server)?;
-    let tenant_id = &ctx.tenant_id;
 
-    // ── Step 1: Pre-route policy evaluation ────────────────────────────
-    // pre-execute checkpoint: PUA rules / RBAC / budget via HarnessBus
-    evaluate_pre_route_policies(server, params, trace, tenant_id).await?;
+    // ── Phase 1: Resolve ──────────────────────────────────────────
+    let mut resolve_out = resolve_phase(server, params, trace, ctx).await?;
 
-    // ── GAP-B52-25: Prompt injection detection ────────────────────────
-    if let Some(ref detector) = server.governance_deps.injection_detector {
-        let user_input: String = params
-            .messages
-            .iter()
-            .map(|m| m.content.as_str())
-            .collect::<Vec<&str>>()
-            .join("\n");
-        let warnings = detector.detect(&user_input);
-        if !warnings.violations.is_empty() {
-            let severities: Vec<String> = warnings
-                .violations
-                .iter()
-                .map(|w| format!("{:?}: {:?}", w.category, w.severity))
-                .collect();
-            info!(injection_warnings = ?severities, "prompt injection detected");
-            // Log injection attempt to hash chain audit
-            if let Some(ref auditor) = server.governance_deps.hash_chain_auditor {
-                if let Ok(mut auditor) = auditor.lock() {
-                    let payload = serde_json::json!({
-                        "event": "prompt_injection",
-                        "warnings": &warnings.violations,
-                    });
-                    let _ = auditor.append(payload);
-                }
-            }
-        }
-    }
+    // ── Phase 2: Agent Routing ────────────────────────────────────
+    let routing_out = agent_routing_phase(server, params, &mut resolve_out, trace).await?;
 
-    // ── GAP-B52-15: Multimodal input detection & processing ───────────
-    // When a MultimodalProcessor is configured on the server, check every
-    // user message for `repo:`-prefixed repo-analysis queries, `data:` URIs
-    // (base64-encoded binary content), and `file://` local-file references.
-    //
-    // Processed content is injected as an additional system-context message
-    // so the rest of the pipeline sees enriched context (transcriptions,
-    // parsed documents, repo answers, etc.) without mutating params in place.
-    let multimodal_context: Option<String> = if let Some(ref mp) = server.multimodal_processor {
-        use crate::multimodal::MultimodalInput;
-        let mut contexts: Vec<String> = Vec::new();
-
-        for msg in &params.messages {
-            if msg.role != "user" {
-                continue;
-            }
-            let content = msg.content.trim();
-
-            // ── repo: prefix → code repository analysis ──────────────
-            if mp.repo_analyzer.is_some() && content.starts_with(crate::multimodal::REPO_PREFIX) {
-                let input = MultimodalInput::Text(content.to_owned());
-                let processed = mp.process_input(&input).await;
-                if !processed.is_empty() && processed.text != content {
-                    tracing::info!(
-                        original_len = content.len(),
-                        processed_len = processed.text.len(),
-                        "MultimodalProcessor: repo analysis result"
-                    );
-                    contexts.push(format!("[Repository analysis result]:\n{}", processed.text));
-                }
-                continue;
-            }
-
-            // ── data: URI (base64-encoded binary content) ────────────
-            if content.starts_with("data:") {
-                if let Some(rest) = content.strip_prefix("data:") {
-                    if let Some((_mime, b64_part)) = rest.split_once(";base64,") {
-                        if let Ok(bytes) = crate::multimodal::base64_decode(b64_part) {
-                            let mime_lower = _mime.to_lowercase();
-                            let input = if mime_lower.contains("image") {
-                                MultimodalInput::Image(bytes)
-                            } else if mime_lower.contains("audio") {
-                                MultimodalInput::Audio(bytes)
-                            } else if mime_lower.contains("video") {
-                                MultimodalInput::Video(bytes)
-                            } else {
-                                let ext = crate::multimodal::mime_to_extension(&mime_lower);
-                                MultimodalInput::Document(bytes, ext)
-                            };
-                            let processed = mp.process_input(&input).await;
-                            if !processed.is_empty() {
-                                tracing::info!(
-                                    modality = ?input.modality(),
-                                    "MultimodalProcessor: processed data: URI"
-                                );
-                                let mut enriched = String::from("[Processed content]:");
-                                if !processed.text.is_empty() {
-                                    enriched.push('\n');
-                                    enriched.push_str(&processed.text);
-                                }
-                                for (i, img_b64) in processed.images.iter().enumerate() {
-                                    enriched.push_str(&format!(
-                                        "\n![extracted-image-{}](data:image/unknown;base64,{})",
-                                        i, img_b64
-                                    ));
-                                }
-                                if !processed.audio_transcriptions.is_empty() {
-                                    enriched.push_str(&format!(
-                                        "\n[Audio transcription]:\\n{}",
-                                        processed.joined_audio()
-                                    ));
-                                }
-                                contexts.push(enriched);
-                            }
-                        }
-                    }
-                }
-                continue;
-            }
-
-            // ── file:// URI (local file reference) ───────────────────
-            if content.starts_with("file://") {
-                let file_path = content.strip_prefix("file://").unwrap_or("");
-                let path = std::path::Path::new(file_path);
-                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                    if let Ok(bytes) = tokio::fs::read(path).await {
-                        let ext_lower = ext.to_lowercase();
-                        let input = match ext_lower.as_str() {
-                            "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" => {
-                                MultimodalInput::Image(bytes)
-                            }
-                            "mp3" | "wav" | "flac" | "ogg" | "m4a" => MultimodalInput::Audio(bytes),
-                            "mp4" | "avi" | "mkv" | "mov" | "webm" => MultimodalInput::Video(bytes),
-                            _ => MultimodalInput::Document(bytes, ext_lower),
-                        };
-                        let processed = mp.process_input(&input).await;
-                        if !processed.is_empty() {
-                            tracing::info!(
-                                path = %file_path,
-                                modality = ?input.modality(),
-                                "MultimodalProcessor: processed file:// URI"
-                            );
-                            let mut enriched = String::from("[Processed file content]:");
-                            enriched.push_str(&format!(" file={}", file_path));
-                            if !processed.text.is_empty() {
-                                enriched.push('\n');
-                                enriched.push_str(&processed.text);
-                            }
-                            for (i, img_b64) in processed.images.iter().enumerate() {
-                                enriched.push_str(&format!(
-                                    "\n![extracted-image-{}](data:image/unknown;base64,{})",
-                                    i, img_b64
-                                ));
-                            }
-                            if !processed.audio_transcriptions.is_empty() {
-                                enriched.push_str(&format!(
-                                    "\n[Audio transcription]:\\n{}",
-                                    processed.joined_audio()
-                                ));
-                            }
-                            contexts.push(enriched);
-                        }
-                    } else {
-                        tracing::warn!(
-                            path = %file_path,
-                            "MultimodalProcessor: could not read file:// path"
-                        );
-                    }
-                }
-                continue;
-            }
-        }
-
-        if contexts.is_empty() {
-            None
-        } else {
-            Some(contexts.join("\n---\n"))
-        }
-    } else {
-        // No MultimodalProcessor configured — legacy fallback: just log detected URIs.
-        for msg in &params.messages {
-            if msg.content.starts_with("data:") || msg.content.starts_with("file://") {
-                debug!(
-                    content_prefix = %msg.content.chars().take(20).collect::<String>(),
-                    "multimodal content detected but no MultimodalProcessor configured"
-                );
-            }
-        }
-        None
-    };
-
-    // Multimodal context will be injected into agent_messages after
-    // select_and_score_agents returns (see below).
-    let _multimodal_context = multimodal_context;
-
-    // ── HarnessBus during-execute checkpoint: sandbox / backpressure / online control ──
-    // Validate the action before execution begins, using the HarnessBus
-    // validate_action(…) API which checks sandbox level, backpressure,
-    // and online controller state.
-    if let Some(ref harness) = server.governance_deps.harness_bus {
-        let messages_json = serde_json::to_value(&params.messages).unwrap_or_default();
-        let verdict = harness.validate_action("chat.execute", &messages_json);
-        if !verdict.is_allowed() {
-            anyhow::bail!(
-                "harness_bus during-execute denied: sandbox={} budget={} permitted={}",
-                verdict.allowed,
-                verdict.budget_ok,
-                verdict.permitted,
-            );
-        }
-    }
-
-    // ── Step 2: Phase resolution ──────────────────────────────────────
-    let phase_res = resolve_request_phase(server, params, &flow, registry.as_ref()).await?;
-
-    let phase = phase_res.phase;
-    let phase_name = &phase_res.phase_name;
-    let phase_origin = &phase_res.phase_origin;
-    let _has_requested_phase = phase_res.has_requested_phase;
-    let _has_controller_phase = phase_res.has_controller_phase;
-    let _has_adaptive_phase = phase_res.has_adaptive_phase;
-    let mut resolved = phase_res.resolved;
-    let schema_warnings = phase_res.schema_warnings;
-    let schema_error = phase_res.schema_error;
-    let mut routing_provenance = phase_res.routing_provenance;
-    let reputation_scores = phase_res.reputation_scores;
-
-    // ── GAP-B50-21: CapabilityBus sensing before agent selection ────
-    // Query environment state (agent health, load, latency) for use
-    // in parallel with the existing ModelSelector decision path.
-    let _capability_sensing = server.governance_deps.capability_bus.as_ref().map(|cb| {
-        let task_ctx = crate::governance::pua::TaskContext {
-            task_type: crate::governance::pua::TaskType::Other,
-            file_count: params.messages.len(),
-            risk_score: 0.5,
-        };
-        cb.sense(&task_ctx)
-    });
-
-    // ── Step 3: Agent selection & scoring ─────────────────────────────
-    let agent_sel = select_and_score_agents(
+    // ── Phase 3: Execution ────────────────────────────────────────
+    let mut exec_out = execution_phase(
         server,
         params,
-        &mut resolved,
-        &phase,
-        phase_name,
-        tenant_id,
         trace,
-        &mut routing_provenance,
-        &reputation_scores,
+        stream_observer.clone(),
+        started,
+        &resolve_out,
+        &routing_out,
     )
     .await?;
 
-    let _agent_sel_name = agent_sel.capability_selected_agent.clone();
-    let capability_info = crate::acp::helpers::response_assembler::CapabilityRoutingInfo {
-        selected_agent: agent_sel.capability_selected_agent,
-        recommended_mode: agent_sel.capability_recommended_mode,
-        candidate_count: agent_sel.capability_candidate_count,
-        decision_confidence: agent_sel.capability_decision_confidence,
-        selection_reason: agent_sel.capability_selection_reason,
-        optimization_hint: agent_sel.capability_optimization_hint,
-    };
-    let configured_primary_agent = agent_sel.configured_primary_agent;
-    let _preferred_agent_from_request = agent_sel.preferred_agent_from_request;
-    let conversation_id = agent_sel.conversation_id;
-    let branch_id = agent_sel.branch_id;
-    let mut agent_messages = agent_sel.agent_messages;
-    // Inject multimodal context (repo analysis, document parsing, transcriptions, etc.)
-    // as a system-level message so downstream agents see the enriched input.
-    if let Some(ctx_text) = _multimodal_context {
-        let ctx_msg = crate::agent::Message {
-            role: "system".to_string(),
-            content: ctx_text,
-        };
-        agent_messages.insert(0, ctx_msg);
-        tracing::info!(
-            total_messages = agent_messages.len(),
-            "MultimodalProcessor: injected context as system message"
-        );
-    }
-
-    // ── GAP-B54-014: AgentMemoryBus — inject relevant memories into context ──
-    if let Some(memory_ctx) = {
-        use crate::memory::agent_memory_bus::{AgentMemoryBus, AGENT_MEMORY_BUS};
-        let bus = AGENT_MEMORY_BUS.get_or_init(AgentMemoryBus::new_default);
-        let task_desc = extract_task_description(&params.messages);
-        bus.retrieve_context_for_agent(
-            _agent_sel_name.as_deref().unwrap_or("unknown"),
-            phase_name,
-            &task_desc,
-            5,
-        )
-    } {
-        let ctx_msg = crate::agent::Message {
-            role: "system".to_string(),
-            content: format!("[AgentMemoryBus context]\n{}", memory_ctx),
-        };
-        agent_messages.insert(0, ctx_msg);
-        tracing::info!(
-            "AgentMemoryBus: injected {} bytes of memory context",
-            memory_ctx.len()
-        );
-    }
-
-    let layered_prompt_segments = agent_sel.layered_prompt_segments;
-    let base_agent_options = agent_sel.base_agent_options;
-    let risk_policy = agent_sel.risk_policy;
-    let risk_assessment = agent_sel.risk_assessment;
-    let enable_high_risk_vote = agent_sel.enable_high_risk_vote;
-    let enable_high_risk_multi_agent_vote = agent_sel.enable_high_risk_multi_agent_vote;
-    let min_vote_agents = agent_sel.min_vote_agents;
-    let max_vote_agents = agent_sel.max_vote_agents;
-    let escalation_enabled = agent_sel.escalation_enabled;
-    let escalation_models_per_agent = agent_sel.escalation_models_per_agent;
-    let escalation_max_agents = agent_sel.escalation_max_agents;
-    let _model_is_specific = agent_sel.model_is_specific;
-    let unhealthy_fallback_agent = agent_sel.unhealthy_fallback_agent;
-    let fallback_reason = agent_sel.fallback_reason;
-    let council_decision = agent_sel.council_decision;
-    let candidate_agents = agent_sel.candidate_agents;
-    let vector_context = agent_sel.vector_context;
-
-    // ── Step 4: Initialize execution state ────────────────────────────
-    let mut selected_agent = String::new();
-    let mut response_text = String::new();
-    let mut reasoning_text: String;
-    let selected_model_name: Option<String>;
-    let mut last_err: Option<anyhow::Error>;
-    let quota_failed_agents: Vec<String>;
-    let mut agent_attempts: Vec<Value> = Vec::with_capacity(resolved.agents.len() + 2);
-    let mut cache_hit = false;
-    let cache_bypassed_for_execution = should_bypass_for_execution(&params.mode, &agent_messages);
-
-    // ── Scheduler task submission (ARCH-02) ────────────────────────────
-    let sched_task_id = trace.request_id.clone();
-    if let Some(ref sched) = server.orchestration_deps.scheduler {
-        let submitted_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0);
-        let primary_role = resolved
-            .agents
-            .first()
-            .map(|(n, _)| n.clone())
-            .unwrap_or_else(|| "general".to_string());
-        let task = crate::orchestration::scheduler::ScheduledTask {
-            task_id: sched_task_id.clone(),
-            role: primary_role,
-            priority: crate::orchestration::scheduler::Priority(100),
-            base_score: 1.0,
-            urgency: 0.5,
-            cost_efficiency: 0.8,
-            deadline_pressure: 0.0,
-            aging_bonus: 0.0,
-            submitted_at,
-            retries: 0,
-            max_retries: 3,
-        };
-        if let Err(e) = sched.level1.submit(task) {
-            let err_str = format!("{}", e);
-            if err_str.contains("backpressure") || err_str.contains("backpressure_rejected") {
-                // GAP-B50-22: Backpressure — return 429 status
-                tracing::warn!("scheduler backpressure: {}", err_str);
-                return Ok(json!({
-                    "done": false,
-                    "mode": params.mode,
-                    "status": 429,
-                    "error": "too_many_requests",
-                    "detail": "Scheduler queue depth exceeded backpressure threshold. Please retry later.",
-                    "retry_after_seconds": 5,
-                }));
-            }
-            tracing::warn!("scheduler submit failed: {}", err_str);
-        }
-    }
-
-    // ── Token cache lookup ──────────────────────────────────────────
-    let input_text = crate::intelligence::token_cache::messages_to_text(&agent_messages);
-    let estimated_tokens =
-        crate::intelligence::token_cache::estimate_messages_token_count(&agent_messages);
-    let context_class = ContextLengthClass::from_token_count(estimated_tokens);
-
-    if let Some((level, entry)) = server
-        .cache_deps
-        .cache
-        .token_cache
-        .lookup(&input_text, context_class)
-        .await
-    {
-        let cache_decision = CacheStrategy::decide_from_entry(
-            &format!("{level}"),
-            &entry,
-            &input_text,
-            cache_bypassed_for_execution,
-        );
-
-        match cache_decision {
-            CacheDecision::Hit { response, level } => {
-                tracing::info!(
-                    target = "token_cache",
-                    level = %level,
-                    agent_count = resolved.agents.len(),
-                    "process_chat_request: token cache HIT, skipping agent execution"
-                );
-                cache_hit = true;
-                selected_agent = resolved
-                    .agents
-                    .first()
-                    .map(|(name, _)| name.clone())
-                    .unwrap_or_else(|| "cached".to_string());
-                response_text = response;
-
-                if let Some(ref observer) = stream_observer {
-                    let meta = StreamEventMeta {
-                        agent_name: &selected_agent,
-                        phase_name,
-                        trace_id: &trace.trace_id,
-                    };
-                    let total_chars = response_text.chars().count();
-                    emit_stream_chunk(server, Some(observer), meta, &response_text, 1, total_chars)
-                        .await?;
-                    emit_stream_done(server, Some(observer), meta, 1, total_chars, 0u64, None)
-                        .await?;
-                }
-
-                agent_attempts.push(CacheStrategy::attempt_entry(&CacheDecision::Hit {
-                    response: response_text.clone(),
-                    level: level.clone(),
-                }));
-            }
-            CacheDecision::Refused { level, reason } => {
-                tracing::info!(
-                    target = "token_cache",
-                    level = %level,
-                    mode = %params.mode,
-                    "process_chat_request: cache HIT but refused (execution-like request)"
-                );
-                crate::acp::helpers::autonomy_metrics::record_cache_shortcircuit_refused(&reason);
-                crate::acp::helpers::autonomy_metrics::record_cache_bypass_for_execution();
-                agent_attempts.push(CacheStrategy::attempt_entry(&CacheDecision::Refused {
-                    level,
-                    reason,
-                }));
-            }
-            CacheDecision::Miss => {}
-        }
-    } else if cache_bypassed_for_execution {
-        crate::acp::helpers::autonomy_metrics::record_cache_bypass_for_execution();
-        agent_attempts.push(CacheStrategy::attempt_entry(&CacheDecision::Miss));
-    }
-
-    // ── Semantic cache lookup ──────────────────────────────────────────
-    let semantic_cache_hit_text: Option<String> =
-        if !cache_hit && response_text.is_empty() && !cache_bypassed_for_execution {
-            let cache_key = input_text.clone();
-            server
-                .cache_deps
-                .cache
-                .semantic_cache
-                .lock()
-                .unwrap_or_else(|poisoned| {
-                    warn!("process_chat_request: semantic_cache poisoned, recovering");
-                    poisoned.into_inner()
-                })
-                .get(&cache_key)
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-        } else {
-            None
-        };
-
-    if let Some(text) = semantic_cache_hit_text {
-        tracing::info!(
-            target = "semantic_cache",
-            "process_chat_request: semantic cache HIT"
-        );
-        cache_hit = true;
-        selected_agent = resolved
-            .agents
-            .first()
-            .map(|(name, _)| name.clone())
-            .unwrap_or_else(|| "cached".to_string());
-        response_text = text;
-
-        if let Some(ref observer) = stream_observer {
-            let meta = StreamEventMeta {
-                agent_name: &selected_agent,
-                phase_name,
-                trace_id: &trace.trace_id,
-            };
-            let total_chars = response_text.chars().count();
-            emit_stream_chunk(server, Some(observer), meta, &response_text, 1, total_chars).await?;
-            emit_stream_done(server, Some(observer), meta, 1, total_chars, 0u64, None).await?;
-        }
-    }
-
-    // ── Step 5: Autonomy round execution ───────────────────────────────
-    let autonomy_outcome = execute_autonomy_round(
+    // ── Phase 4: Response Assembly ────────────────────────────────
+    response_assembly_phase(
         server,
         params,
-        &phase,
-        phase_name,
-        &resolved,
-        &agent_messages,
-        &base_agent_options,
-        cache_hit,
+        trace,
+        span,
+        started,
+        stream_observer.clone(),
+        &resolve_out,
+        &routing_out,
+        &mut exec_out,
     )
-    .await;
-
-    if autonomy_outcome.autonomy_loop_executed {
-        selected_agent = autonomy_outcome.selected_agent;
-        response_text = autonomy_outcome.response_text;
-    }
-    agent_attempts.extend(autonomy_outcome.agent_attempts);
-    let autonomy_loop_executed = autonomy_outcome.autonomy_loop_executed;
-
-    // ── TaskContext propagation (GAP-B50-05) ──────────────────────────
-    // Between the Execute and Reflect phases, propagate TaskContext for
-    // chain-of-thought reasoning continuity. Downstream steps receive
-    // the Vec<TaskContext> for reasoning chain continuity.
-    let mut task_contexts: Vec<crate::orchestration::dag_executor::TaskContext> = Vec::new();
-    if autonomy_loop_executed && !response_text.is_empty() {
-        let mut ctx = crate::orchestration::dag_executor::TaskContext::new(format!(
-            "acp-{}-{}",
-            phase_name, trace.request_id
-        ));
-        ctx.reasoning_trace.push(format!(
-            "Autonomy round executed for phase '{}' using agent '{}'",
-            phase_name, selected_agent,
-        ));
-        ctx.intermediate_findings.insert(
-            "response_length".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(response_text.len() as u64)),
-        );
-        ctx.intermediate_findings.insert(
-            "mode".to_string(),
-            serde_json::Value::String(params.mode.clone()),
-        );
-        ctx.intermediate_findings.insert(
-            "agent".to_string(),
-            serde_json::Value::String(selected_agent.clone()),
-        );
-        task_contexts.push(ctx);
-        tracing::debug!(
-            "TaskContext: {} context(s) propagated after autonomy round for '{}'",
-            task_contexts.len(),
-            phase_name,
-        );
-    }
-
-    // Pass task_contexts downstream for reflection/continuity.
-    // Downstream steps can use these contexts for reasoning chain continuity.
-    let _task_contexts_for_downstream = task_contexts.clone();
-
-    // ── Step 6: Fallback agent execution (parallel with concurrency limit 5) ──
-    if !cache_hit && response_text.is_empty() {
-        let fallback_result = execute_fallback_agents(
-            server,
-            resolved.agents.clone(),
-            &phase,
-            phase_name,
-            agent_messages.clone(),
-            base_agent_options.clone(),
-            stream_observer.clone(),
-            trace,
-            unhealthy_fallback_agent,
-            enable_high_risk_multi_agent_vote,
-            max_vote_agents,
-            tenant_id,
-        )
-        .await;
-
-        selected_agent = fallback_result.selected_agent;
-        response_text = fallback_result.response_text;
-        reasoning_text = fallback_result.reasoning_text;
-        selected_model_name = fallback_result.selected_model_name;
-        last_err = fallback_result.last_err;
-        quota_failed_agents = fallback_result.quota_failed_agents;
-        agent_attempts.extend(fallback_result.agent_attempts);
-
-        // ── High-Risk Vote Execution & Escalation ────────────────────
-        let vote_timeout = request_timeout(phase.options.as_ref());
-        let vote_result = crate::acp::helpers::vote_executor::execute_high_risk_vote(
-            server,
-            phase_name,
-            &trace.trace_id,
-            fallback_result.high_risk_vote_jobs,
-            &agent_messages,
-            phase.principles.clone(),
-            vote_timeout,
-            cache_hit,
-            enable_high_risk_multi_agent_vote,
-            min_vote_agents,
-            max_vote_agents,
-            escalation_enabled,
-            escalation_models_per_agent,
-            escalation_max_agents,
-            &reputation_scores,
-            &mut routing_provenance,
-        )
-        .await;
-
-        agent_attempts.extend(vote_result.agent_attempts);
-
-        let mut emit_final_vote_response = false;
-        let mut vote_winner: Option<String> = None;
-        let mut vote_report: Option<Value> = None;
-        let mut used_multi_model_vote = false;
-        let mut used_multi_agent_vote = false;
-        let mut review_required = false;
-
-        if vote_result.emit_final_vote_response {
-            response_text = vote_result.response_text;
-            reasoning_text = vote_result.reasoning_text;
-            selected_agent = vote_result.selected_agent;
-            last_err = vote_result.last_err;
-            vote_winner = vote_result.vote_winner;
-            vote_report = vote_result.vote_report;
-            used_multi_agent_vote = vote_result.used_multi_agent_vote;
-            used_multi_model_vote = vote_result.used_multi_model_vote;
-            review_required = vote_result.review_required;
-            emit_final_vote_response = true;
-        }
-
-        if emit_final_vote_response {
-            if let Some(ref observer) = stream_observer {
-                let meta = StreamEventMeta {
-                    agent_name: &selected_agent,
-                    phase_name,
-                    trace_id: &trace.trace_id,
-                };
-                let total_chars = response_text.chars().count();
-                emit_stream_chunk(server, Some(observer), meta, &response_text, 1, total_chars)
-                    .await?;
-                emit_stream_done(
-                    server,
-                    Some(observer),
-                    meta,
-                    1,
-                    total_chars,
-                    0u64,
-                    selected_model_name.clone(),
-                )
-                .await?;
-            }
-        }
-
-        // ── Error handling for empty / quota-limited responses ─────────
-        // (inline — too tightly coupled to local state to extract)
-        if response_text.is_empty() && last_err.is_none() {
-            let all_empty_responses = !agent_attempts.is_empty()
-                && agent_attempts.iter().all(|attempt| {
-                    attempt
-                        .get("ok")
-                        .and_then(|value| value.as_bool())
-                        .map(|ok| !ok)
-                        .unwrap_or(false)
-                        && attempt
-                            .get("error")
-                            .and_then(|value| value.as_str())
-                            .map(|error| error == "empty_response")
-                            .unwrap_or(false)
-                });
-
-            server
-                .tenant_budget
-                .lock()
-                .unwrap_or_else(|poisoned| {
-                    warn!("process_chat_request: tenant_budget poisoned, recovering");
-                    poisoned.into_inner()
-                })
-                .record_usage(tenant_id, 0, 0);
-
-            if all_empty_responses {
-                anyhow::bail!(tf("error.chat.all_agents_empty", &[("phase", phase_name)]));
-            }
-            anyhow::bail!(tf("error.chat.no_healthy_agent", &[("phase", phase_name)]));
-        }
-
-        if let Some(err) = last_err {
-            let all_attempts_quota_limited = !agent_attempts.is_empty()
-                && agent_attempts.iter().all(|attempt| {
-                    attempt
-                        .get("ok")
-                        .and_then(|value| value.as_bool())
-                        .map(|ok| !ok)
-                        .unwrap_or(false)
-                        && attempt
-                            .get("quota_limited")
-                            .and_then(|value| value.as_bool())
-                            .unwrap_or(false)
-                });
-
-            server
-                .online_controller
-                .lock()
-                .unwrap_or_else(|poisoned| {
-                    warn!("process_chat_request: online_controller poisoned, recovering");
-                    poisoned.into_inner()
-                })
-                .record_phase_outcome(phase_name, false, started.elapsed().as_millis() as u64);
-
-            if all_attempts_quota_limited {
-                server
-                    .tenant_budget
-                    .lock()
-                    .unwrap_or_else(|poisoned| {
-                        warn!("process_chat_request: tenant_budget poisoned, recovering");
-                        poisoned.into_inner()
-                    })
-                    .record_usage(tenant_id, 0, 0);
-                let switch_prompt = tf(
-                    "error.chat.all_agents_quota_limited",
-                    &[("phase", phase_name)],
-                );
-                return Ok(json!({
-                    "done": false,
-                    "mode": params.mode,
-                    "phase": phase_name,
-                    "phase_origin": phase_origin,
-                    "requires_user_action": true,
-                    "action": "switch_agent",
-                    "prompt": switch_prompt,
-                    "available_agents": candidate_agents,
-                    "quota_failed_agents": quota_failed_agents,
-                    "agent_attempts": agent_attempts,
-                    "risk_decision": json!({
-                        "policy_enabled": risk_policy.enabled,
-                        "score": risk_assessment.score,
-                        "is_high_risk": risk_assessment.is_high_risk,
-                        "reasons": risk_assessment.reasons,
-                        "multi_model_vote_enabled": enable_high_risk_vote,
-                        "multi_model_vote_used": used_multi_model_vote,
-                        "multi_agent_vote_enabled": enable_high_risk_multi_agent_vote,
-                        "multi_agent_vote_used": used_multi_agent_vote,
-                        "escalation_enabled": escalation_enabled,
-                        "escalation_models_per_agent": escalation_models_per_agent,
-                        "escalation_max_agents": escalation_max_agents,
-                        "review_required": review_required,
-                        "vote_report": vote_report,
-                    }),
-                    "hint": {
-                        "options_field": "options.extra.preferred_agent",
-                        "example": {
-                            "preferred_agent": candidate_agents.first().cloned().unwrap_or_else(|| "primary".to_string())
-                        }
-                    }
-                }));
-            }
-
-            server
-                .tenant_budget
-                .lock()
-                .unwrap_or_else(|poisoned| {
-                    warn!("process_chat_request: tenant_budget poisoned, recovering");
-                    poisoned.into_inner()
-                })
-                .record_usage(tenant_id, 0, 0);
-
-            return Err(err);
-        }
-
-        // ── Populate semantic cache ────────────────────────────────────
-        if !cache_hit && !response_text.is_empty() && !cache_bypassed_for_execution {
-            let cache_key = input_text.clone();
-            server
-                .cache_deps
-                .cache
-                .semantic_cache
-                .lock()
-                .unwrap_or_else(|poisoned| {
-                    warn!("process_chat_request: semantic_cache poisoned, recovering");
-                    poisoned.into_inner()
-                })
-                .put(&cache_key, serde_json::Value::String(response_text.clone()));
-            tracing::debug!(
-                target = "semantic_cache",
-                "process_chat_request: semantic cache populated"
-            );
-        }
-
-        // ── Post-success cleanup ──────────────────────────────────────
-        if let Some(primary) = configured_primary_agent {
-            if selected_agent == primary {
-                agent_switch_state()
-                    .lock()
-                    .unwrap_or_else(|poisoned| {
-                        warn!("process_chat_request: agent_switch_state poisoned, recovering");
-                        poisoned.into_inner()
-                    })
-                    .forced_agent_by_phase
-                    .remove(phase_name);
-            }
-        }
-
-        server
-            .online_controller
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                warn!("process_chat_request: online_controller poisoned, recovering");
-                poisoned.into_inner()
-            })
-            .record_phase_outcome(phase_name, true, started.elapsed().as_millis() as u64);
-
-        // ── Persist vector memory ─────────────────────────────────────
-        persist_vector_memory(
-            server,
-            phase_name,
-            phase.options.as_ref(),
-            params,
-            &response_text,
-            &selected_agent,
-        )
-        .await;
-
-        // ── Parallel persistence ──────────────────────────────────────
-        let mut checkpoint_messages = params.messages.clone();
-        checkpoint_messages.push(Message {
-            role: "assistant".to_string(),
-            content: response_text.clone(),
-        });
-
-        let (mut checkpoint, knowledge) = tokio::join!(
-            crate::acp::r#impl::request::create_checkpoint_record(
-                server,
-                &conversation_id,
-                &branch_id,
-                checkpoint_messages,
-                None,
-                None,
-            ),
-            persist_chat_knowledge(
-                server,
-                &conversation_id,
-                &branch_id,
-                phase_name,
-                &selected_agent,
-                params,
-                &response_text,
-            ),
-        );
-
-        let (metacognitive_loop, distillation) = tokio::join!(
-            crate::acp::r#impl::request::persist_checkpoint_metacognitive_loop(
-                server,
-                &conversation_id,
-                &branch_id,
-                &checkpoint.checkpoint_id,
-                json!({
-                    "active": true,
-                    "schema_version": "blue25-metacognitive-loop-v1",
-                    "cycle_count": 1,
-                    "checkpoint_id": checkpoint.checkpoint_id,
-                    "last_reflection": format!("{}:{}", phase_name, selected_agent),
-                    "reflection_trigger": "response_completed",
-                    "last_selected_agent": selected_agent,
-                    "response_chars": response_text.chars().count(),
-                }),
-            ),
-            persist_session_distillation(
-                server,
-                &conversation_id,
-                &branch_id,
-                phase_name,
-                params,
-                &selected_agent,
-                &candidate_agents,
-                &agent_attempts,
-                &response_text,
-            ),
-        );
-        checkpoint.metacognitive_loop = Some(metacognitive_loop.clone());
-
-        if stream_observer.is_some() {
-            emit_stream_token_economy(
-                server,
-                stream_observer.as_ref(),
-                StreamEventMeta {
-                    agent_name: &selected_agent,
-                    phase_name,
-                    trace_id: &trace.trace_id,
-                },
-                &estimate_token_economy(&params.messages, &response_text),
-            )
-            .await?;
-        }
-
-        crate::acp::r#impl::request::append_trace_event(TraceEvent {
-            timestamp: format!(
-                "{}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0)
-            ),
-            event_type: "phase.agent".to_string(),
-            task_id: "chat".to_string(),
-            phase: phase_name.clone(),
-            agent: Some(selected_agent.clone()),
-            tool: None,
-            status: "ok".to_string(),
-            inputs: json!({"attributes": {"agent": selected_agent.clone()}}),
-            outputs: None,
-            duration_ms: 0,
-            error: None,
-            pua_stage: None,
-        });
-
-        // ── HarnessBus post-execute checkpoint: audit / drift / feedback ───
-        if let Some(ref harness) = server.governance_deps.harness_bus {
-            let output_json = serde_json::json!({
-                "agent": &selected_agent,
-                "response": &response_text,
-                "reasoning": &reasoning_text,
-                "phase": phase_name,
-            });
-            let output_v = harness.verify_output(&output_json);
-            if !output_v.quality {
-                tracing::warn!(
-                    target: "harness_bus",
-                    risk_score = output_v.risk_score,
-                    evidence = ?output_v.evidence,
-                    "post-execute: output verification flagged quality issue"
-                );
-            }
-        }
-
-        // ── Step 7a: ModeRuntime execution + MultiAgent pipeline ──────────
-        // Resolve mode runtime to apply per-mode policies (tool whitelist, approval,
-        // risk assessment, PUA reporting) and optionally decompose into multi-agent.
-        let mode_runtime = resolve_mode_runtime(
-            &params.mode,
-            server.agent_registry(),
-            Some(selected_agent.clone()),
-        );
-
-        // Apply ModeRuntime.run() to enforce mode policies and collect execution report
-        if !cache_hit && !response_text.is_empty() {
-            let envelope = crate::agent::AgentTaskEnvelope {
-                task_id: format!("chat-{}-{}", phase_name, trace.request_id),
-                phase: phase_name.to_string(),
-                role: selected_agent.clone(),
-                objective: extract_task_description(&params.messages),
-                constraints: None,
-                evidence: Some(
-                    params
-                        .messages
-                        .iter()
-                        .map(|m| format!("{}: {}", m.role, m.content))
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                ),
-                input: serde_json::json!({
-                    "response_text": response_text,
-                    "reasoning_text": reasoning_text,
-                }),
-            };
-            match mode_runtime.run(envelope) {
-                Ok(result) => {
-                    tracing::info!(
-                        target: "mode_runtime",
-                        mode = %params.mode,
-                        agent = %selected_agent,
-                        pua_report = ?result.pua_report,
-                        "ModeRuntime execution completed"
-                    );
-                    // Collect PUA report for governance
-                    if let Some(pua) = result.pua_report {
-                        tracing::debug!(target: "pua", report = ?pua, "Mode PUA execution report");
-                    }
-                    // Schedule continuous learning review after each execution
-                    if let Some(ref cb) = server.governance_deps.capability_bus {
-                        let now_ms = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_millis() as u64)
-                            .unwrap_or(0);
-                        let consolidated =
-                            crate::intelligence::continuous_learning::ConsolidatedMemory {
-                                id: format!("chat-{}-{}", phase_name, trace.request_id),
-                                pattern_key: format!(
-                                    "chat:{}:{}",
-                                    params.mode,
-                                    extract_task_description(&params.messages)
-                                        .chars()
-                                        .take(50)
-                                        .collect::<String>()
-                                ),
-                                data: serde_json::json!({
-                                    "task": extract_task_description(&params.messages),
-                                    "agent": &selected_agent,
-                                    "response_length": response_text.len(),
-                                    "mode": &params.mode,
-                                })
-                                .to_string(),
-                                importance: 0.5,
-                                consolidated_ms: now_ms,
-                                last_accessed_ms: now_ms,
-                                access_count: 1,
-                            };
-                        if let Ok(clc) = cb.continuous_learning.lock() {
-                            clc.schedule_review(&consolidated);
-                            tracing::debug!(target: "continuous_learning", "scheduled review after chat execution");
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(target: "mode_runtime", error = %e, "ModeRuntime execution failed");
-                }
-            }
-        }
-
-        if matches!(mode_runtime.kind(), ModeKind::Agent) && resolved.agents.len() > 1 && !cache_hit
-        {
-            let task_chars = TaskCharacteristics {
-                description: extract_task_description(&params.messages),
-                task_type: TaskType::FeatureImplementation, // default — can be refined
-                complexity: 3,
-                required_capabilities: vec!["coding".to_string()],
-                involves_multiple_modules: false,
-                is_time_critical: false,
-                needs_verification: true,
-                has_safety_concerns: false,
-            };
-
-            let registry = server
-                .agent_registry()
-                .unwrap_or_else(|| Arc::new(crate::agent::AgentRegistry::new()));
-            let assignment = AgentAssignment::RoundRobin;
-            let pipeline = MultiAgentPipeline::new(registry, assignment);
-
-            let pipeline_result = pipeline
-                .execute(
-                    &extract_task_description(&params.messages),
-                    &task_chars,
-                    resolved.agents.first().map(|(_, agent)| agent.clone()), // pass first available agent for LLM decomposition
-                )
-                .await;
-
-            // If pipeline produced output, use it as the response
-            if pipeline_result.succeeded_count > 0 {
-                response_text = pipeline_result
-                    .merged_output
-                    .get("subtask_outputs")
-                    .and_then(|o| serde_json::to_string(o).ok())
-                    .unwrap_or_default();
-                selected_agent = format!(
-                    "multi-agent ({} succeeded)",
-                    pipeline_result.succeeded_count
-                );
-
-                // BLUE56-B04: MultiModelVoter voting on multi-agent results
-                #[cfg(feature = "sub-bus-voter-future")]
-                {
-                    use crate::intelligence::multi_model_voter::MultiModelVoter;
-                    let voter = MultiModelVoter::new();
-                    let agents: Vec<Arc<dyn crate::agent::Agent>> = resolved
-                        .agents
-                        .iter()
-                        .map(|(_, agent)| agent.clone())
-                        .collect();
-                    if agents.len() > 1 {
-                        match voter
-                            .vote(&extract_task_description(&params.messages), &agents)
-                            .await
-                        {
-                            Ok(outcome) => {
-                                tracing::info!(
-                                    target: "multi_model_voter",
-                                    outcome = %outcome.winning_response.chars().take(100).collect::<String>(),
-                                    consensus = outcome.consensus_level,
-                                    agents_voted = outcome.all_votes.len(),
-                                    "MultiModelVoter selected best response"
-                                );
-                                // Log low-consensus voting to audit
-                                if outcome.consensus_level < 0.5 {
-                                    tracing::warn!(
-                                        target: "multi_model_voter",
-                                        consensus = outcome.consensus_level,
-                                        "low-consensus multi-agent vote"
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    target: "multi_model_voter",
-                                    error = %e,
-                                    "MultiModelVoter vote failed"
-                                );
-                            }
-                        }
-                    }
-                }
-
-                cache_hit = true; // mark as resolved so fallback is skipped
-            }
-        }
-
-        // ── Step 7b: FullAuto execution (review gate + TAO loop) ────────
-        // Cache task_description once for all full_auto sub-steps
-        let full_auto_result = run_full_auto_execution(
-            server,
-            params,
-            &phase,
-            phase_name,
-            span,
-            trace,
-            &selected_agent,
-            &response_text,
-            &conversation_id,
-            autonomy_loop_executed,
-        )
-        .await;
-
-        // ── Step 8: Response assembly ──────────────────────────────────
-        let selected_agent_reputation = reputation_scores.get(&selected_agent).copied();
-
-        let risk_decision = json!({
-            "policy_enabled": risk_policy.enabled,
-            "score": risk_assessment.score,
-            "is_high_risk": risk_assessment.is_high_risk,
-            "reasons": risk_assessment.reasons,
-            "multi_model_vote_enabled": enable_high_risk_vote,
-            "multi_model_vote_used": used_multi_model_vote,
-            "multi_agent_vote_enabled": enable_high_risk_multi_agent_vote,
-            "multi_agent_vote_used": used_multi_agent_vote,
-            "escalation_enabled": escalation_enabled,
-            "escalation_models_per_agent": escalation_models_per_agent,
-            "escalation_max_agents": escalation_max_agents,
-            "review_required": review_required,
-            "vote_report": vote_report,
-        });
-
-        let result = apply_review_gate_assemble(
-            server,
-            params,
-            trace,
-            phase_name,
-            phase_origin,
-            &selected_agent,
-            &selected_model_name,
-            &response_text,
-            &reasoning_text,
-            tenant_id,
-            started,
-            &conversation_id,
-            &branch_id,
-            schema_warnings,
-            schema_error,
-            layered_prompt_segments,
-            &full_auto_result.tool_execution_results,
-            &sched_task_id,
-            &candidate_agents,
-            &routing_provenance,
-            &reputation_scores,
-            selected_agent_reputation,
-            &council_decision,
-            &vote_winner,
-            &fallback_reason,
-            cache_hit,
-            cache_bypassed_for_execution,
-            capability_info,
-            full_auto_result.reviews,
-            agent_attempts,
-            risk_decision,
-            quota_failed_agents,
-            vector_context,
-            knowledge,
-            distillation,
-            checkpoint,
-            metacognitive_loop,
-        )
-        .await?;
-
-        // P3: Auto-create skills from conversation patterns
-        let _ = tokio::time::timeout(
-            Duration::from_secs(2),
-            auto_create_skills_from_conversation(server, params, &response_text),
-        )
-        .await;
-
-        // P4: Auto-generate workflow from conversation patterns
-        let _ = tokio::time::timeout(
-            Duration::from_secs(2),
-            auto_generate_workflow_from_conversation(server, params, &response_text),
-        )
-        .await;
-
-        // BLUE48 Step 19: Run rationalization on the final decision.
-        // This wires the intelligence hub's multi-factor risk analysis into
-        // the request path. The result is logged for observability.
-        let task_description = extract_task_description(&params.messages);
-        let (justified, reason) = crate::intelligence::hub::rationalize_decision(
-            &selected_agent,
-            &task_description,
-            if response_text.is_empty() { 0.3 } else { 0.8 },
-        );
-        if !justified {
-            debug!(
-                "rationalize_decision: decision blocked for agent={} reason={} confidence={}",
-                selected_agent, reason, 0.8
-            );
-        }
-
-        // ── GAP-B50-21: CapabilityBus feedback & evolve ──────────────
-        if let Some(ref cb) = server.governance_deps.capability_bus {
-            let success = !response_text.is_empty() && last_err.is_none();
-            let duration_ms = started.elapsed().as_millis() as u64;
-            let economy =
-                crate::acp::r#impl::chat::estimate_token_economy(&params.messages, &response_text);
-            let token_cost_est = economy["total_tokens"].as_u64().unwrap_or(0);
-            let quality_score = if success { 0.8 } else { 0.2 };
-
-            cb.feedback(
-                &selected_agent,
-                phase_name,
-                &trace.request_id,
-                success,
-                duration_ms,
-                token_cost_est,
-                quality_score,
-            );
-
-            // Periodic evolve every N requests (default 50)
-            static CAPABILITY_EVOLVE_COUNTER: AtomicU64 = AtomicU64::new(0);
-            let count = CAPABILITY_EVOLVE_COUNTER.fetch_add(1, Ordering::Relaxed);
-            let evolve_interval = cb.config.evolve_interval;
-            if count > 0 && count.is_multiple_of(evolve_interval) {
-                let cb_clone = cb.clone();
-                let agent = selected_agent.clone();
-                let phase = phase_name.to_string();
-                // Propagate trace context into the spawned task so that
-                // the evolve operation is visible in the trace tree.
-                let child_span = crate::rpc_protocol::child_trace_context(trace, "evolve");
-                tokio::spawn(async move {
-                    tracing::info!(
-                        trace_id = %child_span.trace_id,
-                        span_id = %child_span.span_id,
-                        "evolve: background capability evolution"
-                    );
-                    let state = (agent.clone(), phase.clone());
-                    let next_state = (agent, format!("{}_complete", phase));
-                    cb_clone
-                        .evolve(
-                            &state,
-                            "chat_complete",
-                            &next_state,
-                            token_cost_est,
-                            success,
-                            quality_score,
-                        )
-                        .await;
-                });
-            }
-        }
-
-        // ── GAP-B54-014: AgentMemoryBus — store agent completion insights ──
-        {
-            use crate::memory::agent_memory_bus::AGENT_MEMORY_BUS;
-            if let Some(bus) = AGENT_MEMORY_BUS.get() {
-                let success = !response_text.is_empty() && last_err.is_none();
-                let task_desc = extract_task_description(&params.messages);
-                bus.store_agent_completion(
-                    &selected_agent,
-                    phase_name,
-                    &task_desc,
-                    &response_text,
-                    success,
-                );
-            }
-        }
-
-        Ok(result)
-    } else {
-        Ok(json!({
-            "done": true,
-            "mode": params.mode,
-            "phase": phase_name,
-            "phase_origin": phase_origin,
-            "cached": cache_hit,
-            "agent": selected_agent,
-            "response": response_text,
-        }))
-    }
+    .await
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -2466,21 +1223,21 @@ pub(crate) async fn process_chat_request(
 // ═════════════════════════════════════════════════════════════════════
 
 /// Result of the phase resolution step.
-struct PhaseResolution {
-    phase: crate::orchestration::flow::ResolvedPhase,
-    phase_name: String,
-    phase_origin: String,
-    resolved: crate::orchestration::flow::ResolvedRouting,
-    has_requested_phase: bool,
-    has_controller_phase: bool,
-    has_adaptive_phase: bool,
-    schema_warnings: Vec<String>,
-    schema_error: Option<String>,
-    routing_provenance: Vec<String>,
-    reputation_scores: HashMap<String, f64>,
-    _online_scores: Vec<(String, f64)>,
-    _original_count: usize,
-    _unavailable_agents: Vec<String>,
+pub(crate) struct PhaseResolution {
+    pub phase: crate::orchestration::flow::ResolvedPhase,
+    pub phase_name: String,
+    pub phase_origin: String,
+    pub resolved: crate::orchestration::flow::ResolvedRouting,
+    pub has_requested_phase: bool,
+    pub has_controller_phase: bool,
+    pub has_adaptive_phase: bool,
+    pub schema_warnings: Vec<String>,
+    pub schema_error: Option<String>,
+    pub routing_provenance: Vec<String>,
+    pub reputation_scores: HashMap<String, f64>,
+    pub _online_scores: Vec<(String, f64)>,
+    pub _original_count: usize,
+    pub _unavailable_agents: Vec<String>,
 }
 
 // Resolve the request phase from parameters, adaptive inference, and controller recommendation.
@@ -2496,7 +1253,7 @@ struct PhaseResolution {
 // Section: Request Phase Resolution
 // ============================================================================
 
-async fn resolve_request_phase(
+pub(crate) async fn resolve_request_phase(
     server: &AcpServer,
     params: &ChatParams,
     flow: &FlowManager,
@@ -2646,7 +1403,7 @@ async fn resolve_request_phase(
 
 /// Evaluate pre-route policies (HarnessBus, token gate, tenant budget).
 /// Returns an error if any policy denies the request.
-async fn evaluate_pre_route_policies(
+pub(crate) async fn evaluate_pre_route_policies(
     server: &AcpServer,
     params: &ChatParams,
     trace: &RequestTraceContext,
@@ -2661,36 +1418,36 @@ async fn evaluate_pre_route_policies(
 
 /// Outcome of the agent selection & scoring step.
 #[allow(clippy::too_many_arguments)]
-struct AgentSelectionOutcome {
-    capability_selected_agent: Option<String>,
-    capability_recommended_mode: Option<String>,
-    capability_candidate_count: Option<u64>,
-    capability_decision_confidence: Option<f64>,
-    capability_selection_reason: Option<String>,
-    capability_optimization_hint: Option<Value>,
-    configured_primary_agent: Option<String>,
-    preferred_agent_from_request: Option<String>,
-    conversation_id: String,
-    branch_id: String,
-    agent_messages: Vec<Message>,
-    layered_prompt_segments: usize,
-    base_agent_options: HashMap<String, Value>,
-    risk_policy: RiskVotePolicy,
-    risk_assessment: RiskAssessment,
-    enable_high_risk_vote: bool,
-    enable_high_risk_multi_agent_vote: bool,
-    min_vote_agents: usize,
-    max_vote_agents: usize,
-    escalation_enabled: bool,
-    escalation_models_per_agent: usize,
-    escalation_max_agents: usize,
-    model_is_specific: bool,
-    unhealthy_fallback_agent: Option<String>,
-    fallback_reason: Option<String>,
-    council_decision: Option<Value>,
-    candidate_agents: Vec<String>,
-    _routing_provenance: Vec<String>,
-    vector_context: VectorContext,
+pub(crate) struct AgentSelectionOutcome {
+    pub capability_selected_agent: Option<String>,
+    pub capability_recommended_mode: Option<String>,
+    pub capability_candidate_count: Option<u64>,
+    pub capability_decision_confidence: Option<f64>,
+    pub capability_selection_reason: Option<String>,
+    pub capability_optimization_hint: Option<Value>,
+    pub configured_primary_agent: Option<String>,
+    pub preferred_agent_from_request: Option<String>,
+    pub conversation_id: String,
+    pub branch_id: String,
+    pub agent_messages: Vec<Message>,
+    pub layered_prompt_segments: usize,
+    pub base_agent_options: HashMap<String, Value>,
+    pub risk_policy: RiskVotePolicy,
+    pub risk_assessment: RiskAssessment,
+    pub enable_high_risk_vote: bool,
+    pub enable_high_risk_multi_agent_vote: bool,
+    pub min_vote_agents: usize,
+    pub max_vote_agents: usize,
+    pub escalation_enabled: bool,
+    pub escalation_models_per_agent: usize,
+    pub escalation_max_agents: usize,
+    pub _model_is_specific: bool,
+    pub unhealthy_fallback_agent: Option<String>,
+    pub fallback_reason: Option<String>,
+    pub council_decision: Option<Value>,
+    pub candidate_agents: Vec<String>,
+    pub _routing_provenance: Vec<String>,
+    pub vector_context: VectorContext,
 }
 
 // Select and score agents using CapabilityBus, agent preferences, and model routing.
@@ -2707,7 +1464,7 @@ struct AgentSelectionOutcome {
 // ============================================================================
 
 #[allow(clippy::too_many_arguments)]
-async fn select_and_score_agents(
+pub(crate) async fn select_and_score_agents(
     server: &AcpServer,
     params: &ChatParams,
     resolved: &mut crate::orchestration::flow::ResolvedRouting,
@@ -2911,7 +1668,7 @@ You have access to {} registered skill(s). Skills are reusable templates that au
         escalation_enabled: vote_config.escalation_enabled,
         escalation_models_per_agent: vote_config.escalation_models_per_agent,
         escalation_max_agents: vote_config.escalation_max_agents,
-        model_is_specific: filter_result.model_is_specific,
+        _model_is_specific: filter_result.model_is_specific,
         unhealthy_fallback_agent,
         fallback_reason,
         council_decision,
@@ -2922,13 +1679,13 @@ You have access to {} registered skill(s). Skills are reusable templates that au
 }
 
 /// Outcome of the autonomy loop execution.
-struct AutonomyOutcome {
-    autonomy_loop_executed: bool,
-    selected_agent: String,
-    response_text: String,
-    _reasoning_text: String,
-    _selected_model_name: Option<String>,
-    agent_attempts: Vec<Value>,
+pub(crate) struct AutonomyOutcome {
+    pub autonomy_loop_executed: bool,
+    pub selected_agent: String,
+    pub response_text: String,
+    pub _reasoning_text: String,
+    pub _selected_model_name: Option<String>,
+    pub agent_attempts: Vec<Value>,
 }
 
 // Execute the multi-round autonomy loop for full_auto / execution-like requests.
@@ -2940,7 +1697,7 @@ struct AutonomyOutcome {
 // ============================================================================
 
 #[allow(clippy::too_many_arguments)]
-async fn execute_autonomy_round(
+pub(crate) async fn execute_autonomy_round(
     _server: &AcpServer,
     params: &ChatParams,
     phase: &crate::orchestration::flow::ResolvedPhase,
@@ -3069,16 +1826,16 @@ type HighRiskVoteJob = (
 );
 
 /// Result of executing fallback agents.
-struct FallbackExecutionResult {
-    selected_agent: String,
-    response_text: String,
-    reasoning_text: String,
-    selected_model_name: Option<String>,
-    last_err: Option<anyhow::Error>,
-    agent_attempts: Vec<Value>,
-    quota_failed_agents: Vec<String>,
-    _cache_hit: bool,
-    high_risk_vote_jobs: Vec<HighRiskVoteJob>,
+pub(crate) struct FallbackExecutionResult {
+    pub selected_agent: String,
+    pub response_text: String,
+    pub reasoning_text: String,
+    pub selected_model_name: Option<String>,
+    pub last_err: Option<anyhow::Error>,
+    pub agent_attempts: Vec<Value>,
+    pub quota_failed_agents: Vec<String>,
+    pub _cache_hit: bool,
+    pub high_risk_vote_jobs: Vec<HighRiskVoteJob>,
 }
 
 /// Execute fallback agents using parallel execution with a concurrency limit.
@@ -3087,7 +1844,7 @@ struct FallbackExecutionResult {
 /// with a `Semaphore` limiting concurrency to 5. Returns the first successful
 /// response or collects all errors for fallback handling.
 #[allow(clippy::too_many_arguments)]
-async fn execute_fallback_agents(
+pub(crate) async fn execute_fallback_agents(
     server: &AcpServer,
     agent_list: Vec<(String, Arc<dyn crate::agent::Agent>)>,
     phase: &crate::orchestration::flow::ResolvedPhase,
@@ -3455,9 +2212,9 @@ async fn execute_fallback_agents(
 }
 
 /// Result of the full_auto execution block (review gate + TAO loop).
-struct FullAutoExecutionResult {
-    reviews: Vec<Value>,
-    tool_execution_results: Vec<Value>,
+pub(crate) struct FullAutoExecutionResult {
+    pub reviews: Vec<Value>,
+    pub tool_execution_results: Vec<Value>,
 }
 
 // Execute the FullAuto review gate and TAO loop.
@@ -3470,7 +2227,7 @@ struct FullAutoExecutionResult {
 // ============================================================================
 
 #[allow(clippy::too_many_arguments)]
-async fn run_full_auto_execution(
+pub(crate) async fn run_full_auto_execution(
     server: &AcpServer,
     params: &ChatParams,
     phase: &crate::orchestration::flow::ResolvedPhase,
@@ -3699,7 +2456,7 @@ async fn run_full_auto_execution(
 // ============================================================================
 
 #[allow(clippy::too_many_arguments)]
-async fn apply_review_gate_assemble(
+pub(crate) async fn apply_review_gate_assemble(
     server: &AcpServer,
     params: &ChatParams,
     trace: &RequestTraceContext,
@@ -4226,7 +2983,7 @@ pub(crate) fn release_sse_buffer(buf: Vec<u8>) {
     }
 }
 
-async fn emit_stream_chunk(
+pub(crate) async fn emit_stream_chunk(
     server: &AcpServer,
     observer: Option<&StreamObserver>,
     meta: StreamEventMeta<'_>,
@@ -4293,7 +3050,7 @@ async fn emit_stream_chunk(
     Ok(())
 }
 
-async fn emit_stream_done(
+pub(crate) async fn emit_stream_done(
     server: &AcpServer,
     observer: Option<&StreamObserver>,
     meta: StreamEventMeta<'_>,
@@ -4355,7 +3112,7 @@ async fn emit_stream_done(
     Ok(())
 }
 
-async fn emit_stream_token_economy(
+pub(crate) async fn emit_stream_token_economy(
     server: &AcpServer,
     observer: Option<&StreamObserver>,
     meta: StreamEventMeta<'_>,
@@ -4550,10 +3307,10 @@ async fn send_result(server: &AcpServer, id: Option<Value>, result: Value) -> Re
 }
 
 #[derive(Debug, Clone, Default)]
-struct VectorContext {
-    hits: Vec<Value>,
-    summary: Option<String>,
-    knowledge: Vec<String>,
+pub(crate) struct VectorContext {
+    pub hits: Vec<Value>,
+    pub summary: Option<String>,
+    pub knowledge: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -4890,7 +3647,7 @@ pub(crate) fn load_recent_knowledge_context(
         .collect()
 }
 
-async fn persist_vector_memory(
+pub(crate) async fn persist_vector_memory(
     server: &AcpServer,
     phase_name: &str,
     phase_options: Option<&PhaseOptions>,
@@ -5067,7 +3824,7 @@ pub(crate) async fn load_phase_summary(
     }
 }
 
-async fn effective_vector_settings(
+pub(crate) async fn effective_vector_settings(
     server: &AcpServer,
     phase_options: Option<&PhaseOptions>,
 ) -> Option<EffectiveVectorSettings> {
@@ -5415,7 +4172,7 @@ fn normalize_phase_summary(raw: &str, fallback: &str, max_chars: usize) -> Strin
     truncate_chars(&normalized, max_chars)
 }
 
-async fn persist_chat_knowledge(
+pub(crate) async fn persist_chat_knowledge(
     server: &AcpServer,
     conversation_id: &str,
     branch_id: &str,
@@ -5591,7 +4348,7 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn persist_session_distillation(
+pub(crate) async fn persist_session_distillation(
     server: &AcpServer,
     conversation_id: &str,
     branch_id: &str,
@@ -5781,13 +4538,13 @@ async fn persist_session_distillation(
 // ============================================================================
 
 /// Get routing handles
-fn routing_handles(
+pub(crate) fn routing_handles(
     server: &AcpServer,
 ) -> Result<(Arc<FlowManager>, Arc<crate::agent::AgentRegistry>)> {
     crate::acp::r#impl::runtime::routing_handles(server)
 }
 
-fn reorder_chat_agents_by_runtime_score(
+pub(crate) fn reorder_chat_agents_by_runtime_score(
     server: &AcpServer,
     phase_name: &str,
     agents: &mut Vec<(String, Arc<dyn crate::agent::Agent>)>,
@@ -6180,7 +4937,7 @@ fn detect_repeated_task_pattern(messages: &[&str]) -> Option<DetectedTaskPattern
 
 /// Analyze a completed chat conversation and auto-create skills for
 /// repetitive task patterns that would benefit from being a reusable skill.
-async fn auto_create_skills_from_conversation(
+pub(crate) async fn auto_create_skills_from_conversation(
     server: &AcpServer,
     chat_params: &ChatParams,
     response_text: &str,
@@ -6301,7 +5058,7 @@ async fn auto_create_skills_from_conversation(
 /// Analyze a conversation and auto-generate a reusable workflow definition
 /// when the system detects a multi-step task pattern that could be
 /// standardized as a workflow.
-async fn auto_generate_workflow_from_conversation(
+pub(crate) async fn auto_generate_workflow_from_conversation(
     server: &AcpServer,
     chat_params: &ChatParams,
     response_text: &str,

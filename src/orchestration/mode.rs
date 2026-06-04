@@ -11,8 +11,18 @@ use crate::pua::mode_execution_report;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::sync::LazyLock;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
+
+/// Shared tokio runtime for CLI synchronous mode execution.
+///
+/// Instead of creating a new `tokio::runtime::Runtime` on every
+/// `run()` call (which is expensive and leaks worker threads), we
+/// create a single shared runtime once and reuse it across calls.
+static SHARED_CLI_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
+    tokio::runtime::Runtime::new().expect("failed to create shared CLI tokio runtime")
+});
 
 /// Supported chat/agent modes
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -267,20 +277,10 @@ impl BaseModeRuntime {
                         return Ok(strategy.fallback_result(&task_id, &objective, &phase, &role));
                     }
 
-                    // No active runtime — create a temporary one for CLI execution.
-                    let rt = match tokio::runtime::Runtime::new() {
-                        Ok(rt) => rt,
-                        Err(e) => {
-                            warn!(
-                                "[{} Mode] Failed to create tokio runtime: {}",
-                                strategy.mode_name(),
-                                e,
-                            );
-                            return Ok(
-                                strategy.fallback_result(&task_id, &objective, &phase, &role)
-                            );
-                        }
-                    };
+                    // No active runtime — use the shared CLI runtime.
+                    // This avoids creating a new tokio runtime on every call,
+                    // which is expensive and leaks worker threads.
+                    let rt = &*SHARED_CLI_RUNTIME;
 
                     if strategy.use_chat() {
                         let messages = build_chat_messages(&task);

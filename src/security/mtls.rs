@@ -53,15 +53,44 @@ impl From<std::io::Error> for MtlsError {
 // MtlsConfig
 // ---------------------------------------------------------------------------
 
+/// Default paths for mTLS certificates, resolved from environment variables
+/// with sensible fallbacks.
+///
+/// | Env Variable | Default |
+/// |---|---|
+/// | `GO_ON_MTLS_CA_CERT` | `./certs/ca.pem` |
+/// | `GO_ON_MTLS_SERVER_CERT` | `./certs/server.pem` |
+/// | `GO_ON_MTLS_SERVER_KEY` | `./certs/server.key` |
+fn default_ca_path() -> PathBuf {
+    std::env::var("GO_ON_MTLS_CA_CERT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("./certs/ca.pem"))
+}
+
+fn default_server_cert_path() -> PathBuf {
+    std::env::var("GO_ON_MTLS_SERVER_CERT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("./certs/server.pem"))
+}
+
+fn default_server_key_path() -> PathBuf {
+    std::env::var("GO_ON_MTLS_SERVER_KEY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("./certs/server.key"))
+}
+
 /// mTLS configuration for the go-on runtime.
 #[allow(dead_code)] // F-GAP-49 — reserved mTLS feature
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MtlsConfig {
     /// Path to the CA certificate file (PEM).
+    /// Default: `./certs/ca.pem` or `$GO_ON_MTLS_CA_CERT`.
     pub ca_cert_path: PathBuf,
     /// Path to the server certificate file (PEM).
+    /// Default: `./certs/server.pem` or `$GO_ON_MTLS_SERVER_CERT`.
     pub server_cert_path: PathBuf,
     /// Path to the server private key file (PEM).
+    /// Default: `./certs/server.key` or `$GO_ON_MTLS_SERVER_KEY`.
     pub server_key_path: PathBuf,
     /// Whether to require client certificates for incoming connections.
     pub require_client_cert: bool,
@@ -86,6 +115,18 @@ impl MtlsConfig {
         }
     }
 
+    /// Create mTLS config with default paths (resolved from environment
+    /// variables or the `./certs/` fallbacks).
+    pub fn with_default_paths() -> Self {
+        Self {
+            ca_cert_path: default_ca_path(),
+            server_cert_path: default_server_cert_path(),
+            server_key_path: default_server_key_path(),
+            require_client_cert: true,
+            allowed_cn_list: Vec::new(),
+        }
+    }
+
     /// Set whether client certificates are required.
     pub fn with_client_cert(mut self, require: bool) -> Self {
         self.require_client_cert = require;
@@ -96,6 +137,12 @@ impl MtlsConfig {
     pub fn with_allowed_cns(mut self, cns: Vec<String>) -> Self {
         self.allowed_cn_list = cns;
         self
+    }
+}
+
+impl Default for MtlsConfig {
+    fn default() -> Self {
+        Self::with_default_paths()
     }
 }
 

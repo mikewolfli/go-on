@@ -612,6 +612,13 @@ const DEFAULT_TENANT: &str = "_global";
 /// and delegates storage to a configurable KeyRotator backend.
 ///
 /// Supports multi-tenant isolation: each tenant gets its own key namespace.
+///
+/// # Default configuration
+///
+/// Environment variables:
+/// - `GO_ON_SECRET_ROTATION_ENABLED` — set to "1" or "true" to enable
+/// - `GO_ON_SECRET_ROTATION_INTERVAL_SECS` — rotation interval in seconds (default: 86400)
+/// - `GO_ON_SECRET_ROTATION_RETAIN_VERSIONS` — number of previous versions to retain (default: 5)
 pub struct SecretManager {
     /// In-memory cache of active secrets, keyed by (tenant → key_id).
     secrets: RwLock<HashMap<String, HashMap<KeyId, SecretEntry>>>,
@@ -633,6 +640,36 @@ impl SecretManager {
             secrets: RwLock::new(HashMap::new()),
             previous_versions: RwLock::new(HashMap::new()),
             rotation_policy,
+            rotator,
+        }
+    }
+
+    /// Create a `SecretManager` with defaults from environment variables.
+    ///
+    /// - `GO_ON_SECRET_ROTATION_INTERVAL_SECS` → `max_age_secs` (default: 86400)
+    /// - `GO_ON_SECRET_ROTATION_RETAIN_VERSIONS` → `retain_versions` (default: 5)
+    pub fn with_defaults() -> Self {
+        let max_age_secs = std::env::var("GO_ON_SECRET_ROTATION_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(86400);
+        let retain_versions = std::env::var("GO_ON_SECRET_ROTATION_RETAIN_VERSIONS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(5);
+
+        let policy = RotationPolicy {
+            max_age_secs,
+            auto_rotate_on_access: false,
+            retain_versions,
+            min_key_length: 32,
+        };
+        let rotator = Arc::new(MemoryRotator::new());
+
+        Self {
+            secrets: RwLock::new(HashMap::new()),
+            previous_versions: RwLock::new(HashMap::new()),
+            rotation_policy: policy,
             rotator,
         }
     }

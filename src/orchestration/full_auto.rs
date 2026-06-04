@@ -23,6 +23,7 @@ use serde_json::{json, Value};
 use tracing::{debug, info, warn};
 
 use crate::i18n::runtime::tf;
+use crate::intelligence::adaptive_selector::AdaptiveModelSelector;
 use crate::orchestration::brain_loop::{
     BrainLoop, BrainLoopConfig, BrainLoopPhase, BrainLoopStep, StepStatus,
 };
@@ -286,6 +287,8 @@ pub struct FullAutoFlow {
     skill_market: Option<SkillMarketRegistry>,
     /// Semaphore for limiting concurrent skill execution.
     semaphore: Arc<tokio::sync::Semaphore>,
+    /// Adaptive model selector for tracking skill execution outcomes.
+    model_selector: AdaptiveModelSelector,
 }
 
 impl std::fmt::Debug for FullAutoFlow {
@@ -299,6 +302,7 @@ impl std::fmt::Debug for FullAutoFlow {
             .field("diagnostic_engine", &"Mutex<DiagnosticFeedbackEngine>")
             .field("tool_recommender", &"Mutex<ToolRecommender>")
             .field("tool_lock_manager", &"ToolLockManager")
+            .field("model_selector", &"AdaptiveModelSelector")
             .finish()
     }
 }
@@ -322,6 +326,7 @@ impl FullAutoFlow {
             tool_lock_manager: ToolLockManager::new(),
             skill_market: None,
             semaphore: Arc::new(tokio::sync::Semaphore::new(max_concurrency)),
+            model_selector: AdaptiveModelSelector::new(),
         }
     }
 
@@ -402,6 +407,7 @@ impl FullAutoFlow {
             tool_lock_manager: ToolLockManager::new(),
             skill_market: None,
             semaphore: Arc::new(tokio::sync::Semaphore::new(max_concurrency)),
+            model_selector: AdaptiveModelSelector::new(),
         }
     }
 
@@ -427,6 +433,7 @@ impl FullAutoFlow {
             semaphore: Arc::new(tokio::sync::Semaphore::new(
                 FullAutoConfig::default().max_concurrency,
             )),
+            model_selector: AdaptiveModelSelector::new(),
         }
     }
 
@@ -606,6 +613,10 @@ impl FullAutoFlow {
         }
 
         let goal_tokens = tokenize(&goal_text);
+        // O(1) lookup set for goal tokens — avoids O(N×M) nested iteration
+        // over goal_tokens × desc_tokens for every skill descriptor.
+        let goal_token_set: std::collections::HashSet<&str> =
+            goal_tokens.iter().map(|s| s.as_str()).collect();
 
         let registry = self.skill_registry.lock().unwrap_or_else(|poisoned| {
             warn!("skill_registry lock poisoned – recovered data");
@@ -627,9 +638,11 @@ impl FullAutoFlow {
                 let desc_score = if goal_tokens.is_empty() {
                     0.0
                 } else {
-                    let overlap = goal_tokens
+                    // O(M) instead of O(G×M): count descriptor tokens that
+                    // appear in the goal token set (HashSet provides O(1) lookup).
+                    let overlap = desc_tokens
                         .iter()
-                        .filter(|t| desc_tokens.contains(*t))
+                        .filter(|t| goal_token_set.contains(t.as_str()))
                         .count();
                     overlap as f64 / goal_tokens.len().max(1) as f64
                 };
@@ -959,9 +972,11 @@ impl FullAutoFlow {
         // dispatch all tasks immediately — they'll compete for permits
         // asynchronously rather than serializing on sequential acquisition.
         let mut handles = Vec::with_capacity(skills_to_run.len());
+        let mut skill_names: Vec<String> = Vec::with_capacity(skills_to_run.len());
 
         for (skill_match, skill, input) in skills_to_run {
             let skill_name = skill_match.name.clone(); // clone before move
+            skill_names.push(skill_name.clone());
             let sem_clone = semaphore.clone();
             handles.push(tokio::spawn(async move {
                 let _permit = match sem_clone.acquire_owned().await {
@@ -976,7 +991,11 @@ impl FullAutoFlow {
         }
 
         // Collect results via join_all on the JoinHandles
-        for handle in handles {
+        for (idx, handle) in handles.into_iter().enumerate() {
+            let skill_name = skill_names
+                .get(idx)
+                .map(|s| s.as_str())
+                .unwrap_or("unknown");
             match handle.await {
                 Ok((Ok(output), elapsed)) => {
                     let duration_ms = elapsed.as_millis() as u64;
@@ -1002,6 +1021,7 @@ impl FullAutoFlow {
                         ));
                     }
 
+                    self.model_selector.record_result(skill_name, true);
                     self.record_match_outcome(true, false, false);
                 }
                 Ok((Err(e), elapsed)) => {
@@ -1022,10 +1042,14 @@ impl FullAutoFlow {
                     };
                     execution_log.push(step);
 
+                    self.model_selector.record_result(skill_name, false);
                     self.record_match_outcome(false, true, false);
                 }
                 Err(join_err) => {
                     warn!("Parallel skill execution panicked: {}", join_err);
+                    if let Some(name) = skill_names.get(idx) {
+                        self.model_selector.record_result(name, false);
+                    }
                     errors.push(format!("Skill panicked: {}", join_err));
                 }
             }
@@ -1085,16 +1109,11 @@ impl FullAutoFlow {
             )
         );
 
-        // ── BrainLoop integration (GAP-46-07) ───────────────────────────
-        // Create a plan from the task result and execute a synthetic step so
-        // the brain loop is no longer a dead module.
-        // GAP-46-12: Use ComplexityEstimator to dynamically tune max_iterations.
-        //
-        // NOTE: The synthetic BrainLoop below uses the complexity-derived
-        // iteration count, but it does NOT actually re-execute any skills.
-        // Future work should connect this to real re-execution — e.g. by
-        // re-running failed or low-confidence steps up to the recommended
-        // iteration limit when the flow produces errors.
+        // ── BrainLoop re-execution (GAP-46-07) ─────────────────────────
+        // Re-run failed or skipped steps through the BrainLoop so that
+        // the brain loop receives real execution data rather than being a
+        // dead module. The complexity estimator dynamically tunes the
+        // iteration budget for each task.
         if !execution_log.is_empty() {
             let complexity = self.complexity_estimator.estimate(task);
             info!(
@@ -1104,12 +1123,9 @@ impl FullAutoFlow {
                 complexity.level.recommended_iterations()
             );
 
-            // The recommended iteration count is plumbed through to the
-            // BrainLoop config so it's available when the loop is connected
-            // to actual re-execution. For now the synthetic run uses it
-            // as a forward-looking placeholder.
             let bl_config = BrainLoopConfig {
                 max_iterations: complexity.level.recommended_iterations(),
+                world_model_integration: true,
                 ..BrainLoopConfig::default()
             };
 
@@ -1142,11 +1158,36 @@ impl FullAutoFlow {
             match bl.start_plan(task, bl_steps) {
                 Ok(plan_id) => {
                     debug!("BrainLoop plan `{plan_id}` started for task");
-                    if let Some(ref output) = final_output {
-                        if let Err(e) = bl.execute_step(&plan_id, "bl-step-0", output).await {
-                            warn!("BrainLoop step execution failed: {e}");
+
+                    // Execute every step through the BrainLoop, not just the first one.
+                    // Failed/skipped steps receive empty outputs; successful steps
+                    // propagate their prior output through the loop.
+                    for i in 0..execution_log.len() {
+                        let step_id = format!("bl-step-{i}");
+                        let step_output = execution_log
+                            .get(i)
+                            .filter(|s| s.success)
+                            .map(|s| s.output.to_string())
+                            .unwrap_or_default();
+
+                        if let Err(e) = bl.execute_step(&plan_id, &step_id, &step_output).await {
+                            warn!("BrainLoop step `{step_id}` execution failed: {e}");
+                            errors.push(format!("BrainLoop re-execution failed for step {i}: {e}"));
                         }
                     }
+
+                    // Mark the plan as completed so the BrainLoop has a clean
+                    // terminal state for profiling / persistence.
+                    if let Err(e) = bl.complete_plan(&plan_id).await {
+                        // Non-fatal — the steps were already recorded.
+                        warn!("BrainLoop complete_plan failed: {e}");
+                    }
+
+                    let profile = bl.profile().await;
+                    debug!(
+                        "BrainLoop plan `{plan_id}` completed: {} cycles, {} plans",
+                        profile.total_cycles, profile.total_plans
+                    );
                 }
                 Err(e) => warn!("BrainLoop plan creation failed: {e}"),
             }

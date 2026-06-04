@@ -36,6 +36,31 @@ static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
 // JSON-RPC envelope types
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// JSON-RPC 2.0 version constant
+// ---------------------------------------------------------------------------
+
+/// The JSON-RPC protocol version string mandated by the 2.0 specification.
+pub const JSONRPC_VERSION: &str = "2.0";
+
+/// Validate that a JSON-RPC version string is `"2.0"` per the specification.
+///
+/// Returns `Ok(())` if the version is `"2.0"`, or `Err` with an `InvalidRequest`
+/// error code (-32600) otherwise.
+pub fn validate_jsonrpc_version(version: &str) -> Result<(), JsonRpcError> {
+    if version == JSONRPC_VERSION {
+        Ok(())
+    } else {
+        Err(JsonRpcError {
+            code: -32600, // Invalid Request per JSON-RPC 2.0 spec
+            message: format!(
+                "invalid JSON-RPC version '{}'; expected '{}'",
+                version, JSONRPC_VERSION
+            ),
+        })
+    }
+}
+
 /// A JSON-RPC 2.0 request envelope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest<T: Serialize> {
@@ -43,6 +68,27 @@ pub struct JsonRpcRequest<T: Serialize> {
     pub method: String,
     pub params: T,
     pub id: u64,
+}
+
+impl<T: Serialize> JsonRpcRequest<T> {
+    /// Create a new JSON-RPC 2.0 request with version validation.
+    ///
+    /// # Errors
+    /// Returns `JsonRpcError` if the version is not `"2.0"`.
+    pub fn new(method: impl Into<String>, params: T, id: u64) -> Result<Self, JsonRpcError> {
+        let r = Self {
+            jsonrpc: JSONRPC_VERSION.to_string(),
+            method: method.into(),
+            params,
+            id,
+        };
+        Ok(r)
+    }
+
+    /// Validate the version field of an existing request.
+    pub fn validate(&self) -> Result<(), JsonRpcError> {
+        validate_jsonrpc_version(&self.jsonrpc)
+    }
 }
 
 /// A JSON-RPC 2.0 response envelope.
@@ -54,6 +100,23 @@ pub struct JsonRpcResponse<T> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<JsonRpcError>,
     pub id: u64,
+}
+
+impl<T> JsonRpcResponse<T> {
+    /// Create a new JSON-RPC 2.0 response.
+    pub fn new(id: u64) -> Self {
+        Self {
+            jsonrpc: JSONRPC_VERSION.to_string(),
+            result: None,
+            error: None,
+            id,
+        }
+    }
+
+    /// Validate the version field of an existing response.
+    pub fn validate(&self) -> Result<(), JsonRpcError> {
+        validate_jsonrpc_version(&self.jsonrpc)
+    }
 }
 
 /// A JSON-RPC error object.

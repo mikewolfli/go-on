@@ -195,6 +195,7 @@ pub fn all() -> &'static [(&'static str, &'static str)] {
         ("status.connected", "已连接"),
         ("status.disconnected", "已断开"),
         ("status.error", "错误"),
+        ("status.staleData", "⚠ 数据可能已过期"),
         ("skills.none", "暂无技能。创建或导入一个技能以开始使用。"),
         ("skills.create.title", "创建新技能"),
         ("skills.create.name", "名称"),

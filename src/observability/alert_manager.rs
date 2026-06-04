@@ -102,6 +102,31 @@ pub fn default_alert_rules() -> Vec<AlertRule> {
             threshold: 10.0,
             cooldown_seconds: 300,
         },
+        // ── O6: Memory health rules ─────────────────────────────────────
+        AlertRule {
+            name: "memory_critical",
+            description: "Free memory below critical threshold (256 MB)",
+            severity: AlertSeverity::Critical,
+            check: |value, threshold| value < threshold,
+            threshold: 256.0,
+            cooldown_seconds: 60,
+        },
+        AlertRule {
+            name: "memory_low",
+            description: "Free memory below warning threshold (512 MB)",
+            severity: AlertSeverity::Warning,
+            check: |value, threshold| value < threshold,
+            threshold: 512.0,
+            cooldown_seconds: 120,
+        },
+        AlertRule {
+            name: "memory_jetsam_risk",
+            description: "Free memory below jetsam risk threshold (128 MB)",
+            severity: AlertSeverity::Critical,
+            check: |value, threshold| value < threshold,
+            threshold: 128.0,
+            cooldown_seconds: 30,
+        },
     ]
 }
 
@@ -230,6 +255,14 @@ impl AlertManager {
 
     /// Fire webhook notification (non-blocking, logs errors)
     fn fire_webhook(&self, alert: &Alert) {
+        let span = tracing::info_span!(
+            "alert_webhook_fire",
+            rule = %alert.rule,
+            severity = %alert.severity,
+            url = %self.webhook.url,
+        );
+        let _guard = span.enter();
+
         let url = self.webhook.url.clone();
         let recent_alerts_count = self.recent_alerts.len();
         let payload = serde_json::json!({

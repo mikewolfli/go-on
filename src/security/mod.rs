@@ -5,6 +5,7 @@
 //! checking for the go-on runtime.
 
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 pub mod audit_integrity;
 pub mod content_safety;
@@ -19,6 +20,9 @@ pub mod vulnerability_scan;
 // Wiring helpers for server startup (GAP-B52)
 // ---------------------------------------------------------------------------
 
+/// Global singleton for the SafetyChecker, instantiated by `wire_content_safety`.
+static CONTENT_SAFETY_CHECKER: OnceLock<content_safety::SafetyChecker> = OnceLock::new();
+
 /// Wire content safety checking into the server startup path.
 /// Instantiates a `SafetyChecker` if governance is enabled.
 /// Returns `true` if content safety was enabled.
@@ -28,10 +32,29 @@ pub fn wire_content_safety(config: &crate::config::types::RuntimeConfig) -> bool
         tracing::info!("Content safety: disabled (governance not enabled)");
         return false;
     }
-    tracing::info!("Content safety: enabled");
-    // Full instantiation: SafetyChecker::new(ContentSafetyConfig::default())
-    true
+
+    let checker =
+        content_safety::SafetyChecker::new(content_safety::ContentSafetyConfig::default());
+    match CONTENT_SAFETY_CHECKER.set(checker) {
+        Ok(()) => {
+            tracing::info!(
+                "Content safety: enabled with {} categories (governance policy: {})",
+                content_safety::ContentSafetyConfig::default()
+                    .check_categories
+                    .len(),
+                config.governance_policy_mode,
+            );
+            true
+        }
+        Err(_) => {
+            tracing::warn!("Content safety: already initialized");
+            false
+        }
+    }
 }
+
+/// Global singleton for the InjectionDetector, instantiated by `wire_prompt_injection`.
+static PROMPT_INJECTION_DETECTOR: OnceLock<prompt_injection::InjectionDetector> = OnceLock::new();
 
 /// Wire prompt injection detection into the server startup path.
 /// Instantiates an `InjectionDetector` if governance is enabled.
@@ -42,11 +65,24 @@ pub fn wire_prompt_injection(config: &crate::config::types::RuntimeConfig) -> bo
         tracing::info!("Prompt injection: disabled (governance not enabled)");
         return false;
     }
-    tracing::info!(
-        "Prompt injection: enabled (threshold: {})",
-        config.detection_config().threshold
-    );
-    true
+
+    let detection_config = config.detection_config();
+    let detector = prompt_injection::InjectionDetector::new(detection_config.clone());
+    match PROMPT_INJECTION_DETECTOR.set(detector) {
+        Ok(()) => {
+            tracing::info!(
+                "Prompt injection: enabled (threshold: {}, model_check: {}, contamination_check: {})",
+                detection_config.threshold,
+                detection_config.enable_model_check,
+                detection_config.enable_contamination_check,
+            );
+            true
+        }
+        Err(_) => {
+            tracing::warn!("Prompt injection: already initialized");
+            false
+        }
+    }
 }
 
 /// Start secret rotation if vault is configured.

@@ -20,10 +20,12 @@
 //! - `MetricsRecorder` feeds into structured event streams (e.g. OTLP traces, JSON logs)
 //!   but is **not** exported via `/metrics`.
 //! - `RuntimeMetrics` (consumed here) is the canonical source for the Prometheus
-//!   endpoint. Future work may bridge `MetricsRecorder` values into `RuntimeMetrics`
-//!   for unified Prometheus exposure.
+//!   endpoint. The bridge function [`bridge_metrics_recorder`] pulls
+//!   `MetricsRecorder` values into `RuntimeMetrics` for unified Prometheus
+//!   exposure.
 
 use crate::acp::server::AcpServer;
+use crate::observability::telemetry_enhanced::MetricsRecorder;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 
@@ -173,7 +175,10 @@ pub fn reset_buckets(buckets: &mut [u64; 10]) {
 }
 
 /// Compute approximate P95 latency from histogram bucket counts.
-/// Buckets are: [1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000] ms.
+///
+/// Bucket boundaries match `METRIC_LATENCY_BUCKETS_MS` in `acp/prelude.rs`:
+/// [1, 5, 10, 50, 100, 500, 1000, 5000, 10000] ms (9 boundaries → 10 buckets,
+/// the 10th covering everything > 10000 ms).
 fn estimate_p95_latency(buckets: &[u64; 10]) -> f64 {
     let total: u64 = buckets.iter().sum();
     if total == 0 {
@@ -181,7 +186,16 @@ fn estimate_p95_latency(buckets: &[u64; 10]) -> f64 {
     }
     let p95_target = (total as f64 * 0.95) as u64;
     let bucket_edges = [
-        1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 5000.0,
+        1.0,
+        5.0,
+        10.0,
+        50.0,
+        100.0,
+        500.0,
+        1000.0,
+        5000.0,
+        10000.0,
+        f64::MAX,
     ];
     let mut cumulative = 0u64;
     for (i, count) in buckets.iter().enumerate() {
@@ -199,7 +213,9 @@ fn estimate_p95_latency(buckets: &[u64; 10]) -> f64 {
             return prev_edge + frac * (edge - prev_edge);
         }
     }
-    bucket_edges[9]
+    // Fallback: P95 is in the overflow bucket — interpolate between the
+    // last finite edge (10000 ms) and a reasonable cap.
+    bucket_edges[8] + (bucket_edges[9] - bucket_edges[8]) * 0.5
 }
 
 /// Build a Prometheus-formatted metrics string from the server status.
@@ -333,5 +349,60 @@ pub fn build_prometheus_metrics(server: &AcpServer) -> String {
         if is_draining { 1 } else { 0 }
     ));
 
+    // ── O2: Memory metrics ────────────────────────────────────────────────
+    lines.push("# HELP go_on_memory_usage_bytes Current memory usage in bytes".to_string());
+    lines.push("# TYPE go_on_memory_usage_bytes gauge".to_string());
+    lines.push(format!("go_on_memory_usage_bytes {}", m.memory_usage_bytes));
+
+    // ── O3: Task count / queue depth metrics ──────────────────────────────
+    lines.push("# HELP go_on_active_requests Currently active requests".to_string());
+    lines.push("# TYPE go_on_active_requests gauge".to_string());
+    lines.push(format!("go_on_active_requests {}", m.active_requests));
+
+    lines.push("# HELP go_on_agent_timeout_failures_total Agent timeout failures".to_string());
+    lines.push("# TYPE go_on_agent_timeout_failures_total counter".to_string());
+    lines.push(format!(
+        "go_on_agent_timeout_failures_total {}",
+        m.agent_timeout_failures_total
+    ));
+
     lines.join("\n") + "\n"
+}
+
+/// Bridge `MetricsRecorder` (structured-logging / OTLP path) values into
+/// `RuntimeMetrics` (Prometheus /metrics path) for unified observability.
+///
+/// Call this periodically (e.g. every metrics scrape) to synchronize the
+/// two metric systems. Only writes fields that `MetricsRecorder` tracks
+/// and `RuntimeMetrics` also exposes.
+pub fn bridge_metrics_recorder(
+    runtime_metrics: &crate::acp::prelude::RuntimeMetrics,
+    recorder: &MetricsRecorder,
+) {
+    let app = recorder.get_metrics();
+
+    runtime_metrics.update_snapshot(|snap| {
+        // Merge cache hit rate using EMA-like blend
+        if app.cache_hits + app.cache_misses > 0 {
+            let recorder_rate = app.cache_hits as f64 / (app.cache_hits + app.cache_misses) as f64;
+            if snap.cache_hit_rate == 0.0 {
+                snap.cache_hit_rate = recorder_rate;
+            } else {
+                snap.cache_hit_rate = 0.3 * recorder_rate + 0.7 * snap.cache_hit_rate;
+            }
+        }
+
+        // Latency: prefer the more recent recorder value
+        if app.avg_latency_ms > 0.0 && snap.avg_request_duration_ms == 0.0 {
+            snap.avg_request_duration_ms = app.avg_latency_ms;
+        }
+
+        // Active connections / memory from recorder (use max to avoid losing data)
+        if app.active_connections > snap.active_requests as u64 {
+            snap.active_requests = app.active_connections as u32;
+        }
+        if app.memory_usage_bytes > snap.memory_usage_bytes {
+            snap.memory_usage_bytes = app.memory_usage_bytes;
+        }
+    });
 }

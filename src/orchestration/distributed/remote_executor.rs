@@ -9,7 +9,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::RwLock;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
+
+use crate::orchestration::tool::{ToolInput, ToolRegistry};
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -335,12 +337,16 @@ impl Default for NodeRegistry {
 #[derive(Debug)]
 pub struct InProcessRemoteExecutor {
     registry: Arc<NodeRegistry>,
+    tool_registry: Arc<ToolRegistry>,
 }
 
 #[allow(dead_code)]
 impl InProcessRemoteExecutor {
-    pub fn new(registry: Arc<NodeRegistry>) -> Self {
-        Self { registry }
+    pub fn new(registry: Arc<NodeRegistry>, tool_registry: Arc<ToolRegistry>) -> Self {
+        Self {
+            registry,
+            tool_registry,
+        }
     }
 }
 
@@ -368,34 +374,75 @@ impl RemoteExecutor for InProcessRemoteExecutor {
 
         let start = std::time::Instant::now();
 
-        // Simulate execution (in a real implementation this would invoke the tool)
         debug!(
             node = %node_id, dag = %dag_id, tool = %tool_name,
-            "In-process executing task"
+            "In-process remote executor: invoking tool"
         );
 
-        // For now, return a successful placeholder output.
-        // In a real executor, this would call the actual tool via ToolRegistry.
-        let output = serde_json::json!({
-            "status": "ok",
-            "node": node_id,
-            "tool": tool_name,
-            "input": packet.input,
-        });
+        // Build ToolInput from the TaskPacket for real execution.
+        let tool_input = ToolInput {
+            task_id: dag_id.clone(),
+            phase: "remote_execution".to_string(),
+            agent_role: "remote_executor".to_string(),
+            objective: String::new(),
+            constraints: None,
+            evidence: if packet.dep_outputs.is_empty() {
+                None
+            } else {
+                Some(serde_json::to_string(&packet.dep_outputs).unwrap_or_default())
+            },
+            payload: packet.input,
+            allowed_base_dir: None,
+        };
+
+        // Execute the tool through the ToolRegistry; fail if tool not found.
+        let tool = self.tool_registry.get(&tool_name).ok_or_else(|| {
+            RemoteExecutionError::ExecutionFailed(
+                node_id.clone(),
+                format!("tool '{}' not found in registry", tool_name),
+            )
+        })?;
+
+        let tool_output = tool.run(&tool_input).map_err(|e| {
+            RemoteExecutionError::ExecutionFailed(
+                node_id.clone(),
+                format!("tool '{}' execution error: {}", tool_name, e),
+            )
+        })?;
 
         let duration_ms = start.elapsed().as_millis() as u64;
-        info!(
-            node = %node_id, dag = %dag_id, tool = %tool_name, duration_ms,
-            "In-process task completed"
-        );
 
-        Ok(NodeOutput::success(
-            node_id,
-            dag_id,
-            tool_name,
-            output,
-            duration_ms,
-        ))
+        if tool_output.success {
+            let output_value = tool_output
+                .result
+                .unwrap_or_else(|| serde_json::json!({"status": "completed"}));
+            info!(
+                node = %node_id, dag = %dag_id, tool = %tool_name, duration_ms,
+                "In-process remote executor: tool completed successfully"
+            );
+            Ok(NodeOutput::success(
+                node_id,
+                dag_id,
+                tool_name,
+                output_value,
+                duration_ms,
+            ))
+        } else {
+            let error_msg = tool_output
+                .error
+                .unwrap_or_else(|| "unknown error".to_string());
+            warn!(
+                node = %node_id, dag = %dag_id, tool = %tool_name, error = %error_msg,
+                "In-process remote executor: tool failed"
+            );
+            Ok(NodeOutput::failure(
+                node_id,
+                dag_id,
+                tool_name,
+                error_msg,
+                duration_ms,
+            ))
+        }
     }
 
     async fn register_node(
@@ -484,39 +531,16 @@ impl GrpcRemoteExecutor {
 impl RemoteExecutor for GrpcRemoteExecutor {
     async fn execute_remote(&self, packet: TaskPacket) -> Result<NodeOutput, RemoteExecutionError> {
         let node_id = packet.node_id.clone();
-        let _addr = self.resolve_addr(&node_id).await?;
+        let addr = self.resolve_addr(&node_id).await?;
+        let tool_name = packet.tool_name.clone();
 
-        let start = std::time::Instant::now();
-
-        // In a full implementation, this would:
-        //   1. Serialize the TaskPacket into a protobuf message
-        //   2. Create a tonic client channel to the remote address
-        //   3. Call the remote Execute RPC with timeout
-        //   4. Deserialize the response into NodeOutput
-        //
-        // Example (conceptual, requires proto-compiled code):
-        //   let mut client = RpcExecutorClient::connect(addr).await?;
-        //   let response = tokio::time::timeout(
-        //       Duration::from_secs(self.default_timeout_s),
-        //       client.execute(tonic::Request::new(packet_proto)),
-        //   ).await.map_err(|_| RemoteExecutionError::Timeout(node_id, self.default_timeout_s))?;
-        //   let node_output = response.into_inner().into();
-
-        let duration_ms = start.elapsed().as_millis() as u64;
-
-        // Stub: return a placeholder indicating gRPC execution path
-        info!(
-            node = %node_id, dag = %packet.dag_id, tool = %packet.tool_name,
-            "gRPC remote execution (stub)"
+        // Fail-fast with a clear error: gRPC execution requires a proto service
+        // definition and tonic build setup. Until that is wired, the executor
+        // cannot issue real RPCs. Users should fall back to InProcessRemoteExecutor.
+        let msg = format!(
+            "gRPC execution not available for tool '{tool_name}' on node '{node_id}' (address: {addr}). "
         );
-
-        Ok(NodeOutput::success(
-            node_id,
-            packet.dag_id,
-            packet.tool_name,
-            serde_json::json!({"status": "grpc_stub", "note": "tonic-based execution not yet wired"}),
-            duration_ms,
-        ))
+        Err(RemoteExecutionError::GrpcError(msg))
     }
 
     async fn register_node(
@@ -572,7 +596,8 @@ mod tests {
     #[tokio::test]
     async fn test_in_process_executor() {
         let registry = Arc::new(NodeRegistry::new());
-        let executor = InProcessRemoteExecutor::new(registry.clone());
+        let tool_registry = Arc::new(ToolRegistry::new_empty());
+        let executor = InProcessRemoteExecutor::new(registry.clone(), tool_registry);
 
         let caps = NodeCapabilities::new("node-1".into(), vec!["shell".into()]);
         let reg = NodeRegistration::new("node-1".into(), "127.0.0.1".into(), 9000, caps);
@@ -612,7 +637,8 @@ mod tests {
     #[tokio::test]
     async fn test_executor_capability_mismatch() {
         let registry = Arc::new(NodeRegistry::new());
-        let executor = InProcessRemoteExecutor::new(registry.clone());
+        let tool_registry = Arc::new(ToolRegistry::new_empty());
+        let executor = InProcessRemoteExecutor::new(registry.clone(), tool_registry);
 
         let caps = NodeCapabilities::new("node-3".into(), vec!["read".into()]);
         let reg = NodeRegistration::new("node-3".into(), "127.0.0.1".into(), 9002, caps);

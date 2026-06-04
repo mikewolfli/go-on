@@ -864,10 +864,12 @@ mod tests {
     use crate::orchestration::distributed::remote_executor::{
         InProcessRemoteExecutor, NodeRegistry,
     };
+    use crate::orchestration::tool::ToolRegistry;
 
     fn make_coordinator() -> Arc<DistributedDAGCoordinator> {
         let registry = Arc::new(NodeRegistry::new());
-        let executor = Arc::new(InProcessRemoteExecutor::new(registry));
+        let tool_registry = Arc::new(ToolRegistry::new_empty());
+        let executor = Arc::new(InProcessRemoteExecutor::new(registry, tool_registry));
         Arc::new(DistributedDAGCoordinator::new("coord-1".into(), executor))
     }
 
