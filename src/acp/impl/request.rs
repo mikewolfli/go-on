@@ -587,7 +587,7 @@ pub async fn handle_request(
             .and_then(|v| v.as_str())
             .unwrap_or("default");
 
-        if !rate_limiter.try_consume_tenant(tenant_id, 1.0) {
+        if !rate_limiter.try_consume_tenant(tenant_id, 1.0).await {
             anyhow::bail!("rate limit exceeded for tenant: {}", tenant_id);
         }
     }

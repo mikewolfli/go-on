@@ -16,12 +16,15 @@ pub mod core_dag; // DAG-UNIFY: Unified generic DAG — prefer over dag_executor
 pub mod council; // F-GAP-15
                  // DAG modules — all deprecated in favor of `core_dag`.
                  // New code should use `crate::orchestration::core_dag` directly.
+#[doc = "Deprecated legacy DAG driver — use [`core_dag`] instead."]
 #[allow(deprecated)]
-pub mod dag_driver; // BLUE42 (deprecated — use core_dag)
+pub mod dag_driver; // BLUE42 / BLUE64: Remove in next major version — use core_dag instead
+#[doc = "Deprecated legacy DAG execution — use [`core_dag`] instead."]
 #[allow(deprecated)]
-pub mod dag_execution; // AUTON-07 (deprecated — use core_dag)
+pub mod dag_execution; // AUTON-07 / BLUE64: Remove in next major version — use core_dag instead
+#[doc = "Deprecated legacy DAG executor — use [`core_dag`] instead."]
 #[allow(deprecated)]
-pub mod dag_executor; // GAP-46-02 (deprecated — use core_dag)
+pub mod dag_executor; // GAP-46-02 / BLUE64: Remove in next major version — use core_dag instead
 #[allow(unused_imports, deprecated)]
 pub use dag_executor::TaskContext; // GAP-B50-05 (deprecated — migrated to core_dag)
 pub mod diagnostic_feedback;

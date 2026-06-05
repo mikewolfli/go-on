@@ -1,0 +1,14 @@
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: go-on-pdb
+  labels:
+    app: go-on
+    component: server
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: go-on
+      component: server

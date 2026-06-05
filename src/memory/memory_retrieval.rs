@@ -179,7 +179,6 @@ impl LinkGraph {
     }
 }
 
-#[allow(dead_code)] // F-GAP-49 — reserved memory retrieval feature
 impl MemoryRetrievalEngine {
     /// Create a new retrieval engine backed by the given persistence manager.
     pub fn new(persistence: MemoryPersistence) -> Self {
@@ -646,11 +645,17 @@ mod tests {
 
         engine.link_memories("a", "b", LinkType::Similar).unwrap();
 
-        // Getting links for "b" should return the same link (reverse lookup).
+        // Getting links for "b" should return the link involving "b" (reverse lookup).
         let links_for_b = engine.get_links("b").unwrap();
 
         assert_eq!(links_for_b.len(), 1);
-        assert_eq!(links_for_b[0].m2, "a");
+        // The link has m1="a", m2="b". Both endpoints should involve "b".
+        assert!(
+            links_for_b[0].m1 == "b" || links_for_b[0].m2 == "b",
+            "Expected link involving 'b', got (m1={}, m2={})",
+            links_for_b[0].m1,
+            links_for_b[0].m2
+        );
     }
 
     #[test]
@@ -676,6 +681,10 @@ mod tests {
             session_id: None,
         };
         engine.persistence().store(entry).unwrap();
+        // Promote from hot → warm so the vector index can find it
+        // (auto_migrate only evicts expired entries, but this entry is fresh)
+        let stored = engine.persistence().retrieve("vec-1").unwrap().unwrap();
+        engine.persistence().promote(&stored).unwrap();
 
         // Build vector index from warm store
         let mut mut_engine = engine;

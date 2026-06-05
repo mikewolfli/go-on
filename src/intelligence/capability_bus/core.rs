@@ -1013,11 +1013,11 @@ impl CapabilityBus {
     // Stage 2: Decision — select agent / strategy
     // ------------------------------------------------------------------
 
-    pub fn decide(&self, task: &TaskContext, sensing: &SensingOutput) -> DecisionOutput {
+    pub async fn decide(&self, task: &TaskContext, sensing: &SensingOutput) -> DecisionOutput {
         let start = Instant::now();
 
         // Step A: HarnessBus policy evaluation (compliance gate)
-        let verdict = self.harness.evaluate(task);
+        let verdict = self.harness.evaluate(task).await;
         match &verdict {
             PolicyVerdict::Deny(v) => {
                 self.record_event(

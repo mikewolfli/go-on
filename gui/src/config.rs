@@ -24,7 +24,7 @@ pub struct AppConfig {
 }
 
 fn default_protocol_mode() -> String {
-    "acp_http".to_string()
+    "adaptive".to_string()
 }
 
 fn default_font_scale() -> f64 {
@@ -202,7 +202,7 @@ impl Default for AppConfig {
             language: "en".to_string(),
             theme: "简约".to_string(),
             font_scale: 1.0,
-            protocol_mode: "acp_http".to_string(),
+            protocol_mode: "adaptive".to_string(),
             ui_stability: UiStabilityConfig::default(),
             features: FeatureToggles::default(),
             enterprise: EnterpriseConfig::default(),
@@ -525,6 +525,165 @@ fn app_config_path() -> PathBuf {
         dirs.config_dir().join("gui_config.json")
     } else {
         PathBuf::from("gui_config.json")
+    }
+}
+
+/// Path for TOML-format config file (new format).
+fn app_config_toml_path() -> PathBuf {
+    if let Some(dirs) = directories::ProjectDirs::from("com", "goon", "go-on-gui") {
+        dirs.config_dir().join("gui_config.toml")
+    } else {
+        PathBuf::from("gui_config.toml")
+    }
+}
+
+/// Save GUI app config to TOML format. Returns true on success, false on failure.
+///
+/// API keys and secret keys are NEVER written to the config file.
+/// They are stored exclusively in the system keyring.
+pub fn save_to_toml(config: &AppConfig) -> bool {
+    let path = app_config_toml_path();
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!(
+                "Failed to create config directory {}: {e}",
+                parent.display()
+            );
+            return false;
+        }
+    }
+    // Clone and redact API keys before serialization to prevent
+    // plaintext secrets from being written to disk.
+    let mut config_for_save = config.clone();
+    for provider in &mut config_for_save.providers {
+        provider.api_key.clear();
+        provider.secret_key.clear();
+    }
+    match toml::to_string_pretty(&config_for_save) {
+        Ok(content) => match std::fs::write(&path, &content) {
+            Ok(_) => true,
+            Err(e) => {
+                eprintln!("Failed to write TOML config to {}: {e}", path.display());
+                false
+            }
+        },
+        Err(e) => {
+            eprintln!("Failed to serialize config to TOML: {e}");
+            false
+        }
+    }
+}
+
+/// Load GUI app config from TOML format (with JSON fallback for backward compatibility).
+///
+/// Prefers `gui_config.toml` over `gui_config.json`. When loading from the old JSON
+/// format, a deprecation warning is logged and the config is automatically migrated
+/// to TOML on save.
+pub fn load_from_toml() -> AppConfig {
+    let toml_path = app_config_toml_path();
+    let json_path = app_config_path();
+
+    // Try TOML first
+    if toml_path.exists() {
+        return load_app_config_inner(Some(&toml_path));
+    }
+
+    // Fall back to JSON with deprecation warning
+    if json_path.exists() {
+        eprintln!(
+            "DEPRECATION WARNING: Loading config from JSON format ({}). ",
+            json_path.display()
+        );
+        eprintln!(
+            "The JSON format is deprecated. Config will be migrated to TOML ({}).",
+            toml_path.display()
+        );
+        let config = load_app_config_inner(Some(&json_path));
+        // Migrate to TOML on load
+        save_to_toml(&config);
+        return config;
+    }
+
+    // No config file exists at all — return defaults
+    AppConfig::default()
+}
+
+/// Inner load: read AppConfig from an optional path. If None, reads from JSON path.
+fn load_app_config_inner(path: Option<&PathBuf>) -> AppConfig {
+    let path = match path {
+        Some(p) => p.clone(),
+        None => app_config_path(),
+    };
+
+    if !path.exists() {
+        return AppConfig::default();
+    }
+
+    let content = std::fs::read_to_string(&path).unwrap_or_default();
+    if content.trim().is_empty() {
+        eprintln!(
+            "WARNING: Config file exists at {} but is empty, using defaults",
+            path.display()
+        );
+        return AppConfig::default();
+    }
+
+    // Try TOML first (if .toml extension), then JSON
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let config: Option<AppConfig> = if ext == "toml" {
+        match toml::from_str(&content) {
+            Ok(cfg) => Some(cfg),
+            Err(e) => {
+                eprintln!(
+                    "ERROR: Failed to parse TOML config file at {}: {e}",
+                    path.display()
+                );
+                None
+            }
+        }
+    } else {
+        match serde_json::from_str(&content) {
+            Ok(cfg) => Some(cfg),
+            Err(e) => {
+                eprintln!(
+                    "ERROR: Failed to parse JSON config file at {}: {e}",
+                    path.display()
+                );
+                None
+            }
+        }
+    };
+
+    match config {
+        Some(mut cfg) => {
+            cfg.ui_stability.clamp_to_sensible_ranges();
+            cfg
+        }
+        None => {
+            eprintln!("Attempting recovery from backup...");
+            let bak_path = if ext == "toml" {
+                path.with_extension("toml.bak")
+            } else {
+                path.with_extension("json.bak")
+            };
+            if let Ok(bak) = std::fs::read_to_string(&bak_path) {
+                let recovered: Option<AppConfig> = if ext == "toml" {
+                    toml::from_str(&bak).ok()
+                } else {
+                    serde_json::from_str(&bak).ok()
+                };
+                if let Some(cfg) = recovered {
+                    eprintln!("Recovered config from backup.");
+                    let _ = std::fs::write(&path, &bak);
+                    return cfg;
+                } else {
+                    eprintln!("Backup also corrupted. Starting with default config.");
+                }
+            } else {
+                eprintln!("No backup found. Starting with default config.");
+            }
+            AppConfig::default()
+        }
     }
 }
 

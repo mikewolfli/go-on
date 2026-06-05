@@ -14,7 +14,6 @@ use std::path::PathBuf;
 
 /// Serialisable snapshot of metacognitive state for disk persistence.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(unused)]
 pub struct MetacognitiveSnapshot {
     pub observations: Vec<ExecutionObservation>,
     pub actions: Vec<CorrectiveAction>,
@@ -24,13 +23,11 @@ pub struct MetacognitiveSnapshot {
 }
 
 /// Handles persisting and restoring metacognitive state across sessions.
-#[allow(unused)]
 pub struct MetacognitivePersistence {
     /// Directory where snapshot files are stored.
     storage_dir: PathBuf,
 }
 
-#[allow(unused)]
 impl MetacognitivePersistence {
     /// Create a new persistence handler rooted at `storage_dir`.
     /// The directory is created if it does not exist.
@@ -122,6 +119,7 @@ impl MetacognitivePersistence {
     }
 
     /// Remove the saved snapshot from disk.
+    #[allow(dead_code)]
     pub fn clear(&self) -> std::io::Result<()> {
         let path = self.snapshot_path();
         if path.exists() {

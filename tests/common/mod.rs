@@ -4,6 +4,7 @@
 //! processes from interfering with shared resources (ports, databases).
 
 use std::fs;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -22,6 +23,9 @@ impl CrossProcessLock {
     ///
     /// Retries every 100ms up to `timeout_secs` seconds. Panics if
     /// the lock cannot be acquired within the timeout.
+    ///
+    /// If a stale lock file from a crashed process is detected (via PID
+    /// aliveness check), it is cleaned up and acquisition retried.
     pub fn new(name: &str, timeout_secs: u64) -> Self {
         let mut lock_path = std::env::temp_dir();
         lock_path.push(format!("go-on-test-{name}.lock"));
@@ -33,13 +37,37 @@ impl CrossProcessLock {
                 .write(true)
                 .open(&lock_path)
             {
-                Ok(file) => {
+                Ok(mut file) => {
+                    // Write our PID to the lock file so other processes
+                    // can detect stale locks from crashed owners.
+                    let _ = write!(file, "{}", std::process::id());
+                    let _ = file.flush();
                     return Self {
                         lock_path,
                         file: Some(file),
                     };
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    // Try to read the PID from the stale lock file.
+                    // If the owner process is gone, remove the stale file
+                    // and retry acquisition.
+                    if let Ok(mut f) = fs::File::open(&lock_path) {
+                        let mut pid_str = String::new();
+                        if f.read_to_string(&mut pid_str).is_ok() {
+                            if let Ok(pid) = pid_str.trim().parse::<u32>() {
+                                if !process_is_alive(pid) {
+                                    tracing::warn!(
+                                        "removing stale lock file from dead PID {}",
+                                        pid
+                                    );
+                                    drop(f);
+                                    let _ = fs::remove_file(&lock_path);
+                                    continue; // retry acquisition
+                                }
+                            }
+                        }
+                    }
+
                     if Instant::now() > deadline {
                         panic!(
                             "could not acquire lock '{}' within {timeout_secs}s \
@@ -56,6 +84,11 @@ impl CrossProcessLock {
             }
         }
     }
+}
+
+/// Check whether a process with the given PID is still alive (Linux-only via /proc).
+fn process_is_alive(pid: u32) -> bool {
+    std::path::Path::new(&format!("/proc/{pid}")).exists()
 }
 
 impl Drop for CrossProcessLock {

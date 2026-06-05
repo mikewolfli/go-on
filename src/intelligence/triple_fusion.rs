@@ -16,11 +16,11 @@ use tokio::sync::Mutex;
 
 /// Configuration for the triple fusion bridge.
 #[derive(Debug, Clone)]
-#[allow(unused)]
 pub struct TripleFusionConfig {
     /// Minimum consciousness awareness threshold before evolution triggers fire.
     pub min_awareness_for_evolution: f64,
     /// How often (in ms) to push metacognitive data into consciousness.
+    #[allow(dead_code)] // TODO: Wire this into a periodic sync task
     pub metacognitive_sync_interval_ms: u64,
     /// Whether to auto-generate evolution triggers from consciousness insights.
     pub auto_evolve_from_reflexion: bool,
@@ -37,7 +37,6 @@ impl Default for TripleFusionConfig {
 }
 
 /// The triple fusion bridge that synchronises data across the three systems.
-#[allow(unused)]
 pub struct TripleFusionBridge {
     config: TripleFusionConfig,
     /// Running count of fusion cycles executed (atomic for interior mutability).
@@ -59,7 +58,6 @@ pub fn global_triple_fusion_bridge() -> &'static Arc<Mutex<TripleFusionBridge>> 
     })
 }
 
-#[allow(unused)]
 impl TripleFusionBridge {
     /// Create a new triple fusion bridge.
     pub fn new(config: TripleFusionConfig) -> Self {
@@ -70,6 +68,7 @@ impl TripleFusionBridge {
     }
 
     /// Returns the number of fusion cycles executed.
+    #[allow(dead_code)] // TODO: Wire into observability/metrics reporting
     pub fn fusion_cycles(&self) -> u64 {
         self.fusion_cycles.load(Ordering::Relaxed)
     }
@@ -88,7 +87,7 @@ impl TripleFusionBridge {
 
         if unresolved_count > 0.0 {
             let awareness_value = (unresolved_count / 20.0).clamp(0.0, 1.0);
-            consciousness.record_metric(
+            let _ = consciousness.record_metric(
                 AwarenessMetricType::EnvironmentalAwareness,
                 awareness_value,
                 0.7,
@@ -101,7 +100,7 @@ impl TripleFusionBridge {
             + (profile.successful_actions as f64 / profile.total_actions_taken.max(1) as f64)
                 * 0.5)
             .clamp(0.0, 1.0);
-        consciousness.record_metric(AwarenessMetricType::MetaAwareness, meta_value, 0.8);
+        let _ = consciousness.record_metric(AwarenessMetricType::MetaAwareness, meta_value, 0.8);
     }
 
     /// Phase 2: Convert Consciousness reflexion insights into Evolution triggers.
@@ -149,6 +148,7 @@ impl TripleFusionBridge {
     ///
     /// Records the evolution outcome as a corrective result so the metacognitive
     /// system can learn from past evolution attempts.
+    #[allow(dead_code)] // TODO: Wire to EvolutionLoop completion callback
     pub fn record_evolution_outcome(
         &self,
         metacognitive: &MetacognitiveController,

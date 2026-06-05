@@ -59,82 +59,75 @@ pub fn validate_output_schema(output: &str, expected_schema: &Value) -> Result<(
 /// Recursively validate `json` against `schema` (a simplified JSON schema
 /// representation supporting `type`, `properties`, `items`, and `required`).
 fn validate_json_schema(json: &Value, schema: &Value, errors: &mut Vec<String>, path: &str) {
-    match schema {
-        Value::Object(map) => {
-            // Check type constraint
-            if let Some(expected_type) = map.get("type").and_then(|t| t.as_str()) {
-                let actual = match json {
-                    Value::Null => "null",
-                    Value::Bool(_) => "boolean",
-                    Value::Number(_) => "number",
-                    Value::String(_) => "string",
-                    Value::Array(_) => "array",
-                    Value::Object(_) => "object",
-                };
-                if actual != expected_type
-                    && !(expected_type == "number" && matches!(json, Value::Number(_)))
-                {
-                    errors.push(format!(
-                        "{}: expected type '{}', got '{}'",
-                        path, expected_type, actual
-                    ));
-                }
-            }
-
-            // Check properties (object)
-            if let Some(properties) = map.get("properties").and_then(|p| p.as_object()) {
-                if let Value::Object(obj) = json {
-                    for (key, prop_schema) in properties {
-                        let child_path = format!("{}.{}", path, key);
-                        let value = obj.get(key);
-                        if let Some(val) = value {
-                            validate_json_schema(val, prop_schema, errors, &child_path);
-                        } else if let Some(required) =
-                            map.get("required").and_then(|r| r.as_array())
-                        {
-                            if required.iter().any(|r| r.as_str() == Some(key)) {
-                                errors.push(format!("{}: missing required field", child_path));
-                            }
-                        }
-                    }
-                } else if !json.is_null()
-                    && map.get("type").and_then(|t| t.as_str()) != Some("null")
-                {
-                    errors.push(format!(
-                        "{}: expected object, got {}",
-                        path,
-                        json_type_name(json)
-                    ));
-                }
-            }
-
-            // Check items (array)
-            if let Some(item_schema) = map.get("items") {
-                if let Value::Array(arr) = json {
-                    for (i, item) in arr.iter().enumerate() {
-                        let child_path = format!("{}[{}]", path, i);
-                        validate_json_schema(item, item_schema, errors, &child_path);
-                    }
-                } else if !json.is_null() {
-                    errors.push(format!(
-                        "{}: expected array, got {}",
-                        path,
-                        json_type_name(json)
-                    ));
-                }
-            }
-
-            // Check enum constraint
-            if let Some(enum_values) = map.get("enum").and_then(|e| e.as_array()) {
-                if !json.is_null() && !enum_values.contains(json) {
-                    errors.push(format!(
-                        "{}: value {} is not one of the allowed enum values",
-                        path, json
-                    ));
-                }
+    if let Value::Object(map) = schema {
+        // Check type constraint
+        if let Some(expected_type) = map.get("type").and_then(|t| t.as_str()) {
+            let actual = match json {
+                Value::Null => "null",
+                Value::Bool(_) => "boolean",
+                Value::Number(_) => "number",
+                Value::String(_) => "string",
+                Value::Array(_) => "array",
+                Value::Object(_) => "object",
+            };
+            if actual != expected_type
+                && !(expected_type == "number" && matches!(json, Value::Number(_)))
+            {
+                errors.push(format!(
+                    "{}: expected type '{}', got '{}'",
+                    path, expected_type, actual
+                ));
             }
         }
-        _ => {}
+
+        // Check properties (object)
+        if let Some(properties) = map.get("properties").and_then(|p| p.as_object()) {
+            if let Value::Object(obj) = json {
+                for (key, prop_schema) in properties {
+                    let child_path = format!("{}.{}", path, key);
+                    let value = obj.get(key);
+                    if let Some(val) = value {
+                        validate_json_schema(val, prop_schema, errors, &child_path);
+                    } else if let Some(required) = map.get("required").and_then(|r| r.as_array()) {
+                        if required.iter().any(|r| r.as_str() == Some(key)) {
+                            errors.push(format!("{}: missing required field", child_path));
+                        }
+                    }
+                }
+            } else if !json.is_null() && map.get("type").and_then(|t| t.as_str()) != Some("null") {
+                errors.push(format!(
+                    "{}: expected object, got {}",
+                    path,
+                    json_type_name(json)
+                ));
+            }
+        }
+
+        // Check items (array)
+        if let Some(item_schema) = map.get("items") {
+            if let Value::Array(arr) = json {
+                for (i, item) in arr.iter().enumerate() {
+                    let child_path = format!("{}[{}]", path, i);
+                    validate_json_schema(item, item_schema, errors, &child_path);
+                }
+            } else if !json.is_null() {
+                errors.push(format!(
+                    "{}: expected array, got {}",
+                    path,
+                    json_type_name(json)
+                ));
+            }
+        }
+
+        // Check enum constraint
+        if let Some(enum_values) = map.get("enum").and_then(|e| e.as_array()) {
+            if !json.is_null() && !enum_values.contains(json) {
+                errors.push(format!(
+                    "{}: value {} is not one of the allowed enum values",
+                    path, json
+                ));
+            }
+        }
     }
 }
 
@@ -142,7 +135,7 @@ fn validate_json_schema(json: &Value, schema: &Value, errors: &mut Vec<String>, 
 /// Reports issues such as unclosed code fences.
 pub fn validate_code_blocks(output: &str, errors: &mut Vec<String>) {
     let code_fence_count = output.matches("```").count();
-    if code_fence_count % 2 != 0 {
+    if !code_fence_count.is_multiple_of(2) {
         errors.push(format!(
             "markdown has an odd number ({}): code fence ``` is unclosed",
             code_fence_count

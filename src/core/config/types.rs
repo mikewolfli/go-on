@@ -180,6 +180,9 @@ pub struct ProviderSpec {
     pub recommended_delivery_request_timeout_seconds: Option<u64>,
 }
 
+// TODO-BLUE64: Add builder pattern for ProviderSpec (31 fields) to simplify
+// construction with sensible defaults and avoid repetitive `Option` wrapping.
+
 impl ProviderSpec {
     /// Returns whether this provider supports vision/image inputs.
     #[allow(dead_code)] // F-GAP-49 — reserved for multi-modal capability checks
@@ -320,6 +323,12 @@ pub struct RuntimeConfig {
     /// BLUE42 Step 8: Enable metacognitive + world-model feedback hooks (default: true)
     #[serde(default = "super::defaults::default_true")]
     pub enable_metacognitive_feedback: bool,
+
+    /// BLUE48: Enable Delphi-method debate voting in rationalize_decision.
+    /// When enabled, `rationalize_decision` calls `consensus_vote_with_reputation`
+    /// for weighted reputation + Delphi debate before applying standard checks.
+    #[serde(default)]
+    pub enable_delphi_debate: bool,
 
     // ── Security (GAP-B52) ───────────────────────────────────────────────
     /// Enable request signature verification for incoming JSON-RPC requests.

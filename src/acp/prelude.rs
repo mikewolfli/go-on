@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant};
+use tokio::sync::Mutex as TokioMutex;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -308,6 +309,25 @@ where
             operation(&mut guard)
         }
     }
+}
+
+/// Acquire a `tokio::sync::Mutex` with lock monitoring (async version).
+///
+/// Records wait time and handles poisoning (tokio mutexes do not poison, but
+/// the interface is kept for consistency).
+pub async fn with_acp_lock_async<T, R, F>(
+    monitor: &AcpLockMonitor,
+    name: &'static str,
+    mutex: &TokioMutex<T>,
+    operation: F,
+) -> R
+where
+    F: FnOnce(&mut T) -> R,
+{
+    let wait_started = Instant::now();
+    let mut guard = mutex.lock().await;
+    monitor.record_wait(name, wait_started.elapsed());
+    operation(&mut guard)
 }
 
 /// Metrics snapshot

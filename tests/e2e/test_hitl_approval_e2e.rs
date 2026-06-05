@@ -158,13 +158,13 @@ async fn test_hitl_approval_auto_deny_on_timeout() {
         timestamp_ms: 0,
     };
     assert!(auto_denied.is_finalized(), "auto-denied must be finalized");
-    assert_eq!(
+    assert!(
         ApprovalStatus::AutoDenied {
             reason: "x".into(),
             timestamp_ms: 1
         }
         .is_finalized(),
-        true
+        "AutoDenied must be finalized"
     );
 
     // Verify timeout policy defaults (captured before move into engine).

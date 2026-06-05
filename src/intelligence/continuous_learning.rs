@@ -6,6 +6,7 @@
 //!
 //! All mutable state is guarded behind `Arc<Mutex<>>`.
 
+use crate::agents::agent::{Agent, Message, StreamingSender};
 use crate::i18n::{t, tf};
 use crate::intelligence::now_ms;
 use std::collections::{HashMap, HashSet};
@@ -265,10 +266,32 @@ pub struct ContinuousLearningProfile {
 /// The central coordinator for lifelong learning, guarding task management,
 /// memory consolidation, forgetting-curve tracking, and curriculum scheduling
 /// behind a thread-safe `Arc<Mutex<>>`.
-#[derive(Debug, Clone)]
 pub struct ContinuousLearningCenter {
     config: ContinuousLearningConfig,
     state: Arc<Mutex<CenterState>>,
+    /// Optional agent used for LLM-based semantic distillation.
+    /// When `None`, TF-IDF keyword extraction is used as a fallback.
+    agent: Option<Arc<dyn Agent>>,
+}
+
+impl std::fmt::Debug for ContinuousLearningCenter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ContinuousLearningCenter")
+            .field("config", &self.config)
+            .field("state", &self.state)
+            .field("agent", &self.agent.as_ref().map(|_| "<agent>"))
+            .finish()
+    }
+}
+
+impl Clone for ContinuousLearningCenter {
+    fn clone(&self) -> Self {
+        Self {
+            config: self.config.clone(),
+            state: Arc::clone(&self.state),
+            agent: self.agent.clone(),
+        }
+    }
 }
 
 /// Internal mutable state held by the centre.
@@ -318,7 +341,14 @@ impl ContinuousLearningCenter {
                 next_memory_id: 1,
                 next_pattern_id: 1,
             })),
+            agent: None,
         }
+    }
+
+    /// Set the agent used for LLM-based semantic distillation.
+    pub fn with_agent(mut self, agent: Arc<dyn Agent>) -> Self {
+        self.agent = Some(agent);
+        self
     }
 
     // ── Task management ────────────────────────────────────────────────────
@@ -454,17 +484,170 @@ impl ContinuousLearningCenter {
 
     // ── LLM Distillation ───────────────────────────────────────────────────
 
-    /// Distills consolidated memories into semantic patterns using TF-IDF-like
-    /// keyword extraction.
+    /// Distills consolidated memories into semantic patterns.
     ///
-    /// This simulates an LLM distillation step: it analyzes stored memories,
-    /// extracts salient keywords via term-frequency / inverse-document-frequency
-    /// scoring, and persists the resulting `SemanticPattern`s into the store.
+    /// When an LLM agent is configured (`self.agent` is `Some`), uses the
+    /// agent's chat endpoint to perform semantic pattern extraction via a
+    /// structured prompt.  Otherwise falls back to TF-IDF keyword extraction.
     ///
     /// Returns the number of new patterns extracted.
     pub fn llm_distill(&self) -> usize {
-        let patterns = self.extract_semantic_patterns();
-        patterns.len()
+        if let Some(ref agent) = self.agent {
+            // LLM-based distillation — collect all memories and ask the agent
+            // to extract semantic patterns.
+            let memory_snapshots: Vec<String> = {
+                let state = lock_guard(&self.state);
+                state
+                    .memories
+                    .values()
+                    .map(|m| format!("ID={}: {}", m.pattern_key, m.data))
+                    .collect()
+            };
+
+            if memory_snapshots.is_empty() {
+                return 0;
+            }
+
+            let prompt = format!(
+                r#"You are a semantic pattern extractor. Analyse the following consolidated
+memories and extract up to 5 distinct semantic patterns.
+
+For each pattern, return a JSON object with these fields:
+- "keywords": array of 3-5 representative keywords
+- "confidence": float between 0.0 and 1.0
+- "frequency": integer count (how many memories match this pattern)
+
+Return ONLY a JSON array, no markdown or other text.
+
+Memories:
+---
+{}
+---"#,
+                memory_snapshots.join("\n")
+            );
+
+            let messages = vec![
+                Message {
+                    role: "system".to_string(),
+                    content: "You are a semantic pattern extraction assistant.".to_string(),
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: prompt,
+                },
+            ];
+
+            // Collect streamed response.
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(64);
+            let sender = StreamingSender::new(tx);
+
+            let result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                tokio::task::block_in_place(|| {
+                    handle.block_on(async { agent.chat(messages, None, None, sender).await })
+                })
+            } else {
+                return 0;
+            };
+
+            if result.is_err() {
+                tracing::warn!("continuous_learning: LLM distillation chat failed");
+                return 0;
+            }
+
+            // Collect all streamed tokens into one response string.
+            let response = tokio::task::block_in_place(|| {
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    handle.block_on(async {
+                        let mut buf = String::new();
+                        while let Some(token) = rx.recv().await {
+                            buf.push_str(&token);
+                        }
+                        buf
+                    })
+                } else {
+                    String::new()
+                }
+            });
+
+            if response.is_empty() {
+                return 0;
+            }
+
+            // Parse the LLM response as JSON array of patterns.
+            let cleaned = response
+                .trim()
+                .strip_prefix("```json")
+                .or_else(|| response.trim().strip_prefix("```"))
+                .and_then(|s| s.strip_suffix("```"))
+                .unwrap_or(response.trim());
+
+            let llm_patterns: Vec<serde_json::Value> = match serde_json::from_str(cleaned) {
+                Ok(v) => v,
+                Err(_) => {
+                    // Try to find a JSON array anywhere in the response
+                    if let Some(start) = cleaned.find('[') {
+                        if let Some(end) = cleaned[start..].rfind(']') {
+                            let sub = &cleaned[start..=start + end];
+                            serde_json::from_str(sub).unwrap_or_default()
+                        } else {
+                            Vec::new()
+                        }
+                    } else {
+                        Vec::new()
+                    }
+                }
+            };
+
+            // Persist the LLM-extracted patterns.
+            let mut state = lock_guard(&self.state);
+            let mut count = 0usize;
+            for p in &llm_patterns {
+                let keywords: Vec<String> = p
+                    .get("keywords")
+                    .and_then(|k| k.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                if keywords.is_empty() {
+                    continue;
+                }
+
+                let confidence = p
+                    .get("confidence")
+                    .and_then(|c| c.as_f64())
+                    .unwrap_or(0.5)
+                    .clamp(0.0, 1.0);
+
+                let frequency = p
+                    .get("frequency")
+                    .and_then(|f| f.as_u64())
+                    .unwrap_or(1)
+                    .max(1) as usize;
+
+                let pattern = SemanticPattern {
+                    pattern_id: format!("pat-{}-llm", state.next_pattern_id),
+                    keywords,
+                    confidence,
+                    frequency,
+                };
+
+                state.next_pattern_id += 1;
+                state
+                    .semantic_patterns
+                    .insert(pattern.pattern_id.clone(), pattern);
+                count += 1;
+            }
+
+            count
+        } else {
+            // No agent — fall back to TF-IDF keyword extraction.
+            let patterns = self.extract_semantic_patterns();
+            patterns.len()
+        }
     }
 
     /// Analyzes all stored memories and extracts semantic patterns using
@@ -669,6 +852,11 @@ impl ContinuousLearningCenter {
     /// struggling agents get a higher (easier) threshold.
     pub fn compute_adaptive_threshold(&self, agent: &str) -> f64 {
         let state = lock_guard(&self.state);
+        Self::compute_adaptive_threshold_impl(&state, agent)
+    }
+
+    /// Inner implementation that takes the state by reference (no locking).
+    fn compute_adaptive_threshold_impl(state: &CenterState, agent: &str) -> f64 {
         let history = state.agent_history.get(agent);
         let history = match history {
             Some(h) if !h.is_empty() => h,
@@ -719,7 +907,7 @@ impl ContinuousLearningCenter {
 
         // Apply adaptive mastery threshold based on agent performance.
         let mut stage = state.curriculum[0].clone();
-        stage.mastery_threshold = self.compute_adaptive_threshold(agent);
+        stage.mastery_threshold = Self::compute_adaptive_threshold_impl(&state, agent);
         Ok(stage)
     }
 

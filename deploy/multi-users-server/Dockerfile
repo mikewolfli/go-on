@@ -13,6 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY Cargo.toml Cargo.lock* ./
 COPY config/ config/
+COPY contracts/ contracts/
+COPY RULES/ RULES/
 COPY languages/ languages/
 COPY prompts/ prompts/
 COPY src/ src/

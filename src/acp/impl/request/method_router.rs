@@ -53,8 +53,8 @@ impl MethodRouter {
 
     /// Find a handler for the given method (synchronous lookup, no lock held).
     #[allow(dead_code)] // F-GAP reserved
-    pub fn find_handler(&self, method: &str) -> Option<&Box<dyn MethodHandler>> {
-        self.handlers.get(method)
+    pub fn find_handler(&self, method: &str) -> Option<&dyn MethodHandler> {
+        self.handlers.get(method).map(Box::as_ref)
     }
 
     /// Dispatch to a registered handler.

@@ -105,6 +105,10 @@ impl CacheEntry {
 ///
 /// Routes lookup requests through L1 → L2 → L3, tracks hit rates per level,
 /// and reports savings statistics.
+///
+/// Supports optional per-request token budget enforcement: when a maximum budget
+/// is configured via [`set_token_budget`](Self::set_token_budget), any request
+/// whose token count exceeds the remaining budget is rejected.
 pub struct TokenMultiLevelCache {
     /// L1: Exact-match cache
     pub l1: RwLock<L1ExactCache>,
@@ -116,10 +120,18 @@ pub struct TokenMultiLevelCache {
     pub stats: RwLock<TokenCacheStats>,
     /// Whether the cache is enabled
     pub enabled: RwLock<bool>,
+    /// Optional per-request token budget (0 = unlimited).
+    max_token_budget: RwLock<usize>,
+    /// Remaining budget for the current period.
+    remaining_budget: RwLock<usize>,
 }
 
 impl TokenMultiLevelCache {
     /// Create a new multi-level cache with default capacities.
+    ///
+    /// The token budget is initialised to 0 (unlimited).  Call
+    /// [`set_token_budget`](Self::set_token_budget) after construction
+    /// to enable per-request enforcement.
     pub fn new(l1_capacity: usize, l2_capacity: usize, l3_store_path: &str) -> Self {
         Self {
             l1: RwLock::new(L1ExactCache::new(l1_capacity)),
@@ -127,7 +139,61 @@ impl TokenMultiLevelCache {
             l3: RwLock::new(L3TemplateCache::new(l3_store_path)),
             stats: RwLock::new(TokenCacheStats::default()),
             enabled: RwLock::new(true),
+            max_token_budget: RwLock::new(0),
+            remaining_budget: RwLock::new(0),
         }
+    }
+
+    /// Set the maximum token budget for a period.  Pass `0` to disable
+    /// budget enforcement (unlimited).
+    pub async fn set_token_budget(&self, max: usize) {
+        *self.max_token_budget.write().await = max;
+        *self.remaining_budget.write().await = max;
+    }
+
+    /// Returns the remaining token budget.  `0` means either unlimited
+    /// (when `max_budget` is also 0) or exhausted.
+    pub async fn remaining_budget(&self) -> usize {
+        *self.remaining_budget.read().await
+    }
+
+    /// Returns the configured maximum token budget (`0` = unlimited).
+    pub async fn max_token_budget(&self) -> usize {
+        *self.max_token_budget.read().await
+    }
+
+    /// Check whether the requested token count fits within the remaining
+    /// budget.  Returns `Ok(())` if the budget is unlimited or sufficient,
+    /// or `Err(remaining)` if the request exceeds the available budget.
+    pub async fn check_budget(&self, requested: usize) -> Result<(), usize> {
+        let max = *self.max_token_budget.read().await;
+        if max == 0 {
+            return Ok(()); // unlimited
+        }
+        let remaining = *self.remaining_budget.read().await;
+        if requested <= remaining {
+            Ok(())
+        } else {
+            Err(remaining)
+        }
+    }
+
+    /// Deduct `consumed` tokens from the remaining budget (only when
+    /// a positive budget is configured).  If the budget would go below
+    /// zero, it is clamped to zero.
+    pub async fn deduct_budget(&self, consumed: usize) {
+        let max = *self.max_token_budget.read().await;
+        if max == 0 {
+            return;
+        }
+        let mut remaining = self.remaining_budget.write().await;
+        *remaining = remaining.saturating_sub(consumed);
+    }
+
+    /// Reset the remaining budget to the configured maximum.
+    pub async fn reset_budget(&self) {
+        let max = *self.max_token_budget.read().await;
+        *self.remaining_budget.write().await = max;
     }
 
     /// Look up a cache entry by input text.
@@ -993,6 +1059,22 @@ impl Agent for CachedAgentWrapper {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
+        // --- Budget enforcement ---
+        // Reject the request if it exceeds the remaining token budget.
+        if let Err(remaining) = self.cache.check_budget(estimated_tokens).await {
+            tracing::warn!(
+                target = "token_cache",
+                estimated_tokens,
+                remaining,
+                "CachedAgentWrapper: request exceeds remaining token budget"
+            );
+            return Err(crate::core::error::AppError::Proxy(
+                crate::core::error::ProxyError::Internal(format!(
+                    "Token budget exceeded: requested {estimated_tokens}, remaining {remaining}"
+                )),
+            ));
+        }
+
         // --- Cache lookup ---
         if let Some((level, entry)) = self.cache.lookup(&input_text, context_class).await {
             tracing::debug!(
@@ -1058,8 +1140,12 @@ impl Agent for CachedAgentWrapper {
         // Collect the full response (channel is drained by the collect task).
         let output = collect_handle.await.unwrap_or_default();
 
-        // --- Store result in cache asynchronously ---
         let token_count = estimate_token_count(&output);
+
+        // --- Deduct tokens from budget ---
+        self.cache.deduct_budget(token_count).await;
+
+        // --- Store result in cache asynchronously ---
         let cache = self.cache.clone();
         let input_text = input_text.clone();
         tokio::spawn(async move {

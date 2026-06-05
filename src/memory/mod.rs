@@ -30,13 +30,13 @@ pub mod vector_index;
 //           let router = MemoryRetrievalRouter::new(engine);
 //           builder = builder.with_memory_retrieval(Arc::new(router));
 
-/// Create a `MemoryRetrievalEngine` wired for future server injection.
-/// This is a placeholder for the server startup path — once the server
-/// carries a `MemoryRetrievalEngine` field, call this during build.
+/// Create a `MemoryRetrievalEngine` wired for server injection.
 ///
-/// When to call: when `ServerBuilder` gains a `memory_retrieval_engine` field,
-/// invoke this function during the build step to create and inject the engine.
-#[allow(dead_code)] // Reserved—wired via ServerBuilder
+/// Called from `ServerBuilder::build()` when a `memory_persistence` is
+/// configured but no explicit `memory_retrieval_engine` has been set.
+/// Build and wire a MemoryRetrievalEngine from an existing MemoryPersistence.
+/// TODO-BLUE64: Wire into production server builder path.
+#[allow(dead_code)]
 pub fn wire_memory_retrieval(
     persistence: crate::memory::memory_persistence::MemoryPersistence,
 ) -> crate::memory::memory_retrieval::MemoryRetrievalEngine {

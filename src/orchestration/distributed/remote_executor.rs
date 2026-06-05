@@ -47,7 +47,6 @@ pub enum RemoteExecutionError {
 // ---------------------------------------------------------------------------
 
 /// Unique identifier for a distributed node.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NodeId(pub String);
 
@@ -82,7 +81,6 @@ impl std::borrow::Borrow<String> for NodeId {
 }
 
 /// Unique identifier for a DAG instance.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DagId(pub String);
 
@@ -120,7 +118,6 @@ impl std::borrow::Borrow<String> for DagId {
 // TaskPacket
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskPacket {
     /// The target node ID to execute on.
@@ -169,7 +166,6 @@ impl TaskPacket {
 // NodeOutput
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeOutput {
     /// The node ID that produced this output.
@@ -235,7 +231,6 @@ impl NodeOutput {
 // NodeCapabilities
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeCapabilities {
     pub node_id: NodeId,
@@ -271,7 +266,6 @@ impl NodeCapabilities {
 // NodeRegistration
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeRegistration {
     pub node_id: NodeId,
@@ -281,7 +275,6 @@ pub struct NodeRegistration {
     pub registered_at_ms: u64,
 }
 
-#[allow(dead_code)]
 impl NodeRegistration {
     pub fn new(
         node_id: NodeId,
@@ -309,8 +302,8 @@ impl NodeRegistration {
 // ---------------------------------------------------------------------------
 
 /// Trait for executing tasks on remote nodes.
-#[async_trait::async_trait]
 #[allow(dead_code)]
+#[async_trait::async_trait]
 pub trait RemoteExecutor: Send + Sync {
     /// Execute a task packet on a remote node and return the output.
     async fn execute_remote(&self, packet: TaskPacket) -> Result<NodeOutput, RemoteExecutionError>;
@@ -639,7 +632,6 @@ impl RemoteExecutor for GrpcRemoteExecutor {
 // Helpers
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
 fn current_timestamp_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -658,18 +650,19 @@ mod tests {
     #[tokio::test]
     async fn test_in_process_executor() {
         let registry = Arc::new(NodeRegistry::new());
-        let tool_registry = Arc::new(ToolRegistry::new_empty());
+        // Use default tool registry which includes shell_exec tool
+        let tool_registry = Arc::new(ToolRegistry::new());
         let executor = InProcessRemoteExecutor::new(registry.clone(), tool_registry);
 
-        let caps = NodeCapabilities::new("node-1".into(), vec!["shell".into()]);
+        let caps = NodeCapabilities::new("node-1".into(), vec!["shell_exec".into()]);
         let reg = NodeRegistration::new("node-1".into(), "127.0.0.1".into(), 9000, caps);
         executor.register_node(reg).await.unwrap();
 
         let packet = TaskPacket::new(
             "node-1".into(),
             "dag-1".into(),
-            "shell".into(),
-            serde_json::json!({"cmd": "echo hello"}),
+            "shell_exec".into(),
+            serde_json::json!({"command": "echo hello"}),
         );
 
         let output = executor.execute_remote(packet).await.unwrap();

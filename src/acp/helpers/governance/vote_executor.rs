@@ -393,22 +393,17 @@ pub(crate) async fn execute_high_risk_vote(
 
 /// Voting mode for the upgraded high-risk vote executor.
 #[allow(dead_code)] // F-GAP reserved
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum VoteMode {
     /// Original count-based voting with reputation tiebreaker (default).
     Legacy,
     /// Weighted reputation voting — each candidate's response vote is
     /// weighted by the agent's reputation score from the reputation store.
+    #[default]
     Weighted,
     /// Delphi-method debate rounds (requires async re-vote callback).
     /// Falls back to Weighted if the callback is not provided.
     DelphiDebate,
-}
-
-impl Default for VoteMode {
-    fn default() -> Self {
-        Self::Weighted
-    }
 }
 
 /// Configuration for the upgraded voting executor.

@@ -1,0 +1,7 @@
+{
+  "spec": "out/test/suite/**/*.test.js",
+  "timeout": 10000,
+  "ui": "tdd",
+  "reporter": "spec",
+  "require": "./scripts/test-setup.js"
+}

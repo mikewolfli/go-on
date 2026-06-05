@@ -1554,10 +1554,10 @@ mod tests {
         let low_task = make_task("low-prio", "role", 1, 10.0);
         scheduler.submit(low_task).unwrap();
 
-        // Simulate aging
+        // Simulate aging (0.5 seconds to keep bonus below 99 so high-prio still wins)
         {
             let mut last = scheduler.last_aging.lock().unwrap();
-            *last = Instant::now() - Duration::from_secs(10);
+            *last = Instant::now() - Duration::from_millis(500);
         }
         scheduler.apply_aging();
 

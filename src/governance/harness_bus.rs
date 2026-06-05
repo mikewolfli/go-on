@@ -59,6 +59,7 @@ use crate::governance::security_governor::{
     PolicyCondition, PolicySeverity, SecurityGovernor, SecurityGovernorConfig, SecurityPolicy,
 };
 use crate::orchestration::artifact::{ArtifactLayer, ArtifactProfile};
+#[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
 use crate::orchestration::brain_loop::{BrainLoop, BrainLoopConfig, BrainLoopProfile};
 use crate::orchestration::omnipotent::{OmnipotentMode, OmnipotentProfile};
 use crate::orchestration::promotion_plugin::PromotionRegistry;
@@ -79,8 +80,9 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 
 // ---------------------------------------------------------------------------
 // Policy definitions
@@ -505,20 +507,11 @@ const MAX_AUDIT_ENTRIES: usize = 10_000;
 /// HarnessAuditTrail — in-memory audit log for governance events.
 ///
 /// Optionally delegates to a HashChainAuditor for tamper-evident persistence.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct HarnessAuditTrail {
     pub entries: Vec<AuditEntry>,
     /// Optional hash-chain auditor for tamper-evident disk persistence.
     pub hash_chain: Option<Arc<Mutex<crate::security::audit_integrity::HashChainAuditor>>>,
-}
-
-impl Default for HarnessAuditTrail {
-    fn default() -> Self {
-        Self {
-            entries: Vec::new(),
-            hash_chain: None,
-        }
-    }
 }
 
 impl HarnessAuditTrail {
@@ -535,21 +528,20 @@ impl HarnessAuditTrail {
 
         // Delegate to hash-chain auditor for tamper-evident persistence.
         if let Some(ref hash_chain) = self.hash_chain {
-            if let Ok(mut guard) = hash_chain.lock() {
-                let payload = serde_json::json!({
-                    "timestamp": entry.timestamp,
-                    "request_id": entry.request_id,
-                    "stage": entry.stage,
-                    "verdict": entry.verdict,
-                    "dispatch_policy": entry.dispatch_policy,
-                    "execution_policy": entry.execution_policy,
-                    "governance_policy": entry.governance_policy,
-                    "violations": entry.violations,
-                    "context_snapshot": entry.context_snapshot,
-                });
-                if let Err(e) = guard.append(payload) {
-                    tracing::warn!(error = %e, "Failed to append to hash-chain auditor");
-                }
+            let mut guard = hash_chain.blocking_lock();
+            let payload = serde_json::json!({
+                "timestamp": entry.timestamp,
+                "request_id": entry.request_id,
+                "stage": entry.stage,
+                "verdict": entry.verdict,
+                "dispatch_policy": entry.dispatch_policy,
+                "execution_policy": entry.execution_policy,
+                "governance_policy": entry.governance_policy,
+                "violations": entry.violations,
+                "context_snapshot": entry.context_snapshot,
+            });
+            if let Err(e) = guard.append(payload) {
+                tracing::warn!(error = %e, "Failed to append to hash-chain auditor");
             }
         }
     }
@@ -628,7 +620,7 @@ pub struct PolicyEvaluator {
     pub execution: ExecutionPolicy,
     pub governance: GovernancePolicy,
     pub rule_engine: Arc<Mutex<PuaRuleEngine>>,
-    pub sandbox_level: Arc<Mutex<SandboxLevel>>,
+    pub sandbox_level: Arc<std::sync::Mutex<SandboxLevel>>,
     pub budget: Arc<Mutex<BudgetTracker>>,
     pub idempotency: Arc<Mutex<IdempotencyCache>>,
     pub runtime_control: Arc<Mutex<OnlineControllerState>>,
@@ -643,7 +635,7 @@ pub struct PolicyEvaluator {
 impl PolicyEvaluator {
     pub fn new(
         rule_engine: Arc<Mutex<PuaRuleEngine>>,
-        sandbox_level: Arc<Mutex<SandboxLevel>>,
+        sandbox_level: Arc<std::sync::Mutex<SandboxLevel>>,
         budget: Arc<Mutex<BudgetTracker>>,
         idempotency: Arc<Mutex<IdempotencyCache>>,
         runtime_control: Arc<Mutex<OnlineControllerState>>,
@@ -763,10 +755,7 @@ impl PolicyEvaluator {
         }
 
         // 1. Red-line check (hard block)
-        let engine = self.rule_engine.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!(target: "harness_bus", "rule_engine Mutex poisoned – recovering");
-            poisoned.into_inner()
-        });
+        let engine = self.rule_engine.blocking_lock();
         if let Err(violation) = engine.check_red_lines(&format!("{:?}", ctx.task_type)) {
             return PolicyVerdict::Deny(PolicyViolation {
                 kind: "red_line".to_string(),
@@ -782,10 +771,7 @@ impl PolicyEvaluator {
         }
 
         // 3. Budget check (hard limit)
-        let budget = self.budget.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!(target: "harness_bus", "budget Mutex poisoned – recovering");
-            poisoned.into_inner()
-        });
+        let budget = self.budget.blocking_lock();
         if let Err(_err) = budget.check_wall_clock() {
             return PolicyVerdict::Deny(PolicyViolation {
                 kind: "budget".to_string(),
@@ -796,10 +782,7 @@ impl PolicyEvaluator {
         // 4. Runtime control check (adaptive sliding window / P95 / UCB)
         // NOTE: lock is acquired once here and reused at step 8 to avoid
         // deadlock from ordering with guard/security_governor locks acquired below.
-        let mut runtime_ctrl = Some(self.runtime_control.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!(target: "harness_bus", "runtime_control Mutex poisoned – recovering");
-            poisoned.into_inner()
-        }));
+        let mut runtime_ctrl = Some(self.runtime_control.blocking_lock());
         if let Some(ref mut ctrl) = runtime_ctrl {
             if ctrl.should_escalate() {
                 // Record the escalation for adaptive control metrics
@@ -871,10 +854,7 @@ impl PolicyEvaluator {
         }
 
         // 6. Self-rationalization guard (low confidence check)
-        let mut guard = self.guard.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!(target: "harness_bus", "guard Mutex poisoned – recovering");
-            poisoned.into_inner()
-        });
+        let mut guard = self.guard.blocking_lock();
         let mut annotation = RationalizationAnnotation::default();
         if guard.evaluate(&mut annotation, ctx.risk_score as f32, false) {
             return PolicyVerdict::Review(ReviewReason {
@@ -977,17 +957,12 @@ impl PolicyEvaluator {
 
     /// Pre-tool-call validation.
     pub fn check_tool_call(&self, tool: &str, _args: &Value) -> ToolVerdict {
-        let level = self
-            .sandbox_level
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!(target: "harness_bus", "sandbox_level Mutex poisoned – recovering");
-                poisoned.into_inner()
-            })
-            .clone();
+        let level = *self.sandbox_level.lock().unwrap();
         let allowed = match tool {
             // Read-only file operations
             "read_file" | "search_files" | "inspect_git_diff"
+            // Phase execution actions — internal orchestration, treated as read
+            | "chat.execute"
             // MCP diagnostic/read-only tools — treated as read operations
             // since they query internal state without side effects
             | "acp_trace_get"
@@ -1013,22 +988,8 @@ impl PolicyEvaluator {
             }
             _ => false,
         };
-        let idempotent = self
-            .idempotency
-            .lock()
-            .map(|cache| cache.get(tool).is_some())
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!(target: "harness_bus", "idempotency Mutex poisoned – recovering");
-                poisoned.into_inner().get(tool).is_some()
-            });
-        let budget_ok = self
-            .budget
-            .lock()
-            .map(|mut b| b.record_tool_call().is_ok())
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!(target: "harness_bus", "budget Mutex poisoned – recovering");
-                poisoned.into_inner().record_tool_call().is_ok()
-            });
+        let idempotent = self.idempotency.blocking_lock().get(tool).is_some();
+        let budget_ok = self.budget.blocking_lock().record_tool_call().is_ok();
         let permitted = self.check_permission(tool, _args);
         ToolVerdict {
             allowed,
@@ -1045,17 +1006,13 @@ impl PolicyEvaluator {
 
         // Collect evidence and find missing checks in a single lock acquisition
         // to avoid TOCTOU between the two engine queries.
-        let (evidence, _missing) = match self.rule_engine.lock() {
-            Ok(engine) => {
-                let evidence = engine.collect_evidence(stage);
-                let missing = engine.collect_missing(stage, &completed);
-                (evidence, missing)
-            }
-            Err(_) => (Vec::new(), Vec::new()),
-        };
+        let engine = self.rule_engine.blocking_lock();
+        let evidence = engine.collect_evidence(stage);
+        let missing = engine.collect_missing(stage, &completed);
+        drop(engine);
 
-        let quality = _missing.is_empty();
-        let risk_score = if _missing.is_empty() { 0.0 } else { 0.5 };
+        let quality = missing.is_empty();
+        let risk_score = if missing.is_empty() { 0.0 } else { 0.5 };
         let evidence_count = evidence.len();
         let verdict = OutputVerdict {
             quality,
@@ -1149,16 +1106,15 @@ impl PolicyEvaluator {
             }
         } else {
             // Derive fallback policy from sandbox level to prevent implicit allow-all.
-            let deployment_hint = self
-                .sandbox_level
-                .lock()
-                .map(|level| match *level {
+            let deployment_hint = {
+                let level = self.sandbox_level.lock().unwrap();
+                match *level {
                     SandboxLevel::None => "local-dev",
                     SandboxLevel::Basic => "ci",
                     SandboxLevel::Strict => "managed-service",
                     SandboxLevel::Isolated => "production",
-                })
-                .unwrap_or("managed-service");
+                }
+            };
             let decision = rbac_fallback_allows_action(Some(deployment_hint), action);
             tracing::info!(
                 tool = %tool,
@@ -1212,19 +1168,21 @@ pub struct HarnessBus {
     pub feedback_collector: Option<PuaFeedbackCollector>,
     pub profile: Arc<Mutex<PuaGovernanceProfile>>,
     pub drift_engine: Arc<DriftProtectionEngine>,
+    #[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
     pub brain_loop: Arc<BrainLoop>,
     pub artifact_layer: Arc<ArtifactLayer>,
     pub omnipotent_mode: Arc<OmnipotentMode>,
     pub promotion_registry: Arc<Mutex<PromotionRegistry>>,
     pub token_chain: Arc<Mutex<TokenLayerChain>>,
     /// Second brain loop instance for runner profile snapshots (consolidated with flat version).
+    #[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
     pub brain_runner: Arc<BrainLoop>,
     /// Hyper-resilience engine — circuit breakers, failover, self-healing (F-GAP-27)
     pub resilience_engine: Arc<HyperResilienceEngine>,
     /// Fault tolerance engine — node isolation, heartbeat detection (F-GAP-28)
     pub fault_tolerance: Arc<FaultToleranceEngine>,
     /// Structured audit trail for replay and evidence export (dual system integration).
-    pub structured_audit_trail: Arc<std::sync::Mutex<crate::orchestration::audit::AuditTrail>>,
+    pub structured_audit_trail: Arc<Mutex<crate::orchestration::audit::AuditTrail>>,
     /// Canonical thread-safe audit log with NDJSON persistence (canonical sink).
     pub audit_log: Arc<ThreadSafeAuditLog>,
     /// Consecutive allow-count for PUA de-escalation.
@@ -1239,7 +1197,7 @@ impl HarnessBus {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         rule_engine: Arc<Mutex<PuaRuleEngine>>,
-        sandbox_level: Arc<Mutex<SandboxLevel>>,
+        sandbox_level: Arc<std::sync::Mutex<SandboxLevel>>,
         budget: Arc<Mutex<BudgetTracker>>,
         idempotency: Arc<Mutex<IdempotencyCache>>,
         runtime_control: Arc<Mutex<OnlineControllerState>>,
@@ -1264,18 +1222,20 @@ impl HarnessBus {
             feedback_collector,
             profile: Arc::new(Mutex::new(PuaGovernanceProfile::default())),
             drift_engine: Arc::new(DriftProtectionEngine::new(DriftProtectionConfig::default())),
+            #[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
             brain_loop: Arc::new(BrainLoop::new(BrainLoopConfig::default())),
             artifact_layer: Arc::new(ArtifactLayer::new()),
             omnipotent_mode: Arc::new(OmnipotentMode::new()),
             promotion_registry: Arc::new(Mutex::new(PromotionRegistry::new())),
             token_chain: Arc::new(Mutex::new(TokenLayerChain::new())),
+            #[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
             brain_runner: Arc::new(BrainLoop::new(BrainLoopConfig::default())),
             // GAP-B58-C13: Use shared engine from AcpServer when provided
             resilience_engine: external_resilience_engine.unwrap_or_else(|| {
                 Arc::new(HyperResilienceEngine::new(ResilienceConfig::default()))
             }),
             fault_tolerance: Arc::new(FaultToleranceEngine::new(FaultToleranceConfig::default())),
-            structured_audit_trail: Arc::new(std::sync::Mutex::new(
+            structured_audit_trail: Arc::new(Mutex::new(
                 crate::orchestration::audit::AuditTrail::new("harness-bus", 1000),
             )),
             audit_log,
@@ -1285,7 +1245,12 @@ impl HarnessBus {
         // Start background health checks for the resilience engine.
         // This spawns a tokio task that periodically probes circuit breakers
         // and triggers self-healing when degradation is detected.
-        bus.resilience_engine.start_health_checks();
+        {
+            let engine = Arc::clone(&bus.resilience_engine);
+            tokio::spawn(async move {
+                engine.start_health_checks().await;
+            });
+        }
 
         // GAP-B58-C16: Start drift monitor (was defined but never called).
         // Checks for metric drift every 60 seconds, logging warnings.
@@ -1295,67 +1260,56 @@ impl HarnessBus {
     }
 
     /// Pre-route evaluation — primary entry point called by CapabilityBus.
-    pub fn evaluate(&self, ctx: &TaskContext) -> PolicyVerdict {
+    pub async fn evaluate(&self, ctx: &TaskContext) -> PolicyVerdict {
         let start = Instant::now();
         let verdict = self.evaluator.evaluate(ctx);
         let elapsed = start.elapsed().as_millis() as u64;
 
-        let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!(target: "harness_bus", "profile Mutex poisoned – recovering");
-            poisoned.into_inner()
-        });
-        p.total_evaluations = p.total_evaluations.saturating_add(1);
-        p.last_evaluation_ms = elapsed;
-        match &verdict {
-            PolicyVerdict::Allow => p.allow_count = p.allow_count.saturating_add(1),
-            PolicyVerdict::Deny(v) => {
-                p.deny_count = p.deny_count.saturating_add(1);
-                match v.kind.as_str() {
-                    "red_line" => {
-                        p.red_line_blocks = p.red_line_blocks.saturating_add(1);
-                        // B51-34: PUA auto-escalation on red-line violation
-                        let engine = self
-                            .evaluator
-                            .rule_engine
-                            .lock()
-                            .unwrap_or_else(|poisoned| {
-                                tracing::warn!(
-                                    "rule_engine lock poisoned in evaluate — escalation"
-                                );
-                                poisoned.into_inner()
-                            });
-                        let level =
-                            engine.escalate(&format!("Red-line violation detected: {}", v.detail));
-                        tracing::info!(
-                            new_level = level,
-                            detail = %v.detail,
-                            "PUA auto-escalated due to red-line violation"
-                        );
+        // Profile and runtime-control updates (scope ensures guards are dropped
+        // before the async call below).
+        {
+            let mut p = self.profile.blocking_lock();
+            p.total_evaluations = p.total_evaluations.saturating_add(1);
+            p.last_evaluation_ms = elapsed;
+            match &verdict {
+                PolicyVerdict::Allow => p.allow_count = p.allow_count.saturating_add(1),
+                PolicyVerdict::Deny(v) => {
+                    p.deny_count = p.deny_count.saturating_add(1);
+                    match v.kind.as_str() {
+                        "red_line" => {
+                            p.red_line_blocks = p.red_line_blocks.saturating_add(1);
+                            // B51-34: PUA auto-escalation on red-line violation
+                            let engine = self.evaluator.rule_engine.blocking_lock();
+                            let level = engine
+                                .escalate(&format!("Red-line violation detected: {}", v.detail));
+                            tracing::info!(
+                                new_level = level,
+                                detail = %v.detail,
+                                "PUA auto-escalated due to red-line violation"
+                            );
+                        }
+                        "budget" => p.budget_violations = p.budget_violations.saturating_add(1),
+                        _ => p.other_denials = p.other_denials.saturating_add(1),
                     }
-                    "budget" => p.budget_violations = p.budget_violations.saturating_add(1),
-                    _ => p.other_denials = p.other_denials.saturating_add(1),
+                }
+                PolicyVerdict::Escalate(_) => p.escalate_count = p.escalate_count.saturating_add(1),
+                PolicyVerdict::Review(_) => p.review_count = p.review_count.saturating_add(1),
+                PolicyVerdict::AllowWithConstraints(_) => {
+                    p.allow_count = p.allow_count.saturating_add(1)
                 }
             }
-            PolicyVerdict::Escalate(_) => p.escalate_count = p.escalate_count.saturating_add(1),
-            PolicyVerdict::Review(_) => p.review_count = p.review_count.saturating_add(1),
-            PolicyVerdict::AllowWithConstraints(_) => {
-                p.allow_count = p.allow_count.saturating_add(1)
-            }
+            // Derive runtime state fields from OnlineControllerState
+            let ctrl = self.evaluator.runtime_control.blocking_lock();
+            p.current_escalation_level = ctrl.control_mode();
+            p.runtime_control_mode = if ctrl.should_escalate() {
+                tf("status.harness_bus.mode_restricted", &[])
+            } else {
+                tf("status.harness_bus.mode_standard", &[])
+            };
+            p.policy_violation_trend = ctrl.violation_trend();
+            // current_active_policies: count how many active policy layers are engaged
+            p.current_active_policies = 5u32; // rule engine + budget + runtime control + sandbox + guard
         }
-        // Derive runtime state fields from OnlineControllerState
-        let ctrl = self.evaluator.runtime_control.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!(target: "harness_bus", "evaluator.runtime_control Mutex poisoned – recovering");
-            poisoned.into_inner()
-        });
-        p.current_escalation_level = ctrl.control_mode();
-        p.runtime_control_mode = if ctrl.should_escalate() {
-            tf("status.harness_bus.mode_restricted", &[])
-        } else {
-            tf("status.harness_bus.mode_standard", &[])
-        };
-        p.policy_violation_trend = ctrl.violation_trend();
-        // current_active_policies: count how many active policy layers are engaged
-        p.current_active_policies = 5u32; // rule engine + budget + runtime control + sandbox + guard
 
         // Record execution outcome through the resilience engine (F-GAP-27).
         let success = matches!(
@@ -1365,7 +1319,8 @@ impl HarnessBus {
                 | PolicyVerdict::Review(_)
         );
         self.resilience_engine
-            .record_execution("harness-main", success);
+            .record_execution("harness-main", success)
+            .await;
 
         // PUA de-escalation: after 3 consecutive clean evaluations (no red lines,
         // no denials, no escalations), de-escalate the PUA level by 1 to allow
@@ -1376,14 +1331,7 @@ impl HarnessBus {
                 if prev >= 2 {
                     // 3rd consecutive allow (prev is 0-indexed: 0→1, 1→2, 2→3)
                     self.consecutive_allows.store(0, Ordering::SeqCst);
-                    let engine = self
-                        .evaluator
-                        .rule_engine
-                        .lock()
-                        .unwrap_or_else(|poisoned| {
-                            tracing::warn!("rule_engine lock poisoned in evaluate — de-escalation");
-                            poisoned.into_inner()
-                        });
+                    let engine = self.evaluator.rule_engine.blocking_lock();
                     let level =
                         engine.de_escalate("No violations detected for 3 consecutive evaluations");
                     tracing::info!(
@@ -1432,10 +1380,7 @@ impl HarnessBus {
     pub fn validate_action(&self, tool: &str, args: &Value) -> ToolVerdict {
         let verdict = self.evaluator.check_tool_call(tool, args);
         // Track sandbox denials and idempotency hits from real tool-call data
-        let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("profile lock poisoned in validate_action");
-            poisoned.into_inner()
-        });
+        let mut p = self.profile.blocking_lock();
         if !verdict.allowed {
             p.sandbox_denials = p.sandbox_denials.saturating_add(1);
         }
@@ -1520,24 +1465,11 @@ impl HarnessBus {
         });
 
         // Write to local governance audit trail.
-        match self.audit_trail.lock() {
-            Ok(mut trail) => trail.entries.push(entry.clone()),
-            Err(poisoned) => {
-                tracing::error!("audit_trail lock poisoned — recovering and recording audit entry");
-                let mut trail = poisoned.into_inner();
-                trail.entries.push(entry.clone());
-            }
-        }
+        self.audit_trail.blocking_lock().entries.push(entry.clone());
 
         // Also write to the structured (orchestration) audit trail for
         // unified access, replay, and evidence export.
-        let mut structured = self
-            .structured_audit_trail
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("structured_audit_trail lock poisoned in audit");
-                poisoned.into_inner()
-            });
+        let mut structured = self.structured_audit_trail.blocking_lock();
         {
             use crate::orchestration::audit::AuditEntry as OrchestrationAuditEntry;
             structured.append_entry(OrchestrationAuditEntry::new(
@@ -1557,10 +1489,7 @@ impl HarnessBus {
             ));
         }
 
-        let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("profile lock poisoned in audit");
-            poisoned.into_inner()
-        });
+        let mut p = self.profile.blocking_lock();
         p.audit_entries_total = p.audit_entries_total.saturating_add(1);
     }
 
@@ -1595,19 +1524,12 @@ impl HarnessBus {
 
     /// Snapshot of the HarnessBus governance profile for pushing into governance.status.
     pub fn governance_profile(&self) -> PuaGovernanceProfile {
-        self.profile.lock().map(|p| p.clone()).unwrap_or_default()
+        self.profile.blocking_lock().clone()
     }
 
     /// Check a red-line violation directly.
     pub fn check_red_line(&self, action: &str) -> bool {
-        let engine = self
-            .evaluator
-            .rule_engine
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("rule_engine lock poisoned in check_red_line");
-                poisoned.into_inner()
-            });
+        let engine = self.evaluator.rule_engine.blocking_lock();
         engine.check_red_lines(action).is_err()
     }
 
@@ -1615,16 +1537,8 @@ impl HarnessBus {
     pub fn self_rationalization_profile(&self, enabled: bool) -> serde_json::Value {
         self.evaluator
             .guard
-            .lock()
-            .map(|guard| guard.governance_profile(enabled))
-            .unwrap_or_else(|_| {
-                serde_json::json!({
-                    "enabled": enabled,
-                    "confidence_threshold": 0.6,
-                    "reexamine_triggered_count": 0u64,
-                    "weak_evidence_blocked_count": 0u64,
-                })
-            })
+            .blocking_lock()
+            .governance_profile(enabled)
     }
 
     /// PolicyBundle compliance check for a GovernanceAction.
@@ -1635,14 +1549,7 @@ impl HarnessBus {
                 // - None/Basic: allow
                 // - Strict: allow (read is generally safe)
                 // - Isolated: deny (prevent data exfiltration)
-                let level = self
-                    .evaluator
-                    .sandbox_level
-                    .lock()
-                    .unwrap_or_else(|poisoned| {
-                        tracing::warn!("sandbox_level lock poisoned in enforce_action(Read)");
-                        poisoned.into_inner()
-                    });
+                let level = self.evaluator.sandbox_level.lock().unwrap();
                 if *level == SandboxLevel::Isolated {
                     return false;
                 }
@@ -1653,14 +1560,7 @@ impl HarnessBus {
                 // - None/Basic: allow
                 // - Strict: deny (search can leak context)
                 // - Isolated: deny
-                let level = self
-                    .evaluator
-                    .sandbox_level
-                    .lock()
-                    .unwrap_or_else(|poisoned| {
-                        tracing::warn!("sandbox_level lock poisoned in enforce_action(Search)");
-                        poisoned.into_inner()
-                    });
+                let level = self.evaluator.sandbox_level.lock().unwrap();
                 if *level == SandboxLevel::Strict || *level == SandboxLevel::Isolated {
                     return false;
                 }
@@ -1681,6 +1581,7 @@ impl HarnessBus {
     /// ⚠️ Sync-shim: only uses `block_on` when no tokio runtime is active (safe path).
     /// If a tokio runtime IS active, logs a warning and returns a default profile
     /// to avoid blocking the tokio worker thread.
+    #[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
     pub fn brain_profile(&self) -> BrainLoopProfile {
         match tokio::runtime::Handle::try_current() {
             Ok(_) => {
@@ -1721,18 +1622,12 @@ impl HarnessBus {
 
     /// Number of registered promotion plugins.
     pub fn promotion_plugin_count(&self) -> usize {
-        self.promotion_registry
-            .lock()
-            .map(|r| r.plugin_count())
-            .unwrap_or(0)
+        self.promotion_registry.blocking_lock().plugin_count()
     }
 
     /// Evaluate a token gate request through the L0-L5 chain.
     pub fn evaluate_token_gate(&self, ctx: &GateContext) -> TokenGateVerdict {
-        self.token_chain
-            .lock()
-            .map(|chain| chain.evaluate(ctx))
-            .unwrap_or(TokenGateVerdict::Allow)
+        self.token_chain.blocking_lock().evaluate(ctx)
     }
 
     /// Brain loop runner profile snapshot (consolidated flat version).
@@ -1740,6 +1635,7 @@ impl HarnessBus {
     /// ⚠️ Sync-shim: only uses `block_on` when no tokio runtime is active (safe path).
     /// If a tokio runtime IS active, logs a warning and returns a default profile
     /// to avoid blocking the tokio worker thread.
+    #[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
     pub fn brain_runner_profile(&self) -> BrainLoopProfile {
         match tokio::runtime::Handle::try_current() {
             Ok(_) => {
@@ -1769,8 +1665,8 @@ impl HarnessBus {
     }
 
     /// Hyper-resilience profile snapshot (F-GAP-27)
-    pub fn resilience_profile(&self) -> ResilienceProfile {
-        self.resilience_engine.profile()
+    pub async fn resilience_profile(&self) -> ResilienceProfile {
+        self.resilience_engine.profile().await
     }
 
     /// Fault tolerance profile snapshot (F-GAP-28)
@@ -1901,6 +1797,11 @@ impl HarnessBus {
         })
     }
 
+    /// Update the sandbox level at runtime.
+    pub fn set_sandbox_level(&self, level: SandboxLevel) {
+        *self.evaluator.sandbox_level.lock().unwrap() = level;
+    }
+
     /// Inject a shared Arc RBAC enforcer into the policy evaluator (GAP-B58-D05).
     pub fn set_rbac_enforcer(&self, enforcer: Arc<RwLock<crate::governance::rbac::RbacEnforcer>>) {
         self.evaluator.set_rbac_enforcer(enforcer);
@@ -1956,12 +1857,11 @@ impl HarnessBus {
 
 /// Build a default HarnessBus with basic policy defaults for local-dev profile.
 pub fn default_harness_bus(storage_path: Option<PathBuf>) -> HarnessBus {
-    use std::sync::Mutex as StdMutex;
-    let pua_plan = Arc::new(StdMutex::new(
+    let pua_plan = Arc::new(std::sync::Mutex::new(
         crate::governance::pua::PuaEnforcementPlan::default(),
     ));
     let rule_engine = Arc::new(Mutex::new(PuaRuleEngine::new(pua_plan)));
-    let sandbox_level = Arc::new(Mutex::new(SandboxLevel::None));
+    let sandbox_level = Arc::new(std::sync::Mutex::new(SandboxLevel::None));
     let budget = Arc::new(Mutex::new(BudgetTracker::new(TaskBudget {
         max_tokens: 120_000,
         max_wall_clock_seconds: 3600,
@@ -2000,15 +1900,13 @@ pub fn config_aware_harness_bus(
     config: &crate::config::AppConfig,
     storage_path: Option<PathBuf>,
 ) -> HarnessBus {
-    use std::sync::Mutex as StdMutex;
-
-    let pua_plan = Arc::new(StdMutex::new(
+    let pua_plan = Arc::new(std::sync::Mutex::new(
         crate::governance::pua::PuaEnforcementPlan::default(),
     ));
     let rule_engine = Arc::new(Mutex::new(PuaRuleEngine::new(pua_plan)));
 
     // Derive sandbox level from compliance config
-    let sandbox_level = Arc::new(Mutex::new(
+    let sandbox_level = Arc::new(std::sync::Mutex::new(
         config
             .compliance
             .as_ref()

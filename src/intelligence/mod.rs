@@ -81,8 +81,10 @@ pub mod continuous_learning;
 
 pub mod evolution_graph;
 
+pub mod fusion_evolution_bridge;
 pub mod hub;
 pub mod triple_fusion;
+pub mod voter_impls;
 pub mod weighted_vote;
 pub mod world_model;
 

@@ -7,8 +7,11 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
+
+use crate::orchestration::fast_path_cache::FastPathCache;
 
 // ---------------------------------------------------------------------------
 // CacheTier
@@ -253,6 +256,10 @@ pub struct CacheWarmingEngine {
     /// Keys to pre-warm, populated from DiscoveryCenter historical data.
     pre_warm_keys: RwLock<HashMap<String, Vec<String>>>,
     last_access_time: RwLock<Instant>,
+    /// Optional link to the FastPathCache for forwarding hit/miss data.
+    /// Uses interior mutability (Mutex) so the connection can be established
+    /// with only a shared reference.
+    fast_path_cache: std::sync::Mutex<Option<Arc<FastPathCache>>>,
 }
 
 impl CacheWarmingEngine {
@@ -263,12 +270,22 @@ impl CacheWarmingEngine {
             access_patterns: RwLock::new(HashMap::new()),
             pre_warm_keys: RwLock::new(HashMap::new()),
             last_access_time: RwLock::new(Instant::now()),
+            fast_path_cache: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Attach a FastPathCache so hit/miss observations are forwarded.
+    /// Uses interior mutability so it can be called with a shared reference.
+    pub fn connect_to_fast_path_cache(&self, cache: Arc<FastPathCache>) {
+        if let Ok(mut guard) = self.fast_path_cache.lock() {
+            *guard = Some(cache);
         }
     }
 
     /// Record a cache access to update patterns and metrics.
     pub fn record_hit(&self, key: &str, tier: CacheTier) {
         self.metrics.total_lookups.inc();
+        let hit_count = 1u64;
         match tier {
             CacheTier::L0 => {
                 self.metrics.hits_l0.inc();
@@ -291,12 +308,26 @@ impl CacheWarmingEngine {
             .record_access();
 
         *self.last_access_time.write().unwrap() = Instant::now();
+
+        // Forward hit to FastPathCache if connected.
+        if let Ok(guard) = self.fast_path_cache.lock() {
+            if let Some(ref cache) = *guard {
+                cache.record_warming_activity(hit_count, 0);
+            }
+        }
     }
 
     /// Record a cache miss.
     pub fn record_miss(&self) {
         self.metrics.total_lookups.inc();
         self.metrics.misses.inc();
+
+        // Forward miss to FastPathCache if connected.
+        if let Ok(guard) = self.fast_path_cache.lock() {
+            if let Some(ref cache) = *guard {
+                cache.record_warming_activity(0, 1);
+            }
+        }
     }
 
     /// Register keys that should be pre-warmed for a given category.

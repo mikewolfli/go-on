@@ -389,7 +389,6 @@ pub trait TriggerSource: Send + Sync + std::fmt::Debug {
 
 /// A trigger source that monitors the system's own cognitive performance
 /// (e.g., decision latency, retry rates, planning depth).
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct MetacognitiveTriggerSource {
     /// Name of this source.
@@ -397,12 +396,14 @@ pub struct MetacognitiveTriggerSource {
     /// Poll interval.
     interval: Duration,
     /// Thresholds for various metacognitive metrics.
+    #[allow(dead_code)]
     thresholds: HashMap<String, f64>,
 }
 
 #[allow(dead_code)]
 impl MetacognitiveTriggerSource {
     /// Create a new metacognitive trigger source.
+    /// TODO-BLUE64: Activate in evolution_loop_builder when metacognitive data is available.
     pub fn new(name: String, interval: Duration) -> Self {
         let mut thresholds = HashMap::new();
         thresholds.insert("decision_latency_ms".to_string(), 5000.0);
@@ -416,6 +417,7 @@ impl MetacognitiveTriggerSource {
     }
 
     /// Set a custom threshold for a metric.
+    #[allow(dead_code)]
     pub fn with_threshold(mut self, metric: &str, value: f64) -> Self {
         self.thresholds.insert(metric.to_string(), value);
         self
@@ -440,7 +442,6 @@ impl TriggerSource for MetacognitiveTriggerSource {
 
 /// A trigger source that listens to the alert manager for active alerts
 /// that should trigger an evolution cycle.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct AlertManagerTriggerSource {
     /// Name of this source.
@@ -450,7 +451,6 @@ pub struct AlertManagerTriggerSource {
     seen_alerts: std::sync::Mutex<Vec<String>>,
 }
 
-#[allow(dead_code)]
 impl AlertManagerTriggerSource {
     /// Create a new alert manager trigger source.
     pub fn new(name: String) -> Self {
@@ -477,7 +477,6 @@ impl TriggerSource for AlertManagerTriggerSource {
 
 /// A trigger source that monitors compiler/LSP diagnostics and test results
 /// to detect repeated error patterns.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct DiagnosticTriggerSource {
     /// Name of this source.
@@ -491,6 +490,7 @@ pub struct DiagnosticTriggerSource {
 #[allow(dead_code)]
 impl DiagnosticTriggerSource {
     /// Create a new diagnostic trigger source.
+    /// TODO-BLUE64: Wire record_error calls from error handling paths.
     pub fn new(name: String, min_count: u64) -> Self {
         Self {
             name,
@@ -500,6 +500,7 @@ impl DiagnosticTriggerSource {
     }
 
     /// Record an observed error pattern.
+    #[allow(dead_code)]
     pub fn record_error(&self, pattern: String) {
         let mut counts = self.error_counts.lock().unwrap();
         *counts.entry(pattern).or_insert(0) += 1;
@@ -530,11 +531,62 @@ impl TriggerSource for DiagnosticTriggerSource {
 }
 
 // ---------------------------------------------------------------------------
+// TickTriggerSource
+// ---------------------------------------------------------------------------
+
+/// A simple trigger source that fires at a fixed interval.
+///
+/// This is the default trigger source that ensures the evolution loop has
+/// at least one active source, preventing `NoTriggerSources` errors.
+#[allow(dead_code)]
+#[derive(Debug)]
+pub struct TickTriggerSource {
+    /// Name of this source.
+    name: String,
+    /// Interval between automatic triggers.
+    interval: Duration,
+    /// Timestamp (ms since epoch) of the last trigger.
+    last_trigger_ms: std::sync::Mutex<u64>,
+}
+
+#[allow(dead_code)]
+impl TickTriggerSource {
+    /// Create a new tick trigger source that fires every `interval`.
+    pub fn new(name: String, interval: Duration) -> Self {
+        Self {
+            name,
+            interval,
+            last_trigger_ms: std::sync::Mutex::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl TriggerSource for TickTriggerSource {
+    async fn poll(&self) -> Vec<EvolutionTrigger> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let mut last = self.last_trigger_ms.lock().unwrap();
+        let elapsed_ms = now.saturating_sub(*last);
+
+        if elapsed_ms >= self.interval.as_millis() as u64 {
+            *last = now;
+            let instruction = format!("Scheduled evolution tick from {}", self.name);
+            vec![EvolutionTrigger::ManualRequest { instruction }]
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ManualTriggerSource
 // ---------------------------------------------------------------------------
 
 /// A trigger source that accepts manual evolution requests via a channel.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct ManualTriggerSource {
     /// Name of this source.
@@ -542,6 +594,7 @@ pub struct ManualTriggerSource {
     /// Receiver for manual trigger requests.
     rx: std::sync::Mutex<mpsc::UnboundedReceiver<String>>,
     /// Sender (cloned for external use).
+    #[allow(dead_code)]
     tx: mpsc::UnboundedSender<String>,
 }
 
@@ -559,6 +612,7 @@ impl ManualTriggerSource {
 
     /// Send a manual evolution request. This is the public API for
     /// submitting manual evolution instructions.
+    #[allow(dead_code)]
     pub fn request_evolution(&self, instruction: String) -> Result<(), String> {
         self.tx
             .send(instruction)
@@ -580,6 +634,56 @@ impl TriggerSource for ManualTriggerSource {
                 Err(mpsc::error::TryRecvError::Empty) => break,
                 Err(mpsc::error::TryRecvError::Disconnected) => {
                     warn!("ManualTriggerSource channel disconnected");
+                    break;
+                }
+            }
+        }
+
+        let _ = &self.name;
+        triggers
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PubsubTriggerSource
+// ---------------------------------------------------------------------------
+
+/// A trigger source that reads evolution triggers from a `mpsc` channel.
+///
+/// This bridges the TripleFusion bridge (or any other in-process producer)
+/// into the EvolutionLoop without coupling the two subsystems directly.
+#[derive(Debug)]
+pub struct PubsubTriggerSource {
+    /// Name of this source.
+    name: String,
+    /// Receiver end of the mpsc channel.
+    rx: tokio::sync::Mutex<mpsc::UnboundedReceiver<EvolutionTrigger>>,
+}
+
+impl PubsubTriggerSource {
+    /// Create a new pubsub trigger source.
+    pub fn new(name: String, rx: mpsc::UnboundedReceiver<EvolutionTrigger>) -> Self {
+        Self {
+            name,
+            rx: tokio::sync::Mutex::new(rx),
+        }
+    }
+}
+
+#[async_trait]
+impl TriggerSource for PubsubTriggerSource {
+    async fn poll(&self) -> Vec<EvolutionTrigger> {
+        let mut triggers = Vec::new();
+        let mut rx = self.rx.lock().await;
+
+        loop {
+            match rx.try_recv() {
+                Ok(trigger) => {
+                    triggers.push(trigger);
+                }
+                Err(mpsc::error::TryRecvError::Empty) => break,
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    warn!("PubsubTriggerSource channel disconnected");
                     break;
                 }
             }
@@ -649,7 +753,6 @@ pub struct EvolutionLoop {
     /// Evolution history recorder.
     history: Option<EvolutionHistory>,
     /// Working directory for sandbox operations.
-    #[allow(dead_code)]
     workdir: PathBuf,
     /// Poll interval for trigger sources.
     poll_interval: Duration,
@@ -676,6 +779,41 @@ impl EvolutionLoop {
     pub fn with_trigger_source(mut self, source: Box<dyn TriggerSource>) -> Self {
         self.trigger_sources.push(source);
         self
+    }
+
+    /// Register the default `TickTriggerSource` that fires every 300 seconds.
+    ///
+    /// This ensures the evolution loop always has at least one active trigger
+    /// source, preventing `NoTriggerSources` errors during idle periods.
+    pub fn with_default_trigger_source(self) -> Self {
+        self.with_trigger_source(Box::new(TickTriggerSource::new(
+            "default_tick".to_string(),
+            Duration::from_secs(300),
+        )))
+    }
+
+    /// Register **all** built-in trigger sources (Tick, Metacognitive,
+    /// AlertManager, Diagnostic, Manual) for a fully wired evolution loop.
+    pub fn with_default_trigger_sources(self) -> Self {
+        let _ = &self; // borrow so we can chain
+        self.with_trigger_source(Box::new(TickTriggerSource::new(
+            "default_tick".to_string(),
+            Duration::from_secs(300),
+        )))
+        .with_trigger_source(Box::new(MetacognitiveTriggerSource::new(
+            "metacognitive_trigger".to_string(),
+            Duration::from_secs(600),
+        )))
+        .with_trigger_source(Box::new(AlertManagerTriggerSource::new(
+            "alert_manager_trigger".to_string(),
+        )))
+        .with_trigger_source(Box::new(DiagnosticTriggerSource::new(
+            "diagnostic_trigger".to_string(),
+            3,
+        )))
+        .with_trigger_source(Box::new(ManualTriggerSource::new(
+            "manual_trigger".to_string(),
+        )))
     }
 
     /// Set the sandbox executor.
@@ -724,6 +862,7 @@ impl EvolutionLoop {
             cycle_id = self.cycle_id,
             trigger_sources = self.trigger_sources.len(),
             approval_mode = ?self.approval_mode,
+            workdir = %self.workdir.display(),
             "evolution loop starting"
         );
 

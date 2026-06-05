@@ -291,21 +291,45 @@ impl WatchDog {
 
         info!("Hot-reload polling watchdog started for: {:?}", path);
 
+        // Exponential backoff: start at 500ms, double on each error, cap at 30s.
+        let backoff_base = Duration::from_millis(500);
+        let backoff_cap = Duration::from_secs(30);
+        let mut backoff = backoff_base;
+        let mut consecutive_errors: u32 = 0;
+
         loop {
-            tokio::time::sleep(debounce).await;
+            tokio::time::sleep(debounce.max(backoff)).await;
 
             let current = match tokio::fs::metadata(&path).await {
                 Ok(meta) => match meta.modified() {
                     Ok(mtime) => mtime,
-                    Err(_) => continue,
+                    Err(_) => {
+                        consecutive_errors += 1;
+                        backoff = backoff_base
+                            .checked_mul(1u32 << consecutive_errors.min(10))
+                            .unwrap_or(backoff_cap)
+                            .min(backoff_cap);
+                        continue;
+                    }
                 },
-                Err(_) => continue,
+                Err(_) => {
+                    consecutive_errors += 1;
+                    backoff = backoff_base
+                        .checked_mul(1u32 << consecutive_errors.min(10))
+                        .unwrap_or(backoff_cap)
+                        .min(backoff_cap);
+                    continue;
+                }
             };
 
             if current == last_modified {
                 continue;
             }
             last_modified = current;
+
+            // Success — reset backoff
+            consecutive_errors = 0;
+            backoff = backoff_base;
 
             Self::reload_config(&self, &path).await;
         }

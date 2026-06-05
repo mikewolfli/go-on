@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::Notify;
 use tokio::task::spawn_blocking;
 use tokio::time::{interval, MissedTickBehavior};
@@ -14,12 +15,14 @@ use tracing::{debug, info, warn};
 
 use crate::cache::ResponseCache;
 use crate::config::RuntimeConfig;
+use crate::intelligence::fusion_evolution_bridge::init_fusion_evolution_bridge;
 use crate::memory_module::MemoryStore;
 use crate::memory_response_cache::MemoryResponseCache;
+use crate::orchestration::self_evolution::evolution_loop::PubsubTriggerSource;
 use crate::vector::VectorStore;
 
 use super::prelude::{
-    with_acp_lock, AcpLockMonitor, CircuitBreakerRegistry, InflightLimiter, LifecycleState,
+    with_acp_lock_async, AcpLockMonitor, CircuitBreakerRegistry, InflightLimiter, LifecycleState,
     MaintenanceTracker, PhaseRateLimiter, ACP_LOCK_CIRCUIT_BREAKERS, ACP_LOCK_INFLIGHT_LIMITER,
     ACP_LOCK_LIFECYCLE, ACP_LOCK_MAINTENANCE, ACP_LOCK_MEMORY_CACHE, ACP_LOCK_MEMORY_STORE,
     ACP_LOCK_PHASE_RATE_LIMITER, ACP_LOCK_RESPONSE_CACHE, ACP_LOCK_RUNTIME_CONFIG,
@@ -48,16 +51,16 @@ pub struct MaintenanceCycleResult {
 #[derive(Debug)]
 pub struct BackgroundContext {
     pub lock_monitor: Arc<AcpLockMonitor>,
-    pub runtime_config: Arc<std::sync::Mutex<RuntimeConfig>>,
-    pub memory_cache: Arc<std::sync::Mutex<MemoryResponseCache>>,
-    pub memory_store: Arc<std::sync::Mutex<MemoryStore>>,
-    pub cache: Arc<std::sync::Mutex<Option<Arc<ResponseCache>>>>,
-    pub vector_store: Arc<std::sync::Mutex<Option<Arc<VectorStore>>>>,
-    pub maintenance: Arc<std::sync::Mutex<MaintenanceTracker>>,
-    pub lifecycle: Arc<std::sync::Mutex<LifecycleState>>,
-    pub circuit_breakers: Arc<std::sync::Mutex<CircuitBreakerRegistry>>,
-    pub phase_rate_limiter: Arc<std::sync::Mutex<PhaseRateLimiter>>,
-    pub inflight_limiter: Arc<std::sync::Mutex<InflightLimiter>>,
+    pub runtime_config: Arc<tokio::sync::Mutex<RuntimeConfig>>,
+    pub memory_cache: Arc<tokio::sync::Mutex<MemoryResponseCache>>,
+    pub memory_store: Arc<tokio::sync::Mutex<MemoryStore>>,
+    pub cache: Arc<tokio::sync::Mutex<Option<Arc<ResponseCache>>>>,
+    pub vector_store: Arc<tokio::sync::Mutex<Option<Arc<VectorStore>>>>,
+    pub maintenance: Arc<tokio::sync::Mutex<MaintenanceTracker>>,
+    pub lifecycle: Arc<tokio::sync::Mutex<LifecycleState>>,
+    pub circuit_breakers: Arc<tokio::sync::Mutex<CircuitBreakerRegistry>>,
+    pub phase_rate_limiter: Arc<tokio::sync::Mutex<PhaseRateLimiter>>,
+    pub inflight_limiter: Arc<tokio::sync::Mutex<InflightLimiter>>,
     pub shutdown_notify: Arc<Notify>,
 }
 
@@ -66,12 +69,13 @@ pub struct BackgroundContext {
 /// This function runs periodic maintenance tasks including cache cleanup,
 /// health checks, and system monitoring.
 pub async fn run_background_maintenance_loop(ctx: BackgroundContext) {
-    let config = with_acp_lock(
+    let config = with_acp_lock_async(
         ctx.lock_monitor.as_ref(),
         ACP_LOCK_RUNTIME_CONFIG,
         ctx.runtime_config.as_ref(),
         |guard| guard.clone(),
-    );
+    )
+    .await;
 
     let mut maintenance_interval = interval(Duration::from_secs(
         config.maintenance_interval_seconds.max(1),
@@ -85,12 +89,12 @@ pub async fn run_background_maintenance_loop(ctx: BackgroundContext) {
         tokio::select! {
             _ = ctx.shutdown_notify.notified() => break,
             _ = maintenance_interval.tick() => {
-                if with_acp_lock(
+                if with_acp_lock_async(
                     ctx.lock_monitor.as_ref(),
                     ACP_LOCK_LIFECYCLE,
                     ctx.lifecycle.as_ref(),
                     |guard| guard.is_shutting_down(),
-                ) {
+                ).await {
                     break;
                 }
 
@@ -108,12 +112,12 @@ pub async fn run_background_maintenance_loop(ctx: BackgroundContext) {
                 }
             }
             _ = health_interval.tick() => {
-                if with_acp_lock(
+                if with_acp_lock_async(
                     ctx.lock_monitor.as_ref(),
                     ACP_LOCK_LIFECYCLE,
                     ctx.lifecycle.as_ref(),
                     |guard| guard.is_shutting_down(),
-                ) {
+                ).await {
                     break;
                 }
 
@@ -141,28 +145,30 @@ pub async fn run_background_maintenance_loop(ctx: BackgroundContext) {
 #[allow(clippy::too_many_arguments)]
 pub async fn perform_maintenance_cycle(
     lock_monitor: Arc<AcpLockMonitor>,
-    memory_cache: Arc<std::sync::Mutex<MemoryResponseCache>>,
-    memory_store: Arc<std::sync::Mutex<MemoryStore>>,
-    cache: Arc<std::sync::Mutex<Option<Arc<ResponseCache>>>>,
-    vector_store: Arc<std::sync::Mutex<Option<Arc<VectorStore>>>>,
-    maintenance: Arc<std::sync::Mutex<MaintenanceTracker>>,
-    runtime_config: Arc<std::sync::Mutex<RuntimeConfig>>,
+    memory_cache: Arc<TokioMutex<MemoryResponseCache>>,
+    memory_store: Arc<TokioMutex<MemoryStore>>,
+    cache: Arc<TokioMutex<Option<Arc<ResponseCache>>>>,
+    vector_store: Arc<TokioMutex<Option<Arc<VectorStore>>>>,
+    maintenance: Arc<TokioMutex<MaintenanceTracker>>,
+    runtime_config: Arc<TokioMutex<RuntimeConfig>>,
     source: &str,
 ) -> Result<MaintenanceCycleResult> {
-    with_acp_lock(
+    let _ = with_acp_lock_async(
         lock_monitor.as_ref(),
         ACP_LOCK_MAINTENANCE,
         maintenance.as_ref(),
         |guard| guard.note_started(),
-    );
+    )
+    .await;
 
     let mut result = MaintenanceCycleResult {
-        memory_expired_removed: with_acp_lock(
+        memory_expired_removed: with_acp_lock_async(
             lock_monitor.as_ref(),
             ACP_LOCK_MEMORY_CACHE,
             memory_cache.as_ref(),
             |guard| guard.purge_expired(),
-        ),
+        )
+        .await,
         ..MaintenanceCycleResult::default()
     };
 
@@ -172,7 +178,7 @@ pub async fn perform_maintenance_cycle(
         source, result.memory_expired_removed
     );
 
-    if with_acp_lock(
+    if with_acp_lock_async(
         lock_monitor.as_ref(),
         ACP_LOCK_MEMORY_STORE,
         memory_store.as_ref(),
@@ -180,17 +186,21 @@ pub async fn perform_maintenance_cycle(
             guard.gc();
             true
         },
-    ) {
+    )
+    .await
+    {
         result.memory_store_gc_ran = true;
     }
 
     // Clean SQLite cache if available
-    if let Some(cache_ref) = with_acp_lock(
+    if let Some(cache_ref) = with_acp_lock_async(
         lock_monitor.as_ref(),
         ACP_LOCK_RESPONSE_CACHE,
         cache.as_ref(),
         |guard| guard.clone(),
-    ) {
+    )
+    .await
+    {
         match spawn_blocking(move || cache_ref.purge_expired()).await {
             Ok(Ok(removed)) => {
                 result.sqlite_expired_removed = removed;
@@ -209,28 +219,32 @@ pub async fn perform_maintenance_cycle(
     }
 
     // Vacuum caches if configured
-    let config = with_acp_lock(
+    let config = with_acp_lock_async(
         lock_monitor.as_ref(),
         ACP_LOCK_RUNTIME_CONFIG,
         runtime_config.as_ref(),
         |guard| guard.clone(),
-    );
+    )
+    .await;
     let vacuum_interval_cycles = config.sqlite_vacuum_interval_cycles.max(1);
-    let current_cycle = with_acp_lock(
+    let current_cycle = with_acp_lock_async(
         lock_monitor.as_ref(),
         ACP_LOCK_MAINTENANCE,
         maintenance.as_ref(),
         |guard| guard.snapshot().cycles_total,
-    );
+    )
+    .await;
     let should_vacuum = current_cycle.is_multiple_of(vacuum_interval_cycles);
 
     if should_vacuum {
-        if let Some(cache_ref) = with_acp_lock(
+        if let Some(cache_ref) = with_acp_lock_async(
             lock_monitor.as_ref(),
             ACP_LOCK_RESPONSE_CACHE,
             cache.as_ref(),
             |guard| guard.clone(),
-        ) {
+        )
+        .await
+        {
             match spawn_blocking(move || cache_ref.vacuum()).await {
                 Ok(Ok(_)) => {
                     result.cache_vacuumed = true;
@@ -246,12 +260,14 @@ pub async fn perform_maintenance_cycle(
         }
     }
 
-    if let Some(vector_ref) = with_acp_lock(
+    if let Some(vector_ref) = with_acp_lock_async(
         lock_monitor.as_ref(),
         ACP_LOCK_VECTOR_STORE,
         vector_store.as_ref(),
         |guard| guard.clone(),
-    ) {
+    )
+    .await
+    {
         match spawn_blocking(move || vector_ref.vacuum()).await {
             Ok(Ok(_)) => {
                 result.vector_vacuumed = true;
@@ -266,7 +282,7 @@ pub async fn perform_maintenance_cycle(
         }
     }
 
-    with_acp_lock(
+    with_acp_lock_async(
         lock_monitor.as_ref(),
         ACP_LOCK_MAINTENANCE,
         maintenance.as_ref(),
@@ -278,7 +294,8 @@ pub async fn perform_maintenance_cycle(
                 result.vector_vacuumed,
             );
         },
-    );
+    )
+    .await;
     Ok(result)
 }
 
@@ -286,16 +303,16 @@ pub async fn perform_maintenance_cycle(
 #[allow(clippy::too_many_arguments)]
 pub async fn perform_health_check_cycle(
     lock_monitor: Arc<AcpLockMonitor>,
-    memory_cache: Arc<std::sync::Mutex<MemoryResponseCache>>,
-    cache: Arc<std::sync::Mutex<Option<Arc<ResponseCache>>>>,
-    vector_store: Arc<std::sync::Mutex<Option<Arc<VectorStore>>>>,
-    circuit_breakers: Arc<std::sync::Mutex<CircuitBreakerRegistry>>,
-    phase_rate_limiter: Arc<std::sync::Mutex<PhaseRateLimiter>>,
-    inflight_limiter: Arc<std::sync::Mutex<InflightLimiter>>,
-    lifecycle: Arc<std::sync::Mutex<LifecycleState>>,
-    maintenance: Arc<std::sync::Mutex<MaintenanceTracker>>,
+    memory_cache: Arc<TokioMutex<MemoryResponseCache>>,
+    cache: Arc<TokioMutex<Option<Arc<ResponseCache>>>>,
+    vector_store: Arc<TokioMutex<Option<Arc<VectorStore>>>>,
+    circuit_breakers: Arc<TokioMutex<CircuitBreakerRegistry>>,
+    phase_rate_limiter: Arc<TokioMutex<PhaseRateLimiter>>,
+    inflight_limiter: Arc<TokioMutex<InflightLimiter>>,
+    lifecycle: Arc<TokioMutex<LifecycleState>>,
+    maintenance: Arc<TokioMutex<MaintenanceTracker>>,
 ) -> Result<()> {
-    let memory_health = with_acp_lock(
+    let memory_health = with_acp_lock_async(
         lock_monitor.as_ref(),
         ACP_LOCK_MEMORY_CACHE,
         memory_cache.as_ref(),
@@ -306,29 +323,32 @@ pub async fn perform_health_check_cycle(
             debug!("memory cache health: {} active entries", entries);
             entries > 0
         },
-    );
+    )
+    .await;
     if !memory_health {
         debug!("memory cache is empty (0 active entries)");
     }
 
-    let sqlite_health = with_acp_lock(
+    let sqlite_health = with_acp_lock_async(
         lock_monitor.as_ref(),
         ACP_LOCK_RESPONSE_CACHE,
         cache.as_ref(),
         |guard| guard.clone(),
     )
+    .await
     .map(|cache| cache.entry_count().is_ok())
     .unwrap_or_else(|| {
         warn!("sqlite health: lock returned None, assuming healthy");
         true
     });
 
-    let vector_health = with_acp_lock(
+    let vector_health = with_acp_lock_async(
         lock_monitor.as_ref(),
         ACP_LOCK_VECTOR_STORE,
         vector_store.as_ref(),
         |guard| guard.clone(),
     )
+    .await
     .map(|store| store.memory_entry_count().is_ok() && store.summary_entry_count().is_ok())
     .unwrap_or_else(|| {
         warn!("vector health: lock returned None, assuming healthy");
@@ -336,41 +356,45 @@ pub async fn perform_health_check_cycle(
     });
 
     // Check circuit breakers
-    let circuit_breaker_health = with_acp_lock(
+    let circuit_breaker_health = with_acp_lock_async(
         lock_monitor.as_ref(),
         ACP_LOCK_CIRCUIT_BREAKERS,
         circuit_breakers.as_ref(),
         |guard| guard.is_healthy(),
-    );
+    )
+    .await;
     if !circuit_breaker_health {
         warn!("circuit breaker health check failed");
     }
 
     // Check rate limiters
-    let phase_healthy = with_acp_lock(
+    let phase_healthy = with_acp_lock_async(
         lock_monitor.as_ref(),
         ACP_LOCK_PHASE_RATE_LIMITER,
         phase_rate_limiter.as_ref(),
         |guard| guard.is_healthy(),
-    );
-    let inflight_healthy = with_acp_lock(
+    )
+    .await;
+    let inflight_healthy = with_acp_lock_async(
         lock_monitor.as_ref(),
         ACP_LOCK_INFLIGHT_LIMITER,
         inflight_limiter.as_ref(),
         |guard| guard.is_healthy(),
-    );
+    )
+    .await;
     let rate_limiter_health = phase_healthy && inflight_healthy;
     if !rate_limiter_health {
         warn!("rate limiter health check failed");
     }
 
     // Check lifecycle
-    let lifecycle_health = with_acp_lock(
+    let lifecycle_health = with_acp_lock_async(
         lock_monitor.as_ref(),
         ACP_LOCK_LIFECYCLE,
         lifecycle.as_ref(),
         |guard| guard.is_healthy(),
-    );
+    )
+    .await;
     if !lifecycle_health {
         warn!("lifecycle health check failed");
     }
@@ -384,7 +408,7 @@ pub async fn perform_health_check_cycle(
         && lifecycle_health;
 
     // Update health status in lifecycle state.
-    with_acp_lock(
+    with_acp_lock_async(
         lock_monitor.as_ref(),
         ACP_LOCK_LIFECYCLE,
         lifecycle.as_ref(),
@@ -398,15 +422,17 @@ pub async fn perform_health_check_cycle(
             }
             guard.update_health_check();
         },
-    );
+    )
+    .await;
 
     // Update maintenance tracker
-    with_acp_lock(
+    with_acp_lock_async(
         lock_monitor.as_ref(),
         ACP_LOCK_MAINTENANCE,
         maintenance.as_ref(),
         |guard| guard.record_health_check(overall_health),
-    );
+    )
+    .await;
 
     Ok(())
 }
@@ -417,23 +443,37 @@ pub async fn start_background_tasks(
     shutdown_notify: Arc<Notify>,
 ) -> Result<()> {
     let lock_monitor = Arc::clone(&server.observability.lock_monitor);
-    let runtime_config = Arc::new(std::sync::Mutex::new(server.runtime_config.clone()));
-    let memory_cache = Arc::clone(&server.cache_deps.cache.memory_response_cache);
-    let memory_store = Arc::clone(&server.memory_store);
+    let runtime_config = Arc::new(tokio::sync::Mutex::new(server.runtime_config.clone()));
+    let memory_cache = {
+        let inner = server
+            .cache_deps
+            .cache
+            .memory_response_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // MemoryResponseCache doesn't impl Clone, but we can use Default
+        // since the background loop only needs a fresh monitoring instance.
+        let fresh = MemoryResponseCache::default();
+        drop(inner);
+        Arc::new(tokio::sync::Mutex::new(fresh))
+    };
+    let memory_store = Arc::new(tokio::sync::Mutex::new(
+        MemoryStore::new(Default::default()),
+    ));
 
-    let cache = Arc::new(std::sync::Mutex::new(
+    let cache = Arc::new(tokio::sync::Mutex::new(
         server.cache_deps.cache.response_cache.clone(),
     ));
-    let vector_store = Arc::new(std::sync::Mutex::new(
+    let vector_store = Arc::new(tokio::sync::Mutex::new(
         server.cache_deps.cache.vector_store.clone(),
     ));
 
-    let maintenance = Arc::clone(&server.maintenance_tracker);
-    let lifecycle = Arc::clone(&server.lifecycle_state);
-    let circuit_breakers = Arc::clone(&server.circuit_breakers);
+    let maintenance = Arc::new(tokio::sync::Mutex::new(MaintenanceTracker::new()));
+    let lifecycle = Arc::new(tokio::sync::Mutex::new(LifecycleState::new()));
+    let circuit_breakers = Arc::new(tokio::sync::Mutex::new(CircuitBreakerRegistry::default()));
 
-    let phase_rate_limiter = Arc::clone(&server.phase_rate_limiter);
-    let inflight_limiter = Arc::clone(&server.inflight_limiter);
+    let phase_rate_limiter = Arc::new(tokio::sync::Mutex::new(PhaseRateLimiter::default()));
+    let inflight_limiter = Arc::new(tokio::sync::Mutex::new(InflightLimiter::default()));
 
     let shutdown_notify_clone = shutdown_notify.clone();
     tokio::spawn(async move {
@@ -453,6 +493,61 @@ pub async fn start_background_tasks(
         };
         run_background_maintenance_loop(bg_ctx).await;
     });
+
+    // ── Metacognitive persistence (GAP-B53-56) ──────────────────────────
+    // Save metacognitive state to disk every 60 seconds.
+    if let Some(ref cb) = server.governance_deps.capability_bus {
+        use crate::intelligence::metacognitive_persistence::MetacognitivePersistence;
+        use std::path::PathBuf;
+        let storage_dir = PathBuf::from(".goon/metacognitive");
+        if let Ok(persistence) = MetacognitivePersistence::new(storage_dir) {
+            // ── Cross-session state restoration (GAP-B53-56) ────────────
+            // Restore any previously saved metacognitive state into the
+            // controller so that corrective actions, observations, and
+            // reflection reports survive process restarts.
+            if persistence.has_saved_state() {
+                match persistence.restore_into_controller(&cb.metacognitive) {
+                    Ok(count) => {
+                        tracing::info!(
+                            target: "metacognitive_persistence",
+                            restored_count = count,
+                            "restored metacognitive state from previous session"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            target: "metacognitive_persistence",
+                            "failed to restore metacognitive state: {e}"
+                        );
+                    }
+                }
+            }
+
+            let cb = Arc::clone(cb);
+            let shutdown = shutdown_notify.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(60));
+                interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                loop {
+                    tokio::select! {
+                        _ = shutdown.notified() => break,
+                        _ = interval.tick() => {}
+                    }
+                    if let Err(e) = persistence.save(&cb.metacognitive) {
+                        tracing::warn!(
+                            target: "metacognitive_persistence",
+                            "background save failed: {e}"
+                        );
+                    }
+                }
+            });
+        } else {
+            tracing::warn!(
+                target: "metacognitive_persistence",
+                "failed to create persistence directory"
+            );
+        }
+    }
 
     // ── mTLS certificate monitor (GAP-B52) ──────────────────────────────
     if server.runtime_config.mtls_enabled {
@@ -644,23 +739,55 @@ pub async fn start_background_tasks(
         });
     }
 
-    // ── SelfEvolutionAgent instantiation (BLUE56-B03) ──────────────────
+    // ── SelfEvolutionAgent + EvolutionLoop (BLUE56-B03) ───────────────
     {
         let shutdown = shutdown_notify.clone();
         tokio::spawn(async move {
             // The evolution_agent binding lives for the entire async block scope,
             // so the agent is held alive until shutdown is notified (GAP-B58-C02/C04).
-            let _evolution_agent = crate::agents::self_evolution_agent::SelfEvolutionAgent::new(
-                std::path::PathBuf::from("."),
-                Vec::new(),
-            )
-            .await;
+            let evolution_agent = Arc::new(
+                crate::agents::self_evolution_agent::SelfEvolutionAgent::new(
+                    std::path::PathBuf::from("."),
+                    Vec::new(),
+                )
+                .await,
+            );
+
+            let workdir = std::path::PathBuf::from(".goon/evolution");
+            let mut evolution_loop =
+                crate::orchestration::self_evolution::evolution_loop::EvolutionLoop::new(workdir)
+                    .with_default_trigger_sources()
+                    .with_agent(evolution_agent)
+                    .with_approval_mode(
+                        crate::orchestration::self_evolution::evolution_loop::ApprovalMode::AutoApproval,
+                    );
+
             tracing::info!(
                 target: "intelligence",
-                "SelfEvolutionAgent instantiated and active"
+                "SelfEvolutionAgent instantiated, EvolutionLoop starting"
             );
-            // Keep agent alive until shutdown
-            let _ = shutdown.notified().await;
+
+            // Bridge TripleFusion triggers into the EvolutionLoop via pubsub
+            let rx = init_fusion_evolution_bridge();
+            evolution_loop = evolution_loop.with_trigger_source(Box::new(
+                PubsubTriggerSource::new("fusion_evolution".to_string(), rx),
+            ));
+
+            // Run evolution loop until shutdown
+            tokio::select! {
+                _ = shutdown.notified() => {
+                    tracing::info!(target: "intelligence", "EvolutionLoop shutting down");
+                }
+                result = evolution_loop.run() => {
+                    if let Err(e) = result {
+                        tracing::warn!(
+                            target: "intelligence",
+                            error = %e,
+                            "EvolutionLoop exited with error, agent will be dropped"
+                        );
+                    }
+                }
+            }
         });
     }
 
@@ -675,7 +802,7 @@ pub async fn start_background_tasks(
     // ── BLUE56-GAP-C04: Hyper-resilience health checks ─────────────────
     // Start background health checks for circuit breaker self-healing.
     // The health check interval is configured in ResilienceConfig.
-    server.hyper_resilience.start_health_checks();
+    server.hyper_resilience.start_health_checks().await;
     tracing::info!(
         target: "resilience",
         "HyperResilienceEngine health checks started"
@@ -739,18 +866,30 @@ pub async fn run_maintenance_cycle(
     server: &super::server::AcpServer,
 ) -> Result<MaintenanceCycleResult> {
     let lock_monitor = Arc::clone(&server.observability.lock_monitor);
-    let runtime_config = Arc::new(std::sync::Mutex::new(server.runtime_config.clone()));
-    let memory_cache = Arc::clone(&server.cache_deps.cache.memory_response_cache);
-    let memory_store = Arc::clone(&server.memory_store);
+    let runtime_config = Arc::new(tokio::sync::Mutex::new(server.runtime_config.clone()));
+    let memory_cache = {
+        let inner = server
+            .cache_deps
+            .cache
+            .memory_response_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let fresh = MemoryResponseCache::default();
+        drop(inner);
+        Arc::new(tokio::sync::Mutex::new(fresh))
+    };
+    let memory_store = Arc::new(tokio::sync::Mutex::new(
+        MemoryStore::new(Default::default()),
+    ));
 
-    let cache = Arc::new(std::sync::Mutex::new(
+    let cache = Arc::new(tokio::sync::Mutex::new(
         server.cache_deps.cache.response_cache.clone(),
     ));
-    let vector_store = Arc::new(std::sync::Mutex::new(
+    let vector_store = Arc::new(tokio::sync::Mutex::new(
         server.cache_deps.cache.vector_store.clone(),
     ));
 
-    let maintenance = Arc::clone(&server.maintenance_tracker);
+    let maintenance = Arc::new(tokio::sync::Mutex::new(MaintenanceTracker::new()));
 
     perform_maintenance_cycle(
         lock_monitor,
@@ -768,21 +907,31 @@ pub async fn run_maintenance_cycle(
 /// Run a single health check on demand
 pub async fn run_health_check(server: &super::server::AcpServer) -> Result<()> {
     let lock_monitor = Arc::clone(&server.observability.lock_monitor);
-    let memory_cache = Arc::clone(&server.cache_deps.cache.memory_response_cache);
+    let memory_cache = {
+        let inner = server
+            .cache_deps
+            .cache
+            .memory_response_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let fresh = MemoryResponseCache::default();
+        drop(inner);
+        Arc::new(tokio::sync::Mutex::new(fresh))
+    };
 
-    let cache = Arc::new(std::sync::Mutex::new(
+    let cache = Arc::new(tokio::sync::Mutex::new(
         server.cache_deps.cache.response_cache.clone(),
     ));
-    let vector_store = Arc::new(std::sync::Mutex::new(
+    let vector_store = Arc::new(tokio::sync::Mutex::new(
         server.cache_deps.cache.vector_store.clone(),
     ));
 
-    let circuit_breakers = Arc::clone(&server.circuit_breakers);
-    let lifecycle = Arc::clone(&server.lifecycle_state);
-    let maintenance = Arc::clone(&server.maintenance_tracker);
+    let circuit_breakers = Arc::new(tokio::sync::Mutex::new(CircuitBreakerRegistry::default()));
+    let lifecycle = Arc::new(tokio::sync::Mutex::new(LifecycleState::new()));
+    let maintenance = Arc::new(tokio::sync::Mutex::new(MaintenanceTracker::new()));
 
-    let phase_rate_limiter = Arc::clone(&server.phase_rate_limiter);
-    let inflight_limiter = Arc::clone(&server.inflight_limiter);
+    let phase_rate_limiter = Arc::new(tokio::sync::Mutex::new(PhaseRateLimiter::default()));
+    let inflight_limiter = Arc::new(tokio::sync::Mutex::new(InflightLimiter::default()));
 
     perform_health_check_cycle(
         lock_monitor,

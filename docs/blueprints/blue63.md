@@ -563,7 +563,7 @@
 | **修复 Round 2 (P1)** | ✅ **100%** — 25项P1全部完成 |
 | **修复 Round 3 (P2)** | ✅ **100%** — 全部44项完成 |
 | **修复 Round 4 (P3)** | ✅ **95%** — 全部完成，仅clippy建议级别项待后续优化 |
-| **最终诊断** | ✅ **workspace/profile-local/tests 三端均0 errors** |
+| **最终诊断** | ✅ **workspace/profile-local/tests 三端均0 errors** |c
 
 ---
 
@@ -641,3 +641,10 @@ Benchmark硬编码→真实计时 ✅
 循环依赖(acp↔intelligence↔observability)解除 ✅
 文件级#![allow(dead_code)]全部移除 ✅
 *
+请继续多轮作为多agents编排系统项目，在全方面（处理问题，执行操作的速度和流畅度，以及智能程度。同时全方位（架构层、运行层、智能层、治理层、协议层、韧性层、可观测层、内存层、GUI层、SDK层、VS Code Addon层、测试层、部署层、i18n层、安全层）按照docs/blueprints/blue64.md规则, 执行按计划步骤进行多轮修复，修复一轮回写一轮blue64.md, 直至全部完成为止。
+1. 注意最后清除所有warnings+errors
+2. 我要ai在本系统加持下，无比聪明，任务处理快速流畅，完全成为全面的真正的智能AI王者。
+3. 不要虚标，一步一个脚印，一个完美超级智能的多AI AGENTS编排系统
+4. 所有级别问题都要修复（high, low critical, medium),完整完美最优化修复。
+5. 绝对绝对禁止假修复不完整修复。
+6. 所有测试fail必须完整完美修复，不要简化或删除。

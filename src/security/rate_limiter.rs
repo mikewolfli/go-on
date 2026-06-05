@@ -5,7 +5,6 @@
 //! 2. Global max concurrent requests (semaphore-based)
 
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -70,7 +69,7 @@ pub struct GlobalRateLimiter {
     #[allow(dead_code)] // F-GAP reserved
     pub global_max: usize,
     config: RateLimitConfig,
-    tenants: Mutex<HashMap<String, TenantBucket>>,
+    tenants: tokio::sync::Mutex<HashMap<String, TenantBucket>>,
     /// Semaphore for global max concurrent requests.
     pub global_semaphore: tokio::sync::Semaphore,
 }
@@ -82,15 +81,15 @@ impl GlobalRateLimiter {
         Self {
             global_max,
             config,
-            tenants: Mutex::new(HashMap::new()),
+            tenants: tokio::sync::Mutex::new(HashMap::new()),
             global_semaphore: semaphore,
         }
     }
 
     /// Try to consume a token for the given tenant.
     /// Returns true if allowed, false if rate limited.
-    pub fn try_consume_tenant(&self, tenant_id: &str, tokens: f64) -> bool {
-        let mut tenants = self.tenants.lock().unwrap();
+    pub async fn try_consume_tenant(&self, tenant_id: &str, tokens: f64) -> bool {
+        let mut tenants = self.tenants.lock().await;
         let bucket = tenants.entry(tenant_id.to_string()).or_insert_with(|| {
             TenantBucket::new(self.config.tenant_burst as f64, self.config.tenant_rps)
         });

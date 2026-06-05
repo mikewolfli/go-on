@@ -67,6 +67,9 @@ pub fn record_model_execution(
 ///
 /// Creates runtimes with the provided agent registry so they can actually
 /// execute tasks instead of falling through to the no-agent fallback.
+///
+/// TODO-BLUE64: Replace hardcoded string matching with a structured dispatch
+/// using `ModeKind` enum or a registry-based strategy pattern.
 pub fn select_mode_runtime_with_registry(
     mode: &str,
     registry: Arc<AgentRegistry>,

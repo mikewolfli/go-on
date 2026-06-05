@@ -39,24 +39,21 @@ pub(super) async fn handle_health(server: &AcpServer, request_id: Option<Value>)
     let token_cache_report = token_cache_stats.to_json();
 
     // Module-level health profiles — read from harness_bus and capability_bus.
-    let harness_profile = server
-        .governance_deps
-        .harness_bus
-        .as_ref()
-        .map(|hb| {
-            json!({
-                "enabled": true,
-                "governance": hb.governance_profile(),
-                "drift": hb.drift_profile(),
-                "brain_loop": hb.brain_profile(),
-                "artifact": hb.artifact_profile(),
-                "omnipotent": hb.omnipotent_profile(),
-                "brain_runner": hb.brain_runner_profile(),
-                "resilience": hb.resilience_profile(),
-                "fault_tolerance": hb.fault_tolerance_profile(),
-            })
+    let harness_profile = if let Some(hb) = server.governance_deps.harness_bus.as_ref() {
+        json!({
+            "enabled": true,
+            "governance": hb.governance_profile(),
+            "drift": hb.drift_profile(),
+            "brain_loop": hb.brain_profile(),
+            "artifact": hb.artifact_profile(),
+            "omnipotent": hb.omnipotent_profile(),
+            "brain_runner": hb.brain_runner_profile(),
+            "resilience": hb.resilience_profile().await,
+            "fault_tolerance": hb.fault_tolerance_profile(),
         })
-        .unwrap_or(json!({"enabled": false}));
+    } else {
+        json!({"enabled": false})
+    };
 
     let capability_profile = server
         .governance_deps

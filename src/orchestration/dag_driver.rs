@@ -16,7 +16,6 @@ use std::sync::Arc;
 
 use crate::i18n::runtime::tf;
 use futures_util::future::join_all;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Semaphore;
 use tracing::warn;
@@ -26,27 +25,7 @@ use crate::orchestration::execution_graph::{ExNodeId, ExNodeState};
 use crate::orchestration::planner_executor::ExecutionPlan;
 use crate::orchestration::tool::{execute_loop, LoopConfig, LoopDecision, ToolInput, ToolRegistry};
 
-/// Result of a single DAG node execution
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DagNodeResult {
-    pub node_id: ExNodeId,
-    pub tool_name: String,
-    pub state: ExNodeState,
-    pub duration_ms: u64,
-    /// Preserved tool output payload for observe/replan evidence
-    pub tool_output: Option<serde_json::Value>,
-    /// Preserved error payload for diagnostic use
-    pub error_payload: Option<String>,
-}
-
-/// Complete DAG execution trace
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DagExecutionTrace {
-    pub nodes: Vec<DagNodeResult>,
-    pub total_duration_ms: u64,
-    pub branch_count: u32,
-    pub join_count: u32,
-}
+pub use crate::orchestration::core_dag::{DagExecutionTrace, DagNodeResult};
 
 /// Build tool execution as a Branch-Join DAG.
 /// Independent tools become Branch fans; dependent tools are sequenced.
@@ -423,42 +402,7 @@ fn create_tool_jobs(
         .collect::<Vec<_>>()
 }
 
-/// Convert DAG execution results into a governance.status-observable payload.
-pub fn dag_trace_to_observability(trace: &DagExecutionTrace) -> Value {
-    let completed = trace
-        .nodes
-        .iter()
-        .filter(|n| matches!(n.state, ExNodeState::Completed))
-        .count();
-    let failed = trace
-        .nodes
-        .iter()
-        .filter(|n| matches!(n.state, ExNodeState::Failed(_)))
-        .count();
-    let total = trace.nodes.len();
-
-    serde_json::json!({
-        "dag_execution": {
-            "total_nodes": total,
-            "completed": completed,
-            "failed": failed,
-            "branch_count": trace.branch_count,
-            "join_count": trace.join_count,
-            "total_duration_ms": trace.total_duration_ms,
-            "dag_width": trace.join_count,
-            "dag_depth": trace.branch_count,
-            "has_tool_evidence": trace.nodes.iter().any(|n| n.tool_output.is_some()),
-            "node_details": trace.nodes.iter().map(|n| serde_json::json!({
-                "node_id": n.node_id,
-                "tool": n.tool_name,
-                "state": format!("{:?}", n.state),
-                "duration_ms": n.duration_ms,
-                "has_output": n.tool_output.is_some(),
-                "has_error": n.error_payload.is_some(),
-            })).collect::<Vec<_>>(),
-        }
-    })
-}
+pub use crate::orchestration::core_dag::dag_trace_to_observability;
 
 #[cfg(test)]
 mod tests {

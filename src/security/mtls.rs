@@ -221,16 +221,18 @@ impl CertificateInfo {
 /// Accepts incoming mTLS connections using rustls.
 ///
 /// Loads CA and server certificates from the paths specified in MtlsConfig.
-#[allow(dead_code)] // F-GAP-49 — reserved mTLS feature
+/// TODO-BLUE64: Wire into ACP runtime accept path (BLUE56-D03).
+#[allow(dead_code)]
 pub struct MtlsAcceptor {
     config: MtlsConfig,
     /// Cached server config (rebuilt on cert reload).
     server_config: RwLock<Option<Arc<rustls::ServerConfig>>>,
 }
 
-#[allow(dead_code)] // F-GAP-49 — reserved mTLS feature
 impl MtlsAcceptor {
     /// Create a new MtlsAcceptor from configuration.
+    /// TODO-BLUE64: Wire into ACP runtime accept path.
+    #[allow(dead_code)]
     pub fn new(config: MtlsConfig) -> Self {
         Self {
             config,
@@ -343,11 +345,15 @@ impl MtlsAcceptor {
     }
 
     /// Accept an incoming TLS connection (wraps a tokio TcpStream).
-    /// Returns the CN of the client certificate if available.
+    /// Returns the TLS stream and the CN of the client certificate (if available).
+    ///
+    /// This bundles handshake + CN extraction, replacing the manual
+    /// `tls_acceptor.accept(stream)` call so that client-cert CN is
+    /// available for authorization (BLUE56-D03).
     pub async fn accept(
         &self,
         stream: tokio::net::TcpStream,
-    ) -> Result<(tokio_rustls::TlsAcceptor, String), MtlsError> {
+    ) -> Result<(tokio_rustls::TlsStream<tokio::net::TcpStream>, String), MtlsError> {
         let server_config = {
             let cached = self.server_config.read().await;
             match cached.as_ref() {
@@ -361,7 +367,7 @@ impl MtlsAcceptor {
             }
         };
 
-        let acceptor = tokio_rustls::TlsAcceptor::from(server_config.clone());
+        let acceptor = tokio_rustls::TlsAcceptor::from(server_config);
 
         // BLUE56-D03: Perform the actual TLS handshake and extract client CN
         let tls_stream = match acceptor.accept(stream).await {
@@ -393,10 +399,11 @@ impl MtlsAcceptor {
             "unknown".to_string()
         };
 
-        Ok((tokio_rustls::TlsAcceptor::from(server_config), cn))
+        Ok((tokio_rustls::TlsStream::Server(tls_stream), cn))
     }
 
     /// Reload certificates from disk (for hot-reload scenarios).
+    #[allow(dead_code)]
     pub async fn reload_certs(&self) -> Result<(), MtlsError> {
         let cfg = self.build_server_config()?;
         *self.server_config.write().await = Some(cfg);

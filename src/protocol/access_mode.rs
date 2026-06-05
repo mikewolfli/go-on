@@ -142,15 +142,10 @@ pub fn resolve_access_selection(
             selection_reason: "configured_explicit_mode",
         },
         other => {
-            tracing::warn!(configured_mode = %other, "unknown protocol mode resolved, falling back to adaptive");
-            AccessSelection {
-                configured_mode: other.to_string(),
-                protocol_capability: ProtocolCapability::DualStack,
-                request_dispatch_mode: RequestDispatchMode::Auto,
-                startup_transport: TransportMode::Http,
-                transport_strategy: "fallback_unknown_mode",
-                selection_reason: "unknown_mode_fallback",
-            }
+            panic!(
+                "fatal: unknown protocol mode '{}' — must be one of: adaptive, acp_stdio, acp_http, mcp_stdio, mcp_http",
+                other
+            );
         }
     }
 }

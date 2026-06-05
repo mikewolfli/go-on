@@ -17,6 +17,7 @@ use super::autonomy::is_execution_like_request;
 use super::autonomy_loop::{
     run_autonomy_loop, AutonomyLoopConfig, AutonomyLoopReport, AutonomyLoopResult,
 };
+#[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
 use crate::orchestration::brain_loop::{
     BrainLoop, BrainLoopConfig, BrainLoopPhase, BrainLoopProfile, BrainLoopStep, StepStatus,
 };
@@ -98,6 +99,7 @@ pub(crate) async fn run_acp_autonomy_loop(
 /// Converts the ACP messages and objective into a `BrainLoop` plan,
 /// runs the plan → execute → reflect → replan cycle, then converts the
 /// resulting [`BrainLoopProfile`] back into [`AutonomyLoopResult`] format.
+#[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
 async fn run_acp_autonomy_loop_with_brain_loop(
     _agent: Arc<dyn Agent>,
     objective: &str,
@@ -136,6 +138,7 @@ async fn run_acp_autonomy_loop_with_brain_loop(
 }
 
 /// Convert a [`BrainLoopProfile`] to an [`AutonomyLoopResult`].
+#[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
 fn brain_loop_profile_to_result(profile: &BrainLoopProfile, objective: &str) -> AutonomyLoopResult {
     let response = serde_json::json!({
         "brain_loop": true,

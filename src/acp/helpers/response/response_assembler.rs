@@ -433,8 +433,8 @@ mod tests {
             .is_some());
     }
 
-    #[test]
-    fn build_task_graph_checkpoint_contains_state() {
+    #[tokio::test]
+    async fn build_task_graph_checkpoint_contains_state() {
         let server = ServerBuilder::new().build().expect("server should build");
         let (checkpoint, graph_id, ckpt_id) = build_task_graph_checkpoint(
             &server,

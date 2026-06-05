@@ -644,6 +644,12 @@ impl SecretManager {
         tenant_id.unwrap_or(DEFAULT_TENANT).to_string()
     }
 
+    /// Qualify a key_id with tenant for backend rotator storage, ensuring
+    /// different tenants get independent secret entries even with the same key_id.
+    fn qualified_key(key_id: &str, tenant: &str) -> String {
+        format!("{}/{}", tenant, key_id)
+    }
+
     pub fn new(rotation_policy: RotationPolicy, rotator: Arc<dyn KeyRotator>) -> Self {
         Self {
             secrets: RwLock::new(HashMap::new()),
@@ -704,8 +710,9 @@ impl SecretManager {
             }
         }
 
-        // Check if the backend already has it
-        if let Some(entry) = self.rotator.retrieve_key(&key_id).await? {
+        // Check if the backend already has it (tenant-qualified key_id)
+        let rotator_key = Self::qualified_key(&key_id, &tenant);
+        if let Some(entry) = self.rotator.retrieve_key(&rotator_key).await? {
             self.secrets
                 .write()
                 .await
@@ -715,8 +722,8 @@ impl SecretManager {
             return Ok(entry);
         }
 
-        // Generate a new key
-        let entry = self.rotator.generate_key(&key_id, algorithm).await?;
+        // Generate a new key (tenant-qualified)
+        let entry = self.rotator.generate_key(&rotator_key, algorithm).await?;
         self.secrets
             .write()
             .await
@@ -749,8 +756,9 @@ impl SecretManager {
             }
         }
 
-        // Try backend
-        if let Some(entry) = self.rotator.retrieve_key(key_id).await? {
+        // Try backend (tenant-qualified key_id)
+        let rotator_key = Self::qualified_key(key_id, &tenant);
+        if let Some(entry) = self.rotator.retrieve_key(&rotator_key).await? {
             if self.needs_rotation(&entry) && self.rotation_policy.auto_rotate_on_access {
                 return self.rotate_key(key_id, tenant_id).await;
             }
@@ -776,6 +784,8 @@ impl SecretManager {
     ) -> Result<SecretEntry, SecretError> {
         let tenant = Self::tenant_key(tenant_id);
 
+        let rotator_key = Self::qualified_key(key_id, &tenant);
+
         let algorithm = {
             let cached = {
                 let secrets = self.secrets.read().await;
@@ -783,7 +793,7 @@ impl SecretManager {
             };
             if let Some(entry) = cached {
                 entry.algorithm
-            } else if let Ok(Some(entry)) = self.rotator.retrieve_key(key_id).await {
+            } else if let Ok(Some(entry)) = self.rotator.retrieve_key(&rotator_key).await {
                 entry.algorithm
             } else {
                 SecretAlgorithm::Generic
@@ -791,7 +801,7 @@ impl SecretManager {
         };
 
         // Archive current key as a previous version
-        if let Ok(Some(old_entry)) = self.rotator.retrieve_key(key_id).await {
+        if let Ok(Some(old_entry)) = self.rotator.retrieve_key(&rotator_key).await {
             let mut versions = self.previous_versions.write().await;
             let tenant_versions = versions.entry(tenant.clone()).or_default();
             let versions_list = tenant_versions.entry(key_id.to_string()).or_default();
@@ -802,11 +812,11 @@ impl SecretManager {
             }
         }
 
-        // Delete old key from backend
-        let _ = self.rotator.delete_key(key_id).await;
+        // Delete old key from backend (tenant-qualified)
+        let _ = self.rotator.delete_key(&rotator_key).await;
 
-        // Generate new key
-        let new_entry = self.rotator.generate_key(key_id, algorithm).await?;
+        // Generate new key (tenant-qualified)
+        let new_entry = self.rotator.generate_key(&rotator_key, algorithm).await?;
 
         // Update cache
         self.secrets
@@ -897,7 +907,8 @@ mod tests {
             retain_versions: 2,
             min_key_length: 16,
         };
-        let rotator = Arc::new(EnvRotator::new("GOON_TEST".into()));
+        // Use MemoryRotator for tenant isolation tests (EnvRotator has flat namespace)
+        let rotator = Arc::new(MemoryRotator::new());
         SecretManager::new(policy, rotator)
     }
 

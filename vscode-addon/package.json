@@ -17,7 +17,7 @@
     "onCommand:go-on.start",
     "onCommand:go-on.stop",
     "onCommand:go-on.status",
-    "onStartupFinished"
+    "onView:go-on-chat"
   ],
   "main": "./out/extension.js",
   "repository": {
@@ -853,16 +853,19 @@
     "lint": "eslint src --ext ts",
     "check": "npm run compile && npm run lint",
     "test:contract": "node ./scripts/contract-smoke.js",
-    "test": "npm run compile && npm run test:contract"
+    "test:unit": "npx mocha --config .mocharc.json",
+    "test": "npm run compile && npm run test:unit && npm run test:contract"
   },
   "devDependencies": {
     "@types/adm-zip": "^0.5.7",
-    "@types/node": "16.x",
+    "@types/mocha": "^10.0.0",
+    "@types/node": "20.x",
     "@types/tar": "^6.1.13",
     "@types/vscode": "^1.90.0",
     "@typescript-eslint/eslint-plugin": "^5.42.0",
     "@typescript-eslint/parser": "^5.42.0",
     "eslint": "^8.28.0",
+    "mocha": "^10.4.0",
     "nodemon": "^3.0.0",
     "typescript": "^4.9.5"
   },

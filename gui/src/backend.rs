@@ -925,26 +925,41 @@ impl BackendClient {
 
         let mut last_err = String::new();
         let mut response = None;
-        for attempt in 1..=3 {
-            match self
-                .long_client
-                .post(format!("{}/chat/stream", self.base_url))
-                .json(&body)
-                .send()
-                .await
-            {
-                Ok(resp) => {
-                    response = Some(resp);
-                    break;
-                }
-                Err(e) => {
-                    last_err = format!("HTTP error: {}", e);
-                    if attempt < 3 {
-                        tokio::time::sleep(std::time::Duration::from_millis(200 * attempt as u64))
+
+        // Try /v1/chat/completions first (OpenAI-compatible), fall back to /chat/stream
+        let endpoints = ["/v1/chat/completions", "/chat/stream"];
+        for endpoint in &endpoints {
+            for attempt in 1..=3 {
+                match self
+                    .long_client
+                    .post(format!("{}{}", self.base_url, endpoint))
+                    .json(&body)
+                    .send()
+                    .await
+                {
+                    Ok(resp) => {
+                        if resp.status() == 404 && *endpoint == "/v1/chat/completions" {
+                            // Endpoint not found — fall back to legacy
+                            last_err = format!("endpoint {} not found, falling back", endpoint);
+                            break;
+                        }
+                        response = Some(resp);
+                        break;
+                    }
+                    Err(e) => {
+                        last_err = format!("HTTP error: {}", e);
+                        if attempt < 3 {
+                            tokio::time::sleep(std::time::Duration::from_millis(
+                                200 * attempt as u64,
+                            ))
                             .await;
-                        continue;
+                            continue;
+                        }
                     }
                 }
+            }
+            if response.is_some() {
+                break;
             }
         }
         let resp = response.ok_or_else(|| last_err.clone())?;

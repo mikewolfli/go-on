@@ -25,6 +25,7 @@ tokio-test = "0.4"
 tokio-util = { version = "0.7", features = ["rt"] }
 tempfile = "3"
 fastrand = "2"
+toml = "1.1.0"
 
 [package]
 name = "go-on"
@@ -172,7 +173,7 @@ opentelemetry-stdout = "0.31"
 rusqlite = { version = "0.31.0", features = ["bundled"], optional = true }
 sha2 = "0.10"
 uuid.workspace = true
-toml = "1.1.0"
+toml.workspace = true
 keyring.workspace = true
 opentelemetry = "0.31"
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
@@ -213,6 +214,7 @@ notify = { version = "6", features = ["macos_kqueue"] }
 windows-sys = { version = "0.59", features = ["Win32_System_ProcessStatus", "Win32_System_Threading"] }
 
 [dev-dependencies]
+# ── Note: Contract tests live in tests/contract_tests/ ──────────────────
 tempfile.workspace = true
 fs2 = "0.4"
 serial_test = "3"
@@ -229,3 +231,8 @@ opt-level = 3
 [profile.dev]
 opt-level = 0
 debug = true
+
+[profile.test]
+# No LTO — avoids linker errors with LLVM hidden symbols under opt-level=1
+opt-level = 1
+lto = "off"

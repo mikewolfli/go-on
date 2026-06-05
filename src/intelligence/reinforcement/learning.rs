@@ -517,6 +517,9 @@ impl Default for QLearningAgent {
 
 impl QLearningAgent {
     pub fn choose_action(&self, state: &(String, String), actions: &[String]) -> Option<String> {
+        if actions.is_empty() {
+            return None;
+        }
         if self.exploration_rate > simple_random_f64() {
             // Explore: pick a random action using simple hash-based approach
             let idx = (simple_random_u64() as usize) % actions.len();

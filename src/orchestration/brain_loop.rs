@@ -204,6 +204,11 @@ pub struct BrainLoopConfig {
     /// planning (GAP-B50-06).
     /// Default: `true`
     pub world_model_integration: bool,
+    /// Maximum time (in milliseconds) that `sync_write`/`sync_read` will
+    /// spin-wait before panicking. This bounds the worst-case wait when
+    /// the async holder is stalled.
+    /// Default: `5000` (5 seconds)
+    pub max_spin_ms: u64,
 }
 
 impl Default for BrainLoopConfig {
@@ -220,6 +225,7 @@ impl Default for BrainLoopConfig {
             max_deep_reasoning_tokens: 4096,
             deep_reasoning_model: None,
             world_model_integration: true,
+            max_spin_ms: 5000,
         }
     }
 }
@@ -705,21 +711,67 @@ impl BrainLoop {
     // ── Plan lifecycle (sync fast paths) ────────────────────────────────
 
     /// Acquire a write guard from a sync context via try-write + yield loop.
+    ///
+    /// TODO: This module is deprecated (use cognitive loop in chat_phases.rs instead).
+    /// The busy-spin is replaced with a small sleep to avoid CPU burning.
+    /// Will panic after `max_spin_ms` to avoid unbounded blocking.
+    #[allow(clippy::needless_continue)]
     fn sync_write(&self) -> tokio::sync::RwLockWriteGuard<'_, BrainLoopInner> {
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_millis(
+                self.inner
+                    .try_read()
+                    .map(|g| g.config.max_spin_ms)
+                    .unwrap_or(5000),
+            );
         loop {
             match self.inner.try_write() {
                 Ok(guard) => return guard,
-                Err(_) => std::thread::yield_now(),
+                Err(_) => {
+                    if std::time::Instant::now() > deadline {
+                        panic!(
+                            "sync_write timed out after {} ms",
+                            self.inner
+                                .try_read()
+                                .map(|g| g.config.max_spin_ms)
+                                .unwrap_or(5000)
+                        );
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
             }
         }
     }
 
     /// Acquire a read guard from a sync context via try-read + yield loop.
+    ///
+    /// TODO: This module is deprecated (use cognitive loop in chat_phases.rs instead).
+    /// The busy-spin is replaced with a small sleep to avoid CPU burning.
+    /// Will panic after `max_spin_ms` to avoid unbounded blocking.
+    #[allow(clippy::needless_continue)]
     fn sync_read(&self) -> tokio::sync::RwLockReadGuard<'_, BrainLoopInner> {
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_millis(
+                self.inner
+                    .try_read()
+                    .map(|g| g.config.max_spin_ms)
+                    .unwrap_or(5000),
+            );
         loop {
             match self.inner.try_read() {
                 Ok(guard) => return guard,
-                Err(_) => std::thread::yield_now(),
+                Err(_) => {
+                    if std::time::Instant::now() > deadline {
+                        panic!(
+                            "sync_read timed out after {} ms",
+                            self.inner
+                                .try_read()
+                                .map(|g| g.config.max_spin_ms)
+                                .unwrap_or(5000)
+                        );
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
             }
         }
     }
@@ -1693,6 +1745,7 @@ impl BrainLoop {
         since = "1.2.0",
         note = "use run_async instead — this wrapper will be removed in a future release"
     )]
+    #[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
     pub fn run(&self, task: &str, steps: Vec<BrainLoopStep>) -> anyhow::Result<BrainLoopProfile> {
         tracing::error!(
             "BrainLoop::run() is DEPRECATED and scheduled for removal — use run_async() directly instead"
@@ -1788,6 +1841,7 @@ mod tests {
             max_deep_reasoning_tokens: 4096,
             deep_reasoning_model: None,
             world_model_integration: true,
+            max_spin_ms: 5000,
         }
     }
 
@@ -2566,7 +2620,11 @@ mod tests {
     #[tokio::test]
     async fn test_query_world_model_stub() {
         // With world model disabled, no data should be set.
-        let bl = BrainLoop::new(default_config());
+        let config = BrainLoopConfig {
+            world_model_integration: false,
+            ..default_config()
+        };
+        let bl = BrainLoop::new(config);
         let plan_id = bl
             .start_plan("WM test", vec![make_step("w1", "World step")])
             .unwrap();

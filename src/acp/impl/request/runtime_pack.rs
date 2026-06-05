@@ -1085,7 +1085,15 @@ pub(super) async fn handle_autotune_reset(
     let mut persisted = false;
     let mut warning = None::<String>;
     if let Some(path) = &server.cache_deps.autotune_state_path {
-        match lock.save(path) {
+        let path = path.clone();
+        // Snapshot the state after reset so we can save outside the lock.
+        let state_snapshot = lock.clone();
+        // Drop the mutex guard before spawn_blocking.
+        drop(lock);
+        match tokio::task::spawn_blocking(move || state_snapshot.save(&path))
+            .await
+            .expect("spawn_blocking for autotune save panicked")
+        {
             Ok(()) => persisted = true,
             Err(err) => {
                 warning = Some(tf(

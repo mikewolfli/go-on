@@ -133,8 +133,8 @@ async fn test_memory_persistence_three_tier_lifecycle() {
     assert_eq!(cold_b.tier, MemoryTier::Cold);
     assert_eq!(cold_a.id, "mem-e2e-l1-001");
     assert_eq!(cold_b.id, "mem-e2e-l1-002");
-    assert!(cold_a.content.len() > 0);
-    assert!(cold_b.content.len() > 0);
+    assert!(!cold_a.content.is_empty());
+    assert!(!cold_b.content.is_empty());
 
     // ── 5. Restore from L3 → L2 ────────────────────────────────────────
     // Restore an entry and verify it lands in warm.
@@ -216,8 +216,7 @@ async fn test_memory_persistence_automatic_demotion_on_capacity() {
     assert!(evicted_count > 0, "entries above capacity must be demoted");
 
     // Verify the evicted entries (those beyond max) are structurally sound.
-    for evicted_idx in policy.hot_max_entries..entries.len() {
-        let entry = &entries[evicted_idx];
+    for entry in entries[policy.hot_max_entries..].iter() {
         assert_eq!(entry.tier, MemoryTier::Hot, "source entries remain hot");
         assert!(entry.id.starts_with("auto-demote-"));
         assert!(entry.usefulness > 0.0);

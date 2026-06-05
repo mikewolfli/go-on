@@ -280,6 +280,8 @@ pub(super) async fn handle_initialize(server: &AcpServer, request_id: Option<Val
             "version".to_string(),
             serde_json::json!(env!("CARGO_PKG_VERSION")),
         );
+        // "protocol_version" — expose as a plain number for compatibility
+        obj.insert("protocol_version".to_string(), serde_json::json!(1u16));
         // "capabilities" — flatten the chat/phase/health/etc. booleans
         let caps_obj = serde_json::json!({
             "chat": true,

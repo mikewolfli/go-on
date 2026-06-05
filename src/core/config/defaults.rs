@@ -214,6 +214,7 @@ impl Default for RuntimeConfig {
             enable_dag_execution: false,
             enable_agent_reroute: true,
             enable_metacognitive_feedback: true,
+            enable_delphi_debate: false,
             governance_enabled: true,
             governance_policy_mode: String::new(),
             // Security (GAP-B52)

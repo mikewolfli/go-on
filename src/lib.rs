@@ -1,5 +1,5 @@
 #![recursion_limit = "2048"]
-#![allow(deprecated)]
+#![allow(deprecated)] // deprecated items used by tests of deprecated API surface
 
 //! go-on – ACP runtime proxy with integrated multi-agent orchestration.
 //!

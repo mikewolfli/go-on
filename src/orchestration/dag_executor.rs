@@ -13,6 +13,9 @@
 
 // F-GAP-51: dead_code allowed on items below when sub-bus-tool-future is disabled
 
+use crate::orchestration::core_dag as core_dag_impl;
+pub use crate::orchestration::core_dag::TaskContext;
+use crate::orchestration::tool::{ToolInput, ToolRegistry};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -21,10 +24,6 @@ use std::time::Instant;
 use tokio::sync::Notify;
 use tokio::sync::Semaphore;
 use tracing::{debug, info, warn};
-use uuid::Uuid;
-
-use crate::orchestration::core_dag as core_dag_impl;
-use crate::orchestration::tool::{ToolInput, ToolRegistry};
 
 // ---------------------------------------------------------------------------
 // DagNode
@@ -46,73 +45,6 @@ pub struct DagNode {
     pub duration_ms: u64,
     /// Chain-of-Thought context propagated from upstream nodes.
     pub context: Option<TaskContext>,
-}
-
-// ---------------------------------------------------------------------------
-// TaskContext — Chain-of-Thought context propagated between DAG nodes
-// ---------------------------------------------------------------------------
-
-/// Chain-of-Thought context propagated between DAG nodes.
-#[allow(dead_code)] // F-GAP-51
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskContext {
-    pub id: String,
-    pub reasoning_trace: Vec<String>,
-    pub intermediate_findings: HashMap<String, Value>,
-    pub confidence: f64,
-    pub open_questions: Vec<String>,
-    pub assumptions: Vec<String>,
-    pub parent_context_id: Option<String>,
-}
-
-#[allow(dead_code)] // F-GAP-51
-impl TaskContext {
-    /// Create a new TaskContext with the given id.
-    pub fn new(id: String) -> Self {
-        Self {
-            id,
-            reasoning_trace: Vec::new(),
-            intermediate_findings: HashMap::new(),
-            confidence: 1.0,
-            open_questions: Vec::new(),
-            assumptions: Vec::new(),
-            parent_context_id: None,
-        }
-    }
-
-    /// Merge multiple parent contexts into a single child context.
-    /// Generates a new UUID for the merged context's id.
-    pub fn merge(parents: &[TaskContext]) -> Self {
-        let mut reasoning_trace = Vec::new();
-        let mut intermediate_findings = HashMap::new();
-        let mut confidences_sum = 0.0;
-        let mut open_questions = Vec::new();
-        let mut assumptions = Vec::new();
-
-        for parent in parents {
-            reasoning_trace.extend(parent.reasoning_trace.clone());
-            intermediate_findings.extend(parent.intermediate_findings.clone());
-            confidences_sum += parent.confidence;
-            open_questions.extend(parent.open_questions.clone());
-            assumptions.extend(parent.assumptions.clone());
-        }
-
-        let parent_context_id = parents.first().map(|p| p.id.clone());
-
-        Self {
-            id: Uuid::new_v4().to_string(),
-            reasoning_trace,
-            intermediate_findings,
-            confidence: if parents.is_empty() {
-                1.0
-            } else {
-                confidences_sum / parents.len() as f64
-            },
-            open_questions,
-            assumptions,
-            parent_context_id,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

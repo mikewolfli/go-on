@@ -909,8 +909,10 @@ impl ServerBuilder {
         self
     }
 
-    /// Set the memory retrieval engine (GAP-B52-13)
-    #[allow(dead_code)] // Reserved for production server startup wiring
+    /// Set the memory retrieval engine (GAP-B52-13).
+    ///
+    /// To create an engine from a `MemoryPersistence` instance, use the
+    /// convenience function [`wire_memory_retrieval`](crate::memory::wire_memory_retrieval).
     pub fn with_memory_retrieval_engine(mut self, engine: Arc<MemoryRetrievalEngine>) -> Self {
         self.memory_retrieval_engine = Some(engine);
         self

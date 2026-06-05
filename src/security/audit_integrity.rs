@@ -555,8 +555,11 @@ mod tests {
 
         // Tamper with the payload (changes compute_hash)
         entry.payload = serde_json::json!({"event": "deploy_tampered"});
+        // Also update payload_hash to reflect the tampered payload
+        let tampered_bytes = serde_json::to_vec(&entry.payload).unwrap_or_default();
+        entry.payload_hash = hex::encode(sha256(&tampered_bytes));
 
-        // Signature should now fail
+        // Signature should now fail (different compute_hash)
         assert!(entry.verify_signature(&verifying_key.to_bytes()).is_err());
     }
 

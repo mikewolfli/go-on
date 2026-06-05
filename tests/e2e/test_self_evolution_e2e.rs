@@ -213,7 +213,7 @@ async fn test_self_evolution_auto_rollback_on_health_check_failure() {
     // Verify the sandbox executor configuration.
     // The sandbox should have a positive iteration budget.
     // (saved before sandbox was moved into EvolutionLoop above)
-    assert!(3 > 0, "iteration budget must be positive");
+    // iteration budget checked statically — always positive
 
     // Verify that the EvolutionLoop can be created with different approval modes.
     let mut auto_loop =

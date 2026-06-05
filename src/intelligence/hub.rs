@@ -9,16 +9,22 @@
 //! All integrations are non-blocking: failures in any module log a warning
 //! but never crash the calling thread.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use std::collections::HashMap;
 
+use std::sync::{Arc, OnceLock};
+
 use crate::governance::audit::{AuditLogEntry, ThreadSafeAuditLog};
 use crate::governance::rationalization::SelfRationalizationGuard;
+use crate::intelligence::capability_bus::core::CapabilityBus;
 use crate::intelligence::consensus::{ConsensusEngine, ConsensusNode, ConsensusVote, NodeRole};
-use crate::intelligence::weighted_vote::{self, DelphiConfig, WeightedVoteConfig};
+use crate::intelligence::voter_impls::{
+    CapabilityBusVoter, LocalAgentVoter, RationalizationGuardVoter,
+};
+use crate::intelligence::weighted_vote::{self, AgentVoter, DelphiConfig, WeightedVoteConfig};
 
 // ── Global counters for observability ─────────────────────────────────────
 
@@ -34,6 +40,21 @@ pub static RATIONALIZATION_COUNT: AtomicU64 = AtomicU64::new(0);
 #[allow(dead_code)] // F-GAP-49 — reserved intelligence hub feature
 pub static AUDIT_ENTRY_COUNT: AtomicU64 = AtomicU64::new(0);
 
+/// Whether Delphi-method debate voting is enabled in rationalize_decision.
+static USE_DELPHI_DEBATE: AtomicBool = AtomicBool::new(false);
+
+#[allow(dead_code)] // TODO-BLUE64: Reserved for Delphi debate feature toggle
+/// Enable or disable the Delphi debate integration in rationalize_decision.
+pub fn set_delphi_debate_enabled(enabled: bool) {
+    USE_DELPHI_DEBATE.store(enabled, Ordering::Relaxed);
+}
+
+#[allow(dead_code)] // TODO-BLUE64: Reserved for Delphi debate feature toggle
+/// Returns whether Delphi debate is currently enabled.
+pub fn delphi_debate_enabled() -> bool {
+    USE_DELPHI_DEBATE.load(Ordering::Relaxed)
+}
+
 // ── Global instances ──────────────────────────────────────────────────────
 
 static GLOBAL_CONSENSUS: LazyLock<Mutex<ConsensusEngine>> =
@@ -41,6 +62,10 @@ static GLOBAL_CONSENSUS: LazyLock<Mutex<ConsensusEngine>> =
 
 static GLOBAL_RATIONALIZATION: LazyLock<Mutex<SelfRationalizationGuard>> =
     LazyLock::new(|| Mutex::new(SelfRationalizationGuard::new(0.3)));
+
+/// Global voters for the Delphi debate / weighted-vote system.
+/// Initialised via [`init_intel_voters`] at server startup.
+static GLOBAL_VOTERS: OnceLock<Vec<Box<dyn AgentVoter + Send + Sync>>> = OnceLock::new();
 
 #[allow(dead_code)] // F-GAP-49 — reserved intelligence hub feature
 static GLOBAL_AUDIT: LazyLock<ThreadSafeAuditLog> = LazyLock::new(|| {
@@ -52,7 +77,11 @@ static GLOBAL_AUDIT: LazyLock<ThreadSafeAuditLog> = LazyLock::new(|| {
 
 /// Initialize intelligence hub at server startup.
 /// Registers local nodes in the consensus engine.
-pub fn init_intel_hub() {
+///
+/// `enable_delphi_debate` — when `true`, `rationalize_decision` will
+/// use the weighted reputation + Delphi debate voting path instead of
+/// the basic rationalization guard.
+pub fn init_intel_hub(enable_delphi_debate: bool) {
     let consensus = match GLOBAL_CONSENSUS.lock() {
         Ok(guard) => guard,
         Err(poisoned) => {
@@ -76,26 +105,59 @@ pub fn init_intel_hub() {
         is_online: true,
         last_heartbeat_ms: crate::intelligence::now_ms(),
     });
+    USE_DELPHI_DEBATE.store(enable_delphi_debate, Ordering::Relaxed);
+    if enable_delphi_debate {
+        tracing::info!("intel_hub: Delphi debate voting enabled");
+    }
     tracing::info!("intel_hub: initialized consensus, rationalization, audit");
+}
+
+/// Initialise the 3 internal voters (CapabilityBusVoter, LocalAgentVoter,
+/// RationalizationGuardVoter) and store them so that
+/// [`consensus_vote_with_reputation`] can delegate to their async
+/// `AgentVoter::vote()` implementations.
+///
+/// Call this once during server startup, *after* `init_intel_hub()`.
+/// When `capability_bus` is `None`, only the `LocalAgentVoter` and
+/// `RationalizationGuardVoter` are stored.
+pub fn init_intel_voters(capability_bus: Option<Arc<CapabilityBus>>) {
+    let mut voters: Vec<Box<dyn AgentVoter + Send + Sync>> = Vec::new();
+
+    // CapabilityBusVoter — only when a capability bus is available.
+    if let Some(bus) = capability_bus {
+        voters.push(Box::new(CapabilityBusVoter::new("capability-bus", bus)));
+    }
+
+    // LocalAgentVoter — keyword-heuristic voter.
+    voters.push(Box::new(LocalAgentVoter::new("local-agent")));
+
+    // RationalizationGuardVoter — safety-guard voter.
+    voters.push(Box::new(RationalizationGuardVoter::new(
+        "rationalization-guard",
+        Arc::new(SelfRationalizationGuard::new(0.6)),
+    )));
+
+    let _ = GLOBAL_VOTERS.set(voters).map_err(|_| {
+        tracing::warn!("intel_hub: GLOBAL_VOTERS already initialised");
+    });
+
+    tracing::info!("intel_hub: {} voter(s) registered", {
+        GLOBAL_VOTERS.get().map(|v| v.len()).unwrap_or(0)
+    });
 }
 
 // ── Voting mode configuration ─────────────────────────────────────────────
 
 /// Voting mode for the intelligence hub.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum VoteMode {
     /// Legacy consensus engine (existing simple majority).
     Legacy,
     /// Weighted reputation voting — each vote is weighted by agent reputation.
     Weighted,
     /// Delphi-method debate rounds with weighted reputation voting.
+    #[default]
     DelphiDebate,
-}
-
-impl Default for VoteMode {
-    fn default() -> Self {
-        Self::DelphiDebate
-    }
 }
 
 /// Configuration for the upgraded voting system.
@@ -259,7 +321,6 @@ pub fn consensus_vote_on(
 /// * `config` – [`VoteConfig`] controlling mode, threshold, debate rounds.
 ///
 /// Returns `(approved, confidence)` — same signature as [`consensus_vote_on`].
-#[allow(dead_code)] // F-GAP-49 — reserved intelligence hub feature
 pub fn consensus_vote_with_reputation(
     proposal_id: &str,
     proposal: serde_json::Value,
@@ -287,87 +348,109 @@ pub fn consensus_vote_with_reputation(
         .map(|s| matches!(s, "high" | "critical"))
         .unwrap_or(false);
 
-    // Build votes for the 3 internal nodes
-    let mut raw_votes = std::collections::HashMap::new();
+    // Collect votes — prefer stored AgentVoter impls, fall back to hardcoded.
+    let raw_votes = if let Some(voters) = GLOBAL_VOTERS.get() {
+        // Build the voting context from the proposal
+        let context = serde_json::to_string(&proposal).unwrap_or_default();
 
-    // Node 1: capability-bus
-    let cb_approve = if is_risky {
-        approve && proposal_confidence > 0.6
+        // Collect votes synchronously by blocking on the async vote() calls.
+        // This is safe because consensus_vote_with_reputation is always called
+        // from within a tokio runtime context (chat hot path or rationalize).
+        let mut votes = HashMap::new();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            for voter in voters {
+                let vote = tokio::task::block_in_place(|| {
+                    handle.block_on(async { voter.vote(&context).await })
+                });
+                votes.insert(voter.name().to_string(), vote);
+            }
+        } else {
+            tracing::warn!("intel_hub: no tokio runtime — falling back to hardcoded votes");
+            return consensus_vote_on(proposal_id, proposal, approve);
+        }
+        votes
     } else {
-        approve || proposal_confidence > 0.7
-    };
-    raw_votes.insert(
-        "capability-bus".to_string(),
-        weighted_vote::Vote {
-            approves: cb_approve,
-            reasoning: format!(
-                "proposal_confidence={}, is_risky={}",
-                proposal_confidence, is_risky
-            ),
-            confidence: proposal_confidence,
-        },
-    );
+        // No voters registered — build hardcoded votes (legacy path)
+        let mut votes = std::collections::HashMap::new();
 
-    // Node 2: local-agent
-    raw_votes.insert(
-        "local-agent".to_string(),
-        weighted_vote::Vote {
-            approves: approve,
-            reasoning: "Caller intent".to_string(),
-            confidence: 0.7,
-        },
-    );
+        let cb_approve = if is_risky {
+            approve && proposal_confidence > 0.6
+        } else {
+            approve || proposal_confidence > 0.7
+        };
+        votes.insert(
+            "capability-bus".to_string(),
+            weighted_vote::Vote {
+                approves: cb_approve,
+                reasoning: format!(
+                    "proposal_confidence={}, is_risky={}",
+                    proposal_confidence, is_risky
+                ),
+                confidence: proposal_confidence,
+            },
+        );
 
-    // Node 3: rationalization-guard
-    let rg_approve = if is_risky {
-        proposal_confidence > 0.5
-    } else {
-        proposal_confidence > 0.3
+        votes.insert(
+            "local-agent".to_string(),
+            weighted_vote::Vote {
+                approves: approve,
+                reasoning: "Caller intent".to_string(),
+                confidence: 0.7,
+            },
+        );
+
+        let rg_approve = if is_risky {
+            proposal_confidence > 0.5
+        } else {
+            proposal_confidence > 0.3
+        };
+        votes.insert(
+            "rationalization-guard".to_string(),
+            weighted_vote::Vote {
+                approves: rg_approve,
+                reasoning: format!(
+                    "risk_assessment: confidence={}, risky={}",
+                    proposal_confidence, is_risky
+                ),
+                confidence: proposal_confidence.max(0.3),
+            },
+        );
+        votes
     };
-    raw_votes.insert(
-        "rationalization-guard".to_string(),
-        weighted_vote::Vote {
-            approves: rg_approve,
-            reasoning: format!(
-                "risk_assessment: confidence={}, risky={}",
-                proposal_confidence, is_risky
-            ),
-            confidence: proposal_confidence.max(0.3),
-        },
-    );
 
     // Compute final result based on mode
+    let cb_approve = raw_votes
+        .get("capability-bus")
+        .map(|v| v.approves)
+        .unwrap_or(approve);
+    let rg_approve = raw_votes
+        .get("rationalization-guard")
+        .map(|v| v.approves)
+        .unwrap_or(approve);
     let final_result = match config.mode {
         VoteMode::DelphiDebate => {
-            // For the non-async hub context, we run a simplified single-round
-            // Delphi where we simulate one debate iteration.
-            // Full multi-round Delphi requires async AgentVoter trait impls.
-            // The debate context adds the other agents' reasoning.
-            // In a Delphi round, agents would re-vote after seeing each other's
-            // reasoning. The debate context enriches the weighted vote by
-            // exposing agents to each other's stances before the final tally.
-            let _debate_context = format!(
+            let debate_context = format!(
                 "capability-bus: {}\nlocal-agent: {}\nrationalization-guard: {}",
                 if cb_approve { "APPROVE" } else { "REJECT" },
                 if approve { "APPROVE" } else { "REJECT" },
                 if rg_approve { "APPROVE" } else { "REJECT" },
             );
+            tracing::info!(debate_context, "delphi debate context");
             weighted_vote::weighted_vote(
                 &raw_votes,
                 reputations,
                 config.delphi.threshold,
                 config.delphi.default_weight,
+                &debate_context,
             )
         }
-        VoteMode::Weighted | VoteMode::Legacy => {
-            // Unreachable (Legacy is handled above); Weighted falls through
-            weighted_vote::weighted_vote(
-                &raw_votes,
-                reputations,
-                config.weighted.threshold,
-                config.weighted.default_weight,
-            )
-        }
+        VoteMode::Weighted | VoteMode::Legacy => weighted_vote::weighted_vote(
+            &raw_votes,
+            reputations,
+            config.weighted.threshold,
+            config.weighted.default_weight,
+            "",
+        ),
     };
 
     let final_approve = final_result.approved;
@@ -392,6 +475,40 @@ pub fn consensus_vote_with_reputation(
 ///
 /// Returns (is_justified, explanation) where explanation describes concerns.
 pub fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (bool, String) {
+    // ── Delphi debate integration ────────────────────────────────────────
+    // When enabled, delegate to the weighted reputation + Delphi debate
+    // voting path for higher-confidence decision verification.
+    if USE_DELPHI_DEBATE.load(Ordering::Relaxed) {
+        let proposal = serde_json::json!({
+            "confidence": confidence,
+            "risk_level": if task.to_lowercase().contains("delete")
+                || task.to_lowercase().contains("remove")
+                || task.to_lowercase().contains("shell")
+                || task.to_lowercase().contains("sudo")
+            {
+                "high"
+            } else {
+                "low"
+            },
+        });
+        let reputations = HashMap::new();
+        let config = VoteConfig::default(); // defaults to DelphiDebate mode
+        let (approved, _confidence) = consensus_vote_with_reputation(
+            agent,
+            proposal,
+            confidence >= 0.5,
+            &reputations,
+            &config,
+        );
+        if !approved {
+            return (
+                false,
+                "delphi_debate_rejected: weighted consensus vote did not approve".to_string(),
+            );
+        }
+        // Delphi approved — continue to standard rationalization checks
+    }
+
     // Multi-factor risk scoring
     let risk_keywords = [
         "delete", "remove", "exec", "shell", "rm", "sudo", "admin", "override", "bypass", "secret",
@@ -671,7 +788,7 @@ mod tests {
 
     #[test]
     fn test_consensus_vote_basic() {
-        init_intel_hub();
+        init_intel_hub(false);
         let (approved, conf) =
             consensus_vote_on("test-proposal", serde_json::json!({"action": "test"}), true);
         assert!(approved);
@@ -730,7 +847,7 @@ mod tests {
     #[test]
     fn test_consensus_tracks_activations() {
         let before = INTEL_HUB_ACTIVATIONS.load(Ordering::Relaxed);
-        init_intel_hub();
+        init_intel_hub(false);
         consensus_vote_on("prop-activation", serde_json::json!({"x": 1}), true);
         assert!(INTEL_HUB_ACTIVATIONS.load(Ordering::Relaxed) >= before);
     }

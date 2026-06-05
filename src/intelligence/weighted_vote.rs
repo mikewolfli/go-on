@@ -15,7 +15,6 @@ use serde::{Deserialize, Serialize};
 // ── Types ───────────────────────────────────────────────────────────────────
 
 /// A single agent's vote on a proposal.
-#[allow(dead_code)] // F-GAP reserved
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Vote {
     /// Whether the agent approves the proposal.
@@ -27,7 +26,6 @@ pub struct Vote {
 }
 
 /// Result of a single weighted voting round.
-#[allow(dead_code)] // F-GAP reserved
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VoteResult {
     /// Whether the proposal was approved given the threshold.
@@ -45,7 +43,6 @@ pub struct VoteResult {
 }
 
 /// Configuration for weighted voting.
-#[allow(dead_code)] // F-GAP reserved
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WeightedVoteConfig {
     /// Approval threshold (0.0–1.0). Default 0.6 (60%).
@@ -137,6 +134,7 @@ pub fn weighted_vote(
     reputations: &HashMap<String, f64>,
     threshold: f64,
     default_weight: f64,
+    _context: &str,
 ) -> VoteResult {
     let mut weighted_yes = 0.0_f64;
     let mut total_weight = 0.0_f64;
@@ -266,6 +264,7 @@ pub async fn delphi_debate(
             reputations,
             config.threshold,
             config.default_weight,
+            &context,
         );
 
         let round_record = DelphiRound {
@@ -291,6 +290,7 @@ pub async fn delphi_debate(
         reputations,
         config.threshold,
         config.default_weight,
+        "",
     );
 
     let rounds_elapsed = history.len();
@@ -355,7 +355,7 @@ mod tests {
         reps.insert("alice".to_string(), 0.9);
         reps.insert("bob".to_string(), 0.7);
 
-        let result = weighted_vote(&votes, &reps, 0.6, 0.5);
+        let result = weighted_vote(&votes, &reps, 0.6, 0.5, "");
         assert!(result.approved);
         assert!((result.approval_ratio - 1.0).abs() < f64::EPSILON);
         assert!(result.weighted);
@@ -385,7 +385,7 @@ mod tests {
         reps.insert("alice".to_string(), 0.9);
         reps.insert("bob".to_string(), 0.9);
 
-        let result = weighted_vote(&votes, &reps, 0.6, 0.5);
+        let result = weighted_vote(&votes, &reps, 0.6, 0.5, "");
         // alice has 0.9 weight, bob has 0.9, so 0.9 / 1.8 = 0.5 < 0.6
         assert!(!result.approved);
         assert!((result.approval_ratio - 0.5).abs() < f64::EPSILON);
@@ -416,7 +416,7 @@ mod tests {
         reps.insert("alice".to_string(), 0.95); // high reputation
         reps.insert("bob".to_string(), 0.15); // low reputation (excluded range)
 
-        let result = weighted_vote(&votes, &reps, 0.6, 0.5);
+        let result = weighted_vote(&votes, &reps, 0.6, 0.5, "");
         // Alice has 0.95 weight, Bob has 0.15 weight
         // weighted_yes = 0.95, total_weight = 1.10
         // approval_ratio = 0.95 / 1.10 ≈ 0.864 >= 0.6 → approved
@@ -438,7 +438,7 @@ mod tests {
         );
         // No reputation entry for "unknown" → uses default_weight = 0.5
         let reps = HashMap::new();
-        let result = weighted_vote(&votes, &reps, 0.6, 0.5);
+        let result = weighted_vote(&votes, &reps, 0.6, 0.5, "");
         assert!(result.approved);
         assert!((result.weighted_yes - 0.5).abs() < f64::EPSILON);
         assert_eq!(result.participant_count, 1);
@@ -448,7 +448,7 @@ mod tests {
     fn test_weighted_vote_empty_votes() {
         let votes = HashMap::new();
         let reps = HashMap::new();
-        let result = weighted_vote(&votes, &reps, 0.6, 0.5);
+        let result = weighted_vote(&votes, &reps, 0.6, 0.5, "");
         assert!(!result.approved);
         assert!((result.approval_ratio - 0.0).abs() < f64::EPSILON);
         assert_eq!(result.total_weight, 0.0);
@@ -469,7 +469,7 @@ mod tests {
         // Reputations only has the agent with weight 0.0
         let mut reps = HashMap::new();
         reps.insert("agent".to_string(), 0.0);
-        let result = weighted_vote(&votes, &reps, 0.6, 0.0);
+        let result = weighted_vote(&votes, &reps, 0.6, 0.0, "");
         assert!(!result.approved);
         assert_eq!(result.total_weight, 0.0);
     }
@@ -498,12 +498,12 @@ mod tests {
         reps.insert("bob".to_string(), 0.2);
 
         // With threshold 0.5, alice's 0.8 / 1.0 = 0.8 >= 0.5 → approved
-        let result = weighted_vote(&votes, &reps, 0.5, 0.5);
+        let result = weighted_vote(&votes, &reps, 0.5, 0.5, "");
         assert!(result.approved);
         assert!((result.approval_ratio - 0.8).abs() < f64::EPSILON);
 
         // With threshold 0.9, 0.8 < 0.9 → not approved
-        let result = weighted_vote(&votes, &reps, 0.9, 0.5);
+        let result = weighted_vote(&votes, &reps, 0.9, 0.5, "");
         assert!(!result.approved);
     }
 
@@ -701,7 +701,7 @@ mod tests {
         let mut reps = HashMap::new();
         reps.insert("a".to_string(), 1.0);
 
-        let result = weighted_vote(&votes, &reps, 0.6, 0.5);
+        let result = weighted_vote(&votes, &reps, 0.6, 0.5, "");
         assert!(result.weighted);
         assert_eq!(result.participant_count, 1);
     }

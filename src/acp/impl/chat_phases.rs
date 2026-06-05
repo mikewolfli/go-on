@@ -6,16 +6,16 @@
 //!
 //! Phase breakdown:
 //!   1. `observe_phase` — Observe current state: input validation, multimodal detection,
-//!                         prompt injection check, context gathering, memory recall,
-//!                         capability sensing
+//!      prompt injection check, context gathering, memory recall,
+//!      capability sensing
 //!   2. `think_phase`   — Think about the situation: model resolution, agent selection,
-//!                         routing, planning, capability analysis, risk assessment,
-//!                         metacognitive evaluation
+//!      routing, planning, capability analysis, risk assessment,
+//!      metacognitive evaluation
 //!   3. `act_phase`     — Execute actions: LLM calls, tool execution, autonomy loop,
-//!                         fallback, vote, cache operations, scheduler
+//!      fallback, vote, cache operations, scheduler
 //!   4. `reflect_phase` — Reflect on outcomes: response assembly, error handling,
-//!                         knowledge persistence, metacognitive updates, threshold learning,
-//!                         capability bus feedback, BrainLoop reflection
+//!      knowledge persistence, metacognitive updates, threshold learning,
+//!      capability bus feedback, BrainLoop reflection
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
@@ -598,7 +598,8 @@ pub(crate) async fn act_phase(
         let success = !response_text.is_empty() && last_err.is_none();
         server
             .hyper_resilience
-            .record_execution(&selected_agent, success);
+            .record_execution(&selected_agent, success)
+            .await;
     }
 
     // TaskContext propagation
@@ -688,10 +689,13 @@ pub(crate) async fn act_phase(
 
         // Error handling
         // BLUE56-GAP-C04: Record execution in hyper-resilience engine before error handling
-        server.hyper_resilience.record_execution(
-            &selected_agent,
-            !response_text.is_empty() && last_err.is_none(),
-        );
+        server
+            .hyper_resilience
+            .record_execution(
+                &selected_agent,
+                !response_text.is_empty() && last_err.is_none(),
+            )
+            .await;
 
         if let Some(_early_value) = handle_execution_errors(
             server,
@@ -772,10 +776,13 @@ pub(crate) async fn act_phase(
         });
 
         // BLUE56-GAP-C04: Record fallback/vote execution in hyper-resilience engine
-        server.hyper_resilience.record_execution(
-            &selected_agent,
-            !response_text.is_empty() && last_err.is_none(),
-        );
+        server
+            .hyper_resilience
+            .record_execution(
+                &selected_agent,
+                !response_text.is_empty() && last_err.is_none(),
+            )
+            .await;
 
         // O-FIX4: Record global performance metric for this operation
         let success = !response_text.is_empty() && last_err.is_none();
@@ -1201,17 +1208,19 @@ pub(crate) async fn reflect_phase(
         }));
     }
 
-    // ModeRuntime + MultiAgent
-    run_mode_runtime_and_multi_agent(
-        server,
-        params,
-        trace,
-        &resolve_out.phase_name,
-        &resolve_out.phase,
-        &resolve_out.resolved,
-        exec_out,
-    )
-    .await;
+    // ModeRuntime + MultiAgent — skip for ask mode since response is already handled
+    if params.mode != "ask" {
+        run_mode_runtime_and_multi_agent(
+            server,
+            params,
+            trace,
+            &resolve_out.phase_name,
+            &resolve_out.phase,
+            &resolve_out.resolved,
+            exec_out,
+        )
+        .await;
+    }
 
     // FullAuto execution
     let full_auto_result = run_full_auto_execution(
@@ -1345,6 +1354,7 @@ pub(crate) async fn reflect_phase(
     );
 
     // BrainLoop post-execution reflection
+    #[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
     if let Some(ref harness) = server.governance_deps.harness_bus {
         let bl = harness.brain_loop.clone();
         let task_type = extract_task_description(&params.messages);
@@ -1430,6 +1440,56 @@ pub(crate) async fn reflect_phase(
                 started.elapsed().as_millis() as u64,
             )
             .await;
+    }
+
+    // ── Metacognitive persistence save (GAP-B53-56) ─────────────────────
+    {
+        use crate::intelligence::metacognitive_persistence::MetacognitivePersistence;
+        use std::path::PathBuf;
+        let storage_dir = PathBuf::from(".goon/metacognitive");
+        if let Ok(persistence) = MetacognitivePersistence::new(storage_dir) {
+            if let Some(ref cb) = server.governance_deps.capability_bus {
+                let _ = persistence.save(&cb.metacognitive);
+            }
+        }
+    }
+
+    // ── TripleFusion fusion cycle (BLUE64-B09) ──────────────────────────
+    if let Some(ref cb) = server.governance_deps.capability_bus {
+        let fusion_bridge = crate::intelligence::triple_fusion::global_triple_fusion_bridge();
+        let triggers = fusion_bridge
+            .lock()
+            .await
+            .run_fusion_cycle(&cb.metacognitive, &cb.consciousness);
+        crate::intelligence::fusion_evolution_bridge::send_triggers_to_evolution(triggers);
+    }
+
+    // ── Memory bridge: persist reflection outcome (GAP-B54-011) ────────
+    if let Some(ref mp) = server.governance_deps.memory_persistence {
+        use crate::memory::memory::{MemoryClass, MemoryEntry};
+        let entry = MemoryEntry {
+            id: format!("reflect-{}", trace.request_id),
+            class: MemoryClass::Episodic,
+            content: if exec_out.response_text.is_empty() {
+                "empty_response".to_string()
+            } else {
+                exec_out.response_text.clone()
+            },
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+                .to_string(),
+            usefulness: 0.5,
+            staleness: 0,
+        };
+        let _ =
+            crate::memory::memory_bridge::bridge_store(&server.memory_store, mp.as_ref(), entry);
+    }
+
+    // ── MemoryRetrievalEngine: index session memory (GAP-B52-13) ───────
+    if let Some(ref engine) = server.governance_deps.memory_retrieval_engine {
+        let _ = engine.index_session_memory(&routing_out.conversation_id, &trace.request_id);
     }
 
     Ok(result)

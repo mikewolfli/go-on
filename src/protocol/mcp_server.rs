@@ -850,7 +850,7 @@ async fn send_parse_error(
             "message": "Parse error"
         }
     });
-    let line = serde_json::to_string(&error).map_err(|e| std::io::Error::other(e))?;
+    let line = serde_json::to_string(&error).map_err(std::io::Error::other)?;
     writer.write_all(line.as_bytes()).await?;
     writer.write_all(b"\n").await?;
     writer.flush().await?;

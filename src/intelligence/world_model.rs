@@ -143,6 +143,7 @@ impl CausalReasoner {
     /// and confidence scores.
     pub fn infer_correlations(&mut self) -> &[Correlation] {
         let window = self.window_ms as i64;
+        #[allow(clippy::type_complexity)]
         let mut co_occurrences: HashMap<(String, String, String, String), (u64, Vec<i64>)> =
             HashMap::new();
 
@@ -245,9 +246,11 @@ impl CausalReasoner {
     }
 
     /// Predicts probable next state changes for a given entity based on
-    /// discovered correlations.
+    /// discovered correlations and historical snapshots.
     ///
     /// Returns a list of `(property, expected_value, confidence)` tuples.
+    /// Unlike the basic version, this method examines historical snapshots
+    /// to extract concrete expected values for each predicted property.
     pub fn predict_next_state(
         &self,
         entity_id: &str,
@@ -255,34 +258,108 @@ impl CausalReasoner {
     ) -> Vec<(String, String, f64)> {
         let mut predictions: Vec<(String, String, f64)> = Vec::new();
 
-        for corr in &self.correlations {
-            // Check if this correlation involves the entity as cause or effect
-            let (target_prop, expected_val, confidence) = if corr.cause_entity == entity_id {
-                // This entity is the cause; predict the effect
-                let cause_val = current_properties.get(&corr.cause_property);
-                if cause_val.is_none() {
-                    continue;
-                }
-                (
-                    corr.effect_property.clone(),
-                    String::new(),
-                    corr.confidence * 0.8,
-                )
-            } else if corr.effect_entity == entity_id {
-                // This entity is the effect; predict the effect property change
-                (
-                    corr.effect_property.clone(),
-                    String::new(),
-                    corr.confidence * 0.7,
-                )
-            } else {
-                continue;
-            };
-
-            predictions.push((target_prop, expected_val, confidence));
+        // Pre-index historical snapshots by entity_id for fast lookup.
+        let mut history_by_entity: HashMap<&str, Vec<&EntityStateSnapshot>> = HashMap::new();
+        for snap in &self.history {
+            history_by_entity
+                .entry(snap.entity_id.as_str())
+                .or_default()
+                .push(snap);
         }
 
-        // Sort by confidence descending and deduplicate
+        for corr in &self.correlations {
+            // Determine if the correlation applies and what to predict.
+            let (target_entity, target_prop, base_confidence, is_cause_side) =
+                if corr.cause_entity == entity_id {
+                    // This entity is the cause; predict the effect
+                    let cause_val = current_properties.get(&corr.cause_property);
+                    if cause_val.is_none() {
+                        continue;
+                    }
+                    (
+                        corr.effect_entity.as_str(),
+                        corr.effect_property.as_str(),
+                        corr.confidence * 0.8,
+                        true,
+                    )
+                } else if corr.effect_entity == entity_id {
+                    // This entity is the effect; predict the effect property change
+                    (
+                        corr.effect_entity.as_str(),
+                        corr.effect_property.as_str(),
+                        corr.confidence * 0.7,
+                        false,
+                    )
+                } else {
+                    continue;
+                };
+
+            // Try to extract an actual predicted value from historical data.
+            // Look for the last snapshot where the target property had a
+            // value that appeared after a matching cause-side change.
+            let predicted_val = if is_cause_side {
+                // We are predicting the effect entity's property.
+                // Find the most recent snapshot of the effect entity where
+                // this property had a value that changed from a prior snapshot
+                // within the correlation's time window.
+                let window = self.window_ms as i64;
+                let mut best_val = String::new();
+
+                if let Some(effect_snaps) = history_by_entity.get(target_entity) {
+                    for snap in effect_snaps.iter().rev() {
+                        if let Some(val) = snap.properties.get(target_prop) {
+                            let causal_snaps = history_by_entity
+                                .get(entity_id)
+                                .map(|v| v.as_slice())
+                                .unwrap_or(&[]);
+                            for csnap in causal_snaps.iter().rev() {
+                                let delta = snap.timestamp_ms as i64 - csnap.timestamp_ms as i64;
+                                if delta > 0 && delta <= window {
+                                    if let Some(cause_val) =
+                                        current_properties.get(&corr.cause_property)
+                                    {
+                                        if csnap.properties.get(&corr.cause_property)
+                                            != Some(cause_val)
+                                        {
+                                            // The cause entity's property changed
+                                            // shortly before this snapshot.
+                                            if !val.is_empty() {
+                                                best_val = val.clone();
+                                            }
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                            if !best_val.is_empty() {
+                                break;
+                            }
+                        }
+                    }
+                }
+                best_val
+            } else {
+                // Entity is the effect itself: find the most recent historical
+                // value for this property.
+                let mut best_val = String::new();
+                if let Some(snaps) = history_by_entity.get(entity_id) {
+                    for snap in snaps.iter().rev() {
+                        if let Some(val) = snap.properties.get(target_prop) {
+                            if !val.is_empty() {
+                                best_val = val.clone();
+                                break;
+                            }
+                        }
+                    }
+                }
+                best_val
+            };
+
+            let confidence = base_confidence + if predicted_val.is_empty() { 0.0 } else { 0.1 };
+            predictions.push((target_prop.to_string(), predicted_val, confidence));
+        }
+
+        // Sort by confidence descending and deduplicate (keep highest confidence).
         predictions.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
         predictions.dedup_by(|a, b| a.0 == b.0);
         predictions.truncate(10);
@@ -1591,10 +1668,12 @@ mod tests {
         let mut props_a = HashMap::new();
         props_a.insert("cpu".to_string(), "high".to_string());
         props_a.insert("mem".to_string(), "low".to_string());
+        props_a.insert("disk".to_string(), "full".to_string());
 
         let mut props_b = HashMap::new();
         props_b.insert("cpu".to_string(), "high".to_string());
         props_b.insert("mem".to_string(), "high".to_string());
+        props_b.insert("disk".to_string(), "empty".to_string());
 
         let now = now_ms();
         reasoner.record_state("server-1", props_a, now);

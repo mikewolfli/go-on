@@ -289,7 +289,7 @@ impl std::fmt::Debug for ApprovalEngine {
 impl ApprovalEngine {
     /// Create a new ApprovalEngine with the given PUA rule engine and timeout policy.
     pub fn new(pua_engine: Arc<Mutex<PuaRuleEngine>>, timeout_policy: TimeoutPolicy) -> Self {
-        let engine = Self {
+        Self {
             queue: Vec::new(),
             escalation_chains: HashMap::new(),
             timeout_policy,
@@ -297,8 +297,7 @@ impl ApprovalEngine {
             learner: None,
             approver_registry: ApproverRegistry::new(),
             db_path: None,
-        };
-        engine
+        }
     }
 
     /// Set the SQLite database path for persistent approval queue storage.

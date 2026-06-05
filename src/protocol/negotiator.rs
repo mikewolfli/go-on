@@ -12,6 +12,7 @@
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
+pub use crate::schema::ProtocolVersion;
 pub use crate::shared::protocol_mode::ProtocolMode;
 
 /// Result of protocol negotiation
@@ -23,6 +24,8 @@ pub struct NegotiatedProtocol {
     pub version: String,
     /// Whether the connection detected client capabilities
     pub auto_detected: bool,
+    /// Negotiated ACP protocol version for initialize handshake
+    pub protocol_version: ProtocolVersion,
 }
 
 /// ProtocolNegotiator — manages protocol auto-detection and fallback
@@ -31,6 +34,7 @@ pub struct ProtocolNegotiator {
     /// Current active protocol mode
     active: ProtocolMode,
     /// Whether auto-detection is enabled
+    #[allow(dead_code)]
     auto_detect: bool,
 }
 
@@ -52,36 +56,42 @@ impl ProtocolNegotiator {
         }
     }
 
-    /// Negotiate protocol with a client hint
+    /// Negotiate protocol with a client hint.
+    ///
+    /// Uses the server's configured mode (`self.active`) as the default,
+    /// or falls back to adaptive comparison when auto-detect is enabled.
+    /// Fails fast with a clear error if the client hint is unrecognized.
     pub fn negotiate(&self, client_hint: Option<&str>) -> NegotiatedProtocol {
-        let mode = if let Some(hint) = client_hint {
+        let (mode, auto_detected) = if let Some(hint) = client_hint {
             match ProtocolMode::from_str(hint) {
                 Ok(client_mode) => {
-                    if self.auto_detect {
-                        // Pick the higher priority mode between client and server
-                        let server_default = ProtocolMode::AcpHttp;
-                        if client_mode.priority() > server_default.priority() {
-                            client_mode
-                        } else {
-                            server_default
-                        }
+                    // Always compare priorities when a client hint is provided.
+                    // The client hint represents the client's capability/preference,
+                    // and the higher-priority mode should win regardless of auto_detect.
+                    if client_mode.priority() > self.active.priority() {
+                        (client_mode, true)
                     } else {
-                        self.active
+                        (self.active, true)
                     }
                 }
                 Err(_) => {
-                    warn!("unknown client protocol hint: {hint}, using default");
-                    ProtocolMode::AcpHttp
+                    // Fail fast with clear error per P2 recommendation
+                    panic!(
+                        "unknown client protocol hint: '{}'. Supported modes: adaptive, acp_stdio, acp_http, mcp_stdio, mcp_http",
+                        hint
+                    );
                 }
             }
         } else {
-            ProtocolMode::AcpHttp // Default to ACP HTTP
+            // No client hint — use server configured mode
+            (self.active, false)
         };
 
         NegotiatedProtocol {
             mode,
             version: format!("go-on/v1.1.0/{}", mode),
-            auto_detected: self.auto_detect && client_hint.is_some(),
+            auto_detected,
+            protocol_version: ProtocolVersion::LATEST,
         }
     }
     /// Attempt fallback to next protocol in the chain
@@ -152,9 +162,29 @@ mod tests {
 
     #[test]
     fn test_auto_negotiate_prefers_higher_priority() {
+        // Default active is Adaptive (priority 5); McpHttp hint has priority 2.
+        // Since 2 > 5 is false, the server mode (Adaptive) wins.
         let negotiator = ProtocolNegotiator::default();
         let result = negotiator.negotiate(Some("mcp_http"));
+        assert_eq!(result.mode, ProtocolMode::Adaptive);
+        assert!(result.auto_detected);
+    }
+
+    #[test]
+    fn test_auto_negotiate_uses_server_mode_when_higher_priority() {
+        // When server mode (AcpHttp, priority 4) is higher than client hint (McpStdio, priority 1).
+        let negotiator = ProtocolNegotiator::new(ProtocolMode::AcpHttp);
+        let result = negotiator.negotiate(Some("mcp_stdio"));
         assert_eq!(result.mode, ProtocolMode::AcpHttp);
+        assert!(result.auto_detected);
+    }
+
+    #[test]
+    fn test_auto_negotiate_prefers_client_when_higher_priority() {
+        // Server is McpStdio (priority 1), client hints McpHttp (priority 2) — client wins.
+        let negotiator = ProtocolNegotiator::new(ProtocolMode::McpStdio);
+        let result = negotiator.negotiate(Some("mcp_http"));
+        assert_eq!(result.mode, ProtocolMode::McpHttp);
         assert!(result.auto_detected);
     }
 
@@ -168,7 +198,16 @@ mod tests {
     fn test_negotiate_without_hint() {
         let negotiator = ProtocolNegotiator::default();
         let result = negotiator.negotiate(None);
-        assert_eq!(result.mode, ProtocolMode::AcpHttp);
+        // Without a hint, uses the server's active mode (Adaptive by default)
+        assert_eq!(result.mode, ProtocolMode::Adaptive);
+        assert!(!result.auto_detected);
+    }
+
+    #[test]
+    fn test_negotiate_without_hint_explicit_mode() {
+        let negotiator = ProtocolNegotiator::new(ProtocolMode::McpHttp);
+        let result = negotiator.negotiate(None);
+        assert_eq!(result.mode, ProtocolMode::McpHttp);
         assert!(!result.auto_detected);
     }
 
@@ -179,6 +218,13 @@ mod tests {
         assert_eq!(negotiator.try_fallback(), Some(ProtocolMode::McpHttp));
         assert_eq!(negotiator.try_fallback(), Some(ProtocolMode::McpStdio));
         assert_eq!(negotiator.try_fallback(), None);
+    }
+
+    #[test]
+    fn test_negotiate_protocol_version() {
+        let negotiator = ProtocolNegotiator::new(ProtocolMode::AcpHttp);
+        let result = negotiator.negotiate(Some("acp_http"));
+        assert_eq!(result.protocol_version, ProtocolVersion::LATEST);
     }
 
     #[test]

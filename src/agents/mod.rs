@@ -427,22 +427,29 @@ where
     Ok(())
 }
 
+/// Process a single SSE event through the sender.
+/// Returns `true` when the stream should stop (sender dropped or [DONE]).
+fn sse_event_to_sender(event: &str, sender: &crate::agent::StreamingSender) -> bool {
+    if let Some(token) = fast_extract_token(event) {
+        if sender.send(token).is_err() {
+            return true;
+        }
+    } else if event.trim() == "[DONE]" {
+        return true;
+    }
+    false
+}
+
 pub async fn stream_sse_to_sender(
     response: reqwest::Response,
     sender: crate::agent::StreamingSender,
 ) -> anyhow::Result<()> {
     stream_sse_events(response, move |data| {
-        // Fast path: extract content using string operations, avoiding
-        // full JSON Value allocation on every SSE token.
-        if let Some(token) = fast_extract_token(data) {
-            if sender.send(token).is_err() {
-                return Ok(SseEventAction::Stop);
-            }
-        } else if data.trim() == "[DONE]" {
-            return Ok(SseEventAction::Stop);
+        if sse_event_to_sender(data, &sender) {
+            Ok(SseEventAction::Stop)
+        } else {
+            Ok(SseEventAction::Continue)
         }
-
-        Ok(SseEventAction::Continue)
     })
     .await
 }
@@ -481,17 +488,16 @@ pub async fn stream_sse_to_sender_compressed(
     while let Some(chunk_result) = stream.next().await {
         let chunk = chunk_result?;
         let decompressed = decompressor.decompress_chunk(&chunk);
+        if decompressed.is_empty() {
+            continue;
+        }
         let chunk_text = std::str::from_utf8(&decompressed)
             .map(|s| s.to_string())
             .unwrap_or_else(|_| String::from_utf8_lossy(&decompressed).to_string());
         match parser.push_chunk(&chunk_text) {
             Ok(events) => {
                 for event in events {
-                    if let Some(token) = fast_extract_token(&event) {
-                        if sender.send(token).is_err() {
-                            return Ok(());
-                        }
-                    } else if event.trim() == "[DONE]" {
+                    if sse_event_to_sender(&event, &sender) {
                         return Ok(());
                     }
                 }
@@ -513,18 +519,14 @@ pub async fn stream_sse_to_sender_compressed(
         let mut tail_parser = SseEventParser::default();
         if let Ok(events) = tail_parser.push_chunk(&tail_text) {
             for event in events {
-                if let Some(token) = fast_extract_token(&event) {
-                    let _ = sender.send(token);
-                } else if event.trim() == "[DONE]" {
+                if sse_event_to_sender(&event, &sender) {
                     break;
                 }
             }
         }
         // Finish any remaining partial data in the tail parser
         for event in tail_parser.finish() {
-            if let Some(token) = fast_extract_token(&event) {
-                let _ = sender.send(token);
-            } else if event.trim() == "[DONE]" {
+            if sse_event_to_sender(&event, &sender) {
                 break;
             }
         }
@@ -533,9 +535,7 @@ pub async fn stream_sse_to_sender_compressed(
     // Process any remaining events accumulated by the main parser
     // that weren't terminated by a newline before stream end.
     for event in parser.finish() {
-        if let Some(token) = fast_extract_token(&event) {
-            let _ = sender.send(token);
-        } else if event.trim() == "[DONE]" {
+        if sse_event_to_sender(&event, &sender) {
             break;
         }
     }

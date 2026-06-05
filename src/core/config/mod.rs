@@ -8,7 +8,6 @@ pub mod hot_reload;
 pub mod load;
 pub mod schema_version;
 pub mod types;
-pub mod watcher;
 
 // Explicit re-exports from each sub-module so that existing import paths
 // like `crate::core::config::AppConfig`, `crate::core::config::RuntimeConfig`,

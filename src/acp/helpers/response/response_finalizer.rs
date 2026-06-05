@@ -497,8 +497,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_finalize_chat_response_returns_augmented_result() {
+    #[tokio::test]
+    async fn test_finalize_chat_response_returns_augmented_result() {
         let server = ServerBuilder::new().build().expect("server should build");
         let trace = make_trace();
         let started = Instant::now();
@@ -560,8 +560,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_finalize_chat_response_handles_empty_tools() {
+    #[tokio::test]
+    async fn test_finalize_chat_response_handles_empty_tools() {
         let server = ServerBuilder::new().build().expect("server should build");
         let trace = make_trace();
         let started = Instant::now();
@@ -608,8 +608,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_finalize_chat_response_with_tool_results() {
+    #[tokio::test]
+    async fn test_finalize_chat_response_with_tool_results() {
         let server = ServerBuilder::new().build().expect("server should build");
         let trace = make_trace();
         let started = Instant::now();

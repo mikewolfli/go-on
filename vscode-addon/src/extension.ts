@@ -462,6 +462,296 @@ let goOnManager: GoOnManager;
 let statusProvider: GoOnStatusProvider;
 let goOnOutput: vscode.OutputChannel;
 let approvalPanelProvider: ApprovalPanelProvider;
+let chatProvider: GoOnChatViewProvider;
+let settingsProvider: GoOnSettingsViewProvider;
+let runtimeBootstrapDeps: RuntimeBootstrapDeps;
+
+/**
+ * Initialize the i18n system and log the current UI language.
+ */
+function initI18n(): void {
+  const currentLanguage = i18n.getCurrentLanguage();
+  goOnOutput.appendLine(`UI Language: ${currentLanguage}`);
+}
+
+/**
+ * Register all webview view providers.
+ */
+function registerViewProviders(context: vscode.ExtensionContext): void {
+  chatProvider = new GoOnChatViewProvider(
+    context.extensionUri,
+    goOnManager,
+    context,
+    async () => {
+      await prepareRuntimeAndStartFromChat(context, runtimeBootstrapDeps);
+    },
+  );
+  settingsProvider = new GoOnSettingsViewProvider(
+    context.extensionUri,
+    goOnManager,
+    context,
+  );
+  const workflowProvider = new GoOnWorkflowViewProvider(
+    context.extensionUri,
+    goOnManager,
+    context,
+  );
+  const processFlowProvider = new GoOnProcessFlowViewProvider(
+    context.extensionUri,
+    goOnManager,
+    context,
+  );
+  approvalPanelProvider = new ApprovalPanelProvider(
+    context.extensionUri,
+    goOnManager,
+  );
+
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(
+      GoOnChatViewProvider.viewType,
+      chatProvider,
+    ),
+    vscode.window.registerWebviewViewProvider(
+      GoOnSettingsViewProvider.viewType,
+      settingsProvider,
+    ),
+    vscode.window.registerWebviewViewProvider(
+      GoOnWorkflowViewProvider.viewType,
+      workflowProvider,
+    ),
+    vscode.window.registerWebviewViewProvider(
+      GoOnProcessFlowViewProvider.viewType,
+      processFlowProvider,
+    ),
+    vscode.window.registerWebviewViewProvider(
+      ApprovalPanelProvider.viewType,
+      approvalPanelProvider,
+    ),
+  );
+}
+
+/**
+ * Register all extension commands.
+ */
+function registerCommands(
+  context: vscode.ExtensionContext,
+  statusMonitor: StatusMonitor,
+): void {
+  context.subscriptions.push(
+    vscode.commands.registerCommand("go-on.openConfigWizard", async () => {
+      await settingsProvider.showConfigWizard();
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider("go-on-status", statusProvider),
+  );
+
+  const coreCommands = registerCoreCommands({
+    context,
+    ensureBinary: ensureGoOnBinary,
+    resolveConfigPath,
+    parseMissingEnvVariableNames,
+    buildPlaceholderEnvValues,
+    start: (
+      configPath: string,
+      executablePath: string,
+      cwd: string,
+      protocolMode: string,
+    ) => goOnManager.start(configPath, executablePath, cwd, protocolMode),
+    stop: () => goOnManager.stop(),
+    isRunning: () => goOnManager.isRunning(),
+    sendRequest: (method: string, params?: unknown) =>
+      goOnManager.sendRequest(method, params),
+    setRuntimeEnvOverrides: (overrides: Record<string, string>) =>
+      goOnManager.setRuntimeEnvOverrides(overrides),
+  });
+
+  const viewCommands = registerViewCommands({
+    revealGoOnView,
+    ensureBinaryReady: async () => {
+      const config = vscode.workspace.getConfiguration("go-on");
+      const workspaceRoot = getPrimaryWorkspaceRoot()?.fsPath;
+      await ensureGoOnBinary(workspaceRoot, config, context);
+    },
+    prepareRuntimeAfterChatOpen: async () =>
+      prepareRuntimeAndStartFromChat(context, runtimeBootstrapDeps),
+    isRunning: () => goOnManager.isRunning(),
+    stop: () => goOnManager.stop(),
+    createSession: (sessionName: string) =>
+      chatProvider.createNewSession(sessionName),
+    switchSession: (sessionName: string) =>
+      chatProvider.switchSession(sessionName),
+    clearChat: () => chatProvider.clearChat(),
+    exportChat: () => chatProvider.exportChat(),
+    sendRequest: (method: string, params?: unknown) =>
+      goOnManager.sendRequest(method, params),
+  });
+  const rpcCommands = registerRpcCommands({
+    isRunning: () => goOnManager.isRunning(),
+    sendRequest: (method: string, params?: unknown) =>
+      goOnManager.sendRequest(method, params),
+  });
+
+  // Refresh status monitor command (internal)
+  const refreshStatusMonitorCommand = vscode.commands.registerCommand(
+    "go-on.refreshStatusMonitor",
+    () => {
+      statusMonitor.refresh();
+    },
+  );
+
+  // Internal command called by GoOnManager.updateStatus() to refresh tree data
+  const refreshStatusTreeCommand = vscode.commands.registerCommand(
+    "go-on-status.refresh",
+    () => {
+      statusProvider.refresh();
+    },
+  );
+
+  const keyringSetCommand = vscode.commands.registerCommand(
+    "go-on.keyringSet",
+    async (payload?: { name?: string; value?: string }) => {
+      try {
+        const name = payload?.name;
+        const value = payload?.value;
+        if (!name || value === undefined) {
+          throw new Error("keyring set requires name and value");
+        }
+        await runGoOnSecretCommand(context, "set", name, value);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        vscode.window.showErrorMessage(
+          i18n.getMessage(MessageKeys.keyringSetFailed, [message]),
+        );
+      }
+    },
+  );
+
+  const keyringGetCommand = vscode.commands.registerCommand(
+    "go-on.keyringGet",
+    async (payload?: { name?: string }) => {
+      try {
+        const name = payload?.name;
+        if (!name) {
+          throw new Error("keyring get requires name");
+        }
+        return await runGoOnSecretCommand(context, "get", name);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        vscode.window.showErrorMessage(
+          i18n.getMessage(MessageKeys.keyringGetFailed, [message]),
+        );
+        return undefined;
+      }
+    },
+  );
+
+  const keyringDeleteCommand = vscode.commands.registerCommand(
+    "go-on.keyringDelete",
+    async (payload?: { name?: string }) => {
+      try {
+        const name = payload?.name;
+        if (!name) {
+          throw new Error("keyring delete requires name");
+        }
+        await runGoOnSecretCommand(context, "delete", name);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        vscode.window.showErrorMessage(
+          i18n.getMessage(MessageKeys.keyringDeleteFailed, [message]),
+        );
+      }
+    },
+  );
+
+  const keyringListCommand = vscode.commands.registerCommand(
+    "go-on.keyringList",
+    async () => {
+      try {
+        return await runGoOnSecretCommand(context, "list");
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        vscode.window.showErrorMessage(
+          i18n.getMessage(MessageKeys.keyringListFailed, [message]),
+        );
+        return undefined;
+      }
+    },
+  );
+
+  const applyDefaultConfigCommand = vscode.commands.registerCommand(
+    "go-on.applyDefaultConfigTemplate",
+    async (payload?: { template?: string }) => {
+      try {
+        const template = payload?.template;
+        if (!template) {
+          throw new Error("template is required");
+        }
+        const configPath = await applyDefaultConfigTemplate(context, template);
+        return configPath;
+      } catch (error: unknown) {
+        vscode.window.showErrorMessage(
+          i18n.getMessage(MessageKeys.templateRequired),
+        );
+        return undefined;
+      }
+    },
+  );
+
+  const updateWorkflowMappingCommand = vscode.commands.registerCommand(
+    "go-on.updateWorkflowMapping",
+    async (payload?: {
+      defaultPhase?: string;
+      phases?: Record<
+        string,
+        {
+          agents: string[];
+          fallback?: boolean;
+          principles?: string[];
+          switchRules?: {
+            circuitBreakerFailures?: number;
+            circuitBreakerOpenSeconds?: number;
+          };
+        }
+      >;
+    }) => {
+      if (!payload) {
+        throw new Error(i18n.getMessage(MessageKeys.workflowMappingRequired));
+      }
+      return await updateWorkflowMappingConfig(context, payload);
+    },
+  );
+
+  const updateRulesCommand = vscode.commands.registerCommand(
+    "go-on.updateRules",
+    async (payload?: {
+      globalRules?: string[];
+      commonRules?: string[];
+      phaseRules?: Record<string, string[]>;
+    }) => {
+      if (!payload) {
+        throw new Error(i18n.getMessage(MessageKeys.rulesPayloadRequired));
+      }
+      return await updateRulesMarkdownFiles(context, payload);
+    },
+  );
+
+  context.subscriptions.push(
+    ...coreCommands,
+    ...viewCommands,
+    ...rpcCommands,
+    refreshStatusMonitorCommand,
+    refreshStatusTreeCommand,
+    keyringSetCommand,
+    keyringGetCommand,
+    keyringDeleteCommand,
+    keyringListCommand,
+    applyDefaultConfigCommand,
+    updateWorkflowMappingCommand,
+    updateRulesCommand,
+  );
+}
 
 export function activate(context: vscode.ExtensionContext) {
   goOnOutput = vscode.window.createOutputChannel("Go-On");
@@ -469,8 +759,7 @@ export function activate(context: vscode.ExtensionContext) {
   goOnOutput.appendLine("Go-On extension activated");
 
   // Initialize i18n system
-  const currentLanguage = i18n.getCurrentLanguage();
-  goOnOutput.appendLine(`UI Language: ${currentLanguage}`);
+  initI18n();
 
   // Initialize config manager
   const config = vscode.workspace.getConfiguration("go-on");
@@ -514,7 +803,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     statusProvider = new GoOnStatusProvider(goOnManager);
 
-    const runtimeBootstrapDeps: RuntimeBootstrapDeps = {
+    runtimeBootstrapDeps = {
       ensureBinary: ensureGoOnBinary,
       isRunning: () => goOnManager.isRunning(),
       startCommandId: "go-on.start",
@@ -524,280 +813,10 @@ export function activate(context: vscode.ExtensionContext) {
     new GoOnAdvancedEditProvider(goOnManager, context);
 
     // Register webview providers
-    const chatProvider = new GoOnChatViewProvider(
-      context.extensionUri,
-      goOnManager,
-      context,
-      async () => {
-        await prepareRuntimeAndStartFromChat(context, runtimeBootstrapDeps);
-      },
-    );
-    const settingsProvider = new GoOnSettingsViewProvider(
-      context.extensionUri,
-      goOnManager,
-      context,
-    );
-    const workflowProvider = new GoOnWorkflowViewProvider(
-      context.extensionUri,
-      goOnManager,
-      context,
-    );
-    const processFlowProvider = new GoOnProcessFlowViewProvider(
-      context.extensionUri,
-      goOnManager,
-      context,
-    );
-    approvalPanelProvider = new ApprovalPanelProvider(
-      context.extensionUri,
-      goOnManager,
-    );
+    registerViewProviders(context);
 
-    context.subscriptions.push(
-      vscode.window.registerWebviewViewProvider(
-        GoOnChatViewProvider.viewType,
-        chatProvider,
-      ),
-      vscode.window.registerWebviewViewProvider(
-        GoOnSettingsViewProvider.viewType,
-        settingsProvider,
-      ),
-      vscode.window.registerWebviewViewProvider(
-        GoOnWorkflowViewProvider.viewType,
-        workflowProvider,
-      ),
-      vscode.window.registerWebviewViewProvider(
-        GoOnProcessFlowViewProvider.viewType,
-        processFlowProvider,
-      ),
-      vscode.window.registerWebviewViewProvider(
-        ApprovalPanelProvider.viewType,
-        approvalPanelProvider,
-      ),
-    );
-
-    context.subscriptions.push(
-      vscode.commands.registerCommand("go-on.openConfigWizard", async () => {
-        await settingsProvider.showConfigWizard();
-      }),
-    );
-
-    context.subscriptions.push(
-      vscode.window.registerTreeDataProvider("go-on-status", statusProvider),
-    );
-
-    const coreCommands = registerCoreCommands({
-      context,
-      ensureBinary: ensureGoOnBinary,
-      resolveConfigPath,
-      parseMissingEnvVariableNames,
-      buildPlaceholderEnvValues,
-      start: (
-        configPath: string,
-        executablePath: string,
-        cwd: string,
-        protocolMode: string,
-      ) => goOnManager.start(configPath, executablePath, cwd, protocolMode),
-      stop: () => goOnManager.stop(),
-      isRunning: () => goOnManager.isRunning(),
-      sendRequest: (method: string, params?: unknown) =>
-        goOnManager.sendRequest(method, params),
-      setRuntimeEnvOverrides: (overrides: Record<string, string>) =>
-        goOnManager.setRuntimeEnvOverrides(overrides),
-    });
-
-    const viewCommands = registerViewCommands({
-      revealGoOnView,
-      ensureBinaryReady: async () => {
-        const config = vscode.workspace.getConfiguration("go-on");
-        const workspaceRoot = getPrimaryWorkspaceRoot()?.fsPath;
-        await ensureGoOnBinary(workspaceRoot, config, context);
-      },
-      prepareRuntimeAfterChatOpen: async () =>
-        prepareRuntimeAndStartFromChat(context, runtimeBootstrapDeps),
-      isRunning: () => goOnManager.isRunning(),
-      stop: () => goOnManager.stop(),
-      createSession: (sessionName: string) =>
-        chatProvider.createNewSession(sessionName),
-      switchSession: (sessionName: string) =>
-        chatProvider.switchSession(sessionName),
-      clearChat: () => chatProvider.clearChat(),
-      exportChat: () => chatProvider.exportChat(),
-      sendRequest: (method: string, params?: unknown) =>
-        goOnManager.sendRequest(method, params),
-    });
-    const rpcCommands = registerRpcCommands({
-      isRunning: () => goOnManager.isRunning(),
-      sendRequest: (method: string, params?: unknown) =>
-        goOnManager.sendRequest(method, params),
-    });
-
-    // Refresh status monitor command (internal)
-    const refreshStatusMonitorCommand = vscode.commands.registerCommand(
-      "go-on.refreshStatusMonitor",
-      () => {
-        statusMonitor.refresh();
-      },
-    );
-
-    // Internal command called by GoOnManager.updateStatus() to refresh tree data
-    const refreshStatusTreeCommand = vscode.commands.registerCommand(
-      "go-on-status.refresh",
-      () => {
-        statusProvider.refresh();
-      },
-    );
-
-    const keyringSetCommand = vscode.commands.registerCommand(
-      "go-on.keyringSet",
-      async (payload?: { name?: string; value?: string }) => {
-        try {
-          const name = payload?.name;
-          const value = payload?.value;
-          if (!name || value === undefined) {
-            throw new Error("keyring set requires name and value");
-          }
-          await runGoOnSecretCommand(context, "set", name, value);
-        } catch (error: unknown) {
-          const message =
-            error instanceof Error ? error.message : String(error);
-          vscode.window.showErrorMessage(
-            i18n.getMessage(MessageKeys.keyringSetFailed, [message]),
-          );
-        }
-      },
-    );
-
-    const keyringGetCommand = vscode.commands.registerCommand(
-      "go-on.keyringGet",
-      async (payload?: { name?: string }) => {
-        try {
-          const name = payload?.name;
-          if (!name) {
-            throw new Error("keyring get requires name");
-          }
-          return await runGoOnSecretCommand(context, "get", name);
-        } catch (error: unknown) {
-          const message =
-            error instanceof Error ? error.message : String(error);
-          vscode.window.showErrorMessage(
-            i18n.getMessage(MessageKeys.keyringGetFailed, [message]),
-          );
-          return undefined;
-        }
-      },
-    );
-
-    const keyringDeleteCommand = vscode.commands.registerCommand(
-      "go-on.keyringDelete",
-      async (payload?: { name?: string }) => {
-        try {
-          const name = payload?.name;
-          if (!name) {
-            throw new Error("keyring delete requires name");
-          }
-          await runGoOnSecretCommand(context, "delete", name);
-        } catch (error: unknown) {
-          const message =
-            error instanceof Error ? error.message : String(error);
-          vscode.window.showErrorMessage(
-            i18n.getMessage(MessageKeys.keyringDeleteFailed, [message]),
-          );
-        }
-      },
-    );
-
-    const keyringListCommand = vscode.commands.registerCommand(
-      "go-on.keyringList",
-      async () => {
-        try {
-          return await runGoOnSecretCommand(context, "list");
-        } catch (error: unknown) {
-          const message =
-            error instanceof Error ? error.message : String(error);
-          vscode.window.showErrorMessage(
-            i18n.getMessage(MessageKeys.keyringListFailed, [message]),
-          );
-          return undefined;
-        }
-      },
-    );
-
-    const applyDefaultConfigCommand = vscode.commands.registerCommand(
-      "go-on.applyDefaultConfigTemplate",
-      async (payload?: { template?: string }) => {
-        try {
-          const template = payload?.template;
-          if (!template) {
-            throw new Error("template is required");
-          }
-          const configPath = await applyDefaultConfigTemplate(
-            context,
-            template,
-          );
-          return configPath;
-        } catch (error: unknown) {
-          vscode.window.showErrorMessage(
-            i18n.getMessage(MessageKeys.templateRequired),
-          );
-          return undefined;
-        }
-      },
-    );
-
-    const updateWorkflowMappingCommand = vscode.commands.registerCommand(
-      "go-on.updateWorkflowMapping",
-      async (payload?: {
-        defaultPhase?: string;
-        phases?: Record<
-          string,
-          {
-            agents: string[];
-            fallback?: boolean;
-            principles?: string[];
-            switchRules?: {
-              circuitBreakerFailures?: number;
-              circuitBreakerOpenSeconds?: number;
-            };
-          }
-        >;
-      }) => {
-        if (!payload) {
-          throw new Error(i18n.getMessage(MessageKeys.workflowMappingRequired));
-        }
-        return await updateWorkflowMappingConfig(context, payload);
-      },
-    );
-
-    const updateRulesCommand = vscode.commands.registerCommand(
-      "go-on.updateRules",
-      async (payload?: {
-        globalRules?: string[];
-        commonRules?: string[];
-        phaseRules?: Record<string, string[]>;
-      }) => {
-        if (!payload) {
-          throw new Error(i18n.getMessage(MessageKeys.rulesPayloadRequired));
-        }
-        return await updateRulesMarkdownFiles(context, payload);
-      },
-    );
-
-    // Runtime download/start is intentionally deferred until the Chat view is opened.
-
-    context.subscriptions.push(
-      ...coreCommands,
-      ...viewCommands,
-      ...rpcCommands,
-      refreshStatusMonitorCommand,
-      refreshStatusTreeCommand,
-      keyringSetCommand,
-      keyringGetCommand,
-      keyringDeleteCommand,
-      keyringListCommand,
-      applyDefaultConfigCommand,
-      updateWorkflowMappingCommand,
-      updateRulesCommand,
-    );
+    // Register all commands
+    registerCommands(context, statusMonitor);
 
     // Delayed check for provider readiness (warn user if API key is missing)
     const providerReadyTimer = setTimeout(async () => {

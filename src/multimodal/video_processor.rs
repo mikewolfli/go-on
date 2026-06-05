@@ -338,9 +338,9 @@ impl VideoProcessor {
 
         // MM-FIX4: Return an explicit error instead of fake PCM silence.
         // Real video audio extraction requires ffmpeg or similar system tool.
-        return Err(VideoProcessorError::AudioExtractionFailed(
+        Err(VideoProcessorError::AudioExtractionFailed(
             "Audio extraction requires a system tool such as ffmpeg; not yet integrated".into(),
-        ));
+        ))
     }
 
     /// Analyze the extracted frames and produce scene descriptions.

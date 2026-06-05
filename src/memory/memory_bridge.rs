@@ -137,14 +137,8 @@ pub fn start_auto_migrate_task(
 /// Convert a canonical [`MemoryEntry`](CanonicalEntry) into a persistence
 /// [`MemoryEntry`](PersistenceEntry) and call `MemoryPersistence::store()`.
 ///
-/// Returns the persistence operation result.
-///
-/// Reserved bridge API — prefixed with `_` to suppress dead-code warnings
-/// until it is wired into production flow.
-pub fn _persist_store(
-    persistence: &MemoryPersistence,
-    entry: CanonicalEntry,
-) -> anyhow::Result<()> {
+/// Bridge API for persistence-only store (wired into production flow).
+pub fn persist_store(persistence: &MemoryPersistence, entry: CanonicalEntry) -> anyhow::Result<()> {
     let p_entry: PersistenceEntry = entry.into();
     persistence.store(p_entry)
 }
@@ -156,12 +150,8 @@ pub fn _persist_store(
 ///
 /// # Errors
 ///
-/// Returns an error if the persistence `store()` call fails.  The entry
-/// will still have been added to the in-memory store.
-///
-/// Reserved bridge API — prefixed with `_` to suppress dead-code warnings
-/// until it is wired into production flow.
-pub fn _bridge_store(
+/// Bridge API for coordinated dual-store (memory + persistence, wired into production flow).
+pub fn bridge_store(
     memory_store: &StdMutex<MemoryStore>,
     persistence: &MemoryPersistence,
     entry: CanonicalEntry,
@@ -177,7 +167,7 @@ pub fn _bridge_store(
     store.store(entry.clone());
 
     // Step 2: persistence (conversion via `From` impl)
-    _persist_store(persistence, entry)?;
+    persist_store(persistence, entry)?;
 
     Ok(())
 }
@@ -284,7 +274,7 @@ mod tests {
 
         // Store an entry via the bridge
         let entry = make_canonical("bridge-test-1", MemoryClass::Observation, 0.80);
-        _bridge_store(&store, &persistence, entry).unwrap();
+        bridge_store(&store, &persistence, entry).unwrap();
 
         // Promote via the bridge
         let report = bridge_promote(&store, &persistence).unwrap();

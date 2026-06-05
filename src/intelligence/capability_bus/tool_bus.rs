@@ -348,29 +348,14 @@ impl ToolBus {
                 "payload": input.payload,
             });
 
-            // The Skill trait is async.  If we are already inside a Tokio
-            // runtime we block in-place; otherwise we spawn a dedicated
-            // thread with a fresh runtime (matching the synchronous Tool
-            // trait interface).
-            let output_value = match tokio::runtime::Handle::try_current() {
-                Ok(handle) => {
-                    tokio::task::block_in_place(|| handle.block_on(skill.execute(&skill_input)))?
-                }
-                Err(_) => std::thread::spawn(move || {
-                    let rt = match tokio::runtime::Runtime::new() {
-                        Ok(rt) => rt,
-                        Err(e) => {
-                            return Err(anyhow::anyhow!(
-                                "ToolBus: failed to create Tokio runtime for skill dispatch: {}",
-                                e
-                            ));
-                        }
-                    };
-                    rt.block_on(skill.execute(&skill_input))
-                })
-                .join()
-                .map_err(|_| anyhow::anyhow!("ToolBus: skill dispatch thread panicked"))??,
-            };
+            // The Skill trait is async. Move execution to a blocking thread
+            // to avoid tying up an async worker thread, then block_on
+            // synchronously since dispatch_tool itself is sync.
+            let output_value = tokio::runtime::Handle::current()
+                .block_on(tokio::task::spawn_blocking(move || {
+                    tokio::runtime::Handle::current().block_on(skill.execute(&skill_input))
+                }))
+                .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))??;
 
             return Ok(ToolOutput {
                 success: true,
@@ -634,6 +619,8 @@ mod tests {
 
     #[test]
     fn execute_tool_ok_but_logical_failure_tracks_failure_stats() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _guard = rt.enter();
         let bus = make_bus();
         let mut reg = bus.tool_registry.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("lock poisoned, recovering");
@@ -707,6 +694,8 @@ mod tests {
 
     #[test]
     fn execute_skill_echo_roundtrips() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _guard = rt.enter();
         let bus = make_bus();
         let input = ToolInput {
             task_id: "skill-test".to_string(),

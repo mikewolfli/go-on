@@ -70,6 +70,7 @@ impl From<&str> for SessionId {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
 pub struct ProtocolVersion(u16);
 #[allow(dead_code)] // F-GAP-49 — reserved schema feature
 impl ProtocolVersion {

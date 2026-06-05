@@ -48,7 +48,7 @@ pub(crate) async fn apply_capability_bus_selection(
         risk_score: (risk_assessment.score as f64 / 4.0).clamp(0.1, 1.0),
     };
     let sensing = cb.sense(&task_ctx);
-    let decision = cb.decide(&task_ctx, &sensing);
+    let decision = cb.decide(&task_ctx, &sensing).await;
     let capability_selected_agent = decision.selected_agent.clone();
     let recommended_mode = Some(decision.recommended_mode.clone());
     let candidate_count = sensing.capability_agent_count;

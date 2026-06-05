@@ -24,6 +24,7 @@ use tracing::{debug, info, warn};
 
 use crate::i18n::runtime::tf;
 use crate::intelligence::adaptive_selector::AdaptiveModelSelector;
+#[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
 use crate::orchestration::brain_loop::{
     BrainLoop, BrainLoopConfig, BrainLoopPhase, BrainLoopStep, StepStatus,
 };
@@ -270,7 +271,7 @@ pub struct FullAutoFlow {
     tool_registry: Arc<ToolRegistry>,
     config: FullAutoConfig,
     /// Fast-path cache for parsing, discovery, environment, and route matching.
-    cache: FastPathCache,
+    cache: Arc<FastPathCache>,
     /// Optional dynamic threshold learner for adaptive skill matching.
     threshold_learner: Option<Mutex<ThresholdLearner>>,
     /// Complexity estimator for dynamic BrainLoop iteration tuning.
@@ -318,7 +319,7 @@ impl FullAutoFlow {
             skill_registry,
             tool_registry,
             config: FullAutoConfig::default(),
-            cache: FastPathCache::with_default_routes(),
+            cache: Arc::new(FastPathCache::with_default_routes()),
             threshold_learner: None,
             complexity_estimator: ComplexityEstimator::new(),
             diagnostic_engine: Mutex::new(DiagnosticFeedbackEngine::new()),
@@ -339,6 +340,12 @@ impl FullAutoFlow {
         tool_registry: Arc<ToolRegistry>,
     ) -> Self {
         Self::new(skill_registry, tool_registry)
+    }
+
+    /// Return a reference to the internal FastPathCache, so callers can
+    /// wire it to the CacheWarmingEngine for unified hit/miss tracking.
+    pub fn fast_path_cache(&self) -> Arc<FastPathCache> {
+        Arc::clone(&self.cache)
     }
 
     /// Attach a threshold learner for dynamic skill-match threshold tuning.
@@ -399,7 +406,7 @@ impl FullAutoFlow {
             skill_registry,
             tool_registry,
             config,
-            cache: FastPathCache::new(),
+            cache: Arc::new(FastPathCache::new()),
             threshold_learner: None,
             complexity_estimator: ComplexityEstimator::new(),
             diagnostic_engine: Mutex::new(DiagnosticFeedbackEngine::new()),
@@ -417,7 +424,7 @@ impl FullAutoFlow {
     pub fn with_cache(
         skill_registry: Arc<Mutex<SkillRegistry>>,
         tool_registry: Arc<ToolRegistry>,
-        cache: FastPathCache,
+        cache: Arc<FastPathCache>,
     ) -> Self {
         Self {
             skill_registry,
@@ -766,6 +773,7 @@ impl FullAutoFlow {
     /// 6. Return a complete `AutoExecutionReport`.
     ///
     /// This is an `async` method because skill execution may involve I/O.
+    #[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
     pub async fn run(&mut self, task: &str) -> AutoExecutionReport {
         let flow_start = Instant::now();
         let mut errors: Vec<String> = Vec::new();
@@ -1316,7 +1324,7 @@ mod tests {
     fn with_cache_constructor_smoke() {
         let registry = setup_registry();
         let tool_registry = Arc::new(ToolRegistry::new_empty());
-        let cache = crate::orchestration::fast_path_cache::FastPathCache::new();
+        let cache = Arc::new(crate::orchestration::fast_path_cache::FastPathCache::new());
         let flow = FullAutoFlow::with_cache(registry, tool_registry, cache);
 
         let intent = flow.parse_task("- goal: validate custom cache constructor");

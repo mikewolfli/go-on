@@ -1569,8 +1569,8 @@ async fn start_server(
 
     // ── ProtocolNegotiator ───────────────────────────────────────────
     // Create negotiator with the resolved mode and log the negotiated result.
-    let negotiator_mode =
-        NegProtocolMode::from_str(dispatch_mode).unwrap_or(NegProtocolMode::AcpHttp);
+    let negotiator_mode = NegProtocolMode::from_str(dispatch_mode)
+        .unwrap_or_else(|e| panic!("fatal: invalid dispatch mode '{}': {:?}", dispatch_mode, e));
     let negotiator = ProtocolNegotiator::new(negotiator_mode);
     let negotiated = negotiator.negotiate(None);
     info!(

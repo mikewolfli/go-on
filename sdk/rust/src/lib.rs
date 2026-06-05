@@ -19,3 +19,52 @@ pub mod types;
 pub use client::{GoOnClient, GoOnClientBuilder};
 pub use error::SdkError;
 pub use types::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_client_builder_defaults() {
+        let client = GoOnClientBuilder::new("http://localhost:8090")
+            .build()
+            .expect("building client with defaults should succeed");
+        let _ = client;
+    }
+
+    #[test]
+    fn test_client_builder_custom_timeout() {
+        let client = GoOnClientBuilder::new("http://localhost:8090")
+            .with_timeout(std::time::Duration::from_secs(60))
+            .build()
+            .expect("building client with custom timeout should succeed");
+        let _ = client;
+    }
+
+    #[test]
+    fn test_client_builder_custom_retries() {
+        let client = GoOnClientBuilder::new("http://localhost:8090")
+            .with_max_retries(5)
+            .with_retry_delay(std::time::Duration::from_secs(2))
+            .build()
+            .expect("building client with custom retries should succeed");
+        let _ = client;
+    }
+
+    #[test]
+    fn test_error_types() {
+        let timeout_err = SdkError::Timeout { elapsed_secs: 30 };
+        assert!(timeout_err.to_string().contains("30"));
+
+        let rate_err = SdkError::RateLimited {
+            retry_after_secs: 5,
+        };
+        assert!(rate_err.to_string().contains("5"));
+
+        let rpc_err = SdkError::JsonRpc {
+            code: -32601,
+            message: "method not found".into(),
+        };
+        assert!(rpc_err.to_string().contains("-32601"));
+    }
+}

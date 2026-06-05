@@ -11,41 +11,31 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::Arc;
 use tokio::sync::watch;
+use tokio::sync::{Mutex, RwLock};
 
 /// Lock a Mutex, recovering from poison with a log.
-fn lock_mutex<T>(mtx: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    match mtx.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            tracing::error!("hyper_resilience mutex poisoned, recovering");
-            poisoned.into_inner()
-        }
-    }
+///
+/// Note: `tokio::sync::Mutex` does not have poisoning, so the recovery
+/// branch is retained only for forward-compatibility (e.g. a custom
+/// wrapper).
+async fn lock_mutex<T>(mtx: &Mutex<T>) -> tokio::sync::MutexGuard<'_, T> {
+    mtx.lock().await
 }
 
 /// Lock a RwLock for reading, recovering from poison with a log.
-fn read_lock<T>(rw: &RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
-    match rw.read() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            tracing::error!("hyper_resilience rwlock read poisoned, recovering");
-            poisoned.into_inner()
-        }
-    }
+///
+/// Note: `tokio::sync::RwLock` does not have poisoning, so the recovery
+/// branch is retained only for forward-compatibility.
+async fn read_lock<T>(rw: &RwLock<T>) -> tokio::sync::RwLockReadGuard<'_, T> {
+    rw.read().await
 }
 
 /// Lock a RwLock for writing, recovering from poison with a log.
 #[allow(dead_code)]
-fn write_lock<T>(rw: &RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
-    match rw.write() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            tracing::error!("hyper_resilience rwlock write poisoned, recovering");
-            poisoned.into_inner()
-        }
-    }
+async fn write_lock<T>(rw: &RwLock<T>) -> tokio::sync::RwLockWriteGuard<'_, T> {
+    rw.write().await
 }
 
 // ---------------------------------------------------------------------------
@@ -257,16 +247,48 @@ impl std::fmt::Debug for HyperResilienceEngine {
 
 impl Clone for HyperResilienceEngine {
     fn clone(&self) -> Self {
+        // Use try_lock in a loop with small sleeps to avoid blocking
+        // a tokio worker thread (tokio::sync::Mutex).
+        let config = loop {
+            match self.config.try_read() {
+                Ok(guard) => break RwLock::new(guard.clone()),
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(1)),
+            }
+        };
+        let circuit_breakers = loop {
+            match self.circuit_breakers.try_lock() {
+                Ok(guard) => break Mutex::new(guard.clone()),
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(1)),
+            }
+        };
+        let failover_groups = loop {
+            match self.failover_groups.try_lock() {
+                Ok(guard) => break Mutex::new(guard.clone()),
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(1)),
+            }
+        };
+        let test_avg_latency_ms = loop {
+            match self.test_avg_latency_ms.try_lock() {
+                Ok(guard) => break Mutex::new(*guard),
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(1)),
+            }
+        };
+        let test_error_rate = loop {
+            match self.test_error_rate.try_lock() {
+                Ok(guard) => break Mutex::new(*guard),
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(1)),
+            }
+        };
         Self {
-            config: RwLock::new(read_lock(&self.config).clone()),
-            circuit_breakers: Mutex::new(lock_mutex(&self.circuit_breakers).clone()),
-            failover_groups: Mutex::new(lock_mutex(&self.failover_groups).clone()),
+            config,
+            circuit_breakers,
+            failover_groups,
             healing_actions_taken: AtomicU64::new(
                 self.healing_actions_taken.load(Ordering::Relaxed),
             ),
             started_ms: self.started_ms,
-            test_avg_latency_ms: Mutex::new(*lock_mutex(&self.test_avg_latency_ms)),
-            test_error_rate: Mutex::new(*lock_mutex(&self.test_error_rate)),
+            test_avg_latency_ms,
+            test_error_rate,
             cancel_tx: self.cancel_tx.clone(),
         }
     }
@@ -298,13 +320,13 @@ impl HyperResilienceEngine {
     }
 
     /// Register a circuit breaker with the given name, threshold, and recovery timeout.
-    pub fn register_circuit_breaker(
+    pub async fn register_circuit_breaker(
         &self,
         name: &str,
         threshold: u64,
         recovery_timeout_ms: u64,
     ) -> Result<()> {
-        let mut cbs = lock_mutex(&self.circuit_breakers);
+        let mut cbs = lock_mutex(&self.circuit_breakers).await;
         if cbs.contains_key(name) {
             bail!(
                 "{}",
@@ -335,8 +357,9 @@ impl HyperResilienceEngine {
     ///
     /// Returns the new state of the circuit breaker after applying the failure.
     /// Uses `FailureMode::ResourceExhaustion` as the default failure mode.
-    pub fn record_failure(&self, breaker_name: &str) -> Result<CircuitState> {
+    pub async fn record_failure(&self, breaker_name: &str) -> Result<CircuitState> {
         self.record_failure_with_mode(breaker_name, FailureMode::ResourceExhaustion)
+            .await
     }
 
     /// Record a failure with a specific `FailureMode` classification.
@@ -344,12 +367,12 @@ impl HyperResilienceEngine {
     /// Returns the new state of the circuit breaker after applying the failure.
     /// The failure mode is stored on the circuit breaker for diagnostics
     /// and is included in the failure history (rolling window of 10).
-    pub fn record_failure_with_mode(
+    pub async fn record_failure_with_mode(
         &self,
         breaker_name: &str,
         failure_mode: FailureMode,
     ) -> Result<CircuitState> {
-        let mut cbs = lock_mutex(&self.circuit_breakers);
+        let mut cbs = lock_mutex(&self.circuit_breakers).await;
         let cb = cbs
             .get_mut(breaker_name)
             .with_context(|| tf("error.circuit_breaker_not_found", &[("name", breaker_name)]))?;
@@ -390,8 +413,8 @@ impl HyperResilienceEngine {
     /// Record a success against the named circuit breaker.
     ///
     /// If the breaker is half-open, a success moves it back to closed.
-    pub fn record_success(&self, breaker_name: &str) -> Result<()> {
-        let mut cbs = lock_mutex(&self.circuit_breakers);
+    pub async fn record_success(&self, breaker_name: &str) -> Result<()> {
+        let mut cbs = lock_mutex(&self.circuit_breakers).await;
         let cb = cbs
             .get_mut(breaker_name)
             .with_context(|| tf("error.circuit_breaker_not_found", &[("name", breaker_name)]))?;
@@ -434,9 +457,9 @@ impl HyperResilienceEngine {
     /// opposite order (config first, then circuit_breakers) would risk a
     /// deadlock with code paths that hold circuit_breakers and later take
     /// config (e.g. `health_check_cycle` → `record_execution`).
-    pub fn is_available(&self, breaker_name: &str) -> bool {
+    pub async fn is_available(&self, breaker_name: &str) -> bool {
         // Acquire circuit_breakers FIRST — this is the canonical lock order.
-        let mut cbs = lock_mutex(&self.circuit_breakers);
+        let mut cbs = lock_mutex(&self.circuit_breakers).await;
         let cb = match cbs.get_mut(breaker_name) {
             Some(cb) => cb,
             None => return false,
@@ -446,7 +469,7 @@ impl HyperResilienceEngine {
             CircuitState::Closed | CircuitState::HalfOpen => true,
             CircuitState::Open => {
                 // Acquire config RwLock only in the Open branch (not in the fast path).
-                let probe_interval = read_lock(&self.config).half_open_probe_interval_ms;
+                let probe_interval = read_lock(&self.config).await.half_open_probe_interval_ms;
                 let now = now_millis();
                 if now >= cb.last_failure_ms + probe_interval {
                     cb.state = CircuitState::HalfOpen;
@@ -464,8 +487,8 @@ impl HyperResilienceEngine {
     /// requests after the probe (i.e. closed or half-open).
     ///
     /// This is the state-mutating counterpart of `is_available()`.
-    pub fn probe(&self, breaker_name: &str) -> bool {
-        let mut cbs = lock_mutex(&self.circuit_breakers);
+    pub async fn probe(&self, breaker_name: &str) -> bool {
+        let mut cbs = lock_mutex(&self.circuit_breakers).await;
         let cb = match cbs.get_mut(breaker_name) {
             Some(cb) => cb,
             None => return false,
@@ -487,13 +510,13 @@ impl HyperResilienceEngine {
     }
 
     /// Register a failover group with a primary node and a list of replicas.
-    pub fn register_failover_group(
+    pub async fn register_failover_group(
         &self,
         group_id: &str,
         primary: &str,
         replicas: Vec<String>,
     ) -> Result<()> {
-        let mut fgs = lock_mutex(&self.failover_groups);
+        let mut fgs = lock_mutex(&self.failover_groups).await;
         if fgs.contains_key(group_id) {
             bail!(
                 "{}",
@@ -530,8 +553,8 @@ impl HyperResilienceEngine {
     /// Trigger a failover for the named group, promoting the next available replica.
     ///
     /// Returns the identifier of the new leader.
-    pub fn trigger_failover(&self, group_id: &str) -> Result<String> {
-        let mut fgs = lock_mutex(&self.failover_groups);
+    pub async fn trigger_failover(&self, group_id: &str) -> Result<String> {
+        let mut fgs = lock_mutex(&self.failover_groups).await;
         let group = fgs
             .get_mut(group_id)
             .with_context(|| tf("error.failover_group_not_found", &[("name", group_id)]))?;
@@ -564,18 +587,18 @@ impl HyperResilienceEngine {
     }
 
     /// Return a snapshot of the current system health.
-    pub fn system_health(&self) -> SystemHealth {
-        let cbs = lock_mutex(&self.circuit_breakers);
+    pub async fn system_health(&self) -> SystemHealth {
+        let cbs = lock_mutex(&self.circuit_breakers).await;
         let active_circuit_breakers = cbs.len();
         let open_circuits = cbs
             .values()
             .filter(|cb| matches!(cb.state, CircuitState::Open))
             .count();
-        let avg_latency_ms = *lock_mutex(&self.test_avg_latency_ms);
-        let error_rate = *lock_mutex(&self.test_error_rate);
+        let avg_latency_ms = *lock_mutex(&self.test_avg_latency_ms).await;
+        let error_rate = *lock_mutex(&self.test_error_rate).await;
         drop(cbs);
 
-        let fgs = lock_mutex(&self.failover_groups);
+        let fgs = lock_mutex(&self.failover_groups).await;
         let active_failovers = fgs.values().filter(|g| g.failover_count > 0).count();
         drop(fgs);
 
@@ -605,7 +628,7 @@ impl HyperResilienceEngine {
     ///
     /// This is a test/benchmark operation — no actual node restarts or resource
     /// scaling are performed.
-    pub fn execute_healing(
+    pub async fn execute_healing(
         &self,
         action: SelfHealingAction,
         target: &str,
@@ -625,7 +648,7 @@ impl HyperResilienceEngine {
         let (success, result) = match &action {
             SelfHealingAction::ClearCircuitBreaker => {
                 // Clear the circuit breaker if it exists.
-                let mut cbs = lock_mutex(&self.circuit_breakers);
+                let mut cbs = lock_mutex(&self.circuit_breakers).await;
                 if let Some(cb) = cbs.get_mut(target) {
                     cb.state = CircuitState::Closed;
                     cb.failure_count = 0;
@@ -644,7 +667,7 @@ impl HyperResilienceEngine {
             }
             SelfHealingAction::PromoteReplica => {
                 // Simulate promoting a replica by triggering a failover.
-                let mut fgs = lock_mutex(&self.failover_groups);
+                let mut fgs = lock_mutex(&self.failover_groups).await;
                 if let Some(group) = fgs.get_mut(target) {
                     let new_leader = if group.replica_nodes.is_empty() {
                         group.primary_node.clone()
@@ -697,8 +720,8 @@ impl HyperResilienceEngine {
     }
 
     /// Return the current resilience profile summarising overall engine state.
-    pub fn profile(&self) -> ResilienceProfile {
-        let cbs = lock_mutex(&self.circuit_breakers);
+    pub async fn profile(&self) -> ResilienceProfile {
+        let cbs = lock_mutex(&self.circuit_breakers).await;
         let total_circuit_breakers = cbs.len();
         let open_circuits = cbs
             .values()
@@ -706,7 +729,7 @@ impl HyperResilienceEngine {
             .count();
         drop(cbs);
 
-        let fgs = lock_mutex(&self.failover_groups);
+        let fgs = lock_mutex(&self.failover_groups).await;
         let failover_groups = fgs.len();
         drop(fgs);
 
@@ -751,8 +774,8 @@ impl HyperResilienceEngine {
     /// Requires the engine to be wrapped in an `Arc`. Call this once during
     /// server startup. Safe to call multiple times — subsequent calls are
     /// no-ops.
-    pub fn start_health_checks(self: &Arc<Self>) {
-        let interval_ms = read_lock(&self.config).health_check_interval_ms;
+    pub async fn start_health_checks(self: &Arc<Self>) {
+        let interval_ms = read_lock(&self.config).await.health_check_interval_ms;
 
         let engine = Arc::clone(self);
         let mut rx = self.cancel_tx.subscribe();
@@ -763,7 +786,7 @@ impl HyperResilienceEngine {
             loop {
                 tokio::select! {
                     _ = timer.tick() => {
-                        engine.health_check_cycle();
+                        engine.health_check_cycle().await;
                     }
                     _ = rx.changed() => {
                         // Stop signal received
@@ -790,22 +813,22 @@ impl HyperResilienceEngine {
     ///    breakers.
     ///
     /// This method is safe to call from any thread.
-    pub fn health_check_cycle(&self) {
+    pub async fn health_check_cycle(&self) {
         // ── Phase 1: Probe all circuit breakers ────────────────────────────
         let breaker_names: Vec<String> = {
-            let cbs = lock_mutex(&self.circuit_breakers);
+            let cbs = lock_mutex(&self.circuit_breakers).await;
             cbs.keys().cloned().collect()
         };
         for name in &breaker_names {
-            self.probe(name);
+            self.probe(name).await;
         }
 
         // ── Phase 2: Assess system health ──────────────────────────────────
-        let health = self.system_health();
+        let health = self.system_health().await;
 
         // Update real operational metrics (only circuit_breakers + test metrics locks)
         {
-            let cbs = lock_mutex(&self.circuit_breakers);
+            let cbs = lock_mutex(&self.circuit_breakers).await;
             let total = cbs.len();
             let open = cbs
                 .values()
@@ -817,8 +840,8 @@ impl HyperResilienceEngine {
                 .count();
             drop(cbs);
 
-            let mut avg_latency = lock_mutex(&self.test_avg_latency_ms);
-            let mut err_rate = lock_mutex(&self.test_error_rate);
+            let mut avg_latency = lock_mutex(&self.test_avg_latency_ms).await;
+            let mut err_rate = lock_mutex(&self.test_error_rate).await;
 
             if total > 0 {
                 *err_rate = open as f64 / total as f64;
@@ -835,17 +858,20 @@ impl HyperResilienceEngine {
 
         // ── Phase 3: Auto-heal if degraded ────────────────────────────────
         if health.level >= DegradationLevel::Constrained {
-            let healing_enabled = read_lock(&self.config).self_healing_enabled;
+            let healing_enabled = read_lock(&self.config).await.self_healing_enabled;
             if healing_enabled {
                 for name in &breaker_names {
                     let is_open = {
-                        let cbs = lock_mutex(&self.circuit_breakers);
+                        let cbs = lock_mutex(&self.circuit_breakers).await;
                         cbs.get(name)
                             .map(|cb| matches!(cb.state, CircuitState::Open))
                             .unwrap_or(false)
                     };
                     if is_open {
-                        match self.execute_healing(SelfHealingAction::ClearCircuitBreaker, name) {
+                        match self
+                            .execute_healing(SelfHealingAction::ClearCircuitBreaker, name)
+                            .await
+                        {
                             Ok(report) => {
                                 tracing::info!(
                                     "health-check: auto-healed breaker '{}': {}",
@@ -879,20 +905,18 @@ impl HyperResilienceEngine {
     ///
     /// This is the primary integration point for production code paths such as
     /// `HarnessBus::evaluate()` and `verify_output()`.
-    pub fn record_execution(&self, breaker_name: &str, success: bool) {
+    pub async fn record_execution(&self, breaker_name: &str, success: bool) {
         // Phase 1: Read config for auto-register defaults (read lock, fast path).
         let threshold: u64;
         let recovery_timeout_ms: u64;
         {
-            let config = read_lock(&self.config);
+            let config = read_lock(&self.config).await;
             threshold = config.circuit_breaker_threshold;
             recovery_timeout_ms = config.recovery_timeout_ms;
         }
 
         // Phase 2: Lock only circuit_breakers for the auto-register + state transition.
-        // This keeps the critical section focused on the circuit breaker state alone,
-        // without holding the config lock or any other lock.
-        let mut cbs = lock_mutex(&self.circuit_breakers);
+        let mut cbs = lock_mutex(&self.circuit_breakers).await;
 
         let cb_ref = cbs
             .entry(breaker_name.to_string())
@@ -1240,113 +1264,126 @@ fn now_millis() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread;
     use std::time::Duration;
 
     /// 1. A fresh engine has no circuit breakers, no failover groups.
-    #[test]
-    fn test_new_engine_empty() {
+    #[tokio::test]
+    async fn test_new_engine_empty() {
         let config = ResilienceConfig::default();
         let engine = HyperResilienceEngine::new(config);
-        let p = engine.profile();
+        let p = engine.profile().await;
         assert_eq!(p.total_circuit_breakers, 0);
         assert_eq!(p.failover_groups, 0);
         assert_eq!(p.healing_actions_taken, 0);
     }
 
     /// 2. Register a circuit breaker succeeds and it appears in the profile.
-    #[test]
-    fn test_register_circuit_breaker() {
+    #[tokio::test]
+    async fn test_register_circuit_breaker() {
         let engine = HyperResilienceEngine::new(ResilienceConfig::default());
         engine
             .register_circuit_breaker("cb-gateway", 3, 10_000)
+            .await
             .unwrap();
-        let p = engine.profile();
+        let p = engine.profile().await;
         assert_eq!(p.total_circuit_breakers, 1);
     }
 
     /// 3. Recording failures beyond threshold trips the breaker open.
-    #[test]
-    fn test_circuit_breaker_trips_open() {
+    #[tokio::test]
+    async fn test_circuit_breaker_trips_open() {
         let engine = HyperResilienceEngine::new(ResilienceConfig::default());
-        engine.register_circuit_breaker("cb-db", 3, 10_000).unwrap();
+        engine
+            .register_circuit_breaker("cb-db", 3, 10_000)
+            .await
+            .unwrap();
 
         // First two failures — still closed.
         assert_eq!(
-            engine.record_failure("cb-db").unwrap(),
+            engine.record_failure("cb-db").await.unwrap(),
             CircuitState::Closed
         );
         assert_eq!(
-            engine.record_failure("cb-db").unwrap(),
+            engine.record_failure("cb-db").await.unwrap(),
             CircuitState::Closed
         );
         // Third failure trips to open.
-        assert_eq!(engine.record_failure("cb-db").unwrap(), CircuitState::Open);
+        assert_eq!(
+            engine.record_failure("cb-db").await.unwrap(),
+            CircuitState::Open
+        );
     }
 
     /// 4. After recovery timeout elapses, an open breaker transitions to half-open.
-    #[test]
-    fn test_circuit_breaker_half_open() {
+    #[tokio::test]
+    async fn test_circuit_breaker_half_open() {
         let engine = HyperResilienceEngine::new(ResilienceConfig::default());
         // Use a very short timeout so the test doesn't take long.
-        engine.register_circuit_breaker("cb-cache", 1, 1).unwrap();
+        engine
+            .register_circuit_breaker("cb-cache", 1, 1)
+            .await
+            .unwrap();
 
         // Single failure trips to open.
         assert_eq!(
-            engine.record_failure("cb-cache").unwrap(),
+            engine.record_failure("cb-cache").await.unwrap(),
             CircuitState::Open
         );
 
         // Immediately — not available, still open.
-        assert!(!engine.is_available("cb-cache"));
+        assert!(!engine.is_available("cb-cache").await);
 
         // Wait for the recovery timeout (1 ms + some slack).
-        thread::sleep(Duration::from_millis(10));
+        tokio::time::sleep(Duration::from_millis(10)).await;
 
         // Now probe should transition to half-open and return true.
-        assert!(engine.probe("cb-cache"));
+        assert!(engine.probe("cb-cache").await);
     }
 
     /// 5. A success in half-open resets the breaker to closed.
-    #[test]
-    fn test_circuit_breaker_resets_on_success() {
+    #[tokio::test]
+    async fn test_circuit_breaker_resets_on_success() {
         let engine = HyperResilienceEngine::new(ResilienceConfig::default());
-        engine.register_circuit_breaker("cb-api", 1, 1).unwrap();
+        engine
+            .register_circuit_breaker("cb-api", 1, 1)
+            .await
+            .unwrap();
 
         // Trip to open.
-        engine.record_failure("cb-api").unwrap();
-        assert!(!engine.is_available("cb-api"));
+        engine.record_failure("cb-api").await.unwrap();
+        assert!(!engine.is_available("cb-api").await);
 
         // Wait for recovery timeout.
-        thread::sleep(Duration::from_millis(10));
+        tokio::time::sleep(Duration::from_millis(10)).await;
 
         // Now probe transitions to half-open.
-        assert!(engine.probe("cb-api"));
+        assert!(engine.probe("cb-api").await);
 
         // Record a success — should close the breaker.
-        engine.record_success("cb-api").unwrap();
-        let health = engine.system_health();
+        engine.record_success("cb-api").await.unwrap();
+        let health = engine.system_health().await;
         assert_eq!(health.open_circuits, 0);
     }
 
     /// 6. An open circuit breaker reports unavailable.
-    #[test]
-    fn test_is_available_open_returns_false() {
+    #[tokio::test]
+    async fn test_is_available_open_returns_false() {
         let engine = HyperResilienceEngine::new(ResilienceConfig::default());
         engine
             .register_circuit_breaker("cb-slow", 2, 60_000)
+            .await
             .unwrap();
 
-        engine.record_failure("cb-slow").unwrap();
-        engine.record_failure("cb-slow").unwrap();
+        engine.record_failure("cb-slow").await.unwrap();
+        engine.record_failure("cb-slow").await.unwrap();
 
         // Should be open and unavailable.
-        assert!(!engine.is_available("cb-slow"));
+        assert!(!engine.is_available("cb-slow").await);
     }
 
     /// 7. Register a failover group with primary and replicas.
-    #[test]
-    fn test_register_failover_group() {
+    #[tokio::test]
+    async fn test_register_failover_group() {
         let engine = HyperResilienceEngine::new(ResilienceConfig::default());
         engine
             .register_failover_group(
@@ -1354,14 +1391,15 @@ mod tests {
                 "node-primary",
                 vec!["node-replica-1".to_string(), "node-replica-2".to_string()],
             )
+            .await
             .unwrap();
-        let p = engine.profile();
+        let p = engine.profile().await;
         assert_eq!(p.failover_groups, 1);
     }
 
     /// 8. Triggering a failover promotes a replica to leader.
-    #[test]
-    fn test_trigger_failover() {
+    #[tokio::test]
+    async fn test_trigger_failover() {
         let engine = HyperResilienceEngine::new(ResilienceConfig::default());
         engine
             .register_failover_group(
@@ -1369,90 +1407,107 @@ mod tests {
                 "node-p",
                 vec!["node-r1".to_string(), "node-r2".to_string()],
             )
+            .await
             .unwrap();
 
-        let new_leader = engine.trigger_failover("group-beta").unwrap();
+        let new_leader = engine.trigger_failover("group-beta").await.unwrap();
         assert_eq!(new_leader, "node-r1");
 
         // A second failover should go to the next replica.
-        let new_leader2 = engine.trigger_failover("group-beta").unwrap();
+        let new_leader2 = engine.trigger_failover("group-beta").await.unwrap();
         assert_eq!(new_leader2, "node-r2");
 
         // Third failover wraps around.
-        let new_leader3 = engine.trigger_failover("group-beta").unwrap();
+        let new_leader3 = engine.trigger_failover("group-beta").await.unwrap();
         assert_eq!(new_leader3, "node-r1");
     }
 
     /// 9. System health reflects registered breakers and failure state.
-    #[test]
-    fn test_system_health_reflects_state() {
+    #[tokio::test]
+    async fn test_system_health_reflects_state() {
         let engine = HyperResilienceEngine::new(ResilienceConfig::default());
-        engine.register_circuit_breaker("cb-1", 1, 60_000).unwrap();
-        engine.register_circuit_breaker("cb-2", 1, 60_000).unwrap();
+        engine
+            .register_circuit_breaker("cb-1", 1, 60_000)
+            .await
+            .unwrap();
+        engine
+            .register_circuit_breaker("cb-2", 1, 60_000)
+            .await
+            .unwrap();
 
-        let health = engine.system_health();
+        let health = engine.system_health().await;
         assert_eq!(health.active_circuit_breakers, 2);
         assert_eq!(health.open_circuits, 0);
         assert_eq!(health.level, DegradationLevel::Normal);
 
         // Trip one breaker.
-        engine.record_failure("cb-1").unwrap();
-        let health2 = engine.system_health();
+        engine.record_failure("cb-1").await.unwrap();
+        let health2 = engine.system_health().await;
         assert_eq!(health2.open_circuits, 1);
         // One out of two open breakers triggers Constrained (more than 1/3 threshold)
         assert_eq!(health2.level, DegradationLevel::Constrained);
     }
 
     /// 10. Executing a self-healing action produces a valid report.
-    #[test]
-    fn test_execute_healing() {
+    #[tokio::test]
+    async fn test_execute_healing() {
         let engine = HyperResilienceEngine::new(ResilienceConfig::default());
         engine
             .register_circuit_breaker("cb-broken", 1, 10_000)
+            .await
             .unwrap();
-        engine.record_failure("cb-broken").unwrap();
+        engine.record_failure("cb-broken").await.unwrap();
 
         let report = engine
             .execute_healing(SelfHealingAction::ClearCircuitBreaker, "cb-broken")
+            .await
             .unwrap();
         assert!(report.success);
         assert_eq!(report.target, "cb-broken");
         assert!(report.duration_ms > 0);
 
         // After healing, the breaker should be closed.
-        let health = engine.system_health();
+        let health = engine.system_health().await;
         assert_eq!(health.open_circuits, 0);
     }
 
     /// 11. Profile accurately reflects engine state after operations.
-    #[test]
-    fn test_profile_reflects_state() {
+    #[tokio::test]
+    async fn test_profile_reflects_state() {
         let engine = HyperResilienceEngine::new(ResilienceConfig::default());
-        engine.register_circuit_breaker("cb-1", 3, 10_000).unwrap();
-        engine.register_circuit_breaker("cb-2", 3, 10_000).unwrap();
+        engine
+            .register_circuit_breaker("cb-1", 3, 10_000)
+            .await
+            .unwrap();
+        engine
+            .register_circuit_breaker("cb-2", 3, 10_000)
+            .await
+            .unwrap();
         engine
             .register_failover_group("group-gamma", "node-p", vec!["node-r1".to_string()])
+            .await
             .unwrap();
 
         // Trip one breaker.
-        engine.record_failure("cb-1").unwrap();
-        engine.record_failure("cb-1").unwrap();
-        engine.record_failure("cb-1").unwrap();
+        engine.record_failure("cb-1").await.unwrap();
+        engine.record_failure("cb-1").await.unwrap();
+        engine.record_failure("cb-1").await.unwrap();
 
-        let p = engine.profile();
+        let p = engine.profile().await;
         assert_eq!(p.total_circuit_breakers, 2);
         assert_eq!(p.open_circuits, 1);
         assert_eq!(p.failover_groups, 1);
     }
 
     /// 12. Registering a circuit breaker with a duplicate name fails.
-    #[test]
-    fn test_register_duplicate_circuit_breaker_fails() {
+    #[tokio::test]
+    async fn test_register_duplicate_circuit_breaker_fails() {
         let engine = HyperResilienceEngine::new(ResilienceConfig::default());
         engine
             .register_circuit_breaker("cb-dup", 5, 10_000)
+            .await
             .unwrap();
-        let result = engine.register_circuit_breaker("cb-dup", 3, 20_000);
+        let result = engine.register_circuit_breaker("cb-dup", 3, 20_000).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err

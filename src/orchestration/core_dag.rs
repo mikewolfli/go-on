@@ -30,12 +30,20 @@
 //!
 //! This module is **active** — do not delete. Prefer `CoreDag<T>` for new DAG code.
 
-// Allow dead_code for this module — it provides foundational types that are
-// not yet integrated across all call sites.
-#![allow(dead_code)]
+// TODO-BLUE64: Wire these methods.
+// 15 items have targeted #[allow(dead_code)] — they are valid utility APIs
+// that should be wired once consumers migrate to CoreDag:
+//   remove_node, get, get_mut, contains, len, is_empty, parents,
+//   has_cycle, metrics, DagMetrics, FromCoreDag, IntoCoreDag, iter_topo,
+//   TaskContext (struct + impl).
 
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet, VecDeque};
+use serde_json::Value;
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use uuid::Uuid;
+
+use crate::orchestration::execution_graph::{ExNodeId, ExNodeState};
+use crate::orchestration::planner_execution_graph::PlannerExecutionBridge;
 
 // ── Core types ──────────────────────────────────────────────────────────────
 
@@ -98,6 +106,7 @@ impl<T> CoreDag<T> {
     }
 
     /// Remove a node and all its edges from the DAG.
+    #[allow(dead_code)] // BLUE64-DAG: Foundational API, not yet wired
     pub fn remove_node(&mut self, id: &str) -> Option<DagNode<T>> {
         let node = self.nodes.remove(id)?;
 
@@ -119,26 +128,31 @@ impl<T> CoreDag<T> {
     }
 
     /// Get a reference to a node by ID.
+    #[allow(dead_code)] // BLUE64-DAG: Foundational API, not yet wired
     pub fn get(&self, id: &str) -> Option<&DagNode<T>> {
         self.nodes.get(id)
     }
 
     /// Get a mutable reference to a node by ID.
+    #[allow(dead_code)] // BLUE64-DAG: Foundational API, not yet wired
     pub fn get_mut(&mut self, id: &str) -> Option<&mut DagNode<T>> {
         self.nodes.get_mut(id)
     }
 
     /// Return `true` if the graph contains a node with the given ID.
+    #[allow(dead_code)] // BLUE64-DAG: Foundational API, not yet wired
     pub fn contains(&self, id: &str) -> bool {
         self.nodes.contains_key(id)
     }
 
     /// Return the number of nodes in the graph.
+    #[allow(dead_code)] // BLUE64-DAG: Foundational API, not yet wired
     pub fn len(&self) -> usize {
         self.nodes.len()
     }
 
     /// Return `true` if the graph has no nodes.
+    #[allow(dead_code)] // BLUE64-DAG: Foundational API, not yet wired
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
@@ -152,6 +166,7 @@ impl<T> CoreDag<T> {
     }
 
     /// Return the parents (direct dependencies) of a node.
+    #[allow(dead_code)] // BLUE64-DAG: Foundational API, not yet wired
     pub fn parents(&self, id: &str) -> Vec<&str> {
         self.nodes
             .get(id)
@@ -208,12 +223,14 @@ impl<T> CoreDag<T> {
     }
 
     /// Detect whether the graph contains a cycle.
+    #[allow(dead_code)] // BLUE64-DAG: Available for future call sites
     pub fn has_cycle(&self) -> bool {
         self.topological_sort().is_err()
     }
 
     /// Compute the width (maximum number of nodes at any depth level) and
     /// depth (longest path length) of the DAG.
+    #[allow(dead_code)] // BLUE64-DAG: Available for future call sites
     pub fn metrics(&self) -> DagMetrics {
         let depth = self.compute_depth();
         let width = self.compute_width();
@@ -319,6 +336,7 @@ impl<T> Default for CoreDag<T> {
 // ── Metrics ─────────────────────────────────────────────────────────────────
 
 /// Metrics computed from a DAG.
+#[allow(dead_code)] // BLUE64-DAG: Used via metrics() which is not yet wired
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DagMetrics {
     /// Maximum number of nodes at a single depth level.
@@ -340,7 +358,7 @@ pub struct DagMetrics {
 ///     }
 /// }
 /// ```
-#[allow(dead_code)] // F-GAP reserved
+#[allow(dead_code)] // F-GAP reserved / BLUE64-DAG: Not yet wired to all call sites
 pub trait FromCoreDag<T, Target> {
     /// Convert a `CoreDag<T>` into `Target`.
     fn from_core_dag(dag: CoreDag<T>) -> Target;
@@ -385,12 +403,249 @@ impl<'a, T> Iterator for TopoIter<'a, T> {
 
 impl<T> CoreDag<T> {
     /// Return an iterator over nodes in topological order.
+    #[allow(dead_code)] // BLUE64-DAG: Available for future call sites
     pub fn iter_topo(&self) -> Result<TopoIter<'_, T>, String> {
         TopoIter::new(self)
     }
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
+// ===========================================================================
+// Deprecated DAG types — consolidated from dag_executor, dag_driver,
+// and dag_execution for eventual removal of those legacy modules.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// TaskContext — Chain-of-Thought context propagated between DAG nodes
+// ---------------------------------------------------------------------------
+
+/// Chain-of-Thought context propagated between DAG nodes.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskContext {
+    pub id: String,
+    pub reasoning_trace: Vec<String>,
+    pub intermediate_findings: HashMap<String, Value>,
+    pub confidence: f64,
+    pub open_questions: Vec<String>,
+    pub assumptions: Vec<String>,
+    pub parent_context_id: Option<String>,
+}
+
+#[allow(dead_code)]
+impl TaskContext {
+    /// Create a new TaskContext with the given id.
+    pub fn new(id: String) -> Self {
+        Self {
+            id,
+            reasoning_trace: Vec::new(),
+            intermediate_findings: HashMap::new(),
+            confidence: 1.0,
+            open_questions: Vec::new(),
+            assumptions: Vec::new(),
+            parent_context_id: None,
+        }
+    }
+
+    /// Merge multiple parent contexts into a single child context.
+    /// Generates a new UUID for the merged context's id.
+    pub fn merge(parents: &[TaskContext]) -> Self {
+        let mut reasoning_trace = Vec::new();
+        let mut intermediate_findings = HashMap::new();
+        let mut confidences_sum = 0.0;
+        let mut open_questions = Vec::new();
+        let mut assumptions = Vec::new();
+
+        for parent in parents {
+            reasoning_trace.extend(parent.reasoning_trace.clone());
+            intermediate_findings.extend(parent.intermediate_findings.clone());
+            confidences_sum += parent.confidence;
+            open_questions.extend(parent.open_questions.clone());
+            assumptions.extend(parent.assumptions.clone());
+        }
+
+        let parent_context_id = parents.first().map(|p| p.id.clone());
+
+        Self {
+            id: Uuid::new_v4().to_string(),
+            reasoning_trace,
+            intermediate_findings,
+            confidence: if parents.is_empty() {
+                1.0
+            } else {
+                confidences_sum / parents.len() as f64
+            },
+            open_questions,
+            assumptions,
+            parent_context_id,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DagNodeResult / DagExecutionTrace — consolidated from dag_driver
+// ---------------------------------------------------------------------------
+
+/// Result of a single DAG node execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DagNodeResult {
+    pub node_id: ExNodeId,
+    pub tool_name: String,
+    pub state: ExNodeState,
+    pub duration_ms: u64,
+    /// Preserved tool output payload for observe/replan evidence.
+    pub tool_output: Option<Value>,
+    /// Preserved error payload for diagnostic use.
+    pub error_payload: Option<String>,
+}
+
+/// Complete DAG execution trace.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DagExecutionTrace {
+    pub nodes: Vec<DagNodeResult>,
+    pub total_duration_ms: u64,
+    pub branch_count: u32,
+    pub join_count: u32,
+}
+
+/// Convert DAG execution results into a governance.status-observable payload.
+pub fn dag_trace_to_observability(trace: &DagExecutionTrace) -> Value {
+    let completed = trace
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.state, ExNodeState::Completed))
+        .count();
+    let failed = trace
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.state, ExNodeState::Failed(_)))
+        .count();
+    let total = trace.nodes.len();
+
+    serde_json::json!({
+        "dag_execution": {
+            "total_nodes": total,
+            "completed": completed,
+            "failed": failed,
+            "branch_count": trace.branch_count,
+            "join_count": trace.join_count,
+            "total_duration_ms": trace.total_duration_ms,
+            "dag_width": trace.join_count,
+            "dag_depth": trace.branch_count,
+            "has_tool_evidence": trace.nodes.iter().any(|n| n.tool_output.is_some()),
+            "node_details": trace.nodes.iter().map(|n| serde_json::json!({
+                "node_id": n.node_id,
+                "tool": n.tool_name,
+                "state": format!("{:?}", n.state),
+                "duration_ms": n.duration_ms,
+                "has_output": n.tool_output.is_some(),
+                "has_error": n.error_payload.is_some(),
+            })).collect::<Vec<_>>(),
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// DAG execution order / progress — consolidated from dag_execution
+// ---------------------------------------------------------------------------
+
+/// Build a phased execution order from the planner DAG.
+///
+/// Returns `Vec<Vec<String>>` where each inner vec is a phase of ready-to-run
+/// node IDs.
+pub fn dag_execution_order(bridge: &PlannerExecutionBridge) -> Vec<Vec<String>> {
+    let plan_step_ids: HashSet<String> = bridge
+        .plan
+        .steps
+        .iter()
+        .map(|step| step.step_id.clone())
+        .collect();
+
+    let mut deps: HashMap<String, Vec<String>> = HashMap::new();
+    for step in &bridge.plan.steps {
+        deps.insert(step.step_id.clone(), step.depends_on.clone());
+    }
+
+    let mut remaining: BTreeSet<String> = plan_step_ids.iter().cloned().collect();
+    let mut completed: HashSet<String> = HashSet::new();
+    let mut phases: Vec<Vec<String>> = Vec::new();
+
+    while !remaining.is_empty() {
+        let ready_phase: Vec<String> = remaining
+            .iter()
+            .filter(|id| {
+                deps.get(*id)
+                    .map(|requirements| {
+                        requirements
+                            .iter()
+                            .all(|dep| !plan_step_ids.contains(dep) || completed.contains(dep))
+                    })
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect();
+
+        if ready_phase.is_empty() {
+            phases.push(remaining.iter().cloned().collect());
+            break;
+        }
+
+        for step_id in &ready_phase {
+            let _ = remaining.remove(step_id);
+            completed.insert(step_id.clone());
+        }
+        phases.push(ready_phase);
+    }
+
+    phases
+}
+
+/// Extract progress information from the DAG as a serializable value.
+pub fn dag_progress_with_suggested_next(bridge: &PlannerExecutionBridge) -> Value {
+    let snapshot = bridge.progress_snapshot();
+    let ready = bridge.ready_nodes();
+    let completed = snapshot["completed"].as_u64().unwrap_or(0);
+    let failed = snapshot["failed"].as_u64().unwrap_or(0);
+    let total = snapshot["total_steps"].as_u64().unwrap_or(0);
+
+    let next_step_hint = if !ready.is_empty() {
+        format!("ready to execute: {}", ready.join(", "),)
+    } else if completed >= total {
+        "all steps completed".to_string()
+    } else if failed > 0 {
+        format!("{} steps failed, repair may be needed", failed)
+    } else {
+        "waiting for dependencies".to_string()
+    };
+
+    serde_json::json!({
+        "progress": snapshot,
+        "ready_nodes": ready,
+        "next_step_hint": next_step_hint,
+        "is_complete": bridge.is_complete(),
+    })
+}
+
+/// Check whether the bridge DAG indicates a stalled state (no progress possible).
+pub fn dag_is_stalled(bridge: &PlannerExecutionBridge) -> bool {
+    let completed = bridge
+        .graph
+        .nodes
+        .iter()
+        .filter(|(_, n)| matches!(n.state, ExNodeState::Completed))
+        .count();
+    let failed = bridge
+        .graph
+        .nodes
+        .iter()
+        .filter(|(_, n)| matches!(n.state, ExNodeState::Failed(..)))
+        .count();
+    let total = bridge.total_steps;
+
+    !bridge.is_complete() && completed + failed < total && bridge.ready_nodes().is_empty()
+}
+
+// ── Tests ──
 
 #[cfg(test)]
 mod tests {
