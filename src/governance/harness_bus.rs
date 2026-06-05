@@ -82,7 +82,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
+use std::sync::Mutex;
 
 // ---------------------------------------------------------------------------
 // Policy definitions
