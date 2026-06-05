@@ -7,7 +7,6 @@
 
 use std::mem;
 use std::net::SocketAddr;
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
@@ -45,10 +44,19 @@ use crate::i18n::runtime::{t, tf};
 
 use crate::acp::server::AcpServer;
 use crate::agent::AgentRegistry;
+use crate::config::{AutoTuneState, VectorConfig};
 use crate::flow::FlowManager;
 use crate::governance::rbac::{AccessDecision, Permission, Principal};
 use crate::rpc_protocol::{chat_trace_context, JsonRpcRequest, RequestTraceContext};
 use crate::shared::secret_override::get_secret;
+use crate::vector::VectorStore;
+
+static RESPONSES_ID_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn next_responses_api_id(prefix: &str) -> String {
+    let seq = RESPONSES_ID_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{}_{}_{}", prefix, crate::acp::prelude::now_ts_ms(), seq)
+}
 
 // Re-export server builder functions from server_builder module
 pub(crate) use server_builder::new_acp_server;

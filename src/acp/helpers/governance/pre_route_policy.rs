@@ -39,11 +39,8 @@ pub(crate) async fn evaluate_pre_route_policies(
             file_count: params.messages.len(),
             risk_score: 0.3,
         };
-        // Drop budget guard before the async call.
-        {
-            let mut budget = harness.evaluator.budget.blocking_lock();
-            budget.reset();
-        }
+        // Reset budget before evaluation.
+        harness.evaluator.budget.lock().await.reset();
         let verdict = harness.evaluate(&task_ctx).await;
         match &verdict {
             crate::governance::harness_bus::PolicyVerdict::Deny(v) => {

@@ -4,7 +4,6 @@
 //! `new_acp_server` constructor and the shared `wire_server` helper.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use tokio::sync::{Mutex, Notify};
@@ -26,13 +25,6 @@ use crate::observability::telemetry::TelemetryRuntime;
 use crate::orchestration::skill::SkillRegistry;
 use crate::reinforcement::ArtifactLedger;
 use crate::vector::VectorStore;
-
-static RESPONSES_ID_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-fn next_responses_api_id(prefix: &str) -> String {
-    let seq = RESPONSES_ID_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    format!("{}_{}_{}", prefix, crate::acp::prelude::now_ts_ms(), seq)
-}
 
 /// Create a new ACP server instance
 ///
