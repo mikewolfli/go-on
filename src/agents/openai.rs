@@ -38,8 +38,8 @@ impl OpenAiAgent {
 
     fn build_payload(
         &self,
-        messages: Vec<Message>,
-        principles: Option<Vec<String>>,
+        messages: &[Message],
+        principles: &Option<Vec<String>>,
         options: &Option<HashMap<String, Value>>,
     ) -> Value {
         let mut final_messages: Vec<Message> = Vec::new();
@@ -54,7 +54,7 @@ impl OpenAiAgent {
             }
         }
 
-        final_messages.extend(messages);
+        final_messages.extend(messages.iter().cloned());
 
         let mut payload = json!({
             "model": self.model,
@@ -81,14 +81,14 @@ impl OpenAiAgent {
 
     async fn chat_once(
         &self,
-        messages: Vec<Message>,
-        principles: Option<Vec<String>>,
-        options: Option<HashMap<String, Value>>,
+        messages: &[Message],
+        principles: &Option<Vec<String>>,
+        options: &Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
     ) -> anyhow::Result<()> {
         let api_key = resolve_secret(&self.api_key_env, "openai.api_key_env")?;
         let endpoint = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        let payload = self.build_payload(messages, principles, &options);
+        let payload = self.build_payload(messages, principles, options);
 
         let response = self
             .client
@@ -128,15 +128,15 @@ impl OpenAiAgent {
     /// responses. This is transparent to the token extraction layer.
     async fn chat_once_compressed(
         &self,
-        messages: Vec<Message>,
-        principles: Option<Vec<String>>,
-        options: Option<HashMap<String, Value>>,
+        messages: &[Message],
+        principles: &Option<Vec<String>>,
+        options: &Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
         compress_cfg: &crate::agents::StreamingConfig,
     ) -> anyhow::Result<()> {
         let api_key = resolve_secret(&self.api_key_env, "openai.api_key_env")?;
         let endpoint = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        let payload = self.build_payload(messages, principles, &options);
+        let payload = self.build_payload(messages, principles, options);
 
         let response = self
             .client
@@ -197,24 +197,20 @@ impl Agent for OpenAiAgent {
             None
         };
 
+        let chat_messages = messages;
         for attempt in 0..=2 {
             let result = if let Some(ref cfg) = compress_cfg {
                 self.chat_once_compressed(
-                    messages.clone(),
-                    principles.clone(),
-                    options.clone(),
+                    &chat_messages,
+                    &principles,
+                    &options,
                     sender.clone(),
                     cfg,
                 )
                 .await
             } else {
-                self.chat_once(
-                    messages.clone(),
-                    principles.clone(),
-                    options.clone(),
-                    sender.clone(),
-                )
-                .await
+                self.chat_once(&chat_messages, &principles, &options, sender.clone())
+                    .await
             };
             match result {
                 Ok(()) => return Ok(()),

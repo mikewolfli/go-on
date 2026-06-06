@@ -389,16 +389,17 @@ impl CopilotAgent {
 
     fn merge_principles_into_messages(
         &self,
-        mut messages: Vec<Message>,
-        principles: Option<Vec<String>>,
+        messages: &[Message],
+        principles: &Option<Vec<String>>,
     ) -> Vec<Message> {
         if let Some(items) = principles {
             if !items.is_empty() {
                 let instruction = principles_to_text(&items);
-                if let Some(first_user) = messages.iter_mut().find(|m| m.role == "user") {
+                let mut owned = messages.to_vec();
+                if let Some(first_user) = owned.iter_mut().find(|m| m.role == "user") {
                     first_user.content = format!("{}\n{}", instruction, first_user.content);
                 } else {
-                    messages.insert(
+                    owned.insert(
                         0,
                         Message {
                             role: "user".to_string(),
@@ -406,16 +407,17 @@ impl CopilotAgent {
                         },
                     );
                 }
+                return owned;
             }
         }
 
-        messages
+        messages.to_vec()
     }
 
     fn build_payload(
         &self,
         messages: Vec<Message>,
-        options: Option<HashMap<String, Value>>,
+        options: &Option<HashMap<String, Value>>,
     ) -> Value {
         // ── Model handling ────────────────────────────────────────────
         // VS Code Copilot extension resolves "auto" to a concrete model
@@ -438,21 +440,21 @@ impl CopilotAgent {
             "stream": true
         });
 
-        apply_openai_common_options(&mut payload, &options);
+        apply_openai_common_options(&mut payload, options);
 
         payload
     }
 
     async fn chat_once(
         &self,
-        messages: Vec<Message>,
-        principles: Option<Vec<String>>,
-        options: Option<HashMap<String, Value>>,
+        messages: &[Message],
+        principles: &Option<Vec<String>>,
+        options: &Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
     ) -> anyhow::Result<()> {
-        let messages = self.merge_principles_into_messages(messages, principles);
+        let merged = self.merge_principles_into_messages(messages, principles);
         let api_token = self.copilot_token().await?;
-        let payload = self.build_payload(messages, options);
+        let payload = self.build_payload(merged, options);
 
         let response = self
             .client
@@ -582,6 +584,7 @@ impl Agent for CopilotAgent {
         };
 
         let mut last_error: Option<anyhow::Error> = None;
+        let chat_messages = messages;
 
         'models: for model_id in &candidates {
             for attempt in 0..=2 {
@@ -590,12 +593,7 @@ impl Agent for CopilotAgent {
                 let model_options = Some(model_opts);
 
                 match self
-                    .chat_once(
-                        messages.clone(),
-                        principles.clone(),
-                        model_options,
-                        sender.clone(),
-                    )
+                    .chat_once(&chat_messages, &principles, &model_options, sender.clone())
                     .await
                 {
                     Ok(()) => {
@@ -864,11 +862,11 @@ mod tests {
     #[test]
     fn merge_principles_prefixes_first_user_message() {
         let merged = agent().merge_principles_into_messages(
-            vec![
+            &vec![
                 message("system", "existing"),
                 message("user", "implement feature"),
             ],
-            Some(vec![
+            &Some(vec![
                 "Use tests".to_string(),
                 "Keep diffs small".to_string(),
             ]),
@@ -884,8 +882,8 @@ mod tests {
     #[test]
     fn merge_principles_inserts_user_message_when_missing() {
         let merged = agent().merge_principles_into_messages(
-            vec![message("assistant", "prior output")],
-            Some(vec!["Use tests".to_string()]),
+            &vec![message("assistant", "prior output")],
+            &Some(vec!["Use tests".to_string()]),
         );
 
         assert_eq!(merged[0].role, "user");
@@ -896,7 +894,7 @@ mod tests {
     fn build_payload_applies_option_overrides() {
         let payload = agent().build_payload(
             vec![message("user", "hello")],
-            Some(HashMap::from([
+            &Some(HashMap::from([
                 ("model".to_string(), json!("copilot-chat")),
                 ("temperature".to_string(), json!(0.2)),
                 ("max_tokens".to_string(), json!(512)),

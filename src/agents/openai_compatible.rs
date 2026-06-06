@@ -45,15 +45,15 @@ impl OpenAiCompatibleAgent {
 
     fn merge_principles_into_messages(
         &self,
-        mut messages: Vec<Message>,
-        principles: Option<Vec<String>>,
+        messages: &[Message],
+        principles: &Option<Vec<String>>,
     ) -> Vec<Message> {
         let Some(items) = principles else {
-            return messages;
+            return messages.to_vec();
         };
 
         if items.is_empty() {
-            return messages;
+            return messages.to_vec();
         }
 
         let instruction = principles_to_text(&items);
@@ -64,16 +64,17 @@ impl OpenAiCompatibleAgent {
                 role: "system".to_string(),
                 content: instruction,
             });
-            merged.extend(messages);
+            merged.extend(messages.iter().cloned());
             return merged;
         }
 
         // Some OpenAI-compatible providers ignore `system`, so we prepend
         // phase principles to the first user message to preserve constraints.
-        if let Some(first_user) = messages.iter_mut().find(|m| m.role == "user") {
+        let mut owned = messages.to_vec();
+        if let Some(first_user) = owned.iter_mut().find(|m| m.role == "user") {
             first_user.content = format!("{}\n{}", instruction, first_user.content);
         } else {
-            messages.insert(
+            owned.insert(
                 0,
                 Message {
                     role: "user".to_string(),
@@ -82,7 +83,7 @@ impl OpenAiCompatibleAgent {
             );
         }
 
-        messages
+        owned
     }
 
     fn chat_endpoint(&self) -> String {
@@ -100,7 +101,7 @@ impl OpenAiCompatibleAgent {
     fn build_payload(
         &self,
         messages: Vec<Message>,
-        options: Option<HashMap<String, Value>>,
+        options: &Option<HashMap<String, Value>>,
     ) -> Value {
         let model = option_string(&options, "model").unwrap_or_else(|| self.model.clone());
 
@@ -110,23 +111,23 @@ impl OpenAiCompatibleAgent {
             "stream": true
         });
 
-        apply_openai_common_options(&mut payload, &options);
+        apply_openai_common_options(&mut payload, options);
 
         payload
     }
 
     async fn chat_once(
         &self,
-        messages: Vec<Message>,
-        principles: Option<Vec<String>>,
-        options: Option<HashMap<String, Value>>,
+        messages: &[Message],
+        principles: &Option<Vec<String>>,
+        options: &Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
     ) -> anyhow::Result<()> {
         let api_key = resolve_secret(&self.api_key_env, "openai_compatible.api_key_env")?;
 
-        let messages = self.merge_principles_into_messages(messages, principles);
+        let merged = self.merge_principles_into_messages(messages, principles);
         let endpoint = self.chat_endpoint();
-        let payload = self.build_payload(messages, options);
+        let payload = self.build_payload(merged, options);
 
         let response = self
             .client
@@ -178,15 +179,11 @@ impl Agent for OpenAiCompatibleAgent {
         sender: crate::agent::StreamingSender,
     ) -> crate::core::error::Result<()> {
         let mut last_error: Option<anyhow::Error> = None;
+        let chat_messages = messages;
 
         for attempt in 0..=2 {
             match self
-                .chat_once(
-                    messages.clone(),
-                    principles.clone(),
-                    options.clone(),
-                    sender.clone(),
-                )
+                .chat_once(&chat_messages, &principles, &options, sender.clone())
                 .await
             {
                 Ok(()) => return Ok(()),
@@ -234,8 +231,8 @@ mod tests {
     #[test]
     fn merge_principles_inserts_system_message_when_supported() {
         let merged = agent(true, "v1/chat/completions").merge_principles_into_messages(
-            vec![message("user", "hello")],
-            Some(vec!["Prefer tests".to_string()]),
+            &vec![message("user", "hello")],
+            &Some(vec!["Prefer tests".to_string()]),
         );
 
         assert_eq!(merged[0].role, "system");
@@ -246,8 +243,8 @@ mod tests {
     #[test]
     fn merge_principles_prefixes_user_message_when_system_not_supported() {
         let merged = agent(false, "v1/chat/completions").merge_principles_into_messages(
-            vec![message("user", "hello")],
-            Some(vec!["Prefer tests".to_string()]),
+            &vec![message("user", "hello")],
+            &Some(vec!["Prefer tests".to_string()]),
         );
 
         assert_eq!(merged.len(), 1);
@@ -271,7 +268,7 @@ mod tests {
     fn build_payload_uses_default_model_and_overrides() {
         let payload = agent(true, "/v1/chat/completions").build_payload(
             vec![message("user", "hello")],
-            Some(HashMap::from([
+            &Some(HashMap::from([
                 ("model".to_string(), json!("alt-model")),
                 ("temperature".to_string(), json!(0.4)),
                 ("max_tokens".to_string(), json!(256)),

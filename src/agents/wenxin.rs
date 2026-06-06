@@ -130,8 +130,8 @@ impl WenxinAgent {
 
     fn build_payload(
         &self,
-        messages: Vec<Message>,
-        principles: Option<Vec<String>>,
+        messages: &[Message],
+        principles: &Option<Vec<String>>,
         options: &Option<HashMap<String, Value>>,
     ) -> Value {
         let mut final_messages: Vec<Message> = Vec::new();
@@ -155,7 +155,7 @@ impl WenxinAgent {
             role: "system".to_string(),
             content: system_text,
         });
-        final_messages.extend(messages);
+        final_messages.extend(messages.iter().cloned());
 
         let model = Self::resolve_target_model(options);
         let mut payload = json!({
@@ -176,18 +176,18 @@ impl WenxinAgent {
 
     async fn chat_once(
         &self,
-        messages: Vec<Message>,
-        principles: Option<Vec<String>>,
-        options: Option<HashMap<String, Value>>,
+        messages: &[Message],
+        principles: &Option<Vec<String>>,
+        options: &Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
     ) -> anyhow::Result<()> {
         let token = self.get_access_token().await?;
-        let target_model = Self::resolve_target_model(&options);
+        let target_model = Self::resolve_target_model(options);
         let endpoint_path = Self::endpoint_for_model(&target_model);
         let endpoint = format!(
             "https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/{endpoint_path}?access_token={token}"
         );
-        let payload = self.build_payload(messages, principles, &options);
+        let payload = self.build_payload(messages, principles, options);
 
         let response = self.client.post(endpoint).json(&payload).send().await?;
         if !response.status().is_success() {
@@ -213,15 +213,11 @@ impl Agent for WenxinAgent {
         sender: crate::agent::StreamingSender,
     ) -> crate::core::error::Result<()> {
         let mut last_error: Option<anyhow::Error> = None;
+        let chat_messages = messages;
 
         for attempt in 0..=2 {
             match self
-                .chat_once(
-                    messages.clone(),
-                    principles.clone(),
-                    options.clone(),
-                    sender.clone(),
-                )
+                .chat_once(&chat_messages, &principles, &options, sender.clone())
                 .await
             {
                 Ok(()) => return Ok(()),
@@ -344,8 +340,8 @@ mod tests {
     #[test]
     fn build_payload_combines_principles_stage_and_messages() {
         let payload = agent().build_payload(
-            vec![message("user", "review this")],
-            Some(vec!["Check safety".to_string()]),
+            &vec![message("user", "review this")],
+            &Some(vec!["Check safety".to_string()]),
             &Some(HashMap::from([
                 ("stage".to_string(), json!("review")),
                 ("temperature".to_string(), json!(0.3)),
@@ -366,8 +362,8 @@ mod tests {
     #[test]
     fn build_payload_omits_strict_note_when_not_strict_phase() {
         let payload = agent().build_payload(
-            vec![message("user", "review this")],
-            Some(vec!["Check safety".to_string()]),
+            &vec![message("user", "review this")],
+            &Some(vec!["Check safety".to_string()]),
             &Some(HashMap::from([
                 ("stage".to_string(), json!("early")),
                 ("temperature".to_string(), json!(0.3)),

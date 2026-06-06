@@ -30,9 +30,7 @@
 //!
 //! This module is **active** — do not delete. Prefer `CoreDag<T>` for new DAG code.
 
-// TODO-BLUE64: Wire these methods.
-// 15 items have targeted #[allow(dead_code)] — they are valid utility APIs
-// that should be wired once consumers migrate to CoreDag:
+// TODO-BLUE64: Wire these utility APIs once consumers migrate to CoreDag:
 //   remove_node, get, get_mut, contains, len, is_empty, parents,
 //   has_cycle, metrics, DagMetrics, FromCoreDag, IntoCoreDag, iter_topo,
 //   TaskContext (struct + impl).
@@ -106,7 +104,7 @@ impl<T> CoreDag<T> {
     }
 
     /// Remove a node and all its edges from the DAG.
-    #[allow(dead_code)] // BLUE64-DAG: Foundational API, not yet wired
+    #[allow(dead_code)]
     pub fn remove_node(&mut self, id: &str) -> Option<DagNode<T>> {
         let node = self.nodes.remove(id)?;
 
@@ -128,31 +126,31 @@ impl<T> CoreDag<T> {
     }
 
     /// Get a reference to a node by ID.
-    #[allow(dead_code)] // BLUE64-DAG: Foundational API, not yet wired
+    #[allow(dead_code)]
     pub fn get(&self, id: &str) -> Option<&DagNode<T>> {
         self.nodes.get(id)
     }
 
     /// Get a mutable reference to a node by ID.
-    #[allow(dead_code)] // BLUE64-DAG: Foundational API, not yet wired
+    #[allow(dead_code)]
     pub fn get_mut(&mut self, id: &str) -> Option<&mut DagNode<T>> {
         self.nodes.get_mut(id)
     }
 
     /// Return `true` if the graph contains a node with the given ID.
-    #[allow(dead_code)] // BLUE64-DAG: Foundational API, not yet wired
+    #[allow(dead_code)]
     pub fn contains(&self, id: &str) -> bool {
         self.nodes.contains_key(id)
     }
 
     /// Return the number of nodes in the graph.
-    #[allow(dead_code)] // BLUE64-DAG: Foundational API, not yet wired
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.nodes.len()
     }
 
     /// Return `true` if the graph has no nodes.
-    #[allow(dead_code)] // BLUE64-DAG: Foundational API, not yet wired
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
@@ -166,7 +164,7 @@ impl<T> CoreDag<T> {
     }
 
     /// Return the parents (direct dependencies) of a node.
-    #[allow(dead_code)] // BLUE64-DAG: Foundational API, not yet wired
+    #[allow(dead_code)]
     pub fn parents(&self, id: &str) -> Vec<&str> {
         self.nodes
             .get(id)
@@ -223,14 +221,14 @@ impl<T> CoreDag<T> {
     }
 
     /// Detect whether the graph contains a cycle.
-    #[allow(dead_code)] // BLUE64-DAG: Available for future call sites
+    #[allow(dead_code)]
     pub fn has_cycle(&self) -> bool {
         self.topological_sort().is_err()
     }
 
     /// Compute the width (maximum number of nodes at any depth level) and
     /// depth (longest path length) of the DAG.
-    #[allow(dead_code)] // BLUE64-DAG: Available for future call sites
+    #[allow(dead_code)]
     pub fn metrics(&self) -> DagMetrics {
         let depth = self.compute_depth();
         let width = self.compute_width();
@@ -336,7 +334,7 @@ impl<T> Default for CoreDag<T> {
 // ── Metrics ─────────────────────────────────────────────────────────────────
 
 /// Metrics computed from a DAG.
-#[allow(dead_code)] // BLUE64-DAG: Used via metrics() which is not yet wired
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DagMetrics {
     /// Maximum number of nodes at a single depth level.
@@ -358,14 +356,14 @@ pub struct DagMetrics {
 ///     }
 /// }
 /// ```
-#[allow(dead_code)] // F-GAP reserved / BLUE64-DAG: Not yet wired to all call sites
+#[allow(dead_code)]
 pub trait FromCoreDag<T, Target> {
     /// Convert a `CoreDag<T>` into `Target`.
     fn from_core_dag(dag: CoreDag<T>) -> Target;
 }
 
 /// Trait for converting from another DAG type into a `CoreDag<T>`.
-#[allow(dead_code)] // F-GAP reserved
+#[allow(dead_code)]
 pub trait IntoCoreDag<T, Source> {
     /// Convert `Source` into a `CoreDag<T>`.
     fn into_core_dag(source: Source) -> CoreDag<T>;
@@ -381,6 +379,7 @@ pub struct TopoIter<'a, T> {
 }
 
 impl<'a, T> TopoIter<'a, T> {
+    #[allow(dead_code)]
     fn new(dag: &'a CoreDag<T>) -> Result<Self, String> {
         let order = dag.topological_sort()?;
         Ok(Self {
@@ -403,7 +402,7 @@ impl<'a, T> Iterator for TopoIter<'a, T> {
 
 impl<T> CoreDag<T> {
     /// Return an iterator over nodes in topological order.
-    #[allow(dead_code)] // BLUE64-DAG: Available for future call sites
+    #[allow(dead_code)]
     pub fn iter_topo(&self) -> Result<TopoIter<'_, T>, String> {
         TopoIter::new(self)
     }
@@ -420,7 +419,6 @@ impl<T> CoreDag<T> {
 // ---------------------------------------------------------------------------
 
 /// Chain-of-Thought context propagated between DAG nodes.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskContext {
     pub id: String,
@@ -432,7 +430,6 @@ pub struct TaskContext {
     pub parent_context_id: Option<String>,
 }
 
-#[allow(dead_code)]
 impl TaskContext {
     /// Create a new TaskContext with the given id.
     pub fn new(id: String) -> Self {

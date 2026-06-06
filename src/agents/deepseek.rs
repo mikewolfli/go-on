@@ -61,9 +61,9 @@ impl DeepSeekAgent {
 
     fn build_payload(
         &self,
-        messages: Vec<Message>,
-        principles: Option<Vec<String>>,
-        options: Option<HashMap<String, Value>>,
+        messages: &[Message],
+        principles: &Option<Vec<String>>,
+        options: &Option<HashMap<String, Value>>,
     ) -> Value {
         let mut final_messages: Vec<Message> = Vec::new();
 
@@ -75,7 +75,7 @@ impl DeepSeekAgent {
                 });
             }
         }
-        final_messages.extend(messages);
+        final_messages.extend(messages.iter().cloned());
 
         let model = option_string(&options, "model").unwrap_or_else(|| self.model.clone());
 
@@ -134,9 +134,9 @@ impl DeepSeekAgent {
 
     async fn chat_once(
         &self,
-        messages: Vec<Message>,
-        principles: Option<Vec<String>>,
-        options: Option<HashMap<String, Value>>,
+        messages: &[Message],
+        principles: &Option<Vec<String>>,
+        options: &Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
     ) -> anyhow::Result<()> {
         let api_key = resolve_secret(&self.api_key_env, "deepseek.api_key_env")?;
@@ -184,15 +184,11 @@ impl Agent for DeepSeekAgent {
         sender: crate::agent::StreamingSender,
     ) -> crate::core::error::Result<()> {
         let mut last_error: Option<anyhow::Error> = None;
+        let chat_messages = messages;
 
         for attempt in 0..=2 {
             match self
-                .chat_once(
-                    messages.clone(),
-                    principles.clone(),
-                    options.clone(),
-                    sender.clone(),
-                )
+                .chat_once(&chat_messages, &principles, &options, sender.clone())
                 .await
             {
                 Ok(()) => return Ok(()),
@@ -290,9 +286,9 @@ mod tests {
         );
 
         let payload = agent.build_payload(
-            vec![message("user", "ship it")],
-            Some(vec!["Prefer tests".to_string()]),
-            Some(HashMap::from([
+            &vec![message("user", "ship it")],
+            &Some(vec!["Prefer tests".to_string()]),
+            &Some(HashMap::from([
                 ("model".to_string(), json!("deepseek-v4-pro")),
                 ("temperature".to_string(), json!(0.1)),
                 ("max_tokens".to_string(), json!(1024)),
@@ -319,7 +315,7 @@ mod tests {
             reqwest::Client::new(),
         );
 
-        let payload = agent.build_payload(vec![message("user", "hello")], None, None);
+        let payload = agent.build_payload(&vec![message("user", "hello")], &None, &None);
 
         assert_eq!(payload["model"], "deepseek-v4-flash");
         assert_eq!(payload["messages"][0]["content"], "hello");
@@ -361,9 +357,9 @@ mod tests {
         );
 
         let payload = agent.build_payload(
-            vec![message("user", "hello")],
-            Some(vec!["Be concise".to_string(), "Use examples".to_string()]),
-            None,
+            &vec![message("user", "hello")],
+            &Some(vec!["Be concise".to_string(), "Use examples".to_string()]),
+            &None,
         );
 
         let content = payload["messages"][0]["content"].as_str().unwrap();
@@ -382,9 +378,9 @@ mod tests {
         );
 
         let payload = agent.build_payload(
-            vec![message("user", "hello")],
-            None,
-            Some(HashMap::from([("user".to_string(), json!("tenant-a"))])),
+            &vec![message("user", "hello")],
+            &None,
+            &Some(HashMap::from([("user".to_string(), json!("tenant-a"))])),
         );
 
         assert_eq!(payload["user_id"], "tenant-a");
@@ -434,9 +430,9 @@ mod tests {
         );
 
         let payload = agent.build_payload(
-            vec![message("user", "hello")],
-            None,
-            Some(HashMap::from([
+            &vec![message("user", "hello")],
+            &None,
+            &Some(HashMap::from([
                 ("frequency_penalty".to_string(), json!(0.2)),
                 ("presence_penalty".to_string(), json!(0.4)),
             ])),

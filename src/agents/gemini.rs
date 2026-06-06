@@ -38,8 +38,8 @@ impl GeminiAgent {
 
     fn build_payload(
         &self,
-        messages: Vec<Message>,
-        principles: Option<Vec<String>>,
+        messages: &[Message],
+        principles: &Option<Vec<String>>,
         options: &Option<HashMap<String, Value>>,
     ) -> Value {
         let mut contents: Vec<Value> = Vec::new();
@@ -52,7 +52,7 @@ impl GeminiAgent {
             }
         }
 
-        for message in &messages {
+        for message in messages.iter() {
             if message.role == "system" {
                 system_instruction = Some(message.content.clone());
             } else {
@@ -139,9 +139,9 @@ impl GeminiAgent {
 
     async fn chat_once(
         &self,
-        messages: Vec<Message>,
-        principles: Option<Vec<String>>,
-        options: Option<HashMap<String, Value>>,
+        messages: &[Message],
+        principles: &Option<Vec<String>>,
+        options: &Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
     ) -> anyhow::Result<()> {
         let api_key = resolve_secret(&self.api_key_env, "gemini.api_key_env")?;
@@ -150,7 +150,7 @@ impl GeminiAgent {
             self.base_url.trim_end_matches('/'),
             self.model,
         );
-        let payload = self.build_payload(messages, principles, &options);
+        let payload = self.build_payload(messages, principles, options);
 
         let response = self
             .client
@@ -363,15 +363,11 @@ impl Agent for GeminiAgent {
         sender: crate::agent::StreamingSender,
     ) -> crate::core::error::Result<()> {
         let mut last_error: Option<anyhow::Error> = None;
+        let chat_messages = messages;
 
         for attempt in 0..=2 {
             match self
-                .chat_once(
-                    messages.clone(),
-                    principles.clone(),
-                    options.clone(),
-                    sender.clone(),
-                )
+                .chat_once(&chat_messages, &principles, &options, sender.clone())
                 .await
             {
                 Ok(()) => return Ok(()),

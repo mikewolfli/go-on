@@ -45,8 +45,8 @@ impl LlamaAgent {
 
     fn build_payload(
         &self,
-        messages: Vec<Message>,
-        principles: Option<Vec<String>>,
+        messages: &[Message],
+        principles: &Option<Vec<String>>,
         options: &Option<HashMap<String, Value>>,
     ) -> Value {
         let mut final_messages: Vec<Message> = Vec::new();
@@ -65,7 +65,7 @@ impl LlamaAgent {
                 content: system_text,
             });
         }
-        final_messages.extend(messages);
+        final_messages.extend(messages.iter().cloned());
 
         let mut payload = json!({
             "model": self.model,
@@ -80,14 +80,14 @@ impl LlamaAgent {
 
     async fn chat_once(
         &self,
-        messages: Vec<Message>,
-        principles: Option<Vec<String>>,
-        options: Option<HashMap<String, Value>>,
+        messages: &[Message],
+        principles: &Option<Vec<String>>,
+        options: &Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
     ) -> anyhow::Result<()> {
         let endpoint = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
 
-        let payload = self.build_payload(messages, principles, &options);
+        let payload = self.build_payload(messages, principles, options);
 
         let mut request = self
             .client
@@ -153,13 +153,14 @@ impl Agent for LlamaAgent {
         sender: crate::agent::StreamingSender,
     ) -> crate::core::error::Result<()> {
         let mut last_error: Option<anyhow::Error> = None;
+        let chat_messages = messages;
 
         for attempt in 0..=2 {
             match self
                 .chat_once(
-                    messages.clone(),
-                    principles.clone(),
-                    options.clone(),
+                    &chat_messages,
+                    &principles,
+                    &options,
                     sender.clone(),
                 )
                 .await

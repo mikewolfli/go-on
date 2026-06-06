@@ -61,8 +61,8 @@ impl Default for WeightedVoteConfig {
 }
 
 /// A single round's worth of debate history.
-#[allow(dead_code)] // F-GAP reserved
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct DelphiRound {
     /// Round number (0-based).
     pub round: usize,
@@ -73,8 +73,8 @@ pub struct DelphiRound {
 }
 
 /// Result of a full Delphi-method debate.
-#[allow(dead_code)] // F-GAP reserved
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct DelphiResult {
     /// Final votes, keyed by agent name.
     pub votes: HashMap<String, Vote>,
@@ -91,7 +91,6 @@ pub struct DelphiResult {
 }
 
 /// Configuration for Delphi-method debate.
-#[allow(dead_code)] // F-GAP reserved
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DelphiConfig {
     /// Maximum number of debate rounds (default: 2).
@@ -225,7 +224,7 @@ pub fn format_debate_history(round_votes: &HashMap<String, Vote>) -> String {
 /// * `question` – The proposal or question being voted on.
 /// * `reputations` – Map from agent name to reputation score.
 /// * `config` – [`DelphiConfig`] controlling rounds, threshold, etc.
-#[allow(dead_code)] // F-GAP reserved
+#[allow(dead_code)]
 pub async fn delphi_debate(
     agents: &[impl AgentVoter],
     question: &str,
@@ -311,7 +310,6 @@ pub async fn delphi_debate(
 /// Implementors provide their name and an async `vote()` method that
 /// returns a [`Vote`] given a context string describing the proposal
 /// and (in later debate rounds) the reasoning of other agents.
-#[allow(dead_code)] // F-GAP reserved
 #[async_trait::async_trait]
 pub trait AgentVoter: Send + Sync {
     /// Display name of this agent, used as the key in vote maps.

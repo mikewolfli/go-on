@@ -80,9 +80,9 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use std::sync::Mutex;
 
 // ---------------------------------------------------------------------------
 // Policy definitions
@@ -528,7 +528,7 @@ impl HarnessAuditTrail {
 
         // Delegate to hash-chain auditor for tamper-evident persistence.
         if let Some(ref hash_chain) = self.hash_chain {
-            let mut guard = hash_chain.blocking_lock();
+            let mut guard = hash_chain.lock().unwrap();
             let payload = serde_json::json!({
                 "timestamp": entry.timestamp,
                 "request_id": entry.request_id,
@@ -755,7 +755,7 @@ impl PolicyEvaluator {
         }
 
         // 1. Red-line check (hard block)
-        let engine = self.rule_engine.blocking_lock();
+        let engine = self.rule_engine.lock().unwrap();
         if let Err(violation) = engine.check_red_lines(&format!("{:?}", ctx.task_type)) {
             return PolicyVerdict::Deny(PolicyViolation {
                 kind: "red_line".to_string(),
@@ -771,7 +771,7 @@ impl PolicyEvaluator {
         }
 
         // 3. Budget check (hard limit)
-        let budget = self.budget.blocking_lock();
+        let budget = self.budget.lock().unwrap();
         if let Err(_err) = budget.check_wall_clock() {
             return PolicyVerdict::Deny(PolicyViolation {
                 kind: "budget".to_string(),
@@ -782,7 +782,7 @@ impl PolicyEvaluator {
         // 4. Runtime control check (adaptive sliding window / P95 / UCB)
         // NOTE: lock is acquired once here and reused at step 8 to avoid
         // deadlock from ordering with guard/security_governor locks acquired below.
-        let mut runtime_ctrl = Some(self.runtime_control.blocking_lock());
+        let mut runtime_ctrl = Some(self.runtime_control.lock().unwrap());
         if let Some(ref mut ctrl) = runtime_ctrl {
             if ctrl.should_escalate() {
                 // Record the escalation for adaptive control metrics
@@ -854,7 +854,7 @@ impl PolicyEvaluator {
         }
 
         // 6. Self-rationalization guard (low confidence check)
-        let mut guard = self.guard.blocking_lock();
+        let mut guard = self.guard.lock().unwrap();
         let mut annotation = RationalizationAnnotation::default();
         if guard.evaluate(&mut annotation, ctx.risk_score as f32, false) {
             return PolicyVerdict::Review(ReviewReason {
@@ -988,8 +988,8 @@ impl PolicyEvaluator {
             }
             _ => false,
         };
-        let idempotent = self.idempotency.blocking_lock().get(tool).is_some();
-        let budget_ok = self.budget.blocking_lock().record_tool_call().is_ok();
+        let idempotent = self.idempotency.lock().unwrap().get(tool).is_some();
+        let budget_ok = self.budget.lock().unwrap().record_tool_call().is_ok();
         let permitted = self.check_permission(tool, _args);
         ToolVerdict {
             allowed,
@@ -1006,7 +1006,7 @@ impl PolicyEvaluator {
 
         // Collect evidence and find missing checks in a single lock acquisition
         // to avoid TOCTOU between the two engine queries.
-        let engine = self.rule_engine.blocking_lock();
+        let engine = self.rule_engine.lock().unwrap();
         let evidence = engine.collect_evidence(stage);
         let missing = engine.collect_missing(stage, &completed);
         drop(engine);
@@ -1268,7 +1268,7 @@ impl HarnessBus {
         // Profile and runtime-control updates (scope ensures guards are dropped
         // before the async call below).
         {
-            let mut p = self.profile.blocking_lock();
+            let mut p = self.profile.lock().unwrap();
             p.total_evaluations = p.total_evaluations.saturating_add(1);
             p.last_evaluation_ms = elapsed;
             match &verdict {
@@ -1279,7 +1279,7 @@ impl HarnessBus {
                         "red_line" => {
                             p.red_line_blocks = p.red_line_blocks.saturating_add(1);
                             // B51-34: PUA auto-escalation on red-line violation
-                            let engine = self.evaluator.rule_engine.blocking_lock();
+                            let engine = self.evaluator.rule_engine.lock().unwrap();
                             let level = engine
                                 .escalate(&format!("Red-line violation detected: {}", v.detail));
                             tracing::info!(
@@ -1299,7 +1299,7 @@ impl HarnessBus {
                 }
             }
             // Derive runtime state fields from OnlineControllerState
-            let ctrl = self.evaluator.runtime_control.blocking_lock();
+            let ctrl = self.evaluator.runtime_control.lock().unwrap();
             p.current_escalation_level = ctrl.control_mode();
             p.runtime_control_mode = if ctrl.should_escalate() {
                 tf("status.harness_bus.mode_restricted", &[])
@@ -1331,7 +1331,7 @@ impl HarnessBus {
                 if prev >= 2 {
                     // 3rd consecutive allow (prev is 0-indexed: 0→1, 1→2, 2→3)
                     self.consecutive_allows.store(0, Ordering::SeqCst);
-                    let engine = self.evaluator.rule_engine.blocking_lock();
+                    let engine = self.evaluator.rule_engine.lock().unwrap();
                     let level =
                         engine.de_escalate("No violations detected for 3 consecutive evaluations");
                     tracing::info!(
@@ -1380,7 +1380,7 @@ impl HarnessBus {
     pub fn validate_action(&self, tool: &str, args: &Value) -> ToolVerdict {
         let verdict = self.evaluator.check_tool_call(tool, args);
         // Track sandbox denials and idempotency hits from real tool-call data
-        let mut p = self.profile.blocking_lock();
+        let mut p = self.profile.lock().unwrap();
         if !verdict.allowed {
             p.sandbox_denials = p.sandbox_denials.saturating_add(1);
         }
@@ -1465,11 +1465,11 @@ impl HarnessBus {
         });
 
         // Write to local governance audit trail.
-        self.audit_trail.blocking_lock().entries.push(entry.clone());
+        self.audit_trail.lock().unwrap().entries.push(entry.clone());
 
         // Also write to the structured (orchestration) audit trail for
         // unified access, replay, and evidence export.
-        let mut structured = self.structured_audit_trail.blocking_lock();
+        let mut structured = self.structured_audit_trail.lock().unwrap();
         {
             use crate::orchestration::audit::AuditEntry as OrchestrationAuditEntry;
             structured.append_entry(OrchestrationAuditEntry::new(
@@ -1489,7 +1489,7 @@ impl HarnessBus {
             ));
         }
 
-        let mut p = self.profile.blocking_lock();
+        let mut p = self.profile.lock().unwrap();
         p.audit_entries_total = p.audit_entries_total.saturating_add(1);
     }
 
@@ -1524,12 +1524,12 @@ impl HarnessBus {
 
     /// Snapshot of the HarnessBus governance profile for pushing into governance.status.
     pub fn governance_profile(&self) -> PuaGovernanceProfile {
-        self.profile.blocking_lock().clone()
+        self.profile.lock().unwrap().clone()
     }
 
     /// Check a red-line violation directly.
     pub fn check_red_line(&self, action: &str) -> bool {
-        let engine = self.evaluator.rule_engine.blocking_lock();
+        let engine = self.evaluator.rule_engine.lock().unwrap();
         engine.check_red_lines(action).is_err()
     }
 
@@ -1537,7 +1537,8 @@ impl HarnessBus {
     pub fn self_rationalization_profile(&self, enabled: bool) -> serde_json::Value {
         self.evaluator
             .guard
-            .blocking_lock()
+            .lock()
+            .unwrap()
             .governance_profile(enabled)
     }
 
@@ -1622,12 +1623,12 @@ impl HarnessBus {
 
     /// Number of registered promotion plugins.
     pub fn promotion_plugin_count(&self) -> usize {
-        self.promotion_registry.blocking_lock().plugin_count()
+        self.promotion_registry.lock().unwrap().plugin_count()
     }
 
     /// Evaluate a token gate request through the L0-L5 chain.
     pub fn evaluate_token_gate(&self, ctx: &GateContext) -> TokenGateVerdict {
-        self.token_chain.blocking_lock().evaluate(ctx)
+        self.token_chain.lock().unwrap().evaluate(ctx)
     }
 
     /// Brain loop runner profile snapshot (consolidated flat version).

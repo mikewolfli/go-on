@@ -12,6 +12,7 @@
 //! - `link_memories(m1, m2, link_type)` – create bidirectional links
 //! - ANN vector index search via `VectorIndex` for cosine-similarity retrieval
 
+use crate::memory::embedding_provider::{ConfigurableEmbeddingProvider, EmbeddingProvider};
 use crate::memory::memory_persistence::{MemoryEntry, MemoryPersistence};
 use crate::memory::vector_index::VectorIndex;
 use anyhow::Result;
@@ -110,6 +111,8 @@ pub struct MemoryRetrievalEngine {
     session_index: Mutex<HashMap<String, Vec<String>>>,
     /// Optional ANN vector index for cosine-similarity search.
     vector_index: Option<VectorIndex>,
+    /// Embedding provider for vectorizing queries at retrieval time.
+    embedding_provider: ConfigurableEmbeddingProvider,
 }
 
 /// Internal link graph with bidirectional indexing.
@@ -187,6 +190,7 @@ impl MemoryRetrievalEngine {
             links: Mutex::new(LinkGraph::default()),
             session_index: Mutex::new(HashMap::new()),
             vector_index: None,
+            embedding_provider: ConfigurableEmbeddingProvider::new_local(128),
         }
     }
 
@@ -201,12 +205,23 @@ impl MemoryRetrievalEngine {
             links: Mutex::new(LinkGraph::default()),
             session_index: Mutex::new(HashMap::new()),
             vector_index: Some(vector_index),
+            embedding_provider: ConfigurableEmbeddingProvider::new_local(128),
         }
     }
 
     /// Returns a reference to the underlying persistence manager.
     pub fn persistence(&self) -> &MemoryPersistence {
         &self.persistence
+    }
+
+    /// Override the embedding provider used for query vectorization.
+    ///
+    /// By default, a local minhash provider (128 dims) is used. Call this
+    /// with a `ConfigurableEmbeddingProvider` configured for `OpenAi`,
+    /// `Ollama`, or `Qwen3` to use a real embedding model instead.
+    pub fn with_embedding_provider(mut self, provider: ConfigurableEmbeddingProvider) -> Self {
+        self.embedding_provider = provider;
+        self
     }
 
     // ── Retrieval ──────────────────────────────────────────────────────────
@@ -279,9 +294,11 @@ impl MemoryRetrievalEngine {
 
         // ── L3: ANN vector index search (semantic, bypasses token overlap) ──
         {
-            // Compute a query embedding using the local minhash provider.
-            // This is a lightweight deterministic hash -> no network call.
-            let embedding = crate::memory::embedding_provider::local_hash_embed(query, 128);
+            // Compute a query embedding using the configured embedding provider.
+            // When set to `Local` (default), this uses a lightweight deterministic
+            // hash with no network call. When set to `OpenAi`/`Ollama`, this calls
+            // the respective API.
+            let embedding = self.embedding_provider.embed(query);
             let query_vec: Vec<f64> = embedding.iter().map(|v| *v as f64).collect();
 
             let ann_results = self.search_vector_index(&query_vec, limit);
@@ -440,7 +457,7 @@ impl MemoryRetrievalEngine {
     ///
     /// Returns `true` when at least one entry was indexed.
     pub fn build_vector_index_from_warm_store(&mut self) -> Result<bool> {
-        let dimension = 128; // default embedding dimension; matched to local_hash_embed
+        let dimension = self.embedding_provider.dimensions();
 
         let warm_entries = self
             .persistence

@@ -38,8 +38,8 @@ impl DeepQuestAgent {
 
     fn build_payload(
         &self,
-        messages: Vec<Message>,
-        principles: Option<Vec<String>>,
+        messages: &[Message],
+        principles: &Option<Vec<String>>,
         options: &Option<HashMap<String, Value>>,
     ) -> Value {
         let mut final_messages: Vec<Message> = Vec::new();
@@ -58,7 +58,7 @@ impl DeepQuestAgent {
                 content: system_text,
             });
         }
-        final_messages.extend(messages);
+        final_messages.extend(messages.iter().cloned());
 
         let mut payload = json!({
             "model": self.model,
@@ -78,14 +78,14 @@ impl DeepQuestAgent {
 
     async fn chat_once(
         &self,
-        messages: Vec<Message>,
-        principles: Option<Vec<String>>,
-        options: Option<HashMap<String, Value>>,
+        messages: &[Message],
+        principles: &Option<Vec<String>>,
+        options: &Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
     ) -> anyhow::Result<()> {
         let api_key = resolve_secret(&self.api_key_env, "deepquest.api_key_env")?;
         let endpoint = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        let payload = self.build_payload(messages, principles, &options);
+        let payload = self.build_payload(messages, principles, options);
 
         let response = self
             .client
@@ -119,15 +119,11 @@ impl Agent for DeepQuestAgent {
         sender: crate::agent::StreamingSender,
     ) -> crate::core::error::Result<()> {
         let mut last_error: Option<anyhow::Error> = None;
+        let chat_messages = messages;
 
         for attempt in 0..=2 {
             match self
-                .chat_once(
-                    messages.clone(),
-                    principles.clone(),
-                    options.clone(),
-                    sender.clone(),
-                )
+                .chat_once(&chat_messages, &principles, &options, sender.clone())
                 .await
             {
                 Ok(()) => return Ok(()),

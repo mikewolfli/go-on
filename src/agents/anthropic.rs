@@ -146,9 +146,9 @@ impl AnthropicAgent {
     /// * `Value` - Anthropic API payload
     fn to_anthropic_payload(
         &self,
-        messages: Vec<Message>,
-        principles: Option<Vec<String>>,
-        options: Option<HashMap<String, Value>>,
+        messages: &[Message],
+        principles: &Option<Vec<String>>,
+        options: &Option<HashMap<String, Value>>,
         tools: Option<Vec<Value>>,
     ) -> Value {
         let mut system_parts: Vec<String> = Vec::new();
@@ -159,9 +159,9 @@ impl AnthropicAgent {
         }
 
         let mut out_messages: Vec<Value> = Vec::new();
-        for m in messages {
+        for m in messages.iter() {
             if m.role.eq_ignore_ascii_case("system") {
-                system_parts.push(m.content);
+                system_parts.push(m.content.clone());
                 continue;
             }
 
@@ -395,9 +395,9 @@ impl AnthropicAgent {
     /// * `Result<()>` - Returns Ok(()) if the request completes successfully, or an error if something goes wrong
     async fn chat_once(
         &self,
-        messages: Vec<Message>,
-        principles: Option<Vec<String>>,
-        options: Option<HashMap<String, Value>>,
+        messages: &[Message],
+        principles: &Option<Vec<String>>,
+        options: &Option<HashMap<String, Value>>,
         sender: crate::agent::StreamingSender,
     ) -> anyhow::Result<()> {
         let api_key = resolve_secret(&self.api_key_env, "claude.api_key_env")?;
@@ -495,15 +495,11 @@ impl Agent for AnthropicAgent {
         sender: crate::agent::StreamingSender,
     ) -> crate::core::error::Result<()> {
         let mut last_error: Option<anyhow::Error> = None;
+        let chat_messages = messages;
 
         for attempt in 0..=2 {
             match self
-                .chat_once(
-                    messages.clone(),
-                    principles.clone(),
-                    options.clone(),
-                    sender.clone(),
-                )
+                .chat_once(&chat_messages, &principles, &options, sender.clone())
                 .await
             {
                 Ok(()) => return Ok(()),
@@ -671,12 +667,12 @@ mod tests {
     #[test]
     fn to_anthropic_payload_merges_system_content_and_options() {
         let payload = agent().to_anthropic_payload(
-            vec![
+            &vec![
                 message("system", "existing system"),
                 message("user", "hello"),
             ],
-            Some(vec!["Prefer tests".to_string()]),
-            Some(HashMap::from([
+            &Some(vec!["Prefer tests".to_string()]),
+            &Some(HashMap::from([
                 ("model".to_string(), json!("claude-custom")),
                 ("max_tokens".to_string(), json!(2048)),
                 ("temperature".to_string(), json!(0.2)),
