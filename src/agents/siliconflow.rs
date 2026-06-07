@@ -51,7 +51,7 @@ impl SiliconFlowAgent {
 
         if let Some(items) = principles {
             if !items.is_empty() {
-                system_text.push_str(&principles_to_text(&items));
+                system_text.push_str(&principles_to_text(items));
                 system_text.push('\n');
             }
         }
@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn test_build_payload_basic() {
-        let payload = agent().build_payload(&vec![message("user", "hello")], &None, &None);
+        let payload = agent().build_payload(&[message("user", "hello")], &None, &None);
 
         assert_eq!(payload["model"], "Pro/deepseek-ai/DeepSeek-V3-0324");
         assert_eq!(payload["messages"][0]["content"], "hello");
@@ -250,7 +250,7 @@ mod tests {
     #[test]
     fn test_build_payload_with_principles() {
         let payload = agent().build_payload(
-            &vec![message("user", "write code")],
+            &[message("user", "write code")],
             &Some(vec!["Be clean".to_string()]),
             &None,
         );

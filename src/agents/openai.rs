@@ -46,7 +46,7 @@ impl OpenAiAgent {
 
         if let Some(items) = principles {
             if !items.is_empty() {
-                let system_text = principles_to_text(&items);
+                let system_text = principles_to_text(items);
                 final_messages.push(Message {
                     role: "system".to_string(),
                     content: system_text,

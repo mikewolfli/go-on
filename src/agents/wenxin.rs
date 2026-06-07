@@ -340,7 +340,7 @@ mod tests {
     #[test]
     fn build_payload_combines_principles_stage_and_messages() {
         let payload = agent().build_payload(
-            &vec![message("user", "review this")],
+            &[message("user", "review this")],
             &Some(vec!["Check safety".to_string()]),
             &Some(HashMap::from([
                 ("stage".to_string(), json!("review")),
@@ -362,7 +362,7 @@ mod tests {
     #[test]
     fn build_payload_omits_strict_note_when_not_strict_phase() {
         let payload = agent().build_payload(
-            &vec![message("user", "review this")],
+            &[message("user", "review this")],
             &Some(vec!["Check safety".to_string()]),
             &Some(HashMap::from([
                 ("stage".to_string(), json!("early")),

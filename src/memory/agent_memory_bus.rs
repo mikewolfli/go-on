@@ -363,6 +363,17 @@ impl AgentMemoryBus {
 /// provide a custom initialiser.
 pub static AGENT_MEMORY_BUS: OnceLock<AgentMemoryBus> = OnceLock::new();
 
+/// Clear all stored memories from the global agent memory bus.
+/// Used in test teardown to prevent cross-test contamination.
+#[cfg(test)]
+pub fn clear_agent_memory_bus() {
+    if let Some(bus) = AGENT_MEMORY_BUS.get() {
+        if let Ok(mut store) = bus.store.lock() {
+            store.clear();
+        }
+    }
+}
+
 /// Pre-initialize `AGENT_MEMORY_BUS` with a `VectorStore` for similarity search.
 ///
 /// This should be called during server startup (e.g. from `new_acp_server()`) so

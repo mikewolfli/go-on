@@ -95,6 +95,14 @@ impl MemoryStore {
         }
     }
 
+    /// Clear all entries from the memory store.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.class_counts.clear();
+        self.entries_by_class.clear();
+        self.store_sequence = 0;
+    }
+
     /// Get the maximum number of entries allowed for a given memory class.
     fn class_max_size(&self, class: &MemoryClass) -> usize {
         match class {

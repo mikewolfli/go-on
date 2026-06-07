@@ -154,7 +154,7 @@ impl AnthropicAgent {
         let mut system_parts: Vec<String> = Vec::new();
         if let Some(items) = principles {
             if !items.is_empty() {
-                system_parts.push(principles_to_text(&items));
+                system_parts.push(principles_to_text(items));
             }
         }
 
@@ -179,14 +179,14 @@ impl AnthropicAgent {
             }));
         }
 
-        let model = option_string(&options, "model").unwrap_or_else(|| self.model.clone());
-        let max_tokens = option_u64(&options, "max_tokens")
+        let model = option_string(options, "model").unwrap_or_else(|| self.model.clone());
+        let max_tokens = option_u64(options, "max_tokens")
             .map(|v| v as u32)
             .unwrap_or(self.max_tokens);
 
-        let temperature = option_f64(&options, "temperature");
-        let top_p = option_f64(&options, "top_p");
-        let top_k = option_u64(&options, "top_k");
+        let temperature = option_f64(options, "temperature");
+        let top_p = option_f64(options, "top_p");
+        let top_k = option_u64(options, "top_k");
 
         let mut payload = json!({
             "model": model,
@@ -212,7 +212,7 @@ impl AnthropicAgent {
         }
 
         // Forward thinking parameter as object style for Anthropic API.
-        if let Some(thinking) = Self::normalize_thinking_option(&options) {
+        if let Some(thinking) = Self::normalize_thinking_option(options) {
             payload["thinking"] = thinking;
         }
 
@@ -249,7 +249,7 @@ impl AnthropicAgent {
         }
 
         // Forward tool_choice parameter as object style.
-        if let Some(tool_choice) = Self::normalize_tool_choice_option(&options) {
+        if let Some(tool_choice) = Self::normalize_tool_choice_option(options) {
             payload["tool_choice"] = tool_choice;
         } else if payload.get("tools").is_some() && payload.get("tool_choice").is_none() {
             // Default to auto tool_choice when tools are present
@@ -667,7 +667,7 @@ mod tests {
     #[test]
     fn to_anthropic_payload_merges_system_content_and_options() {
         let payload = agent().to_anthropic_payload(
-            &vec![
+            &[
                 message("system", "existing system"),
                 message("user", "hello"),
             ],

@@ -28,9 +28,20 @@ mod unit_tests {
     use serde_json::Value;
 
     #[cfg(not(feature = "backend-postgres"))]
+    use crate::acp::helpers::agent_preference::reset_agent_switch_state_for_test;
     use crate::acp::r#impl::chat::{
-        extract_tool_calls_from_response, process_chat_request, ChatParams,
+        extract_tool_calls_from_response, process_chat_request, reset_agent_switch_state,
+        ChatParams,
     };
+    use crate::memory::agent_memory_bus::clear_agent_memory_bus;
+
+    /// Reset all global state that can accumulate across test runs.
+    #[cfg(not(feature = "backend-postgres"))]
+    fn reset_global_state() {
+        reset_agent_switch_state();
+        reset_agent_switch_state_for_test();
+        clear_agent_memory_bus();
+    }
     #[cfg(not(feature = "backend-postgres"))]
     use crate::acp::server::ServerBuilder;
     #[cfg(not(feature = "backend-postgres"))]
@@ -167,6 +178,7 @@ mod unit_tests {
     #[cfg(not(feature = "backend-postgres"))]
     #[tokio::test]
     async fn process_chat_request_wires_vector_context_and_checkpoint_tree() {
+        reset_global_state();
         let temp = tempfile::tempdir().expect("tempdir should exist");
         let vector_path = temp.path().join("vector.sqlite3");
         let vector_store = Arc::new(
@@ -363,6 +375,7 @@ mod unit_tests {
     #[cfg(not(feature = "backend-postgres"))]
     #[tokio::test]
     async fn process_chat_request_wires_harness_and_capability_bus_closed_loop() {
+        reset_global_state();
         let temp = tempfile::tempdir().expect("tempdir should exist");
         let vector_path = temp.path().join("e2e_vector.sqlite3");
         let vector_store = Arc::new(
@@ -470,6 +483,7 @@ mod unit_tests {
     #[cfg(not(feature = "backend-postgres"))]
     #[tokio::test]
     async fn process_chat_request_skips_empty_agent_output_and_uses_next_agent() {
+        reset_global_state();
         let temp = tempfile::tempdir().expect("tempdir should exist");
 
         let seen_messages = Arc::new(Mutex::new(Vec::new()));
@@ -555,6 +569,7 @@ mod unit_tests {
     #[cfg(not(feature = "backend-postgres"))]
     #[tokio::test]
     async fn process_chat_request_all_empty_outputs_returns_specific_error() {
+        reset_global_state();
         let temp = tempfile::tempdir().expect("tempdir should exist");
 
         let mut registry = AgentRegistry::new();
@@ -617,6 +632,7 @@ mod unit_tests {
     #[cfg(not(feature = "backend-postgres"))]
     #[tokio::test]
     async fn process_chat_request_specific_model_without_match_keeps_phase_agents() {
+        reset_global_state();
         let temp = tempfile::tempdir().expect("tempdir should exist");
 
         let seen_messages = Arc::new(Mutex::new(Vec::new()));
@@ -682,6 +698,7 @@ mod unit_tests {
     #[cfg(not(feature = "backend-postgres"))]
     #[tokio::test]
     async fn process_chat_request_high_risk_multi_candidate_emits_council_decision() {
+        reset_global_state();
         let temp = tempfile::tempdir().expect("tempdir should exist");
 
         let mut registry = AgentRegistry::new();
@@ -777,6 +794,7 @@ mod unit_tests {
     #[cfg(not(feature = "backend-postgres"))]
     #[tokio::test]
     async fn process_chat_request_execute_mode_exposes_stable_autonomy_contract() {
+        reset_global_state();
         let temp = tempfile::tempdir().expect("tempdir should exist");
 
         let mut registry = AgentRegistry::new();

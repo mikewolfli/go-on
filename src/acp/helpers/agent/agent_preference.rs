@@ -76,6 +76,16 @@ fn agent_switch_state() -> &'static StdMutex<AgentSwitchState> {
     AGENT_SWITCH_STATE.get_or_init(|| StdMutex::new(AgentSwitchState::default()))
 }
 
+#[cfg(test)]
+pub(crate) fn reset_agent_switch_state_for_test() {
+    if let Some(state) = AGENT_SWITCH_STATE.get() {
+        if let Ok(mut guard) = state.lock() {
+            guard.forced_agent_by_phase.clear();
+            guard.primary_agent_by_phase.clear();
+        }
+    }
+}
+
 // ── Agent reordering helper ──────────────────────────────────────────────
 
 /// Move the named agent to the front of the agent list.

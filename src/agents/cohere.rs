@@ -59,7 +59,7 @@ impl CohereAgent {
         let mut preamble = String::new();
         if let Some(items) = principles {
             if !items.is_empty() {
-                preamble.push_str(&principles_to_text(&items));
+                preamble.push_str(&principles_to_text(items));
             }
         }
 

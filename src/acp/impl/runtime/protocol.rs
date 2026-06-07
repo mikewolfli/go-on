@@ -1,0 +1,123 @@
+//! Protocol negotiation, HTTP request parsing, and version handshake
+//!
+//! Contains low-level HTTP request parsing functions and adaptive signal
+//! inference used to determine which protocol variant a client is speaking.
+//! Extracted from the parent `runtime.rs` to reduce the monolithic file size.
+
+use anyhow::Result;
+
+/// A parsed HTTP request with its components split for routing.
+pub(crate) struct ParsedHttpRequest<'a> {
+    pub(crate) method: &'a str,
+    pub(crate) path: &'a str,
+    pub(crate) header_part: &'a str,
+    pub(crate) body_initial_part: &'a str,
+    #[allow(dead_code)] // F-GAP-49 — reserved for planner/executor adaptive signal
+    pub(crate) adaptive_signal: &'static str,
+}
+
+/// Parse a raw HTTP request text into its components.
+pub(crate) fn parse_http_request(request_text: &str) -> Result<ParsedHttpRequest<'_>> {
+    let header_end = request_text
+        .find("\r\n\r\n")
+        .ok_or_else(|| anyhow::anyhow!("invalid HTTP request: missing header terminator"))?;
+
+    let (header_part, body_initial_part) = request_text.split_at(header_end + 4);
+    let request_line = header_part
+        .lines()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("invalid HTTP request: missing request line"))?;
+
+    let mut request_line_parts = request_line.split_whitespace();
+    let method = request_line_parts
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("invalid HTTP request: missing method"))?;
+    let path = request_line_parts
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("invalid HTTP request: missing path"))?;
+    let adaptive_signal = infer_adaptive_signal(method, path, header_part);
+
+    Ok(ParsedHttpRequest {
+        method,
+        path,
+        header_part,
+        body_initial_part,
+        adaptive_signal,
+    })
+}
+
+/// Infer the adaptive signal (protocol hint) from the HTTP method, path, and headers.
+pub(crate) fn infer_adaptive_signal(method: &str, path: &str, headers: &str) -> &'static str {
+    if matches!(path, "/chat" | "/chat/stream") {
+        return "acp_http_path";
+    }
+    if matches!(
+        path,
+        "/chat/completions" | "/v1/chat/completions" | "/v1/responses"
+    ) {
+        return "openai_http_path";
+    }
+    if path.starts_with("/v1/") {
+        return "openai_api_prefix";
+    }
+
+    if let Some(protocol_hint) = extract_header_value(headers, "x-go-on-protocol") {
+        let hint = protocol_hint.trim().to_ascii_lowercase();
+        if hint == "acp" {
+            return "header_hint_acp";
+        }
+        if hint == "mcp" {
+            return "header_hint_mcp";
+        }
+    }
+
+    if let Some(content_type) = extract_header_value(headers, "content-type") {
+        if content_type
+            .to_ascii_lowercase()
+            .contains("application/json")
+        {
+            if method == "POST" {
+                return "json_post_fallback";
+            }
+            return "json_http_fallback";
+        }
+    }
+
+    if method == "GET" {
+        "read_probe_fallback"
+    } else {
+        "generic_http_fallback"
+    }
+}
+
+/// Extract the Content-Length value from HTTP headers.
+pub(crate) fn extract_content_length(headers: &str) -> Option<usize> {
+    let mut found: Option<usize> = None;
+    for line in headers.lines() {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if !name.trim().eq_ignore_ascii_case("content-length") {
+            continue;
+        }
+        let val: usize = value.trim().parse().ok()?;
+        match found {
+            None => found = Some(val),
+            Some(prev) if prev == val => {} // duplicate with same value — OK
+            Some(_) => return None,         // different values — reject per RFC 7230
+        }
+    }
+    found
+}
+
+/// Extract the value of a named header from raw HTTP headers.
+pub(crate) fn extract_header_value(headers: &str, header_name: &str) -> Option<String> {
+    headers.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        if name.trim().eq_ignore_ascii_case(header_name) {
+            Some(value.trim().to_string())
+        } else {
+            None
+        }
+    })
+}

@@ -11,12 +11,13 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::warn;
 
+use super::http::http_trace_context;
+use super::protocol::parse_http_request;
+use super::sse::{write_sse_event, write_sse_headers};
 use super::RPC_SERIAL;
 use crate::acp::r#impl::request::{handle_request, inject_platform_profiles_if_absent};
 use crate::acp::server::AcpServer;
-use crate::rpc_protocol::{chat_trace_context, JsonRpcRequest, RequestTraceContext};
-
-use super::{parse_http_request, write_sse_event, write_sse_headers};
+use crate::rpc_protocol::JsonRpcRequest;
 
 /// Write an HTTP JSON response through a generic async writer.
 async fn tls_write_http_json<W: tokio::io::AsyncWrite + Unpin>(
@@ -137,10 +138,8 @@ async fn handle_tls_http_stream(
     };
 
     // Compute CORS headers
-    let cors_headers = crate::acp::r#impl::runtime::cors::compute_cors_response_headers(
-        parsed.header_part,
-        server.as_ref(),
-    );
+    let cors_headers =
+        super::http::compute_cors_response_headers(parsed.header_part, server.as_ref());
 
     // Route the request
     if parsed.method == "OPTIONS" {
@@ -381,13 +380,4 @@ pub(crate) async fn handle_tls_http_connection(
     let mut tls_stream = tokio_rustls::TlsStream::Server(tls_stream);
 
     handle_tls_http_stream(&mut tls_stream, &server, peer_addr).await
-}
-
-fn http_trace_context(method: &str) -> RequestTraceContext {
-    let request_id = format!("http-{}", crate::acp::prelude::now_ts_ms());
-    let seed = Some(serde_json::json!(request_id.clone()));
-    let mut trace = chat_trace_context(&seed, "chat.http");
-    trace.method = method.to_string();
-    trace.request_id = request_id;
-    trace
 }

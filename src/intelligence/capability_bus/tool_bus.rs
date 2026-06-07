@@ -348,14 +348,12 @@ impl ToolBus {
                 "payload": input.payload,
             });
 
-            // The Skill trait is async. Move execution to a blocking thread
-            // to avoid tying up an async worker thread, then block_on
-            // synchronously since dispatch_tool itself is sync.
-            let output_value = tokio::runtime::Handle::current()
-                .block_on(tokio::task::spawn_blocking(move || {
-                    tokio::runtime::Handle::current().block_on(skill.execute(&skill_input))
-                }))
-                .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {e}"))??;
+            // The Skill trait is async, but dispatch_tool is sync.  Use a single
+            // block_on on the future directly — no spawn_blocking needed, since
+            // we are already inside a Tokio runtime and the skill itself is
+            // async (not CPU-bound), so a dedicated blocking thread is wasted.
+            let output_value =
+                tokio::runtime::Handle::current().block_on(skill.execute(&skill_input))?;
 
             return Ok(ToolOutput {
                 success: true,

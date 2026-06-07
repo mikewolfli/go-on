@@ -18,7 +18,7 @@ use crate::acp::server::AcpServer;
 /// Limits concurrent ACP HTTP connections to prevent unbounded tokio task growth.
 static CONNECTION_SEMAPHORE: Semaphore = Semaphore::const_new(1000);
 
-use super::handle_http_connection;
+use super::http::handle_http_connection;
 use super::tls::{handle_mtls_http_connection, handle_tls_http_connection};
 
 /// Start the ACP HTTP server.

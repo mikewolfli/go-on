@@ -47,7 +47,7 @@ impl GroqAgent {
 
         if let Some(items) = principles {
             if !items.is_empty() {
-                system_text.push_str(&principles_to_text(&items));
+                system_text.push_str(&principles_to_text(items));
                 system_text.push('\n');
             }
         }
@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_build_payload_basic() {
-        let payload = agent().build_payload(&vec![message("user", "hello")], &None, &None);
+        let payload = agent().build_payload(&[message("user", "hello")], &None, &None);
 
         assert_eq!(payload["model"], "llama-3.3-70b-versatile");
         assert_eq!(payload["messages"][0]["content"], "hello");
@@ -281,7 +281,7 @@ mod tests {
     #[test]
     fn test_build_payload_with_principles() {
         let payload = agent().build_payload(
-            &vec![message("user", "do it")],
+            &[message("user", "do it")],
             &Some(vec![
                 "Be thorough".to_string(),
                 "Test everything".to_string(),
@@ -299,7 +299,7 @@ mod tests {
     #[test]
     fn test_build_payload_tool_choice_auto() {
         let payload = agent().build_payload(
-            &vec![message("user", "use tools")],
+            &[message("user", "use tools")],
             &None,
             &Some(HashMap::from([(
                 "tools".to_string(),
@@ -329,7 +329,7 @@ mod tests {
     #[test]
     fn test_build_payload_tool_choice_preserved() {
         let payload = agent().build_payload(
-            &vec![message("user", "pick a tool")],
+            &[message("user", "pick a tool")],
             &None,
             &Some(HashMap::from([
                 (

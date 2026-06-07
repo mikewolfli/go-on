@@ -47,7 +47,7 @@ impl GeminiAgent {
 
         if let Some(items) = principles {
             if !items.is_empty() {
-                let system_text = principles_to_text(&items);
+                let system_text = principles_to_text(items);
                 system_instruction = Some(system_text);
             }
         }

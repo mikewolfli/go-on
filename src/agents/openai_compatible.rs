@@ -56,7 +56,7 @@ impl OpenAiCompatibleAgent {
             return messages.to_vec();
         }
 
-        let instruction = principles_to_text(&items);
+        let instruction = principles_to_text(items);
 
         if self.supports_system {
             let mut merged = Vec::with_capacity(messages.len() + 1);
@@ -103,7 +103,7 @@ impl OpenAiCompatibleAgent {
         messages: Vec<Message>,
         options: &Option<HashMap<String, Value>>,
     ) -> Value {
-        let model = option_string(&options, "model").unwrap_or_else(|| self.model.clone());
+        let model = option_string(options, "model").unwrap_or_else(|| self.model.clone());
 
         let mut payload = json!({
             "model": model,
@@ -231,7 +231,7 @@ mod tests {
     #[test]
     fn merge_principles_inserts_system_message_when_supported() {
         let merged = agent(true, "v1/chat/completions").merge_principles_into_messages(
-            &vec![message("user", "hello")],
+            &[message("user", "hello")],
             &Some(vec!["Prefer tests".to_string()]),
         );
 
@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn merge_principles_prefixes_user_message_when_system_not_supported() {
         let merged = agent(false, "v1/chat/completions").merge_principles_into_messages(
-            &vec![message("user", "hello")],
+            &[message("user", "hello")],
             &Some(vec!["Prefer tests".to_string()]),
         );
 

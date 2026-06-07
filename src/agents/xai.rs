@@ -50,7 +50,7 @@ impl XaiAgent {
 
         if let Some(items) = principles {
             if !items.is_empty() {
-                system_text.push_str(&principles_to_text(&items));
+                system_text.push_str(&principles_to_text(items));
                 system_text.push('\n');
             }
         }
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn test_build_payload_basic() {
-        let payload = agent().build_payload(&vec![message("user", "hello")], &None, &None);
+        let payload = agent().build_payload(&[message("user", "hello")], &None, &None);
 
         assert_eq!(payload["model"], "grok-3");
         assert_eq!(payload["messages"][0]["content"], "hello");
@@ -241,7 +241,7 @@ mod tests {
     #[test]
     fn test_build_payload_with_principles() {
         let payload = agent().build_payload(
-            &vec![message("user", "do it")],
+            &[message("user", "do it")],
             &Some(vec!["Be concise".to_string()]),
             &None,
         );

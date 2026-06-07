@@ -61,7 +61,7 @@ impl TitanAgent {
 
         if let Some(items) = principles {
             if !items.is_empty() {
-                system_text.push_str(&principles_to_text(&items));
+                system_text.push_str(&principles_to_text(items));
                 system_text.push('\n');
             }
         }

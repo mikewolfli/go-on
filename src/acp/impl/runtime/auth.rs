@@ -15,7 +15,8 @@ use tokio::net::TcpStream;
 use crate::acp::server::AcpServer;
 use crate::governance::rbac::{AccessDecision, Permission, Principal};
 
-use super::cors::extract_header_value;
+use super::http::write_http_json_response;
+use super::protocol::extract_header_value;
 
 /// Extract an authentication/API key token from HTTP headers.
 ///
@@ -56,7 +57,7 @@ pub(super) async fn check_http_authorization(
     let session = match user_session {
         Some(s) => s,
         None => {
-            super::write_http_json_response(
+            write_http_json_response(
                 socket,
                 401,
                 serde_json::json!({"error": "Authentication required", "code": "AUTH_REQUIRED"}),
@@ -74,7 +75,6 @@ pub(super) async fn check_http_authorization(
 
     // Map HTTP method + path to required permission
     let required_perm = match (method, path) {
-        // Admin-only operations
         ("POST", "/rpc") => Permission::Execute,
         ("GET", _) => Permission::Read,
         ("POST", "/chat" | "/chat/stream") => Permission::Execute,
@@ -83,15 +83,12 @@ pub(super) async fn check_http_authorization(
         _ => Permission::Read,
     };
 
-    // Create principal from session
     let principal = Principal::new(
         &session.user_id,
         session.roles.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
         session.tenant_id.as_deref(),
     );
 
-    // Resolve permissions from roles (lock is scoped to avoid holding a non-Send
-    // guard across .await points)
     let access_decision = server
         .governance_deps
         .rbac_enforcer
@@ -109,7 +106,7 @@ pub(super) async fn check_http_authorization(
                 return Ok(false);
             }
             AccessDecision::Deny { reason } => {
-                super::write_http_json_response(
+                write_http_json_response(
                     socket,
                     403,
                     serde_json::json!({
@@ -123,7 +120,7 @@ pub(super) async fn check_http_authorization(
                 return Ok(true);
             }
             AccessDecision::Escalate { required_role } => {
-                super::write_http_json_response(
+                write_http_json_response(
                     socket,
                     403,
                     serde_json::json!({
@@ -139,6 +136,5 @@ pub(super) async fn check_http_authorization(
         }
     }
 
-    // No RBAC enforcer configured — allow (backward compat)
     Ok(false)
 }

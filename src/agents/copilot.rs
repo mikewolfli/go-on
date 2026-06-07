@@ -394,7 +394,7 @@ impl CopilotAgent {
     ) -> Vec<Message> {
         if let Some(items) = principles {
             if !items.is_empty() {
-                let instruction = principles_to_text(&items);
+                let instruction = principles_to_text(items);
                 let mut owned = messages.to_vec();
                 if let Some(first_user) = owned.iter_mut().find(|m| m.role == "user") {
                     first_user.content = format!("{}\n{}", instruction, first_user.content);
@@ -426,7 +426,7 @@ impl CopilotAgent {
         //
         // Go-on passes the resolved model through, or defaults to "gpt-4o"
         // (the safest fallback that all Copilot tiers support).
-        let model = option_string(&options, "model").unwrap_or_default();
+        let model = option_string(options, "model").unwrap_or_default();
         let mapped_model = match model.as_str() {
             "" | "auto" | "copilot/auto" | "copilot-auto" | "copilot" | "github-copilot" => {
                 "gpt-4o"
@@ -862,7 +862,7 @@ mod tests {
     #[test]
     fn merge_principles_prefixes_first_user_message() {
         let merged = agent().merge_principles_into_messages(
-            &vec![
+            &[
                 message("system", "existing"),
                 message("user", "implement feature"),
             ],
@@ -882,7 +882,7 @@ mod tests {
     #[test]
     fn merge_principles_inserts_user_message_when_missing() {
         let merged = agent().merge_principles_into_messages(
-            &vec![message("assistant", "prior output")],
+            &[message("assistant", "prior output")],
             &Some(vec!["Use tests".to_string()]),
         );
 

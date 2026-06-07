@@ -71,13 +71,13 @@ impl DeepSeekAgent {
             if !items.is_empty() {
                 final_messages.push(Message {
                     role: "system".to_string(),
-                    content: principles_to_text(&items),
+                    content: principles_to_text(items),
                 });
             }
         }
         final_messages.extend(messages.iter().cloned());
 
-        let model = option_string(&options, "model").unwrap_or_else(|| self.model.clone());
+        let model = option_string(options, "model").unwrap_or_else(|| self.model.clone());
 
         let mut payload = json!({
             "model": model,
@@ -87,7 +87,7 @@ impl DeepSeekAgent {
 
         // Apply common OpenAI options (temperature, top_p, max_tokens, stop,
         // tools, tool_choice, response_format, seed, etc.)
-        apply_openai_common_options(&mut payload, &options);
+        apply_openai_common_options(&mut payload, options);
 
         // DeepSeek-specific: thinking mode control (enabled/disabled + reasoning_effort)
         if let Some(thinking) = options.as_ref().and_then(|o| o.get("thinking")) {
@@ -286,7 +286,7 @@ mod tests {
         );
 
         let payload = agent.build_payload(
-            &vec![message("user", "ship it")],
+            &[message("user", "ship it")],
             &Some(vec!["Prefer tests".to_string()]),
             &Some(HashMap::from([
                 ("model".to_string(), json!("deepseek-v4-pro")),
@@ -315,7 +315,7 @@ mod tests {
             reqwest::Client::new(),
         );
 
-        let payload = agent.build_payload(&vec![message("user", "hello")], &None, &None);
+        let payload = agent.build_payload(&[message("user", "hello")], &None, &None);
 
         assert_eq!(payload["model"], "deepseek-v4-flash");
         assert_eq!(payload["messages"][0]["content"], "hello");
@@ -357,7 +357,7 @@ mod tests {
         );
 
         let payload = agent.build_payload(
-            &vec![message("user", "hello")],
+            &[message("user", "hello")],
             &Some(vec!["Be concise".to_string(), "Use examples".to_string()]),
             &None,
         );
@@ -378,7 +378,7 @@ mod tests {
         );
 
         let payload = agent.build_payload(
-            &vec![message("user", "hello")],
+            &[message("user", "hello")],
             &None,
             &Some(HashMap::from([("user".to_string(), json!("tenant-a"))])),
         );
@@ -430,7 +430,7 @@ mod tests {
         );
 
         let payload = agent.build_payload(
-            &vec![message("user", "hello")],
+            &[message("user", "hello")],
             &None,
             &Some(HashMap::from([
                 ("frequency_penalty".to_string(), json!(0.2)),
