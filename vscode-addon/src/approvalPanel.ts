@@ -134,8 +134,9 @@ export class ApprovalPanelProvider implements vscode.WebviewViewProvider {
         requests,
         count: requests.length,
       });
-    } catch {
-      // Backend not reachable or approval not supported
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("[approvalPanel] _fetchPendingRequests failed:", err);
     }
   }
 

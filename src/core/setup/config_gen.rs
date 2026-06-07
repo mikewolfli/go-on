@@ -161,7 +161,7 @@ pub fn recommendation_snapshot_for_config(
     config: &crate::config::AppConfig,
 ) -> Option<ProviderRecommendationSnapshot> {
     let mut provider_names: HashSet<String> = HashSet::new();
-    for agent in config.agents.values() {
+    for agent in config.agents().values() {
         if let Some(spec) = super::provider_spec_by_agent_type(agent.agent_type.as_str()) {
             provider_names.insert(spec.name.clone());
         }

@@ -311,6 +311,109 @@ pub struct ObservabilityLayer {
     pub alert_manager: Arc<StdMutex<AlertManager>>,
 }
 
+/// Resilience-related subsystems grouped together (circuit breaking, rate limiting, lifecycle, failover)
+///
+/// # Why two circuit breaker systems?
+///
+/// | System | Type | Scope | Purpose |
+/// |--------|------|-------|---------|
+/// | `circuit_breakers` | `CircuitBreakerRegistry` | ACP per-service | Tracks open/closed state per agent; used by `get_status()` for UI reporting |
+/// | `hyper_resilience` | `HyperResilienceEngine` | Cross-service | Full failover groups, self-healing, latency-aware degradation (BLUE56-GAP-C04) |
+///
+/// `circuit_breakers` is a lightweight per-service registry whose state is
+/// reported to the GUI and the `/status` endpoint. `hyper_resilience` is a
+/// superset engine that consumes the same signals but also orchestrates
+/// failover between services and automatic healing. Both coexist because
+/// the simple registry provides the synchronous `open_count()` / `snapshots()`
+/// accessors needed by the ACP status API, while the hyper engine runs
+/// its own async decision loops for advanced resilience patterns.
+///
+/// All StdMutex fields here are safe because they are never held across `.await` boundaries:
+/// locks are acquired, used in short synchronous operations, and released within the same scope.
+/// None of these fields have an `.await` point inside their critical sections.
+pub struct ResilienceContext {
+    /// Online controller for adaptive strategy from live outcomes
+    pub online_controller: Arc<StdMutex<OnlineControllerState>>,
+    /// Circuit breaker registry for failure prevention
+    pub circuit_breakers: Arc<StdMutex<CircuitBreakerRegistry>>,
+    /// Hyper-resilience engine for circuit breaking, failover, and self-healing (BLUE56-GAP-C04)
+    pub hyper_resilience: Arc<crate::resilience::hyper_resilience::HyperResilienceEngine>,
+    /// Maintenance tracker for system health monitoring
+    pub maintenance_tracker: Arc<StdMutex<MaintenanceTracker>>,
+    /// Inflight request limiter
+    pub inflight_limiter: Arc<StdMutex<InflightLimiter>>,
+    /// Lifecycle state management
+    pub lifecycle_state: Arc<StdMutex<LifecycleState>>,
+    /// Review timeout policy
+    pub review_timeout_policy: Arc<StdMutex<ReviewTimeoutPolicy>>,
+    /// Failure prevention system
+    pub failure_prevention: Arc<StdMutex<FailurePrevention>>,
+    /// Phase rate limiter (held by ResilienceContext since it governs per-phase request admission)
+    pub phase_rate_limiter: Arc<StdMutex<PhaseRateLimiter>>,
+}
+
+/// Session and conversation state grouped together
+///
+/// `conversation_state` uses `tokio::sync::Mutex` because its lock is held across `.await` boundaries
+/// (e.g. checkpoint operations that involve async I/O). The other fields are either lock-free
+/// (`audit_log` is thread-safe internally) or use StdMutex for short synchronous operations.
+pub struct SessionContext {
+    /// Conversation state management (uses tokio::sync::Mutex — held across .await points)
+    pub conversation_state: Arc<Mutex<ConversationState>>,
+    /// User session manager for authentication and session lifecycle
+    pub session_manager: Option<Arc<SessionManager>>,
+    /// Session registry for cross-client state synchronization
+    pub session_registry: Option<Arc<crate::protocol::session_sync::SessionRegistry>>,
+    /// Thread-safe audit log with NDJSON persistence at ~/.goon/audit.ndjson
+    pub audit_log: ThreadSafeAuditLog,
+    /// In-memory registry for Responses API objects
+    pub responses_api_store: Arc<StdMutex<HashMap<String, serde_json::Value>>>,
+}
+
+/// Rate limiting and tenant quota enforcement grouped together
+///
+/// Both fields use StdMutex for short synchronous critical sections:
+/// `rate_limit_middleware.check()` and `tenant_budget.check_can_start()`/`start_task()`
+/// are fast non-async operations with no `.await` inside the locked scope.
+pub struct RateLimitContext {
+    /// Tenant-level rate limit middleware (F-GAP-49)
+    pub rate_limit_middleware: Option<Arc<crate::protocol::rate_limit::RateLimitMiddleware>>,
+    /// TenantBudgetEnforcer — per-tenant resource quota management (F-GAP-08)
+    pub tenant_budget: Arc<StdMutex<crate::governance::hardening::TenantBudgetEnforcer>>,
+}
+
+/// Registries for reusable system components
+///
+/// All fields use StdMutex — each is accessed in short synchronous critical sections
+/// (locking, reading/writing, releasing). No `.await` points inside any locked scope.
+pub struct RegistryContext {
+    /// SchemaRegistry — task envelope validation (F-GAP-07)
+    pub schema_registry: Arc<StdMutex<crate::orchestration::task_schema::SchemaRegistry>>,
+    /// OptimizerRegistry — workflow optimization plugins (ARCH-11)
+    pub optimizer_registry:
+        Arc<StdMutex<crate::orchestration::workflow_optimizer::OptimizerRegistry>>,
+    /// PromotionRegistry — promotion plugin evaluation (ARCH-10)
+    pub promotion_registry:
+        Arc<StdMutex<crate::orchestration::promotion_plugin::PromotionRegistry>>,
+    /// BenchmarkSuite — evaluation suite for agent quality (F-GAP-06)
+    pub evaluation_suite: Arc<StdMutex<crate::intelligence::evaluation::BenchmarkSuite>>,
+    /// ForkRegistry — sub-agent process isolation (ARCH-05)
+    pub fork_registry: Arc<StdMutex<ForkRegistry>>,
+}
+
+/// Persistence-related data stores grouped together
+///
+/// All fields use StdMutex — locks are acquired, used synchronously, and released.
+/// No `.await` points inside any locked scope.
+pub struct PersistenceContext {
+    /// Cross-request memory policy store
+    pub memory_store: Arc<Mutex<MemoryStore>>,
+    /// Artifact ledger
+    pub artifact_ledger: Arc<StdMutex<ArtifactLedger>>,
+    /// Persistent task graph store for checkpoints and recovery
+    pub task_graph_store: Option<Arc<TaskGraphStore>>,
+}
+
 /// Main ACP server structure
 ///
 /// This struct represents the core ACP server that handles incoming requests,
@@ -330,73 +433,32 @@ pub struct AcpServer {
     pub config_path: Option<String>,
     /// Observability-related subsystems
     pub observability: ObservabilityLayer,
-    /// Online controller for adaptive strategy from live outcomes
-    pub online_controller: Arc<StdMutex<OnlineControllerState>>,
-    /// Circuit breaker registry for failure prevention
-    pub circuit_breakers: Arc<StdMutex<CircuitBreakerRegistry>>,
-    /// Hyper-resilience engine for circuit breaking, failover, and self-healing (BLUE56-GAP-C04)
-    pub hyper_resilience: Arc<crate::resilience::hyper_resilience::HyperResilienceEngine>,
-    /// Maintenance tracker for system health monitoring
-    pub maintenance_tracker: Arc<StdMutex<MaintenanceTracker>>,
-    /// Inflight request limiter
-    pub inflight_limiter: Arc<StdMutex<InflightLimiter>>,
-    /// Lifecycle state management
-    pub lifecycle_state: Arc<StdMutex<LifecycleState>>,
-    /// Conversation state management
-    pub conversation_state: Arc<Mutex<ConversationState>>,
-    /// Phase rate limiter
-    pub phase_rate_limiter: Arc<StdMutex<PhaseRateLimiter>>,
-    /// Tenant-level rate limit middleware (F-GAP-49)
-    pub rate_limit_middleware: Option<Arc<crate::protocol::rate_limit::RateLimitMiddleware>>,
-    /// Review timeout policy
-    pub review_timeout_policy: Arc<StdMutex<ReviewTimeoutPolicy>>,
-    /// Failure prevention system
-    pub failure_prevention: Arc<StdMutex<FailurePrevention>>,
-    /// Cross-request memory policy store
-    pub memory_store: Arc<StdMutex<MemoryStore>>,
-    /// Artifact ledger
-    pub artifact_ledger: Arc<StdMutex<ArtifactLedger>>,
-    /// ForkRegistry — sub-agent process isolation (ARCH-05)
-    pub fork_registry: Arc<StdMutex<ForkRegistry>>,
-
-    /// BenchmarkSuite — evaluation suite for agent quality (F-GAP-06)
-    pub evaluation_suite: Arc<StdMutex<crate::intelligence::evaluation::BenchmarkSuite>>,
-    /// SchemaRegistry — task envelope validation (F-GAP-07)
-    pub schema_registry: Arc<StdMutex<crate::orchestration::task_schema::SchemaRegistry>>,
-    /// TenantBudgetEnforcer — per-tenant resource quota management (F-GAP-08)
-    pub tenant_budget: Arc<StdMutex<crate::governance::hardening::TenantBudgetEnforcer>>,
-    /// OptimizerRegistry — workflow optimization plugins (ARCH-11)
-    pub optimizer_registry:
-        Arc<StdMutex<crate::orchestration::workflow_optimizer::OptimizerRegistry>>,
+    /// Resilience subsystems (circuit breakers, lifecycle, rate limiting, failover)
+    pub resilience: ResilienceContext,
+    /// Session and conversation state management
+    pub session: SessionContext,
+    /// Rate limiting and tenant quota enforcement
+    pub rate_limiting: RateLimitContext,
+    /// Registries for reusable system components
+    pub registries: RegistryContext,
+    /// Persistence data stores
+    pub persistence: PersistenceContext,
     /// PromptAssembler — 8-layer prompt assembly (ARCH-03)
     pub prompt_assembler: crate::orchestration::prompt_layers::PromptAssembler,
-    /// PromotionRegistry — promotion plugin evaluation (ARCH-10)
-    pub promotion_registry:
-        Arc<StdMutex<crate::orchestration::promotion_plugin::PromotionRegistry>>,
+    /// Prompt manager for prompt template management
+    pub prompt_manager: PromptManager,
     /// Verbose logging flag
     pub verbose: bool,
     /// Output stream for responses
     pub output: Arc<Mutex<Box<dyn tokio::io::AsyncWrite + Send + Unpin>>>,
     /// Shutdown notification mechanism
     pub shutdown_notify: Arc<Notify>,
-    /// In-memory registry for Responses API objects
-    pub responses_api_store: Arc<StdMutex<HashMap<String, serde_json::Value>>>,
-    /// Persistent task graph store for checkpoints and recovery
-    pub task_graph_store: Option<Arc<TaskGraphStore>>,
-    /// User session manager for authentication and session lifecycle
-    pub session_manager: Option<Arc<SessionManager>>,
-    /// Prompt manager for prompt template management
-    pub prompt_manager: PromptManager,
     /// Skill market registry for external skill discovery and installation
     pub skill_market_registry: Option<Arc<SkillMarketRegistry>>,
     /// DrainGuard for graceful shutdown
     pub drain_guard: DrainGuard,
-    /// Thread-safe audit log with NDJSON persistence at ~/.goon/audit.ndjson
-    pub audit_log: ThreadSafeAuditLog,
     /// Tool registry for built-in tool execution
     pub tool_registry: Arc<ToolRegistry>,
-    /// Session registry for cross-client state synchronization
-    pub session_registry: Option<Arc<crate::protocol::session_sync::SessionRegistry>>,
     /// WebSocket hub for real-time push to connected clients
     pub websocket_hub: Option<Arc<crate::protocol::websocket::WebSocketHub>>,
     /// Optional multimodal processor for document, audio, video, and repo analysis.
@@ -458,7 +520,7 @@ impl AcpServer {
             circuit_breaker_open_count: with_acp_lock(
                 self.observability.lock_monitor.as_ref(),
                 ACP_LOCK_CIRCUIT_BREAKERS,
-                self.circuit_breakers.as_ref(),
+                self.resilience.circuit_breakers.as_ref(),
                 |guard| guard.open_count(),
             ),
             memory_usage_bytes: 0,
@@ -484,21 +546,21 @@ impl AcpServer {
         let lifecycle = with_acp_lock(
             self.observability.lock_monitor.as_ref(),
             ACP_LOCK_LIFECYCLE,
-            self.lifecycle_state.as_ref(),
+            self.resilience.lifecycle_state.as_ref(),
             |guard| guard.snapshot(),
         );
 
         let circuit_breakers = with_acp_lock(
             self.observability.lock_monitor.as_ref(),
             ACP_LOCK_CIRCUIT_BREAKERS,
-            self.circuit_breakers.as_ref(),
+            self.resilience.circuit_breakers.as_ref(),
             |guard| guard.snapshots(),
         );
 
         let maintenance = with_acp_lock(
             self.observability.lock_monitor.as_ref(),
             ACP_LOCK_MAINTENANCE,
-            self.maintenance_tracker.as_ref(),
+            self.resilience.maintenance_tracker.as_ref(),
             |guard| guard.snapshot(),
         );
 
@@ -516,7 +578,7 @@ impl AcpServer {
         with_acp_lock(
             self.observability.lock_monitor.as_ref(),
             ACP_LOCK_LIFECYCLE,
-            self.lifecycle_state.as_ref(),
+            self.resilience.lifecycle_state.as_ref(),
             |guard| guard.is_healthy(),
         )
     }
@@ -526,7 +588,7 @@ impl AcpServer {
         with_acp_lock(
             self.observability.lock_monitor.as_ref(),
             ACP_LOCK_LIFECYCLE,
-            self.lifecycle_state.as_ref(),
+            self.resilience.lifecycle_state.as_ref(),
             |guard| guard.shutdown_requested(),
         )
     }
@@ -536,19 +598,19 @@ impl AcpServer {
         with_acp_lock(
             self.observability.lock_monitor.as_ref(),
             ACP_LOCK_LIFECYCLE,
-            self.lifecycle_state.as_ref(),
+            self.resilience.lifecycle_state.as_ref(),
             |guard| guard.begin_shutdown(),
         );
     }
 
     /// Get maintenance tracker reference
     pub fn maintenance(&self) -> &Arc<StdMutex<MaintenanceTracker>> {
-        &self.maintenance_tracker
+        &self.resilience.maintenance_tracker
     }
 
     /// Get circuit breakers reference
     pub fn circuit_breakers(&self) -> &Arc<StdMutex<CircuitBreakerRegistry>> {
-        &self.circuit_breakers
+        &self.resilience.circuit_breakers
     }
 
     /// Get metrics reference
@@ -558,20 +620,21 @@ impl AcpServer {
 
     /// Get a reference to the thread-safe audit log.
     pub fn audit_log(&self) -> &ThreadSafeAuditLog {
-        &self.audit_log
+        &self.session.audit_log
     }
 
     /// Get audit health information: total entries and last write time.
     pub fn audit_health(&self) -> serde_json::Value {
         serde_json::json!({
-            "total_entries": self.audit_log.len(),
-            "last_write_time": self.audit_log.last_write_time(),
+            "total_entries": self.session.audit_log.len(),
+            "last_write_time": self.session.audit_log.last_write_time(),
         })
     }
 
     /// Get the artifact ledger handle
     pub fn artifact_ledger(&self) -> Option<Arc<ArtifactLedger>> {
-        self.artifact_ledger
+        self.persistence
+            .artifact_ledger
             .lock()
             .ok()
             .map(|guard| Arc::new(guard.clone()))
@@ -621,12 +684,12 @@ impl AcpServer {
 
     /// Get the session manager handle
     pub fn session_manager(&self) -> Option<Arc<crate::acp::r#impl::session::SessionManager>> {
-        self.session_manager.clone()
+        self.session.session_manager.clone()
     }
 
     /// Get the session registry handle
     pub fn session_registry(&self) -> Option<Arc<crate::protocol::session_sync::SessionRegistry>> {
-        self.session_registry.clone()
+        self.session.session_registry.clone()
     }
 
     /// Get the WebSocket hub handle
@@ -641,14 +704,14 @@ impl AcpServer {
 
     /// Get lifecycle state reference
     pub fn lifecycle_state(&self) -> &Arc<StdMutex<crate::acp::prelude::LifecycleState>> {
-        &self.lifecycle_state
+        &self.resilience.lifecycle_state
     }
 
     /// Get conversation state reference
     pub fn conversation_state(
         &self,
     ) -> &Arc<tokio::sync::Mutex<crate::acp::prelude::ConversationState>> {
-        &self.conversation_state
+        &self.session.conversation_state
     }
 
     /// Get runtime config reference
@@ -660,7 +723,7 @@ impl AcpServer {
     pub fn rate_limit_middleware(
         &self,
     ) -> Option<&crate::protocol::rate_limit::RateLimitMiddleware> {
-        self.rate_limit_middleware.as_deref()
+        self.rate_limiting.rate_limit_middleware.as_deref()
     }
 
     /// Get prompt manager reference
@@ -1000,7 +1063,8 @@ impl ServerBuilder {
     pub fn build(self) -> Result<AcpServer> {
         use crate::acp::prelude::{
             CircuitBreakerRegistry, ConversationState, InflightLimiter, LifecycleState,
-            MaintenanceTracker, OnlineControllerState, RuntimeMetrics,
+            MaintenanceTracker, OnlineControllerState, PhaseRateLimiter, ReviewTimeoutPolicy,
+            RuntimeMetrics,
         };
 
         let metrics = Arc::new(RuntimeMetrics::default());
@@ -1034,7 +1098,7 @@ impl ServerBuilder {
         let memory_response_cache = Arc::new(StdMutex::new(
             self.memory_response_cache.unwrap_or_default(),
         ));
-        let memory_store = Arc::new(StdMutex::new(MemoryStore::new(MemoryPolicy::default())));
+        let memory_store = Arc::new(Mutex::new(MemoryStore::new(MemoryPolicy::default())));
 
         // Initialize skill registry with disk-persisted prompt-based skills
         let mut registry = SkillRegistry::default();
@@ -1087,31 +1151,27 @@ impl ServerBuilder {
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 loop {
                     interval.tick().await;
-                    match cl_bus.continuous_learning.lock() {
-                        Ok(cl) => {
-                            let (replayed, evicted) = cl.review_cycle();
-                            if replayed > 0 || evicted > 0 {
-                                tracing::debug!(
-                                    "ContinuousLearning: review_cycle replayed={} evicted={}",
-                                    replayed,
-                                    evicted
-                                );
-                            }
-                        }
+                    // Clone the center briefly under the outer lock, then release
+                    // the lock before calling the async review_cycle. This avoids
+                    // holding a !Send std::sync::MutexGuard across an .await point.
+                    let center_for_review = match cl_bus.continuous_learning.lock() {
+                        Ok(cl) => cl.clone(),
                         Err(poisoned) => {
                             tracing::warn!(
                                 "continuous_learning mutex poisoned in review_cycle task — recovering"
                             );
-                            let cl = poisoned.into_inner();
-                            let (replayed, evicted) = cl.review_cycle();
-                            if replayed > 0 || evicted > 0 {
-                                tracing::debug!(
-                                    "ContinuousLearning: review_cycle (poisoned) replayed={} evicted={}",
-                                    replayed,
-                                    evicted
-                                );
-                            }
+                            poisoned.into_inner().clone()
                         }
+                    };
+                    let (replayed, evicted, patterns) =
+                        center_for_review.review_cycle("local-agent").await;
+                    if replayed > 0 || evicted > 0 || patterns > 0 {
+                        tracing::debug!(
+                            "ContinuousLearning: review_cycle replayed={} evicted={} patterns={}",
+                            replayed,
+                            evicted,
+                            patterns
+                        );
                     }
                 }
             });
@@ -1277,45 +1337,54 @@ impl ServerBuilder {
                     am
                 },
             },
-            online_controller,
-            circuit_breakers,
-            hyper_resilience,
-            maintenance_tracker,
-            inflight_limiter,
-            lifecycle_state,
-            conversation_state,
-            phase_rate_limiter,
-            review_timeout_policy,
-
-            failure_prevention,
-            memory_store,
-            artifact_ledger,
-            fork_registry: Arc::new(StdMutex::new(ForkRegistry::new(ForkConfig::default()))),
-            evaluation_suite: Arc::new(StdMutex::new(
-                crate::intelligence::evaluation::BenchmarkSuite::new(),
-            )),
-            schema_registry: Arc::new(StdMutex::new(SchemaRegistry::new())),
-            tenant_budget: Arc::new(StdMutex::new(
-                crate::governance::hardening::TenantBudgetEnforcer::new(),
-            )),
-            optimizer_registry: Arc::new(StdMutex::new(OptimizerRegistry::new())),
+            resilience: ResilienceContext {
+                online_controller,
+                circuit_breakers,
+                hyper_resilience,
+                maintenance_tracker,
+                inflight_limiter,
+                lifecycle_state,
+                review_timeout_policy,
+                failure_prevention,
+                phase_rate_limiter,
+            },
+            session: SessionContext {
+                conversation_state,
+                session_manager: None,
+                session_registry: None,
+                audit_log: ThreadSafeAuditLog::new_with_default_path(10_000),
+                responses_api_store,
+            },
+            rate_limiting: RateLimitContext {
+                rate_limit_middleware: None,
+                tenant_budget: Arc::new(StdMutex::new(
+                    crate::governance::hardening::TenantBudgetEnforcer::new(),
+                )),
+            },
+            registries: RegistryContext {
+                schema_registry: Arc::new(StdMutex::new(SchemaRegistry::new())),
+                optimizer_registry: Arc::new(StdMutex::new(OptimizerRegistry::new())),
+                promotion_registry: Arc::new(StdMutex::new(PromotionRegistry::new())),
+                evaluation_suite: Arc::new(StdMutex::new(
+                    crate::intelligence::evaluation::BenchmarkSuite::new(),
+                )),
+                fork_registry: Arc::new(StdMutex::new(ForkRegistry::new(ForkConfig::default()))),
+            },
+            persistence: PersistenceContext {
+                memory_store,
+                artifact_ledger,
+                task_graph_store: self.task_graph_store,
+            },
             prompt_assembler: PromptAssembler,
-            promotion_registry: Arc::new(StdMutex::new(PromotionRegistry::new())),
+            prompt_manager,
             verbose: self.verbose,
             output: Arc::new(Mutex::new(
                 Box::new(tokio::io::stdout()) as Box<dyn tokio::io::AsyncWrite + Send + Unpin>
             )),
             shutdown_notify: Arc::new(Notify::new()),
-            responses_api_store,
-            task_graph_store: self.task_graph_store,
-            session_manager: None,
-            prompt_manager,
             skill_market_registry: None,
-            rate_limit_middleware: None,
-            audit_log: ThreadSafeAuditLog::new_with_default_path(10_000),
-            tool_registry: Arc::new(ToolRegistry::new()),
             drain_guard: DrainGuard::default(),
-            session_registry: None,
+            tool_registry: Arc::new(ToolRegistry::new()),
             websocket_hub: None,
             multimodal_processor: self.multimodal_processor,
         })

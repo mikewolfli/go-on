@@ -4,7 +4,7 @@
 //! test modules from `tests/e2e/`. Each sub-module covers a complete
 //! end-to-end workflow across multiple go-on subsystems.
 //!
-//! All tests are annotated with `#[ignore]` because they require actual
-//! infrastructure (services, databases, network peers) to run.
+//! Tests use in-memory type construction and structural validation.
+//! They do NOT require external infrastructure — `#[ignore]` is not needed.
 
 mod e2e;

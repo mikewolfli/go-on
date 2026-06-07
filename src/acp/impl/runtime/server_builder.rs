@@ -11,7 +11,8 @@ use tracing::{debug, info};
 
 use crate::acp::server::{
     AcpServer, CacheLayer, CacheServerDeps, GovernanceServerDeps, ModelServerDeps,
-    ObservabilityLayer, OrchestrationServerDeps,
+    ObservabilityLayer, OrchestrationServerDeps, PersistenceContext, RateLimitContext,
+    RegistryContext, ResilienceContext, SessionContext,
 };
 use crate::adaptive_selector::AdaptiveModelSelector;
 use crate::agent::AgentRegistry;
@@ -378,7 +379,7 @@ pub fn new_acp_server(
             server.governance_deps.provenance_ledger = Some(provenance_ledger);
             server.governance_deps.rbac_enforcer = Some(rbac_enforcer);
             server.skill_market_registry = None;
-            server.rate_limit_middleware = Some(Arc::new(
+            server.rate_limiting.rate_limit_middleware = Some(Arc::new(
                 crate::protocol::rate_limit::RateLimitMiddleware::new(
                     crate::protocol::rate_limit::TenantRateLimit::default(),
                 ),
@@ -611,67 +612,77 @@ pub fn new_acp_server(
                         ),
                     )),
                 },
-                online_controller: Arc::new(StdMutex::new(OnlineControllerState::default())),
-                circuit_breakers: Arc::new(StdMutex::new(CircuitBreakerRegistry::new())),
-                hyper_resilience: Arc::new(
-                    crate::resilience::hyper_resilience::HyperResilienceEngine::new(
-                        crate::resilience::hyper_resilience::ResilienceConfig::default(),
+                resilience: ResilienceContext {
+                    online_controller: Arc::new(StdMutex::new(OnlineControllerState::default())),
+                    circuit_breakers: Arc::new(StdMutex::new(CircuitBreakerRegistry::new())),
+                    hyper_resilience: Arc::new(
+                        crate::resilience::hyper_resilience::HyperResilienceEngine::new(
+                            crate::resilience::hyper_resilience::ResilienceConfig::default(),
+                        ),
                     ),
-                ),
-                maintenance_tracker: Arc::new(StdMutex::new(MaintenanceTracker::new())),
-                inflight_limiter: Arc::new(StdMutex::new(InflightLimiter::default())),
-                lifecycle_state: Arc::new(StdMutex::new(LifecycleState::new())),
-                conversation_state: Arc::new(Mutex::new(ConversationState::default())),
-                phase_rate_limiter: Arc::new(StdMutex::new(PhaseRateLimiter::default())),
-                review_timeout_policy: Arc::new(StdMutex::new(ReviewTimeoutPolicy {
-                    timeout_seconds: None,
-                    fail_on_timeout: false,
-                })),
-                failure_prevention: Arc::new(StdMutex::new(failure_prevention_state)),
-                memory_store: Arc::new(StdMutex::new(MemoryStore::new(MemoryPolicy::default()))),
-                artifact_ledger: Arc::new(StdMutex::new(ArtifactLedger::new(
-                    config_path.as_deref().map(Path::new),
-                ))),
-                fork_registry: Arc::new(StdMutex::new(
-                    crate::orchestration::fork_registry::ForkRegistry::new(
-                        crate::orchestration::fork_registry::ForkConfig::default(),
+                    maintenance_tracker: Arc::new(StdMutex::new(MaintenanceTracker::new())),
+                    inflight_limiter: Arc::new(StdMutex::new(InflightLimiter::default())),
+                    lifecycle_state: Arc::new(StdMutex::new(LifecycleState::new())),
+                    review_timeout_policy: Arc::new(StdMutex::new(ReviewTimeoutPolicy {
+                        timeout_seconds: None,
+                        fail_on_timeout: false,
+                    })),
+                    failure_prevention: Arc::new(StdMutex::new(failure_prevention_state)),
+                    phase_rate_limiter: Arc::new(StdMutex::new(PhaseRateLimiter::default())),
+                },
+                session: SessionContext {
+                    conversation_state: Arc::new(Mutex::new(ConversationState::default())),
+                    session_manager: None,
+                    session_registry: None,
+                    audit_log: crate::governance::audit::ThreadSafeAuditLog::new_with_default_path(
+                        10_000,
                     ),
-                )),
-                verbose: _verbose,
-                evaluation_suite: Arc::new(StdMutex::new(
-                    crate::intelligence::evaluation::BenchmarkSuite::new(),
-                )),
-                schema_registry: Arc::new(StdMutex::new(
-                    crate::orchestration::task_schema::SchemaRegistry::new(),
-                )),
-                tenant_budget: Arc::new(StdMutex::new(
-                    crate::governance::hardening::TenantBudgetEnforcer::new(),
-                )),
-                optimizer_registry: Arc::new(StdMutex::new(
-                    crate::orchestration::workflow_optimizer::OptimizerRegistry::new(),
-                )),
+                    responses_api_store: Arc::new(StdMutex::new(std::collections::HashMap::new())),
+                },
+                rate_limiting: RateLimitContext {
+                    rate_limit_middleware: None,
+                    tenant_budget: Arc::new(StdMutex::new(
+                        crate::governance::hardening::TenantBudgetEnforcer::new(),
+                    )),
+                },
+                registries: RegistryContext {
+                    schema_registry: Arc::new(StdMutex::new(
+                        crate::orchestration::task_schema::SchemaRegistry::new(),
+                    )),
+                    optimizer_registry: Arc::new(StdMutex::new(
+                        crate::orchestration::workflow_optimizer::OptimizerRegistry::new(),
+                    )),
+                    promotion_registry: Arc::new(StdMutex::new(
+                        crate::orchestration::promotion_plugin::PromotionRegistry::new(),
+                    )),
+                    evaluation_suite: Arc::new(StdMutex::new(
+                        crate::intelligence::evaluation::BenchmarkSuite::new(),
+                    )),
+                    fork_registry: Arc::new(StdMutex::new(
+                        crate::orchestration::fork_registry::ForkRegistry::new(
+                            crate::orchestration::fork_registry::ForkConfig::default(),
+                        ),
+                    )),
+                },
+                persistence: PersistenceContext {
+                    memory_store: Arc::new(Mutex::new(MemoryStore::new(MemoryPolicy::default()))),
+                    artifact_ledger: Arc::new(StdMutex::new(ArtifactLedger::new(
+                        config_path.as_deref().map(Path::new),
+                    ))),
+                    task_graph_store: None,
+                },
                 prompt_assembler: crate::orchestration::prompt_layers::PromptAssembler,
-                promotion_registry: Arc::new(StdMutex::new(
-                    crate::orchestration::promotion_plugin::PromotionRegistry::new(),
-                )),
+                prompt_manager: crate::acp::r#impl::request::prompts_pack::PromptManager::new(
+                    std::path::PathBuf::from("./prompts"),
+                ),
+                verbose: _verbose,
                 output: Arc::new(Mutex::new(
                     Box::new(tokio::io::stdout()) as Box<dyn tokio::io::AsyncWrite + Send + Unpin>
                 )),
                 shutdown_notify: Arc::new(Notify::new()),
-                responses_api_store: Arc::new(StdMutex::new(std::collections::HashMap::new())),
-                task_graph_store: None,
-                prompt_manager: crate::acp::r#impl::request::prompts_pack::PromptManager::new(
-                    std::path::PathBuf::from("./prompts"),
-                ),
-                session_manager: None,
                 skill_market_registry: None,
-                rate_limit_middleware: None,
-                audit_log: crate::governance::audit::ThreadSafeAuditLog::new_with_default_path(
-                    10_000,
-                ),
-                tool_registry: Arc::new(crate::orchestration::tool::ToolRegistry::new()),
                 drain_guard: crate::acp::server::DrainGuard::default(),
-                session_registry: None,
+                tool_registry: Arc::new(crate::orchestration::tool::ToolRegistry::new()),
                 websocket_hub: None,
                 multimodal_processor: Some(crate::multimodal::MultimodalProcessor::default()),
             };
@@ -695,7 +706,8 @@ fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
     if server.runtime_config.user_auth_enabled {
         use crate::acp::r#impl::session::{AuthConfig, SessionManager};
         let auth_config = AuthConfig::from(&server.runtime_config);
-        server.session_manager = Some(Arc::new(SessionManager::with_auth_config(auth_config)));
+        server.session.session_manager =
+            Some(Arc::new(SessionManager::with_auth_config(auth_config)));
     }
 
     // Wire dual-level task scheduler (ARCH-02): create the scheduler and
@@ -745,7 +757,7 @@ fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
 
     // Wire the new modules' state from CapabilityBus into the server's
     // standalone fields so process_chat_request can access them directly.
-    server.schema_registry = Arc::clone(
+    server.registries.schema_registry = Arc::clone(
         &server
             .governance_deps
             .capability_bus
@@ -753,7 +765,7 @@ fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
             .map(|cb| Arc::clone(&cb.schema_registry))
             .unwrap_or_default(),
     );
-    server.tenant_budget = Arc::clone(
+    server.rate_limiting.tenant_budget = Arc::clone(
         &server
             .governance_deps
             .capability_bus
@@ -766,14 +778,18 @@ fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
     // the budget enforcer does not reject every request with "no quota
     // configured for tenant 'default-tenant'" (F-GAP-08).
     if server.runtime_config.user_auth_enabled {
-        let mut budget = server.tenant_budget.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("tenant_budget lock poisoned in wire_server");
-            poisoned.into_inner()
-        });
+        let mut budget = server
+            .rate_limiting
+            .tenant_budget
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("tenant_budget lock poisoned in wire_server");
+                poisoned.into_inner()
+            });
         budget.auto_provision_default(&server.runtime_config);
     }
 
-    server.optimizer_registry = Arc::clone(
+    server.registries.optimizer_registry = Arc::clone(
         &server
             .governance_deps
             .capability_bus
@@ -802,7 +818,14 @@ fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
     ));
 
     // Start WebSocket heartbeat and wire broadcast fn.
-    // new_acp_server is sync, so wrap the one-time async setup in block_in_place.
+    //
+    // R6 (ARCH-07): wire_server() is called from new_acp_server(), which is
+    // intentionally synchronous — it constructs an AcpServer from builder and
+    // config, not from an async context.  The WebSocket heartbeat is a one-time
+    // async setup step that must complete before the server starts, so we wrap
+    // it in block_in_place + block_on to run it on the current thread without
+    // requiring the caller to be in an async context.  tokio::spawn would race
+    // with subsequent synchronous wiring (session_registry assignment below).
     // Use try_current() to avoid panicking if no runtime is present (GAP-B58-C07).
     {
         let handle = match tokio::runtime::Handle::try_current() {
@@ -823,7 +846,7 @@ fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
         });
     }
 
-    server.session_registry = Some(session_registry);
+    server.session.session_registry = Some(session_registry);
     server.websocket_hub = Some(ws_hub);
 
     // ── Federated learning initializer (activated, formerly BLUE2 / F-GAP-19) ────

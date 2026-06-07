@@ -239,7 +239,7 @@ fn collect_agent_outputs(
 
     // ── TenantBudgetEnforcer record usage (F-GAP-08) ───────────────────
     {
-        let mut budget = server.tenant_budget.lock().unwrap_or_else(|poisoned| {
+        let mut budget = server.rate_limiting.tenant_budget.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("tenant_budget lock poisoned in collect_agent_outputs");
             poisoned.into_inner()
         });
@@ -283,7 +283,7 @@ fn build_response_metadata(
         };
         let latency_ms = elapsed as f64;
         let cost_score = (used_tokens as f64 / 100_000.0).min(1.0);
-        let reg = server.promotion_registry.lock().unwrap_or_else(|poisoned| {
+        let reg = server.registries.promotion_registry.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("promotion_registry lock poisoned in build_response_metadata");
             poisoned.into_inner()
         });
@@ -300,7 +300,7 @@ fn build_response_metadata(
 
     // ── OptimizerRegistry recommendations (ARCH-11) ────────────────────
     let optimizer_recommendations: Vec<Value> = {
-        let reg = server.optimizer_registry.lock().unwrap_or_else(|poisoned| {
+        let reg = server.registries.optimizer_registry.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("optimizer_registry lock poisoned in build_response_metadata");
             poisoned.into_inner()
         });
@@ -380,7 +380,7 @@ fn build_response_metadata(
 
     // ── ForkRegistry cleanup (ARCH-05) ─────────────────────────────────
     let fork_id = {
-        let fr = server.fork_registry.lock().unwrap_or_else(|poisoned| {
+        let fr = server.registries.fork_registry.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("fork_registry lock poisoned in build_response_metadata");
             poisoned.into_inner()
         });
@@ -401,7 +401,7 @@ fn build_response_metadata(
 
     // ── Evaluation Suite scoring (activated, formerly F-GAP-06) ────────
     let evaluation_results: Vec<Value> = {
-        let suite = server.evaluation_suite.lock().unwrap_or_else(|poisoned| {
+        let suite = server.registries.evaluation_suite.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("evaluation_suite lock poisoned in build_response_metadata");
             poisoned.into_inner()
         });

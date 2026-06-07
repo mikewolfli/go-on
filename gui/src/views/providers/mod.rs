@@ -1,3 +1,16 @@
+//! Providers view — listing, editing, catalog, and Copilot OAuth.
+//!
+//! This module has been decomposed into sub-modules:
+//! - `list` — provider name constants and model suggestions
+//! - `editor` — provider editing form helpers
+//! - `catalog` — provider catalog fetched from backend RPC
+//!
+//! TODO (BLUE65): Migrate rendering logic into these sub-modules.
+
+pub mod catalog;
+pub mod editor;
+pub mod list;
+
 use crate::backend::{BackendClient, ProviderCapabilityModel};
 use crate::config::{save_app_config, AppConfig, ProviderConfig};
 use crate::i18n::I18n;

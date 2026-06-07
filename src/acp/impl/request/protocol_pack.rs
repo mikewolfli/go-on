@@ -809,7 +809,7 @@ pub(super) async fn handle_session_close(
         let mut state = acp_session_state().lock().await;
         state.remove(session_id);
         // B51-36: Evict tenant rate limiter state on session close.
-        if let Some(ref limiter) = server.rate_limit_middleware {
+        if let Some(ref limiter) = server.rate_limiting.rate_limit_middleware {
             limiter.evict_tenant(session_id);
         }
     }
@@ -995,7 +995,7 @@ pub(super) async fn handle_logout(
     // B51-36: Evict tenant rate limiter state on logout if session info is present.
     if let Some(session_id) = params.get("sessionId").and_then(Value::as_str) {
         if !session_id.is_empty() {
-            if let Some(ref limiter) = server.rate_limit_middleware {
+            if let Some(ref limiter) = server.rate_limiting.rate_limit_middleware {
                 limiter.evict_tenant(session_id);
             }
         }
@@ -2022,6 +2022,7 @@ pub(super) async fn handle_phase(
     _trace: &RequestTraceContext,
 ) -> Result<()> {
     let rate_limiter = server
+        .resilience
         .phase_rate_limiter
         .lock()
         .map(|guard| {
@@ -2044,6 +2045,7 @@ pub(super) async fn handle_phase(
         });
 
     let inflight = server
+        .resilience
         .inflight_limiter
         .lock()
         .map(|guard| {

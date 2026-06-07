@@ -69,7 +69,7 @@ pub async fn probe_agent_runtime_readiness(
     agent_name: &str,
     timeout_duration: Duration,
 ) -> AgentRuntimeReadiness {
-    let Some(agent) = config.agents.get(agent_name) else {
+    let Some(agent) = config.agents().get(agent_name) else {
         return AgentRuntimeReadiness::Ready;
     };
     for key in [
@@ -229,8 +229,11 @@ mod tests {
 
         let config = AppConfig {
             schema_version: "1.0.0".to_string(),
-            default_phase: "coding".to_string(),
-            agents,
+            provider: crate::core::config::types::ProviderConfig {
+                default_phase: "coding".to_string(),
+                agents,
+                role_registry: HashMap::new(),
+            },
             flow: FlowConfig {
                 name: "coding".to_string(),
                 phases: vec!["coding".to_string()],
@@ -241,12 +244,15 @@ mod tests {
             cache: None,
             vector: None,
             autotune: None,
-            model_selection_mode: "auto".to_string(),
+            security: crate::core::config::types::SecurityConfig::default(),
+            feature: crate::core::config::types::FeatureConfig {
+                model_selection_mode: "auto".to_string(),
+                ..Default::default()
+            },
             compliance: None,
             startup_context: None,
             scheduler: None,
             reputation: None,
-            role_registry: HashMap::new(),
         };
 
         let readiness =

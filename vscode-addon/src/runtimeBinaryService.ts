@@ -26,6 +26,25 @@ import * as tar from "tar";
 // When null (the default), verification relies solely on checksums.txt
 // downloaded from the same release. This is better than no verification,
 // but an attacker who can MITM the download can also forge checksums.txt.
+//
+// SECURITY GAP (TODO): Signature verification
+// =============================================
+// Current verification uses SHA-256 hashes only. There is no cryptographic
+// signature validation (e.g., GPG, minisign, or sigstore). This means:
+//
+//   1. An attacker who compromises the GitHub release or the CDN can replace
+//      both the binary AND checksums.txt, making the verification ineffective.
+//   2. There is no chain of trust — we validate integrity but NOT authenticity.
+//
+// RECOMMENDED MITIGATION:
+//   - Publish a detached GPG signature (`.asc` file) alongside each release.
+//   - Embed the project's public key in this extension.
+//   - Before extracting the archive, verify the signature using a library
+//     such as `openpgpjs` (https://openpgpjs.org/).
+//   - Fall back to checksum-only verification if the signature file is
+//     unavailable (graceful degradation for older releases).
+//
+// See: https://docs.github.com/en/repositories/releasing-projects-and-archives/managing-releases-in-a-repository#signing-releases
 const TRUSTED_RUNTIME_SHA256: string | null = null;
 
 export interface RuntimeResolution {

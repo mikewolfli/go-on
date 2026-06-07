@@ -3,20 +3,19 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 import { i18n, MessageKeys } from "./i18n";
-import { asRecord } from "./utils";
+import { asRecord, getErrorMessage as _getErrorMessage } from "./utils";
 
-interface RpcCommandRegistryDeps {
+export interface RpcCommandRegistryDeps {
   isRunning: () => boolean;
   sendRequest: (_method: string, _params?: unknown) => Promise<unknown>;
 }
 
-function asArray(value: unknown): unknown[] {
+export function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
+/** Re-exported from utils.ts for backward compatibility. */
+export const getErrorMessage = _getErrorMessage;
 
 /**
  * Safely serialize a value to JSON, falling back to readable representation
@@ -25,8 +24,8 @@ function getErrorMessage(error: unknown): string {
 function safeStringify(value: unknown): string {
   try {
     return JSON.stringify(value);
-  } catch {
-    // Circular reference or other serialization issue
+  } catch (err) {
+    console.warn("[rpcCommandRegistry] safeStringify failed:", err);
     try {
       // Use a replacer that tracks visited objects
       const seen = new WeakSet<object>();

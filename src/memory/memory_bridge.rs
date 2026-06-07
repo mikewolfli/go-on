@@ -20,8 +20,8 @@
 //! `MemoryPersistence::auto_migrate()` every 5 minutes.
 
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
 use std::time::Duration;
+use tokio::sync::Mutex;
 
 use tokio_util::sync::CancellationToken;
 
@@ -152,18 +152,12 @@ pub fn persist_store(persistence: &MemoryPersistence, entry: CanonicalEntry) -> 
 ///
 /// Bridge API for coordinated dual-store (memory + persistence, wired into production flow).
 pub fn bridge_store(
-    memory_store: &StdMutex<MemoryStore>,
+    memory_store: &Mutex<MemoryStore>,
     persistence: &MemoryPersistence,
     entry: CanonicalEntry,
 ) -> anyhow::Result<()> {
     // Step 1: in-memory store
-    let mut store = memory_store.lock().unwrap_or_else(|poisoned| {
-        tracing::warn!(
-            target = "memory_bridge",
-            "MemoryStore mutex poisoned, recovering"
-        );
-        poisoned.into_inner()
-    });
+    let mut store = memory_store.blocking_lock();
     store.store(entry.clone());
 
     // Step 2: persistence (conversion via `From` impl)
@@ -184,18 +178,12 @@ pub fn bridge_store(
 /// Returns an error if `auto_migrate()` fails.  The in-memory promotion will
 /// still have been applied.
 pub fn bridge_promote(
-    memory_store: &StdMutex<MemoryStore>,
+    memory_store: &Mutex<MemoryStore>,
     persistence: &MemoryPersistence,
 ) -> anyhow::Result<MemoryPromotionReport> {
     // Step 1: promote in-memory classes
     let report = {
-        let mut store = memory_store.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!(
-                target = "memory_bridge",
-                "MemoryStore mutex poisoned, recovering"
-            );
-            poisoned.into_inner()
-        });
+        let mut store = memory_store.blocking_lock();
         store.promote()
     };
 
@@ -266,7 +254,7 @@ mod tests {
 
     #[test]
     fn test_bridge_store_and_promote() {
-        let store = StdMutex::new(MemoryStore::new(MemoryPolicy::default()));
+        let store = Mutex::new(MemoryStore::new(MemoryPolicy::default()));
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("warm.db");
         let cold_path = tmp.path().join("cold");

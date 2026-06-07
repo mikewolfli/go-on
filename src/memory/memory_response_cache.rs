@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Mutex as StdMutex;
+use tokio::sync::Mutex;
 
 use crate::acp::prelude::now_ts;
 
@@ -11,16 +11,13 @@ pub(crate) struct MemoryCachedResponse {
 
 #[derive(Debug, Default)]
 pub struct MemoryResponseCache {
-    inner: StdMutex<HashMap<String, MemoryCachedResponse>>,
+    inner: Mutex<HashMap<String, MemoryCachedResponse>>,
 }
 
 impl MemoryResponseCache {
     pub(crate) fn get(&self, key: &str) -> Option<MemoryCachedResponse> {
         let now = now_ts();
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned in MemoryResponseCache::get: recovering");
-            poisoned.into_inner()
-        });
+        let mut guard = self.inner.blocking_lock();
         // Only evict the requested key if expired; bulk cleanup happens in purge_expired().
         if let Some(entry) = guard.get(key) {
             if entry.expires_at <= now {
@@ -34,20 +31,14 @@ impl MemoryResponseCache {
 
     pub(crate) fn purge_expired(&self) -> usize {
         let now = now_ts();
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned in MemoryResponseCache::purge_expired: recovering");
-            poisoned.into_inner()
-        });
+        let mut guard = self.inner.blocking_lock();
         let before = guard.len();
         guard.retain(|_, entry| entry.expires_at > now);
         before.saturating_sub(guard.len())
     }
 
     pub(crate) fn clear_all(&self) -> usize {
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned in MemoryResponseCache::clear_all: recovering");
-            poisoned.into_inner()
-        });
+        let mut guard = self.inner.blocking_lock();
         let removed = guard.len();
         guard.clear();
         removed
@@ -55,7 +46,7 @@ impl MemoryResponseCache {
 
     pub(crate) fn active_entries(&self) -> usize {
         self.purge_expired();
-        self.inner.lock().map(|guard| guard.len()).unwrap_or(0)
+        self.inner.blocking_lock().len()
     }
 
     pub(crate) fn put(
@@ -70,10 +61,7 @@ impl MemoryResponseCache {
         }
 
         let expires_at = now_ts() + ttl_seconds as i64;
-        let mut guard = self.inner.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned in MemoryResponseCache::put: recovering");
-            poisoned.into_inner()
-        });
+        let mut guard = self.inner.blocking_lock();
         guard.insert(
             key,
             MemoryCachedResponse {

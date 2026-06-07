@@ -79,20 +79,26 @@ mod test_suite {
 
         let _config = AppConfig {
             schema_version: "1.0.0".to_string(),
-            default_phase: default_phase.to_string(),
-            agents,
+            provider: crate::core::config::types::ProviderConfig {
+                default_phase: default_phase.to_string(),
+                agents,
+                role_registry: HashMap::new(),
+            },
             flow,
             phases: HashMap::new(),
             runtime: None,
             cache: None,
             vector: Some(vector_config_fixture()),
             autotune: None,
-            model_selection_mode: "auto".to_string(),
+            security: crate::core::config::types::SecurityConfig::default(),
+            feature: crate::core::config::types::FeatureConfig {
+                model_selection_mode: "auto".to_string(),
+                ..Default::default()
+            },
             compliance: None,
             startup_context: None,
             scheduler: None,
             reputation: None,
-            role_registry: HashMap::new(),
         };
 
         // Create server using builder
@@ -109,7 +115,7 @@ mod test_suite {
         let server = phase_inference_server("coding", &["coding", "review"]);
 
         // Verify conversation state is initialized and empty
-        let state = server.conversation_state.blocking_lock();
+        let state = server.session.conversation_state.blocking_lock();
         assert!(state.checkpoints.is_empty());
         assert!(state.branch_heads.is_empty());
     }
@@ -140,7 +146,7 @@ mod test_suite {
         assert_eq!(checkpoint.messages.len(), 1);
         assert!(!checkpoint.checkpoint_id.is_empty());
 
-        let state = server.conversation_state.blocking_lock();
+        let state = server.session.conversation_state.blocking_lock();
         assert_eq!(state.checkpoints.len(), 1);
         assert_eq!(state.checkpoints[0].checkpoint_id, checkpoint.checkpoint_id);
     }
@@ -221,7 +227,7 @@ mod test_suite {
         // Use adaptive configuration
         let adaptive_config = AdaptiveConfig::auto_detect();
         let config = adaptive_config.to_app_config();
-        assert_eq!(config.model_selection_mode, "adaptive");
+        assert_eq!(config.model_selection_mode(), "adaptive");
         assert!(config.phases.contains_key("coding"));
 
         let builder = ServerBuilder::new();

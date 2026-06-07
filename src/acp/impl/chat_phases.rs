@@ -58,8 +58,7 @@ use crate::intelligence::token_cache::{
     estimate_messages_token_count, messages_to_text, ContextLengthClass,
 };
 use crate::observability::performance::record_global_operation;
-#[allow(deprecated)] // TODO: migrate to crate::orchestration::core_dag
-use crate::orchestration::dag_executor::TaskContext;
+use crate::orchestration::core_dag::TaskContext;
 use crate::orchestration::flow::ResolvedPhase;
 use crate::orchestration::mode::{resolve_mode_runtime, ModeKind};
 use crate::orchestration::multi_agent_pipeline::{AgentAssignment, MultiAgentPipeline};
@@ -597,6 +596,7 @@ pub(crate) async fn act_phase(
     if autonomy_loop_executed {
         let success = !response_text.is_empty() && last_err.is_none();
         server
+            .resilience
             .hyper_resilience
             .record_execution(&selected_agent, success)
             .await;
@@ -690,6 +690,7 @@ pub(crate) async fn act_phase(
         // Error handling
         // BLUE56-GAP-C04: Record execution in hyper-resilience engine before error handling
         server
+            .resilience
             .hyper_resilience
             .record_execution(
                 &selected_agent,
@@ -767,7 +768,7 @@ pub(crate) async fn act_phase(
                     .map(|mut s| s.forced_agent_by_phase.remove(&resolve_out.phase_name));
             }
         }
-        let _ = server.online_controller.lock().map(|mut oc| {
+        let _ = server.resilience.online_controller.lock().map(|mut oc| {
             oc.record_phase_outcome(
                 &resolve_out.phase_name,
                 true,
@@ -777,6 +778,7 @@ pub(crate) async fn act_phase(
 
         // BLUE56-GAP-C04: Record fallback/vote execution in hyper-resilience engine
         server
+            .resilience
             .hyper_resilience
             .record_execution(
                 &selected_agent,
@@ -1129,6 +1131,7 @@ async fn handle_execution_errors(
                         .unwrap_or(false)
             });
         let _ = server
+            .rate_limiting
             .tenant_budget
             .lock()
             .map(|mut b| b.record_usage(tenant_id, 0, 0));
@@ -1148,11 +1151,12 @@ async fn handle_execution_errors(
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false)
             });
-        let _ = server.online_controller.lock().map(|mut oc| {
+        let _ = server.resilience.online_controller.lock().map(|mut oc| {
             oc.record_phase_outcome(phase_name, false, started.elapsed().as_millis() as u64)
         });
         if all_quota {
             let _ = server
+                .rate_limiting
                 .tenant_budget
                 .lock()
                 .map(|mut b| b.record_usage(tenant_id, 0, 0));
@@ -1171,6 +1175,7 @@ async fn handle_execution_errors(
             })));
         }
         let _ = server
+            .rate_limiting
             .tenant_budget
             .lock()
             .map(|mut b| b.record_usage(tenant_id, 0, 0));
@@ -1483,8 +1488,11 @@ pub(crate) async fn reflect_phase(
             usefulness: 0.5,
             staleness: 0,
         };
-        let _ =
-            crate::memory::memory_bridge::bridge_store(&server.memory_store, mp.as_ref(), entry);
+        let _ = crate::memory::memory_bridge::bridge_store(
+            &server.persistence.memory_store,
+            mp.as_ref(),
+            entry,
+        );
     }
 
     // ── MemoryRetrievalEngine: index session memory (GAP-B52-13) ───────

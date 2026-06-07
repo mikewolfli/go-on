@@ -136,6 +136,7 @@ pub(super) async fn handle_data_lifecycle(
     };
 
     let maintenance = server
+        .resilience
         .maintenance_tracker
         .lock()
         .map(|guard| guard.snapshot())

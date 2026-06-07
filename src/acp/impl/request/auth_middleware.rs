@@ -38,7 +38,7 @@ impl AuthProvider for JsonRpcAuthProvider<'_> {
             return Ok(None);
         }
 
-        let session_manager = match server.session_manager.as_ref() {
+        let session_manager = match server.session.session_manager.as_ref() {
             Some(sm) => sm,
             None => {
                 return Err("Session manager not initialized".into());
@@ -79,7 +79,7 @@ impl AuthProvider for HttpAuthProvider<'_> {
             return Ok(None);
         }
 
-        let session_manager = match server.session_manager.as_ref() {
+        let session_manager = match server.session.session_manager.as_ref() {
             Some(sm) => sm,
             None => {
                 return Err("Session manager not initialized".into());
@@ -125,7 +125,7 @@ mod tests {
         server.runtime_config.user_auth_enabled = enabled;
         if enabled {
             let auth_cfg = AuthConfig::from(&server.runtime_config);
-            server.session_manager = Some(Arc::new(SessionManager::with_auth_config(auth_cfg)));
+            server.session.session_manager = Some(Arc::new(SessionManager::with_auth_config(auth_cfg)));
         }
         server
     }

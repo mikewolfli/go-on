@@ -1,6 +1,7 @@
 pub mod alert_severity;
 pub mod execution_recorder;
 pub mod http_client;
+pub mod image_attachment;
 pub mod lock_utils;
 pub mod metrics_helpers;
 pub mod protocol_mode;

@@ -81,8 +81,9 @@ async function runGoOnSecretCommand(
           if (!proc.killed) {
             proc.kill("SIGKILL");
           }
-        } catch {
-          // process already terminated
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn("[extension] forceKill failed:", err);
         }
       }, 1000);
     }, 10000);
@@ -458,62 +459,89 @@ async function updateRulesMarkdownFiles(
   return rulesDir;
 }
 
-let goOnManager: GoOnManager;
-let statusProvider: GoOnStatusProvider;
-let goOnOutput: vscode.OutputChannel;
-let approvalPanelProvider: ApprovalPanelProvider;
-let chatProvider: GoOnChatViewProvider;
-let settingsProvider: GoOnSettingsViewProvider;
-let runtimeBootstrapDeps: RuntimeBootstrapDeps;
+/**
+ * Encapsulates all module-level state in a single object so we avoid
+ * 7 mutable module-level variables (fixes BLUE65 V7).
+ */
+interface GoOnExtensionState {
+  manager: GoOnManager;
+  statusProvider: GoOnStatusProvider;
+  output: vscode.OutputChannel;
+  approvalPanel: ApprovalPanelProvider;
+  chat: GoOnChatViewProvider;
+  settings: GoOnSettingsViewProvider;
+  runtimeBootstrap: RuntimeBootstrapDeps;
+}
+
+// Single module-level state holder, initialized in activate()
+let extensionState: GoOnExtensionState | undefined;
+
+function getState(): GoOnExtensionState {
+  if (!extensionState) {
+    throw new Error(
+      "extensionState not initialized. activate() must be called first.",
+    );
+  }
+  return extensionState;
+}
 
 /**
  * Initialize the i18n system and log the current UI language.
  */
 function initI18n(): void {
   const currentLanguage = i18n.getCurrentLanguage();
-  goOnOutput.appendLine(`UI Language: ${currentLanguage}`);
+  getState().output.appendLine(`UI Language: ${currentLanguage}`);
 }
 
 /**
  * Register all webview view providers.
  */
 function registerViewProviders(context: vscode.ExtensionContext): void {
-  chatProvider = new GoOnChatViewProvider(
+  const state = getState();
+  const chat = new GoOnChatViewProvider(
     context.extensionUri,
-    goOnManager,
+    state.manager,
     context,
     async () => {
-      await prepareRuntimeAndStartFromChat(context, runtimeBootstrapDeps);
+      await prepareRuntimeAndStartFromChat(context, state.runtimeBootstrap);
     },
   );
-  settingsProvider = new GoOnSettingsViewProvider(
+  const settings = new GoOnSettingsViewProvider(
     context.extensionUri,
-    goOnManager,
+    state.manager,
     context,
   );
   const workflowProvider = new GoOnWorkflowViewProvider(
     context.extensionUri,
-    goOnManager,
+    state.manager,
     context,
   );
   const processFlowProvider = new GoOnProcessFlowViewProvider(
     context.extensionUri,
-    goOnManager,
+    state.manager,
     context,
   );
-  approvalPanelProvider = new ApprovalPanelProvider(
+  const approvalPanel = new ApprovalPanelProvider(
     context.extensionUri,
-    goOnManager,
+    state.manager,
   );
+
+  // Update extension state with view providers
+  extensionState = {
+    ...state,
+    approvalPanel,
+    chat,
+    settings,
+  };
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
       GoOnChatViewProvider.viewType,
-      chatProvider,
+      chat,
     ),
     vscode.window.registerWebviewViewProvider(
       GoOnSettingsViewProvider.viewType,
-      settingsProvider,
+      settings,
     ),
     vscode.window.registerWebviewViewProvider(
       GoOnWorkflowViewProvider.viewType,
@@ -525,7 +553,7 @@ function registerViewProviders(context: vscode.ExtensionContext): void {
     ),
     vscode.window.registerWebviewViewProvider(
       ApprovalPanelProvider.viewType,
-      approvalPanelProvider,
+      approvalPanel,
     ),
   );
 }
@@ -537,14 +565,19 @@ function registerCommands(
   context: vscode.ExtensionContext,
   statusMonitor: StatusMonitor,
 ): void {
+  const state = getState();
+
   context.subscriptions.push(
     vscode.commands.registerCommand("go-on.openConfigWizard", async () => {
-      await settingsProvider.showConfigWizard();
+      await state.settings.showConfigWizard();
     }),
   );
 
   context.subscriptions.push(
-    vscode.window.registerTreeDataProvider("go-on-status", statusProvider),
+    vscode.window.registerTreeDataProvider(
+      "go-on-status",
+      state.statusProvider,
+    ),
   );
 
   const coreCommands = registerCoreCommands({
@@ -558,13 +591,13 @@ function registerCommands(
       executablePath: string,
       cwd: string,
       protocolMode: string,
-    ) => goOnManager.start(configPath, executablePath, cwd, protocolMode),
-    stop: () => goOnManager.stop(),
-    isRunning: () => goOnManager.isRunning(),
+    ) => state.manager.start(configPath, executablePath, cwd, protocolMode),
+    stop: () => state.manager.stop(),
+    isRunning: () => state.manager.isRunning(),
     sendRequest: (method: string, params?: unknown) =>
-      goOnManager.sendRequest(method, params),
+      state.manager.sendRequest(method, params),
     setRuntimeEnvOverrides: (overrides: Record<string, string>) =>
-      goOnManager.setRuntimeEnvOverrides(overrides),
+      state.manager.setRuntimeEnvOverrides(overrides),
   });
 
   const viewCommands = registerViewCommands({
@@ -575,22 +608,22 @@ function registerCommands(
       await ensureGoOnBinary(workspaceRoot, config, context);
     },
     prepareRuntimeAfterChatOpen: async () =>
-      prepareRuntimeAndStartFromChat(context, runtimeBootstrapDeps),
-    isRunning: () => goOnManager.isRunning(),
-    stop: () => goOnManager.stop(),
+      prepareRuntimeAndStartFromChat(context, state.runtimeBootstrap),
+    isRunning: () => state.manager.isRunning(),
+    stop: () => state.manager.stop(),
     createSession: (sessionName: string) =>
-      chatProvider.createNewSession(sessionName),
+      state.chat.createNewSession(sessionName),
     switchSession: (sessionName: string) =>
-      chatProvider.switchSession(sessionName),
-    clearChat: () => chatProvider.clearChat(),
-    exportChat: () => chatProvider.exportChat(),
+      state.chat.switchSession(sessionName),
+    clearChat: () => state.chat.clearChat(),
+    exportChat: () => state.chat.exportChat(),
     sendRequest: (method: string, params?: unknown) =>
-      goOnManager.sendRequest(method, params),
+      state.manager.sendRequest(method, params),
   });
   const rpcCommands = registerRpcCommands({
-    isRunning: () => goOnManager.isRunning(),
+    isRunning: () => state.manager.isRunning(),
     sendRequest: (method: string, params?: unknown) =>
-      goOnManager.sendRequest(method, params),
+      state.manager.sendRequest(method, params),
   });
 
   // Refresh status monitor command (internal)
@@ -605,7 +638,7 @@ function registerCommands(
   const refreshStatusTreeCommand = vscode.commands.registerCommand(
     "go-on-status.refresh",
     () => {
-      statusProvider.refresh();
+      state.statusProvider.refresh();
     },
   );
 
@@ -754,9 +787,20 @@ function registerCommands(
 }
 
 export function activate(context: vscode.ExtensionContext) {
-  goOnOutput = vscode.window.createOutputChannel("Go-On");
-  context.subscriptions.push(goOnOutput);
-  goOnOutput.appendLine("Go-On extension activated");
+  const output = vscode.window.createOutputChannel("Go-On");
+  context.subscriptions.push(output);
+  output.appendLine("Go-On extension activated");
+
+  // Initialize extension state with output channel (other fields filled below)
+  extensionState = {
+    manager: undefined as unknown as GoOnManager,
+    statusProvider: undefined as unknown as GoOnStatusProvider,
+    output,
+    approvalPanel: undefined as unknown as ApprovalPanelProvider,
+    chat: undefined as unknown as GoOnChatViewProvider,
+    settings: undefined as unknown as GoOnSettingsViewProvider,
+    runtimeBootstrap: undefined as unknown as RuntimeBootstrapDeps,
+  };
 
   // Initialize i18n system
   initI18n();
@@ -772,12 +816,12 @@ export function activate(context: vscode.ExtensionContext) {
   async function updateConfigPath(): Promise<void> {
     const cfg = vscode.workspace.getConfiguration("go-on");
     const newPath = cfg.get<string>("configPath", "./config.toml");
-    goOnOutput.appendLine(`Config path updated: ${newPath}`);
+    output.appendLine(`Config path updated: ${newPath}`);
     try {
       await configManager.initialize(newPath);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      goOnOutput.appendLine(`warn: config manager re-init failed: ${errMsg}`);
+      output.appendLine(`warn: config manager re-init failed: ${errMsg}`);
     }
   }
 
@@ -785,32 +829,40 @@ export function activate(context: vscode.ExtensionContext) {
   (async () => {
     try {
       await configManager.initialize(configPath);
-      goOnOutput.appendLine("config manager initialized");
+      output.appendLine("config manager initialized");
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      goOnOutput.appendLine(`warn: config manager init failed: ${errMsg}`);
+      output.appendLine(`warn: config manager init failed: ${errMsg}`);
       void vscode.window.showWarningMessage(
         i18n.getMessage(MessageKeys.runtimeInitFailed, [errMsg]),
       );
     }
 
-    goOnManager = new GoOnManager();
-    goOnManager.setOutputChannel(goOnOutput);
+    const manager = new GoOnManager();
+    manager.setOutputChannel(output);
 
-    // status monitor and view providers must be created after goOnManager is initialized
-    const statusMonitor = new StatusMonitor(goOnManager);
+    // status monitor and view providers must be created after manager is initialized
+    const statusMonitor = new StatusMonitor(manager);
     context.subscriptions.push(statusMonitor);
 
-    statusProvider = new GoOnStatusProvider(goOnManager);
+    const statusProv = new GoOnStatusProvider(manager);
 
-    runtimeBootstrapDeps = {
+    const runtimeBootstrap: RuntimeBootstrapDeps = {
       ensureBinary: ensureGoOnBinary,
-      isRunning: () => goOnManager.isRunning(),
+      isRunning: () => manager.isRunning(),
       startCommandId: "go-on.start",
     };
 
+    // Initialize extension state with manager and runtime deps
+    extensionState = {
+      ...extensionState!,
+      manager,
+      statusProvider: statusProv,
+      runtimeBootstrap,
+    };
+
     // Initialize advanced edit provider
-    new GoOnAdvancedEditProvider(goOnManager, context);
+    new GoOnAdvancedEditProvider(manager, context);
 
     // Register webview providers
     registerViewProviders(context);
@@ -821,20 +873,19 @@ export function activate(context: vscode.ExtensionContext) {
     // Delayed check for provider readiness (warn user if API key is missing)
     const providerReadyTimer = setTimeout(async () => {
       try {
-        if (goOnManager) {
-          const backendRunning = goOnManager.isRunning();
-          if (!backendRunning) return;
-          const ready = await goOnManager.isAnyAiProviderReady();
-          if (!ready) {
-            const openSettingsLabel = i18n.getMessage(MessageKeys.openSettings);
-            const action = await vscode.window.showWarningMessage(
-              i18n.getMessage(MessageKeys.apiKeyMissing),
-              openSettingsLabel,
-              i18n.getMessage(MessageKeys.later),
-            );
-            if (action === openSettingsLabel) {
-              vscode.commands.executeCommand("go-on.openSettings");
-            }
+        const { manager: m } = getState();
+        const backendRunning = m.isRunning();
+        if (!backendRunning) return;
+        const ready = await m.isAnyAiProviderReady();
+        if (!ready) {
+          const openSettingsLabel = i18n.getMessage(MessageKeys.openSettings);
+          const action = await vscode.window.showWarningMessage(
+            i18n.getMessage(MessageKeys.apiKeyMissing),
+            openSettingsLabel,
+            i18n.getMessage(MessageKeys.later),
+          );
+          if (action === openSettingsLabel) {
+            vscode.commands.executeCommand("go-on.openSettings");
           }
         }
       } catch (err) {
@@ -859,8 +910,9 @@ export function activate(context: vscode.ExtensionContext) {
         try {
           await vscode.commands.executeCommand("go-on.openChat");
           await context.globalState.update("go-on.hasOpenedChatOnce", true);
-        } catch {
-          // Auto-open failed (e.g., binary not found) — don't mark as opened so it retries next time
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn("[extension] autoOpenChat failed:", err);
         }
       }, 300);
       context.subscriptions.push(
@@ -871,14 +923,14 @@ export function activate(context: vscode.ExtensionContext) {
     // Listen for workspace folder changes and re-evaluate config path
     context.subscriptions.push(
       vscode.workspace.onDidChangeWorkspaceFolders((event) => {
-        goOnOutput.appendLine(
+        output.appendLine(
           `Workspace folders changed: ${event.added.length} added, ${event.removed.length} removed`,
         );
         // Re-evaluate the config file path based on new workspace roots
         updateConfigPath();
       }),
     );
-  })().catch((err) => {
+  })().catch(async (err) => {
     const diagnosticData = {
       error: String(err),
       workspaceFolders: vscode.workspace.workspaceFolders?.map(
@@ -893,11 +945,72 @@ export function activate(context: vscode.ExtensionContext) {
       "Activation failed:",
       JSON.stringify(diagnosticData, null, 2),
     );
-    vscode.window.showErrorMessage(`go-on activation failed: ${err}`);
+
+    // Retry activation once after a short delay
+    const retryDelayMs = 2000;
+    output.appendLine(`Activation failed, retrying in ${retryDelayMs}ms...`);
+    await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+
+    try {
+      await (async () => {
+        // Re-run the inline activation block from above.
+        // The closure captures `context`, `output`, `configPath`, and `updateConfigPath`
+        // from the outer scope. We re-execute the init sequence inline.
+        const cfg = vscode.workspace.getConfiguration("go-on");
+        const retryConfigPath = cfg.get<string>("configPath", "./config.toml");
+        output.appendLine("Retrying activation...");
+
+        try {
+          await configManager.initialize(retryConfigPath);
+          output.appendLine("config manager initialized (retry)");
+        } catch (initErr) {
+          const initErrMsg =
+            initErr instanceof Error ? initErr.message : String(initErr);
+          output.appendLine(
+            `warn: config manager init failed (retry): ${initErrMsg}`,
+          );
+        }
+
+        const retryManager = new GoOnManager();
+        retryManager.setOutputChannel(output);
+
+        const retryStatusMonitor = new StatusMonitor(retryManager);
+        context.subscriptions.push(retryStatusMonitor);
+
+        const retryStatusProv = new GoOnStatusProvider(retryManager);
+
+        const retryRuntimeBootstrap: RuntimeBootstrapDeps = {
+          ensureBinary: ensureGoOnBinary,
+          isRunning: () => retryManager.isRunning(),
+          startCommandId: "go-on.start",
+        };
+
+        extensionState = {
+          ...extensionState!,
+          manager: retryManager,
+          statusProvider: retryStatusProv,
+          runtimeBootstrap: retryRuntimeBootstrap,
+        };
+
+        new GoOnAdvancedEditProvider(retryManager, context);
+        registerViewProviders(context);
+        registerCommands(context, retryStatusMonitor);
+
+        output.appendLine("Activation completed on retry.");
+      })();
+    } catch (retryErr) {
+      output.appendLine(`Activation retry also failed: ${retryErr}`);
+      vscode.window.showErrorMessage(
+        `go-on activation failed after retry: ${err}. ${retryErr}`,
+      );
+    }
   });
 }
 
 export function deactivate() {
-  if (goOnManager) goOnManager.stop();
-  approvalPanelProvider.dispose();
+  const state = extensionState;
+  if (state) {
+    if (state.manager) state.manager.stop();
+    if (state.approvalPanel) state.approvalPanel.dispose();
+  }
 }

@@ -292,7 +292,7 @@ mod adaptive {
     impl From<AppConfig> for super::super::types::AdaptiveConfig {
         fn from(config: AppConfig) -> Self {
             let mut available_providers: Vec<String> = config
-                .agents
+                .agents()
                 .values()
                 .filter_map(|agent| normalize_provider_name(&agent.agent_type))
                 .collect();
@@ -306,7 +306,7 @@ mod adaptive {
             super::super::types::AdaptiveConfig {
                 adaptive_mode: true,
                 minimal_config: MinimalConfig {
-                    default_phase: config.default_phase,
+                    default_phase: config.default_phase().to_string(),
                     available_providers,
                     enable_cache: config.cache.is_some(),
                     enable_vector_memory: config.vector.is_some(),
@@ -569,20 +569,26 @@ mod adaptive {
 
             AppConfig {
                 schema_version: "1.0.0".to_string(),
-                default_phase: self.minimal_config.default_phase.clone(),
-                agents,
+                provider: crate::core::config::types::ProviderConfig {
+                    default_phase: self.minimal_config.default_phase.clone(),
+                    agents,
+                    role_registry: HashMap::new(),
+                },
                 flow,
                 phases,
                 runtime: Some(RuntimeConfig::default()),
                 cache,
                 vector,
                 autotune: Some(super::super::autotune::default_autotune_config()),
-                model_selection_mode: "adaptive".to_string(),
+                security: crate::core::config::types::SecurityConfig::default(),
+                feature: crate::core::config::types::FeatureConfig {
+                    model_selection_mode: "adaptive".to_string(),
+                    ..Default::default()
+                },
                 compliance: None,
                 startup_context: None,
                 scheduler: None,
                 reputation: None,
-                role_registry: HashMap::new(),
             }
         }
     }

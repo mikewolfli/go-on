@@ -13,7 +13,7 @@ pub(super) async fn handle_debug_panel_get(
 }
 
 pub(super) async fn build_debug_panel_payload(server: &AcpServer) -> Value {
-    let state = server.conversation_state.lock().await;
+    let state = server.session.conversation_state.lock().await;
     let conversation_count = state
         .checkpoints
         .iter()

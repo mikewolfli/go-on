@@ -508,7 +508,7 @@ pub(super) fn metrics_errors_summary_payload(server: &AcpServer, params: &Value)
 }
 
 pub(super) async fn build_debug_panel_payload(server: &AcpServer) -> Value {
-    let state = server.conversation_state.lock().await;
+    let state = server.session.conversation_state.lock().await;
     let conversation_count = state
         .checkpoints
         .iter()
@@ -1167,7 +1167,7 @@ pub(super) fn provider_test_connection_payload(
         .map(std::path::Path::new)
         .and_then(|path| AppConfig::load(path).ok())
     {
-        for agent in cfg.agents.values() {
+        for agent in cfg.agents().values() {
             if agent.agent_type.eq_ignore_ascii_case(provider) {
                 if let Some(secret_ref) = agent.api_key_env.as_deref() {
                     if crate::agents::agent::inspect_secret_pool(secret_ref, secret_ref).is_ok() {

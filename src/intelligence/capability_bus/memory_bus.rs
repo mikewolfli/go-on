@@ -11,6 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, Mutex as StdMutex};
+use tokio::sync::Mutex as TokioMutex;
 
 use crate::cache::ResponseCache;
 use crate::memory_module::{MemoryPolicy, MemoryStore};
@@ -95,7 +96,7 @@ pub struct MemoryBus {
     /// Vector store reference (L3).
     vector_store: Option<Arc<VectorStore>>,
     /// In-memory memory store.
-    memory_store: Option<Arc<StdMutex<MemoryStore>>>,
+    memory_store: Option<Arc<TokioMutex<MemoryStore>>>,
     /// In-memory response cache (L1).
     memory_response_cache: Option<Arc<StdMutex<MemoryResponseCache>>>,
     /// Runtime profile / metrics.
@@ -109,7 +110,7 @@ impl MemoryBus {
     pub fn new(
         response_cache: Option<Arc<ResponseCache>>,
         vector_store: Option<Arc<VectorStore>>,
-        memory_store: Option<Arc<StdMutex<MemoryStore>>>,
+        memory_store: Option<Arc<TokioMutex<MemoryStore>>>,
         memory_response_cache: Option<Arc<StdMutex<MemoryResponseCache>>>,
     ) -> Self {
         Self {
@@ -135,7 +136,7 @@ impl MemoryBus {
                 Some(Arc::new(StdMutex::new(MemoryResponseCache::default())));
         }
         if self.memory_store.is_none() {
-            self.memory_store = Some(Arc::new(StdMutex::new(MemoryStore::new(
+            self.memory_store = Some(Arc::new(TokioMutex::new(MemoryStore::new(
                 MemoryPolicy::default(),
             ))));
         }
@@ -148,7 +149,7 @@ impl MemoryBus {
         &mut self,
         response_cache: Option<Option<Arc<ResponseCache>>>,
         vector_store: Option<Option<Arc<VectorStore>>>,
-        memory_store: Option<Option<Arc<StdMutex<MemoryStore>>>>,
+        memory_store: Option<Option<Arc<TokioMutex<MemoryStore>>>>,
         memory_response_cache: Option<Option<Arc<StdMutex<MemoryResponseCache>>>>,
     ) {
         if let Some(rc) = response_cache {
@@ -286,10 +287,7 @@ impl MemoryBus {
 
         // ---- In-memory MemoryStore (if available) ----
         if let Some(ref ms) = self.memory_store {
-            let mut guard = ms.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("memory_bus store lock poisoned, recovering");
-                poisoned.into_inner()
-            });
+            let mut guard = ms.blocking_lock();
             let entry = crate::memory_module::MemoryEntry {
                 id: key.to_string(),
                 class: crate::memory_module::MemoryClass::Episodic,
@@ -315,13 +313,7 @@ impl MemoryBus {
         }
 
         if let Some(ref ms) = self.memory_store {
-            let guard = match ms.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => {
-                    tracing::warn!("[B48] ms lock poisoned, recovering");
-                    poisoned.into_inner()
-                }
-            };
+            let guard = ms.blocking_lock();
             // Approximate total entry count by summing across all classes.
             use crate::memory_module::MemoryClass;
             let mut total: u32 = 0;
@@ -372,10 +364,7 @@ impl MemoryBus {
 
         // MemoryStore: run garbage collection.
         if let Some(ref ms) = self.memory_store {
-            let mut guard = ms.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("memory_bus gc lock poisoned, recovering");
-                poisoned.into_inner()
-            });
+            let mut guard = ms.blocking_lock();
             guard.gc();
         }
 
@@ -433,7 +422,9 @@ mod tests {
     fn make_test_bus() -> MemoryBus {
         // Create minimal backends for testing.
         let mrc = Arc::new(StdMutex::new(MemoryResponseCache::default()));
-        let ms = Arc::new(StdMutex::new(MemoryStore::new(MemoryPolicy::default())));
+        let ms = Arc::new(super::TokioMutex::new(MemoryStore::new(
+            MemoryPolicy::default(),
+        )));
 
         // L2 and L3 are left as None to test L1-only path.
         MemoryBus::new(None, None, Some(ms), Some(mrc))

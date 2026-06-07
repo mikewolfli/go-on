@@ -82,12 +82,12 @@ fn detect_ai_onboarding_state(config_path: &Path) -> Result<Option<AiOnboardingS
         Err(_) => return Ok(Some(AiOnboardingState::InvalidConfig)),
     };
 
-    if config.agents.is_empty() {
+    if config.agents().is_empty() {
         return Ok(Some(AiOnboardingState::NoAgents));
     }
 
     let ready = config
-        .agents
+        .agents()
         .keys()
         .filter(|name| is_agent_env_ready(&config, name))
         .count();

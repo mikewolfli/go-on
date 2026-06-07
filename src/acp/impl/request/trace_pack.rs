@@ -4,6 +4,7 @@ use crate::acp::helpers::metrics::RuntimeGaugeSnapshot;
 static TRACE_EVENTS: OnceLock<StdMutex<Vec<TraceEvent>>> = OnceLock::new();
 static ERROR_RESPONSE_IDS: OnceLock<StdMutex<HashSet<String>>> = OnceLock::new();
 static TOOL_BUDGET_TRACKERS: OnceLock<StdMutex<HashMap<String, BudgetTracker>>> = OnceLock::new();
+#[allow(dead_code)] // F-GAP: reserved for idempotency resume
 static TASK_EXECUTE_IDEMPOTENCY_CACHE: OnceLock<StdMutex<IdempotencyCache>> = OnceLock::new();
 static MCP_AUDIT_LOGGER: OnceLock<AuditLogger> = OnceLock::new();
 static PUA_FEEDBACK_COLLECTOR: OnceLock<PuaFeedbackCollector> = OnceLock::new();
@@ -25,6 +26,7 @@ pub(super) fn tool_budget_trackers() -> &'static StdMutex<HashMap<String, Budget
     TOOL_BUDGET_TRACKERS.get_or_init(|| StdMutex::new(HashMap::new()))
 }
 
+#[allow(dead_code)] // F-GAP: reserved for idempotency resume
 pub(super) fn task_execute_idempotency_cache() -> &'static StdMutex<IdempotencyCache> {
     TASK_EXECUTE_IDEMPOTENCY_CACHE
         .get_or_init(|| StdMutex::new(IdempotencyCache::new(Duration::from_secs(300))))
@@ -86,6 +88,7 @@ pub(super) fn build_runtime_gauge_snapshot(server: &AcpServer) -> RuntimeGaugeSn
         })
         .unwrap_or((0, 0));
     let breaker_snapshots = server
+        .resilience
         .circuit_breakers
         .lock()
         .map(|guard| guard.snapshots())
@@ -100,6 +103,7 @@ pub(super) fn build_runtime_gauge_snapshot(server: &AcpServer) -> RuntimeGaugeSn
         .count() as u64;
     let circuit_tracked_agents = breaker_snapshots.len() as u64;
     let rate_limiter_tracked_phases = server
+        .resilience
         .phase_rate_limiter
         .lock()
         .map(|guard| guard.tracked_phases() as u64)
@@ -218,6 +222,7 @@ pub(super) fn trace_metrics_snapshot(server: &AcpServer) -> Value {
 
 pub(super) fn clone_artifact_ledger(server: &AcpServer) -> ArtifactLedger {
     server
+        .persistence
         .artifact_ledger
         .lock()
         .map(|guard| guard.clone())

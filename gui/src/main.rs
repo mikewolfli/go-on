@@ -6,12 +6,16 @@
 mod app;
 mod backend;
 mod config;
+mod config_store;
+mod connection;
+mod crash_recovery;
 mod fs_util;
 mod i18n;
 mod keyring_util;
 #[cfg(test)]
 mod tests;
 mod theme;
+mod view_registry;
 mod views;
 mod widgets;
 

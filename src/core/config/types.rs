@@ -11,7 +11,145 @@ fn default_schema_version() -> String {
     "1.0.0".to_string()
 }
 
+// ---------------------------------------------------------------------------
+// Sub-configs (A7: split AppConfig into logical sections)
+// ---------------------------------------------------------------------------
+
+/// Provider-related configuration fields.
+///
+/// Flattened into [`AppConfig`] so existing config files with
+/// `agents.*`, `default_phase`, and `role_registry.*` keys continue
+/// to deserialize without nesting changes.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ProviderConfig {
+    /// Default phase to use when none is specified
+    #[serde(default)]
+    pub default_phase: String,
+    /// Map of agent configurations
+    #[serde(default)]
+    pub agents: HashMap<String, AgentConfig>,
+    /// Custom role registry loaded from `[role_registry.*]`
+    #[serde(default)]
+    pub role_registry: HashMap<String, RoleDefinition>,
+}
+
+/// Security / governance configuration fields.
+///
+/// Extracted from the original monolithic `RuntimeConfig` so that
+/// security-sensitive settings are grouped and independently
+/// documented.  Flattened into [`AppConfig`] for config-file
+/// backward compatibility.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SecurityConfig {
+    /// Whether inbound entry auth is enabled at gateway/edge for exposed HTTP endpoints
+    #[serde(default)]
+    pub entry_auth_enabled: bool,
+    /// Env var name holding entry API key used for HTTP ingress auth
+    #[serde(default = "super::defaults::default_runtime_entry_auth_api_key_env")]
+    pub entry_auth_api_key_env: String,
+    /// Entry layer source-based rate limit (requests per minute)
+    #[serde(default = "super::defaults::default_runtime_entry_rate_limit_rpm")]
+    pub entry_rate_limit_rpm: u64,
+    /// Entry layer token bucket burst capacity per source
+    #[serde(default = "super::defaults::default_runtime_entry_rate_limit_burst")]
+    pub entry_rate_limit_burst: u64,
+    /// Master switch for user-level authentication.
+    /// When `false`, all requests are treated as admin (single-user mode).
+    #[serde(default)]
+    pub user_auth_enabled: bool,
+    /// HMAC secret for signing user authentication tokens.
+    #[serde(default = "super::defaults::default_runtime_user_auth_token_secret")]
+    pub user_auth_token_secret: String,
+    /// Env var name holding the HMAC secret for user auth tokens.
+    #[serde(default = "super::defaults::default_runtime_user_auth_token_secret_env")]
+    pub user_auth_token_secret_env: String,
+    /// Token TTL in seconds for user authentication tokens (default: 86400 = 24h).
+    #[serde(default = "super::defaults::default_runtime_user_auth_token_ttl_seconds")]
+    pub user_auth_token_ttl_seconds: u64,
+    /// Enable request signature verification for incoming JSON-RPC requests.
+    #[serde(default)]
+    pub request_signing_enabled: bool,
+    /// Base64-encoded Ed25519 public key (32 bytes) for request signature verification.
+    #[serde(default)]
+    pub request_signing_public_key: String,
+    /// HMAC shared secret for request signature verification (plaintext).
+    #[serde(default)]
+    pub request_signing_hmac_secret: String,
+    /// Enable mTLS for the ACP HTTP listener.
+    #[serde(default)]
+    pub mtls_enabled: bool,
+    /// Path to the CA certificate file for mTLS.
+    #[serde(default)]
+    pub mtls_ca_cert_path: String,
+    /// Path to the server certificate file for mTLS.
+    #[serde(default)]
+    pub mtls_server_cert_path: String,
+    /// Path to the server private key file for mTLS.
+    #[serde(default)]
+    pub mtls_server_key_path: String,
+    /// Whether to require client certificates in mTLS handshake.
+    #[serde(default)]
+    pub mtls_require_client_cert: bool,
+    /// Comma-separated list of allowed client certificate CNs.
+    /// Empty means any valid client cert is accepted.
+    #[serde(default)]
+    pub mtls_allowed_cns: String,
+}
+
+/// Feature-flag configuration fields.
+///
+/// Extracted from the original monolithic `RuntimeConfig` and
+/// `AppConfig` so that feature flags are grouped in one place.
+/// Flattened into [`AppConfig`] for config-file backward compatibility.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct FeatureConfig {
+    /// Enable governance subsystem (policy enforcement, RBAC, budget, etc.).
+    #[serde(default = "super::defaults::default_true")]
+    pub governance_enabled: bool,
+    /// Governance policy mode: "active" (enforce), "audit" (log-only), "disabled".
+    #[serde(default)]
+    pub governance_policy_mode: String,
+    /// Enable builtin skills at server startup.
+    #[serde(default = "super::defaults::default_runtime_skills_enabled")]
+    pub skills_enabled: bool,
+    /// Enable skills import APIs.
+    #[serde(default)]
+    pub skills_import_enabled: bool,
+    /// Allowed source prefixes for importing skills.
+    #[serde(default)]
+    pub skills_allowed_sources: Vec<String>,
+    /// Require import requests to provide expected SHA256 digest.
+    #[serde(default = "super::defaults::default_runtime_skills_require_sha256")]
+    pub skills_require_sha256: bool,
+    /// Allow floating refs when importing from GitHub.
+    #[serde(default)]
+    pub skills_allow_floating_ref: bool,
+    /// Cache directory for skill manifests and index.
+    #[serde(default = "super::defaults::default_runtime_skills_cache_dir")]
+    pub skills_cache_dir: String,
+    /// Model selection mode for automatic selection (Phase 10+)
+    #[serde(default)]
+    pub model_selection_mode: String,
+    /// Enable DAG-driven tool execution in autonomy loop.
+    #[serde(default)]
+    pub enable_dag_execution: bool,
+    /// Enable adaptive agent reroute on weak rounds.
+    #[serde(default = "super::defaults::default_true")]
+    pub enable_agent_reroute: bool,
+    /// Enable metacognitive + world-model feedback hooks.
+    #[serde(default = "super::defaults::default_true")]
+    pub enable_metacognitive_feedback: bool,
+    /// Enable Delphi-method debate voting in rationalize_decision.
+    #[serde(default)]
+    pub enable_delphi_debate: bool,
+}
+
 /// Application configuration structure
+///
+/// The provider, security, and feature sub-configs are `#[serde(flatten)]`ed
+/// so that existing TOML/JSON config files with top-level keys like
+/// `agents.*`, `entry_auth_enabled`, `governance_enabled`, etc. continue
+/// to deserialize without nesting changes (A7 backward-compat requirement).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 #[derive(Default)]
@@ -19,10 +157,9 @@ pub struct AppConfig {
     /// Config schema version for migration tracking
     #[serde(default = "default_schema_version")]
     pub schema_version: String,
-    /// Default phase to use when none is specified
-    pub default_phase: String,
-    /// Map of agent configurations
-    pub agents: HashMap<String, AgentConfig>,
+    /// Provider-related configuration (flattened)
+    #[serde(flatten)]
+    pub provider: ProviderConfig,
     /// Flow configuration defining phase sequence
     pub flow: FlowConfig,
     /// Map of phase configurations
@@ -35,9 +172,12 @@ pub struct AppConfig {
     pub vector: Option<VectorConfig>,
     /// Autotune configuration
     pub autotune: Option<AutoTuneConfig>,
-    /// Model selection mode for automatic selection (Phase 10+)
-    #[serde(default)]
-    pub model_selection_mode: String,
+    /// Security / governance configuration (flattened)
+    #[serde(flatten)]
+    pub security: SecurityConfig,
+    /// Feature-flag configuration (flattened)
+    #[serde(flatten)]
+    pub feature: FeatureConfig,
     /// Compliance configuration (S3)
     #[serde(default)]
     pub compliance: Option<ComplianceConfig>,
@@ -50,9 +190,6 @@ pub struct AppConfig {
     /// Reputation tracking configuration (S13)
     #[serde(default)]
     pub reputation: Option<ReputationConfig>,
-    /// Custom role registry loaded from `[role_registry.*]`
-    #[serde(default)]
-    pub role_registry: HashMap<String, RoleDefinition>,
 }
 
 /// Simplified adaptive configuration for AI-driven setup
@@ -588,39 +725,76 @@ impl PhaseOptions {
 }
 
 impl AppConfig {
+    // -----------------------------------------------------------------------
+    // Backward-compatible delegation accessors (A7)
+    //
+    // The agent, provider, and role_registry fields moved into
+    // `ProviderConfig`; model_selection_mode moved into
+    // `FeatureConfig`.  These accessors keep existing code paths like
+    // `config.agents()` working without requiring a rewrite of all
+    // call sites.
+    // -----------------------------------------------------------------------
+
+    /// Agents map (delegated to `self.provider.agents`).
+    pub fn agents(&self) -> &HashMap<String, AgentConfig> {
+        &self.provider.agents
+    }
+
+    /// Mutable agents map.
+    pub fn agents_mut(&mut self) -> &mut HashMap<String, AgentConfig> {
+        &mut self.provider.agents
+    }
+
+    /// Default phase (delegated to `self.provider.default_phase`).
+    pub fn default_phase(&self) -> &str {
+        &self.provider.default_phase
+    }
+
+    /// Mutable default phase reference.
+    pub fn default_phase_mut(&mut self) -> &mut String {
+        &mut self.provider.default_phase
+    }
+
+    /// Role registry (delegated to `self.provider.role_registry`).
+    pub fn role_registry(&self) -> &HashMap<String, RoleDefinition> {
+        &self.provider.role_registry
+    }
+
+    /// Model selection mode (delegated to `self.feature.model_selection_mode`).
+    pub fn model_selection_mode(&self) -> &str {
+        &self.feature.model_selection_mode
+    }
+
     /// Returns the effective default phase, accounting for free workflow bypass.
     pub fn effective_default_phase(&self) -> Option<&str> {
         match self.flow.workflow_type {
             WorkflowType::Free => None,
             WorkflowType::General => {
-                if self.default_phase.trim().is_empty() {
+                if self.provider.default_phase.trim().is_empty() {
                     Some("executing")
                 } else {
-                    Some(self.default_phase.as_str())
+                    Some(self.provider.default_phase.as_str())
                 }
             }
             WorkflowType::Custom => {
-                if self.default_phase.trim().is_empty() {
+                if self.provider.default_phase.trim().is_empty() {
                     self.flow.phases.first().map(|phase| phase.as_str())
                 } else {
-                    Some(self.default_phase.as_str())
+                    Some(self.provider.default_phase.as_str())
                 }
             }
             WorkflowType::Dev => {
-                // Development workflow always starts in a coding-oriented phase.
-                if self.default_phase.trim().is_empty() {
+                if self.provider.default_phase.trim().is_empty() {
                     Some("coding")
                 } else {
-                    Some(self.default_phase.as_str())
+                    Some(self.provider.default_phase.as_str())
                 }
             }
             WorkflowType::Auto => {
-                // Auto-detected workflow: use configured default or fall back
-                // to "coding" (the most common entry point).
-                if self.default_phase.trim().is_empty() {
+                if self.provider.default_phase.trim().is_empty() {
                     Some("coding")
                 } else {
-                    Some(self.default_phase.as_str())
+                    Some(self.provider.default_phase.as_str())
                 }
             }
         }

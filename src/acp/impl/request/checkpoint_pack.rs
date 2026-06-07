@@ -8,7 +8,7 @@ pub(super) async fn list_checkpoint_records(
     branch_id: Option<&str>,
     limit: Option<usize>,
 ) -> Vec<crate::acp::prelude::ConversationCheckpoint> {
-    let state = server.conversation_state.lock().await;
+    let state = server.session.conversation_state.lock().await;
     let mut checkpoints = state
         .checkpoints
         .iter()
@@ -32,7 +32,7 @@ pub(super) async fn find_checkpoint(
     conversation_id: &str,
     checkpoint_id: &str,
 ) -> Option<crate::acp::prelude::ConversationCheckpoint> {
-    let state = server.conversation_state.lock().await;
+    let state = server.session.conversation_state.lock().await;
     state
         .checkpoints
         .iter()
@@ -48,7 +48,7 @@ pub(super) async fn get_branch_head_id(
     conversation_id: &str,
     branch_id: &str,
 ) -> Option<String> {
-    let state = server.conversation_state.lock().await;
+    let state = server.session.conversation_state.lock().await;
     state
         .branch_heads
         .get(&format!("{}:{}", conversation_id, branch_id))
@@ -61,7 +61,7 @@ pub(super) async fn prune_checkpoints(
     branch_id: &str,
     keep: usize,
 ) -> (usize, usize, usize) {
-    let mut state = server.conversation_state.lock().await;
+    let mut state = server.session.conversation_state.lock().await;
     let mut checkpoints = state
         .checkpoints
         .iter()
@@ -129,7 +129,7 @@ pub async fn create_checkpoint_record(
     );
 
     // Acquire a single lock for the duration of the read + write.
-    let mut state = server.conversation_state.lock().await;
+    let mut state = server.session.conversation_state.lock().await;
     let branch_key = format!("{}:{}", conversation_id, branch_id);
 
     // Auto-detect parent checkpoint from current branch head when not explicitly provided.
@@ -172,7 +172,7 @@ pub async fn persist_checkpoint_metacognitive_loop(
     checkpoint_id: &str,
     loop_state: Value,
 ) -> Value {
-    let mut state = server.conversation_state.lock().await;
+    let mut state = server.session.conversation_state.lock().await;
     if let Some(checkpoint) = state.checkpoints.iter_mut().find(|cp| {
         cp.checkpoint_id == checkpoint_id
             && cp.conversation_id == conversation_id

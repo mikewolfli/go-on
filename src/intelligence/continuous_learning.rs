@@ -10,8 +10,9 @@ use crate::agents::agent::{Agent, Message, StreamingSender};
 use crate::i18n::{t, tf};
 use crate::intelligence::now_ms;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::Mutex as TokioMutex;
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -20,21 +21,12 @@ use serde::{Deserialize, Serialize};
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Lock a Mutex, recovering from poison by clearing the mutex data and logging a warning.
+/// Lock a tokio::sync::Mutex using blocking_lock.
 ///
-/// NOTE: This version is intentionally distinct from the shared
-/// `crate::intelligence::lock_guard` because it requires `T: Default`
-/// and resets the value to its default on poison.
-fn lock_guard<T: Default>(mtx: &Mutex<T>) -> MutexGuard<'_, T> {
-    match mtx.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            tracing::warn!("continuous_learning mutex poisoned, recovering by clearing state");
-            let mut guard = poisoned.into_inner();
-            *guard = T::default();
-            guard
-        }
-    }
+/// tokio::sync::Mutex does not have the poisoning concept that std::sync::Mutex
+/// has, so no poison recovery is needed.
+fn lock_guard<T>(mtx: &TokioMutex<T>) -> tokio::sync::MutexGuard<'_, T> {
+    mtx.blocking_lock()
 }
 
 // ---------------------------------------------------------------------------
@@ -268,7 +260,7 @@ pub struct ContinuousLearningProfile {
 /// behind a thread-safe `Arc<Mutex<>>`.
 pub struct ContinuousLearningCenter {
     config: ContinuousLearningConfig,
-    state: Arc<Mutex<CenterState>>,
+    state: Arc<TokioMutex<CenterState>>,
     /// Optional agent used for LLM-based semantic distillation.
     /// When `None`, TF-IDF keyword extraction is used as a fallback.
     agent: Option<Arc<dyn Agent>>,
@@ -329,7 +321,7 @@ impl ContinuousLearningCenter {
 
         Self {
             config,
-            state: Arc::new(Mutex::new(CenterState {
+            state: Arc::new(TokioMutex::new(CenterState {
                 tasks: HashMap::new(),
                 memories: HashMap::new(),
                 forgetting_curves: HashMap::new(),
@@ -430,7 +422,7 @@ impl ContinuousLearningCenter {
         importance: f64,
     ) -> Result<String> {
         let importance = importance.clamp(0.0, 1.0);
-        let mut state = lock_guard(&self.state);
+        let mut state = self.state.blocking_lock();
         // Evict the least-important memory when at capacity.
         if state.memories.len() >= self.config.max_memories {
             if let Some(oldest_id) = state
@@ -482,6 +474,30 @@ impl ContinuousLearningCenter {
         Ok(id)
     }
 
+    /// Consolidate a new experience AND run LLM distillation on the result.
+    /// This replaces simple JSON string rotation with semantic summarisation.
+    pub fn consolidate_experience_with_distill(
+        &self,
+        pattern_key: &str,
+        data: &str,
+        importance: f64,
+    ) -> Result<String> {
+        let id = self.consolidate_experience(pattern_key, data, importance)?;
+        // Non-blocking: kicks off LLM distillation in the background when an
+        // agent is configured.  Since we are in a sync context, we use
+        // std::thread::spawn to avoid blocking the caller.
+        if self.agent.is_some() {
+            let center = self.clone();
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new();
+                if let Ok(rt) = rt {
+                    rt.block_on(center.llm_distill());
+                }
+            });
+        }
+        Ok(id)
+    }
+
     // ── LLM Distillation ───────────────────────────────────────────────────
 
     /// Distills consolidated memories into semantic patterns.
@@ -491,12 +507,12 @@ impl ContinuousLearningCenter {
     /// structured prompt.  Otherwise falls back to TF-IDF keyword extraction.
     ///
     /// Returns the number of new patterns extracted.
-    pub fn llm_distill(&self) -> usize {
+    pub async fn llm_distill(&self) -> usize {
         if let Some(ref agent) = self.agent {
             // LLM-based distillation — collect all memories and ask the agent
             // to extract semantic patterns.
             let memory_snapshots: Vec<String> = {
-                let state = lock_guard(&self.state);
+                let state = self.state.lock().await;
                 state
                     .memories
                     .values()
@@ -537,17 +553,11 @@ Memories:
                 },
             ];
 
-            // Collect streamed response.
+            // Collect streamed response using proper async patterns.
             let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(64);
             let sender = StreamingSender::new(tx);
 
-            let result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                tokio::task::block_in_place(|| {
-                    handle.block_on(async { agent.chat(messages, None, None, sender).await })
-                })
-            } else {
-                return 0;
-            };
+            let result = agent.chat(messages, None, None, sender).await;
 
             if result.is_err() {
                 tracing::warn!("continuous_learning: LLM distillation chat failed");
@@ -555,19 +565,11 @@ Memories:
             }
 
             // Collect all streamed tokens into one response string.
-            let response = tokio::task::block_in_place(|| {
-                if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                    handle.block_on(async {
-                        let mut buf = String::new();
-                        while let Some(token) = rx.recv().await {
-                            buf.push_str(&token);
-                        }
-                        buf
-                    })
-                } else {
-                    String::new()
-                }
-            });
+            let mut buf = String::new();
+            while let Some(token) = rx.recv().await {
+                buf.push_str(&token);
+            }
+            let response = buf;
 
             if response.is_empty() {
                 return 0;
@@ -599,7 +601,7 @@ Memories:
             };
 
             // Persist the LLM-extracted patterns.
-            let mut state = lock_guard(&self.state);
+            let mut state = self.state.lock().await;
             let mut count = 0usize;
             for p in &llm_patterns {
                 let keywords: Vec<String> = p
@@ -1097,18 +1099,35 @@ Memories:
         Instant::now() + Duration::from_secs(delay_secs)
     }
 
-    /// Perform a forgetting review cycle:
-    /// 1. Detect forgetting risks.
-    /// 2. Replay memories at risk (score < 0.3).
-    /// 3. Fast-evict memories with 3 consecutive critical scores.
-    /// 4. Reinforce the replayed memories.
+    /// Perform a forgetting review cycle with full learning loop integration:
+    /// 1. LLM distillation — create semantic summaries from consolidated memories.
+    /// 2. Apply curriculum — manage learning stage progression with adaptive thresholds.
+    /// 3. Detect forgetting (raw `detect_forgetting`) and reinforce decaying memories.
+    /// 4. Replay important memories via `replay_important_memories()` for spaced repetition.
+    /// 5. Detect forgetting risks and reinforce at-risk memories (original logic).
+    /// 6. Fast-evict memories with 3+ consecutive critical scores.
     ///
-    /// Returns the number of memories replayed and evicted.
-    pub fn review_cycle(&self) -> (usize, usize) {
-        // Step 1: Detect forgetting risks.
+    /// Returns `(replayed, evicted, patterns_extracted)`.
+    pub async fn review_cycle(&self, agent: &str) -> (usize, usize, usize) {
+        // Step 1: LLM distillation — semantic summarisation instead of JSON string rotation.
+        let patterns = self.llm_distill().await;
+
+        // Step 2: Apply curriculum — manage learning progression with adaptive thresholds.
+        let _ = self.apply_curriculum(agent);
+
+        // Step 3: Detect forgetting (raw forgetting-curve check) and reinforce.
+        let forgotten = self.detect_forgetting();
+        for curve in &forgotten {
+            let _ = self.reinforce_memory(&curve.memory_id);
+        }
+
+        // Step 4: Replay important memories (spaced repetition).
+        let _important = self.replay_important_memories(5);
+
+        // Step 5: Detect forgetting risks.
         let at_risk = self.detect_forgetting_risk();
 
-        // Step 2: Replay important at-risk memories.
+        // Step 6: Replay important at-risk memories.
         let mut replayed = 0usize;
         for record in &at_risk {
             if record.flagged_for_eviction {
@@ -1119,11 +1138,11 @@ Memories:
             }
         }
 
-        // Step 3: Fast-evict memories flagged for eviction.
+        // Step 7: Fast-evict memories flagged for eviction.
         let evict_ids = self.fast_evict_candidates();
         let evicted = evict_ids.len();
         {
-            let mut state = lock_guard(&self.state);
+            let mut state = self.state.lock().await;
             for id in &evict_ids {
                 state.memories.remove(id);
                 state.forgetting_curves.remove(id);
@@ -1131,7 +1150,7 @@ Memories:
             }
         }
 
-        (replayed, evicted)
+        (replayed, evicted, patterns)
     }
 
     // ── Profile ────────────────────────────────────────────────────────────
@@ -1198,6 +1217,7 @@ Memories:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::test as async_test;
 
     /// Helper: builds a default centre for testing.
     fn test_center() -> ContinuousLearningCenter {
@@ -1322,15 +1342,15 @@ mod tests {
         assert_eq!(pattern.frequency, 3);
     }
 
-    #[test]
-    fn test_llm_distill_empty_center() {
+    #[async_test]
+    async fn test_llm_distill_empty_center() {
         let center = test_center();
-        let count = center.llm_distill();
+        let count = center.llm_distill().await;
         assert_eq!(count, 0);
     }
 
-    #[test]
-    fn test_llm_distill_extracts_patterns() -> Result<()> {
+    #[async_test]
+    async fn test_llm_distill_extracts_patterns() -> Result<()> {
         let center = test_center();
         center.consolidate_experience(
             "sys-error",
@@ -1348,7 +1368,7 @@ mod tests {
             0.5,
         )?;
 
-        let count = center.llm_distill();
+        let count = center.llm_distill().await;
         // Each of the 3 memories should produce a pattern
         assert_eq!(count, 3);
 

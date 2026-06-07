@@ -184,7 +184,7 @@ pub struct ProviderConfig {
     #[serde(skip)]
     pub api_key: String,
     /// Secret key — same as api_key; only stored in keyring, never in config JSON.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[serde(skip)]
     pub secret_key: String,
     pub model: String,
     pub validated: bool,
@@ -211,129 +211,44 @@ impl Default for AppConfig {
     }
 }
 
-/// Load GUI app config from JSON file.
+/// Load GUI app config, preferring TOML format with automatic JSON→TOML migration.
 ///
-/// Strategy (dual storage):
-///   - api_key is stored in BOTH config file AND system keyring.
-///   - On load: migrate key from config → keyring if keyring is empty (fills keyring).
-///   - On load: migrate key from keyring → config if config is empty (fills config).
-///   - This ensures keys are never lost regardless of platform quirks.
+/// This is the **primary** loading path that delegates to `load_from_toml()`.
+/// TOML is the canonical config format (`gui_config.toml`). If a JSON config
+/// (`gui_config.json`) exists but no TOML config exists, it is automatically
+/// migrated to TOML on load. The JSON file is preserved as a backup.
+///
+/// ## Post-Load Processing
+///
+/// 1. **Provider deduplication**: After loading, providers are deduplicated by
+///    (name, label), keeping the last occurrence of each pair.
+/// 2. **Keyring synchronisation**: API keys and secret keys are synced
+///    bidirectionally between the config file and the OS keyring.
+///    - If a key exists in config but not in keyring → write to keyring.
+///    - If a key exists in keyring but not in config → copy into config.
+/// 3. **Environment variable override**: `GO_ON_BACKEND_URL` can override
+///    `backend_url` at load time if set.
+///
+/// ## Security
+///
+/// - API keys and secret keys are NEVER written to disk as plaintext.
+///   The `save_app_config` function strips them before serialization,
+///   storing them exclusively in the OS keyring.
+/// - This ensures keys are never lost regardless of platform quirks.
 pub fn load_app_config() -> AppConfig {
-    let path = app_config_path();
-    let file_exists = path.exists();
-
-    // If config file never existed, start with defaults (no misleading recovery messages)
-    if !file_exists {
-        return AppConfig::default();
-    }
-
-    let content = std::fs::read_to_string(&path).unwrap_or_default();
-
-    // Detect corrupted config — if file exists but parse fails, warn user
-    if content.trim().is_empty() {
-        eprintln!(
-            "WARNING: Config file exists at {} but is empty, using defaults",
-            path.display()
-        );
-        return AppConfig::default();
-    }
-
-    let raw: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
-    let mut config: AppConfig = match serde_json::from_str(&content) {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            eprintln!(
-                "ERROR: Failed to parse config file at {}: {e}",
-                path.display()
-            );
-            // Only attempt backup recovery when the file existed but was corrupted
-            eprintln!("Attempting recovery from backup...");
-            let bak_path = path.with_extension("json.bak");
-            match std::fs::read_to_string(&bak_path) {
-                Ok(bak) => match serde_json::from_str(&bak) {
-                    Ok(cfg) => {
-                        eprintln!("Recovered config from backup.");
-                        // Restore backup to main path atomically
-                        let _ = crate::fs_util::atomic_write(&path, &bak);
-                        cfg
-                    }
-                    Err(_) => {
-                        eprintln!("Backup also corrupted. Starting with default config.");
-                        AppConfig::default()
-                    }
-                },
-                Err(_) => {
-                    eprintln!("No backup found. Starting with default config.");
-                    AppConfig::default()
-                }
-            }
-        }
-    };
-
-    if !content.trim().is_empty() && config.providers.is_empty() && raw.get("providers").is_none() {
-        eprintln!(
-            "WARNING: No providers found in config file at {}, using defaults",
-            path.display()
-        );
-    }
+    // Delegate to load_from_toml() which handles TOML preference + JSON migration
+    let mut config = load_from_toml();
 
     // Clamp UI stability config to sensible ranges after deserialization
     config.ui_stability.clamp_to_sensible_ranges();
 
     let mut changed = false;
 
-    // Step 1: If old JSON has provider data but deserialize gave empty list,
-    // rebuild from raw JSON (compatibility with intermediate format that dropped api_key field).
-    if config.providers.is_empty() {
-        if let Some(old_providers) = raw.get("providers").and_then(|p| p.as_array()) {
-            for old_p in old_providers {
-                let name = match old_p.get("name").and_then(|n| n.as_str()) {
-                    Some(n) => n.to_string(),
-                    None => continue,
-                };
-                let api_key = old_p
-                    .get("api_key")
-                    .and_then(|k| k.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let secret_key = old_p
-                    .get("secret_key")
-                    .and_then(|k| k.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let model = old_p
-                    .get("model")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("auto")
-                    .to_string();
-                let validated = old_p
-                    .get("validated")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(true);
-                let label = old_p
-                    .get("label")
-                    .and_then(|l| l.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                config.providers.push(ProviderConfig {
-                    name,
-                    api_key,
-                    secret_key,
-                    model,
-                    validated,
-                    label,
-                });
-                changed = true;
-            }
-        }
-    }
-
-    // Step 1b: Deduplicate providers — keep last entry for each (name, label) pair.
+    // Step 1: Deduplicate providers — keep last entry for each (name, label) pair.
     // Multiple entries with the same `name` are allowed when they have different `label` values.
     let mut seen = std::collections::HashSet::new();
     let mut deduped = Vec::new();
     for provider in config.providers.drain(..).rev() {
-        // Use (name, label) as the dedup key so different labels of the same provider are preserved.
         let dedup_key = (provider.name.clone(), provider.label.clone());
         if seen.insert(dedup_key) {
             deduped.push(provider);
@@ -467,7 +382,7 @@ pub fn load_app_config() -> AppConfig {
     }
 
     if changed {
-        save_app_config(&config);
+        save_to_toml(&config);
     }
 
     // Allow env var override of backend URL
@@ -481,43 +396,15 @@ pub fn load_app_config() -> AppConfig {
     config
 }
 
-/// Save GUI app config to JSON file. Returns true on success, false on failure.
+/// Save GUI app config to TOML format. Delegates to `save_to_toml()`.
+/// Returns true on success, false on failure.
 ///
 /// API keys and secret keys are NEVER written to the config file.
 /// They are stored exclusively in the system keyring.
 /// Before serialization, the keys are cleared from the in-memory config
 /// (the original AppConfig is NOT modified — a clone is used).
 pub fn save_app_config(config: &AppConfig) -> bool {
-    let path = app_config_path();
-    if let Some(parent) = path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            eprintln!(
-                "Failed to create config directory {}: {e}",
-                parent.display()
-            );
-            return false;
-        }
-    }
-    // Clone and redact API keys before serialization to prevent
-    // plaintext secrets from being written to disk.
-    let mut config_for_save = config.clone();
-    for provider in &mut config_for_save.providers {
-        provider.api_key.clear();
-        provider.secret_key.clear();
-    }
-    match serde_json::to_string_pretty(&config_for_save) {
-        Ok(content) => match crate::fs_util::save_with_backup(&path, &content) {
-            Ok(_) => true,
-            Err(e) => {
-                eprintln!("Failed to write config to {}: {e}", path.display());
-                false
-            }
-        },
-        Err(e) => {
-            eprintln!("Failed to serialize config: {e}");
-            false
-        }
-    }
+    save_to_toml(config)
 }
 
 fn app_config_path() -> PathBuf {

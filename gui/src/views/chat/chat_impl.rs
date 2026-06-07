@@ -130,6 +130,14 @@ pub struct ChatView {
     /// Per-message content hash cache: skips re-parsing unchanged messages.
     /// Key = message index, value = hash of content last rendered.
     rendered_content_hashes: Vec<u64>,
+    /// Cache of pre-rendered markdown segments (parsed on background thread).
+    /// Key = message index, value = optional cached render.
+    cached_markdown_renders: Vec<Option<crate::views::chat::types::CachedMarkdownRender>>,
+    /// Per-message "expand full text" toggle for truncated content.
+    /// Key = message index, value = whether full text is shown.
+    expand_full_text: std::collections::HashSet<usize>,
+    /// SSE JSON parse error counter for the current stream.
+    sse_parse_errors: u32,
     /// Shared abort controller for cancelling in-progress streaming generations.
     abort_controller: Option<AbortController>,
     /// Token-level progress tracking for the active generation.
@@ -499,6 +507,9 @@ impl ChatView {
                         .unwrap_or_else(|_| reqwest::Client::new())
                 }),
             rendered_content_hashes: Vec::new(),
+            cached_markdown_renders: Vec::new(),
+            expand_full_text: std::collections::HashSet::new(),
+            sse_parse_errors: 0,
             abort_controller: None,
             stream_progress: TokenProgress::default(),
             stream_processor: None,
@@ -1056,6 +1067,9 @@ mod tests {
             model_stats: std::collections::HashMap::new(),
             stream_client: reqwest::Client::new(),
             rendered_content_hashes: Vec::new(),
+            cached_markdown_renders: Vec::new(),
+            expand_full_text: std::collections::HashSet::new(),
+            sse_parse_errors: 0,
             abort_controller: None,
             stream_progress: TokenProgress::default(),
             stream_processor: None,

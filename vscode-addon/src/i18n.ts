@@ -435,8 +435,8 @@ class I18nManager {
       try {
         const parsed = JSON.parse(env.VSCODE_NLS_CONFIG);
         lang = parsed.locale || "en";
-      } catch {
-        // Malformed VSCODE_NLS_CONFIG — fall back to env vars or "en"
+      } catch (err) {
+        console.warn("[i18n] detectLanguage parse failed:", err);
         lang = env.LANG || env.LANGUAGE || "en";
       }
     } else {
@@ -501,8 +501,8 @@ class I18nManager {
         this.loadedLocales.add(localeName);
         return;
       }
-    } catch {
-      // Fall through to fallback messages
+    } catch (err) {
+      console.warn("[i18n] loadMessages failed for locale path:", err);
     }
 
     // Fallback: try relative path for development
@@ -520,8 +520,8 @@ class I18nManager {
         this.loadedLocales.add(localeName);
         return;
       }
-    } catch {
-      // Fall through to hardcoded fallback
+    } catch (err) {
+      console.warn("[i18n] loadMessages failed for dev path:", err);
     }
 
     // If all else fails, use built-in minimal fallback
@@ -629,7 +629,8 @@ class I18nManager {
             return output;
           }
         }
-      } catch {
+      } catch (err) {
+        console.warn("[i18n] getFallbackValue failed:", err);
         return key;
       }
     }

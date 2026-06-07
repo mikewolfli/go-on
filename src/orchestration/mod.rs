@@ -19,14 +19,8 @@ pub mod council; // F-GAP-15
 #[doc = "Deprecated legacy DAG driver — use [`core_dag`] instead."]
 #[allow(deprecated)]
 pub mod dag_driver; // BLUE42 / BLUE64: Remove in next major version — use core_dag instead
-#[doc = "Deprecated legacy DAG execution — use [`core_dag`] instead."]
-#[allow(deprecated)]
-pub mod dag_execution; // AUTON-07 / BLUE64: Remove in next major version — use core_dag instead
-#[doc = "Deprecated legacy DAG executor — use [`core_dag`] instead."]
-#[allow(deprecated)]
-pub mod dag_executor; // GAP-46-02 / BLUE64: Remove in next major version — use core_dag instead
-#[allow(unused_imports, deprecated)]
-pub use dag_executor::TaskContext; // GAP-B50-05 (deprecated — migrated to core_dag)
+#[allow(unused_imports)]
+pub use core_dag::TaskContext; // GAP-B50-05 (migrated from dag_executor to core_dag)
 pub mod diagnostic_feedback;
 pub mod distributed; // GAP-B52-21/22
 pub mod distributed_tx; // BLUE45 item 4: Two-Phase Commit (2PC) over multiple nodes

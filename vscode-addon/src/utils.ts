@@ -22,3 +22,10 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 export function asRecord(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {};
 }
+
+/**
+ * Safely convert an unknown error to a string message.
+ */
+export function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

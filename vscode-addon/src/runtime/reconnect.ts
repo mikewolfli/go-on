@@ -1,0 +1,63 @@
+import * as vscode from "vscode";
+
+/**
+ * Manages reconnection logic with exponential backoff.
+ *
+ * Backoff formula: min(2000 * 2^attempt, 300000)ms with 30% jitter.
+ * Supports unlimited retries for long-running multi-agent workflows.
+ */
+export class ReconnectManager {
+  private _attempts = 0;
+  private _timer: ReturnType<typeof setTimeout> | undefined;
+
+  constructor(
+    private readonly doReconnect: () => Promise<void>,
+    private readonly outputChannel?: vscode.OutputChannel,
+  ) {}
+
+  /** Reset the attempt counter (call on successful connection/reconnect). */
+  reset(): void {
+    this._attempts = 0;
+  }
+
+  /** Get the current number of reconnect attempts. */
+  get attempts(): number {
+    return this._attempts;
+  }
+
+  /** Calculate exponential backoff delay for the given attempt. */
+  backoffMs(attempt: number): number {
+    const baseDelay = 2000 * Math.pow(2, attempt);
+    const cappedDelay = Math.min(baseDelay, 300000);
+    const jitter = 0.7 + Math.random() * 0.3;
+    return Math.round(cappedDelay * jitter);
+  }
+
+  /** Schedule a reconnection attempt. */
+  schedule(): void {
+    const delay = this.backoffMs(this._attempts);
+    this.outputChannel?.appendLine(
+      `[reconnect] Scheduling attempt ${this._attempts + 1} in ${delay}ms...`,
+    );
+    this._timer = setTimeout(() => {
+      void this.doAttempt();
+    }, delay);
+  }
+
+  /** Cancel any pending reconnection. */
+  cancel(): void {
+    if (this._timer) {
+      clearTimeout(this._timer);
+      this._timer = undefined;
+    }
+  }
+
+  /** Perform a reconnection attempt (increments counter and calls doReconnect). */
+  private async doAttempt(): Promise<void> {
+    this._attempts++;
+    this.outputChannel?.appendLine(
+      `[reconnect] Attempt ${this._attempts} with unlimited retries...`,
+    );
+    await this.doReconnect();
+  }
+}

@@ -71,7 +71,17 @@ pub fn parse_secret_action(value: &str) -> Result<SecretAction> {
     anyhow::bail!("{}", tf("error.invalid_secret_action", &[("value", value)]))
 }
 
-/// Run a secret command (set / get / delete / list) against the system keyring.
+/// Run a secret command (set/get/delete/list) against the OS keyring.
+///
+/// # Sync boundary
+///
+/// This function performs synchronous keyring I/O via the `keyring` crate.
+/// When called from an async context (e.g. a tokio task), the caller MUST
+/// wrap this call in `tokio::task::spawn_blocking` to avoid blocking the
+/// async runtime.  The `#[cfg(feature = "sync-secrets")]` attribute on this
+/// function marks it as a synchronous boundary — profiles that disable this
+/// feature will not have access to keyring operations.
+#[cfg(feature = "sync-secrets")]
 pub fn run_secret_command(
     action: SecretAction,
     name: Option<&str>,

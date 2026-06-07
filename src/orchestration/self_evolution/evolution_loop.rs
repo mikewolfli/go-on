@@ -5,6 +5,7 @@
 //! that polls multiple trigger sources and processes them one at a time.
 
 use crate::agents::self_evolution_agent::SelfEvolutionAgent;
+use crate::intelligence::evolution_graph::{EvolutionGraph, EvolutionStage};
 use crate::orchestration::self_evolution::evolution_history::EvolutionHistory;
 use crate::orchestration::self_evolution::sandbox::{CodePatch, SandboxExecutor};
 use async_trait::async_trait;
@@ -758,6 +759,8 @@ pub struct EvolutionLoop {
     poll_interval: Duration,
     /// Self-evolution agent for LLM-based code analysis and patch generation.
     agent: Option<Arc<SelfEvolutionAgent>>,
+    /// Evolution graph for capability version history tracking (I9).
+    evolution_graph: Option<Arc<std::sync::Mutex<EvolutionGraph>>>,
 }
 
 impl EvolutionLoop {
@@ -772,6 +775,7 @@ impl EvolutionLoop {
             workdir,
             poll_interval: Duration::from_secs(30),
             agent: None,
+            evolution_graph: None,
         }
     }
 
@@ -840,9 +844,18 @@ impl EvolutionLoop {
         self
     }
 
-    /// Set the self-evolution agent for LLM-based analysis and patch generation.
+    /// Set the self-evolution agent for LLM-based code analysis and patch generation.
     pub fn with_agent(mut self, agent: Arc<SelfEvolutionAgent>) -> Self {
         self.agent = Some(agent);
+        self
+    }
+
+    /// Attach an EvolutionGraph for capability version history tracking.
+    ///
+    /// When set, the `analyze()` phase will record version snapshots on the
+    /// evolution graph, keeping capability version history up to date.
+    pub fn with_evolution_graph(mut self, graph: Arc<std::sync::Mutex<EvolutionGraph>>) -> Self {
+        self.evolution_graph = Some(graph);
         self
     }
 
@@ -1070,6 +1083,26 @@ impl EvolutionLoop {
             EvolutionTrigger::PerformanceRegression { .. } => "high",
             _ => "low",
         };
+
+        // Record a capability version snapshot on the evolution graph (I9).
+        if let Some(ref graph_mtx) = self.evolution_graph {
+            let trigger_label = trigger.label();
+            let cap_name = format!("evolution_analyze_{}", trigger_label);
+            match graph_mtx.lock() {
+                Ok(mut graph) => {
+                    let _ =
+                        graph.register_capability(trigger_label, &cap_name, EvolutionStage::New);
+                    let _ = graph.record_version(trigger_label, &cap_name, 0.7, 0.0);
+                }
+                Err(poisoned) => {
+                    tracing::warn!("evolution_graph lock poisoned, recovering");
+                    let mut graph = poisoned.into_inner();
+                    let _ =
+                        graph.register_capability(trigger_label, &cap_name, EvolutionStage::New);
+                    let _ = graph.record_version(trigger_label, &cap_name, 0.7, 0.0);
+                }
+            }
+        }
 
         Analysis::new(
             trigger.clone(),

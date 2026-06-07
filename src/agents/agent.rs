@@ -585,7 +585,7 @@ impl AgentRegistry {
     ) -> Result<Self> {
         let mut agents: HashMap<String, Arc<dyn Agent>> = HashMap::new();
 
-        for (name, agent_cfg) in &config.agents {
+        for (name, agent_cfg) in config.agents() {
             let agent = build_agent(agent_cfg, client.clone())
                 .with_context(|| format!("failed to build agent '{}'", name))?;
             agents.insert(name.clone(), agent);
@@ -1354,8 +1354,11 @@ mod tests {
 
         let app_config = AppConfig {
             schema_version: "1.0.0".to_string(),
-            default_phase: "coding".to_string(),
-            agents,
+            provider: crate::core::config::types::ProviderConfig {
+                default_phase: "coding".to_string(),
+                agents,
+                role_registry: HashMap::new(),
+            },
             flow: FlowConfig {
                 name: "test".to_string(),
                 phases: vec!["coding".to_string()],
@@ -1384,12 +1387,15 @@ mod tests {
             cache: None,
             vector: None,
             autotune: None,
-            model_selection_mode: "adaptive".to_string(),
+            security: crate::core::config::types::SecurityConfig::default(),
+            feature: crate::core::config::types::FeatureConfig {
+                model_selection_mode: "adaptive".to_string(),
+                ..Default::default()
+            },
             compliance: None,
             startup_context: None,
             scheduler: None,
             reputation: None,
-            role_registry: HashMap::new(),
         };
 
         let registry = AgentRegistry::from_config(

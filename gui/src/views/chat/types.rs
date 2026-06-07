@@ -134,6 +134,48 @@ pub enum PendingResponse {
     ExternalEditorResult(String),
 }
 
+/// A pre-rendered markdown segment that can be displayed without re-parsing.
+/// Produced on a background thread via spawn_blocking to avoid UI thread blocking.
+#[derive(Debug, Clone)]
+pub enum MarkdownSegment {
+    /// Plain text with optional styling
+    Text(String, MarkdownStyle),
+    /// Code block with language and content
+    CodeBlock(String, String),
+    /// Inline code
+    InlineCode(String),
+    /// Thematic break (horizontal rule)
+    ThematicBreak,
+    /// Heading with level and text
+    Heading(u8, String),
+    /// List item with prefix ("• " or "1. " etc.)
+    ListItem(String, Vec<MarkdownSegment>),
+    /// Blockquote containing segments
+    BlockQuote(Vec<MarkdownSegment>),
+    /// Link with URL and label
+    Link(String, String),
+    /// Image with URL and alt text
+    Image(String, String),
+    /// Soft or hard line break
+    LineBreak,
+    /// Raw text (no markdown interpretation, plain label)
+    Raw(String),
+}
+
+/// Styling attributes for markdown text segments
+#[derive(Debug, Clone, Default)]
+pub struct MarkdownStyle {
+    pub bold: bool,
+    pub italic: bool,
+    pub font_size: f32,
+}
+
+/// Cache entry for pre-rendered markdown content.
+#[derive(Debug, Clone)]
+pub struct CachedMarkdownRender {
+    pub segments: Vec<MarkdownSegment>,
+}
+
 /// Model performance statistics for caching and analysis
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ModelPerfStats {

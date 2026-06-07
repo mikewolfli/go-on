@@ -19,7 +19,6 @@ use std::time::Duration;
 use anyhow::Result;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::signal;
-use tokio::sync::Semaphore;
 use tracing::{error, info, warn};
 
 use crate::acp::background::start_background_tasks;
@@ -67,11 +66,6 @@ pub(crate) use server_builder::new_acp_server;
 /// `/rpc` requests would corrupt each other's response capture pipes.
 static RPC_SERIAL: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
-#[allow(dead_code)]
-/// Limits concurrent ACP HTTP connections to prevent unbounded tokio task growth.
-/// NOTE: `http_server` module defines its own `CONNECTION_SEMAPHORE` for the HTTP accept loop.
-static CONNECTION_SEMAPHORE: Semaphore = Semaphore::const_new(1000);
-
 // ---------------------------------------------------------------------------
 // Shared utilities
 // ---------------------------------------------------------------------------
@@ -98,7 +92,7 @@ pub async fn run_acp_server(server: &mut AcpServer) -> Result<()> {
 
     // GAP-B58-B13: Wire memory bridge — run initial promotion on startup
     if let Some(mp) = server.governance_deps.memory_persistence.as_ref() {
-        let memory_store = &server.memory_store;
+        let memory_store = &server.persistence.memory_store;
         match crate::memory::memory_bridge::bridge_promote(memory_store, mp) {
             Ok(report) => {
                 if report.promoted_count > 0 {
@@ -261,6 +255,7 @@ pub fn cache_handle(server: &AcpServer) -> Option<Arc<crate::cache::ResponseCach
 /// Get artifact ledger.
 pub fn artifact_ledger(_server: &AcpServer) -> crate::reinforcement::ArtifactLedger {
     _server
+        .persistence
         .artifact_ledger
         .lock()
         .map(|guard| guard.clone())

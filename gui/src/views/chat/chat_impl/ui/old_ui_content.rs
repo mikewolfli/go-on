@@ -1706,20 +1706,98 @@ impl ChatView {
                                 content_text.clone()
                             };
 
-                            if !content_changed && !content_text.is_empty() && !self.sending {
-                                // Content unchanged and not streaming — skip markdown parse
-                                ui.label(egui::RichText::new(&display_content).color(text_color));
+                            // ── Truncation check & expand button ──
+                            const MAX_MARKDOWN_CHARS: usize = 10_000;
+                            let is_truncated = display_content.len() > MAX_MARKDOWN_CHARS;
+                            let is_expanded = self.expand_full_text.contains(&msg_idx);
+                            let render_text = if is_truncated && !is_expanded {
+                                // Truncate on a UTF-8 char boundary
+                                let preview: String = display_content
+                                    .char_indices()
+                                    .take_while(|(idx, _)| *idx < MAX_MARKDOWN_CHARS)
+                                    .map(|(_, c)| c)
+                                    .collect();
+                                preview
                             } else {
+                                display_content.clone()
+                            };
+
+                            // ── Try cache-first markdown rendering ──
+                            let cached = self
+                                .cached_markdown_renders
+                                .get(msg_idx)
+                                .and_then(|c| c.as_ref());
+
+                            if let Some(cache) = cached {
+                                // Cache hit — render from pre-parsed segments (fast path)
+                                Self::render_markdown_from_cache(
+                                    ui,
+                                    cache,
+                                    &i18n.t("chat.copyCode"),
+                                    text_color,
+                                );
+                            } else if !content_changed && !content_text.is_empty() && !self.sending
+                            {
+                                // Content unchanged and not streaming — skip parse
+                                ui.label(egui::RichText::new(&render_text).color(text_color));
+                            } else {
+                                // Parse and render
                                 let trunc_hint_msg =
                                     i18n.t("chat.largeMessageTruncated").to_string();
                                 Self::render_markdown(
                                     ui,
-                                    &display_content,
+                                    &render_text,
                                     &i18n.t("chat.copyCode"),
                                     enable_markdown_val,
                                     text_color,
                                     &trunc_hint_msg,
                                 );
+                                // Populate cache for next frame
+                                if !render_text.is_empty() {
+                                    self.background_parse_markdown(msg_idx, &render_text);
+                                }
+                            }
+
+                            // ── Expand / collapse button for truncated content ──
+                            if is_truncated {
+                                let btn_text = if is_expanded {
+                                    i18n.t("chat.collapseFullText")
+                                } else {
+                                    i18n.t("chat.expandFullText")
+                                };
+                                let total_chars = display_content.chars().count();
+                                let btn_label = if is_expanded {
+                                    format!(
+                                        "▲ {} ({} {})",
+                                        btn_text,
+                                        total_chars,
+                                        i18n.t("chat.chars")
+                                    )
+                                } else {
+                                    format!(
+                                        "▼ {} — {} {}",
+                                        btn_text,
+                                        total_chars,
+                                        i18n.t("chat.chars")
+                                    )
+                                };
+                                let btn_color = if ui.visuals().dark_mode {
+                                    egui::Color32::from_rgb(220, 170, 80)
+                                } else {
+                                    egui::Color32::from_rgb(180, 130, 40)
+                                };
+                                if ui
+                                    .button(
+                                        egui::RichText::new(btn_label).color(btn_color).size(12.0),
+                                    )
+                                    .clicked()
+                                {
+                                    if is_expanded {
+                                        self.expand_full_text.remove(&msg_idx);
+                                    } else {
+                                        self.expand_full_text.insert(msg_idx);
+                                    }
+                                }
                             }
 
                             // ── Thinking section ──

@@ -65,6 +65,7 @@ pub(crate) fn record_orchestration_alignment(coverage_ratio: f64) {
     }
 }
 
+#[allow(dead_code)] // F-GAP: reserved for idempotency tracking
 pub(crate) fn record_idempotency_hit(pending_continuation: bool) {
     IDEMPOTENCY_HIT_TOTAL.fetch_add(1, Ordering::Relaxed);
     if pending_continuation {

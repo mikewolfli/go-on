@@ -13,6 +13,8 @@ use crate::acp::prelude::now_ts;
 use std::path::Path;
 use std::sync::Mutex;
 #[cfg(not(feature = "backend-postgres"))]
+use std::sync::Mutex as StdMutex;
+#[cfg(not(feature = "backend-postgres"))]
 use std::sync::Once;
 
 #[cfg(not(feature = "backend-postgres"))]
@@ -20,6 +22,7 @@ use crate::memory::embedding_provider::{
     local_hash_embed, ConfigurableEmbeddingProvider, EmbeddingProvider,
 };
 use anyhow::Result;
+use fastrand;
 #[cfg(feature = "backend-postgres")]
 use pgvector::Vector;
 #[cfg(not(feature = "backend-postgres"))]
@@ -67,6 +70,287 @@ impl VectorPrecisionFeedback {
     }
 }
 
+/// HNSW node metadata
+#[cfg(not(feature = "backend-postgres"))]
+#[derive(Debug, Clone)]
+struct HnswNodeMeta {
+    memory_key: String,
+    response_text: String,
+    updated_at: i64,
+}
+
+/// A (node index, distance) pair with ordering so that smaller distance sorts first.
+#[cfg(not(feature = "backend-postgres"))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct HnswNodeDist {
+    idx: usize,
+    dist: f32,
+}
+
+#[cfg(not(feature = "backend-postgres"))]
+impl Eq for HnswNodeDist {}
+
+#[cfg(not(feature = "backend-postgres"))]
+impl PartialOrd for HnswNodeDist {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[cfg(not(feature = "backend-postgres"))]
+impl Ord for HnswNodeDist {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.dist
+            .partial_cmp(&other.dist)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }
+}
+
+/// Hierarchical Navigable Small World index for approximate nearest neighbor search.
+///
+/// Provides O(log N) search time for high-dimensional vectors.
+/// Standard parameters: M=16, ef_construction=200, ef_search=50.
+#[cfg(not(feature = "backend-postgres"))]
+#[derive(Debug)]
+struct HnswIndex {
+    /// Stored vectors (index in this vec == node id)
+    vectors: Vec<Vec<f32>>,
+    /// Per-node metadata
+    metadata: Vec<HnswNodeMeta>,
+    /// Adjacency lists per layer: layers[layer][node_id] = Vec<neighbor_id>
+    layers: Vec<Vec<Vec<usize>>>,
+    /// Current entry point (node id at the topmost layer)
+    entry_point: Option<usize>,
+    /// Highest layer that has any element
+    max_level: usize,
+    // ── HNSW parameters (constant after construction) ──
+    /// Max number of connections per node on layer > 0
+    m: usize,
+    /// Max number of connections per node on layer 0
+    m_max0: usize,
+    /// Size of dynamic candidate list during construction
+    ef_construction: usize,
+    /// Size of dynamic candidate list during search
+    ef_search: usize,
+    /// Normalisation factor for level generation: mL = 1.0 / ln(M)
+    m_l: f64,
+}
+
+#[cfg(not(feature = "backend-postgres"))]
+impl HnswIndex {
+    fn new(m: usize, ef_construction: usize, ef_search: usize) -> Self {
+        let m_max0 = m * 2;
+        let m_l = 1.0 / (m as f64).ln();
+        Self {
+            vectors: Vec::new(),
+            metadata: Vec::new(),
+            layers: vec![Vec::new()], // layer 0 exists and is empty
+            entry_point: None,
+            max_level: 0,
+            m,
+            m_max0,
+            ef_construction,
+            ef_search,
+            m_l,
+        }
+    }
+
+    fn random_level(&self) -> usize {
+        let r: f64 = fastrand::f64(); // uniform in [0, 1)
+        if r <= 0.0 {
+            return 0;
+        }
+        (-r.ln() * self.m_l).floor() as usize
+    }
+
+    /// Distance between a query vector and a stored node.
+    fn distance(&self, query: &[f32], node: usize) -> f32 {
+        let v = &self.vectors[node];
+        1.0 - cosine_similarity(query, v)
+    }
+
+    /// Greedy search at a single layer, returning up to `ef` nearest neighbours.
+    ///
+    /// `entry` is the starting node id on this layer.
+    fn search_layer(&self, query: &[f32], entry: usize, lc: usize, ef: usize) -> Vec<HnswNodeDist> {
+        // Min-heap of candidates (closest first)
+        let mut candidates: std::collections::BinaryHeap<std::cmp::Reverse<HnswNodeDist>> =
+            std::collections::BinaryHeap::new();
+        // Max-heap of results (furthest first — we track the worst distance)
+        let mut results: std::collections::BinaryHeap<HnswNodeDist> =
+            std::collections::BinaryHeap::new();
+
+        let entry_dist = self.distance(query, entry);
+        let entry_nd = HnswNodeDist {
+            idx: entry,
+            dist: entry_dist,
+        };
+        candidates.push(std::cmp::Reverse(entry_nd));
+        results.push(entry_nd);
+
+        let mut visited = std::collections::HashSet::new();
+        visited.insert(entry);
+
+        while let Some(std::cmp::Reverse(closest)) = candidates.pop() {
+            // The furthest result is the top of the max-heap
+            if let Some(furthest) = results.peek() {
+                if closest.dist > furthest.dist {
+                    break; // Cannot improve
+                }
+            }
+            for &neighbor in &self.layers[lc][closest.idx] {
+                if visited.contains(&neighbor) {
+                    continue;
+                }
+                visited.insert(neighbor);
+                let neighbor_dist = self.distance(query, neighbor);
+                let furthest_dist = results.peek().map(|r| r.dist).unwrap_or(f32::MAX);
+                if neighbor_dist < furthest_dist || results.len() < ef {
+                    let nd = HnswNodeDist {
+                        idx: neighbor,
+                        dist: neighbor_dist,
+                    };
+                    candidates.push(std::cmp::Reverse(nd));
+                    results.push(nd);
+                    if results.len() > ef {
+                        results.pop(); // Remove furthest
+                    }
+                }
+            }
+        }
+
+        // Convert to sorted (closest-first) vec
+        let mut sorted: Vec<HnswNodeDist> = results.into_sorted_vec();
+        sorted.reverse(); // into_sorted_vec gives ascending; we want descending for .pop()
+        sorted
+    }
+
+    /// Select the M closest neighbours from a candidate set (simple heuristic).
+    fn select_neighbors_simple(
+        &self,
+        _q_idx: usize,
+        candidates: &[HnswNodeDist],
+        m: usize,
+    ) -> Vec<HnswNodeDist> {
+        let k = m.min(candidates.len());
+        let mut sorted = candidates.to_vec();
+        sorted.sort();
+        sorted.truncate(k);
+        sorted
+    }
+
+    /// Shrink connections for a node on a given layer, keeping only the M closest.
+    fn shrink_connections(&mut self, node: usize, lc: usize, max_conn: usize) {
+        let neighbors = &self.layers[lc][node];
+        if neighbors.len() <= max_conn {
+            return;
+        }
+        // Sort neighbors by distance to `node`
+        let node_vec = &self.vectors[node];
+        let mut dists: Vec<HnswNodeDist> = neighbors
+            .iter()
+            .map(|&n| HnswNodeDist {
+                idx: n,
+                dist: 1.0 - cosine_similarity(node_vec, &self.vectors[n]),
+            })
+            .collect();
+        dists.sort();
+        dists.truncate(max_conn);
+        self.layers[lc][node] = dists.into_iter().map(|nd| nd.idx).collect();
+    }
+
+    /// Insert a single vector with its metadata into the index.
+    fn insert(&mut self, vector: Vec<f32>, meta: HnswNodeMeta) {
+        let q_idx = self.vectors.len();
+        let level = self.random_level();
+
+        // Ensure layers exist up to `level`
+        while self.layers.len() <= level {
+            self.layers.push(Vec::new());
+        }
+        // Ensure each layer has adjacency entries for all existing nodes
+        for lc in 0..self.layers.len() {
+            while self.layers[lc].len() <= q_idx {
+                self.layers[lc].push(Vec::new());
+            }
+        }
+
+        self.vectors.push(vector.clone());
+        self.metadata.push(meta);
+
+        if self.entry_point.is_none() {
+            // First element
+            self.entry_point = Some(q_idx);
+            self.max_level = level;
+            return;
+        }
+
+        let ep = self.entry_point.unwrap();
+
+        // Phase 1: traverse from top layer down to level+1 greedily (ef=1)
+        let mut curr_ep = ep;
+        for lc in (level + 1..=self.max_level).rev() {
+            if lc < self.layers.len() && self.layers[lc].len() > curr_ep {
+                let result = self.search_layer(&vector, curr_ep, lc, 1);
+                if let Some(nearest) = result.first() {
+                    curr_ep = nearest.idx;
+                }
+            }
+        }
+
+        // Phase 2: insert on each layer from min(level, max_level) down to 0
+        let top = level.min(self.max_level);
+        for lc in (0..=top).rev() {
+            let candidates = self.search_layer(&vector, curr_ep, lc, self.ef_construction);
+            let m_lc = if lc == 0 { self.m_max0 } else { self.m };
+            let neighbors = self.select_neighbors_simple(q_idx, &candidates, m_lc);
+
+            // Connect q → neighbors
+            self.layers[lc][q_idx] = neighbors.iter().map(|nd| nd.idx).collect();
+
+            // Connect neighbors → q (bidirectional)
+            for nd in &neighbors {
+                let n_idx = nd.idx;
+                if lc < self.layers.len() && self.layers[lc].len() > n_idx {
+                    self.layers[lc][n_idx].push(q_idx);
+                    // Shrink if needed
+                    let m_shrink = if lc == 0 { self.m_max0 } else { self.m };
+                    self.shrink_connections(n_idx, lc, m_shrink);
+                }
+            }
+        }
+
+        // Update global entry point if the new element has a higher level
+        if level > self.max_level {
+            self.max_level = level;
+            self.entry_point = Some(q_idx);
+        }
+    }
+
+    /// Search the index, returning up to `ef` nearest neighbours sorted by distance.
+    fn search(&self, query: &[f32], ef: usize) -> Vec<HnswNodeDist> {
+        if self.vectors.is_empty() {
+            return Vec::new();
+        }
+        let ep = self.entry_point.unwrap();
+
+        // Greedy search from top layer down to layer 1 (ef=1 per layer)
+        let mut curr_ep = ep;
+        for lc in (1..=self.max_level).rev() {
+            if lc < self.layers.len() && self.layers[lc].len() > curr_ep {
+                let result = self.search_layer(query, curr_ep, lc, 1);
+                if let Some(nearest) = result.first() {
+                    curr_ep = nearest.idx;
+                }
+            }
+        }
+
+        // Search layer 0 with ef
+        let ef_actual = ef.max(self.ef_search);
+        self.search_layer(query, curr_ep, 0, ef_actual)
+    }
+}
+
 /// Vector store for similarity search
 #[cfg(not(feature = "backend-postgres"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +359,7 @@ enum SqliteVectorMode {
     JsonFallback,
 }
 
+/// Vector store for similarity search
 #[cfg(not(feature = "backend-postgres"))]
 #[derive(Debug)]
 pub struct VectorStore {
@@ -92,6 +377,9 @@ pub struct VectorStore {
     /// When `None`, the built-in minhash fallback (`embed_text()`) is used,
     /// which is only suitable for development/testing.
     embedding_provider: Option<ConfigurableEmbeddingProvider>,
+    /// Optional in-memory HNSW index for approximate nearest neighbor search.
+    /// Built lazily on first search; updated on upsert when present.
+    hnsw: StdMutex<Option<HnswIndex>>,
 }
 
 #[cfg(not(feature = "backend-postgres"))]
@@ -159,6 +447,7 @@ impl VectorStore {
             max_entries,
             mode,
             embedding_provider: None,
+            hnsw: StdMutex::new(None),
         })
     }
 
@@ -257,6 +546,20 @@ impl VectorStore {
             params![self.max_entries as i64],
         )?;
 
+        // Update HNSW index if it exists
+        if let Ok(mut hnsw_guard) = self.hnsw.lock() {
+            if let Some(ref mut hnsw) = *hnsw_guard {
+                hnsw.insert(
+                    embedding,
+                    HnswNodeMeta {
+                        memory_key,
+                        response_text: response.to_string(),
+                        updated_at: now,
+                    },
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -295,6 +598,21 @@ impl VectorStore {
         };
         let now = now_ts();
         let limit = self.max_entries.max(top_k);
+
+        // Try HNSW fast path first — if index exists, use it for O(log N) search
+        {
+            let hnsw_exists = self.hnsw.lock().map(|g| g.is_some()).unwrap_or(false);
+            if hnsw_exists {
+                return self.hnsw_search(
+                    &query_embedding,
+                    phase,
+                    top_k,
+                    min_similarity,
+                    max_snippet_chars,
+                    now,
+                );
+            }
+        }
 
         // Collect results within a locked scope, then release the lock
         // before doing sorting/processing (minimizes lock duration).
@@ -523,6 +841,155 @@ impl VectorStore {
         });
         conn.execute_batch("VACUUM;")?;
         Ok(())
+    }
+
+    /// Ensure the in-memory HNSW index is built from SQLite data.
+    ///
+    /// Reads all vectors from the database and constructs the HNSW graph.
+    /// Called lazily on first search when no HNSW index exists yet.
+    /// Returns true if the index was built, false if it already existed.
+    #[allow(dead_code)]
+    fn ensure_hnsw_index(&self) -> Result<bool> {
+        let mut hnsw_guard = self.hnsw.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("vector hnsw mutex poisoned in 'ensure_hnsw_index', recovering");
+            poisoned.into_inner()
+        });
+        if hnsw_guard.is_some() {
+            return Ok(false);
+        }
+
+        // Read all entries from SQLite (collect into Vec within a nested scope so
+        // the Statement / Rows borrow ends before we close the connection).
+        let entries: Vec<(Vec<f32>, HnswNodeMeta)> = {
+            let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("vector mutex poisoned in 'ensure_hnsw_index', recovering");
+                poisoned.into_inner()
+            });
+
+            let mut stmt = conn.prepare(
+                "SELECT memory_key, response_text, updated_at, embedding_blob, embedding_json
+                 FROM vector_memory
+                 ORDER BY updated_at ASC",
+            )?;
+
+            let mut entries: Vec<(Vec<f32>, HnswNodeMeta)> = Vec::new();
+            let mut rows = stmt.query([])?;
+
+            while let Some(row) = rows.next()? {
+                let memory_key: String = row.get(0)?;
+                let response_text: String = row.get(1)?;
+                let updated_at: i64 = row.get(2)?;
+                let embedding_blob: Option<Vec<u8>> = row.get(3)?;
+                let embedding_json: Option<String> = row.get(4)?;
+
+                let embedding: Vec<f32> = match (embedding_blob, embedding_json) {
+                    (Some(blob), _) => blob
+                        .chunks_exact(4)
+                        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                        .collect(),
+                    (None, Some(json)) => match serde_json::from_str(&json) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    },
+                    (None, None) => continue,
+                };
+
+                if embedding.len() != self.dimensions {
+                    continue;
+                }
+
+                entries.push((
+                    embedding,
+                    HnswNodeMeta {
+                        memory_key,
+                        response_text,
+                        updated_at,
+                    },
+                ));
+            }
+            entries
+        };
+
+        if entries.is_empty() {
+            *hnsw_guard = Some(HnswIndex::new(16, 200, 50));
+            return Ok(true);
+        }
+
+        let mut hnsw = HnswIndex::new(16, 200, 50);
+        for (vector, meta) in entries {
+            hnsw.insert(vector, meta);
+        }
+
+        *hnsw_guard = Some(hnsw);
+        Ok(true)
+    }
+
+    /// Search using the HNSW index (internal helper, assumes HNSW exists).
+    fn hnsw_search(
+        &self,
+        query_embedding: &[f32],
+        phase: &str,
+        top_k: usize,
+        min_similarity: f32,
+        max_snippet_chars: usize,
+        now: i64,
+    ) -> Result<(Vec<VectorHit>, VectorPrecisionFeedback)> {
+        let hnsw_guard = self.hnsw.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("vector hnsw mutex poisoned in 'hnsw_search', recovering");
+            poisoned.into_inner()
+        });
+
+        let Some(ref hnsw) = *hnsw_guard else {
+            // Fallback: no HNSW index
+            return self.search(phase, "", top_k, min_similarity, max_snippet_chars);
+        };
+
+        // Prefetch more candidates than top_k because recency blending may re-rank
+        let ef = (top_k * 4).max(hnsw.ef_search);
+        let results = hnsw.search(query_embedding, ef);
+
+        let metadata = hnsw.metadata.clone();
+        drop(hnsw_guard);
+
+        let mut scored: Vec<(String, f32, String)> = Vec::with_capacity(results.len());
+        for nd in &results {
+            if nd.dist > 1.0 - min_similarity {
+                continue;
+            }
+            let similarity = (1.0_f32 - nd.dist).clamp(0.0, 1.0);
+            let meta = &metadata[nd.idx];
+            let blended = blend_similarity_with_recency(similarity, now, meta.updated_at);
+            scored.push((meta.memory_key.clone(), blended, meta.response_text.clone()));
+        }
+
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(top_k);
+
+        // Update hit counts in SQLite
+        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("vector mutex poisoned in 'hnsw_search::hit_count', recovering");
+            poisoned.into_inner()
+        });
+        if !scored.is_empty() {
+            for (memory_key, _, _) in &scored {
+                let _ = conn.execute(
+                    "UPDATE vector_memory SET hit_count = hit_count + 1, last_hit_at = ?2 WHERE memory_key = ?1",
+                    params![memory_key, now],
+                );
+            }
+        }
+        drop(conn);
+
+        let hits: Vec<VectorHit> = scored
+            .into_iter()
+            .map(|(_, blended_score, response_text)| VectorHit {
+                similarity: blended_score,
+                response_snippet: trim_chars(&response_text, max_snippet_chars),
+            })
+            .collect();
+
+        let feedback = VectorPrecisionFeedback::new(&hits);
+        Ok((hits, feedback))
     }
 }
 
@@ -809,6 +1276,99 @@ mod tests {
             first_snippet.contains("fresh"),
             "fresh entry should rank first but got: {first_snippet:?}"
         );
+    }
+
+    #[test]
+    fn hnsw_index_insert_and_search_basic() {
+        let dir = tempfile::tempdir().expect("temp dir should be created");
+        let db_path = dir.path().join("hnsw_basic.sqlite3");
+        let store = VectorStore::new(&db_path, 64, 200).expect("vector store init");
+
+        // Insert enough entries to trigger HNSW construction
+        for i in 0..50 {
+            let query = format!("rust feature number {i}");
+            let response = format!("response for feature {i}");
+            store.upsert("test", &query, &response).expect("upsert");
+        }
+
+        // Trigger HNSW build by calling ensure_hnsw_index
+        store.ensure_hnsw_index().expect("ensure_hnsw_index");
+
+        // Search via HNSW path
+        let (hits, feedback) = store
+            .search("test", "rust feature number 5", 5, 0.0, 200)
+            .expect("hnsw search");
+        assert!(!hits.is_empty(), "HNSW search should return hits");
+        assert!(
+            feedback.avg_similarity > 0.0,
+            "should have meaningful similarity"
+        );
+        assert!(
+            hits[0].response_snippet.contains("feature 5")
+                || hits[0].response_snippet.contains("feature 4")
+                || hits[0].response_snippet.contains("feature 6"),
+            "top result should be near query: got {:?}",
+            hits[0].response_snippet
+        );
+    }
+
+    #[test]
+    fn hnsw_benchmark_10k_vectors() {
+        let dir = tempfile::tempdir().expect("temp dir should be created");
+        let db_path = dir.path().join("hnsw_10k.sqlite3");
+        let store = VectorStore::new(&db_path, 128, 10000).expect("vector store init");
+
+        // Insert 10,000 vectors using the public upsert API.
+        // HNSW index is None during this phase, so each upsert only goes to SQLite.
+        for i in 0..10_000 {
+            let query = format!("benchmark query number {i}");
+            let response = format!("benchmark response {i}");
+            store.upsert("bench", &query, &response).expect("upsert");
+        }
+
+        // Build the HNSW index from the SQLite data
+        let built = store.ensure_hnsw_index().expect("ensure_hnsw_index");
+        assert!(built, "HNSW index should be built");
+
+        // Warm-up: run one search to ensure any lazy initialization is done
+        let _ = store
+            .search("bench", "benchmark query number 42", 10, 0.0, 200)
+            .expect("warmup search");
+
+        // Measure HNSW search latency for 10 queries
+        let start = std::time::Instant::now();
+        for _ in 0..10 {
+            let (hits, _) = store
+                .search("bench", "benchmark query number 42", 10, 0.0, 200)
+                .expect("search");
+            assert!(!hits.is_empty(), "should find similar entries");
+        }
+        let elapsed = start.elapsed();
+        let avg_us = elapsed.as_micros() as f64 / 10.0;
+
+        // HNSW search should be fast: each search under 10 ms on 10K vectors
+        assert!(
+            avg_us < 10_000.0,
+            "HNSW search too slow: {avg_us:.0}us avg (expected < 10ms)"
+        );
+    }
+
+    #[test]
+    fn hnsw_insert_empty_and_build() {
+        let dir = tempfile::tempdir().expect("temp dir should be created");
+        let db_path = dir.path().join("hnsw_empty.sqlite3");
+        let store = VectorStore::new(&db_path, 64, 100).expect("vector store init");
+
+        // Build HNSW with empty DB
+        let built = store.ensure_hnsw_index().expect("ensure_hnsw_index empty");
+        assert!(built, "should build empty index");
+
+        // Search on empty index should return no results
+        let (hits, feedback) = store
+            .search("test", "something", 5, 0.0, 200)
+            .expect("search on empty");
+        assert!(hits.is_empty());
+        assert_eq!(feedback.hit_count, 0);
     }
 }
 

@@ -1,5 +1,4 @@
 import { ChildProcess, spawn } from "child_process";
-import * as crypto from "crypto";
 import * as http from "http";
 import * as os from "os";
 import * as vscode from "vscode";
@@ -11,356 +10,25 @@ import {
   protocolContract,
 } from "./protocolContract";
 import { StreamEvent, StreamRequestOptions } from "./managerTypes";
-
-interface JsonRpcRequest {
-  jsonrpc: "2.0";
-  id: number;
-  method: string;
-  params?: unknown;
-}
-
-interface JsonRpcResponse {
-  jsonrpc: "2.0";
-  id: number;
-  result?: unknown;
-  error?: {
-    code: number;
-    message: string;
-    data?: unknown;
-  };
-}
-
-interface PendingRequest {
-  resolve: (_value: unknown) => void;
-  reject: (_reason?: unknown) => void;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-/**
- * Extract the keyring account name from a provider's env-var / keyring URI.
- *
- * Handles two formats:
- * - `keyring://go-on/{account_name}` — extract account_name directly
- * - `OPENAI_API_KEY` — old-style env var name, convert to lowercase
- *
- * Returns the account name suitable for use with the system keyring
- * (e.g. `copilot_api_key`, `openai_api_key`).
- */
-function secretNameForEnvVar(envVar: string): string {
-  const normalized = String(envVar || "").trim();
-  if (!normalized) {
-    return "";
-  }
-  // Handle keyring://go-on/{name} URIs
-  const keyringPrefix = "keyring://go-on/";
-  if (normalized.startsWith(keyringPrefix)) {
-    return normalized.slice(keyringPrefix.length);
-  }
-  // Legacy env-var name: GITHUB_COPILOT_TOKEN → github_copilot_token
-  if (normalized === "GITHUB_COPILOT_TOKEN") {
-    return "github_copilot_token";
-  }
-  return normalized.toLowerCase();
-}
+import {
+  FramedReader,
+  FramedWriter,
+  FramedReaderCallbacks,
+  ReadableStreamLike,
+} from "./runtime/framedProtocol";
+import {
+  JsonRpcRequest,
+  JsonRpcResponse,
+  PendingRequest,
+  asRecord,
+  secretNameForEnvVar,
+} from "./runtime/jsonRpc";
+import { HeartbeatManager } from "./runtime/heartbeat";
+import { ReconnectManager } from "./runtime/reconnect";
 
 // ── Framed stdio protocol ────────────────────────────────────────────
-
-// Minimal type declarations for ReadableStream (available at runtime via
-// Node.js stream/web but not in @types/node@16.x type definitions).
-interface ReadableStreamLike<R = unknown> {
-  getReader(): ReadableStreamDefaultReaderLike<R>;
-}
-interface ReadableStreamDefaultReaderLike<R = unknown> {
-  read(): Promise<{ done: boolean; value: R }>;
-  cancel(): Promise<void>;
-}
-
-interface FramedReaderCallbacks {
-  onMessage: (_msg: FramedMessage) => void;
-  onPong?: () => void;
-  onError?: (_err: Error) => void;
-}
-
-/**
- * FramedReader parses a length-prefixed framed protocol from a
- * ReadableStream<Uint8Array>.
- *
- * Frame format: [4-byte BigEndian uint32 payload_length][JSON payload]
- *
- * In compatibility mode, if the first bytes of the stream do not look like a
- * valid length prefix (e.g. the stream starts with a JSON object character),
- * the reader falls back to line-by-line JSON parsing.
- */
-class FramedReader {
-  private chunks: Uint8Array[] = [];
-  private chunkLength = 0;
-  private reader: ReadableStreamDefaultReaderLike<Uint8Array> | null = null;
-  private callbacks: FramedReaderCallbacks;
-  private compatibilityMode: boolean;
-  private lineBuffer = "";
-  private aborted = false;
-  private fallbackActive = false;
-  private readonly MAX_FRAME_SIZE = 1024 * 1024; // 1 MB
-
-  constructor(
-    stream: ReadableStreamLike<Uint8Array>,
-    callbacks: FramedReaderCallbacks,
-    compatibilityMode = false,
-  ) {
-    this.callbacks = callbacks;
-    this.compatibilityMode = compatibilityMode;
-    this.reader = stream.getReader();
-    void this.readLoop();
-  }
-
-  /** Manually feed data into the reader (used by adapter code). */
-  feed(data: Uint8Array): void {
-    if (this.aborted) return;
-    this.chunks.push(data);
-    this.chunkLength += data.length;
-    this.processBuffer();
-  }
-
-  abort(): void {
-    this.aborted = true;
-    if (this.reader) {
-      void this.reader.cancel();
-    }
-    this.chunks = [];
-    this.chunkLength = 0;
-  }
-
-  private async readLoop(): Promise<void> {
-    try {
-      while (!this.aborted && this.reader) {
-        const { done, value } = await this.reader.read();
-        if (done) break;
-        if (value && value.length > 0) {
-          this.feed(value);
-        }
-      }
-    } catch (err) {
-      if (!this.aborted) {
-        this.callbacks.onError?.(
-          err instanceof Error ? err : new Error(String(err)),
-        );
-      }
-    }
-  }
-
-  private concatBuffer(): Uint8Array {
-    if (this.chunks.length === 1) return this.chunks[0];
-    const result = new Uint8Array(this.chunkLength);
-    let offset = 0;
-    for (const chunk of this.chunks) {
-      result.set(chunk, offset);
-      offset += chunk.length;
-    }
-    return result;
-  }
-
-  private processBuffer(): void {
-    if (this.fallbackActive) {
-      this.fallbackParse(this.concatBuffer());
-      return;
-    }
-    if (this.chunkLength < 4) return;
-
-    const view = this.concatBuffer();
-    let offset = 0;
-
-    // In compatibility mode, check heuristic on the first 4 bytes
-    if (this.compatibilityMode && offset === 0 && this.shouldFallback(view)) {
-      this.fallbackActive = true;
-      this._outputLine(
-        "[framed] compatibility mode: switching to line-by-line parsing",
-      );
-      this.fallbackParse(view);
-      return;
-    }
-
-    while (offset + 4 <= view.length) {
-      const payloadLen = new DataView(
-        view.buffer,
-        view.byteOffset + offset,
-        4,
-      ).getUint32(0, false); // BigEndian
-
-      if (payloadLen > this.MAX_FRAME_SIZE) {
-        this.callbacks.onError?.(
-          new Error(
-            `Frame payload too large: ${payloadLen} bytes (max ${this.MAX_FRAME_SIZE})`,
-          ),
-        );
-        return;
-      }
-
-      if (offset + 4 + payloadLen > view.length) {
-        break; // incomplete frame, wait for more data
-      }
-
-      offset += 4;
-      const jsonBytes = view.slice(offset, offset + payloadLen);
-      offset += payloadLen;
-
-      const jsonStr = new TextDecoder().decode(jsonBytes);
-      try {
-        const msg = JSON.parse(jsonStr) as FramedMessage;
-
-        // Handle heartbeat pong internally
-        if (msg.type === "heartbeat.pong") {
-          this.callbacks.onPong?.();
-        } else if (msg.type === "heartbeat.ping") {
-          // Auto-respond to heartbeat ping from the server
-          // (the GoOnManager's writer will send back a pong)
-          // Let the message through so the manager can respond
-          this.callbacks.onMessage(msg);
-        } else {
-          this.callbacks.onMessage(msg);
-        }
-      } catch {
-        this.callbacks.onError?.(
-          new Error(`Invalid JSON in frame: ${jsonStr.slice(0, 200)}`),
-        );
-      }
-    }
-
-    // Keep remaining bytes
-    if (offset < view.length) {
-      this.chunks = [view.slice(offset)];
-      this.chunkLength = this.chunks[0].length;
-    } else {
-      this.chunks = [];
-      this.chunkLength = 0;
-    }
-  }
-
-  /**
-   * Heuristic: if the first byte is `{` (0x7B) the stream likely starts with
-   * raw JSON rather than a 4-byte length prefix. Also if the uint32 decoded
-   * from the first 4 bytes would exceed 1 MB, treat as invalid.
-   */
-  private shouldFallback(data: Uint8Array): boolean {
-    // If first byte is '{', it's almost certainly raw JSON
-    if (data.length > 0 && data[0] === 0x7b) return true;
-    // Check if the 4-byte prefix decodes to an unreasonable size
-    if (data.length >= 4) {
-      const len = new DataView(data.buffer, data.byteOffset, 4).getUint32(
-        0,
-        false,
-      );
-      if (len > this.MAX_FRAME_SIZE) return true;
-    }
-    return false;
-  }
-
-  private fallbackParse(data: Uint8Array): void {
-    const text = new TextDecoder().decode(data);
-    this.lineBuffer += text;
-
-    const lines = this.lineBuffer.split("\n");
-    this.lineBuffer = lines.pop() || "";
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const msg = JSON.parse(trimmed) as FramedMessage;
-        this.callbacks.onMessage(msg);
-      } catch {
-        // Ignore invalid JSON in fallback mode
-      }
-    }
-  }
-
-  private _outputLine(msg: string): void {
-    // eslint-disable-next-line no-console
-    console.log(msg);
-  }
-}
-
-/**
- * FramedWriter writes messages with a length-prefixed framing protocol:
- * [4-byte BigEndian uint32 payload_length][JSON payload]
- *
- * Each outgoing message is automatically annotated with a `message_id`
- * for deduplication. Supports queuing when the underlying transport's
- * buffer is full (backpressure).
- */
-class FramedWriter {
-  private writeFn: (_data: Uint8Array) => boolean;
-  private queue: Uint8Array[] = [];
-  private messageCounter = 0;
-  private sessionId: string;
-
-  constructor(writeFn: (_data: Uint8Array) => boolean) {
-    this.writeFn = writeFn;
-    this.sessionId = `session-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
-  }
-
-  /**
-   * Encode and write a message. Returns true if the message was written
-   * directly, false if it was queued (backpressure).
-   */
-  writeMessage(msg: unknown): boolean {
-    const enriched: FramedMessage = {
-      message_id: `msg-${this.sessionId}-${++this.messageCounter}`,
-      ...(msg as Record<string, unknown>),
-    };
-    const json = JSON.stringify(enriched);
-    const encoder = new TextEncoder();
-    const jsonBytes = encoder.encode(json);
-
-    const frame = new Uint8Array(4 + jsonBytes.length);
-    new DataView(frame.buffer).setUint32(0, jsonBytes.length, false); // BE
-    frame.set(jsonBytes, 4);
-
-    return this.writeFrame(frame);
-  }
-
-  private writeFrame(frame: Uint8Array): boolean {
-    if (this.queue.length > 0) {
-      this.queue.push(frame);
-      return false;
-    }
-    try {
-      const canWrite = this.writeFn(frame);
-      if (!canWrite) {
-        this.queue.push(frame);
-      }
-      return canWrite;
-    } catch {
-      this.queue.push(frame);
-      return false;
-    }
-  }
-
-  /** Flush any queued messages. */
-  flush(): void {
-    while (this.queue.length > 0) {
-      const frame = this.queue[0];
-      try {
-        const canWrite = this.writeFn(frame);
-        if (canWrite) {
-          this.queue.shift();
-        } else {
-          break;
-        }
-      } catch {
-        break;
-      }
-    }
-  }
-
-  get queuedCount(): number {
-    return this.queue.length;
-  }
-}
+// FramedReader, FramedWriter, and supporting types moved to
+// runtime/framedProtocol.ts -- imported above
 
 // ── GoOnManager ──────────────────────────────────────────────────────
 
@@ -376,8 +44,12 @@ export class GoOnManager {
   private stdoutBuffer = "";
   private lineBuffer = "";
   private _droppedBytes = 0;
-  private _reconnectAttempts = 0;
-  private readonly maxReconnectAttempts = 3;
+  /**
+   * Removed fixed limit (was 3). Now uses unlimited exponential backoff
+   * to support long-running multi-agent workflows (10+ min).
+   * Backoff: min(2000 * 2^attempt, 300000)ms with 30% jitter.
+   * @see https://github.com/go-on/go-on/issues/connection-resilience
+   */
   private _shutdownInProgress = false;
   /**
    * Guards start()/stop() from concurrent calls.
@@ -386,7 +58,8 @@ export class GoOnManager {
    */
   private _operationPromise: Promise<void> | null = null;
   private _closeListener: (() => void) | null = null;
-  private _reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  private reconnect: ReconnectManager;
+  private heartbeat: HeartbeatManager;
   private _startupConfig?: {
     configPath: string;
     executablePath: string;
@@ -401,11 +74,8 @@ export class GoOnManager {
   private framedWriter: FramedWriter | null = null;
   private writerWriteFn: ((_data: Uint8Array) => boolean) | null = null;
 
-  // ── Heartbeat ──
-  private readonly HEARTBEAT_INTERVAL_MS = 30000;
-  private readonly HEARTBEAT_TIMEOUT_MS = 90000;
-  private heartbeatIntervalTimer: ReturnType<typeof setInterval> | null = null;
-  private heartbeatTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
+  // ── Heartbeat managed by HeartbeatManager ──
+  // Fields moved to runtime/heartbeat.ts
 
   // ── Message deduplication ──
   private readonly DEDUP_CAPACITY = 100;
@@ -454,6 +124,16 @@ export class GoOnManager {
   }
 
   constructor() {
+    this.reconnect = new ReconnectManager(
+      () => this._doReconnect(),
+      this._outputChannel,
+    );
+    this.heartbeat = new HeartbeatManager(
+      () => this._sendFramedPing(),
+      () => this._sendLegacyPing(),
+      () => this._onHeartbeatTimeout(),
+      this._outputChannel,
+    );
     this.updateStatus();
   }
 
@@ -549,6 +229,8 @@ export class GoOnManager {
       } else {
         // Framed protocol not available / not requested — use line-based
         this.useFramedProtocol = false;
+        // Start legacy mode heartbeat (JSON-RPC ping/pong)
+        this.heartbeat.startLegacy();
 
         // ── Traditional line-based protocol on stdout ──
         this.process.stdout?.on("data", (data: Buffer) => {
@@ -590,6 +272,8 @@ export class GoOnManager {
 
             try {
               const response: JsonRpcResponse = JSON.parse(combined);
+              // Legacy heartbeat: any valid JSON-RPC response means backend is alive
+              this.heartbeat.resetLegacyTimeout();
               const pending = this.pendingRequests.get(response.id);
               if (pending) {
                 this.pendingRequests.delete(response.id);
@@ -601,10 +285,11 @@ export class GoOnManager {
                   pending.resolve(response.result);
                 }
               }
-            } catch {
-              // JSON.parse failed — buffer the fragment and prepend to the
-              // next chunk. This handles fragmented JSON responses that are
-              // split across two (or more) newline-delimited chunks.
+            } catch (err) {
+              console.warn(
+                "[runtimeManager] JSON parse failed, buffering:",
+                err,
+              );
               this.lineBuffer = combined;
               // Cap lineBuffer at 1MB to prevent memory leak
               if (this.lineBuffer.length > 1024 * 1024) {
@@ -676,6 +361,36 @@ export class GoOnManager {
         healthReq.setTimeout(3000, () => {
           healthReq.destroy();
         });
+
+        // Protocol version discovery: probe the /protocol/version endpoint
+        // to confirm the backend API level and unify with the GUI's discovery pattern.
+        // This is fire-and-forget — we log the result but don't block startup.
+        const protoUrl = `${baseUrl}/protocol/version`;
+        const protoReq = http.get(protoUrl, (res) => {
+          let body = "";
+          res.on("data", (chunk: Buffer) => {
+            body += chunk.toString();
+          });
+          res.on("end", () => {
+            if (res.statusCode === 200) {
+              this._outputChannel?.appendLine(
+                `[protocol] version discovery succeeded: ${body.slice(0, 200)}`,
+              );
+            } else {
+              this._outputChannel?.appendLine(
+                `[protocol] version discovery returned HTTP ${res.statusCode}`,
+              );
+            }
+          });
+        });
+        protoReq.on("error", (err: Error) => {
+          this._outputChannel?.appendLine(
+            `[protocol] version discovery failed: ${err.message}`,
+          );
+        });
+        protoReq.setTimeout(3000, () => {
+          protoReq.destroy();
+        });
       }, 500);
 
       this.process.stderr?.on("data", (data: Buffer) => {
@@ -684,7 +399,12 @@ export class GoOnManager {
         if (stderrBuffer.length > 4000) {
           stderrBuffer = stderrBuffer.slice(-4000);
         }
-        this._outputChannel?.appendLine("[stderr] " + text.trimEnd());
+        // Sanitize stderr: strip potential secrets (API keys, tokens) from output
+        // channel display while preserving the raw buffer for error diagnostics.
+        const sanitized = text
+          .replace(/(sk-[a-zA-Z0-9]{20,})/g, "sk-***REDACTED***")
+          .replace(/([A-Za-z0-9+/=]{40,})/g, "***REDACTED***");
+        this._outputChannel?.appendLine("[stderr] " + sanitized.trimEnd());
       });
 
       this.process.on("close", (code: number) => {
@@ -698,7 +418,7 @@ export class GoOnManager {
 
         // Clean up framed protocol and heartbeat
         this._clearFramedProtocol();
-        this._clearHeartbeat();
+        this.heartbeat.stopAll();
 
         // Reject all pending requests — process exited unexpectedly
         for (const [, pending] of this.pendingRequests) {
@@ -777,36 +497,39 @@ export class GoOnManager {
           kill.on("error", reject);
           kill.unref();
         });
-      } catch {
-        proc.kill(); // fallback
+      } catch (err) {
+        console.warn("[runtimeManager] forceKill fallback:", err);
+        proc.kill();
       }
     } else {
       proc.kill("SIGKILL");
     }
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     if (this._operationPromise) {
-      // An operation is in flight; can't stop now. Caller should retry.
-      return;
+      // V10: Wait for the in-flight operation to complete, then proceed with stop.
+      // Previously this returned early, abandoning the stop request.
+      try {
+        await this._operationPromise;
+      } catch {
+        // If the in-flight operation failed, we still need to proceed with stop.
+      }
     }
     this._shutdownInProgress = true;
-    this._reconnectAttempts = 0;
+    this.reconnect.reset();
 
     // Clean up framed protocol
     this._clearFramedProtocol();
-    this._clearHeartbeat();
+    this.heartbeat.stopAll();
 
     // Save startupConfig before clearing, so we can restore it
     // if a concurrent start() call spawned a new process during our await
     const savedConfig = this._startupConfig;
     this._startupConfig = undefined;
 
-    // Clean up timers first
-    if (this._reconnectTimer) {
-      clearTimeout(this._reconnectTimer);
-      this._reconnectTimer = undefined;
-    }
+    // Cancel any pending reconnection
+    this.reconnect.cancel();
 
     // Save process reference to local variable before clearing
     const proc = this.process;
@@ -867,46 +590,20 @@ export class GoOnManager {
 
   private _handleProcessExit(): void {
     if (this._shutdownInProgress || !this._startupConfig) return;
-    void this.attemptReconnect();
+    void this._doReconnect();
   }
 
-  private _scheduleReconnect(): void {
-    // Exponential backoff with 30% jitter: delay = 5000 * (0.7 + random * 0.3)
-    const jitter = 0.7 + Math.random() * 0.3;
-    const delay = Math.round(5000 * jitter);
-    this._reconnectTimer = setTimeout(() => {
-      void this.attemptReconnect();
-    }, delay);
-  }
-
-  private async attemptReconnect(): Promise<void> {
+  /** Core reconnect logic (called by ReconnectManager). */
+  private async _doReconnect(): Promise<void> {
     if (this._shutdownInProgress || !this._startupConfig) return;
 
-    this._reconnectAttempts++;
-    if (this._reconnectAttempts > this.maxReconnectAttempts) {
-      this._outputChannel?.appendLine(
-        `[reconnect] Max reconnect attempts (${this.maxReconnectAttempts}) reached, giving up.`,
-      );
-      void vscode.window.showWarningMessage(
-        i18n.getMessage(MessageKeys.reconnectMaxAttempts, [
-          String(this.maxReconnectAttempts),
-        ]),
-      );
-      this._reconnectAttempts = 0;
-      return;
-    }
-
-    // Exponential backoff with 30% jitter: delay = 2000 * (0.7 + random * 0.3)
-    const jitter = 0.7 + Math.random() * 0.3;
-    const delay = Math.round(2000 * jitter);
+    // Use exponential backoff with jitter
+    const delay = this.reconnect.backoffMs(this.reconnect.attempts);
     this._outputChannel?.appendLine(
-      `[reconnect] Attempt ${this._reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms...`,
+      `[reconnect] Attempt ${this.reconnect.attempts + 1} in ${delay}ms (unlimited retries)...`,
     );
 
-    // Wait before reconnecting
-    // Use a local timer so stop() can't clear it via this._reconnectTimer.
-    // If stop() clears the shared timer reference, we'd never reach the
-    // shutdown check below and _shutdownInProgress would stay true forever.
+    // Wait before reconnecting with a local timer so stop() can't clear it.
     await new Promise<void>((resolve) => {
       setTimeout(resolve, delay);
     });
@@ -923,16 +620,16 @@ export class GoOnManager {
         this._startupConfig.useFramedProtocol,
       );
       this._outputChannel?.appendLine(
-        `[reconnect] Reconnect attempt ${this._reconnectAttempts} succeeded.`,
+        `[reconnect] Reconnect attempt ${this.reconnect.attempts} succeeded.`,
       );
-      this._reconnectAttempts = 0;
+      this.reconnect.reset();
     } catch (error) {
       this._outputChannel?.appendLine(
-        `[reconnect] Attempt ${this._reconnectAttempts} failed: ${error}`,
+        `[reconnect] Attempt ${this.reconnect.attempts} failed: ${error}`,
       );
       // Only schedule retry if not shutting down
       if (!this._shutdownInProgress) {
-        this._scheduleReconnect();
+        this.reconnect.schedule();
       }
     }
   }
@@ -941,11 +638,24 @@ export class GoOnManager {
     return this.process !== null;
   }
 
+  /**
+   * Trigger reconnection from StatusMonitor (or other observers).
+   * Does nothing if process is running, shutting down, or no startup config.
+   */
+  triggerReconnectFromObserver(): void {
+    if (this.process || this._shutdownInProgress || !this._startupConfig)
+      return;
+    this._outputChannel?.appendLine(
+      "[reconnect] Observer triggered reconnection",
+    );
+    void this._doReconnect();
+  }
+
   /** Expose reconnect state for diagnostics. */
   getReconnectState(): { attempts: number; maxAttempts: number } {
     return {
-      attempts: this._reconnectAttempts,
-      maxAttempts: this.maxReconnectAttempts,
+      attempts: this.reconnect.attempts,
+      maxAttempts: Infinity, // unlimited retries with exponential backoff
     };
   }
 
@@ -1291,29 +1001,10 @@ export class GoOnManager {
     this.writerWriteFn = null;
   }
 
-  // ── Heartbeat ──
+  // ── Heartbeat (delegated to HeartbeatManager) ──
 
-  /** Start the heartbeat interval that sends pings every 30s. */
-  private _startHeartbeat(): void {
-    this._clearHeartbeat();
-
-    // Send first heartbeat immediately (not after 30s interval)
-    this._sendHeartbeatPing();
-
-    // Schedule subsequent pings
-    this._scheduleHeartbeatPing();
-
-    // Set heartbeat timeout: if no pong within 90s, reconnect
-    this._resetHeartbeatTimeout();
-  }
-
-  private _scheduleHeartbeatPing(): void {
-    this.heartbeatIntervalTimer = setInterval(() => {
-      this._sendHeartbeatPing();
-    }, this.HEARTBEAT_INTERVAL_MS);
-  }
-
-  private _sendHeartbeatPing(): void {
+  /** Send a framed heartbeat ping via the FramedWriter. */
+  private _sendFramedPing(): void {
     if (!this.useFramedProtocol || !this.framedWriter) return;
     try {
       this.framedWriter.writeMessage({ type: "heartbeat.ping" });
@@ -1325,51 +1016,33 @@ export class GoOnManager {
     }
   }
 
-  /** Reset the heartbeat timeout timer (called on pong received). */
-  private _resetHeartbeatTimeout(): void {
-    if (this.heartbeatTimeoutTimer) {
-      clearTimeout(this.heartbeatTimeoutTimer);
-      this.heartbeatTimeoutTimer = null;
+  /** Send a legacy JSON-RPC ping via stdin. */
+  private _sendLegacyPing(): void {
+    if (!this.process?.stdin || this._shutdownInProgress) return;
+    try {
+      const pingMsg =
+        JSON.stringify({ jsonrpc: "2.0", id: 0, method: "runtime.health" }) +
+        "\n";
+      this.process.stdin.write(pingMsg);
+      this._outputChannel?.appendLine("[legacy-heartbeat] ping sent");
+    } catch (err) {
+      this._outputChannel?.appendLine(
+        `[legacy-heartbeat] Failed to send ping: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
-    this.heartbeatTimeoutTimer = setTimeout(() => {
-      this._handleHeartbeatTimeout();
-    }, this.HEARTBEAT_TIMEOUT_MS);
   }
 
-  /** Called when no pong is received within the timeout window. */
-  private _handleHeartbeatTimeout(): void {
-    this._outputChannel?.appendLine(
-      "[heartbeat] Timeout — no pong received, triggering reconnection",
-    );
-    void vscode.window.showWarningMessage(
-      "Go-On connection lost (heartbeat timeout). Reconnecting...",
-    );
-
-    // Clean up the current process
+  /** Handle heartbeat timeout from HeartbeatManager. */
+  private _onHeartbeatTimeout(): void {
     this._clearFramedProtocol();
-    this._clearHeartbeat();
-
+    this.heartbeat.stopAll();
     if (this.process) {
       const proc = this.process;
       this.process = null;
       proc.kill();
     }
-
-    // Trigger reconnection
     if (this._startupConfig && !this._shutdownInProgress) {
-      void this.attemptReconnect();
-    }
-  }
-
-  /** Stop all heartbeat timers. */
-  private _clearHeartbeat(): void {
-    if (this.heartbeatIntervalTimer) {
-      clearInterval(this.heartbeatIntervalTimer);
-      this.heartbeatIntervalTimer = null;
-    }
-    if (this.heartbeatTimeoutTimer) {
-      clearTimeout(this.heartbeatTimeoutTimer);
-      this.heartbeatTimeoutTimer = null;
+      void this._doReconnect();
     }
   }
 
@@ -1416,7 +1089,8 @@ export class GoOnManager {
       if (!this.process?.stdin) return false;
       try {
         return this.process.stdin.write(Buffer.from(frame));
-      } catch {
+      } catch (err) {
+        console.warn("[runtimeManager] stdin write failed:", err);
         return false;
       }
     };
@@ -1466,7 +1140,7 @@ export class GoOnManager {
     };
 
     const onStdoutPong = (): void => {
-      this._resetHeartbeatTimeout();
+      this.heartbeat.resetFramedTimeout();
     };
 
     const onStdoutError = (err: Error): void => {
@@ -1517,8 +1191,8 @@ export class GoOnManager {
       this._outputChannel?.appendLine(`[stdout] ${data.toString().trimEnd()}`);
     });
 
-    // Start heartbeat
-    this._startHeartbeat();
+    // Start framed heartbeat
+    this.heartbeat.startFramed();
     return true;
   }
 
@@ -1569,7 +1243,8 @@ export class GoOnManager {
       const isReady = total > 0 && ready > 0;
       this.providerReadyCache = { checkedAt: now, ready: isReady };
       return isReady;
-    } catch {
+    } catch (err) {
+      console.warn("[runtimeManager] isAnyAiProviderReady failed:", err);
       this.providerReadyCache = { checkedAt: now, ready: false };
       return false;
     }
@@ -1608,7 +1283,8 @@ export class GoOnManager {
         apiKeyEnv: String(p.api_key_env || ""),
         secretKeyEnv: String(p.secret_key_env || ""),
       }));
-    } catch {
+    } catch (err) {
+      console.warn("[runtimeManager] fetchAvailableProviders failed:", err);
       return null;
     }
   }

@@ -169,10 +169,15 @@ pub(crate) async fn execute_fallback_agents(
 
             // ── Tenant budget check before LLM call (B54-075) ─────────
             {
-                let budget_guard = server.tenant_budget.lock().unwrap_or_else(|poisoned| {
-                    warn!("execute_fallback_agents: tenant_budget poisoned, recovering");
-                    poisoned.into_inner()
-                });
+                let budget_guard =
+                    server
+                        .rate_limiting
+                        .tenant_budget
+                        .lock()
+                        .unwrap_or_else(|poisoned| {
+                            warn!("execute_fallback_agents: tenant_budget poisoned, recovering");
+                            poisoned.into_inner()
+                        });
                 if let Err(e) = budget_guard.check_can_start(&tenant_id_owned) {
                     return (
                         agent_name_owned,
@@ -215,6 +220,7 @@ pub(crate) async fn execute_fallback_agents(
                         "error": "empty_response",
                     }));
                     server
+                        .resilience
                         .online_controller
                         .lock()
                         .unwrap_or_else(|poisoned| {
@@ -268,6 +274,7 @@ pub(crate) async fn execute_fallback_agents(
                     }
                     // BLUE56-GAP-C04: Record failure in HyperResilienceEngine
                     let _ = server
+                        .resilience
                         .hyper_resilience
                         .record_failure_with_mode(
                             &agent_name,
@@ -287,6 +294,7 @@ pub(crate) async fn execute_fallback_agents(
                 }
 
                 server
+                    .resilience
                     .online_controller
                     .lock()
                     .unwrap_or_else(|poisoned| {
@@ -337,7 +345,11 @@ pub(crate) async fn execute_fallback_agents(
                     );
                 }
                 // BLUE56-GAP-C04: Record success in HyperResilienceEngine
-                let _ = server.hyper_resilience.record_success(&agent_name).await;
+                let _ = server
+                    .resilience
+                    .hyper_resilience
+                    .record_success(&agent_name)
+                    .await;
 
                 agent_attempts.push(json!({
                     "agent": agent_name,
@@ -388,6 +400,7 @@ pub(crate) async fn execute_fallback_agents(
                     "error": err_text
                 }));
                 server
+                    .resilience
                     .online_controller
                     .lock()
                     .unwrap_or_else(|poisoned| {

@@ -49,17 +49,20 @@ use crate::intelligence::consciousness::ConsciousnessMetrics;
 use crate::intelligence::consensus::ConsensusEngine;
 use crate::intelligence::continuous_learning::ContinuousLearningCenter;
 use crate::intelligence::discovery::DiscoveryCenter;
-use crate::intelligence::evolution_graph::{EvolutionGraph, EvolutionStage, TrendDirection};
+use crate::intelligence::evolution_graph::EvolutionGraph;
 
 use crate::intelligence::matcher::ScenarioMatcher;
 use crate::intelligence::metacognitive::MetacognitiveController;
 use crate::intelligence::now_ms;
 use crate::intelligence::reinforcement::federated::FederatedRL;
 use crate::intelligence::reinforcement::learning::{
-    ExperienceKnowledgeBase, QLearningAgent, RewardFunction, RlTaskExecutionMetrics, SuccessCase,
+    ExperienceKnowledgeBase, QLearningAgent, RewardFunction,
 };
 use crate::intelligence::reputation::ReputationStore;
 use crate::intelligence::self_model::SelfModelCore;
+use crate::intelligence::semantic_matcher::{
+    ModelCapability as SemanticModelCap, SemanticCapabilityMatcher,
+};
 use crate::intelligence::world_model::WorldModel;
 use crate::intelligence::{lock_guard, read_guard, write_guard};
 use crate::observability::provenance::ProvenanceLedger;
@@ -1121,6 +1124,29 @@ impl CapabilityBus {
             })
             .unwrap_or_default();
 
+        // Step D: Query DiscoveryCenter for prior solutions matching this task (I6).
+        //         If a matching solution exists, prefer its associated agent.
+        let discovery_query = crate::intelligence::discovery::DiscoveryQuery {
+            problem_pattern: Some(task_type_str.clone()),
+            tags: None,
+            category: None,
+            min_success_rate: Some(0.5),
+            limit: Some(5),
+        };
+        let discovery_result = self.discovery.search(&discovery_query);
+        if !discovery_result.entries.is_empty() {
+            self.record_event(
+                "decision",
+                None,
+                None,
+                "discovery_match",
+                serde_json::json!({
+                    "total_matches": discovery_result.total_matches,
+                    "best_match": discovery_result.best_match,
+                }),
+            );
+        }
+
         // In profiles with tool bus, merge runtime-created sub-agent templates from AgentFactory.
         #[cfg(any(
             feature = "sub-bus-tool",
@@ -1140,6 +1166,33 @@ impl CapabilityBus {
             }
             agents
         };
+
+        // Step E: Query SemanticCapabilityMatcher for semantic agent-task fit (I7).
+        //         Logs the top-3 matches for observability.
+        let semantic_matches = self.query_capabilities_semantic(&task_type_str);
+        if !semantic_matches.is_empty() {
+            let top_n: Vec<serde_json::Value> = semantic_matches
+                .iter()
+                .take(3)
+                .map(|m| {
+                    serde_json::json!({
+                        "agent": m.model_id,
+                        "score": m.score,
+                        "reasons": m.match_reasons,
+                    })
+                })
+                .collect();
+            self.record_event(
+                "decision",
+                None,
+                None,
+                "semantic_match",
+                serde_json::json!({
+                    "top_matches": top_n,
+                    "total_scored": semantic_matches.len(),
+                }),
+            );
+        }
 
         // If ScenarioMatcher found a high-confidence match, prefer its routing
         let scenario_preferred_agent = if scenario_match.matched {
@@ -1395,6 +1448,36 @@ impl CapabilityBus {
         result
     }
 
+    /// Query agent capabilities using SemanticCapabilityMatcher (I7).
+    ///
+    /// Uses the semantic matcher to find the best-matching agents for a
+    /// given task description, boosting scores when task keywords align
+    /// with capability tags. Wired into the `decide()` hot path so that
+    /// the matcher influences agent routing alongside reputation and
+    /// recency scores.
+    pub fn query_capabilities_semantic(
+        &self,
+        task_description: &str,
+    ) -> Vec<crate::intelligence::semantic_matcher::ScoredModel> {
+        let graph = lock_guard(&self.capability_graph);
+        let capabilities: Vec<SemanticModelCap> = graph
+            .all_capability_names()
+            .into_iter()
+            .map(|name| SemanticModelCap {
+                model_id: name.to_string(),
+                description: format!("Capability: {}", name),
+                tags: vec![name.to_lowercase()],
+            })
+            .collect();
+        drop(graph);
+
+        if capabilities.is_empty() {
+            return Vec::new();
+        }
+
+        SemanticCapabilityMatcher::match_task_to_models(task_description, &capabilities)
+    }
+
     /// Check if an agent is healthy via ObservabilityBus and OptimizationBus
     pub fn is_agent_healthy(&self, agent: &str) -> bool {
         // Check circuit breaker via OptimizationBus
@@ -1592,44 +1675,6 @@ impl CapabilityBus {
     // exceeding its ~100 ms budget.
     // ------------------------------------------------------------------
 
-    /// Update Q-table with reward signal from latest execution.
-    fn evolve_q_learning(
-        &self,
-        state: &(String, String),
-        action: &str,
-        next_state: &(String, String),
-        token_cost: u64,
-        success: bool,
-        quality_score: f64,
-    ) -> f64 {
-        let metrics = RlTaskExecutionMetrics {
-            tokens_used: token_cost,
-            success,
-            quality_score,
-            duration_ms: 0,
-        };
-        let reward = lock_guard(&self.reward_fn).calculate(&metrics);
-        lock_guard(&self.q_learning).update(state, action, reward, next_state);
-        reward
-    }
-
-    /// Record success case in experience knowledge base.
-    fn evolve_experience(
-        &self,
-        state: &(String, String),
-        action: &str,
-        success: bool,
-        quality_score: f64,
-    ) {
-        if success {
-            lock_guard(&self.experience).add_success_case(SuccessCase {
-                objective: format!("state_{:?}", state),
-                strategy: format!("action_{}", action),
-                confidence: quality_score,
-            });
-        }
-    }
-
     /// Record drift metrics through HarnessBus drift engine.
     fn evolve_drift_protection(&self, quality_score: f64, success: bool) {
         use crate::governance::drift::drift_protection::DriftType;
@@ -1684,366 +1729,6 @@ impl CapabilityBus {
             }),
         };
         self.harness.audit(entry);
-    }
-
-    /// Submit local policy to FederatedRL.
-    fn evolve_federated_rl(
-        &self,
-        state: &(String, String),
-        action: &str,
-        reward: f64,
-        quality_score: f64,
-        success: bool,
-    ) {
-        if success {
-            let now = now_ms();
-            let frl = self.federated_rl.submit_policy(
-                "local_agent".to_string(),
-                format!("evolve_{}", state.0),
-                serde_json::json!({
-                    "state": state,
-                    "action": action,
-                    "reward": reward,
-                    "timestamp": now,
-                })
-                .to_string(),
-                quality_score,
-                1,
-            );
-            if let Err(e) = self
-                .federated_rl
-                .contribute_to_round(&format!("round_{}", state.0), &frl)
-            {
-                warn!("evolve: federated_rl.contribute_to_round failed: {}", e);
-            }
-        }
-    }
-
-    /// Consolidate experience into continuous learning center.
-    ///
-    /// Periodically triggers forgetting detection and experience replay
-    /// to close the online learning loop (F-GAP-51).
-    fn evolve_continuous_learning(
-        &self,
-        state: &(String, String),
-        action: &str,
-        reward: f64,
-        success: bool,
-        quality_score: f64,
-    ) {
-        if let Err(e) = lock_guard(&self.continuous_learning).consolidate_experience(
-            &format!("{:?}_{}", state.0, action),
-            &serde_json::json!({
-                "state": state,
-                "action": action,
-                "success": success,
-                "reward": reward,
-                "quality": quality_score,
-            })
-            .to_string(),
-            quality_score,
-        ) {
-            warn!(
-                "evolve: continuous_learning.consolidate_experience failed: {}",
-                e
-            );
-        }
-
-        // ── Periodic maintenance: detect forgetting & replay (every 10th call) ──
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static CL_MAINTENANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
-        let count = CL_MAINTENANCE_COUNTER.fetch_add(1, Ordering::Relaxed);
-
-        if count.is_multiple_of(10) {
-            // 1. Detect forgetting and reinforce forgotten memories
-            let forgotten = {
-                let cl = lock_guard(&self.continuous_learning);
-                cl.detect_forgetting()
-            };
-            for curve in &forgotten {
-                if let Err(e) =
-                    lock_guard(&self.continuous_learning).reinforce_memory(&curve.memory_id)
-                {
-                    warn!("evolve: reinforce_memory failed: {}", e);
-                }
-            }
-            if !forgotten.is_empty() {
-                tracing::info!(
-                    "evolve: continuous_learning reinforced {} forgotten memories",
-                    forgotten.len()
-                );
-            }
-
-            // 2. Replay important memories and feed into Q-learning
-            let replayed = {
-                let cl = lock_guard(&self.continuous_learning);
-                cl.replay_important_memories(3)
-            };
-            for mem in &replayed {
-                if let Ok(data) = serde_json::from_str::<serde_json::Value>(&mem.data) {
-                    // Parse the stored (state, action, reward) triple
-                    let state_arr = data["state"].as_array();
-                    let action_str = data["action"].as_str();
-                    let replay_reward = data["reward"].as_f64();
-
-                    if let (Some(arr), Some(action_str), Some(replay_reward)) =
-                        (state_arr, action_str, replay_reward)
-                    {
-                        if arr.len() >= 2 {
-                            if let (Some(s0), Some(s1)) = (arr[0].as_str(), arr[1].as_str()) {
-                                let replayed_state = (s0.to_string(), s1.to_string());
-                                // Perform a mini Q-learning update with
-                                // replayed experience using the current
-                                // state as the next_state placeholder.
-                                lock_guard(&self.q_learning).update(
-                                    &replayed_state,
-                                    action_str,
-                                    replay_reward,
-                                    state,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-            if !replayed.is_empty() {
-                tracing::info!(
-                    "evolve: continuous_learning replayed {} memories into Q-learning",
-                    replayed.len()
-                );
-            }
-        }
-    }
-
-    /// Record observation in metacognitive controller and feed feedback into Q-learning.
-    fn evolve_metacognitive(
-        &self,
-        state: &(String, String),
-        action: &str,
-        reward: f64,
-        quality_score: f64,
-        success: bool,
-    ) {
-        if let Err(e) = self.metacognitive.record_observation(
-            &format!("evolve_{}_{}", state.0, action),
-            "capability_bus",
-            "evolution",
-            if success { "success" } else { "failure" },
-            &format!("reward={}, quality={}", reward, quality_score),
-        ) {
-            warn!("evolve: metacognitive.record_observation failed: {}", e);
-        }
-
-        // ── Generate metacognitive feedback and feed into Q-learning (F-GAP-51) ──
-        let feedback = self.metacognitive.generate_evolve_feedback();
-        let reward_multiplier = feedback["reward_multiplier"].as_f64().unwrap_or(1.0);
-        let suggested_exploration_rate = feedback["suggested_exploration_rate"]
-            .as_f64()
-            .unwrap_or(0.1);
-
-        // Apply suggested exploration rate to Q-learning agent for future decisions.
-        {
-            let mut ql = lock_guard(&self.q_learning);
-            ql.exploration_rate = suggested_exploration_rate;
-        }
-
-        // Scale the Q-value for this (state, action) pair by the reward_multiplier
-        // to retroactively incorporate metacognitive insight into the Q-table.
-        if (reward_multiplier - 1.0).abs() > 0.001 {
-            let mut ql = lock_guard(&self.q_learning);
-            if let Some(state_actions) = ql.q_table.get_mut(state) {
-                if let Some(q_val) = state_actions.get_mut(action) {
-                    *q_val *= reward_multiplier;
-                }
-            }
-            if let Some(state_actions) = ql.q_table_2.get_mut(state) {
-                if let Some(q_val) = state_actions.get_mut(action) {
-                    *q_val *= reward_multiplier;
-                }
-            }
-        }
-    }
-
-    /// Record successful patterns in DiscoveryCenter.
-    fn evolve_discovery(
-        &self,
-        state: &(String, String),
-        action: &str,
-        reward: f64,
-        quality_score: f64,
-        success: bool,
-        now: u64,
-    ) {
-        if success && quality_score > 0.7 {
-            if let Err(e) = self.discovery.record_solution(
-                crate::intelligence::discovery::DiscoveryEntry {
-                    id: String::new(),
-                    problem_pattern: format!("state_{}", state.0),
-                    solution_summary: format!("action_{}", action),
-                    solution_detail: serde_json::json!({"reward": reward, "quality": quality_score}),
-                    applicability_tags: vec![state.0.clone(), state.1.clone()],
-                    success_rate: quality_score,
-                    total_attempts: 1,
-                    successful_attempts: if success { 1 } else { 0 },
-                    discovered_by: "capability_bus_evolve".to_string(),
-                    created_ms: now,
-                    last_used_ms: now,
-                }
-            ) {
-                warn!("evolve: discovery.record_solution failed: {}", e);
-            }
-        }
-    }
-
-    /// Update EvolutionGraph with capability trajectory.
-    fn evolve_evolution_graph(
-        &self,
-        state: &(String, String),
-        action: &str,
-        success: bool,
-        quality_score: f64,
-    ) {
-        let mut eg = lock_guard(&self.evolution_graph);
-        let cap_name = format!("evolve_{}", action);
-        if let Err(e) = eg.register_capability(&state.0, &cap_name, EvolutionStage::New) {
-            warn!("evolve: evolution_graph.register_capability failed: {}", e);
-        }
-        if let Err(e) = eg.record_version(
-            &state.0,
-            &cap_name,
-            if success { quality_score } else { 0.0 },
-            0.0,
-        ) {
-            warn!("evolve: evolution_graph.record_version failed: {}", e);
-        }
-        if success && quality_score > 0.8 {
-            if let Some(rec) = eg.get_history(&state.0, &cap_name) {
-                let next_stage = match rec.current_stage {
-                    EvolutionStage::New => Some(EvolutionStage::Learning),
-                    EvolutionStage::Learning
-                        if rec.versions.len() >= 3 && rec.trend == TrendDirection::Improving =>
-                    {
-                        Some(EvolutionStage::Mature)
-                    }
-                    _ => None,
-                };
-                if let Some(stage) = next_stage {
-                    if let Err(e) = eg.advance_stage(&state.0, &cap_name, stage) {
-                        warn!("evolve: evolution_graph.advance_stage failed: {}", e);
-                    }
-                }
-            }
-        }
-    }
-
-    /// Record performance snapshot in SelfModel.
-    fn evolve_self_model(&self, now: u64, success: bool) {
-        use crate::intelligence::self_model::SelfPerformanceSnapshot;
-        let snapshot = SelfPerformanceSnapshot {
-            timestamp_ms: now,
-            avg_latency_ms: 0.0,
-            p50_latency_ms: 0.0,
-            p95_latency_ms: 0.0,
-            p99_latency_ms: 0.0,
-            error_rate: if success { 0.0 } else { 1.0 },
-            throughput: 1.0,
-            agent_count: 1,
-            tasks_processed: 1,
-        };
-        self.self_model.record_performance(snapshot);
-    }
-
-    /// Record awareness metrics in Consciousness.
-    fn evolve_consciousness(
-        &self,
-        state: &(String, String),
-        action: &str,
-        quality_score: f64,
-        success: bool,
-    ) {
-        use crate::intelligence::consciousness::AwarenessMetricType;
-        let awareness_value = if success { quality_score } else { 0.1 };
-        let _ = self.consciousness.record_metric(
-            AwarenessMetricType::SelfAwareness,
-            awareness_value,
-            quality_score,
-        );
-        let _ = self.consciousness.record_metric(
-            AwarenessMetricType::EnvironmentalAwareness,
-            if quality_score > 0.5 { 0.7 } else { 0.3 },
-            quality_score,
-        );
-        let profile = self.consciousness.profile();
-        if profile.reflexion_count < 100 && success {
-            let _ = self
-                .consciousness
-                .trigger_reflexion(&format!("evolve_cycle_{}_{}", state.0, action));
-        }
-    }
-
-    /// Update WorldModel with entity state.
-    fn evolve_world_model(&self, action: &str, state: &(String, String), reward: f64) {
-        if let Err(e) = self.world_model.register_entity(
-            &format!("action_{}", action),
-            crate::intelligence::world_model::EntityType::System,
-        ) {
-            warn!("evolve: world_model.register_entity failed: {}", e);
-        } else {
-            let mut props = std::collections::HashMap::new();
-            props.insert("state_0".to_string(), state.0.clone());
-            props.insert("state_1".to_string(), state.1.clone());
-            props.insert("reward".to_string(), reward.to_string());
-            if let Err(e) = self
-                .world_model
-                .update_entity(&format!("action_{}", action), props)
-            {
-                warn!("evolve: world_model.update_entity failed: {}", e);
-            }
-        }
-    }
-
-    /// Record evolve result as a round in ConsensusEngine.
-    fn evolve_consensus(
-        &self,
-        state: &(String, String),
-        action: &str,
-        reward: f64,
-        q_value: f64,
-        success: bool,
-        now: u64,
-    ) {
-        use crate::intelligence::consensus::{ConsensusNode, ConsensusVote, NodeRole};
-        let _ = self.consensus.register_node(ConsensusNode {
-            id: "capability-bus".to_string(),
-            address: "internal://capability_bus".to_string(),
-            weight: 1,
-            role: NodeRole::Leader,
-            is_online: true,
-            last_heartbeat_ms: now,
-        });
-        let proposals = vec![serde_json::json!({
-            "action": action,
-            "state": state,
-            "reward": reward,
-            "q_value": q_value,
-            "success": success,
-        })];
-        let proposal_id = format!("proposal_{}_{}", state.0, action);
-        match self.consensus.start_round("capability-bus", proposals) {
-            Ok(rid) => {
-                if let Err(e) = self.consensus.cast_vote(ConsensusVote {
-                    node_id: "capability-bus".to_string(),
-                    round_id: rid,
-                    proposal_id,
-                    approve: success,
-                    weight: 1,
-                    vote_ms: now,
-                }) {
-                    warn!("evolve: consensus.cast_vote failed: {}", e);
-                }
-            }
-            Err(e) => warn!("evolve: consensus.start_round failed: {}", e),
-        }
     }
 
     /// Coordinate the full evolution pipeline by delegating to focused
@@ -2359,15 +2044,7 @@ impl CapabilityBus {
         });
 
         if timeout(timeout_dur, async {
-            let transport = lock_guard(&self.transport);
-            let summary = serde_json::json!({
-                "q_value": q_value,
-                "exploration_rate": exploration_rate,
-            });
-            if let Err(e) = transport.send_event("capability-bus", "monitor", &summary.to_string())
-            {
-                warn!("evolve: transport.send_event failed: {}", e);
-            }
+            self.evolve_send_transport_event(q_value, exploration_rate)
         })
         .await
         .is_err()

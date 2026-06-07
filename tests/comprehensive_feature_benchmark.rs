@@ -682,14 +682,15 @@ fn measure_chat_latency() -> DimensionScore {
 /// Check that external_benchmark.rs exists with gate tests.
 fn measure_external_benchmark_gate() -> DimensionScore {
     let bench_src = include_str!("external_benchmark.rs");
-    let has_tests = bench_src.contains("#[test]") || bench_src.contains("#[tokio::test]");
-    let has_gate_assert = bench_src.contains("assert!");
+    let test_count =
+        bench_src.matches("#[test]").count() + bench_src.matches("#[tokio::test]").count();
+    let gate_assert_count = bench_src.matches("assert!").count();
     let mut pass_count = 0u64;
     let total = 2u64;
-    if has_tests {
+    if test_count > 0 {
         pass_count += 1;
     }
-    if has_gate_assert {
+    if gate_assert_count > 0 {
         pass_count += 1;
     }
     let score = ratio_score(pass_count, total);

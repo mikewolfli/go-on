@@ -225,6 +225,219 @@ fn embedding_safety_check(agent_output: &str) -> f64 {
     }
 }
 
+/// Real cosine-similarity based embedding comparison (I8).
+///
+/// Instead of set-based Jaccard, this builds a TF (term-frequency) vector
+/// for the agent output and compares it against each unsafe pattern's TF
+/// vector using cosine similarity. This more closely approximates a real
+/// embedding lookup while remaining dependency-free.
+///
+/// Returns a safety score in [0.0, 1.0] where 1.0 = completely safe.
+#[allow(dead_code)]
+fn cosine_embedding_safety_check(agent_output: &str) -> f64 {
+    use std::collections::HashMap;
+
+    // Reuse the same unsafe pattern definitions from `embedding_safety_check`.
+    const UNSAFE_PATTERNS: &[&[&str]] = &[
+        // File-system destruction
+        &[
+            "rm",
+            "-rf",
+            "/",
+            "delete",
+            "remove",
+            "force",
+            "recursive",
+            "unlink",
+            "wipe",
+            "destroy",
+            "erase",
+            "truncate",
+            "shred",
+        ],
+        // SQL injection / database destruction
+        &[
+            "DROP",
+            "TABLE",
+            "DATABASE",
+            "DELETE",
+            "FROM",
+            "TRUNCATE",
+            "ALTER",
+            "EXEC",
+            "xp_cmdshell",
+            "INTO",
+            "OVERRIDE",
+        ],
+        // Arbitrary code execution
+        &[
+            "eval",
+            "exec",
+            "shell",
+            "popen",
+            "subprocess",
+            "os.system",
+            "execve",
+            "command",
+            "invoke",
+            "spawn",
+            "compile",
+            "runtime.exec",
+        ],
+        // Privilege escalation
+        &[
+            "chmod",
+            "777",
+            "0777",
+            "chown",
+            "sudo",
+            "root",
+            "privilege",
+            "suid",
+            "sgid",
+            "setuid",
+            "setgid",
+            "sudoers",
+            "passwd",
+        ],
+        // Security bypass / defence disablement
+        &[
+            "bypass",
+            "security",
+            "disable",
+            "SELinux",
+            "AppArmor",
+            "iptables",
+            "ufw",
+            "firewall",
+            "disable_secure",
+            "no_check",
+            "insecure",
+        ],
+        // Network / data exfiltration
+        &[
+            "curl",
+            "wget",
+            "nc",
+            "netcat",
+            "reverse",
+            "shell",
+            "bind",
+            "exfiltrate",
+            "upload",
+            "send_to",
+            "callback",
+            "c2",
+        ],
+        // Cryptographic / ransomware-like operations
+        &[
+            "encrypt",
+            "decrypt",
+            "cipher",
+            "aes",
+            "rsa",
+            "ransomware",
+            "key_rotation",
+            "crypt",
+            "lock",
+        ],
+        // Credential / secret handling
+        &[
+            "password",
+            "secret",
+            "token",
+            "api_key",
+            "credential",
+            "plaintext",
+            "hardcode",
+            "leak",
+            "expose",
+        ],
+    ];
+
+    /// Build a term-frequency vector from word tokens.
+    fn tf_vector(words: &[&str]) -> HashMap<String, f64> {
+        let mut tf = HashMap::new();
+        let mut total = 0.0_f64;
+        for &w in words {
+            if w.len() >= 2 {
+                *tf.entry(w.to_lowercase()).or_insert(0.0_f64) += 1.0;
+                total += 1.0;
+            }
+        }
+        if total > 0.0 {
+            for v in tf.values_mut() {
+                *v /= total;
+            }
+        }
+        tf
+    }
+
+    /// Compute cosine similarity between two TF vectors.
+    /// Returns a score in [0.0, 1.0].
+    fn cosine_sim(a: &HashMap<String, f64>, b: &HashMap<String, f64>) -> f64 {
+        let dot: f64 = a
+            .iter()
+            .filter_map(|(k, av)| b.get(k).map(|bv| av * bv))
+            .sum();
+        let mag_a: f64 = a.values().map(|v| v * v).sum::<f64>().sqrt();
+        let mag_b: f64 = b.values().map(|v| v * v).sum::<f64>().sqrt();
+        if mag_a == 0.0 || mag_b == 0.0 {
+            return 0.0;
+        }
+        (dot / (mag_a * mag_b)).clamp(0.0, 1.0)
+    }
+
+    let output_lower = agent_output.to_lowercase();
+    let output_tokens: Vec<&str> = output_lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() >= 2)
+        .collect();
+
+    if output_tokens.is_empty() {
+        return 1.0;
+    }
+
+    let output_tf = tf_vector(&output_tokens);
+
+    // Pre-compute TF vectors for each unsafe pattern (all lowercased).
+    let pattern_tfs: Vec<HashMap<String, f64>> = UNSAFE_PATTERNS
+        .iter()
+        .map(|pattern| {
+            let lower_words: Vec<String> = pattern
+                .iter()
+                .map(|w| w.to_lowercase())
+                .filter(|w| w.len() >= 2)
+                .collect();
+            let mut tf = HashMap::new();
+            let mut total = 0.0_f64;
+            for w in &lower_words {
+                *tf.entry(w.clone()).or_insert(0.0_f64) += 1.0;
+                total += 1.0;
+            }
+            if total > 0.0 {
+                for v in tf.values_mut() {
+                    *v /= total;
+                }
+            }
+            tf
+        })
+        .collect();
+
+    // Find the maximum cosine similarity between the output and any pattern.
+    let max_sim = pattern_tfs
+        .iter()
+        .map(|ptf| cosine_sim(&output_tf, ptf))
+        .fold(0.0_f64, f64::max);
+
+    // Convert to safety score: similarity > 0.25 is flagged.
+    if max_sim > 0.25 {
+        1.0 - max_sim.min(1.0)
+    } else {
+        1.0
+    }
+}
+
 /// Evaluate safety using heuristic keyword substring matching.
 ///
 /// Returns a safety score in [0.0, 1.0] where:

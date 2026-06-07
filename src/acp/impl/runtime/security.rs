@@ -270,6 +270,7 @@ async fn apply_entry_guards(
     let rpm_limit = server.runtime_config.entry_rate_limit_rpm.max(1);
     let burst = server.runtime_config.entry_rate_limit_burst.max(1);
     let allowed = server
+        .resilience
         .phase_rate_limiter
         .lock()
         .map(|guard| guard.allow(&key, rpm_limit, Some(burst)))

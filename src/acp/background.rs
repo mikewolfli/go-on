@@ -802,7 +802,7 @@ pub async fn start_background_tasks(
     // ── BLUE56-GAP-C04: Hyper-resilience health checks ─────────────────
     // Start background health checks for circuit breaker self-healing.
     // The health check interval is configured in ResilienceConfig.
-    server.hyper_resilience.start_health_checks().await;
+    server.resilience.hyper_resilience.start_health_checks().await;
     tracing::info!(
         target: "resilience",
         "HyperResilienceEngine health checks started"

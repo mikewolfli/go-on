@@ -1,5 +1,6 @@
 use serde_json::{json, Value};
 
+#[allow(dead_code)] // helper for derive_idempotency_continuation (currently dead)
 fn bool_at_path(payload: &Value, path: &[&str]) -> bool {
     let mut current = payload;
     for segment in path {
@@ -11,6 +12,7 @@ fn bool_at_path(payload: &Value, path: &[&str]) -> bool {
     current.as_bool().unwrap_or(false)
 }
 
+#[allow(dead_code)] // helper for derive_idempotency_continuation (currently dead)
 fn string_at_path(payload: &Value, path: &[&str]) -> Option<String> {
     let mut current = payload;
     for segment in path {
@@ -20,6 +22,7 @@ fn string_at_path(payload: &Value, path: &[&str]) -> Option<String> {
     current.as_str().map(|value| value.to_string())
 }
 
+#[allow(dead_code)] // helper for derive_idempotency_continuation (currently dead)
 fn u64_at_path(payload: &Value, path: &[&str]) -> Option<u64> {
     let mut current = payload;
     for segment in path {
@@ -29,6 +32,7 @@ fn u64_at_path(payload: &Value, path: &[&str]) -> Option<u64> {
     current.as_u64()
 }
 
+#[allow(dead_code)] // F-GAP: reserved for idempotency resume pipeline
 pub(crate) fn derive_idempotency_continuation(payload: &Value) -> Value {
     let run_status = payload
         .get("run_status")
@@ -93,6 +97,7 @@ pub(crate) fn derive_idempotency_continuation(payload: &Value) -> Value {
     })
 }
 
+#[allow(dead_code)] // F-GAP: reserved for idempotency resume pipeline
 pub(crate) fn annotate_idempotency_hit(
     mut cached_response: Value,
     idempotency_key: &str,

@@ -65,7 +65,7 @@ pub async fn handle_chat(
 
     let result = async {
         let lifecycle_snapshot = {
-            let lifecycle_guard = server.lifecycle_state.lock().unwrap_or_else(|poisoned| {
+            let lifecycle_guard = server.resilience.lifecycle_state.lock().unwrap_or_else(|poisoned| {
                 warn!("handle_chat: lifecycle_state poisoned, recovering");
                 poisoned.into_inner()
             });

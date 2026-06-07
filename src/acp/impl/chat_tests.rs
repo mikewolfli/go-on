@@ -69,6 +69,7 @@ mod unit_tests {
     #[cfg(not(feature = "backend-postgres"))]
     fn setup_test_tenant_budget(server: &crate::acp::server::AcpServer) {
         server
+            .rate_limiting
             .tenant_budget
             .lock()
             .unwrap_or_else(|poisoned| {
@@ -140,8 +141,11 @@ mod unit_tests {
 
         AppConfig {
             schema_version: "1.0.0".to_string(),
-            default_phase: "coding".to_string(),
-            agents: HashMap::new(),
+            provider: crate::core::config::types::ProviderConfig {
+                default_phase: "coding".to_string(),
+                agents: HashMap::new(),
+                role_registry: HashMap::new(),
+            },
             flow: FlowConfig {
                 name: "flow".to_string(),
                 phases: vec!["coding".to_string()],
@@ -166,12 +170,15 @@ mod unit_tests {
                 summary_max_chars: 240,
             }),
             autotune: None,
-            model_selection_mode: "adaptive".to_string(),
+            security: crate::core::config::types::SecurityConfig::default(),
+            feature: crate::core::config::types::FeatureConfig {
+                model_selection_mode: "adaptive".to_string(),
+                ..Default::default()
+            },
             compliance: None,
             startup_context: None,
             scheduler: None,
             reputation: None,
-            role_registry: HashMap::new(),
         }
     }
 
@@ -217,7 +224,7 @@ mod unit_tests {
         let config_path = temp.path().join("config.toml");
         std::fs::write(&config_path, "default_phase = \"coding\"\n").expect("config write");
         server.config_path = Some(config_path.display().to_string());
-        if let Ok(mut ledger) = server.artifact_ledger.lock() {
+        if let Ok(mut ledger) = server.persistence.artifact_ledger.lock() {
             *ledger = crate::reinforcement::ArtifactLedger::new(Some(&config_path));
         }
 
@@ -276,7 +283,7 @@ mod unit_tests {
         assert!(system_text.contains("Existing coding summary"));
         assert!(system_text.contains("stream notifications"));
 
-        let state = server.conversation_state.lock().await;
+        let state = server.session.conversation_state.lock().await;
         assert_eq!(state.checkpoints.len(), 1);
         assert!(state.branch_heads.contains_key("conv-chat:feature-a"));
 

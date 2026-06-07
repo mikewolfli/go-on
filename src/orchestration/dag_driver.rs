@@ -2,8 +2,7 @@
 //!
 //! Provides `build_tool_execution_dag`, `execute_tool_dag`, and
 //! `dag_trace_to_observability` — legacy functions that use
-//! [`dag_executor::DagGraph`](crate::orchestration::dag_executor::DagGraph)
-//! (which itself wraps `CoreDag`) plus
+//! [`CoreDag`](crate::orchestration::core_dag::CoreDag) plus
 //! [`ExecutionGraph`](crate::orchestration::execution_graph::ExecutionGraph)
 //! integration. New code should use `CoreDag<T>` directly.
 //!
@@ -20,7 +19,7 @@ use serde_json::Value;
 use tokio::sync::Semaphore;
 use tracing::warn;
 
-use crate::orchestration::dag_executor::{build_dag_from_tool_calls, DagGraph};
+use crate::orchestration::core_dag::CoreDag;
 use crate::orchestration::execution_graph::{ExNodeId, ExNodeState};
 use crate::orchestration::planner_executor::ExecutionPlan;
 use crate::orchestration::tool::{execute_loop, LoopConfig, LoopDecision, ToolInput, ToolRegistry};
@@ -30,32 +29,16 @@ pub use crate::orchestration::core_dag::{DagExecutionTrace, DagNodeResult};
 /// Build tool execution as a Branch-Join DAG.
 /// Independent tools become Branch fans; dependent tools are sequenced.
 pub fn build_tool_execution_dag(tool_calls: &[(String, String)]) -> (ExNodeId, Vec<ExNodeId>) {
-    // Delegate to the real DAG builder: convert String args to Value
-    let converted: Vec<(String, Value)> = tool_calls
+    // Generate stable node IDs for each tool call.
+    let tool_node_ids: Vec<ExNodeId> = tool_calls
         .iter()
-        .map(|(name, args_str)| {
-            let parsed: Value = serde_json::from_str(args_str).unwrap_or_else(|e| {
-                warn!(
-                    "failed to parse JSON args for tool '{}': {}; using empty object",
-                    name, e
-                );
-                serde_json::json!({})
-            });
-            (name.clone(), parsed)
-        })
+        .enumerate()
+        .map(|(i, (name, _))| format!("tool-{}-{}", name, i))
         .collect();
-    let graph = build_dag_from_tool_calls(&converted);
-    let tool_node_ids: Vec<ExNodeId> = graph.nodes.keys().cloned().collect();
-    let branch_id: ExNodeId = if graph.nodes.is_empty() {
-        "branch-tools".to_string()
-    } else {
-        // Use the first entry point as the branch node ID
-        graph
-            .entry_points
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "branch-tools".to_string())
-    };
+    let branch_id: ExNodeId = tool_node_ids
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "branch-tools".to_string());
     (branch_id, tool_node_ids)
 }
 
@@ -166,37 +149,30 @@ async fn execute_with_plan_topology(
     // Collect fallback tool names from the tool calls.
     let preferred_tools: Vec<String> = tool_calls.iter().map(|(name, _)| name.clone()).collect();
 
-    // Build a DagGraph from plan steps to extract topological levels
-    let mut graph = DagGraph::new();
+    // Build a CoreDag from plan steps to extract topological metrics
+    let mut dag: CoreDag<serde_json::Value> = CoreDag::new();
     for step in &plan.steps {
         let node_input = serde_json::json!({
             "step_id": &step.step_id,
             "description": &step.description,
         });
-        graph.add_node(
-            step.step_id.clone(),
-            format!("phase:{:?}", step.mode),
-            node_input,
-            step.depends_on.clone(),
-        );
+        dag.add_node(step.step_id.clone(), node_input, step.depends_on.clone());
     }
 
-    // Compute topological levels (groups of plan steps that can run in parallel)
-    let levels = match graph.topological_sort() {
-        Ok(l) => l,
-        Err(e) => {
-            tracing::warn!(
-                "{}",
-                tf("status.dag.cycle_detected", &[("error", &e.to_string())])
-            );
-            return execute_flat_fanout(registry, objective, iteration, tool_calls).await;
-        }
-    };
+    // Validate DAG — fall back to flat fanout if a cycle is detected.
+    if dag.topological_sort().is_err() {
+        tracing::warn!(
+            "{}",
+            tf("status.dag.cycle_detected", &[("error", "cycle detected")])
+        );
+        return execute_flat_fanout(registry, objective, iteration, tool_calls).await;
+    }
 
-    let width = graph.width;
-    let depth = graph.depth;
+    let metrics = dag.metrics();
+    let width = metrics.width;
+    let depth = metrics.depth;
 
-    if levels.is_empty() || tool_calls.is_empty() {
+    if depth == 0 || tool_calls.is_empty() {
         let trace = DagExecutionTrace {
             nodes: vec![],
             total_duration_ms: dag_start.elapsed().as_millis() as u64,
@@ -207,7 +183,7 @@ async fn execute_with_plan_topology(
     }
 
     // Distribute tool calls across topological levels (round-robin assignment)
-    let num_levels = levels.len();
+    let num_levels = depth;
     let num_tools = tool_calls.len();
     let mut level_tool_indices: Vec<Vec<usize>> = Vec::with_capacity(num_levels);
     for _ in 0..num_levels {
@@ -222,8 +198,7 @@ async fn execute_with_plan_topology(
     let mut all_results: Vec<DagNodeResult> = Vec::with_capacity(num_tools);
     let mut accumulated_outputs: Vec<serde_json::Value> = Vec::new();
 
-    for (level_idx, _level) in levels.iter().enumerate() {
-        let tool_indices = &level_tool_indices[level_idx];
+    for (level_idx, tool_indices) in level_tool_indices.iter().enumerate() {
         if tool_indices.is_empty() {
             continue;
         }
@@ -708,35 +683,31 @@ mod tests {
             }),
         };
 
-        // Build a DagGraph from the plan to verify topological sort yields 3 levels
-        let mut graph = DagGraph::new();
+        // Build a CoreDag from the plan to verify topological sort yields 3 levels
+        let mut dag: CoreDag<serde_json::Value> = CoreDag::new();
         for step in &plan.steps {
-            graph.add_node(
+            dag.add_node(
                 step.step_id.clone(),
-                format!("phase:{:?}", step.mode),
                 serde_json::json!({"step_id": &step.step_id}),
                 step.depends_on.clone(),
             );
         }
-        let levels = graph.topological_sort().unwrap();
+        let sorted = dag.topological_sort().unwrap();
+        let metrics = dag.metrics();
 
-        // Should have 3 levels:
+        // Should have 3 levels (depth = 3):
         // Level 0: plan-1 (no deps)
         // Level 1: sub-1, sub-2 (depend on plan-1)
         // Level 2: review-1 (depends on sub-1, sub-2)
-        assert_eq!(levels.len(), 3, "should have 3 topological levels");
-        assert_eq!(levels[0], vec!["plan-1"]);
-        assert_eq!(
-            levels[1].len(),
-            2,
-            "level 1 should have two parallel subtasks"
-        );
-        assert!(levels[1].contains(&"sub-1".to_string()));
-        assert!(levels[1].contains(&"sub-2".to_string()));
-        assert_eq!(levels[2], vec!["review-1"]);
+        assert_eq!(sorted.len(), 4, "should have 4 nodes total");
+        assert!(sorted.contains(&"plan-1"));
+        assert!(sorted.contains(&"sub-1"));
+        assert!(sorted.contains(&"sub-2"));
+        assert!(sorted.contains(&"review-1"));
+        assert_eq!(sorted[0], "plan-1", "first node should be plan-1");
 
-        // Verify DAG metrics are populated with real values
-        assert_eq!(graph.width, 2, "max width is 2 parallel substeps");
-        assert_eq!(graph.depth, 3, "depth is 3 levels");
+        // Verify DAG metrics from CoreDag
+        assert_eq!(metrics.width, 2, "max width is 2 parallel substeps");
+        assert_eq!(metrics.depth, 3, "depth is 3 levels");
     }
 }

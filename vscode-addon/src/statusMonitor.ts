@@ -106,7 +106,8 @@ export class StatusMonitor {
             console.error("Provider readiness check failed:", err);
           });
         }
-      } catch {
+      } catch (err) {
+        console.warn("[statusMonitor] health check failed:", err);
         this.consecutiveFailures++;
         this.statusBarItem.tooltip = i18n.getMessage(
           MessageKeys.statusBarHealthCheckFailedTooltip,
@@ -120,6 +121,13 @@ export class StatusMonitor {
           void vscode.window.showWarningMessage(
             i18n.getMessage(MessageKeys.healthCheckWarning),
           );
+          // Trigger reconnection via manager if not running
+          if (
+            !this.manager.isRunning() &&
+            this.manager.triggerReconnectFromObserver
+          ) {
+            this.manager.triggerReconnectFromObserver();
+          }
         }
       } finally {
         this.healthCheckInFlight = false;
@@ -176,8 +184,8 @@ export class StatusMonitor {
       this._noProviderWarningShown = false;
       this.statusBarItem.backgroundColor = undefined;
       this.updateStatus();
-    } catch {
-      // probe check failed — ignore, will retry on next interval
+    } catch (err) {
+      console.warn("[statusMonitor] _checkProviderReadiness failed:", err);
     }
   }
 

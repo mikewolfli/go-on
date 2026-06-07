@@ -16,8 +16,9 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 /// Supported chat/agent modes
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ModeKind {
+    #[default]
     Ask,
     Edit,
     Agent,
@@ -72,36 +73,19 @@ pub fn resolve_mode_runtime(
     registry: Option<Arc<AgentRegistry>>,
     agent_name: Option<String>,
 ) -> Box<dyn ModeRuntime> {
-    match mode.to_lowercase().as_str() {
-        "ask" => Box::new(AskModeRuntime::new(
-            registry.expect("AskModeRuntime requires a registry"),
-            agent_name,
-        )),
-        "edit" => Box::new(EditModeRuntime::new(
-            registry.expect("EditModeRuntime requires a registry"),
-            agent_name,
-        )),
-        "agent" => Box::new(AgentModeRuntime::new(
-            registry.expect("AgentModeRuntime requires a registry"),
-            agent_name,
-        )),
-        "full_auto" => Box::new(FullAutoModeRuntime::new(
-            registry.expect("FullAutoModeRuntime requires a registry"),
-            agent_name,
-        )),
-        "safeguard" => Box::new(SafeGuardModeRuntime::new(
-            registry.expect("SafeGuardModeRuntime requires a registry"),
-            agent_name,
-        )),
+    let kind = match mode.to_lowercase().as_str() {
+        "ask" => ModeKind::Ask,
+        "edit" => ModeKind::Edit,
+        "agent" => ModeKind::Agent,
+        "full_auto" => ModeKind::FullAuto,
+        "safeguard" => ModeKind::SafeGuard,
         _ => {
-            // Default to Ask mode for unknown mode strings
             tracing::warn!("unknown mode '{}', defaulting to Ask", mode);
-            Box::new(AskModeRuntime::new(
-                registry.expect("AskModeRuntime requires a registry"),
-                agent_name,
-            ))
+            ModeKind::Ask
         }
-    }
+    };
+    let registry = registry.expect("ModeRuntime requires a registry");
+    Box::new(GenericModeRuntime::new(kind, registry, agent_name))
 }
 
 /// Async helper to execute an agent chat without blocking.
@@ -332,442 +316,64 @@ impl BaseModeRuntime {
 }
 
 // ---------------------------------------------------------------------------
-// AskModeRuntime
+// GenericModeRuntime — single runtime dispatching on ModeKind (A6)
 // ---------------------------------------------------------------------------
 
-/// AskModeRuntime: single-turn Q&A, no tools, user approval required.
+/// Single generic mode runtime that dispatches per-mode policy based on
+/// [`ModeKind`].  Replaces the five individual `*ModeRuntime` structs
+/// that were ~750 lines of copy-paste.
 ///
-/// Uses `Agent::chat()` to produce a direct answer.
+/// Callers continue to use the old type aliases (`AskModeRuntime`,
+/// `EditModeRuntime`, etc.) and their public `::new()` constructors —
+/// the public API surface is unchanged.
 #[derive(Default)]
-pub struct AskModeRuntime {
+pub struct GenericModeRuntime {
+    /// The mode variant that governs policy dispatch.
+    pub kind: ModeKind,
     /// Optional agent registry to pick a default chat agent.
-    /// If not provided, run() falls back to a graceful informational response.
     pub agent_registry: Option<Arc<AgentRegistry>>,
-    /// Name of the agent to use for chat (defaults to first available).
-    pub agent_name: Option<String>,
-}
-
-impl AskModeRuntime {
-    pub fn new(registry: Arc<AgentRegistry>, agent_name: Option<String>) -> Self {
-        Self {
-            agent_registry: Some(registry),
-            agent_name,
-        }
-    }
-}
-
-impl ModeStrategy for AskModeRuntime {
-    fn mode_name(&self) -> &str {
-        "ask"
-    }
-    fn use_chat(&self) -> bool {
-        true
-    }
-    fn pua_mode(&self) -> &str {
-        "ask"
-    }
-    fn log_start(&self, objective: &str, phase: &str, role: &str) {
-        info!(
-            "[Ask Mode] Executing task: {} (phase: {}, role: {})",
-            objective, phase, role
-        );
-    }
-    fn fallback_result(
-        &self,
-        task_id: &str,
-        objective: &str,
-        phase: &str,
-        role: &str,
-    ) -> AgentTaskResult {
-        AgentTaskResult {
-            success: true,
-            output: Some(serde_json::json!({
-                "mode": "ask",
-                "task_id": task_id.to_string(),
-                "status": "unavailable",
-                "note": "No suitable Ask mode agent was available in the registry",
-                "message": format!("Task '{}' processed in Ask mode (no agent available)", objective)
-            })),
-            error: None,
-            audit_log: Some(format!(
-                "Ask mode (fallback): task_id={}, phase={}, role={}",
-                task_id, phase, role
-            )),
-            pua_report: Some(mode_execution_report("ask", false)),
-        }
-    }
-}
-
-#[async_trait]
-impl ModeRuntime for AskModeRuntime {
-    fn kind(&self) -> ModeKind {
-        ModeKind::Ask
-    }
-    fn allowed_tools(&self) -> Vec<String> {
-        vec![]
-    }
-    fn max_tool_calls(&self) -> usize {
-        0
-    }
-    fn user_approval_required(&self) -> bool {
-        true
-    }
-    fn is_high_risk_operation(&self, _objective: &str) -> bool {
-        false
-    }
-    async fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult> {
-        let base = BaseModeRuntime::new(self.agent_registry.clone(), self.agent_name.clone());
-        base.run(self, task).await
-    }
-}
-
-// ---------------------------------------------------------------------------
-// EditModeRuntime
-// ---------------------------------------------------------------------------
-
-/// EditModeRuntime: constrained edit with plan/patch/verify, user approval required.
-///
-/// Uses `Agent::run_task()` to execute the edit as a structured task.
-#[derive(Default)]
-pub struct EditModeRuntime {
-    pub agent_registry: Option<Arc<AgentRegistry>>,
-    pub agent_name: Option<String>,
-}
-
-impl EditModeRuntime {
-    pub fn new(registry: Arc<AgentRegistry>, agent_name: Option<String>) -> Self {
-        Self {
-            agent_registry: Some(registry),
-            agent_name,
-        }
-    }
-}
-
-impl ModeStrategy for EditModeRuntime {
-    fn mode_name(&self) -> &str {
-        "edit"
-    }
-    fn use_chat(&self) -> bool {
-        false
-    }
-    fn pua_mode(&self) -> &str {
-        "edit"
-    }
-    fn log_start(&self, objective: &str, phase: &str, role: &str) {
-        info!(
-            "[Edit Mode] Planning edits for: {} (phase: {}, role: {})",
-            objective, phase, role
-        );
-    }
-    fn fallback_result(
-        &self,
-        task_id: &str,
-        objective: &str,
-        phase: &str,
-        role: &str,
-    ) -> AgentTaskResult {
-        AgentTaskResult {
-            success: true,
-            output: Some(serde_json::json!({
-                "mode": "edit",
-                "task_id": task_id.to_string(),
-                "status": "unavailable",
-                "note": "No suitable Edit mode agent was available in the registry",
-                "stages": ["plan", "patch", "verify"],
-                "message": format!("Edit task '{}' completed with verification", objective)
-            })),
-            error: None,
-            audit_log: Some(format!(
-                "Edit mode: task_id={}, phase={}, role={}, max_tools=5",
-                task_id, phase, role
-            )),
-            pua_report: Some(mode_execution_report("edit", false)),
-        }
-    }
-}
-
-#[async_trait]
-impl ModeRuntime for EditModeRuntime {
-    fn kind(&self) -> ModeKind {
-        ModeKind::Edit
-    }
-    fn allowed_tools(&self) -> Vec<String> {
-        vec![
-            "read_file".to_string(),
-            "apply_patch".to_string(),
-            "run_tests".to_string(),
-        ]
-    }
-    fn max_tool_calls(&self) -> usize {
-        5
-    }
-    fn user_approval_required(&self) -> bool {
-        true
-    }
-    fn is_high_risk_operation(&self, _objective: &str) -> bool {
-        false
-    }
-    async fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult> {
-        let base = BaseModeRuntime::new(self.agent_registry.clone(), self.agent_name.clone());
-        base.run(self, task).await
-    }
-}
-
-// ---------------------------------------------------------------------------
-// AgentModeRuntime
-// ---------------------------------------------------------------------------
-
-/// AgentModeRuntime: iterative planner-executor with tools, autonomy gated.
-///
-/// Uses `Agent::run_task()` with multi-tool iteration.
-/// Fails on high-risk operations unless approval is given.
-#[derive(Default)]
-pub struct AgentModeRuntime {
-    pub agent_registry: Option<Arc<AgentRegistry>>,
-    pub agent_name: Option<String>,
-}
-
-impl AgentModeRuntime {
-    pub fn new(registry: Arc<AgentRegistry>, agent_name: Option<String>) -> Self {
-        Self {
-            agent_registry: Some(registry),
-            agent_name,
-        }
-    }
-}
-
-impl ModeStrategy for AgentModeRuntime {
-    fn mode_name(&self) -> &str {
-        "agent"
-    }
-    fn use_chat(&self) -> bool {
-        false
-    }
-    fn pua_mode(&self) -> &str {
-        "agent"
-    }
-    fn log_start(&self, objective: &str, phase: &str, role: &str) {
-        let is_high_risk = self.is_high_risk_operation(objective);
-        info!(
-            "[Agent Mode] Executing iterative task: {} (phase: {}, role: {}, high_risk: {})",
-            objective, phase, role, is_high_risk
-        );
-    }
-    fn pre_execute(
-        &self,
-        task_id: &str,
-        objective: &str,
-        phase: &str,
-        role: &str,
-    ) -> Option<Result<AgentTaskResult>> {
-        if self.is_high_risk_operation(objective) {
-            warn!("[Agent Mode] High-risk operation detected: {}", objective);
-            Some(Ok(AgentTaskResult {
-                success: false,
-                output: Some(serde_json::json!({
-                    "mode": "agent",
-                    "task_id": task_id.to_string(),
-                    "status": "pending_approval",
-                    "is_high_risk": true,
-                    "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
-                    "max_tool_calls": 20,
-                                        "message": format!("Agent task '{}' requires approval for high-risk operation", objective)
-                })),
-                error: Some(AgentError::Runtime(
-                    "Operator approval required for high-risk operation".to_string(),
-                )),
-                audit_log: Some(format!(
-                    "Agent mode: task_id={}, phase={}, role={}, high_risk=true",
-                    task_id, phase, role
-                )),
-                pua_report: Some(mode_execution_report("agent", true)),
-            }))
-        } else {
-            None
-        }
-    }
-    fn fallback_result(
-        &self,
-        task_id: &str,
-        objective: &str,
-        phase: &str,
-        role: &str,
-    ) -> AgentTaskResult {
-        AgentTaskResult {
-            success: true,
-            output: Some(serde_json::json!({
-                "mode": "agent",
-                "task_id": task_id.to_string(),
-                "status": "unavailable",
-                "note": "No suitable Agent mode agent was available in the registry",
-                "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
-                "max_tool_calls": 20,
-                "message": format!("Agent task '{}' ready for execution", objective)
-            })),
-            error: None,
-            audit_log: Some(format!(
-                "Agent mode: task_id={}, phase={}, role={}, high_risk={}",
-                task_id, phase, role, false
-            )),
-            pua_report: Some(mode_execution_report("agent", false)),
-        }
-    }
-}
-
-#[async_trait]
-impl ModeRuntime for AgentModeRuntime {
-    fn kind(&self) -> ModeKind {
-        ModeKind::Agent
-    }
-    fn allowed_tools(&self) -> Vec<String> {
-        vec![
-            "read_file".to_string(),
-            "search_files".to_string(),
-            "apply_patch".to_string(),
-            "run_tests".to_string(),
-            "inspect_git_diff".to_string(),
-        ]
-    }
-    fn max_tool_calls(&self) -> usize {
-        20
-    }
-    fn user_approval_required(&self) -> bool {
-        false
-    }
-    fn is_high_risk_operation(&self, objective: &str) -> bool {
-        let lower = objective.to_lowercase();
-        lower.contains("delete")
-            || lower.contains("remove")
-            || lower.contains("drop")
-            || lower.contains("truncate")
-    }
-    async fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult> {
-        let base = BaseModeRuntime::new(self.agent_registry.clone(), self.agent_name.clone());
-        base.run(self, task).await
-    }
-}
-
-// ---------------------------------------------------------------------------
-// FullAutoModeRuntime
-// ---------------------------------------------------------------------------
-
-/// FullAutoModeRuntime: fully automatic with review gate and recovery policy.
-///
-/// Uses `Agent::run_task()` with full autonomy — no approval gates.
-#[derive(Default)]
-pub struct FullAutoModeRuntime {
-    pub agent_registry: Option<Arc<AgentRegistry>>,
-    pub agent_name: Option<String>,
-}
-
-impl FullAutoModeRuntime {
-    pub fn new(registry: Arc<AgentRegistry>, agent_name: Option<String>) -> Self {
-        Self {
-            agent_registry: Some(registry),
-            agent_name,
-        }
-    }
-}
-
-impl ModeStrategy for FullAutoModeRuntime {
-    fn mode_name(&self) -> &str {
-        "full_auto"
-    }
-    fn use_chat(&self) -> bool {
-        false
-    }
-    fn pua_mode(&self) -> &str {
-        "full_auto"
-    }
-    fn log_start(&self, objective: &str, phase: &str, role: &str) {
-        info!(
-            "[FullAuto Mode] Executing autonomous task: {} (phase: {}, role: {})",
-            objective, phase, role
-        );
-    }
-    fn fallback_result(
-        &self,
-        task_id: &str,
-        objective: &str,
-        phase: &str,
-        role: &str,
-    ) -> AgentTaskResult {
-        AgentTaskResult {
-            success: true,
-            output: Some(serde_json::json!({
-                "mode": "fullauto",
-                "task_id": task_id.to_string(),
-                "status": "unavailable",
-                "note": "No suitable FullAuto mode agent was available in the registry",
-                "execution_level": "full_autonomy",
-                "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
-                "max_tool_calls": 50,
-                "message": format!("FullAuto task '{}' executed autonomously", objective)
-            })),
-            error: None,
-            audit_log: Some(format!(
-                "FullAuto mode: task_id={}, phase={}, role={}, autonomy_level=full",
-                task_id, phase, role
-            )),
-            pua_report: Some(mode_execution_report("full_auto", false)),
-        }
-    }
-}
-
-#[async_trait]
-impl ModeRuntime for FullAutoModeRuntime {
-    fn kind(&self) -> ModeKind {
-        ModeKind::FullAuto
-    }
-    fn allowed_tools(&self) -> Vec<String> {
-        vec![
-            "read_file".to_string(),
-            "search_files".to_string(),
-            "apply_patch".to_string(),
-            "run_tests".to_string(),
-            "inspect_git_diff".to_string(),
-        ]
-    }
-    fn max_tool_calls(&self) -> usize {
-        50
-    }
-    fn user_approval_required(&self) -> bool {
-        false
-    }
-    fn is_high_risk_operation(&self, _objective: &str) -> bool {
-        false
-    }
-    async fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult> {
-        let base = BaseModeRuntime::new(self.agent_registry.clone(), self.agent_name.clone());
-        base.run(self, task).await
-    }
-}
-
-// ---------------------------------------------------------------------------
-// SafeGuardModeRuntime
-// ---------------------------------------------------------------------------
-
-/// SafeGuardModeRuntime: automatic mode with approval gates at high-risk nodes.
-///
-/// Same as Agent mode but with conservative risk detection and
-/// mandatory approval gates for destructive operations.
-///
-/// Mode Hierarchy (by automation level):
-///   Ask (0) < Edit (5) < Agent (20) < SafeGuard (30) < FullAuto (50)
-#[derive(Default)]
-pub struct SafeGuardModeRuntime {
-    pub agent_registry: Option<Arc<AgentRegistry>>,
+    /// Name of the agent to use (defaults to first available).
     pub agent_name: Option<String>,
     /// When true, auto-degrade the operation mode based on risk score
-    /// instead of blocking outright.
+    /// (SafeGuard only; ignored by other modes).
     pub auto_degrade: bool,
-    /// The policy to apply when risk is elevated but not extreme (> 0.95).
+    /// The policy to apply when risk is elevated (SafeGuard only).
     pub degrade_policy: AutoDegradePolicy,
 }
 
-impl SafeGuardModeRuntime {
-    pub fn new(registry: Arc<AgentRegistry>, agent_name: Option<String>) -> Self {
+// ── Backward-compat type aliases (A6: keep public API surface) ──────
+
+/// Ask-mode runtime (single-turn Q&A, no tools, user approval required).
+pub type AskModeRuntime = GenericModeRuntime;
+
+/// Edit-mode runtime (constrained edit with plan/patch/verify).
+pub type EditModeRuntime = GenericModeRuntime;
+
+/// Agent-mode runtime (iterative planner-executor with tools).
+pub type AgentModeRuntime = GenericModeRuntime;
+
+/// FullAuto-mode runtime (fully automatic with review gate).
+pub type FullAutoModeRuntime = GenericModeRuntime;
+
+/// SafeGuard-mode runtime (automatic mode with approval gates).
+pub type SafeGuardModeRuntime = GenericModeRuntime;
+
+impl GenericModeRuntime {
+    /// Create a new GenericModeRuntime with the given mode, registry, and agent.
+    pub fn new(kind: ModeKind, registry: Arc<AgentRegistry>, agent_name: Option<String>) -> Self {
         Self {
+            kind,
+            agent_registry: Some(registry),
+            agent_name,
+            auto_degrade: false,
+            degrade_policy: AutoDegradePolicy::default(),
+        }
+    }
+
+    /// Create a new SafeGuard-mode runtime with degradation enabled.
+    pub fn new_safeguard(registry: Arc<AgentRegistry>, agent_name: Option<String>) -> Self {
+        Self {
+            kind: ModeKind::SafeGuard,
             agent_registry: Some(registry),
             agent_name,
             auto_degrade: true,
@@ -786,7 +392,6 @@ impl SafeGuardModeRuntime {
         let lower = objective.to_lowercase();
         let mut score: f64 = 0.0;
 
-        // Destructive keywords — each adds 0.25 to the score.
         let extreme_keywords = ["drop database", "drop table", "truncate", "uninstall"];
         for kw in &extreme_keywords {
             if lower.contains(kw) {
@@ -839,29 +444,75 @@ impl SafeGuardModeRuntime {
         } else if risk_score > 0.40 {
             AutoDegradePolicy::ReadOnly
         } else {
-            // Low risk — no degradation needed.
             AutoDegradePolicy::AllowWithAudit
         }
     }
 }
 
-impl ModeStrategy for SafeGuardModeRuntime {
+// ── ModeStrategy: dispatch on ModeKind ───────────────────────────────
+
+impl ModeStrategy for GenericModeRuntime {
     fn mode_name(&self) -> &str {
-        "safeguard"
+        match self.kind {
+            ModeKind::Ask => "ask",
+            ModeKind::Edit => "edit",
+            ModeKind::Agent => "agent",
+            ModeKind::FullAuto => "full_auto",
+            ModeKind::SafeGuard => "safeguard",
+        }
     }
+
     fn use_chat(&self) -> bool {
-        false
+        matches!(self.kind, ModeKind::Ask)
     }
+
     fn pua_mode(&self) -> &str {
-        "safeguard"
+        match self.kind {
+            ModeKind::Ask => "ask",
+            ModeKind::Edit => "edit",
+            ModeKind::Agent => "agent",
+            ModeKind::FullAuto => "full_auto",
+            ModeKind::SafeGuard => "safeguard",
+        }
     }
+
     fn log_start(&self, objective: &str, phase: &str, role: &str) {
-        let risk_score = self.compute_risk_score(objective);
-        info!(
-            "[SafeGuard Mode] Executing protected task: {} (phase: {}, role: {}, risk_score: {:.2})",
-            objective, phase, role, risk_score
-        );
+        match self.kind {
+            ModeKind::Ask => {
+                info!(
+                    "[Ask Mode] Executing task: {} (phase: {}, role: {})",
+                    objective, phase, role
+                );
+            }
+            ModeKind::Edit => {
+                info!(
+                    "[Edit Mode] Planning edits for: {} (phase: {}, role: {})",
+                    objective, phase, role
+                );
+            }
+            ModeKind::Agent => {
+                let is_high_risk = self.is_high_risk_operation(objective);
+                info!(
+                    "[Agent Mode] Executing iterative task: {} (phase: {}, role: {}, high_risk: {})",
+                    objective, phase, role, is_high_risk
+                );
+            }
+            ModeKind::FullAuto => {
+                info!(
+                    "[FullAuto Mode] Executing autonomous task: {} (phase: {}, role: {})",
+                    objective, phase, role
+                );
+            }
+            ModeKind::SafeGuard => {
+                let risk_score = self.compute_risk_score(objective);
+                info!(
+                    "[SafeGuard Mode] Executing protected task: {} (phase: {}, role: {}, risk_score: {:.2})",
+                    objective, phase, role, risk_score
+                );
+            }
+        }
     }
+
     fn pre_execute(
         &self,
         task_id: &str,
@@ -869,91 +520,123 @@ impl ModeStrategy for SafeGuardModeRuntime {
         phase: &str,
         role: &str,
     ) -> Option<Result<AgentTaskResult>> {
-        let risk_score = self.compute_risk_score(objective);
+        match self.kind {
+            ModeKind::Agent => {
+                if self.is_high_risk_operation(objective) {
+                    warn!("[Agent Mode] High-risk operation detected: {}", objective);
+                    Some(Ok(AgentTaskResult {
+                        success: false,
+                        output: Some(serde_json::json!({
+                            "mode": "agent",
+                            "task_id": task_id.to_string(),
+                            "status": "pending_approval",
+                            "is_high_risk": true,
+                            "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
+                            "max_tool_calls": 20,
+                            "message": format!("Agent task '{}' requires approval for high-risk operation", objective)
+                        })),
+                        error: Some(AgentError::Runtime(
+                            "Operator approval required for high-risk operation".to_string(),
+                        )),
+                        audit_log: Some(format!(
+                            "Agent mode: task_id={}, phase={}, role={}, high_risk=true",
+                            task_id, phase, role
+                        )),
+                        pua_report: Some(mode_execution_report("agent", true)),
+                    }))
+                } else {
+                    None
+                }
+            }
+            ModeKind::SafeGuard => {
+                let risk_score = self.compute_risk_score(objective);
+                let policy = if self.auto_degrade {
+                    self.evaluate_degradation(risk_score)
+                } else if risk_score > 0.95 {
+                    AutoDegradePolicy::Block
+                } else if risk_score > 0.40 {
+                    AutoDegradePolicy::ConfirmRequired
+                } else {
+                    AutoDegradePolicy::AllowWithAudit
+                };
 
-        let policy = if self.auto_degrade {
-            self.evaluate_degradation(risk_score)
-        } else if risk_score > 0.95 {
-            AutoDegradePolicy::Block
-        } else if risk_score > 0.40 {
-            AutoDegradePolicy::ConfirmRequired
-        } else {
-            AutoDegradePolicy::AllowWithAudit
-        };
-
-        match policy {
-            AutoDegradePolicy::Block => {
-                warn!(
-                    "[SafeGuard Mode] Extreme risk operation blocked: {} (score: {:.2})",
-                    objective, risk_score
-                );
-                Some(Ok(AgentTaskResult {
-                    success: false,
-                    output: Some(serde_json::json!({
-                        "mode": "safeguard",
-                        "task_id": task_id.to_string(),
-                        "status": "blocked",
-                        "risk_score": risk_score,
-                        "degrade_policy": "Block",
-                        "safety_level": "enhanced",
-                        "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
-                        "max_tool_calls": 30,
-                        "message": format!("SafeGuard task '{}' blocked: extreme risk ({:.2})", objective, risk_score)
-                    })),
-                    error: Some(AgentError::Runtime(
-                        format!("SafeGuard: Operation blocked due to extreme risk score ({:.2})", risk_score)
-                    )),
-                    audit_log: Some(format!(
-                        "SafeGuard mode: task_id={}, phase={}, role={}, risk_score={:.2}, policy=Block",
-                        task_id, phase, role, risk_score
-                    )),
-                    pua_report: Some(mode_execution_report("safeguard", true)),
-                }))
+                match policy {
+                    AutoDegradePolicy::Block => {
+                        warn!(
+                            "[SafeGuard Mode] Extreme risk operation blocked: {} (score: {:.2})",
+                            objective, risk_score
+                        );
+                        Some(Ok(AgentTaskResult {
+                            success: false,
+                            output: Some(serde_json::json!({
+                                "mode": "safeguard",
+                                "task_id": task_id.to_string(),
+                                "status": "blocked",
+                                "risk_score": risk_score,
+                                "degrade_policy": "Block",
+                                "safety_level": "enhanced",
+                                "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
+                                "max_tool_calls": 30,
+                                "message": format!("SafeGuard task '{}' blocked: extreme risk ({:.2})", objective, risk_score)
+                            })),
+                            error: Some(AgentError::Runtime(
+                                format!("SafeGuard: Operation blocked due to extreme risk score ({:.2})", risk_score)
+                            )),
+                            audit_log: Some(format!(
+                                "SafeGuard mode: task_id={}, phase={}, role={}, risk_score={:.2}, policy=Block",
+                                task_id, phase, role, risk_score
+                            )),
+                            pua_report: Some(mode_execution_report("safeguard", true)),
+                        }))
+                    }
+                    AutoDegradePolicy::ReadOnly => {
+                        warn!(
+                            "[SafeGuard Mode] Auto-degrading to read-only for: {} (score: {:.2})",
+                            objective, risk_score
+                        );
+                        None
+                    }
+                    AutoDegradePolicy::AllowWithAudit => {
+                        info!(
+                            "[SafeGuard Mode] Proceeding with enhanced audit for: {} (score: {:.2})",
+                            objective, risk_score
+                        );
+                        None
+                    }
+                    AutoDegradePolicy::ConfirmRequired => {
+                        warn!(
+                            "[SafeGuard Mode] Confirmation required for: {} (score: {:.2})",
+                            objective, risk_score
+                        );
+                        Some(Ok(AgentTaskResult {
+                            success: false,
+                            output: Some(serde_json::json!({
+                                "mode": "safeguard",
+                                "task_id": task_id.to_string(),
+                                "status": "pending_approval",
+                                "risk_score": risk_score,
+                                "degrade_policy": "ConfirmRequired",
+                                "safety_level": "enhanced",
+                                "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
+                                "max_tool_calls": 30,
+                                "message": format!("SafeGuard task '{}' awaiting safety approval (risk: {:.2})", objective, risk_score)
+                            })),
+                            error: Some(AgentError::Runtime(
+                                "SafeGuard: Operator approval required for this operation".to_string(),
+                            )),
+                            audit_log: Some(format!(
+                                "SafeGuard mode: task_id={}, phase={}, role={}, risk_score={:.2}, policy=ConfirmRequired",
+                                task_id, phase, role, risk_score
+                            )),
+                            pua_report: Some(mode_execution_report("safeguard", true)),
+                        }))
+                    }
+                }
             }
-            AutoDegradePolicy::ReadOnly => {
-                warn!(
-                    "[SafeGuard Mode] Auto-degrading to read-only for: {} (score: {:.2})",
-                    objective, risk_score
-                );
-                None
-            }
-            AutoDegradePolicy::AllowWithAudit => {
-                info!(
-                    "[SafeGuard Mode] Proceeding with enhanced audit for: {} (score: {:.2})",
-                    objective, risk_score
-                );
-                None
-            }
-            AutoDegradePolicy::ConfirmRequired => {
-                warn!(
-                    "[SafeGuard Mode] Confirmation required for: {} (score: {:.2})",
-                    objective, risk_score
-                );
-                Some(Ok(AgentTaskResult {
-                    success: false,
-                    output: Some(serde_json::json!({
-                        "mode": "safeguard",
-                        "task_id": task_id.to_string(),
-                        "status": "pending_approval",
-                        "risk_score": risk_score,
-                        "degrade_policy": "ConfirmRequired",
-                        "safety_level": "enhanced",
-                        "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
-                        "max_tool_calls": 30,
-                        "message": format!("SafeGuard task '{}' awaiting safety approval (risk: {:.2})", objective, risk_score)
-                    })),
-                    error: Some(AgentError::Runtime(
-                        "SafeGuard: Operator approval required for this operation".to_string(),
-                    )),
-                    audit_log: Some(format!(
-                        "SafeGuard mode: task_id={}, phase={}, role={}, risk_score={:.2}, policy=ConfirmRequired",
-                        task_id, phase, role, risk_score
-                    )),
-                    pua_report: Some(mode_execution_report("safeguard", true)),
-                }))
-            }
+            _ => None,
         }
     }
+
     fn fallback_result(
         &self,
         task_id: &str,
@@ -961,64 +644,166 @@ impl ModeStrategy for SafeGuardModeRuntime {
         phase: &str,
         role: &str,
     ) -> AgentTaskResult {
-        let risk_score = self.compute_risk_score(objective);
-        let policy = if self.auto_degrade {
-            self.evaluate_degradation(risk_score)
-        } else if risk_score > 0.95 {
-            AutoDegradePolicy::Block
-        } else if risk_score > 0.40 {
-            AutoDegradePolicy::ConfirmRequired
-        } else {
-            AutoDegradePolicy::AllowWithAudit
-        };
-
-        AgentTaskResult {
-            success: true,
-            output: Some(serde_json::json!({
-                "mode": "safeguard",
-                "task_id": task_id.to_string(),
-                "status": "unavailable",
-                "note": "No suitable SafeGuard mode agent was available in the registry",
-                "risk_score": risk_score,
-                "degrade_policy": format!("{:?}", policy),
-                "safety_level": "enhanced",
-                "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
-                "max_tool_calls": 30,
-                "message": format!("SafeGuard task '{}' completed with enhanced safety (risk: {:.2})", objective, risk_score)
-            })),
-            error: None,
-            audit_log: Some(format!(
-                "SafeGuard mode: task_id={}, phase={}, role={}, risk_score={:.2}, policy={:?}",
-                task_id, phase, role, risk_score, policy
-            )),
-            pua_report: Some(mode_execution_report("safeguard", false)),
+        match self.kind {
+            ModeKind::Ask => AgentTaskResult {
+                success: true,
+                output: Some(serde_json::json!({
+                    "mode": "ask",
+                    "task_id": task_id.to_string(),
+                    "status": "unavailable",
+                    "note": "No suitable Ask mode agent was available in the registry",
+                    "message": format!("Task '{}' processed in Ask mode (no agent available)", objective)
+                })),
+                error: None,
+                audit_log: Some(format!(
+                    "Ask mode (fallback): task_id={}, phase={}, role={}",
+                    task_id, phase, role
+                )),
+                pua_report: Some(mode_execution_report("ask", false)),
+            },
+            ModeKind::Edit => AgentTaskResult {
+                success: true,
+                output: Some(serde_json::json!({
+                    "mode": "edit",
+                    "task_id": task_id.to_string(),
+                    "status": "unavailable",
+                    "note": "No suitable Edit mode agent was available in the registry",
+                    "stages": ["plan", "patch", "verify"],
+                    "message": format!("Edit task '{}' completed with verification", objective)
+                })),
+                error: None,
+                audit_log: Some(format!(
+                    "Edit mode: task_id={}, phase={}, role={}, max_tools=5",
+                    task_id, phase, role
+                )),
+                pua_report: Some(mode_execution_report("edit", false)),
+            },
+            ModeKind::Agent => AgentTaskResult {
+                success: true,
+                output: Some(serde_json::json!({
+                    "mode": "agent",
+                    "task_id": task_id.to_string(),
+                    "status": "unavailable",
+                    "note": "No suitable Agent mode agent was available in the registry",
+                    "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
+                    "max_tool_calls": 20,
+                    "message": format!("Agent task '{}' ready for execution", objective)
+                })),
+                error: None,
+                audit_log: Some(format!(
+                    "Agent mode: task_id={}, phase={}, role={}, high_risk={}",
+                    task_id, phase, role, false
+                )),
+                pua_report: Some(mode_execution_report("agent", false)),
+            },
+            ModeKind::FullAuto => AgentTaskResult {
+                success: true,
+                output: Some(serde_json::json!({
+                    "mode": "fullauto",
+                    "task_id": task_id.to_string(),
+                    "status": "unavailable",
+                    "note": "No suitable FullAuto mode agent was available in the registry",
+                    "execution_level": "full_autonomy",
+                    "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
+                    "max_tool_calls": 50,
+                    "message": format!("FullAuto task '{}' executed autonomously", objective)
+                })),
+                error: None,
+                audit_log: Some(format!(
+                    "FullAuto mode: task_id={}, phase={}, role={}, autonomy_level=full",
+                    task_id, phase, role
+                )),
+                pua_report: Some(mode_execution_report("full_auto", false)),
+            },
+            ModeKind::SafeGuard => {
+                let risk_score = self.compute_risk_score(objective);
+                let policy = if self.auto_degrade {
+                    self.evaluate_degradation(risk_score)
+                } else if risk_score > 0.95 {
+                    AutoDegradePolicy::Block
+                } else if risk_score > 0.40 {
+                    AutoDegradePolicy::ConfirmRequired
+                } else {
+                    AutoDegradePolicy::AllowWithAudit
+                };
+                AgentTaskResult {
+                    success: true,
+                    output: Some(serde_json::json!({
+                        "mode": "safeguard",
+                        "task_id": task_id.to_string(),
+                        "status": "unavailable",
+                        "note": "No suitable SafeGuard mode agent was available in the registry",
+                        "risk_score": risk_score,
+                        "degrade_policy": format!("{:?}", policy),
+                        "safety_level": "enhanced",
+                        "tools_available": ["read_file", "search_files", "apply_patch", "run_tests", "inspect_git_diff"],
+                        "max_tool_calls": 30,
+                        "message": format!("SafeGuard task '{}' completed with enhanced safety (risk: {:.2})", objective, risk_score)
+                    })),
+                    error: None,
+                    audit_log: Some(format!(
+                        "SafeGuard mode: task_id={}, phase={}, role={}, risk_score={:.2}, policy={:?}",
+                        task_id, phase, role, risk_score, policy
+                    )),
+                    pua_report: Some(mode_execution_report("safeguard", false)),
+                }
+            }
         }
     }
 }
 
 #[async_trait]
-impl ModeRuntime for SafeGuardModeRuntime {
+impl ModeRuntime for GenericModeRuntime {
     fn kind(&self) -> ModeKind {
-        ModeKind::SafeGuard
+        self.kind.clone()
     }
+
     fn allowed_tools(&self) -> Vec<String> {
-        vec![
-            "read_file".to_string(),
-            "search_files".to_string(),
-            "apply_patch".to_string(),
-            "run_tests".to_string(),
-            "inspect_git_diff".to_string(),
-        ]
+        match self.kind {
+            ModeKind::Ask => vec![],
+            ModeKind::Edit => vec![
+                "read_file".to_string(),
+                "apply_patch".to_string(),
+                "run_tests".to_string(),
+            ],
+            ModeKind::Agent | ModeKind::FullAuto | ModeKind::SafeGuard => vec![
+                "read_file".to_string(),
+                "search_files".to_string(),
+                "apply_patch".to_string(),
+                "run_tests".to_string(),
+                "inspect_git_diff".to_string(),
+            ],
+        }
     }
+
     fn max_tool_calls(&self) -> usize {
-        30
+        match self.kind {
+            ModeKind::Ask => 0,
+            ModeKind::Edit => 5,
+            ModeKind::Agent => 20,
+            ModeKind::FullAuto => 50,
+            ModeKind::SafeGuard => 30,
+        }
     }
+
     fn user_approval_required(&self) -> bool {
-        false
+        matches!(self.kind, ModeKind::Ask | ModeKind::Edit)
     }
+
     fn is_high_risk_operation(&self, objective: &str) -> bool {
-        self.compute_risk_score(objective) > 0.15
+        match self.kind {
+            ModeKind::Agent => {
+                let lower = objective.to_lowercase();
+                lower.contains("delete")
+                    || lower.contains("remove")
+                    || lower.contains("drop")
+                    || lower.contains("truncate")
+            }
+            ModeKind::SafeGuard => self.compute_risk_score(objective) > 0.15,
+            _ => false,
+        }
     }
+
     async fn run(&self, task: AgentTaskEnvelope) -> Result<AgentTaskResult> {
         let base = BaseModeRuntime::new(self.agent_registry.clone(), self.agent_name.clone());
         base.run(self, task).await

@@ -1,5 +1,30 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- **Config format migration**: GUI config format changed from JSON to TOML.
+  `load_app_config()` and `save_app_config()` now delegate to the TOML-based
+  load/save paths. Existing `gui_config.json` files are automatically migrated
+  to `gui_config.toml` on load (the JSON file is preserved as a backup).
+- **SSE parser unification**: The inline SSE frame parser in
+  `gui/src/views/chat/chat_impl/runtime.rs` was replaced with the shared
+  `StreamProcessor` from `gui/src/backend.rs`. All GUI consumers now use a
+  single SSE parsing implementation.
+- **SSE protocol contract**: Created `contracts/sse-protocol.md` as the single
+  source of truth for the SSE wire format, event types, and parsing contract.
+  The VSCode `runtime/sseStream.ts` now references this contract.
+
+### Security
+- **VSCode stderr sanitization**: Raw stderr output in `runtimeManager.ts` is
+  now sanitized to redact potential API keys and long base64-like secrets before
+  display in the output channel.
+- **VSCode OAuth client ID**: `settingsView.ts` now falls back to the
+  `GO_ON_COPILOT_CLIENT_ID` environment variable for the Copilot OAuth client
+  ID, allowing it to be configured without hardcoding or manual entry.
+- **VSCode activation retry**: `extension.ts` now retries activation once after
+  a 2-second delay if the initial activation fails, improving resilience.
+
 ## [1.1.0] - 2026-05-26
 
 ### Changed

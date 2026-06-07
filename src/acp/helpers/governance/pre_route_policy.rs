@@ -40,7 +40,19 @@ pub(crate) async fn evaluate_pre_route_policies(
             risk_score: 0.3,
         };
         // Reset budget before evaluation.
-        harness.evaluator.budget.lock().unwrap().reset();
+        // The budget lock is taken and released in a separate scope so the
+        // !Send MutexGuard is dropped BEFORE the .await below.
+        {
+            let mut budget = match harness.evaluator.budget.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    tracing::warn!("pre_route_policy: budget mutex was poisoned, recovering");
+                    poisoned.into_inner()
+                }
+            };
+            budget.reset();
+            // MutexGuard dropped here, before .await
+        }
         let verdict = harness.evaluate(&task_ctx).await;
         match &verdict {
             crate::governance::harness_bus::PolicyVerdict::Deny(v) => {
@@ -97,7 +109,7 @@ pub(crate) async fn evaluate_pre_route_policies(
     // ── RateLimitMiddleware tenant-level rate limit (F-GAP-49) ───────-
     // Check per-tenant token bucket rate limits alongside phase-level rate
     // limiting (PhaseRateLimiter). Returns 429 with retry-after when exceeded.
-    if let Some(ref limiter) = server.rate_limit_middleware {
+    if let Some(ref limiter) = server.rate_limiting.rate_limit_middleware {
         if let Err(retry_after) = limiter.check(tenant_id) {
             anyhow::bail!(
                 "rate limited for tenant '{}': retry after {}s",
@@ -115,7 +127,7 @@ pub(crate) async fn evaluate_pre_route_policies(
     // quota is exceeded; in non-strict mode the request is allowed with a
     // warning log.
     let tenant_budget_ok = {
-        let budget_guard = server.tenant_budget.lock();
+        let budget_guard = server.rate_limiting.tenant_budget.lock();
         match budget_guard {
             Ok(mut budget) => {
                 if server.runtime_config.production_strict {

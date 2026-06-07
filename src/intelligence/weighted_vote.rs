@@ -226,7 +226,7 @@ pub fn format_debate_history(round_votes: &HashMap<String, Vote>) -> String {
 /// * `config` – [`DelphiConfig`] controlling rounds, threshold, etc.
 #[allow(dead_code)]
 pub async fn delphi_debate(
-    agents: &[impl AgentVoter],
+    agents: &[&dyn AgentVoter],
     question: &str,
     reputations: &HashMap<String, f64>,
     config: &DelphiConfig,

@@ -211,7 +211,7 @@ fn build_health_probes_payload(server: &AcpServer) -> Result<Value> {
     let rate_limiter_buckets = with_acp_lock(
         server.observability.lock_monitor.as_ref(),
         ACP_LOCK_PHASE_RATE_LIMITER,
-        server.phase_rate_limiter.as_ref(),
+        server.resilience.phase_rate_limiter.as_ref(),
         |guard| {
             guard
                 .snapshot()

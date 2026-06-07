@@ -161,8 +161,8 @@ export class MultiAgentPanelProvider implements vscode.WebviewViewProvider {
               });
             }
           }
-        } catch {
-          // agent.status RPC not available - fallback empty
+        } catch (err) {
+          console.warn("[multiAgentPanel] agent.status RPC failed:", err);
         }
       }
 
@@ -187,8 +187,8 @@ export class MultiAgentPanelProvider implements vscode.WebviewViewProvider {
         agents,
         summary: { total, running },
       });
-    } catch {
-      // Backend not reachable - agents panel will show nothing
+    } catch (err) {
+      console.warn("[multiAgentPanel] _fetchAgents failed:", err);
     }
   }
 

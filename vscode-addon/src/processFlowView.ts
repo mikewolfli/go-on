@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { RuntimeManagerLike } from "./managerTypes";
 import { i18n, MessageKeys } from "./i18n";
+import { getErrorMessage } from "./utils";
 
 interface ProcessStage {
   type: "chat" | "code" | "delay" | "manual";
@@ -115,10 +116,6 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
 
     // Load existing processes
     this._loadProcesses();
-  }
-
-  private getErrorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
   }
 
   private async _loadProcesses() {
@@ -257,7 +254,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
       );
     } catch (error: unknown) {
       process.status = "failed";
-      const message = this.getErrorMessage(error);
+      const message = getErrorMessage(error);
       process.error = message;
       await this.context.workspaceState.update("go-on-processes", processes);
 
@@ -322,7 +319,7 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
     } catch (error: unknown) {
       vscode.window.showErrorMessage(
         i18n.getMessage(MessageKeys.processFlowFailed, [
-          this.getErrorMessage(error),
+          getErrorMessage(error),
         ]),
       );
     }

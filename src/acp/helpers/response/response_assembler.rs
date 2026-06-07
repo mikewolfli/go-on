@@ -219,7 +219,7 @@ pub fn build_task_graph_checkpoint(
     memory_promotion_result: Option<&Value>,
     duration_ms: u64,
 ) -> (Option<Value>, Option<String>, Option<String>) {
-    if let Some(ref store) = server.task_graph_store {
+    if let Some(ref store) = server.persistence.task_graph_store {
         let root_node = TaskNode {
             id: format!("chat-{}-root", conversation_id),
             kind: "chat_request".to_string(),

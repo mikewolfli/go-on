@@ -83,7 +83,7 @@ impl FlowModelSelector {
                 // Use semantic matching when task description is available
                 // and config requests it, falling back to criteria-based.
                 if let Some(desc) = task_description {
-                    if config.model_selection_mode == "semantic" {
+                    if config.model_selection_mode() == "semantic" {
                         return AgentModelSelection {
                             selected_model: select_model_semantic(
                                 ctx,
@@ -115,7 +115,7 @@ impl FlowModelSelector {
     }
 
     fn selection_strategy(config: &AppConfig) -> ModelSelectionStrategy {
-        match config.model_selection_mode.as_str() {
+        match config.model_selection_mode() {
             "explicit" => ModelSelectionStrategy::Explicit,
             "capable" => ModelSelectionStrategy::MostCapable,
             "cost" => ModelSelectionStrategy::Cheapest,
@@ -188,7 +188,7 @@ impl FlowModelSelector {
 
     /// Get recommended policy based on system configuration
     pub fn recommended_policy(config: &AppConfig) -> AutomaticModePolicy {
-        match config.model_selection_mode.as_str() {
+        match config.model_selection_mode() {
             "cost" => AutomaticModePolicy::CostOptimized,
             "speed" => AutomaticModePolicy::SpeedOptimized,
             "capable" => AutomaticModePolicy::AlwaysMostCapable,
@@ -239,8 +239,11 @@ mod tests {
     fn test_config(mode: &str) -> AppConfig {
         AppConfig {
             schema_version: "1.0.0".to_string(),
-            default_phase: "coding".to_string(),
-            agents: HashMap::new(),
+            provider: crate::core::config::types::ProviderConfig {
+                default_phase: "coding".to_string(),
+                agents: HashMap::new(),
+                role_registry: HashMap::new(),
+            },
             flow: crate::config::FlowConfig {
                 name: "flow".to_string(),
                 phases: vec!["coding".to_string()],
@@ -251,12 +254,15 @@ mod tests {
             cache: None,
             vector: None,
             autotune: None,
-            model_selection_mode: mode.to_string(),
+            security: crate::core::config::types::SecurityConfig::default(),
+            feature: crate::core::config::types::FeatureConfig {
+                model_selection_mode: mode.to_string(),
+                ..Default::default()
+            },
             compliance: None,
             startup_context: None,
             scheduler: None,
             reputation: None,
-            role_registry: HashMap::new(),
         }
     }
 

@@ -545,6 +545,7 @@ async fn handle_http_connection(
     // ── User auth and RBAC ───────────────────────────────────────────────
     if let Some(ref server) = acp_server {
         let user_session = server
+            .session
             .session_manager
             .as_ref()
             .and_then(|sm| sm.extract_user_from_request(header_part));

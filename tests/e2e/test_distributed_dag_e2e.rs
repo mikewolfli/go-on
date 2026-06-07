@@ -83,6 +83,13 @@ fn make_test_plan(dag_id: &str) -> DagExecutionPlan {
 
 /// Full distributed DAG execution: node registration → cross-node execution →
 /// failure → recovery → completion.
+///
+/// # Real-infra
+/// This test uses in-memory type construction. It requires two running go-on
+/// nodes with `sub-bus-tool` feature and network connectivity to actually validate
+/// cross-node execution. Ignored by default; run with `cargo test -- --ignored`
+/// when real infrastructure is available.
+#[ignore = "requires real go-on nodes with sub-bus-tool feature and network connectivity"]
 #[tokio::test]
 async fn test_distributed_dag_failure_recovery() {
     let mut ctx = DistributedDagE2eContext::new();
@@ -250,6 +257,12 @@ async fn test_distributed_dag_failure_recovery() {
 }
 
 /// Validates that a DAG with invalid structure (cyclic deps) is rejected.
+///
+/// # Real-infra
+/// This test uses in-memory type construction. It requires two running go-on
+/// nodes with `sub-bus-tool` feature and network connectivity to actually validate
+/// cross-node execution. Ignored by default.
+#[ignore = "requires real go-on nodes with sub-bus-tool feature and network connectivity"]
 #[tokio::test]
 async fn test_distributed_dag_rejects_invalid_dag() {
     // integration-test-stub: real validation checks for cycles before
@@ -325,6 +338,12 @@ async fn test_distributed_dag_rejects_invalid_dag() {
 }
 
 /// Validates DAG status transitions.
+///
+/// # Real-infra
+/// This test uses in-memory type construction. It requires two running go-on
+/// nodes with `sub-bus-tool` feature and network connectivity to actually validate
+/// cross-node execution. Ignored by default.
+#[ignore = "requires real go-on nodes with sub-bus-tool feature and network connectivity"]
 #[tokio::test]
 async fn test_distributed_dag_status_transitions() {
     let plan = make_test_plan("dag-status-test");

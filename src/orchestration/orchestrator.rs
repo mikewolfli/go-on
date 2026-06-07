@@ -12,12 +12,8 @@ use crate::intelligence::semantic_matcher::{
     ModelCapability as SemanticModelCapability, ScoredSkill, SemanticCapabilityMatcher,
     SkillCapability as SemanticSkillCapability,
 };
-#[cfg(test)]
-use crate::mode::ModeKind;
-use crate::mode::{
-    AgentModeRuntime, AskModeRuntime, EditModeRuntime, FullAutoModeRuntime, ModeRuntime,
-    SafeGuardModeRuntime,
-};
+
+use crate::mode::{GenericModeRuntime, ModeKind, ModeRuntime};
 use crate::model_selector::{
     ModelCharacteristics, ModelSelectionStrategy, ModelSelector, SelectionCriteria,
 };
@@ -74,14 +70,15 @@ pub fn select_mode_runtime_with_registry(
     mode: &str,
     registry: Arc<AgentRegistry>,
 ) -> Box<dyn ModeRuntime> {
-    match mode {
-        "ask" => Box::new(AskModeRuntime::new(registry, None)),
-        "edit" => Box::new(EditModeRuntime::new(registry, None)),
-        "agent" => Box::new(AgentModeRuntime::new(registry, None)),
-        "full_auto" => Box::new(FullAutoModeRuntime::new(registry, None)),
-        "safeguard" => Box::new(SafeGuardModeRuntime::new(registry, None)),
-        _ => Box::new(AskModeRuntime::new(registry, None)),
-    }
+    let kind = match mode {
+        "ask" => ModeKind::Ask,
+        "edit" => ModeKind::Edit,
+        "agent" => ModeKind::Agent,
+        "full_auto" => ModeKind::FullAuto,
+        "safeguard" => ModeKind::SafeGuard,
+        _ => ModeKind::Ask,
+    };
+    Box::new(GenericModeRuntime::new(kind, registry, None))
 }
 
 /// Deprecated: returns runtimes with no agent registry.

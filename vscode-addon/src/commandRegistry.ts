@@ -204,11 +204,11 @@ export function registerViewCommands(
             sessionNames = Array.from(names);
           }
         }
-      } catch {
-        // RPC failed — fall back to ["default"]
+      } catch (err) {
         // eslint-disable-next-line no-console
         console.warn(
-          "go-on: failed to fetch session list from backend, using default",
+          "go-on: failed to fetch session list from backend, using default:",
+          err,
         );
       }
 

@@ -26,6 +26,9 @@ pub struct NegotiatedProtocol {
     pub auto_detected: bool,
     /// Negotiated ACP protocol version for initialize handshake
     pub protocol_version: ProtocolVersion,
+    /// The list of client-supported versions that led to this negotiation
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_versions: Option<Vec<u16>>,
 }
 
 /// ProtocolNegotiator — manages protocol auto-detection and fallback
@@ -92,8 +95,32 @@ impl ProtocolNegotiator {
             version: format!("go-on/v1.1.0/{}", mode),
             auto_detected,
             protocol_version: ProtocolVersion::LATEST,
+            client_versions: None,
         }
     }
+
+    /// Negotiate protocol with both a client hint and a list of supported versions.
+    ///
+    /// Performs real version negotiation: the highest common version between the
+    /// server's supported versions and the client's list is selected as the
+    /// negotiated protocol version. Falls back to `ProtocolVersion::LATEST` when
+    /// no common version is found (backward compatibility).
+    #[allow(dead_code)] // F-GAP: reserved for protocol version discovery integration
+    pub fn negotiate_with_versions(
+        &self,
+        client_hint: Option<&str>,
+        client_versions: &[ProtocolVersion],
+    ) -> NegotiatedProtocol {
+        let base = self.negotiate(client_hint);
+        let negotiated_version = ProtocolVersion::select_highest_common(client_versions)
+            .unwrap_or(ProtocolVersion::LATEST);
+        NegotiatedProtocol {
+            protocol_version: negotiated_version,
+            client_versions: Some(client_versions.iter().map(|v| v.as_u16()).collect()),
+            ..base
+        }
+    }
+
     /// Attempt fallback to next protocol in the chain
     #[allow(dead_code)] // F-GAP-49 — reserved for fallback orchestration
     pub fn try_fallback(&mut self) -> Option<ProtocolMode> {
@@ -225,6 +252,45 @@ mod tests {
         let negotiator = ProtocolNegotiator::new(ProtocolMode::AcpHttp);
         let result = negotiator.negotiate(Some("acp_http"));
         assert_eq!(result.protocol_version, ProtocolVersion::LATEST);
+    }
+
+    #[test]
+    fn test_negotiate_with_versions_selects_highest_common() {
+        let negotiator = ProtocolNegotiator::new(ProtocolMode::AcpHttp);
+        let client_versions = vec![ProtocolVersion::V1, ProtocolVersion::V3];
+        let result = negotiator.negotiate_with_versions(Some("acp_http"), &client_versions);
+        // Highest common between server {1,2,3} and client {1,3} is V3
+        assert_eq!(result.protocol_version, ProtocolVersion::V3);
+        assert_eq!(result.client_versions, Some(vec![1, 3]));
+    }
+
+    #[test]
+    fn test_negotiate_with_versions_falls_back_to_latest() {
+        let negotiator = ProtocolNegotiator::new(ProtocolMode::AcpHttp);
+        // Client only supports V999, which server doesn't have
+        let client_versions = vec![ProtocolVersion::from_u16(999)];
+        let result = negotiator.negotiate_with_versions(Some("acp_http"), &client_versions);
+        // Falls back to LATEST for backward compatibility
+        assert_eq!(result.protocol_version, ProtocolVersion::LATEST);
+    }
+
+    #[test]
+    fn test_select_highest_common() {
+        let client = vec![ProtocolVersion::V1, ProtocolVersion::V2];
+        assert_eq!(
+            ProtocolVersion::select_highest_common(&client),
+            Some(ProtocolVersion::V2)
+        );
+
+        let client = vec![ProtocolVersion::V1];
+        assert_eq!(
+            ProtocolVersion::select_highest_common(&client),
+            Some(ProtocolVersion::V1)
+        );
+
+        // No overlap
+        let client = vec![ProtocolVersion::from_u16(42)];
+        assert_eq!(ProtocolVersion::select_highest_common(&client), None);
     }
 
     #[test]

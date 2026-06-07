@@ -175,6 +175,7 @@ pub(crate) async fn run_high_risk_vote_attempt(
         Ok((output_text, reasoning_output, _sel_m)) => {
             let success = !output_text.trim().is_empty();
             server
+                .resilience
                 .online_controller
                 .lock()
                 .unwrap_or_else(|poisoned| {
@@ -222,6 +223,7 @@ pub(crate) async fn run_high_risk_vote_attempt(
         Err(err) => {
             let err_text = err.to_string();
             server
+                .resilience
                 .online_controller
                 .lock()
                 .unwrap_or_else(|poisoned| {
@@ -395,6 +397,7 @@ pub(crate) fn controller_recommended_phase(
 ) -> Option<String> {
     let candidates = config.flow.phases.clone();
     let recommended = server
+        .resilience
         .online_controller
         .lock()
         .unwrap_or_else(|poisoned| {
@@ -615,10 +618,14 @@ pub(crate) async fn resolve_request_phase(
     // ── SchemaRegistry task envelope validation (activated, formerly F-GAP-07) ─
     let mut schema_warnings: Vec<String> = Vec::new();
     let mut schema_error: Option<String> = None;
-    let sr_guard = server.schema_registry.lock().unwrap_or_else(|poisoned| {
-        warn!("resolve_request_phase: schema_registry poisoned, recovering");
-        poisoned.into_inner()
-    });
+    let sr_guard = server
+        .registries
+        .schema_registry
+        .lock()
+        .unwrap_or_else(|poisoned| {
+            warn!("resolve_request_phase: schema_registry poisoned, recovering");
+            poisoned.into_inner()
+        });
     for (role_name, _agent) in &resolved.agents {
         if let Some(schema) = sr_guard.get(role_name) {
             let input_val = serde_json::json!({
@@ -1277,7 +1284,7 @@ async fn check_conversation_history_escalation(
 ) -> Result<bool> {
     // This is a simplified implementation
     // In reality, this would check the conversation store for history
-    let conversation_state = server.conversation_state.lock().await;
+    let conversation_state = server.session.conversation_state.lock().await;
 
     // Check if conversation exists in checkpoints
     let has_conversation = conversation_state
@@ -1426,6 +1433,7 @@ pub(crate) fn reorder_chat_agents_by_runtime_score(
         .map(|(name, _)| name.clone())
         .collect::<Vec<_>>();
     let ranked = server
+        .resilience
         .online_controller
         .lock()
         .map(|state| state.rank_agent_names_for_phase(phase_name, &names))
@@ -1630,6 +1638,7 @@ pub(crate) async fn auto_generate_workflow_from_conversation(
 
     // Persist the workflow artifact for traceability
     let ledger = server
+        .persistence
         .artifact_ledger
         .lock()
         .map(|guard| guard.clone())

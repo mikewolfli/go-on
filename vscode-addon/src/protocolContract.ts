@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import * as vscode from "vscode";
 
 type SurfaceSupport = {
   openAiCompat: boolean;
@@ -410,6 +411,36 @@ const fallbackContract: ProtocolContract = {
   },
 };
 
+/**
+ * Resolve the backend base URL using the following priority:
+ *   1. VS Code config `go-on.baseUrl`
+ *   2. Environment variable `GOON_BASE_URL`
+ *   3. Hardcoded fallback `http://127.0.0.1:8090`
+ */
+function resolveBaseUrl(): string {
+  // Priority 1: VS Code configuration (go-on.baseUrl)
+  try {
+    const configured = vscode.workspace
+      .getConfiguration("go-on")
+      .get<string>("baseUrl");
+    if (configured && configured.trim().length > 0) {
+      return configured.trim();
+    }
+  } catch {
+    // Not running inside VS Code (e.g., tests) — fall through
+  }
+
+  // Priority 2: Environment variable
+  const envUrl = process.env["GOON_BASE_URL"];
+  if (envUrl && envUrl.trim().length > 0) {
+    return envUrl.trim();
+  }
+
+  // Priority 3: Hardcoded default
+  return "http://127.0.0.1:8090";
+}
+
+/** @returns {ProtocolContract} the parsed contract, or fallback on failure. */
 function loadProtocolContract(): ProtocolContract {
   // NOTE: __dirname is used because VS Code extensions use CommonJS.
   // If migrating to ESM, use: `import.meta.url` + `fileURLToPath`.
@@ -423,13 +454,49 @@ function loadProtocolContract(): ProtocolContract {
 
   try {
     const raw = fs.readFileSync(contractPath, "utf8");
-    return JSON.parse(raw) as ProtocolContract;
-  } catch {
-    return fallbackContract;
+    const contract = JSON.parse(raw) as ProtocolContract;
+    // Override baseUrl with resolved value so consumers get the correct backend address.
+    contract.runtime.baseUrl = resolveBaseUrl();
+    return contract;
+  } catch (err) {
+    console.warn("[protocolContract] load failed:", err);
+    return {
+      ...fallbackContract,
+      runtime: { ...fallbackContract.runtime, baseUrl: resolveBaseUrl() },
+    };
   }
 }
 
-export const protocolContract = loadProtocolContract();
+export let protocolContract = loadProtocolContract();
+
+/**
+ * Refresh interval for protocol contract (milliseconds).
+ * Re-fetches the contract every 5 minutes so the extension picks up
+ * backend API upgrades without requiring a reload.
+ */
+const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+
+/** Reload the protocol contract from disk, updating the exported reference. */
+function refreshProtocolContract(): void {
+  try {
+    const contract = loadProtocolContract();
+    protocolContract = contract;
+  } catch (err) {
+    console.warn(
+      "[protocolContract] refresh failed, keeping stale contract:",
+      err,
+    );
+  }
+  // Re-resolve baseUrl on refresh so config/env changes are picked up.
+  const newBaseUrl = resolveBaseUrl();
+  protocolContract.runtime.baseUrl = newBaseUrl;
+}
+
+// Periodically refresh the contract so the extension adapts to backend upgrades.
+// The interval is intentionally not cleared — the extension lives for the lifetime
+// of the VS Code window, so the refresh runs until the window closes.
+setInterval(refreshProtocolContract, REFRESH_INTERVAL_MS);
+
 export const workflowControlModes = protocolContract.protocol
   .workflowControlModes ?? ["manual", "assisted", "autonomous"];
 export const defaultWorkflowControlMode =

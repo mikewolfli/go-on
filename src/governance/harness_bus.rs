@@ -574,6 +574,24 @@ pub struct PuaGovernanceProfile {
     pub idempotency_hits: u64,
     pub other_denials: u64,
     pub audit_entries_total: u64,
+    // ── Extended governance module tracking (14-module coverage) ──────
+    /// (7) Rationalization module blocks
+    pub rationalization_blocks: u64,
+    /// (8) RBAC enforcer denials
+    pub rbac_denials: u64,
+    /// (9) Security governor blocks
+    pub security_blocks: u64,
+    /// (10) Drift detection engine detections
+    pub drift_detections: u64,
+    /// (11) Approval engine requests processed
+    pub approval_requests: u64,
+    /// (12) Approval learning updates applied
+    pub learning_updates: u64,
+    /// (13) Hardening events triggered
+    pub hardening_events: u64,
+    /// (14) Review control overrides
+    pub review_overrides: u64,
+    // ── Existing fields ───────────────────────────────────────────────
     pub current_active_policies: u32,
     pub current_escalation_level: String,
     pub runtime_control_mode: String,
@@ -596,6 +614,14 @@ impl Default for PuaGovernanceProfile {
             idempotency_hits: 0,
             other_denials: 0,
             audit_entries_total: 0,
+            rationalization_blocks: 0,
+            rbac_denials: 0,
+            security_blocks: 0,
+            drift_detections: 0,
+            approval_requests: 0,
+            learning_updates: 0,
+            hardening_events: 0,
+            review_overrides: 0,
             current_active_policies: 5,
             current_escalation_level: "normal".to_string(),
             runtime_control_mode: "standard".to_string(),
@@ -1289,6 +1315,12 @@ impl HarnessBus {
                             );
                         }
                         "budget" => p.budget_violations = p.budget_violations.saturating_add(1),
+                        "rbac" | "permission" => {
+                            p.rbac_denials = p.rbac_denials.saturating_add(1);
+                        }
+                        "security_policy" => {
+                            p.security_blocks = p.security_blocks.saturating_add(1);
+                        }
                         _ => p.other_denials = p.other_denials.saturating_add(1),
                     }
                 }
@@ -1307,8 +1339,9 @@ impl HarnessBus {
                 tf("status.harness_bus.mode_standard", &[])
             };
             p.policy_violation_trend = ctrl.violation_trend();
-            // current_active_policies: count how many active policy layers are engaged
-            p.current_active_policies = 5u32; // rule engine + budget + runtime control + sandbox + guard
+            // current_active_policies: count how many active policy layers are engaged.
+            // Updated to reflect the expanded 14-module governance coverage.
+            p.current_active_policies = 12u32; // dispatch, execution, governance (red_lines + quality_compass + sandbox_level + idempotency + tenant_quota + escalation + audit), rule_engine, budget, runtime_control, guard, security_governor, rbac_enforcer
         }
 
         // Record execution outcome through the resilience engine (F-GAP-27).
@@ -1582,32 +1615,23 @@ impl HarnessBus {
     /// ⚠️ Sync-shim: only uses `block_on` when no tokio runtime is active (safe path).
     /// If a tokio runtime IS active, logs a warning and returns a default profile
     /// to avoid blocking the tokio worker thread.
+    /// Lazily initialized shared tokio runtime for sync callers.
+    /// Avoids creating a new Runtime on every invocation.
+    fn shared_tokio_runtime() -> &'static tokio::runtime::Runtime {
+        static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+        RUNTIME.get_or_init(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to create shared tokio runtime for sync profiles")
+        })
+    }
+
     #[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
     pub fn brain_profile(&self) -> BrainLoopProfile {
         match tokio::runtime::Handle::try_current() {
-            Ok(_) => {
-                tracing::warn!(
-                    "brain_profile called from inside tokio runtime — returning default to avoid blocking worker thread"
-                );
-                crate::orchestration::brain_loop::BrainLoopProfile {
-                    total_plans: 0,
-                    active_plans: 0,
-                    completed_plans: 0,
-                    failed_plans: 0,
-                    total_cycles: 0,
-                    avg_cycles_per_plan: 0.0,
-                    convergence_info: String::new(),
-                    avg_step_score: 0.0,
-                    total_steps: 0,
-                }
-            }
-            Err(_) => {
-                // No active tokio runtime — safe to create a temporary runtime and block.
-                let bl = self.brain_loop.clone();
-                tokio::runtime::Runtime::new()
-                    .expect("failed to create temporary tokio runtime for brain_profile")
-                    .block_on(bl.profile())
-            }
+            Ok(handle) => handle.block_on(self.brain_loop.profile()),
+            Err(_) => Self::shared_tokio_runtime().block_on(self.brain_loop.profile()),
         }
     }
 
@@ -1632,36 +1656,12 @@ impl HarnessBus {
     }
 
     /// Brain loop runner profile snapshot (consolidated flat version).
-    ///
-    /// ⚠️ Sync-shim: only uses `block_on` when no tokio runtime is active (safe path).
-    /// If a tokio runtime IS active, logs a warning and returns a default profile
-    /// to avoid blocking the tokio worker thread.
+    /// Uses shared tokio runtime to avoid creating new Runtime per invocation.
     #[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
     pub fn brain_runner_profile(&self) -> BrainLoopProfile {
         match tokio::runtime::Handle::try_current() {
-            Ok(_) => {
-                tracing::warn!(
-                    "brain_runner_profile called from inside tokio runtime — returning default to avoid blocking worker thread"
-                );
-                crate::orchestration::brain_loop::BrainLoopProfile {
-                    total_plans: 0,
-                    active_plans: 0,
-                    completed_plans: 0,
-                    failed_plans: 0,
-                    total_cycles: 0,
-                    avg_cycles_per_plan: 0.0,
-                    convergence_info: String::new(),
-                    avg_step_score: 0.0,
-                    total_steps: 0,
-                }
-            }
-            Err(_) => {
-                // No active tokio runtime — safe to create a temporary runtime and block.
-                let br = self.brain_runner.clone();
-                tokio::runtime::Runtime::new()
-                    .expect("failed to create temporary tokio runtime for brain_runner_profile")
-                    .block_on(br.profile())
-            }
+            Ok(handle) => handle.block_on(self.brain_runner.profile()),
+            Err(_) => Self::shared_tokio_runtime().block_on(self.brain_runner.profile()),
         }
     }
 

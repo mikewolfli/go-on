@@ -219,7 +219,7 @@ fn build_provider_dependency_component(config: &AppConfig) -> ComponentReport {
     let mut degraded_count: u64 = 0;
     let mut total_count: u64 = 0;
 
-    for (agent_key, agent_config) in &config.agents {
+    for (agent_key, agent_config) in config.agents() {
         let env_var = agent_config.api_key_env.as_deref().unwrap_or("");
         let secret_env_var = agent_config.secret_key_env.as_deref();
         let agent_name = agent_key;
@@ -361,7 +361,7 @@ fn keyring_env_fallback_candidates(service: &str, account: &str) -> Vec<String> 
 #[allow(dead_code)] // F-GAP-49 — reserved for secret pool diagnostics
 fn secret_pool_status(config: &AppConfig) -> Value {
     let mut secrets = Vec::new();
-    for agent_config in config.agents.values() {
+    for agent_config in config.agents().values() {
         if let Some(env_var) = &agent_config.api_key_env {
             let exists = crate::agent::inspect_secret_pool(env_var, "api_key_env").is_ok();
             secrets.push(json!({
@@ -376,7 +376,7 @@ fn secret_pool_status(config: &AppConfig) -> Value {
 #[allow(dead_code)] // F-GAP-49 — reserved for agent environment validation
 fn missing_envs_for_agent(config: &AppConfig) -> Vec<Value> {
     let mut missing = Vec::new();
-    for agent_config in config.agents.values() {
+    for agent_config in config.agents().values() {
         if let Some(api_key_env) = &agent_config.api_key_env {
             if api_key_env.starts_with("env://") {
                 let env_var = api_key_env.trim_start_matches("env://");

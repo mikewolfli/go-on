@@ -19,6 +19,7 @@ use go_on::multimodal::document_parser::ParsedContent;
 use go_on::multimodal::{
     AudioFormat, AudioProcessorConfig, DocumentParserError, MultimodalInput, SttBackend,
 };
+use go_on::shared::image_attachment::ImageAttachment;
 
 // ── Context ────────────────────────────────────────────────────────────────
 
@@ -251,6 +252,66 @@ async fn test_multimodal_audio_processor_config() {
     assert!(
         format!("{:?}", raw).contains("RawPcm"),
         "AudioFormat::RawPcm debug representation"
+    );
+
+    sleep(Duration::from_millis(10)).await;
+}
+
+/// Validates serialisation round-trip of multimodal data types.
+///
+/// This ensures that `MultimodalInput` and `ImageAttachment` can be
+/// serialised to JSON and deserialised back without data loss, which
+/// is the path used by GUI/VSCode clients when sending images to the backend.
+#[tokio::test]
+async fn test_multimodal_serialization_round_trip() {
+    // ── ImageAttachment round-trip ───────────────────────────────────────
+    let raw_png: Vec<u8> = vec![
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+        0x44, 0x52,
+    ];
+    let attachment = ImageAttachment::from_bytes(&raw_png, "image/png", Some("test screenshot".into()));
+
+    // Serialize to JSON
+    let json = serde_json::to_string(&attachment).expect("serialize ImageAttachment");
+    // Deserialize back
+    let decoded: ImageAttachment =
+        serde_json::from_str(&json).expect("deserialize ImageAttachment");
+
+    assert_eq!(decoded.mime_type, "image/png");
+    assert_eq!(decoded.alt_text.as_deref(), Some("test screenshot"));
+    let recovered_bytes = decoded.decode().expect("base64 decode");
+    assert_eq!(recovered_bytes, raw_png, "round-trip bytes must match");
+
+    // Verify the serialized JSON contains the expected fields
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse JSON");
+    assert!(
+        parsed.get("data").and_then(|v| v.as_str()).is_some(),
+        "data field must exist"
+    );
+    assert!(
+        parsed.get("mime_type").and_then(|v| v.as_str()).is_some(),
+        "mime_type field must exist"
+    );
+    assert!(
+        parsed.get("alt_text").and_then(|v| v.as_str()).is_some(),
+        "alt_text field must exist"
+    );
+
+    // ── ImageAttachment without alt_text (should be omitted from JSON) ────
+    let no_alt = ImageAttachment::from_bytes(b"raw data", "image/webp", None);
+    let no_alt_json = serde_json::to_string(&no_alt).expect("serialize without alt");
+    let no_alt_parsed: serde_json::Value =
+        serde_json::from_str(&no_alt_json).expect("parse without alt");
+    assert!(
+        no_alt_parsed.get("alt_text").is_none(),
+        "alt_text should be omitted when None"
+    );
+    let no_alt_decoded: ImageAttachment =
+        serde_json::from_str(&no_alt_json).expect("deserialize without alt");
+    assert!(no_alt_decoded.alt_text.is_none());
+    assert_eq!(
+        no_alt_decoded.decode().expect("base64 decode"),
+        b"raw data"
     );
 
     sleep(Duration::from_millis(10)).await;

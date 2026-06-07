@@ -26,8 +26,9 @@ pub use load::{
 };
 pub use types::{
     AdaptiveConfig, AgentConfig, AppConfig, CacheConfig, ComplianceConfig, ConversationContext,
-    FlowConfig, LearningPreferences, MinimalConfig, PhaseConfig, PhaseOptions, ReputationConfig,
-    RuntimeConfig, SchedulerConfig, StartupContextConfig, VectorConfig, WorkflowType,
+    FeatureConfig, FlowConfig, LearningPreferences, MinimalConfig, PhaseConfig, PhaseOptions,
+    ProviderConfig, ReputationConfig, RuntimeConfig, SchedulerConfig, SecurityConfig,
+    StartupContextConfig, VectorConfig, WorkflowType,
 };
 
 // Suppress dead-code warnings for not-yet-integrated modules.

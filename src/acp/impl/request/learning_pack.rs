@@ -1247,6 +1247,7 @@ pub(super) async fn handle_phase_policy_replay(
         .map(|flow| flow.config().flow.phases.clone())
         .unwrap_or_default();
     let (controller_recommended, controller_snapshot) = server
+        .resilience
         .online_controller
         .lock()
         .ok()

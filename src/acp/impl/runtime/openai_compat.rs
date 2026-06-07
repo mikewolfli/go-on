@@ -816,6 +816,7 @@ fn store_responses_api_payload(server: &AcpServer, payload: &serde_json::Value) 
         return;
     };
     let mut store = server
+        .session
         .responses_api_store
         .lock()
         .unwrap_or_else(|poisoned| {
@@ -836,6 +837,7 @@ fn store_responses_api_payload(server: &AcpServer, payload: &serde_json::Value) 
 
 fn load_responses_api_payload(server: &AcpServer, response_id: &str) -> Option<serde_json::Value> {
     server
+        .session
         .responses_api_store
         .lock()
         .ok()
@@ -844,6 +846,7 @@ fn load_responses_api_payload(server: &AcpServer, response_id: &str) -> Option<s
 
 pub(crate) fn list_responses_api_payloads(server: &AcpServer) -> Vec<serde_json::Value> {
     let mut values = server
+        .session
         .responses_api_store
         .lock()
         .ok()

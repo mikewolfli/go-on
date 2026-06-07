@@ -24,20 +24,19 @@ use crate::intelligence::consensus::{ConsensusEngine, ConsensusNode, ConsensusVo
 use crate::intelligence::voter_impls::{
     CapabilityBusVoter, LocalAgentVoter, RationalizationGuardVoter,
 };
-use crate::intelligence::weighted_vote::{self, AgentVoter, DelphiConfig, WeightedVoteConfig};
+use crate::intelligence::weighted_vote::{
+    self, delphi_debate, AgentVoter, DelphiConfig, WeightedVoteConfig,
+};
 
 // ── Global counters for observability ─────────────────────────────────────
 
 /// How many times the intelligence hub has been activated.
-#[allow(dead_code)] // F-GAP-49 — reserved intelligence hub feature
 pub static INTEL_HUB_ACTIVATIONS: AtomicU64 = AtomicU64::new(0);
 /// How many consensus rounds have been started.
-#[allow(dead_code)] // F-GAP-49 — reserved intelligence hub feature
 pub static CONSENSUS_ROUNDS: AtomicU64 = AtomicU64::new(0);
 /// How many rationalization evaluations were performed.
 pub static RATIONALIZATION_COUNT: AtomicU64 = AtomicU64::new(0);
 /// How many audit entries were recorded.
-#[allow(dead_code)] // F-GAP-49 — reserved intelligence hub feature
 pub static AUDIT_ENTRY_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Whether Delphi-method debate voting is enabled in rationalize_decision.
@@ -67,11 +66,38 @@ static GLOBAL_RATIONALIZATION: LazyLock<Mutex<SelfRationalizationGuard>> =
 /// Initialised via [`init_intel_voters`] at server startup.
 static GLOBAL_VOTERS: OnceLock<Vec<Box<dyn AgentVoter + Send + Sync>>> = OnceLock::new();
 
-#[allow(dead_code)] // F-GAP-49 — reserved intelligence hub feature
 static GLOBAL_AUDIT: LazyLock<ThreadSafeAuditLog> = LazyLock::new(|| {
     let audit_path: std::path::PathBuf = std::env::temp_dir().join("goon-audit.ndjson");
     ThreadSafeAuditLog::new_with_path(10_000, audit_path)
 });
+
+/// Snapshot of all intelligence hub metric counters.
+///
+/// Used by the governance health endpoint to expose hub activity
+/// (I5 — wire the dead-code counters into a read-side).
+pub fn hub_metrics() -> serde_json::Value {
+    serde_json::json!({
+        "intel_hub_activations": INTEL_HUB_ACTIVATIONS.load(Ordering::Relaxed),
+        "consensus_rounds": CONSENSUS_ROUNDS.load(Ordering::Relaxed),
+        "rationalization_count": RATIONALIZATION_COUNT.load(Ordering::Relaxed),
+        "audit_entry_count": AUDIT_ENTRY_COUNT.load(Ordering::Relaxed),
+    })
+}
+
+// ── Default node addresses ───────────────────────────────────────────────
+
+/// Default address for the local agent consensus node.
+/// Uses `internal://` scheme because these are in-process logical nodes
+/// with no network transport — the consensus engine routes votes entirely
+/// within the same memory space. No DNS / TCP resolution is required.
+pub const DEFAULT_LOCAL_AGENT_ADDRESS: &str = "internal://local";
+
+/// Default address for the capability bus consensus node.
+/// Same rationale as `DEFAULT_LOCAL_AGENT_ADDRESS` — the capability bus
+/// is an in-process component, not a remote service, so an `internal://`
+/// scheme avoids unnecessary network overhead and keeps the consensus
+/// loop zero-allocation for local decisions.
+pub const DEFAULT_CAPABILITY_BUS_ADDRESS: &str = "internal://capability_bus";
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
@@ -81,7 +107,24 @@ static GLOBAL_AUDIT: LazyLock<ThreadSafeAuditLog> = LazyLock::new(|| {
 /// `enable_delphi_debate` — when `true`, `rationalize_decision` will
 /// use the weighted reputation + Delphi debate voting path instead of
 /// the basic rationalization guard.
+///
+/// Addresses default to `internal://local` and `internal://capability_bus`
+/// because both consensus nodes are in-process logical entities with no
+/// network transport. Override by passing custom addresses if the consensus
+/// engine needs to reference external or multi-process nodes.
 pub fn init_intel_hub(enable_delphi_debate: bool) {
+    init_intel_hub_with_addrs(enable_delphi_debate, DEFAULT_LOCAL_AGENT_ADDRESS, DEFAULT_CAPABILITY_BUS_ADDRESS)
+}
+
+/// Initialize intelligence hub with configurable consensus node addresses.
+///
+/// `local_agent_address` — address for the local agent consensus node.
+/// `capability_bus_address` — address for the capability bus consensus node.
+pub fn init_intel_hub_with_addrs(
+    enable_delphi_debate: bool,
+    local_agent_address: &str,
+    capability_bus_address: &str,
+) {
     let consensus = match GLOBAL_CONSENSUS.lock() {
         Ok(guard) => guard,
         Err(poisoned) => {
@@ -91,7 +134,7 @@ pub fn init_intel_hub(enable_delphi_debate: bool) {
     };
     let _ = consensus.register_node(ConsensusNode {
         id: "local-agent".to_string(),
-        address: "internal://local".to_string(),
+        address: local_agent_address.to_string(),
         weight: 1,
         role: NodeRole::Leader,
         is_online: true,
@@ -99,7 +142,7 @@ pub fn init_intel_hub(enable_delphi_debate: bool) {
     });
     let _ = consensus.register_node(ConsensusNode {
         id: "capability-bus".to_string(),
-        address: "internal://capability_bus".to_string(),
+        address: capability_bus_address.to_string(),
         weight: 1,
         role: NodeRole::Follower,
         is_online: true,
@@ -358,14 +401,36 @@ pub fn consensus_vote_with_reputation(
         // from within a tokio runtime context (chat hot path or rationalize).
         let mut votes = HashMap::new();
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            for voter in voters {
-                let vote = tokio::task::block_in_place(|| {
-                    handle.block_on(async { voter.vote(&context).await })
-                });
-                votes.insert(voter.name().to_string(), vote);
+            // Spawn all voters concurrently using join_all.
+            // This avoids block_in_place+block_on anti-pattern that
+            // deadlocks on single-threaded runtimes.
+            let voter_futures: Vec<_> = voters
+                .iter()
+                .map(|voter| {
+                    let context = context.clone();
+                    tokio::spawn(async move {
+                        let name = voter.name().to_string();
+                        let vote = voter.vote(&context).await;
+                        (name, vote)
+                    })
+                })
+                .collect();
+            let results = tokio::task::block_in_place(|| {
+                handle.block_on(futures_util::future::join_all(voter_futures))
+            });
+            for result in results {
+                match result {
+                    Ok((name, vote)) => {
+                        votes.insert(name, vote);
+                    }
+                    Err(e) => {
+                        tracing::warn!("intel_hub: voter task failed: {}", e);
+                    }
+                }
             }
         } else {
             tracing::warn!("intel_hub: no tokio runtime — falling back to hardcoded votes");
+            // Fallback: use consensus_vote_on which is synchronous
             return consensus_vote_on(proposal_id, proposal, approve);
         }
         votes
@@ -436,13 +501,52 @@ pub fn consensus_vote_with_reputation(
                 if rg_approve { "APPROVE" } else { "REJECT" },
             );
             tracing::info!(debate_context, "delphi debate context");
-            weighted_vote::weighted_vote(
-                &raw_votes,
-                reputations,
-                config.delphi.threshold,
-                config.delphi.default_weight,
-                &debate_context,
-            )
+
+            // Use the actual multi-round Delphi debate when global voters are available.
+            if let Some(voters) = GLOBAL_VOTERS.get() {
+                if !voters.is_empty() {
+                    let agent_refs: Vec<&dyn AgentVoter> = voters
+                        .iter()
+                        .map(|b| b.as_ref() as &dyn AgentVoter)
+                        .collect();
+                    let debate_question = debate_context.clone();
+                    let reputations_clone = reputations.clone();
+                    let delphi_config = config.delphi.clone();
+                    let result = tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current().block_on(delphi_debate(
+                            &agent_refs,
+                            &debate_question,
+                            &reputations_clone,
+                            &delphi_config,
+                        ))
+                    });
+                    tracing::info!(
+                        "delphi_debate: {} rounds, converged={}, approved={}",
+                        result.rounds,
+                        result.converged,
+                        result.final_result.approved
+                    );
+                    result.final_result
+                } else {
+                    // No voters — fall back to simple weighted vote.
+                    weighted_vote::weighted_vote(
+                        &raw_votes,
+                        reputations,
+                        config.delphi.threshold,
+                        config.delphi.default_weight,
+                        &debate_context,
+                    )
+                }
+            } else {
+                // No voters registered — simple weighted vote.
+                weighted_vote::weighted_vote(
+                    &raw_votes,
+                    reputations,
+                    config.delphi.threshold,
+                    config.delphi.default_weight,
+                    &debate_context,
+                )
+            }
         }
         VoteMode::Weighted | VoteMode::Legacy => weighted_vote::weighted_vote(
             &raw_votes,
@@ -460,7 +564,21 @@ pub fn consensus_vote_with_reputation(
     } else {
         0.5 - (0.5 - approval_ratio) * 0.4
     };
-    (final_approve, confidence.clamp(0.1, 0.95))
+    let confidence = confidence.clamp(0.1, 0.95);
+
+    // Record audit entry for the consensus vote outcome
+    record_audit_entry(
+        AuditEntryBuilder::new(
+            proposal_id,
+            "consensus_vote",
+            if final_approve { "allow" } else { "deny" },
+        )
+        .inputs(proposal.clone())
+        .confidence(confidence as f32)
+        .build(),
+    );
+
+    (final_approve, confidence)
 }
 
 /// Evaluate a decision using the rationalization guard with multi-factor risk analysis.
@@ -501,10 +619,15 @@ pub fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (bool, 
             &config,
         );
         if !approved {
-            return (
-                false,
-                "delphi_debate_rejected: weighted consensus vote did not approve".to_string(),
+            let reason = "delphi_debate_rejected: weighted consensus vote did not approve";
+            record_audit_entry(
+                AuditEntryBuilder::new(agent, "rationalize", "deny")
+                    .agent(agent)
+                    .inputs(serde_json::json!({"task": task, "confidence": confidence}))
+                    .error(reason)
+                    .build(),
             );
+            return (false, reason.to_string());
         }
         // Delphi approved — continue to standard rationalization checks
     }
@@ -534,6 +657,13 @@ pub fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (bool, 
         Ok(g) => g,
         Err(e) => {
             tracing::warn!("intel_hub: rationalization lock failed: {e}");
+            record_audit_entry(
+                AuditEntryBuilder::new(agent, "rationalize", "allow")
+                    .agent(agent)
+                    .inputs(serde_json::json!({"task": task, "confidence": confidence}))
+                    .error("lock_failed")
+                    .build(),
+            );
             return (true, String::new());
         }
     };
@@ -581,15 +711,29 @@ pub fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (bool, 
             .next()
             .or_else(|| annotation.weak_evidence_flags.first().cloned())
             .unwrap_or_else(|| "multi_factor_rejection".to_string());
+        record_audit_entry(
+            AuditEntryBuilder::new(agent, "rationalize", "deny")
+                .agent(agent)
+                .inputs(serde_json::json!({"task": task, "confidence": confidence, "risk_score": risk_score, "adjusted_confidence": adjusted_confidence}))
+                .error(&reason)
+                .build()
+        );
         (false, reason)
     } else {
+        record_audit_entry(
+            AuditEntryBuilder::new(agent, "rationalize", "allow")
+                .agent(agent)
+                .inputs(serde_json::json!({"task": task, "confidence": confidence, "risk_score": risk_score}))
+                .build()
+        );
         (true, String::new())
     }
 }
 
 /// Record an audit entry for the decision pipeline.
-// F-GAP-48: intentionally not wired into the hot path; rationalize_decision is primary
-#[allow(dead_code)] // F-GAP-49 — reserved intelligence hub feature
+///
+/// Wired into `rationalize_decision` and `consensus_vote_with_reputation`
+/// at key decision points for governance audit trail completeness.
 pub fn record_audit_entry(entry: AuditLogEntry) {
     GLOBAL_AUDIT.record(entry);
     AUDIT_ENTRY_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -611,7 +755,6 @@ pub fn record_audit_entry(entry: AuditLogEntry) {
 ///     .confidence(0.95)
 ///     .build();
 /// ```
-#[allow(dead_code)] // Public API — reserved for adoption over the old positional function
 pub struct AuditEntryBuilder {
     task_id: String,
     phase: String,
@@ -628,7 +771,7 @@ pub struct AuditEntryBuilder {
     correlation_id: Option<String>,
 }
 
-#[allow(dead_code)] // Public API — reserved for adoption over the old positional function
+#[allow(dead_code)] // F-GAP: builder pattern reserved for comprehensive audit entries
 impl AuditEntryBuilder {
     /// Start building an audit entry with the minimum required fields.
     pub fn new(task_id: &str, phase: &str, decision: &str) -> Self {

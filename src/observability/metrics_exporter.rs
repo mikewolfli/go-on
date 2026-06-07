@@ -234,7 +234,7 @@ pub async fn build_prometheus_metrics(server: &AcpServer) -> String {
     let lifecycle = &status.lifecycle;
     let maintenance = &status.maintenance;
     // ── O7: Read from HyperResilienceEngine instead of legacy registry ──
-    let resilience_profile = server.hyper_resilience.profile().await;
+    let resilience_profile = server.resilience.hyper_resilience.profile().await;
     let circuit_breaker_open_count = resilience_profile.open_circuits;
     let is_draining = server.drain_guard.is_draining();
     let cache_hit_ratio = if m.chat_requests_total > 0 {

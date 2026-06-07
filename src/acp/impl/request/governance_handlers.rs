@@ -227,7 +227,7 @@ pub(super) async fn handle_governance_status(
     let entry_rate_snapshot = crate::acp::prelude::with_acp_lock(
         server.observability.lock_monitor.as_ref(),
         crate::acp::prelude::ACP_LOCK_PHASE_RATE_LIMITER,
-        server.phase_rate_limiter.as_ref(),
+        server.resilience.phase_rate_limiter.as_ref(),
         |guard| guard.snapshot(),
     );
     let entry_sources_tracked = entry_rate_snapshot
@@ -1506,6 +1506,9 @@ pub(super) async fn handle_governance_status(
                     "ready": workflow_type_tri_mode_ready,
                     "workflow_profile": workflow_profile,
                 },
+                "intelligence_hub": {
+                    "hub_metrics": crate::intelligence::hub::hub_metrics(),
+                },
                 "blue35_release_closure": {
                     "ready": blue35_release_closure_ready,
                 },
@@ -1933,6 +1936,7 @@ pub(super) async fn handle_governance_remediate(
         }
         rid if rid.contains("breaker") || rid.contains("circuit") => {
             let reset_count = server
+                .resilience
                 .circuit_breakers
                 .lock()
                 .map(|guard| guard.reset(None))

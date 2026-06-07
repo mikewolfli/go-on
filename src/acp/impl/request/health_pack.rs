@@ -9,6 +9,7 @@ pub(super) async fn handle_breaker_status(
     request_id: Option<Value>,
 ) -> Result<()> {
     let breakers = server
+        .resilience
         .circuit_breakers
         .lock()
         .map(|guard| guard.snapshots())
@@ -46,11 +47,13 @@ pub(super) async fn handle_breaker_reset(
         .or_else(|| params.get("name"))
         .and_then(Value::as_str);
     let reset_count = server
+        .resilience
         .circuit_breakers
         .lock()
         .map(|guard| guard.reset(target))
         .unwrap_or(0);
     let breakers = server
+        .resilience
         .circuit_breakers
         .lock()
         .map(|guard| guard.snapshots())
@@ -121,6 +124,7 @@ fn recovery_action(
 
 pub(super) fn collect_degraded_services(server: &AcpServer) -> Vec<Value> {
     server
+        .resilience
         .failure_prevention
         .lock()
         .map(|fp| {
@@ -189,11 +193,13 @@ pub(super) async fn handle_breaker_recovery(
         (Vec::new(), 0)
     } else {
         let recovered_services = server
+            .resilience
             .failure_prevention
             .lock()
             .map(|mut fp| fp.recover(target))
             .unwrap_or_default();
         let breaker_reset_count = server
+            .resilience
             .circuit_breakers
             .lock()
             .map(|guard| guard.reset(target))
@@ -292,6 +298,7 @@ pub(super) async fn handle_maintenance_gc(
 ) -> Result<()> {
     let cycle = crate::acp::background::run_maintenance_cycle(server).await?;
     let maintenance = server
+        .resilience
         .maintenance_tracker
         .lock()
         .map(|guard| guard.snapshot())

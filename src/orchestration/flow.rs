@@ -102,7 +102,7 @@ impl FlowManager {
     /// # Returns
     /// * `&str` - Default phase name
     pub fn default_phase(&self) -> &str {
-        &self.config.default_phase
+        self.config.default_phase()
     }
 
     /// Get the underlying application configuration.
@@ -130,7 +130,7 @@ impl FlowManager {
             .forced_phase
             .as_deref()
             .or(requested_phase.as_deref())
-            .unwrap_or(self.config.default_phase.as_str())
+            .unwrap_or(self.config.default_phase())
             .to_string();
 
         // Unknown phase: silently fall back to the configured default phase.
@@ -143,7 +143,7 @@ impl FlowManager {
             .iter()
             .any(|name| name == &phase_name)
         {
-            let fallback = self.config.default_phase.clone();
+            let fallback = self.config.default_phase().to_string();
             warn!(
                 "phase '{}' not in [flow].phases ({:?}), falling back to default '{}'",
                 phase_name, self.config.flow.phases, fallback
@@ -325,8 +325,11 @@ mod tests {
 
         AppConfig {
             schema_version: "1.0.0".to_string(),
-            default_phase: "coding".to_string(),
-            agents,
+            provider: crate::core::config::types::ProviderConfig {
+                default_phase: "coding".to_string(),
+                agents,
+                role_registry: HashMap::new(),
+            },
             flow: FlowConfig {
                 name: "flow".to_string(),
                 phases: vec!["coding".to_string(), "review".to_string()],
@@ -337,12 +340,15 @@ mod tests {
             cache: None,
             vector: None,
             autotune: None,
-            model_selection_mode: "adaptive".to_string(),
+            security: crate::core::config::types::SecurityConfig::default(),
+            feature: crate::core::config::types::FeatureConfig {
+                model_selection_mode: "adaptive".to_string(),
+                ..Default::default()
+            },
             compliance: None,
             startup_context: None,
             scheduler: None,
             reputation: None,
-            role_registry: HashMap::new(),
         }
     }
 
@@ -488,7 +494,7 @@ mod tests {
 
         // All agents registered in the config must appear in the resolved list.
         let resolved_names: Vec<&str> = resolved.agents.iter().map(|(n, _)| n.as_str()).collect();
-        for name in config.agents.keys() {
+        for name in config.agents().keys() {
             assert!(
                 resolved_names.contains(&name.as_str()),
                 "auto-map should include agent '{name}'"

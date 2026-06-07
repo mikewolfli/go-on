@@ -1,3 +1,24 @@
+//! ACP Runtime RPC integration test suite.
+//!
+//! Sections:
+//! - Harness helpers (ChildGuard, RpcHarness, AdvancedRpcHarness)
+//! - Config writers (write_test_config, write_*_config)
+//! - Helper functions (assert_*, http_*, load_scenarios, etc.)
+//! - Core RPC tests (initialize, health, phase, shutdown)
+//! - HTTP/streaming tests
+//! - Debug panel, MCP adapter, mode coexistence
+//! - Conversation checkpoint/rollback
+//! - Breaker, cache, unknown method, config reload
+//! - Action, maintenance, trace, legacy alias
+//! - Protocol validation (JSON-RPC version, invalid params)
+//! - Provider failure, review timeout, shutdown drain
+//! - Cache/vector path validation, rate limiting
+//! - Task/execute workflow, governance, dual review
+//! - Learning, primary/secondary, consultation
+//! - Autotune, confirmation, meta-cognition
+
+#![cfg(test)]
+
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};

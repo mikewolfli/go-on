@@ -12,10 +12,13 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use serde_json::Value;
 
 use super::capability_bus::core::CapabilityBus;
 use super::weighted_vote::{AgentVoter, Vote};
 use crate::governance::rationalization::SelfRationalizationGuard;
+
+use crate::config::AgentConfig;
 
 // ── CapabilityBusVoter ──────────────────────────────────────────────────
 
@@ -232,6 +235,241 @@ impl AgentVoter for RationalizationGuardVoter {
             "RationalizationGuardVoter: confidence={:.2}, threshold={:.2}, \
              words={}, rollback={}, validation={}",
             confidence, threshold, word_count as u64, has_rollback, has_validation,
+        );
+
+        Vote {
+            approves,
+            reasoning,
+            confidence,
+        }
+    }
+}
+
+// ── DeepSeekVoter ──────────────────────────────────────────────────────────
+
+/// Uses the DeepSeek API to cast a vote based on the proposal context.
+///
+/// Sends a non-streaming chat completion request to the DeepSeek API and
+/// parses the response to extract an approve/reject decision with reasoning.
+#[allow(dead_code)] // F-GAP: reserved for Delphi debate activation
+pub struct DeepSeekVoter {
+    name: String,
+    /// Base URL for the DeepSeek API.
+    base_url: String,
+    /// Name of the DeepSeek model to use.
+    model: String,
+    /// API key.
+    api_key: String,
+    /// HTTP client.
+    client: reqwest::Client,
+}
+
+#[allow(dead_code)] // F-GAP: reserved for Delphi debate activation
+impl DeepSeekVoter {
+    /// Create a new DeepSeek voter.
+    pub fn new(
+        name: impl Into<String>,
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+        api_key: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            base_url: base_url.into(),
+            model: model.into(),
+            api_key: api_key.into(),
+            client: reqwest::Client::new(),
+        }
+    }
+
+    /// Build a non-streaming payload for the DeepSeek chat completions endpoint.
+    fn build_payload(&self, context: &str) -> Value {
+        let system_content = concat!(
+            "You are a voting agent. Analyse the following proposal ",
+            "and decide whether to approve or reject it. ",
+            "Respond with valid JSON only: ",
+            "{\"approves\": true/false, \"reasoning\": \"...\", \"confidence\": 0.0-1.0}"
+        );
+        serde_json::json!({
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": context}
+            ],
+            "temperature": 0.3,
+            "max_tokens": 256
+        })
+    }
+}
+
+#[async_trait]
+impl AgentVoter for DeepSeekVoter {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    async fn vote(&self, context: &str) -> Vote {
+        let payload = self.build_payload(context);
+        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+
+        match self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                if let Ok(body) = resp.json::<Value>().await {
+                    // Extract content from the completion response.
+                    let content = body
+                        .pointer("/choices/0/message/content")
+                        .and_then(|c| c.as_str())
+                        .unwrap_or("");
+
+                    // Try to parse JSON response.
+                    if let Ok(parsed) = serde_json::from_str::<Value>(content) {
+                        let approves = parsed
+                            .get("approves")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(true);
+                        let reasoning = parsed
+                            .get("reasoning")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("DeepSeekVoter: parsed response")
+                            .to_string();
+                        let confidence = parsed
+                            .get("confidence")
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(0.5)
+                            .clamp(0.0, 1.0);
+                        return Vote {
+                            approves,
+                            reasoning,
+                            confidence,
+                        };
+                    }
+
+                    // Fallback: keyword-based heuristic from raw content.
+                    let lower = content.to_lowercase();
+                    let approves = lower.contains("approve") && !lower.contains("reject");
+                    Vote {
+                        approves,
+                        reasoning: format!(
+                            "DeepSeekVoter: raw response — {}",
+                            content.chars().take(200).collect::<String>()
+                        ),
+                        confidence: 0.5,
+                    }
+                } else {
+                    Vote {
+                        approves: true,
+                        reasoning: "DeepSeekVoter: failed to parse response body".to_string(),
+                        confidence: 0.3,
+                    }
+                }
+            }
+            Err(e) => Vote {
+                approves: true,
+                reasoning: format!("DeepSeekVoter: API error — {}", e),
+                confidence: 0.2,
+            },
+        }
+    }
+}
+
+// ── LocalVoter ────────────────────────────────────────────────────────────
+
+/// Uses a local model configuration to vote on proposals.
+///
+/// Evaluates proposals using config-driven thresholds and local agent config.
+/// Unlike `LocalAgentVoter` (keyword heuristic), this voter respects the
+/// `AgentConfig` thresholds for more configurable voting behaviour.
+#[allow(dead_code)] // F-GAP: reserved for Delphi debate activation
+pub struct LocalVoter {
+    name: String,
+    /// Agent configuration for threshold tuning.
+    config: AgentConfig,
+}
+
+#[allow(dead_code)] // F-GAP: reserved for Delphi debate activation
+impl LocalVoter {
+    /// Create a new local voter from an agent configuration.
+    pub fn new(name: impl Into<String>, config: AgentConfig) -> Self {
+        Self {
+            name: name.into(),
+            config,
+        }
+    }
+
+    /// Create a voter with default configuration and a given name.
+    pub fn new_default(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            config: AgentConfig::default(),
+        }
+    }
+}
+
+#[async_trait]
+impl AgentVoter for LocalVoter {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    async fn vote(&self, context: &str) -> Vote {
+        let lower = context.to_lowercase();
+
+        // Config-driven thresholds.
+        let max_tokens = self.config.max_tokens.unwrap_or(4096) as f64;
+        let confidence_base = (max_tokens / 8192.0).clamp(0.3, 0.9);
+
+        // Structural indicators.
+        let has_proposal_keywords = ["proposal", "plan", "design", "spec", "objective"]
+            .iter()
+            .any(|kw| lower.contains(kw));
+        let has_risk_indicators = [
+            "risk",
+            "critical",
+            "breaking",
+            "unsafe",
+            "deprecate",
+            "delete",
+        ]
+        .iter()
+        .any(|kw| lower.contains(kw));
+        let has_positive_signals = ["optimize", "improve", "fix", "upgrade", "enhance"]
+            .iter()
+            .any(|kw| lower.contains(kw));
+
+        let mut confidence = confidence_base;
+        if has_proposal_keywords {
+            confidence += 0.15;
+        }
+        if has_positive_signals {
+            confidence += 0.1;
+        }
+        if has_risk_indicators {
+            confidence -= 0.25;
+        }
+        // Long context with structure indicates well-thought-out proposals.
+        let word_count = context.split_whitespace().count() as f64;
+        if word_count > 20.0 && has_proposal_keywords {
+            confidence += 0.1;
+        }
+
+        confidence = confidence.clamp(0.0, 1.0);
+        let approves = confidence >= 0.45;
+
+        let reasoning = format!(
+            "LocalVoter: confidence={:.2}, proposal={}, risk={}, positive={}, words={}",
+            confidence,
+            has_proposal_keywords,
+            has_risk_indicators,
+            has_positive_signals,
+            word_count as u64
         );
 
         Vote {

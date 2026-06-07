@@ -267,6 +267,9 @@ pub struct BackendClient {
     /// Client for long-lived requests (chat - 180s timeout)
     long_client: reqwest::Client,
     base_url: String,
+    /// Discovered chat endpoint (set by discover_protocol_version, falls back to /v1/chat/completions).
+    /// Wrapped in Arc<Mutex<>> because BackendClient is Clone and shared across async tasks.
+    chat_endpoint: Arc<std::sync::Mutex<String>>,
     /// Monotonically increasing JSON-RPC request id (per JSON-RPC 2.0 spec)
     next_id: Arc<AtomicU64>,
     /// Model list cache with timestamp
@@ -374,6 +377,7 @@ impl BackendClient {
             quick_client,
             long_client,
             base_url: base_url.trim_end_matches('/').to_string(),
+            chat_endpoint: Arc::new(std::sync::Mutex::new("/v1/chat/completions".to_string())),
             next_id: Arc::new(AtomicU64::new(1)),
             models_cache: Arc::new(std::sync::Mutex::new((None, std::time::Instant::now()))),
             stale_models_flag: Arc::new(AtomicBool::new(false)),
@@ -867,6 +871,34 @@ impl BackendClient {
         }
     }
 
+    /// Probe the backend's protocol version discovery endpoint to confirm
+    /// the modern API is available.
+    /// Updates chat_endpoint based on the result (always uses /v1/chat/completions
+    /// when discovery succeeds; falls back to same default on failure).
+    /// This replaces the old dual-endpoint fallback mechanism (V1 → /chat/stream).
+    pub async fn discover_protocol_version(&self) -> String {
+        let discovery_url = format!("{}/protocol/version", self.base_url);
+        let endpoint = match self.quick_client.get(&discovery_url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                eprintln!("protocol version discovery succeeded, using /v1/chat/completions");
+                "/v1/chat/completions".to_string()
+            }
+            Ok(resp) => {
+                eprintln!("protocol version discovery returned: {}", resp.status());
+                "/v1/chat/completions".to_string()
+            }
+            Err(e) => {
+                eprintln!("protocol version discovery failed: {}", e);
+                "/v1/chat/completions".to_string()
+            }
+        };
+        {
+            let mut ep = self.chat_endpoint.lock().unwrap_or_else(|e| e.into_inner());
+            *ep = endpoint.clone();
+        }
+        endpoint
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn chat_with_options(
         &self,
@@ -926,40 +958,33 @@ impl BackendClient {
         let mut last_err = String::new();
         let mut response = None;
 
-        // Try /v1/chat/completions first (OpenAI-compatible), fall back to /chat/stream
-        let endpoints = ["/v1/chat/completions", "/chat/stream"];
-        for endpoint in &endpoints {
-            for attempt in 1..=3 {
-                match self
-                    .long_client
-                    .post(format!("{}{}", self.base_url, endpoint))
-                    .json(&body)
-                    .send()
-                    .await
-                {
-                    Ok(resp) => {
-                        if resp.status() == 404 && *endpoint == "/v1/chat/completions" {
-                            // Endpoint not found — fall back to legacy
-                            last_err = format!("endpoint {} not found, falling back", endpoint);
-                            break;
-                        }
-                        response = Some(resp);
-                        break;
-                    }
-                    Err(e) => {
-                        last_err = format!("HTTP error: {}", e);
-                        if attempt < 3 {
-                            tokio::time::sleep(std::time::Duration::from_millis(
-                                200 * attempt as u64,
-                            ))
+        // Use the endpoint discovered via /protocol/version at startup.
+        // This replaces the old dual-endpoint fallback (Round 3 unification).
+        let endpoint = self
+            .chat_endpoint
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        for attempt in 1..=3 {
+            match self
+                .long_client
+                .post(format!("{}{}", self.base_url, endpoint))
+                .json(&body)
+                .send()
+                .await
+            {
+                Ok(resp) => {
+                    response = Some(resp);
+                    break;
+                }
+                Err(e) => {
+                    last_err = format!("HTTP error: {}", e);
+                    if attempt < 3 {
+                        tokio::time::sleep(std::time::Duration::from_millis(200 * attempt as u64))
                             .await;
-                            continue;
-                        }
+                        continue;
                     }
                 }
-            }
-            if response.is_some() {
-                break;
             }
         }
         let resp = response.ok_or_else(|| last_err.clone())?;
@@ -1381,11 +1406,11 @@ impl BackendClient {
             .await
     }
 
-    /// F-GAP-48: Reserved for future provider catalog browsing
-    /// DEPRECATED: Unused. Provider metadata is currently hardcoded in app.rs `provider_meta()`.
-    /// This RPC exists on the backend but the GUI does not call it.
-    /// Retained for reference; remove in a future cleanup round.
-    #[allow(dead_code)]
+    /// Fetch the full provider catalog from the backend.
+    /// Returns a JSON value with provider specs including agent_type, default_url,
+    /// default_model, and supports_system per provider.
+    /// This is the canonical source when the backend is reachable; the GUI falls
+    /// back to `built_in_provider_specs()` in `catalog.rs` when offline.
     pub async fn provider_catalog(&self) -> Result<Value, String> {
         self.rpc_call_quick("provider.catalog", None)
             .await

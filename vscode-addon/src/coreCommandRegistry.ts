@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import * as fs from "fs";
 import { i18n, MessageKeys } from "./i18n";
 import { RuntimeResolution } from "./runtimeBinaryService";
-import { asRecord } from "./utils";
+import { asRecord, getErrorMessage } from "./utils";
 
 interface CoreCommandRegistryDeps {
   context: vscode.ExtensionContext;
@@ -30,10 +30,6 @@ interface CoreCommandRegistryDeps {
   isRunning: () => boolean;
   sendRequest: (_method: string, _params?: unknown) => Promise<unknown>;
   setRuntimeEnvOverrides: (_overrides: Record<string, string>) => void;
-}
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** Returns the primary (first) workspace folder, or undefined when none is open. */
@@ -282,7 +278,9 @@ export function registerCoreCommands(
       if (paramsInput && paramsInput.trim()) {
         try {
           params = JSON.parse(paramsInput);
-        } catch {
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn("[coreCommandRegistry] Invalid JSON params:", err);
           vscode.window.showErrorMessage(
             "Invalid JSON params. Please provide valid JSON or leave empty.",
           );

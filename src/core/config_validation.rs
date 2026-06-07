@@ -473,7 +473,7 @@ impl ConfigValidator {
     /// Validate configuration structure
     fn validate_structure(&self, result: &mut ValidationResult) {
         // Check required sections
-        if self.config.agents.is_empty() {
+        if self.config.agents().is_empty() {
             result.warnings.push(ValidationWarning {
                 message: "No agents configured".to_string(),
                 section: "agents".to_string(),
@@ -550,7 +550,7 @@ impl ConfigValidator {
 
     /// Validate agent configurations
     fn validate_agents(&self, result: &mut ValidationResult) {
-        for (name, agent) in &self.config.agents {
+        for (name, agent) in self.config.agents() {
             self.validate_agent(name, agent, result);
         }
     }
@@ -645,7 +645,7 @@ impl ConfigValidator {
         // Check agent references in phases
         for (phase_name, phase) in &self.config.phases {
             for agent_name in &phase.agents {
-                if !self.config.agents.contains_key(agent_name) {
+                if !self.config.agents().contains_key(agent_name) {
                     result.errors.push(ValidationError {
                         message: format!(
                             "Phase '{}' references non-existent agent '{}'",
@@ -707,7 +707,7 @@ impl ConfigValidator {
 
         // Agent configuration analysis
         let mut has_fast_agent = false;
-        for agent in self.config.agents.values() {
+        for agent in self.config.agents().values() {
             if let Some(model) = &agent.model {
                 if model.contains("turbo") || model.contains("fast") || model.contains("3.5") {
                     has_fast_agent = true;
@@ -731,7 +731,7 @@ impl ConfigValidator {
     /// Check security configuration
     fn check_security(&self, result: &mut ValidationResult) {
         // Check for insecure URLs
-        for (name, agent) in &self.config.agents {
+        for (name, agent) in self.config.agents() {
             if let Some(url) = &agent.url {
                 if url.starts_with("http://")
                     && !url.contains("localhost")
@@ -765,7 +765,7 @@ impl ConfigValidator {
 
         // Check for keyring usage
         let mut uses_keyring = false;
-        for agent in self.config.agents.values() {
+        for agent in self.config.agents().values() {
             if let Some(api_key_env) = &agent.api_key_env {
                 if api_key_env.starts_with("keyring://") {
                     uses_keyring = true;

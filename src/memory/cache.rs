@@ -10,7 +10,7 @@ compile_error!("features 'backend-sqlite' and 'backend-postgres' cannot be enabl
 #[cfg(not(any(feature = "backend-sqlite", feature = "backend-postgres")))]
 compile_error!("one of 'backend-sqlite' or 'backend-postgres' must be enabled");
 
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 
 use crate::acp::prelude::now_ts;
 
@@ -49,7 +49,7 @@ use std::path::Path;
 #[cfg(feature = "backend-sqlite")]
 #[derive(Debug)]
 pub struct ResponseCache {
-    /// SQLite connection (mutex-protected)
+    /// SQLite connection (rwlock-protected)
     conn: Mutex<Connection>,
     /// Default time-to-live for cache entries in seconds
     default_ttl_seconds: u64,
@@ -113,10 +113,7 @@ impl ResponseCache {
     /// * `Result<Option<CachedResponse>>` - Returns Ok(Some(CachedResponse)) if the key is found and not expired, Ok(None) if not found, or an error if something goes wrong
     pub fn get(&self, cache_key: &str) -> Result<Option<CachedResponse>> {
         let now = now_ts();
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'get'"))?;
+        let conn = self.conn.blocking_lock();
 
         conn.execute(
             "DELETE FROM response_cache WHERE expires_at <= ?1",
@@ -184,10 +181,7 @@ impl ResponseCache {
         let now = now_ts();
         let expires_at = now + ttl as i64;
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'put'"))?;
+        let conn = self.conn.blocking_lock();
 
         conn.execute(
             "
@@ -235,10 +229,7 @@ impl ResponseCache {
     /// * `Result<usize>` - Returns Ok(usize) with the number of entries purged, or an error if something goes wrong
     pub fn purge_expired(&self) -> Result<usize> {
         let now = now_ts();
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'purge_expired'"))?;
+        let conn = self.conn.blocking_lock();
         let affected = conn.execute(
             "DELETE FROM response_cache WHERE expires_at <= ?1",
             params![now],
@@ -251,20 +242,14 @@ impl ResponseCache {
     /// # Returns
     /// * `Result<usize>` - Returns Ok(usize) with the number of entries cleared, or an error if something goes wrong
     pub fn clear_all(&self) -> Result<usize> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'clear'"))?;
+        let conn = self.conn.blocking_lock();
         let affected = conn.execute("DELETE FROM response_cache", [])?;
         Ok(affected)
     }
 
     /// Reclaim SQLite free pages after cleanup-heavy maintenance cycles.
     pub fn vacuum(&self) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'vacuum'"))?;
+        let conn = self.conn.blocking_lock();
         conn.execute_batch("VACUUM;")?;
         Ok(())
     }
@@ -274,10 +259,7 @@ impl ResponseCache {
     /// # Returns
     /// * `Result<u64>` - Returns Ok(u64) with the number of entries, or an error if something goes wrong
     pub fn entry_count(&self) -> Result<u64> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'entry_count'"))?;
+        let conn = self.conn.blocking_lock();
         let count = conn.query_row("SELECT COUNT(*) FROM response_cache", [], |row| {
             row.get::<_, i64>(0)
         })?;
@@ -286,10 +268,7 @@ impl ResponseCache {
 
     /// Get aggregate cache statistics used by ACP cache observability APIs.
     pub fn stats(&self) -> Result<ResponseCacheStats> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'stats'"))?;
+        let conn = self.conn.blocking_lock();
 
         let (entry_count_raw, total_hits_raw) = conn.query_row(
             "SELECT COUNT(*), COALESCE(SUM(hit_count), 0) FROM response_cache",
@@ -419,10 +398,7 @@ impl ResponseCache {
     }
 
     pub fn get(&self, cache_key: &str) -> Result<Option<CachedResponse>> {
-        let mut client = self
-            .client
-            .lock()
-            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'get'"))?;
+        let mut client = self.client.blocking_lock();
         let now = now_ts();
         client.execute("DELETE FROM response_cache WHERE expires_at <= $1", &[&now])?;
 
@@ -462,10 +438,7 @@ impl ResponseCache {
         if ttl == 0 {
             return Ok(());
         }
-        let mut client = self
-            .client
-            .lock()
-            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'put'"))?;
+        let mut client = self.client.blocking_lock();
         let max_entries = self.max_entries as i64;
         let now = now_ts();
         let expires_at = now + ttl as i64;
@@ -494,19 +467,13 @@ impl ResponseCache {
     }
 
     pub fn purge_expired(&self) -> Result<usize> {
-        let mut client = self
-            .client
-            .lock()
-            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'purge_expired'"))?;
+        let mut client = self.client.blocking_lock();
         let now = now_ts();
         Ok(client.execute("DELETE FROM response_cache WHERE expires_at <= $1", &[&now])? as usize)
     }
 
     pub fn clear_all(&self) -> Result<usize> {
-        let mut client = self
-            .client
-            .lock()
-            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'clear_all'"))?;
+        let mut client = self.client.blocking_lock();
         Ok(client.execute("DELETE FROM response_cache", &[])? as usize)
     }
 
@@ -516,20 +483,14 @@ impl ResponseCache {
     }
 
     pub fn entry_count(&self) -> Result<u64> {
-        let mut client = self
-            .client
-            .lock()
-            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'entry_count'"))?;
+        let mut client = self.client.blocking_lock();
         let row = client.query_one("SELECT COUNT(*) FROM response_cache", &[])?;
         let count: i64 = row.get(0);
         Ok(count.max(0) as u64)
     }
 
     pub fn stats(&self) -> Result<ResponseCacheStats> {
-        let mut client = self
-            .client
-            .lock()
-            .map_err(|_| anyhow::anyhow!("cache mutex poisoned in 'stats'"))?;
+        let mut client = self.client.blocking_lock();
         let row = client.query_one(
             "SELECT COUNT(*), COALESCE(SUM(hit_count), 0) FROM response_cache",
             &[],

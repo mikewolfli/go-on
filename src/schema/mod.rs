@@ -69,13 +69,41 @@ impl From<&str> for SessionId {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(transparent)]
 pub struct ProtocolVersion(u16);
-#[allow(dead_code)] // F-GAP-49 — reserved schema feature
 impl ProtocolVersion {
     pub const V1: Self = Self(1);
-    pub const LATEST: Self = Self::V1;
+    pub const V2: Self = Self(2);
+    pub const V3: Self = Self(3);
+    pub const LATEST: Self = Self::V3;
+
+    /// Return an ordered list of all supported versions (ascending).
+    pub fn supported_versions() -> &'static [Self] {
+        &[Self::V1, Self::V2, Self::V3]
+    }
+
+    /// Create a version from a raw numeric value.
+    #[allow(dead_code)] // F-GAP: reserved for protocol version discovery
+    pub fn from_u16(v: u16) -> Self {
+        Self(v)
+    }
+
+    /// Return the underlying numeric version.
+    pub fn as_u16(self) -> u16 {
+        self.0
+    }
+
+    /// Select the highest common version between two supported sets.
+    /// Returns `None` when no common version is found.
+    #[allow(dead_code)] // F-GAP: reserved for protocol version discovery
+    pub fn select_highest_common(client_versions: &[Self]) -> Option<Self> {
+        Self::supported_versions()
+            .iter()
+            .rev()
+            .find(|sv| client_versions.contains(sv))
+            .copied()
+    }
 }
 
 pub type Meta = serde_json::Map<String, serde_json::Value>;

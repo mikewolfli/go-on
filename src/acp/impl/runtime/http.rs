@@ -54,7 +54,7 @@ pub(crate) async fn handle_http_connection(
 
     // Extract user session if user auth is enabled
     let user_session: Option<crate::acp::r#impl::session::UserSession> =
-        server.session_manager.as_ref().and_then(|sm| {
+        server.session.session_manager.as_ref().and_then(|sm| {
             let session = sm.extract_user_from_request(parsed.header_part);
             if let Some(ref s) = session {
                 debug!("Authenticated user: {} (roles: {:?})", s.user_id, s.roles);
@@ -203,6 +203,25 @@ async fn route_http_get(
                 200,
                 build_openai_models_response(),
                 "openai.chat.completions",
+                cors_headers,
+            )
+            .await?;
+        }
+        "/protocol/version" => {
+            use crate::schema::ProtocolVersion;
+            let versions: Vec<u16> = ProtocolVersion::supported_versions()
+                .iter()
+                .map(|v| v.as_u16())
+                .collect();
+            write_http_json_response_with_context(
+                socket,
+                200,
+                serde_json::json!({
+                    "supported_versions": versions,
+                    "latest": ProtocolVersion::LATEST.as_u16(),
+                    "server": "go-on"
+                }),
+                "protocol.version",
                 cors_headers,
             )
             .await?;

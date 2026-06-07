@@ -6,6 +6,7 @@ import * as crypto from "crypto";
 
 import { RuntimeManagerLike } from "./managerTypes";
 import { t, MessageKeys } from "./i18n";
+import { getErrorMessage } from "./utils";
 
 type ChatRole = "user" | "assistant" | "error" | "system";
 
@@ -66,6 +67,10 @@ class StreamProcessor {
   }
 }
 
+// V13: Maximum number of chat sessions to keep in storage.
+// When exceeded, the least-recently-used sessions are evicted.
+const MAX_SESSIONS = 50;
+
 export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "go-on-chat";
   private _view?: vscode.WebviewView;
@@ -75,6 +80,8 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
   );
   private _currentSession: string = "default";
   private _sessions: Map<string, ChatMessage[]> = new Map();
+  // V13: Track last-access timestamp (epoch ms) per session for LRU eviction.
+  private _sessionLastAccessed: Map<string, number> = new Map();
 
   private readonly manager: RuntimeManagerLike;
   private readonly context: vscode.ExtensionContext;
@@ -108,13 +115,27 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
         Array.isArray(messages) ? (messages as ChatMessage[]) : [],
       );
     }
+    // V13: Load last-accessed timestamps from storage.
+    const storedAccessTimes = this.context.globalState.get<
+      Record<string, number>
+    >("go-on-chat-sessions-access", {});
+    const now = Date.now();
+    for (const [sessionName, ts] of Object.entries(storedAccessTimes)) {
+      this._sessionLastAccessed.set(sessionName, ts);
+    }
     // Ensure default session exists
     if (!this._sessions.has("default")) {
       this._sessions.set("default", []);
     }
+    if (!this._sessionLastAccessed.has("default")) {
+      this._sessionLastAccessed.set("default", now);
+    }
   }
 
   private async _saveSessions() {
+    // V13: Enforce max session count with LRU eviction.
+    this._trimSessions();
+
     const sessionsObject: Record<string, ChatMessage[]> = {};
     for (const [sessionName, messages] of this._sessions) {
       sessionsObject[sessionName] = messages;
@@ -123,9 +144,43 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
       "go-on-chat-sessions",
       sessionsObject,
     );
+
+    // V13: Persist last-accessed timestamps.
+    const accessTimesObject: Record<string, number> = {};
+    for (const [sessionName, ts] of this._sessionLastAccessed) {
+      accessTimesObject[sessionName] = ts;
+    }
+    await this.context.globalState.update(
+      "go-on-chat-sessions-access",
+      accessTimesObject,
+    );
+  }
+
+  // V13: Remove the least-recently-used sessions when the total exceeds MAX_SESSIONS.
+  private _trimSessions(): void {
+    if (this._sessions.size <= MAX_SESSIONS) return;
+
+    // Sort sessions by last-accessed time (ascending).
+    const sorted = [...this._sessionLastAccessed.entries()].sort(
+      ([, a], [, b]) => a - b,
+    );
+
+    // Evict oldest sessions until we're within the limit.
+    // Always keep the current session.
+    const toEvict = this._sessions.size - MAX_SESSIONS;
+    let evicted = 0;
+    for (const [sessionName] of sorted) {
+      if (evicted >= toEvict) break;
+      if (sessionName === this._currentSession) continue;
+      this._sessions.delete(sessionName);
+      this._sessionLastAccessed.delete(sessionName);
+      evicted++;
+    }
   }
 
   private _getCurrentSessionMessages(): ChatMessage[] {
+    // V13: Update last-accessed time for the current session.
+    this._sessionLastAccessed.set(this._currentSession, Date.now());
     return this._sessions.get(this._currentSession) || [];
   }
 
@@ -142,8 +197,8 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
           session: this._currentSession,
           messages: [message],
         });
-      } catch {
-        // Non-critical — local save is sufficient; backend sync is best-effort
+      } catch (err) {
+        console.warn("[chatView] checkpoint.create failed:", err);
       }
     }
   }
@@ -154,10 +209,6 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     }
     const candidate = (result as { response?: unknown }).response;
     return typeof candidate === "string" ? candidate : undefined;
-  }
-
-  private _getErrorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
   }
 
   private _handleStopGeneration(): void {
@@ -392,7 +443,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
         } catch (streamError: unknown) {
           this.streamProcessor.reset();
           // Only re-throw if we have no accumulated content
-          const streamErrMsg = this._getErrorMessage(streamError);
+          const streamErrMsg = getErrorMessage(streamError);
           if (streamErrMsg === "Request aborted") {
             // User stopped — don't add an error message, just return
             this._view?.webview.postMessage({
@@ -507,7 +558,7 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
         });
       }
     } catch (error: unknown) {
-      const errorMsg = this._getErrorMessage(error);
+      const errorMsg = getErrorMessage(error);
 
       // Check for provider-not-ready errors and show a more helpful message
       if (
@@ -559,8 +610,8 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
   public postMessage(message: unknown) {
     try {
       this._view?.webview.postMessage(message);
-    } catch {
-      // Webview disposed — silently ignore
+    } catch (err) {
+      console.warn("[chatView] postMessage failed:", err);
     }
   }
 
@@ -622,11 +673,12 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
             // Use safe JSON parsing instead of arbitrary code execution
             try {
               result = JSON.stringify(JSON.parse(code), null, 2);
-            } catch {
+            } catch (err) {
+              console.warn("[chatView] JSON preview parse failed:", err);
               result = "⚠️ Only JSON expressions are supported for preview";
             }
           } catch (e: unknown) {
-            result = `Error: ${this._getErrorMessage(e)}`;
+            result = `Error: ${getErrorMessage(e)}`;
           }
           break;
         case "python":
@@ -653,10 +705,10 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     } catch (error: unknown) {
       this._view.webview.postMessage({
         type: "codeResult",
-        result: t(MessageKeys.executionFailed, this._getErrorMessage(error)),
+        result: t(MessageKeys.executionFailed, getErrorMessage(error)),
       });
       this._executionOutput.appendLine(
-        `[error] ${new Date().toISOString()} ${this._getErrorMessage(error)}`,
+        `[error] ${new Date().toISOString()} ${getErrorMessage(error)}`,
       );
     }
   }
@@ -892,8 +944,8 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
             this._sessions.set(sessionName, messages);
           }
         }
-      } catch {
-        // Non-critical — local state is sufficient
+      } catch (err) {
+        console.warn("[chatView] _switchSession failed:", err);
       }
     }
 

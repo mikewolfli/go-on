@@ -352,8 +352,12 @@ impl ToolBus {
             // block_on on the future directly — no spawn_blocking needed, since
             // we are already inside a Tokio runtime and the skill itself is
             // async (not CPU-bound), so a dedicated blocking thread is wasted.
-            let output_value =
-                tokio::runtime::Handle::current().block_on(skill.execute(&skill_input))?;
+            let output_value = match tokio::runtime::Handle::try_current() {
+                Ok(handle) => handle.block_on(skill.execute(&skill_input))?,
+                Err(_) => {
+                    anyhow::bail!("ToolBus: dispatch_tool requires a tokio runtime context")
+                }
+            };
 
             return Ok(ToolOutput {
                 success: true,

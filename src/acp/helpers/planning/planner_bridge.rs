@@ -6,8 +6,7 @@
 use serde_json::{json, Value};
 
 use crate::agent::AgentTaskEnvelope;
-#[allow(deprecated)] // TODO: migrate to crate::orchestration::core_dag
-use crate::orchestration::dag_execution::{
+use crate::orchestration::core_dag::{
     dag_execution_order, dag_is_stalled, dag_progress_with_suggested_next,
 };
 use crate::orchestration::planner_execution_graph::PlannerExecutionBridge;

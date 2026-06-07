@@ -1063,10 +1063,10 @@ async fn run() -> Result<()> {
                 _ = interval.tick() => {
                     // Run a review cycle: detect forgetting, replay important memories,
                     // and advance curriculum stage when ready.
-                    let (replayed, evicted) = learning_center.review_cycle();
+                    let (replayed, evicted, patterns) = learning_center.review_cycle("system").await;
                     if replayed > 0 || evicted > 0 {
                         tracing::debug!(
-                            "ContinuousLearningCenter review: {replayed} replayed, {evicted} evicted"
+                            "ContinuousLearningCenter review: {replayed} replayed, {evicted} evicted, {patterns} patterns"
                         );
                     }
                 }
@@ -1130,7 +1130,7 @@ async fn handle_chat_mode(
     _cli: &Cli,
     config_path: &std::path::Path,
 ) -> Result<()> {
-    if config.agents.is_empty() {
+    if config.agents().is_empty() {
         eprintln!("{}", t("error.no_providers_configured"));
         eprintln!("{}", t("error.setup_wizard_first"));
         eprintln!("  go-on -c {} --setup", config_path.display());
@@ -1699,8 +1699,11 @@ mod tests {
 
         AppConfig {
             schema_version: "1.0.0".to_string(),
-            default_phase: "coding".to_string(),
-            agents,
+            provider: crate::core::config::types::ProviderConfig {
+                default_phase: "coding".to_string(),
+                agents,
+                role_registry: HashMap::new(),
+            },
             flow: FlowConfig {
                 name: "flow".to_string(),
                 phases: vec![
@@ -1736,12 +1739,15 @@ mod tests {
                 summary_max_chars: 1200,
             }),
             autotune: None,
-            model_selection_mode: "adaptive".to_string(),
+            security: crate::core::config::types::SecurityConfig::default(),
+            feature: crate::core::config::types::FeatureConfig {
+                model_selection_mode: "adaptive".to_string(),
+                ..Default::default()
+            },
             compliance: None,
             startup_context: None,
             scheduler: None,
             reputation: None,
-            role_registry: HashMap::new(),
         }
     }
 

@@ -233,6 +233,7 @@ pub fn resolve_agent_preferences(
             .and_then(|v| v.as_u64());
         if rpm_limit != u64::MAX {
             let allowed = server
+                .resilience
                 .phase_rate_limiter
                 .lock()
                 .map(|guard| guard.allow(phase_name, rpm_limit, burst))

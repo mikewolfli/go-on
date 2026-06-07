@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { i18n, MessageKeys } from "./i18n";
 import { RuntimeManagerLike } from "./managerTypes";
+import { getErrorMessage } from "./utils";
 
 interface AdvancedEditArgs {
   action?: string;
@@ -60,10 +61,6 @@ export class GoOnAdvancedEditProvider {
     }
     const candidate = (result as { response?: unknown }).response;
     return typeof candidate === "string" ? candidate : undefined;
-  }
-
-  private getErrorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
   }
 
   private registerCommands() {
@@ -228,9 +225,7 @@ export class GoOnAdvancedEditProvider {
       );
     } catch (error: unknown) {
       vscode.window.showErrorMessage(
-        i18n.getMessage(MessageKeys.changesFailed, [
-          this.getErrorMessage(error),
-        ]),
+        i18n.getMessage(MessageKeys.changesFailed, [getErrorMessage(error)]),
       );
     }
   }
@@ -430,9 +425,7 @@ export class GoOnAdvancedEditProvider {
       );
     } catch (error: unknown) {
       vscode.window.showErrorMessage(
-        i18n.getMessage(MessageKeys.changesFailed, [
-          this.getErrorMessage(error),
-        ]),
+        i18n.getMessage(MessageKeys.changesFailed, [getErrorMessage(error)]),
       );
     }
   }

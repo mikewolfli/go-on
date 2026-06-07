@@ -203,6 +203,7 @@ pub(crate) fn derive_orchestration_node_decisions(
     })
 }
 
+#[allow(dead_code)] // F-GAP: reserved for subtask node decision tracking
 pub(crate) fn derive_runtime_subtask_node_decisions(records: &[Value]) -> Value {
     let mut mapped_nodes = 0_u64;
     let mut unmapped_nodes = 0_u64;

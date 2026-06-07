@@ -27,7 +27,6 @@ async fn send_pending(tx: &mpsc::SyncSender<PendingResponse>, msg: PendingRespon
 }
 
 const MAX_INLINE_ATTACHMENT_B64_CHARS: usize = 8_192;
-const MAX_SSE_BUFFER_BYTES: usize = 1024 * 1024; // 1 MB max SSE frame buffer
 const MAX_BUFFERED_TOKENS_BYTES: usize = 256 * 1024; // 256 KB accumulated token buffer
 
 /// RAII guard to decrement active_generations counter on drop.
@@ -475,7 +474,6 @@ impl ChatView {
                             resp
                         };
 
-                        let mut sse_buffer = String::with_capacity(16384);
                         let mut final_content: Option<String> = None;
                         let mut final_thinking: Option<String> = None;
                         let mut final_agent: Option<String> = None;
@@ -486,6 +484,11 @@ impl ChatView {
                         let mut buffered_reasoning = String::with_capacity(2048);
                         let mut last_stream_flush = std::time::Instant::now();
                         let mut total_buffer_bytes = 0usize;
+                        let mut sse_parse_error_count = 0u32;
+
+                        // Use StreamProcessor as the single SSE parser for all GUI stream parsing.
+                        // This replaces the previous inline frame splitting and JSON parsing.
+                        let mut processor = StreamProcessor::new();
 
                         loop {
                             let chunk = match resp.chunk().await {
@@ -504,174 +507,190 @@ impl ChatView {
                                 }
                             };
 
-                            // Safely append chunk to buffer with overflow protection
-                            let chunk_len = chunk.len();
-                            if sse_buffer.len() + chunk_len > MAX_SSE_BUFFER_BYTES {
-                                send_pending(
-                                    &tx,
-                                    PendingResponse::Error {
-                                        generation_id: Some(generation_id),
-                                        message: format!(
-                                            "stream frame overflow ({}+{} > {}MB)",
-                                            sse_buffer.len(),
-                                            chunk_len,
-                                            MAX_SSE_BUFFER_BYTES / (1024 * 1024)
-                                        ),
-                                    },
-                                )
-                                .await;
-                                return;
-                            }
-
                             // Check for abort before processing the chunk
                             if abort_ctrl_task.is_cancelled() {
                                 return;
                             }
 
-                            // Normalize CRLF to LF so frame splitting is consistent across
-                            // backends and platforms that may emit different line endings.
-                            let part = String::from_utf8_lossy(&chunk);
-                            sse_buffer.push_str(&part.replace('\r', ""));
-
-                            // Process complete frames only (delimited by \n\n)
-                            while let Some(split_at) = sse_buffer.find("\n\n") {
-                                let frame = sse_buffer[..split_at].to_string();
-                                sse_buffer.drain(..split_at + 2);
-
-                                // Parse event and data from frame
-                                let mut event_name = String::new();
-                                let mut data_payload = String::new();
-                                for line in frame.lines() {
-                                    if let Some(rest) = line.strip_prefix("event:") {
-                                        event_name = rest.trim().to_string();
-                                    } else if let Some(rest) = line.strip_prefix("data:") {
-                                        if !data_payload.is_empty() {
-                                            data_payload.push('\n');
+                            // Delegate SSE parsing to StreamProcessor, which handles
+                            // frame splitting, CRLF normalization, JSON parsing, and
+                            // event type injection via the "_event_type" field.
+                            let events = processor.push_chunk(&chunk);
+                            for event_result in events {
+                                match event_result {
+                                    Ok(val) => {
+                                        // Handle [DONE] sentinel (used by non-streaming fallback)
+                                        if val.is_string() && val.as_str() == Some("[DONE]") {
+                                            break;
                                         }
-                                        data_payload.push_str(rest.trim());
-                                    }
-                                }
+                                        if val.get("data").and_then(|v| v.as_str())
+                                            == Some("[DONE]")
+                                        {
+                                            break;
+                                        }
 
-                                if data_payload.is_empty() {
-                                    continue;
-                                }
-
-                                // Parse JSON data safely
-                                let data: Value = match serde_json::from_str(&data_payload) {
-                                    Ok(v) => v,
-                                    Err(e) => {
-                                        eprintln!(
-                                            "[SSE] JSON parse error in {}: {}",
-                                            event_name, e
-                                        );
-                                        continue;
-                                    }
-                                };
-
-                                match event_name.as_str() {
-                                    "chunk" => {
-                                        let token = data
-                                            .get("token")
+                                        let event_type = val
+                                            .get("_event_type")
                                             .and_then(|v| v.as_str())
-                                            .unwrap_or_default()
-                                            .to_string();
-                                        let reasoning = data
-                                            .get("reasoning")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or_default()
-                                            .to_string();
+                                            .unwrap_or("");
 
-                                        if !token.is_empty() || !reasoning.is_empty() {
-                                            // Track buffer usage and flush if needed
-                                            let token_bytes = token.len();
-                                            let reasoning_bytes = reasoning.len();
-                                            total_buffer_bytes += token_bytes + reasoning_bytes;
+                                        match event_type {
+                                            "chunk" | "" => {
+                                                let token = val
+                                                    .get("token")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or_default()
+                                                    .to_string();
+                                                let reasoning = val
+                                                    .get("reasoning")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or_default()
+                                                    .to_string();
 
-                                            buffered_token.push_str(&token);
-                                            buffered_reasoning.push_str(&reasoning);
+                                                if !token.is_empty() || !reasoning.is_empty() {
+                                                    // Track buffer usage and flush if needed
+                                                    let token_bytes = token.len();
+                                                    let reasoning_bytes = reasoning.len();
+                                                    total_buffer_bytes +=
+                                                        token_bytes + reasoning_bytes;
 
-                                            // Force flush if buffer exceeds max accumulated size
-                                            if total_buffer_bytes > MAX_BUFFERED_TOKENS_BYTES {
+                                                    buffered_token.push_str(&token);
+                                                    buffered_reasoning.push_str(&reasoning);
+
+                                                    // Force flush if buffer exceeds max accumulated size
+                                                    if total_buffer_bytes
+                                                        > MAX_BUFFERED_TOKENS_BYTES
+                                                    {
+                                                        send_pending(
+                                                            &tx,
+                                                            PendingResponse::StreamChunk {
+                                                                generation_id,
+                                                                token: std::mem::take(
+                                                                    &mut buffered_token,
+                                                                ),
+                                                                reasoning: std::mem::take(
+                                                                    &mut buffered_reasoning,
+                                                                ),
+                                                            },
+                                                        )
+                                                        .await;
+                                                        total_buffer_bytes = 0;
+                                                        last_stream_flush =
+                                                            std::time::Instant::now();
+                                                    }
+                                                }
+                                            }
+                                            "telemetry" => {
+                                                if let Some(te) = val.get("token_economy") {
+                                                    let input_tokens = te
+                                                        .get("input_tokens")
+                                                        .and_then(|v| v.as_u64())
+                                                        .unwrap_or(0)
+                                                        as usize;
+                                                    let output_tokens = te
+                                                        .get("output_tokens")
+                                                        .and_then(|v| v.as_u64())
+                                                        .unwrap_or(0)
+                                                        as usize;
+                                                    let total_tokens = te
+                                                        .get("total_tokens")
+                                                        .and_then(|v| v.as_u64())
+                                                        .unwrap_or(0)
+                                                        as usize;
+                                                    send_pending(
+                                                        &tx,
+                                                        PendingResponse::TokenEconomy {
+                                                            generation_id,
+                                                            input_tokens,
+                                                            output_tokens,
+                                                            total_tokens,
+                                                        },
+                                                    )
+                                                    .await;
+                                                }
+                                            }
+                                            "result" | "done" => {
+                                                final_content = val
+                                                    .get("response")
+                                                    .or_else(|| val.get("content"))
+                                                    .and_then(|v| v.as_str())
+                                                    .map(ToOwned::to_owned);
+                                                final_thinking = val
+                                                    .get("thinking")
+                                                    .and_then(|v| v.as_str())
+                                                    .map(ToOwned::to_owned);
+                                                final_agent = val
+                                                    .get("agent")
+                                                    .or_else(|| val.get("selected_agent"))
+                                                    .or_else(|| {
+                                                        val.pointer(
+                                                            "/capability_routing/selected_agent",
+                                                        )
+                                                    })
+                                                    .and_then(|v| v.as_str())
+                                                    .map(String::from);
+                                                final_used_model = val
+                                                    .get("selected_model")
+                                                    .and_then(|v| v.as_str())
+                                                    .map(String::from);
+                                                final_conv_id = val
+                                                    .get("conversation_id")
+                                                    .and_then(|v| v.as_str())
+                                                    .map(String::from);
+                                                final_branch_id = val
+                                                    .get("branch_id")
+                                                    .and_then(|v| v.as_str())
+                                                    .map(String::from);
+                                            }
+                                            "error" => {
+                                                if !buffered_token.is_empty()
+                                                    || !buffered_reasoning.is_empty()
+                                                {
+                                                    send_pending(
+                                                        &tx,
+                                                        PendingResponse::StreamChunk {
+                                                            generation_id,
+                                                            token: std::mem::take(
+                                                                &mut buffered_token,
+                                                            ),
+                                                            reasoning: std::mem::take(
+                                                                &mut buffered_reasoning,
+                                                            ),
+                                                        },
+                                                    )
+                                                    .await;
+                                                }
+                                                let message = val
+                                                    .get("message")
+                                                    .or_else(|| val.get("error"))
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("unknown stream error")
+                                                    .to_string();
                                                 send_pending(
                                                     &tx,
-                                                    PendingResponse::StreamChunk {
-                                                        generation_id,
-                                                        token: std::mem::take(&mut buffered_token),
-                                                        reasoning: std::mem::take(
-                                                            &mut buffered_reasoning,
-                                                        ),
+                                                    PendingResponse::Error {
+                                                        generation_id: Some(generation_id),
+                                                        message,
                                                     },
                                                 )
                                                 .await;
-                                                total_buffer_bytes = 0;
-                                                last_stream_flush = std::time::Instant::now();
+                                                return;
+                                            }
+                                            _ => {
+                                                eprintln!(
+                                                    "[SSE] Unknown event type: {}",
+                                                    event_type
+                                                );
+                                                sse_parse_error_count =
+                                                    sse_parse_error_count.saturating_add(1);
                                             }
                                         }
-                                    }
-                                    "telemetry" => {
-                                        if let Some(te) = data.get("token_economy") {
-                                            let input_tokens = te
-                                                .get("input_tokens")
-                                                .and_then(|v| v.as_u64())
-                                                .unwrap_or(0)
-                                                as usize;
-                                            let output_tokens = te
-                                                .get("output_tokens")
-                                                .and_then(|v| v.as_u64())
-                                                .unwrap_or(0)
-                                                as usize;
-                                            let total_tokens = te
-                                                .get("total_tokens")
-                                                .and_then(|v| v.as_u64())
-                                                .unwrap_or(0)
-                                                as usize;
-                                            send_pending(
-                                                &tx,
-                                                PendingResponse::TokenEconomy {
-                                                    generation_id,
-                                                    input_tokens,
-                                                    output_tokens,
-                                                    total_tokens,
-                                                },
-                                            )
-                                            .await;
-                                        }
-                                    }
-                                    "result" | "done" => {
-                                        final_content = data
-                                            .get("response")
-                                            .or_else(|| data.get("content"))
-                                            .and_then(|v| v.as_str())
-                                            .map(ToOwned::to_owned);
-                                        final_thinking = data
-                                            .get("thinking")
-                                            .and_then(|v| v.as_str())
-                                            .map(ToOwned::to_owned);
-                                        final_agent = data
-                                            .get("agent")
-                                            .or_else(|| data.get("selected_agent"))
-                                            .or_else(|| {
-                                                data.pointer("/capability_routing/selected_agent")
-                                            })
-                                            .and_then(|v| v.as_str())
-                                            .map(String::from);
-                                        // selected_model from backend (copilot-auto resolution)
-                                        final_used_model = data
-                                            .get("selected_model")
-                                            .and_then(|v| v.as_str())
-                                            .map(String::from);
-                                        final_conv_id = data
-                                            .get("conversation_id")
-                                            .and_then(|v| v.as_str())
-                                            .map(String::from);
-                                        final_branch_id = data
-                                            .get("branch_id")
-                                            .and_then(|v| v.as_str())
-                                            .map(String::from);
-                                    }
-                                    "error" => {
-                                        if !buffered_token.is_empty()
-                                            || !buffered_reasoning.is_empty()
+
+                                        // Time-based flush to maintain responsive UI
+                                        if (!buffered_token.is_empty()
+                                            || !buffered_reasoning.is_empty())
+                                            && last_stream_flush.elapsed()
+                                                >= stream_chunk_flush_interval
                                         {
                                             send_pending(
                                                 &tx,
@@ -684,41 +703,15 @@ impl ChatView {
                                                 },
                                             )
                                             .await;
+                                            last_stream_flush = std::time::Instant::now();
+                                            total_buffer_bytes = 0;
                                         }
-                                        let message = data
-                                            .get("message")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("unknown stream error")
-                                            .to_string();
-                                        send_pending(
-                                            &tx,
-                                            PendingResponse::Error {
-                                                generation_id: Some(generation_id),
-                                                message,
-                                            },
-                                        )
-                                        .await;
-                                        return;
                                     }
-                                    _ => {
-                                        eprintln!("[SSE] Unknown event type: {}", event_name);
+                                    Err(e) => {
+                                        eprintln!("[SSE] Parse error: {}", e);
+                                        sse_parse_error_count =
+                                            sse_parse_error_count.saturating_add(1);
                                     }
-                                }
-
-                                // Time-based flush to maintain responsive UI
-                                if (!buffered_token.is_empty() || !buffered_reasoning.is_empty())
-                                    && last_stream_flush.elapsed() >= stream_chunk_flush_interval
-                                {
-                                    send_pending(
-                                        &tx,
-                                        PendingResponse::StreamChunk {
-                                            generation_id,
-                                            token: std::mem::take(&mut buffered_token),
-                                            reasoning: std::mem::take(&mut buffered_reasoning),
-                                        },
-                                    )
-                                    .await;
-                                    last_stream_flush = std::time::Instant::now();
                                 }
                             }
                         }
@@ -749,6 +742,16 @@ impl ChatView {
                             "[Gen] Generation {} completed ({})",
                             generation_id, status_log
                         );
+
+                        // Emit SSE parse error summary warning if any errors occurred
+                        if sse_parse_error_count > 0 {
+                            let warn_msg = format!(
+                                "[SSE] {} JSON parse error(s) occurred during streaming",
+                                sse_parse_error_count
+                            );
+                            eprintln!("{}", warn_msg);
+                            send_pending(&tx, PendingResponse::UiMessage(warn_msg)).await;
+                        }
 
                         send_pending(
                             &tx,

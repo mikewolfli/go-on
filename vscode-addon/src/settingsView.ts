@@ -1,580 +1,49 @@
 import * as vscode from "vscode";
 import { spawn } from "child_process";
 import * as fs from "fs/promises";
-import * as http from "http";
-import * as https from "https";
 import * as path from "path";
 import { i18n, MessageKeys } from "./i18n";
 import { configManager } from "./configManager";
 import { RuntimeManagerLike } from "./managerTypes";
 import { normalizeProtocolMode } from "./protocolContract";
 import { ensureGoOnBinary } from "./runtimeBinaryService";
-import { getNonce, asRecord } from "./utils";
+import { asRecord } from "./utils";
+import { getSettingsHtml, getConfigWizardHtml } from "./settingsHtmlTemplate";
+import { secretNameForEnvVar } from "./runtime/jsonRpc";
+import {
+  ProviderCatalogSpec,
+  ProviderCatalogEntry,
+  ProviderConfigSnapshot,
+  ProviderSecretTarget,
+  BUILTIN_PROVIDER_CATALOG,
+  asCatalogSpec,
+  dedupeCatalog,
+  inferEnvVar,
+  collectProviderSecretTargets,
+} from "./settings/providerCatalog";
+import {
+  PersistedCopilotState,
+  CopilotAuthState,
+  ProviderModelResolution,
+  CopilotTokenExchange,
+  CopilotModelCache,
+  PendingCopilotDeviceAuth,
+  DeviceCodeResponse,
+  COPILOT_ENV_VAR,
+  COPILOT_SECRET_NAME,
+  COPILOT_TOKEN_URL,
+  COPILOT_MODELS_URL,
+  GITHUB_DEVICE_CODE_URL,
+  GITHUB_ACCESS_TOKEN_URL,
+  COPILOT_MODEL_CACHE_KEY,
+  COPILOT_STATE_KEY,
+  errorMessage,
+  requestJson,
+  escapeRegex,
+} from "./settings/copilotAuth";
 
-interface ProviderCatalogSpec {
-  name: string;
-  type: string;
-  group?: string;
-  model?: string;
-  api_key_env?: string;
-  secret_key_env?: string;
-  url?: string;
-  chat_path?: string;
-  anthropic_version?: string;
-  max_tokens?: number;
-  supports_system?: boolean;
-}
-
-interface ProviderCatalogEntry {
-  name: string;
-  agentType: string;
-  group?: string;
-  defaultModel?: string;
-  apiKeyEnv?: string;
-  secretKeyEnv?: string;
-  url?: string;
-  chatPath?: string;
-  supportsSystem?: boolean;
-  configuredModel?: string;
-  configuredEnvVar?: string;
-}
-
-interface ProviderConfigSnapshot {
-  model?: string;
-  envVar?: string;
-}
-
-interface ProviderSecretTarget {
-  name: string;
-  envVar: string;
-}
-
-interface PersistedCopilotState {
-  authMode?: string;
-  accountLabel?: string;
-  oauthClientId?: string;
-  lastError?: string;
-  lastStatus?: string;
-}
-
-interface CopilotAuthState {
-  isAuthorized: boolean;
-  authMode: string;
-  accountLabel: string;
-  oauthClientId: string;
-  pending: boolean;
-  statusMessage: string;
-  lastError: string;
-  userCode?: string;
-  verificationUri?: string;
-  expiresAt?: number;
-  modelSource?: string;
-  modelCount?: number;
-}
-
-interface ProviderModelResolution {
-  modelOptions: string[];
-  copilotAuth?: CopilotAuthState;
-}
-
-const BUILTIN_PROVIDER_CATALOG: ProviderCatalogSpec[] = [
-  {
-    name: "openai",
-    type: "openai",
-    group: "openai",
-    url: "https://api.openai.com/v1",
-    model: "gpt-4o-mini",
-    api_key_env: "OPENAI_API_KEY",
-    supports_system: true,
-  },
-  {
-    name: "openai_compatible",
-    type: "openai_compatible",
-    group: "openai",
-    url: "http://127.0.0.1:8080/v1",
-    model: "compatible-model",
-    api_key_env: "OPENAI_COMPATIBLE_API_KEY",
-    supports_system: true,
-  },
-  {
-    name: "anthropic",
-    type: "claude",
-    group: "openai",
-    url: "https://api.anthropic.com",
-    model: "claude-sonnet-4-20250514",
-    api_key_env: "ANTHROPIC_API_KEY",
-    anthropic_version: "2023-06-01",
-    max_tokens: 8192,
-    supports_system: true,
-  },
-  {
-    name: "cohere",
-    type: "cohere",
-    group: "openai",
-    url: "https://api.cohere.ai/v1",
-    model: "command-r-plus-08-2024",
-    api_key_env: "COHERE_API_KEY",
-    supports_system: true,
-  },
-  {
-    name: "deepseek",
-    type: "deepseek",
-    group: "chinese",
-    url: "https://api.deepseek.com",
-    model: "deepseek-v4-flash",
-    api_key_env: "DEEPSEEK_API_KEY",
-    supports_system: true,
-  },
-  {
-    name: "wenxin",
-    type: "wenxin",
-    group: "chinese",
-    model: "ERNIE-4.5-8K",
-    api_key_env: "WENXIN_API_KEY",
-    secret_key_env: "WENXIN_SECRET_KEY",
-  },
-  {
-    name: "qianfan",
-    type: "qianfan",
-    group: "chinese",
-    model: "ERNIE-4.5-8K",
-    api_key_env: "QIANFAN_API_KEY",
-    secret_key_env: "QIANFAN_SECRET_KEY",
-  },
-  {
-    name: "qwen",
-    type: "qwen",
-    group: "chinese",
-    url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    model: "qwen-max",
-    api_key_env: "QWEN_API_KEY",
-    supports_system: true,
-  },
-  {
-    name: "glm",
-    type: "glm",
-    group: "chinese",
-    url: "https://open.bigmodel.cn/api/paas/v4",
-    model: "glm-4-flash",
-    api_key_env: "GLM_API_KEY",
-  },
-  {
-    name: "yi",
-    type: "yi",
-    group: "chinese",
-    url: "https://api.lingyiwanwu.com/v1",
-    model: "yi-lightning",
-    api_key_env: "YI_API_KEY",
-  },
-  {
-    name: "hunyuan",
-    type: "hunyuan",
-    group: "chinese",
-    url: "https://api.hunyuan.cloud.tencent.com/v1",
-    model: "hunyuan-turbo-latest",
-    api_key_env: "HUNYUAN_API_KEY",
-  },
-  {
-    name: "doubao",
-    type: "doubao",
-    group: "chinese",
-    url: "https://ark.cn-beijing.volces.com/api/v3",
-    chat_path: "/chat/completions",
-    model: "doubao-1.5-pro-256k-250115",
-    api_key_env: "DOUBAO_API_KEY",
-    supports_system: true,
-  },
-  {
-    name: "facewall",
-    type: "facewall",
-    group: "chinese",
-    url: "https://api.facewall.ai/v1",
-    model: "facewall-chat",
-    api_key_env: "FACEWALL_API_KEY",
-  },
-  {
-    name: "langboat",
-    type: "langboat",
-    group: "chinese",
-    url: "https://api.langboat.com/v1",
-    model: "langboat-chat",
-    api_key_env: "LANGBOAT_API_KEY",
-  },
-  {
-    name: "skywork",
-    type: "skywork",
-    group: "chinese",
-    url: "https://api.skywork.ai/v1",
-    model: "skywork-chat",
-    api_key_env: "SKYWORK_API_KEY",
-  },
-  {
-    name: "stepfun",
-    type: "stepfun",
-    group: "chinese",
-    url: "https://api.stepfun.com/v1",
-    model: "step-2-16k",
-    api_key_env: "STEPFUN_API_KEY",
-  },
-  {
-    name: "xihu",
-    type: "xihu",
-    group: "chinese",
-    url: "https://api.xihu.ai/v1",
-    model: "xihu-chat",
-    api_key_env: "XIHU_API_KEY",
-  },
-  {
-    name: "moonshot",
-    type: "moonshot",
-    group: "chinese",
-    url: "https://api.moonshot.cn/v1",
-    model: "moonshot-v1-8k",
-    api_key_env: "MOONSHOT_API_KEY",
-  },
-  {
-    name: "minimax",
-    type: "minimax",
-    group: "chinese",
-    url: "https://api.minimax.chat/v1",
-    model: "MiniMax-Text-01",
-    api_key_env: "MINIMAX_API_KEY",
-  },
-  {
-    name: "ai21",
-    type: "ai21",
-    group: "other",
-    url: "https://api.ai21.com/studio/v1",
-    model: "jamba-1.5-mini",
-    api_key_env: "AI21_API_KEY",
-  },
-  {
-    name: "aleph",
-    type: "aleph",
-    group: "other",
-    url: "https://api.aleph-alpha.com",
-    model: "luminous-base",
-    api_key_env: "ALEPH_API_KEY",
-  },
-  {
-    name: "copilot",
-    type: "copilot",
-    group: "other",
-    url: "http://127.0.0.1:8080",
-    api_key_env: "GITHUB_COPILOT_TOKEN",
-  },
-  {
-    name: "deepquest",
-    type: "deepquest",
-    group: "other",
-    url: "https://api.deepquest.ai/v1",
-    model: "deepquest-chat",
-    api_key_env: "DEEPQUEST_API_KEY",
-  },
-  {
-    name: "fireworks",
-    type: "fireworks",
-    group: "other",
-    url: "https://api.fireworks.ai/inference/v1",
-    model: "accounts/fireworks/models/llama-v3p1-8b-instruct",
-    api_key_env: "FIREWORKS_API_KEY",
-  },
-  {
-    name: "gemini",
-    type: "gemini",
-    group: "other",
-    url: "https://generativelanguage.googleapis.com/v1beta",
-    model: "gemini-2.5-flash",
-    api_key_env: "GEMINI_API_KEY",
-  },
-  {
-    name: "groq",
-    type: "groq",
-    group: "other",
-    url: "https://api.groq.com/openai/v1",
-    model: "llama-3.3-70b-versatile",
-    api_key_env: "GROQ_API_KEY",
-  },
-  {
-    name: "llama",
-    type: "llama",
-    group: "other",
-    url: "http://127.0.0.1:11434/v1",
-    model: "llama3.2",
-    supports_system: true,
-  },
-  {
-    name: "loopai",
-    type: "loopai",
-    group: "other",
-    url: "https://api.loopai.com/v1",
-    model: "loopai-chat",
-    api_key_env: "LOOPAI_API_KEY",
-  },
-  {
-    name: "mistral",
-    type: "mistral",
-    group: "other",
-    url: "https://api.mistral.ai/v1",
-    model: "mistral-small-latest",
-    api_key_env: "MISTRAL_API_KEY",
-  },
-  {
-    name: "nim",
-    type: "nim",
-    group: "other",
-    url: "https://integrate.api.nvidia.com/v1",
-    model: "meta/llama-3.1-70b-instruct",
-    api_key_env: "NIM_API_KEY",
-  },
-  {
-    name: "perplexity",
-    type: "perplexity",
-    group: "other",
-    url: "https://api.perplexity.ai",
-    model: "sonar-pro",
-    api_key_env: "PERPLEXITY_API_KEY",
-  },
-  {
-    name: "replicate",
-    type: "replicate",
-    group: "other",
-    url: "https://api.replicate.com/v1",
-    model: "meta/meta-llama-3-70b-instruct",
-    api_key_env: "REPLICATE_API_TOKEN",
-  },
-  {
-    name: "titan",
-    type: "titan",
-    group: "other",
-    url: "https://api.titanml.co/v1",
-    model: "titan-chat",
-    api_key_env: "TITAN_API_KEY",
-  },
-  {
-    name: "together",
-    type: "together",
-    group: "other",
-    url: "https://api.together.xyz/v1",
-    model: "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
-    api_key_env: "TOGETHER_API_KEY",
-  },
-  {
-    name: "xai",
-    type: "openai_compatible",
-    group: "other",
-    url: "https://api.x.ai/v1",
-    model: "grok-3",
-    api_key_env: "XAI_API_KEY",
-    supports_system: true,
-  },
-];
-
-interface CopilotTokenExchange {
-  token: string;
-  expiresAt: number;
-}
-
-interface CopilotModelCache {
-  models: string[];
-  fetchedAt: number;
-}
-
-interface PendingCopilotDeviceAuth {
-  cancelRequested: boolean;
-  userCode: string;
-  verificationUri: string;
-  expiresAt: number;
-}
-
-interface DeviceCodeResponse {
-  device_code?: string;
-  user_code?: string;
-  verification_uri?: string;
-  expires_in?: number;
-  interval?: number;
-}
-
-interface HttpJsonResponse {
-  status: number;
-  bodyText: string;
-  body: unknown;
-}
-
-const COPILOT_ENV_VAR = "GITHUB_COPILOT_TOKEN";
-const COPILOT_SECRET_NAME = "github_copilot_token";
-const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
-const COPILOT_MODELS_URL = "https://api.githubcopilot.com/models";
-const GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code";
-const GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
-const COPILOT_MODEL_CACHE_KEY = "go-on.copilot.modelsCache.v1";
-const COPILOT_STATE_KEY = "go-on.copilot.authState.v1";
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function createTransport(urlValue: URL): typeof http | typeof https {
-  return urlValue.protocol === "http:" ? http : https;
-}
-
-async function requestJson(
-  urlString: string,
-  options: {
-    method?: string;
-    headers?: Record<string, string>;
-    body?: string;
-  } = {},
-): Promise<HttpJsonResponse> {
-  const target = new URL(urlString);
-  const body = options.body ?? "";
-  const headers: Record<string, string> = {
-    Accept: "application/json",
-    ...(options.headers || {}),
-  };
-
-  if (body && headers["Content-Length"] === undefined) {
-    headers["Content-Length"] = Buffer.byteLength(body).toString();
-  }
-
-  return new Promise<HttpJsonResponse>((resolve, reject) => {
-    const req = createTransport(target).request(
-      target,
-      {
-        method: options.method || "GET",
-        headers,
-      },
-      (res) => {
-        let chunks = "";
-        res.setEncoding("utf8");
-        res.on("data", (chunk: string) => {
-          chunks += chunk;
-        });
-        res.on("end", () => {
-          let parsed: unknown = undefined;
-          if (chunks.trim()) {
-            try {
-              parsed = JSON.parse(chunks);
-            } catch {
-              parsed = undefined;
-            }
-          }
-          resolve({
-            status: res.statusCode || 0,
-            bodyText: chunks,
-            body: parsed,
-          });
-        });
-      },
-    );
-
-    req.on("error", reject);
-    if (body) {
-      req.write(body);
-    }
-    req.end();
-  });
-}
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function inferEnvVar(providerName: string): string {
-  return `${providerName
-    .trim()
-    .toUpperCase()
-    .replace(/[-\s]+/g, "_")}_API_KEY`;
-}
-
-function secretNameForEnvVar(envVar: string): string {
-  const normalized = String(envVar || "").trim();
-  if (!normalized) {
-    return "";
-  }
-  // Handle keyring://go-on/{name} URIs
-  const keyringPrefix = "keyring://go-on/";
-  if (normalized.startsWith(keyringPrefix)) {
-    return normalized.slice(keyringPrefix.length);
-  }
-  // Legacy env-var name: GITHUB_COPILOT_TOKEN → github_copilot_token
-  if (normalized === "GITHUB_COPILOT_TOKEN") {
-    return "github_copilot_token";
-  }
-  return normalized.toLowerCase();
-}
-
-function collectProviderSecretTargets(
-  catalog: ProviderCatalogSpec[],
-): ProviderSecretTarget[] {
-  const targets = new Map<string, ProviderSecretTarget>();
-
-  for (const spec of catalog) {
-    for (const envVar of [spec.api_key_env, spec.secret_key_env]) {
-      const normalized = String(envVar || "").trim();
-      if (!normalized) {
-        continue;
-      }
-      const secretName = secretNameForEnvVar(normalized);
-      if (!secretName || targets.has(secretName)) {
-        continue;
-      }
-      targets.set(secretName, {
-        name: secretName,
-        envVar: normalized,
-      });
-    }
-  }
-
-  return Array.from(targets.values()).sort((left, right) =>
-    left.name.localeCompare(right.name),
-  );
-}
-
-function asCatalogSpec(value: unknown): ProviderCatalogSpec | null {
-  const record = asRecord(value);
-  const name = String(record.name || "").trim();
-  const type = String(record.type || record.agent_type || "").trim();
-  if (!name || !type) {
-    return null;
-  }
-  const parseString = (raw: unknown): string | undefined => {
-    const normalized = String(raw || "").trim();
-    return normalized ? normalized : undefined;
-  };
-  const parseBool = (raw: unknown): boolean | undefined =>
-    typeof raw === "boolean" ? raw : undefined;
-  const parseNumber = (raw: unknown): number | undefined =>
-    typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
-
-  return {
-    name,
-    type,
-    group: parseString(record.group),
-    model: parseString(record.model),
-    api_key_env: parseString(record.api_key_env),
-    secret_key_env: parseString(record.secret_key_env),
-    url: parseString(record.url),
-    chat_path: parseString(record.chat_path),
-    anthropic_version: parseString(record.anthropic_version),
-    max_tokens: parseNumber(record.max_tokens),
-    supports_system: parseBool(record.supports_system),
-  };
-}
-
-function dedupeCatalog(specs: ProviderCatalogSpec[]): ProviderCatalogSpec[] {
-  const byName = new Map<string, ProviderCatalogSpec>();
-  for (const spec of specs) {
-    const key = spec.name.trim();
-    if (!key || byName.has(key)) {
-      continue;
-    }
-    byName.set(key, spec);
-  }
-  return Array.from(byName.values()).sort((a, b) =>
-    a.name.localeCompare(b.name),
-  );
-}
+// Types, constants, and utility functions moved to
+// settings/providerCatalog.ts and settings/copilotAuth.ts
 
 function parseConfiguredAgents(
   content: string,
@@ -765,7 +234,11 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       localResourceRoots: [this._extensionUri],
     };
 
-    webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
+    webviewView.webview.html = getSettingsHtml(
+      webviewView.webview,
+      this._extensionUri,
+      this.manager.isRunning(),
+    );
 
     this._messageSubscription?.dispose();
     this._messageSubscription = webviewView.webview.onDidReceiveMessage(
@@ -817,8 +290,8 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
           features: this._runtimeFeatures,
         });
       }
-    } catch {
-      // not fatal — keep previous features
+    } catch (err) {
+      console.warn("[settingsView] _refreshRuntimeFeatures failed:", err);
     }
   }
 
@@ -1050,8 +523,8 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
             if (!proc.killed) {
               proc.kill("SIGKILL");
             }
-          } catch {
-            // process already terminated
+          } catch (err) {
+            console.warn("[settingsView] forceKill failed:", err);
           }
         }, 1000);
       }, 10000);
@@ -1089,7 +562,8 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     try {
       const token = await this._runSecretCommand("get", COPILOT_SECRET_NAME);
       return token.trim() || undefined;
-    } catch {
+    } catch (err) {
+      console.warn("[settingsView] _readCopilotToken failed:", err);
       return undefined;
     }
   }
@@ -1347,10 +821,14 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
   private async _startCopilotDeviceAuthorization(
     oauthClientId: string,
   ): Promise<void> {
-    const clientId = oauthClientId.trim();
+    // Fall back to GO_ON_COPILOT_CLIENT_ID environment variable if not provided
+    const resolvedClientId =
+      oauthClientId.trim() || process.env.GO_ON_COPILOT_CLIENT_ID || "";
+    const clientId = resolvedClientId.trim();
     if (!clientId) {
       throw new Error(
-        "GitHub OAuth client ID is required for device authorization.",
+        "GitHub OAuth client ID is required for device authorization. " +
+          "Provide it via the settings panel or set the GO_ON_COPILOT_CLIENT_ID environment variable.",
       );
     }
 
@@ -1548,8 +1026,8 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
   private async _deleteCopilotAuthorization(): Promise<void> {
     try {
       await this._runSecretCommand("delete", COPILOT_SECRET_NAME);
-    } catch {
-      // ignore missing secrets
+    } catch (err) {
+      console.warn("[settingsView] _deleteCopilotAuthorization failed:", err);
     }
     this.manager.setRuntimeEnvOverrides?.({
       [COPILOT_ENV_VAR]: "",
@@ -1609,8 +1087,8 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       if (parsed.length > 0) {
         return parsed;
       }
-    } catch {
-      // Fallback to models/list and built-in catalog when provider.catalog is unavailable.
+    } catch (err) {
+      console.warn("[settingsView] provider.catalog failed:", err);
     }
 
     try {
@@ -1644,7 +1122,8 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
           }) as ProviderCatalogSpec,
       );
       return parsed;
-    } catch {
+    } catch (err) {
+      console.warn("[settingsView] models/list failed:", err);
       return [];
     }
   }
@@ -1656,7 +1135,8 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       const configPath = this._resolveConfigPath();
       const content = await fs.readFile(configPath, "utf8");
       return parseConfiguredAgents(content);
-    } catch {
+    } catch (err) {
+      console.warn("[settingsView] _loadConfiguredAgentMap failed:", err);
       return new Map();
     }
   }
@@ -1734,7 +1214,11 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
         if (defaultModel) {
           modelSet.add(defaultModel);
         }
-      } catch {
+      } catch (err) {
+        console.warn(
+          "[settingsView] _resolveProviderModels provider.models failed:",
+          err,
+        );
         try {
           const response = await this.manager.sendRequest("models/list", {});
           const payload = asRecord(response);
@@ -1754,8 +1238,11 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
               modelSet.add(modelId);
             }
           }
-        } catch {
-          // Keep catalog-only models when runtime endpoint is unavailable.
+        } catch (err2) {
+          console.warn(
+            "[settingsView] _resolveProviderModels models/list failed:",
+            err2,
+          );
         }
       }
     }
@@ -1876,7 +1363,8 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     let content = "";
     try {
       content = await fs.readFile(configPath, "utf8");
-    } catch {
+    } catch (err) {
+      console.warn("[settingsView] _saveProviderSelection read failed:", err);
       content = "";
     }
 
@@ -2062,8 +1550,8 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
 
     try {
       providerSettings = await this._buildProviderSettingsPayload();
-    } catch {
-      // Keep fallback provider payload if catalog/config discovery fails.
+    } catch (err) {
+      console.warn("[settingsView] _buildProviderSettingsPayload failed:", err);
     }
 
     const settings = {
@@ -2344,8 +1832,8 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
   private _postMessage(message: unknown) {
     try {
       this._view?.webview.postMessage(message);
-    } catch {
-      // Webview disposed — silently ignore
+    } catch (err) {
+      console.warn("[settingsView] _postMessage failed:", err);
     }
   }
 
@@ -2420,7 +1908,6 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
   }
 
   private _getConfigWizardHtml(webview: vscode.Webview) {
-    const nonce = getNonce();
     const config = vscode.workspace.getConfiguration("go-on");
     const configPath = String(config.get("configPath", "./config.toml"));
     const executablePath = String(config.get("executablePath", ""));
@@ -2429,538 +1916,19 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       config.get("runtime.protocolMode", "from_config"),
     );
 
-    const payload = JSON.stringify({
+    return getConfigWizardHtml(webview, {
       configPath,
       executablePath,
       autoStart,
       protocolMode,
-    }).replace(/</g, "\\u003c");
-
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource} data:; script-src 'nonce-${nonce}';">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${i18n.getMessage(MessageKeys.configWizardTitle)}</title>
-    <style>
-        body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-editor-background); padding: 20px; }
-        .header { margin-bottom: 16px; }
-        .title { font-size: 22px; font-weight: 700; }
-        .subtitle { color: var(--vscode-descriptionForeground); margin-top: 6px; }
-        .steps { display: flex; gap: 8px; margin: 18px 0 20px; }
-        .step { flex: 1; border: 1px solid var(--vscode-panel-border); border-radius: 8px; padding: 10px; color: var(--vscode-descriptionForeground); }
-        .step.active { border-color: var(--vscode-focusBorder); color: var(--vscode-foreground); }
-        .cards, .modes { display: grid; gap: 12px; }
-        .cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-        .modes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        .card { border: 1px solid var(--vscode-panel-border); border-radius: 10px; padding: 14px; cursor: pointer; background: var(--vscode-sideBar-background); }
-        .card.selected { border-color: var(--vscode-focusBorder); background: var(--vscode-list-activeSelectionBackground); }
-        .card-title { font-weight: 700; margin-bottom: 8px; }
-        .card-desc { color: var(--vscode-descriptionForeground); line-height: 1.6; font-size: 12px; }
-        .recommended { display: inline-block; margin-top: 8px; color: var(--vscode-testing-iconPassed); font-size: 12px; }
-        .review { display: grid; gap: 10px; }
-        .review-item { border: 1px solid var(--vscode-panel-border); border-radius: 8px; padding: 10px; }
-        .review-label { font-size: 12px; color: var(--vscode-descriptionForeground); margin-bottom: 4px; }
-        .review-value { font-weight: 600; word-break: break-all; }
-        .actions { display: flex; justify-content: space-between; margin-top: 20px; }
-        button { border: none; border-radius: 6px; padding: 8px 14px; cursor: pointer; }
-        .ghost { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
-        .primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
-        @media (max-width: 760px) { .cards, .modes { grid-template-columns: 1fr; } }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <div class="title">${i18n.getMessage(MessageKeys.configWizardTitle)}</div>
-        <div class="subtitle">${i18n.getMessage(MessageKeys.configWizardSubtitle)}</div>
-    </div>
-    <div class="steps">
-        <div class="step active" data-step-indicator="0">${i18n.getMessage(MessageKeys.configWizardStep1)}</div>
-        <div class="step" data-step-indicator="1">${i18n.getMessage(MessageKeys.configWizardStep2)}</div>
-        <div class="step" data-step-indicator="2">${i18n.getMessage(MessageKeys.configWizardStep3)}</div>
-    </div>
-    <div id="step0">
-        <div class="cards">
-            <div class="card selected" data-scenario="local">
-                <div class="card-title">${i18n.getMessage(MessageKeys.configWizardLocalTitle)}</div>
-                <div class="card-desc">${i18n.getMessage(MessageKeys.configWizardLocalDesc)}</div>
-            </div>
-            <div class="card" data-scenario="shared">
-                <div class="card-title">${i18n.getMessage(MessageKeys.configWizardSharedTitle)}</div>
-                <div class="card-desc">${i18n.getMessage(MessageKeys.configWizardSharedDesc)}</div>
-            </div>
-            <div class="card" data-scenario="editor">
-                <div class="card-title">${i18n.getMessage(MessageKeys.configWizardEditorTitle)}</div>
-                <div class="card-desc">${i18n.getMessage(MessageKeys.configWizardEditorDesc)}</div>
-            </div>
-        </div>
-    </div>
-    <div id="step1" hidden>
-        <div class="modes">
-            <div class="card" data-mode="from_config"><div class="card-title">from_config</div><div class="card-desc">Follow project config.toml</div></div>
-            <div class="card selected" data-mode="adaptive"><div class="card-title">adaptive</div><div class="card-desc">${i18n.getMessage(MessageKeys.configWizardAdaptiveDesc)}</div><span class="recommended">${i18n.getMessage(MessageKeys.configWizardRecommended)}</span></div>
-            <div class="card" data-mode="acp_stdio"><div class="card-title">acp_stdio</div><div class="card-desc">${i18n.getMessage(MessageKeys.configWizardAcpStdioDesc)}</div></div>
-            <div class="card" data-mode="acp_http"><div class="card-title">acp_http</div><div class="card-desc">${i18n.getMessage(MessageKeys.configWizardAcpHttpDesc)}</div></div>
-            <div class="card" data-mode="mcp_stdio"><div class="card-title">mcp_stdio</div><div class="card-desc">${i18n.getMessage(MessageKeys.configWizardMcpStdioDesc)}</div></div>
-            <div class="card" data-mode="mcp_http"><div class="card-title">mcp_http</div><div class="card-desc">${i18n.getMessage(MessageKeys.configWizardMcpHttpDesc)}</div></div>
-        </div>
-    </div>
-    <div id="step2" hidden>
-        <div class="review">
-            <div class="review-item"><div class="review-label">${i18n.getMessage(MessageKeys.configPath)}</div><div class="review-value" id="review-config-path"></div></div>
-            <div class="review-item"><div class="review-label">${i18n.getMessage(MessageKeys.executablePath)}</div><div class="review-value" id="review-executable-path"></div></div>
-            <div class="review-item"><div class="review-label">${i18n.getMessage(MessageKeys.autoStart)}</div><div class="review-value" id="review-auto-start"></div></div>
-            <div class="review-item"><div class="review-label">${i18n.getMessage(MessageKeys.configWizardProtocolMode)}</div><div class="review-value" id="review-protocol-mode"></div></div>
-        </div>
-    </div>
-    <div class="actions">
-        <button class="ghost" id="cancel-btn">${i18n.getMessage(MessageKeys.cancel)}</button>
-        <div>
-            <button class="ghost" id="prev-btn" disabled>${i18n.getMessage(MessageKeys.configWizardPrevious)}</button>
-            <button class="primary" id="next-btn">${i18n.getMessage(MessageKeys.configWizardNext)}</button>
-        </div>
-    </div>
-    <script nonce="${nonce}">
-        const vscode = acquireVsCodeApi();
-        const initial = ${payload};
-        const state = {
-            step: 0,
-            scenario: 'local',
-            configPath: initial.configPath,
-            executablePath: initial.executablePath,
-            autoStart: initial.autoStart,
-            protocolMode: initial.protocolMode || 'adaptive',
-        };
-
-        const recommendations = {
-            local: 'adaptive',
-            shared: 'acp_http',
-            editor: 'acp_stdio',
-        };
-
-        function render() {
-            document.querySelectorAll('[data-step-indicator]').forEach((el, index) => {
-                el.classList.toggle('active', index === state.step);
-            });
-            document.getElementById('step0').hidden = state.step !== 0;
-            document.getElementById('step1').hidden = state.step !== 1;
-            document.getElementById('step2').hidden = state.step !== 2;
-            document.getElementById('prev-btn').disabled = state.step === 0;
-            document.getElementById('next-btn').textContent = state.step === 2 ? '${i18n.getMessage(MessageKeys.save)}' : '${i18n.getMessage("configuration.wizard.next")}';
-            document.querySelectorAll('[data-scenario]').forEach((el) => {
-                el.classList.toggle('selected', el.dataset.scenario === state.scenario);
-            });
-            document.querySelectorAll('[data-mode]').forEach((el) => {
-                el.classList.toggle('selected', el.dataset.mode === state.protocolMode);
-            });
-            document.getElementById('review-config-path').textContent = state.configPath || './config.toml';
-            document.getElementById('review-executable-path').textContent = state.executablePath || '(empty)';
-            document.getElementById('review-auto-start').textContent = state.autoStart ? 'true' : 'false';
-            document.getElementById('review-protocol-mode').textContent = state.protocolMode;
-        }
-
-        document.querySelectorAll('[data-scenario]').forEach((el) => {
-            el.addEventListener('click', () => {
-                state.scenario = el.dataset.scenario;
-                state.protocolMode = recommendations[state.scenario] || 'adaptive';
-                state.autoStart = state.scenario === 'shared';
-                render();
-            });
-        });
-
-        document.querySelectorAll('[data-mode]').forEach((el) => {
-            el.addEventListener('click', () => {
-                state.protocolMode = el.dataset.mode;
-                render();
-            });
-        });
-
-        document.getElementById('cancel-btn').addEventListener('click', () => {
-            vscode.postMessage({ command: 'cancel' });
-        });
-
-        document.getElementById('prev-btn').addEventListener('click', () => {
-            if (state.step > 0) state.step -= 1;
-            render();
-        });
-
-        document.getElementById('next-btn').addEventListener('click', () => {
-            if (state.step < 2) {
-                state.step += 1;
-                render();
-                return;
-            }
-            vscode.postMessage({ command: 'saveConfig', config: state });
-        });
-
-        window.addEventListener('message', (event) => {
-            if (event.data?.command === 'close') {
-                window.close();
-            }
-        });
-
-        render();
-    </script>
-</body>
-</html>`;
+    });
   }
 
   private _getHtmlForWebview(webview: vscode.Webview) {
-    const styleResetUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this._extensionUri, "media", "reset.css"),
+    return getSettingsHtml(
+      webview,
+      this._extensionUri,
+      this.manager.isRunning(),
     );
-    const styleVSCodeUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this._extensionUri, "media", "vscode.css"),
-    );
-    const scriptUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this._extensionUri, "media", "settings.js"),
-    );
-
-    const nonce = getNonce();
-
-    return `<!DOCTYPE html>
-            <html lang="en">
-            <head>
-                <meta charset="UTF-8">
-                <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource} data:; script-src 'nonce-${nonce}';">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <link href="${styleResetUri}" rel="stylesheet">
-                <link href="${styleVSCodeUri}" rel="stylesheet">
-                <title>Go-On Settings</title>
-                <style>
-                    .settings-container {
-                        padding: 10px;
-                        height: 100%;
-                        overflow-y: auto;
-                    }
-                    .setting-group {
-                        margin-bottom: 20px;
-                        border: 1px solid var(--vscode-panel-border);
-                        border-radius: 3px;
-                        padding: 10px;
-                    }
-                    .setting-group h3 {
-                        margin: 0 0 10px 0;
-                        color: var(--vscode-textLink-foreground);
-                        border-bottom: 1px solid var(--vscode-panel-border);
-                        padding-bottom: 5px;
-                    }
-                    .setting-item {
-                        margin-bottom: 10px;
-                    }
-                    .setting-item label {
-                        display: block;
-                        margin-bottom: 4px;
-                        font-weight: bold;
-                    }
-                    .setting-item input, .setting-item select {
-                        width: 100%;
-                        padding: 4px 8px;
-                        border: 1px solid var(--vscode-input-border);
-                        border-radius: 3px;
-                        background: var(--vscode-input-background);
-                        color: var(--vscode-input-foreground);
-                    }
-                    .setting-item input[type="checkbox"] {
-                        width: auto;
-                        margin-right: 8px;
-                    }
-                    .setting-item input[type="number"] {
-                        width: 80px;
-                    }
-                    .action-buttons {
-                        margin-top: 20px;
-                        display: flex;
-                        flex-wrap: wrap;
-                        gap: 5px;
-                    }
-                    .action-button {
-                        padding: 6px 12px;
-                        background: var(--vscode-button-background);
-                        color: var(--vscode-button-foreground);
-                        border: none;
-                        border-radius: 3px;
-                        cursor: pointer;
-                        font-size: 0.9em;
-                    }
-                    .action-button:hover {
-                        background: var(--vscode-button-hoverBackground);
-                    }
-                    .action-button.danger {
-                        background: var(--vscode-notificationsErrorIcon-foreground);
-                    }
-                    .status-indicator {
-                        display: inline-block;
-                        width: 8px;
-                        height: 8px;
-                        border-radius: 50%;
-                        margin-right: 5px;
-                    }
-                    .status-indicator.connected {
-                        background: var(--vscode-charts-green);
-                    }
-                    .status-indicator.disconnected {
-                        background: var(--vscode-notificationsErrorIcon-foreground);
-                    }
-                </style>
-            </head>
-            <body>
-                <div class="settings-container">
-                    <div class="setting-group">
-                        <h3>🖥️ System Configuration</h3>
-                        <div class="setting-item">
-                            <label for="configPath">Config File Path:</label>
-                            <input type="text" id="configPath" data-setting="go-on.configPath">
-                        </div>
-                        <div class="setting-item">
-                            <label for="executablePath">Executable Path:</label>
-                            <input type="text" id="executablePath" data-setting="go-on.executablePath">
-                        </div>
-                        <div class="setting-item">
-                            <label>
-                                <input type="checkbox" id="autoDownloadBinary" data-setting="go-on.autoDownloadBinary">
-                                Auto-download app binary when missing
-                            </label>
-                        </div>
-                        <div class="setting-item">
-                            <label for="releaseRepository">Release Repository (owner/repo):</label>
-                            <input type="text" id="releaseRepository" data-setting="go-on.releaseRepository">
-                        </div>
-                        <div class="setting-item">
-                            <label for="releaseTag">Release Tag:</label>
-                            <input type="text" id="releaseTag" data-setting="go-on.releaseTag">
-                        </div>
-                        <div class="setting-item">
-                            <label>
-                                <input type="checkbox" id="autoStart" data-setting="go-on.autoStart">
-                                Auto-start Go-On on workspace open
-                            </label>
-                        </div>
-                        <div class="setting-item">
-                            <label for="defaultTemplate">Default Config Template:</label>
-                            <select id="defaultTemplate">
-                                <option value="config.toml.autopilot-adaptive">autopilot-adaptive</option>
-                            </select>
-                        </div>
-                        <div class="action-buttons">
-                            <button class="action-button" id="applyDefaultTemplate">Apply As Active config.toml</button>
-                            <button class="action-button" id="openConfigWizard">Open Config Wizard</button>
-                        </div>
-                    </div>
-
-                    <div class="setting-group">
-                        <h3>🔐 System Keyring (Preferred)</h3>
-                        <div class="setting-item">
-                            <label for="secretName">Secret Name:</label>
-                          <select id="secretName"></select>
-                        </div>
-                        <div class="setting-item">
-                            <label for="secretValue">Secret Value:</label>
-                            <input type="password" id="secretValue" autocomplete="off" placeholder="Enter API key or token">
-                        </div>
-                        <div class="action-buttons">
-                            <button class="action-button" id="setKeyringSecret">Save to Keyring</button>
-                            <button class="action-button" id="getKeyringSecret">Read from Keyring</button>
-                            <button class="action-button" id="listKeyringSecrets">List Key Status</button>
-                            <button class="action-button danger" id="deleteKeyringSecret">Delete Key</button>
-                        </div>
-                        <div class="setting-item" style="margin-top: 8px;">
-                            <label for="keyringOutput">Keyring Output:</label>
-                            <textarea id="keyringOutput" rows="5" style="width: 100%;"></textarea>
-                        </div>
-                    </div>
-
-                    <div class="setting-group">
-                        <h3>📜 Rules Settings</h3>
-                        <div class="setting-item">
-                            <label for="globalRules">Global Rules (RULES/global.md, one per line):</label>
-                            <textarea id="globalRules" rows="5" style="width: 100%;" placeholder="Rule line 1&#10;Rule line 2"></textarea>
-                        </div>
-                        <div class="setting-item">
-                            <label for="commonRules">Common Rules (RULES/common.md, one per line):</label>
-                            <textarea id="commonRules" rows="5" style="width: 100%;" placeholder="Rule line 1&#10;Rule line 2"></textarea>
-                        </div>
-                        <div class="setting-item">
-                            <label for="phaseRules">Per-Phase Rules (format: phase|rule text):</label>
-                            <textarea id="phaseRules" rows="6" style="width: 100%;" placeholder="coding|Must include tests&#10;review|Fail closed on uncertainty"></textarea>
-                        </div>
-                        <div class="action-buttons">
-                            <button class="action-button" id="applyRulesSettings">Save Rules</button>
-                        </div>
-                    </div>
-
-                    <div class="setting-group">
-                        <h3>🧭 Workflow And AI Routing</h3>
-                        <div class="setting-item">
-                            <label for="defaultPhaseInput">Default Phase:</label>
-                            <input type="text" id="defaultPhaseInput" placeholder="coding">
-                        </div>
-                        <div class="setting-item">
-                            <label for="workflowMapping">Node Mapping JSON:</label>
-                            <textarea id="workflowMapping" rows="12" style="width: 100%;" placeholder='{"coding":{"agents":["copilot","deepseek"],"fallback":true,"principles":["Prefer safe changes"],"switchRules":{"circuitBreakerFailures":3,"circuitBreakerOpenSeconds":30}}}'></textarea>
-                        </div>
-                        <div class="action-buttons">
-                            <button class="action-button" id="applyWorkflowMapping">Save Workflow Mapping</button>
-                        </div>
-                    </div>
-
-                    <div class="setting-group">
-                        <h3>🤖 Provider Model Routing</h3>
-                        <div class="setting-item">
-                            <label for="providerSelect">Provider:</label>
-                            <select id="providerSelect"></select>
-                        </div>
-                        <div class="setting-item">
-                            <label for="providerModelSelect">Model:</label>
-                            <select id="providerModelSelect"></select>
-                        </div>
-                        <div class="setting-item">
-                            <label for="providerEnvVar">API Key Env Var:</label>
-                            <input type="text" id="providerEnvVar" placeholder="Optional, inferred when empty">
-                        </div>
-                        <div class="setting-item" id="copilotAuthPanel" style="display: none;">
-                          <label for="copilotOauthClientId">GitHub OAuth Client ID For Device Flow:</label>
-                          <input type="text" id="copilotOauthClientId" placeholder="Required only for device flow">
-                          <div class="action-buttons" style="margin-top: 8px;">
-                            <button class="action-button" id="authorizeCopilotGitHubSession">Authorize With GitHub Login</button>
-                            <button class="action-button" id="authorizeCopilotDeviceFlow">Authorize With Device Code</button>
-                            <button class="action-button" id="refreshCopilotModels">Refresh Copilot Models</button>
-                            <button class="action-button danger" id="cancelCopilotDeviceFlow">Cancel Device Flow</button>
-                            <button class="action-button danger" id="deleteCopilotAuthorization">Delete Stored Copilot Token</button>
-                          </div>
-                          <div class="setting-item" style="margin-top: 8px;">
-                            <label for="copilotAuthOutput">Copilot Authorization And Model Status:</label>
-                            <textarea id="copilotAuthOutput" rows="6" style="width: 100%;"></textarea>
-                          </div>
-                        </div>
-                        <div class="action-buttons">
-                            <button class="action-button" id="applyProviderSelection">Apply Provider/Model To config.toml</button>
-                        </div>
-                    </div>
-
-                    <div class="setting-group">
-                        <h3>💬 Chat Settings</h3>
-                        <div class="setting-item">
-                            <label for="maxHistory">Max Chat History:</label>
-                            <input type="number" id="maxHistory" min="1" max="1000" data-setting="go-on.chat.maxHistory">
-                        </div>
-                        <div class="setting-item">
-                            <label for="model">Default Model:</label>
-                            <select id="model" data-setting="go-on.chat.model">
-                                <option value="auto">Auto</option>
-                                <option value="copilot">GitHub Copilot</option>
-                                <option value="deepseek">DeepSeek</option>
-                                <option value="wenxin">Wenxin</option>
-                                <option value="openai_compatible">OpenAI Compatible</option>
-                                <option value="doubao">Doubao</option>
-                                <option value="claude">Claude</option>
-                            </select>
-                        </div>
-                        <div class="setting-item">
-                            <label for="temperature">Temperature:</label>
-                            <input type="number" id="temperature" min="0" max="2" step="0.1" data-setting="go-on.chat.temperature">
-                        </div>
-                        <div class="setting-item">
-                            <label for="maxTokens">Max Tokens:</label>
-                            <input type="number" id="maxTokens" min="1" max="32768" data-setting="go-on.chat.maxTokens">
-                        </div>
-                        <div class="setting-item">
-                            <label>
-                                <input type="checkbox" id="streaming" data-setting="go-on.chat.streaming">
-                                Enable streaming responses
-                            </label>
-                        </div>
-                    </div>
-
-                    <div class="setting-group">
-                        <h3>🧠 Memory & Cache</h3>
-                        <div class="setting-item">
-                            <label>
-                                <input type="checkbox" id="cacheEnabled" data-setting="go-on.cache.enabled">
-                                Enable response caching
-                            </label>
-                        </div>
-                        <div class="setting-item">
-                            <label>
-                                <input type="checkbox" id="vectorEnabled" data-setting="go-on.vector.enabled">
-                                Enable vector memory
-                            </label>
-                        </div>
-                        <div class="setting-item">
-                            <label for="healthInterval">Health Check Interval (seconds):</label>
-                            <input type="number" id="healthInterval" min="30" max="3600" data-setting="go-on.health.interval">
-                        </div>
-                    </div>
-
-                    <div class="setting-group">
-                        <h3>🎨 UI Settings</h3>
-                        <div class="setting-item">
-                            <label for="uiTheme">Theme:</label>
-                            <select id="uiTheme" data-setting="go-on.ui.theme">
-                                <option value="auto">Auto (Follow VS Code)</option>
-                                <option value="light">Light</option>
-                                <option value="dark">Dark</option>
-                            </select>
-                        </div>
-                        <div class="setting-item">
-                            <label for="fontSize">Font Size:</label>
-                            <input type="number" id="fontSize" min="8" max="24" data-setting="go-on.ui.fontSize">
-                        </div>
-                    </div>
-
-                    <div class="action-buttons">
-                        <button class="action-button" id="startGoOn">Start Go-On</button>
-                        <button class="action-button" id="stopGoOn">Stop Go-On</button>
-                        <button class="action-button" id="healthCheck">Health Check</button>
-                        <button class="action-button" id="healthProbes">Health Probes</button>
-                        <button class="action-button" id="lockStatus">Lock Status</button>
-                        <button class="action-button" id="observabilityAlerts">Observability Alerts</button>
-                        <button class="action-button" id="securityBaseline" data-feature="entry_auth,production_strict">Security Baseline</button>
-                        <button class="action-button" id="harnessStatus" data-feature="harness_bus">Harness Status</button>
-                        <button class="action-button" id="breakerStatus">Breaker Status</button>
-                        <button class="action-button" id="breakerRecovery">Breaker Recovery</button>
-                        <button class="action-button danger" id="clearCache" data-feature="response_cache">Clear Cache</button>
-                        <button class="action-button danger" id="clearVector" data-feature="vector_store">Clear Vector</button>
-                        <button class="action-button" id="reloadConfig">Reload Config</button>
-                        <button class="action-button" id="workflowExecute" data-feature="skills_enabled,skills_import">Workflow Execute</button>
-                        <button class="action-button" id="taskPlan">Task Plan</button>
-                        <button class="action-button" id="taskExecute">Task Execute</button>
-                        <button class="action-button" id="learningSummary">Learning Summary</button>
-                        <button class="action-button" id="learningGuardrail">Learning Guardrail</button>
-                        <button class="action-button" id="learningReplay">Learning Replay</button>
-                        <button class="action-button" id="knowledgeDistill">Knowledge Distill</button>
-                        <button class="action-button" id="rlAlignmentEval">RL Alignment Eval</button>
-                        <button class="action-button" id="hardnessStatus">Hardness Status</button>
-                        <button class="action-button" id="costStatus">Cost Status</button>
-                        <button class="action-button" id="configBaseline">Config Baseline</button>
-                        <button class="action-button" id="errorContract">Error Contract</button>
-                        <button class="action-button" id="buildRepro">Build Repro</button>
-                        <button class="action-button" id="dataLifecycle">Data Lifecycle</button>
-                        <button class="action-button" id="optimizationPeak">Optimization Peak</button>
-                        <button class="action-button" id="releaseReadiness">Release Readiness</button>
-                        <button class="action-button" id="runtimeStability">Runtime Stability</button>
-                        <button class="action-button" id="autotuneStatus" data-feature="autotune">Autotune Status</button>
-                        <button class="action-button" id="governanceStatus">Governance Status</button>
-                        <button class="action-button" id="governancePlanGet">Governance Plan</button>
-                        <button class="action-button" id="governanceAuditRecent">Governance Audit</button>
-                        <button class="action-button" id="debugPanelGet">Debug Panel</button>
-                        <button class="action-button" id="actionCheck">Action Check</button>
-                    </div>
-
-                    <div style="margin-top: 20px; padding: 10px; background: var(--vscode-textBlockQuote-background); border-left: 3px solid var(--vscode-textBlockQuote-border);">
-                        <strong>Status:</strong>
-                        <span class="status-indicator ${this.manager.isRunning() ? "connected" : "disconnected"}"></span>
-                        ${this.manager.isRunning() ? "Connected" : "Disconnected"}
-                    </div>
-
-                    <div class="setting-item" style="margin-top: 8px;">
-                        <label for="settingsActionOutput">Settings Action Output:</label>
-                        <textarea id="settingsActionOutput" rows="4" style="width: 100%;"></textarea>
-                    </div>
-                </div>
-                <script nonce="${nonce}" src="${scriptUri}"></script>
-            </body>
-            </html>`;
   }
 }

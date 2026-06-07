@@ -101,6 +101,28 @@ export interface GoOnConfig {
 }
 
 /**
+ * Type guard that verifies an unknown value conforms to the `GoOnConfig` interface.
+ * Checks runtime shape: required top-level keys and sub-object with `default_phase`.
+ * Does not deeply validate every field — just confirms the shape is plausible.
+ */
+export function isGoOnConfig(obj: unknown): obj is GoOnConfig {
+  if (typeof obj !== "object" || obj === null) return false;
+  const record = obj as Record<string, unknown>;
+  // Must have a string default_phase
+  if (typeof record.default_phase !== "string") return false;
+  // Must have a cache sub-object
+  if (typeof record.cache !== "object" || record.cache === null) return false;
+  // Must have a runtime sub-object
+  if (typeof record.runtime !== "object" || record.runtime === null)
+    return false;
+  // Must have an agents sub-object
+  if (typeof record.agents !== "object" || record.agents === null) return false;
+  // Must have a flow sub-object
+  if (typeof record.flow !== "object" || record.flow === null) return false;
+  return true;
+}
+
+/**
  * Normalize known boolean fields in the parsed config that may arrive as
  * strings from TOML (e.g. `"true"` / `"false"` instead of `true` / `false`).
  */
@@ -154,9 +176,11 @@ class ConfigManager {
     try {
       await fs.access(configPath);
       await this.loadFromFile(configPath);
-    } catch {
-      // File doesn't exist, create default
-      console.warn("configManager: Config file not found, creating default");
+    } catch (err) {
+      console.warn(
+        "configManager: Config file not found, creating default:",
+        err,
+      );
       this.createDefaultConfig();
     }
   }
@@ -170,8 +194,8 @@ class ConfigManager {
 
     try {
       await fs.mkdir(configDir, { recursive: true });
-    } catch {
-      // Return fallback path if directory creation fails
+    } catch (err) {
+      console.warn("[configManager] mkdir failed:", err);
       return path.join(homeDir, "config.toml");
     }
 
@@ -193,7 +217,8 @@ class ConfigManager {
         void vscode.window.showErrorMessage(`Go-On: ${message}`);
         this.createDefaultConfig();
       }
-    } catch {
+    } catch (err) {
+      console.warn("[configManager] loadFromFile failed:", err);
       this.createDefaultConfig();
     }
   }
@@ -232,7 +257,18 @@ class ConfigManager {
     // Normalize known string-to-boolean fields from TOML (which may parse as strings)
     normalizeBooleans(config);
 
-    return config as unknown as GoOnConfig;
+    // Use runtime type guard instead of raw `as unknown as GoOnConfig` cast.
+    // This provides type safety: if the parsed TOML is missing a required field,
+    // the guard catches it and falls back to defaults.
+    if (isGoOnConfig(config)) {
+      return config;
+    }
+    // eslint-disable-next-line no-console
+    console.warn(
+      "configManager: parsed TOML does not conform to GoOnConfig shape, using defaults",
+    );
+    this.createDefaultConfig();
+    return this.config as GoOnConfig;
   }
 
   /**

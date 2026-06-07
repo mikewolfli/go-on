@@ -34,4 +34,10 @@ export interface RuntimeManagerLike {
   /** Send a cancel notification to abort an in-flight streaming request. */
   sendCancelRequest?(): Promise<void>;
   setRuntimeEnvOverrides?(_overrides: Record<string, string>): void;
+  /**
+   * Trigger reconnection from external observer (e.g., StatusMonitor).
+   * Only initiates reconnection if the manager is not running.
+   * Does nothing if the manager is already running or shutting down.
+   */
+  triggerReconnectFromObserver?(): void;
 }

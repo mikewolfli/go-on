@@ -227,7 +227,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::sync::{Mutex as StdMutex, OnceLock};
 use std::time::{Instant, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -236,7 +236,6 @@ use base64::Engine;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::task::JoinSet;
 use tokio::time::Duration;
 use tracing::{debug, info};
 
@@ -265,7 +264,7 @@ use crate::acp::helpers::requirement::{
 use crate::flow_with_models::FlowModelSelector;
 use crate::governance::hardening::{
     enforce_action, policy_bundle_for_target, task_budget_for_target, AuditLogger,
-    AutonomousEditAuditEntry, BudgetTracker, GovernanceAction, Idempotency, IdempotencyCache,
+    AutonomousEditAuditEntry, BudgetTracker, GovernanceAction, IdempotencyCache,
 };
 use crate::i18n::runtime::{t, tf};
 use crate::memory_module::{MemoryClass, MemoryEntry, MemoryPromotionReport, MemoryStore};
@@ -284,8 +283,7 @@ use crate::reinforcement::{
     build_runtime_healthcheck_report, build_task_plan, build_workflow_generated_artifact,
     persist_clarification_session_artifact, persist_consultation_artifact,
     persist_execution_decision, persist_primary_secondary_failover_artifact,
-    persist_primary_secondary_policy_artifact, persist_requirement_contract,
-    persist_task_execution_summary, persist_task_graph_checkpoint, persist_task_plan,
+    persist_primary_secondary_policy_artifact, persist_requirement_contract, persist_task_plan,
     persist_workflow_generated, persist_workflow_learning_event, persist_workflow_research,
     recommend_agent_order_from_execution_history, recommend_failure_strategy_from_learning,
     recommend_parallelism_from_learning, recommend_predicted_success_rate_from_learning,
@@ -293,9 +291,8 @@ use crate::reinforcement::{
     CheckStatus, ClarificationSessionArtifact, ConsultationArtifact, ExecutionAssignmentRecord,
     ExecutionDecisionArtifact, ExecutionDecisionCandidate, KnowledgeBusArtifact,
     ParallelPhaseDecisionRecord, PrimaryFailoverReportItem, PrimarySecondaryFailoverArtifact,
-    PrimarySecondaryPolicyArtifact, RequirementContractArtifact, TaskExecutionMetrics,
-    TaskExecutionSummary, WorkflowGeneratedArtifact, WorkflowLearningBusArtifact,
-    WorkflowLearningEvent, WorkflowResearchArtifact,
+    PrimarySecondaryPolicyArtifact, RequirementContractArtifact, WorkflowGeneratedArtifact,
+    WorkflowLearningBusArtifact, WorkflowLearningEvent, WorkflowResearchArtifact,
 };
 use crate::tool::{ToolInput, ToolRegistry};
 use crate::vector::VectorStore;
@@ -335,6 +332,7 @@ pub(crate) use self::checkpoint_pack::persist_checkpoint_metacognitive_loop;
 use self::checkpoint_pack::*;
 use self::config_pack::*;
 use self::diagnostic_pack::*;
+#[allow(unused_imports)] // sub-modules re-export many items; parent only uses subset
 use self::exec_pack::*;
 pub use self::governance_pack::build_knowledge_refinement_profile;
 pub use self::governance_pack::build_learning_profile;
@@ -1591,8 +1589,13 @@ pub async fn handle_request(
                     .await
                 }
                 "task.execute" => {
-                    handle_task_execute(server, request.params.unwrap_or_default(), request_id)
-                        .await
+                    handle_task_execute(
+                        server,
+                        request.params.unwrap_or_default(),
+                        request_id,
+                        &trace,
+                    )
+                    .await
                 }
                 "learning.summary" => {
                     learning_pack::handle_learning_summary(
