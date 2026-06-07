@@ -12,7 +12,8 @@ const originalResolve = Module._resolveFilename;
 Module._resolveFilename = function (request, parent, ...args) {
   // Intercept the 'vscode' module and resolve to our mock
   if (request === "vscode") {
-    return path.resolve(__dirname, "..", "node_modules", "vscode-mock.js");
+    // Reuse this loaded setup module as the vscode shim source.
+    return __filename;
   }
   return originalResolve.call(this, request, parent, ...args);
 };

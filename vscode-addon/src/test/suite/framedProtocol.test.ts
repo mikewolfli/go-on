@@ -301,6 +301,7 @@ suite("framedProtocol", () => {
         '{"type":"fallback","value":1}\n',
       );
 
+      let completed = false;
       let msgReceived = false;
       const { stream } = makeStream(jsonData);
       const reader = new FramedReader(
@@ -308,6 +309,10 @@ suite("framedProtocol", () => {
         {
           onMessage: (msg) => {
             if (msg.type === "fallback" && msg.value === 1) {
+              if (completed) {
+                return;
+              }
+              completed = true;
               msgReceived = true;
               reader.abort();
               done();
@@ -318,6 +323,10 @@ suite("framedProtocol", () => {
       );
 
       setTimeout(() => {
+        if (completed) {
+          return;
+        }
+        completed = true;
         assert.strictEqual(
           msgReceived,
           true,

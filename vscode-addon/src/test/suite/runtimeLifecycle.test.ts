@@ -52,8 +52,7 @@ class LifecycleMachine {
       throw new Error("Cannot start while stopping");
     }
 
-    const promise = new Promise<void>((resolve, reject) => {
-      this._operationPromise = promise;
+    const promise = new Promise<void>((resolve) => {
       this.transitions.push({ from: this._state, action: "start", to: "starting" });
       this._state = "starting";
 
