@@ -22,6 +22,7 @@ impl CrashRecovery {
     }
 
     /// Record a backend crash event.
+    #[allow(dead_code)]
     pub fn record_crash(&mut self) {
         self.backend_crash_time = Some(Instant::now());
         self.backend_crash_count = self.backend_crash_count.saturating_add(1);

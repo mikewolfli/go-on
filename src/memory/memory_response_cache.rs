@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use tokio::sync::Mutex;
+use std::sync::Mutex;
 
 use crate::acp::prelude::now_ts;
 
@@ -17,7 +17,7 @@ pub struct MemoryResponseCache {
 impl MemoryResponseCache {
     pub(crate) fn get(&self, key: &str) -> Option<MemoryCachedResponse> {
         let now = now_ts();
-        let mut guard = self.inner.blocking_lock();
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         // Only evict the requested key if expired; bulk cleanup happens in purge_expired().
         if let Some(entry) = guard.get(key) {
             if entry.expires_at <= now {
@@ -31,14 +31,14 @@ impl MemoryResponseCache {
 
     pub(crate) fn purge_expired(&self) -> usize {
         let now = now_ts();
-        let mut guard = self.inner.blocking_lock();
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let before = guard.len();
         guard.retain(|_, entry| entry.expires_at > now);
         before.saturating_sub(guard.len())
     }
 
     pub(crate) fn clear_all(&self) -> usize {
-        let mut guard = self.inner.blocking_lock();
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let removed = guard.len();
         guard.clear();
         removed
@@ -46,7 +46,7 @@ impl MemoryResponseCache {
 
     pub(crate) fn active_entries(&self) -> usize {
         self.purge_expired();
-        self.inner.blocking_lock().len()
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 
     pub(crate) fn put(
@@ -61,7 +61,7 @@ impl MemoryResponseCache {
         }
 
         let expires_at = now_ts() + ttl_seconds as i64;
-        let mut guard = self.inner.blocking_lock();
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         guard.insert(
             key,
             MemoryCachedResponse {

@@ -43,7 +43,7 @@ pub(crate) struct RuntimeExecutionContext {
         Arc<std::sync::Mutex<crate::governance::runtime_controls::OnlineControllerState>>,
     pub(super) failure_prevention: Arc<std::sync::Mutex<FailurePrevention>>,
     pub(super) metrics: Arc<RuntimeMetrics>,
-    pub(super) memory_store: Arc<tokio::sync::Mutex<MemoryStore>>,
+    pub(super) memory_store: Arc<std::sync::Mutex<MemoryStore>>,
     pub(super) lazy_policy: super::LazyLoadPolicy,
     pub(super) adaptive_defaults: super::AdaptiveExecutionDefaults,
     pub(super) artifact_ledger: ArtifactLedger,
@@ -611,7 +611,10 @@ pub(crate) async fn execute_runtime_subtasks(
     let mut memory_artifact_path = None;
     if context.lazy_policy.enable_memory_policy {
         let promotion = {
-            let mut store = context.memory_store.blocking_lock();
+            let mut store = context.memory_store.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("memory store mutex poisoned during execute_runtime_subtasks");
+                poisoned.into_inner()
+            });
             for (index, content) in memory_snapshots.iter().enumerate() {
                 let class = if content.contains("tool:") {
                     MemoryClass::Observation

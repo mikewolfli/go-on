@@ -99,12 +99,13 @@ pub fn global_method_router() -> &'static Mutex<MethodRouter> {
 }
 
 /// Convenience: register a handler on the global router at startup.
+///
+/// This function is async because `GLOBAL_ROUTER` uses `tokio::sync::Mutex`
+/// for compatibility with async dispatch in the hot path.
 #[allow(dead_code)] // F-GAP reserved
-pub fn register_method_handler(method: &'static str, handler: Box<dyn MethodHandler>) {
+pub async fn register_method_handler(method: &'static str, handler: Box<dyn MethodHandler>) {
     let router = GLOBAL_ROUTER.get_or_init(|| Mutex::new(MethodRouter::new()));
-    // blocking_lock is safe here because this is only called during
-    // single-threaded startup, before any async dispatch happens.
-    router.blocking_lock().register(method, handler);
+    router.lock().await.register(method, handler);
     // Register on the static table as well so that `is_acp_request`
     // continues to recognise the method.
     register_acp_method(method);

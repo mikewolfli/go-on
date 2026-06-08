@@ -6,6 +6,7 @@
 use super::super::*;
 
 /// Render the attachments bar showing current file attachments.
+#[allow(dead_code)]
 pub fn render_attachments(chat: &mut ChatView, ui: &mut egui::Ui) {
     if !chat.attachments.is_empty() {
         ui.horizontal(|ui| {
@@ -28,7 +29,8 @@ pub fn render_attachments(chat: &mut ChatView, ui: &mut egui::Ui) {
 }
 
 /// Handle file dialog button for adding attachments.
-pub fn handle_attach_button(chat: &mut ChatView, ui: &mut egui::Ui) {
+#[allow(dead_code)]
+pub fn handle_attach_button(chat: &mut ChatView, _ui: &mut egui::Ui) {
     if let Some(files) = rfd::FileDialog::new().pick_files() {
         for f in files {
             let n = f
@@ -47,7 +49,8 @@ pub fn handle_attach_button(chat: &mut ChatView, ui: &mut egui::Ui) {
 }
 
 /// Handle external editor button: writes input to temp file and opens editor.
-pub fn handle_external_editor(chat: &mut ChatView, ui: &mut egui::Ui) {
+#[allow(dead_code)]
+pub fn handle_external_editor(chat: &mut ChatView, _ui: &mut egui::Ui) {
     let p = std::env::temp_dir().join("go_on_chat_input.txt");
     if let Err(e) = std::fs::write(&p, &chat.input) {
         chat.error = format!("Failed to write temp file for external editor: {e}");

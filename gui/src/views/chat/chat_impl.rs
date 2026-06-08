@@ -137,6 +137,7 @@ pub struct ChatView {
     /// Key = message index, value = whether full text is shown.
     expand_full_text: std::collections::HashSet<usize>,
     /// SSE JSON parse error counter for the current stream.
+    #[allow(dead_code)]
     sse_parse_errors: u32,
     /// Shared abort controller for cancelling in-progress streaming generations.
     abort_controller: Option<AbortController>,

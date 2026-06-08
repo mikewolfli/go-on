@@ -110,12 +110,14 @@ fn extract_additional_directories(params: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn session_state_for_prompt(params: &Value) -> AcpSessionState {
+async fn session_state_for_prompt(params: &Value) -> AcpSessionState {
     let session_id = params.get("sessionId").and_then(Value::as_str);
-    let stored = session_id.and_then(|session_id| {
-        let state = acp_session_state().blocking_lock();
+    let stored = if let Some(session_id) = session_id {
+        let state = acp_session_state().lock().await;
         state.get(session_id).cloned()
-    });
+    } else {
+        None
+    };
 
     let mut state = stored.unwrap_or_default();
     if let Some(cwd) = params.get("cwd").and_then(Value::as_str) {
@@ -451,7 +453,7 @@ pub(super) async fn handle_session_prompt(
     use crate::acp::r#impl::chat::{process_chat_request, ChatParams};
     use crate::rpc_protocol::chat_trace_context;
 
-    let session_state = session_state_for_prompt(&params);
+    let session_state = session_state_for_prompt(&params).await;
 
     // Extract sessionId before params is consumed by build_chat_params_from_acp
     let session_id_for_notification = params

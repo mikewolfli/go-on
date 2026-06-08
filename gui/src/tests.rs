@@ -17,8 +17,8 @@ mod unit_tests {
         assert_eq!(cfg.language, "en");
         // Default theme (Chinese display name)
         assert_eq!(cfg.theme, "简约");
-        // Default protocol mode
-        assert_eq!(cfg.protocol_mode, "acp_http");
+        // Default protocol mode — uses auto-detection by default
+        assert_eq!(cfg.protocol_mode, "adaptive");
     }
 
     #[test]

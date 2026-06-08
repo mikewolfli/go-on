@@ -16,7 +16,7 @@ impl ChatView {
         copy_code_hint: &str,
         enable_markdown: bool,
         text_color: egui::Color32,
-        truncation_hint: &str,
+        _truncation_hint: &str,
     ) {
         if CHAT_DISABLE_MARKDOWN_RENDER || !enable_markdown {
             ui.label(egui::RichText::new(Self::markdown_to_plain_text(text)).color(text_color));

@@ -8,6 +8,7 @@
 /// Provider names for the dropdown (36 total, matching built_in_provider_specs())
 /// This is the CANONICAL source of provider names used throughout the codebase.
 /// Keep in sync with `src/core/config.rs` built_in_provider_specs().
+#[allow(dead_code)]
 pub const PROVIDER_NAMES: &[&str] = &[
     // OpenAI Family (4)
     "openai",
@@ -52,6 +53,7 @@ pub const PROVIDER_NAMES: &[&str] = &[
 
 /// Model suggestions per provider (GUI-side hardcoded).
 /// These match the model IDs returned by backend agents' `available_models()`.
+#[allow(dead_code)]
 pub(crate) fn models_for_provider(provider: &str) -> &'static [&'static str] {
     match provider.to_lowercase().as_str() {
         "deepseek" => &[

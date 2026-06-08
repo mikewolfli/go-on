@@ -665,7 +665,9 @@ pub fn new_acp_server(
                     )),
                 },
                 persistence: PersistenceContext {
-                    memory_store: Arc::new(Mutex::new(MemoryStore::new(MemoryPolicy::default()))),
+                    memory_store: Arc::new(StdMutex::new(
+                        MemoryStore::new(MemoryPolicy::default()),
+                    )),
                     artifact_ledger: Arc::new(StdMutex::new(ArtifactLedger::new(
                         config_path.as_deref().map(Path::new),
                     ))),

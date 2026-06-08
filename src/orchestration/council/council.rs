@@ -2221,6 +2221,7 @@ mod tests {
             if let Some(r) = rep.get_mut("high-acc") {
                 r.record_outcome(true);
             }
+            drop(rep);
             council.ensure_reputation("low-acc");
             let mut rep = council.reputation.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("lock poisoned, recovering");
@@ -2229,6 +2230,7 @@ mod tests {
             if let Some(r) = rep.get_mut("low-acc") {
                 r.record_outcome(false);
             }
+            drop(rep);
         }
 
         // Submit proposal

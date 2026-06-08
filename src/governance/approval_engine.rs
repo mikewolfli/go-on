@@ -476,6 +476,7 @@ impl ApprovalEngine {
         self.queue.push(request.clone());
 
         // Persist to SQLite if configured.
+        #[allow(unused_variables)]
         if let Some(ref db_path) = self.db_path {
             #[cfg(feature = "backend-sqlite")]
             if let Err(e) = Self::upsert_sqlite(db_path, &request) {
@@ -523,9 +524,10 @@ impl ApprovalEngine {
         self.feedback_to_learner(&status);
 
         // Update SQLite if configured.
-        if let Some(ref db_path) = self.db_path {
+        #[allow(unused_variables)]
+        if let Some(ref _db_path) = self.db_path {
             #[cfg(feature = "backend-sqlite")]
-            if let Err(e) = Self::update_status_sqlite(db_path, &status) {
+            if let Err(e) = Self::update_status_sqlite(_db_path, &status) {
                 tracing::warn!(error = %e, id = %id, "Failed to update approval in SQLite");
             }
         }
@@ -563,9 +565,10 @@ impl ApprovalEngine {
         self.feedback_to_learner(&request_clone);
 
         // Update SQLite if configured.
-        if let Some(ref db_path) = self.db_path {
+        #[allow(unused_variables)]
+        if let Some(ref _db_path) = self.db_path {
             #[cfg(feature = "backend-sqlite")]
-            if let Err(e) = Self::update_status_sqlite(db_path, &request_clone) {
+            if let Err(e) = Self::update_status_sqlite(_db_path, &request_clone) {
                 tracing::warn!(error = %e, id = %id, "Failed to update rejection in SQLite");
             }
         }
@@ -673,15 +676,17 @@ impl ApprovalEngine {
         {
             let db_path = self.db_path.clone();
             std::thread::scope(|scope| {
-                for req in &snapshots {
+                #[allow(unused_variables)]
+                for _req in &snapshots {
                     // Persist to SQLite concurrently per request.
-                    if let Some(ref db_path) = db_path {
+                    #[allow(unused_variables)]
+                    if let Some(ref _db_path) = db_path {
                         scope.spawn(|| {
                             #[cfg(feature = "backend-sqlite")]
-                            if let Err(e) = Self::update_status_sqlite(db_path, req) {
+                            if let Err(e) = Self::update_status_sqlite(_db_path, _req) {
                                 tracing::warn!(
                                     error = %e,
-                                    id = %req.id,
+                                    id = %_req.id,
                                     "Failed to persist timeout status to SQLite"
                                 );
                             }
@@ -748,11 +753,13 @@ impl ApprovalEngine {
         }
 
         // Remove from SQLite if configured.
-        if let Some(ref db_path) = self.db_path {
-            for id in &old_ids {
+        #[allow(unused_variables)]
+        if let Some(ref _db_path) = self.db_path {
+            #[allow(unused_variables)]
+            for _id in &old_ids {
                 #[cfg(feature = "backend-sqlite")]
-                if let Err(e) = Self::delete_from_sqlite(db_path, id) {
-                    tracing::warn!(error = %e, id = %id, "Failed to remove purged approval from SQLite");
+                if let Err(e) = Self::delete_from_sqlite(_db_path, _id) {
+                    tracing::warn!(error = %e, id = %_id, "Failed to remove purged approval from SQLite");
                 }
             }
         }

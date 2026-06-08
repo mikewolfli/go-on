@@ -27,6 +27,7 @@ pub fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
 }
 
 /// Save with backup: copy existing file to `.bak` before atomic write.
+#[allow(dead_code)]
 pub fn save_with_backup(path: &Path, content: &str) -> std::io::Result<()> {
     if path.exists() {
         let bak_path = path.with_extension("json.bak");

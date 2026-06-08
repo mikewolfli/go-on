@@ -910,6 +910,9 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// Create a test agent in a sync context.
+    /// Uses `block_on` since `SelfEvolutionAgent::new` is async and
+    /// this factory is called from `#[test]` (non-async) contexts.
     fn create_test_agent() -> (SelfEvolutionAgent, TempDir) {
         let tmp_dir = TempDir::new().unwrap();
         let project_root = tmp_dir.path().to_path_buf();
@@ -926,6 +929,26 @@ mod tests {
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         let agent = rt.block_on(SelfEvolutionAgent::new(project_root.clone(), models));
+        (agent, tmp_dir)
+    }
+
+    /// Create a test agent in an async context (for `#[tokio::test]`).
+    /// Avoids nested runtime creation that would panic in async contexts.
+    async fn create_test_agent_async() -> (SelfEvolutionAgent, TempDir) {
+        let tmp_dir = TempDir::new().unwrap();
+        let project_root = tmp_dir.path().to_path_buf();
+        let models = vec![ModelCharacteristics {
+            id: "test-model".to_string(),
+            cost_per_request_cents: 1,
+            latency_ms: 100,
+            capability_tier: 3,
+            supports_vision: false,
+            supports_function_calling: true,
+            excels_at_code: true,
+            context_window: 8192,
+        }];
+
+        let agent = SelfEvolutionAgent::new(project_root.clone(), models).await;
         (agent, tmp_dir)
     }
 
@@ -952,17 +975,15 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // requires real file system interaction
     async fn test_analyze_code_file_not_found() {
-        let (agent, _tmp_dir) = create_test_agent();
+        let (agent, _tmp_dir) = create_test_agent_async().await;
         let result = agent.analyze_code("nonexistent.rs").await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
-    #[ignore] // requires real file system interaction
     async fn test_analyze_code_rust_file() {
-        let (agent, tmp_dir) = create_test_agent();
+        let (agent, tmp_dir) = create_test_agent_async().await;
         let test_file = tmp_dir.path().join("test.rs");
         fs::write(
             &test_file,
@@ -980,18 +1001,16 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // requires LLM integration
     async fn test_generate_patch_empty_instruction() {
-        let (agent, _tmp_dir) = create_test_agent();
+        let (agent, _tmp_dir) = create_test_agent_async().await;
         let report = Report::new("test.rs".to_string());
         let result = agent.generate_patch(&report, "").await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
-    #[ignore] // requires LLM integration
     async fn test_assess_risk_critical_paths() {
-        let (agent, _tmp_dir) = create_test_agent();
+        let (agent, _tmp_dir) = create_test_agent_async().await;
         let patch = CodePatch::new(
             "src/security/auth.rs".to_string(),
             vec![],
@@ -1002,9 +1021,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // requires LLM integration
     async fn test_assess_risk_high_paths() {
-        let (agent, _tmp_dir) = create_test_agent();
+        let (agent, _tmp_dir) = create_test_agent_async().await;
         let patch = CodePatch::new(
             "src/core/mod.rs".to_string(),
             vec![],
@@ -1015,9 +1033,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // requires LLM integration
     async fn test_assess_risk_low_paths() {
-        let (agent, _tmp_dir) = create_test_agent();
+        let (agent, _tmp_dir) = create_test_agent_async().await;
         let patch = CodePatch::new(
             "src/agents/test.rs".to_string(),
             vec![],
@@ -1028,21 +1045,23 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // requires LLM integration
     async fn test_assess_risk_medium_for_unsafe() {
-        let (_agent, _tmp_dir) = create_test_agent();
+        let (agent, _tmp_dir) = create_test_agent_async().await;
+        // Create a patch where the diff contains "unsafe" by providing original
+        // and patched lines that produce a diff hunk with the unsafe keyword.
         let patch = CodePatch::new(
             "src/test.rs".to_string(),
-            vec![],
-            vec![],
-            "uses unsafe block".to_string(),
+            vec![(1, "fn foo() {}".to_string())],
+            vec![(1, "unsafe fn foo() {}".to_string())],
+            "added unsafe".to_string(),
         );
-        // Make the diff contain "unsafe" keyword
-        let _ = &patch;
-        // A real patch with unsafe in diff would be medium
-        // Our assess_risk checks diff text — for a patch with empty original/patched,
-        // the diff won't contain "unsafe", so this would be Low.
-        // Skip the diff-specific check in this test.
+        assert!(
+            patch.diff.contains("unsafe"),
+            "diff should contain 'unsafe' keyword: {} \n {}",
+            patch.diff,
+            "CodePatch should produce diff with unsafe in it"
+        );
+        assert_eq!(agent.assess_risk(&patch), RiskLevel::Medium);
     }
 
     #[test]
@@ -1091,22 +1110,22 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // requires LLM integration
     fn test_resolve_errors_unused_variable() {
         let (agent, _tmp_dir) = create_test_agent();
         let content = "fn main() {\n    let x = 42;\n}";
-        let errors = vec!["warning: unused variable `x`".to_string()];
+        // Use a Rust compiler-style error message with proper line number format
+        let errors = vec!["warning: unused variable `x`\n --> src/main.rs:2:1".to_string()];
         let (lines, fixes) = agent.resolve_errors(content, &errors);
         assert!(fixes > 0);
         assert!(lines.iter().any(|(_, l)| l.contains("_x")));
     }
 
     #[test]
-    #[ignore] // requires LLM integration
     fn test_resolve_errors_missing_semicolon() {
         let (agent, _tmp_dir) = create_test_agent();
         let content = "fn main() {\n    let x = 42\n}";
-        let errors = vec!["error: expected `;`".to_string()];
+        // Use a Rust compiler-style error message with proper line number format
+        let errors = vec!["error: expected `;`\n --> src/main.rs:2:1".to_string()];
         let (lines, fixes) = agent.resolve_errors(content, &errors);
         assert!(fixes > 0);
         assert!(lines.iter().any(|(_, l)| l.ends_with(';')));

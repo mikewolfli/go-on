@@ -72,7 +72,14 @@ pub(crate) async fn persist_chat_knowledge(
     })
     .to_string();
 
-    let mut store = server.persistence.memory_store.blocking_lock();
+    let mut store = server
+        .persistence
+        .memory_store
+        .lock()
+        .unwrap_or_else(|poisoned| {
+            tracing::warn!("memory store mutex poisoned during persist_chat_knowledge");
+            poisoned.into_inner()
+        });
     store.store(MemoryEntry {
         id: format!(
             "knowledge-{}-{}",

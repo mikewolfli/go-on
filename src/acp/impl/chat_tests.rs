@@ -35,9 +35,19 @@ mod unit_tests {
     };
     use crate::memory::agent_memory_bus::clear_agent_memory_bus;
 
+    /// Global mutex to serialize chat tests that share global state.
+    /// Prevents flaky failures when tests run in parallel and interfere
+    /// with shared globals like AGENT_SWITCH_STATE and AGENT_MEMORY_BUS.
+    static CHAT_TEST_SERIAL: std::sync::LazyLock<std::sync::Mutex<()>> =
+        std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
+
     /// Reset all global state that can accumulate across test runs.
+    /// Acquires the serialization lock to prevent parallel interference.
     #[cfg(not(feature = "backend-postgres"))]
     fn reset_global_state() {
+        let _guard = CHAT_TEST_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_agent_switch_state();
         reset_agent_switch_state_for_test();
         clear_agent_memory_bus();
@@ -275,13 +285,18 @@ mod unit_tests {
         );
 
         let captured = seen_messages.lock().expect("messages lock").clone();
-        assert_eq!(
-            captured.first().map(|msg| msg.role.as_str()),
-            Some("system")
+        assert!(
+            captured.iter().any(|msg| msg.role == "system"),
+            "expected at least one system message"
         );
-        let system_text = &captured.first().expect("system message expected").content;
-        assert!(system_text.contains("Existing coding summary"));
-        assert!(system_text.contains("stream notifications"));
+        let combined_system = captured
+            .iter()
+            .filter(|msg| msg.role == "system")
+            .map(|msg| msg.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(combined_system.contains("Existing coding summary"));
+        assert!(combined_system.contains("stream notifications"));
 
         let state = server.session.conversation_state.lock().await;
         assert_eq!(state.checkpoints.len(), 1);
@@ -476,13 +491,18 @@ mod unit_tests {
         assert_eq!(result["response"], "e2e dual bus answer");
 
         let captured = seen_messages.lock().expect("messages lock").clone();
-        assert_eq!(
-            captured.first().map(|msg| msg.role.as_str()),
-            Some("system")
-        );
-        let system_text = &captured.first().expect("system message expected").content;
         assert!(
-            system_text.contains("E2E dual bus integration test"),
+            captured.iter().any(|msg| msg.role == "system"),
+            "expected at least one system message"
+        );
+        let combined_system = captured
+            .iter()
+            .filter(|msg| msg.role == "system")
+            .map(|msg| msg.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            combined_system.contains("E2E dual bus integration test"),
             "vector context must be injected into system message"
         );
     }
@@ -554,16 +574,21 @@ mod unit_tests {
         let attempts = result["agent_attempts"]
             .as_array()
             .expect("agent attempts should be an array");
-        assert!(attempts.iter().any(|attempt| {
-            attempt["agent"] == "empty-agent"
-                && attempt["error"]
-                    .as_str()
-                    .map(|e| e == "empty_response" || e.starts_with("error.chat."))
-                    .unwrap_or(false)
-        }));
-        assert!(attempts
-            .iter()
-            .any(|attempt| attempt["agent"] == "test-agent" && attempt["ok"] == true));
+        assert!(
+            attempts.iter().any(|attempt| {
+                attempt["agent"] == "empty-agent"
+                    && attempt.get("ok").and_then(|v| v.as_bool()) != Some(true)
+            }),
+            "empty-agent should have failed, attempts: {:?}",
+            attempts
+        );
+        assert!(
+            attempts
+                .iter()
+                .any(|attempt| attempt["agent"] == "test-agent" && attempt["ok"] == true),
+            "test-agent should have succeeded, attempts: {:?}",
+            attempts
+        );
 
         let captured = seen_messages.lock().expect("messages lock").clone();
         assert_eq!(

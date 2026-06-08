@@ -482,18 +482,20 @@ impl AudioProcessor {
             .collect::<Vec<_>>()
             .join(" ");
 
+        let confidence = if text.is_empty() { 0.0 } else { 0.2 };
+        let num_segments = segments.len();
         Ok(Transcription {
             text,
             segments,
             language,
-            confidence: Some(if text.is_empty() { 0.0 } else { 0.2 }),
+            confidence: Some(confidence),
             processing_duration: Duration::from_secs_f64(duration_sec.max(1.0)),
             metadata: {
                 let mut m = HashMap::new();
                 m.insert("feature".to_string(), "audio-whisper-openai".to_string());
                 m.insert("model_path".to_string(), model_path.clone());
                 m.insert("sample_count".to_string(), samples.len().to_string());
-                m.insert("num_segments".to_string(), segments.len().to_string());
+                m.insert("num_segments".to_string(), num_segments.to_string());
                 m.insert("duration_sec".to_string(), format!("{:.1}", duration_sec));
                 m
             },
@@ -566,6 +568,7 @@ impl AudioProcessor {
             });
         }
 
+        let num_segments = segments.len();
         Ok(Transcription {
             text: String::new(),
             segments,
@@ -577,7 +580,7 @@ impl AudioProcessor {
                 m.insert("feature".to_string(), "audio-vosk".to_string());
                 m.insert("model_path".to_string(), model_path.clone());
                 m.insert("audio_bytes".to_string(), audio.len().to_string());
-                m.insert("num_segments".to_string(), segments.len().to_string());
+                m.insert("num_segments".to_string(), num_segments.to_string());
                 m.insert("duration_sec".to_string(), format!("{:.1}", duration_sec));
                 m
             },

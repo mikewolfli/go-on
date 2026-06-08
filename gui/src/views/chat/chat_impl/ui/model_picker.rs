@@ -7,7 +7,8 @@ use super::super::*;
 
 /// Render a model picker combo box showing the currently selected model.
 /// Returns true if the selection changed.
-pub fn render_model_picker(chat: &mut ChatView, ui: &mut egui::Ui, i18n: &I18n) -> bool {
+#[allow(dead_code)]
+pub fn render_model_picker(chat: &mut ChatView, ui: &mut egui::Ui, _i18n: &I18n) -> bool {
     let prev_model = chat.selected_model.clone();
 
     let agent_keys: Vec<String> = chat.available_agent_models.keys().cloned().collect();

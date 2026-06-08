@@ -407,7 +407,7 @@ pub struct RegistryContext {
 /// No `.await` points inside any locked scope.
 pub struct PersistenceContext {
     /// Cross-request memory policy store
-    pub memory_store: Arc<Mutex<MemoryStore>>,
+    pub memory_store: Arc<StdMutex<MemoryStore>>,
     /// Artifact ledger
     pub artifact_ledger: Arc<StdMutex<ArtifactLedger>>,
     /// Persistent task graph store for checkpoints and recovery
@@ -1098,7 +1098,7 @@ impl ServerBuilder {
         let memory_response_cache = Arc::new(StdMutex::new(
             self.memory_response_cache.unwrap_or_default(),
         ));
-        let memory_store = Arc::new(Mutex::new(MemoryStore::new(MemoryPolicy::default())));
+        let memory_store = Arc::new(StdMutex::new(MemoryStore::new(MemoryPolicy::default())));
 
         // Initialize skill registry with disk-persisted prompt-based skills
         let mut registry = SkillRegistry::default();

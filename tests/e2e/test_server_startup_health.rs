@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 
 use go_on::config::{
-    AgentConfig, AppConfig, CacheConfig, FlowConfig, PhaseConfig, PhaseOptions, RuntimeConfig,
-    VectorConfig,
+    AgentConfig, AppConfig, CacheConfig, FeatureConfig, FlowConfig, PhaseConfig, PhaseOptions,
+    ProviderConfig, RuntimeConfig, SecurityConfig, VectorConfig,
 };
 use go_on::governance::rbac::{Permission, Principal, RbacEnforcer};
 use go_on::orchestration::distributed::dag_coordinator::{
@@ -74,8 +74,16 @@ fn minimal_test_config() -> AppConfig {
 
     AppConfig {
         schema_version: "1.0.0".to_string(),
-        default_phase: "planning".to_string(),
-        agents,
+        provider: ProviderConfig {
+            default_phase: "planning".to_string(),
+            agents,
+            role_registry: HashMap::new(),
+        },
+        security: SecurityConfig::default(),
+        feature: FeatureConfig {
+            model_selection_mode: "adaptive".to_string(),
+            ..FeatureConfig::default()
+        },
         flow: FlowConfig {
             name: "test-flow".to_string(),
             phases: vec!["planning".to_string()],
@@ -110,12 +118,10 @@ fn minimal_test_config() -> AppConfig {
             summary_max_chars: 1200,
         }),
         autotune: None,
-        model_selection_mode: "adaptive".to_string(),
         compliance: None,
         startup_context: None,
         scheduler: None,
         reputation: None,
-        role_registry: HashMap::new(),
     }
 }
 
@@ -129,7 +135,7 @@ async fn test_server_config_validation_and_health() {
     let config = minimal_test_config();
     assert_eq!(config.schema_version, "1.0.0");
     assert_eq!(config.flow.name, "test-flow");
-    assert!(!config.agents.is_empty());
+    assert!(!config.provider.agents.is_empty());
     assert_eq!(config.flow.phases.len(), 1);
 
     // ── 2. Config validation ────────────────────────────────────────────

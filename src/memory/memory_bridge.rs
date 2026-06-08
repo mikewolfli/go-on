@@ -20,8 +20,8 @@
 //! `MemoryPersistence::auto_migrate()` every 5 minutes.
 
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
-use tokio::sync::Mutex;
 
 use tokio_util::sync::CancellationToken;
 
@@ -157,7 +157,10 @@ pub fn bridge_store(
     entry: CanonicalEntry,
 ) -> anyhow::Result<()> {
     // Step 1: in-memory store
-    let mut store = memory_store.blocking_lock();
+    let mut store = memory_store.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("memory bridge mutex poisoned during store");
+        poisoned.into_inner()
+    });
     store.store(entry.clone());
 
     // Step 2: persistence (conversion via `From` impl)
@@ -183,7 +186,10 @@ pub fn bridge_promote(
 ) -> anyhow::Result<MemoryPromotionReport> {
     // Step 1: promote in-memory classes
     let report = {
-        let mut store = memory_store.blocking_lock();
+        let mut store = memory_store.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("memory bridge mutex poisoned during promote");
+            poisoned.into_inner()
+        });
         store.promote()
     };
 

@@ -624,11 +624,13 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let _guard = rt.enter();
         let bus = make_bus();
-        let mut reg = bus.tool_registry.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        reg.register(LogicalFailureTool);
+        {
+            let mut reg = bus.tool_registry.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            reg.register(LogicalFailureTool);
+        }
 
         let input = ToolInput {
             task_id: "test-003".to_string(),

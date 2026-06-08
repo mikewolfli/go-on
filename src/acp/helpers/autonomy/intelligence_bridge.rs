@@ -182,6 +182,12 @@ pub struct IntelligenceContext {
 /// Queries EvolutionGraph for agent recommendations and builds an
 /// intelligence context that can be injected into planning/execution.
 pub fn gather_intelligence_context(task_objective: &str) -> IntelligenceContext {
+    // For empty task objectives, return a fully inactive default context immediately.
+    // No intelligence module should be queried when there is no task to guide the query.
+    if task_objective.trim().is_empty() {
+        return IntelligenceContext::default();
+    }
+
     let mut ctx = IntelligenceContext::default();
 
     // Query EvolutionGraph for agent recommendations
@@ -198,34 +204,30 @@ pub fn gather_intelligence_context(task_objective: &str) -> IntelligenceContext 
     }
 
     // Generate insights based on task objective analysis
-    if !task_objective.is_empty() {
-        let objective_lower = task_objective.to_ascii_lowercase();
+    let objective_lower = task_objective.to_ascii_lowercase();
 
-        if objective_lower.contains("refactor") {
-            ctx.recent_insights.push(
-                "Refactoring tasks benefit from multi-step planning with verification rounds"
-                    .to_string(),
-            );
-        }
-        if objective_lower.contains("bug") || objective_lower.contains("fix") {
-            ctx.recent_insights.push(
-                "Bug-fix tasks should include diagnosis step before implementation".to_string(),
-            );
-        }
-        if objective_lower.contains("test") {
-            ctx.recent_insights
-                .push("Testing tasks should verify edge cases and regression coverage".to_string());
-        }
-        if objective_lower.contains("deploy") || objective_lower.contains("release") {
-            ctx.recent_insights.push(
-                "Deployment tasks benefit from staged rollout and rollback planning".to_string(),
-            );
-        }
+    if objective_lower.contains("refactor") {
+        ctx.recent_insights.push(
+            "Refactoring tasks benefit from multi-step planning with verification rounds"
+                .to_string(),
+        );
+    }
+    if objective_lower.contains("bug") || objective_lower.contains("fix") {
+        ctx.recent_insights
+            .push("Bug-fix tasks should include diagnosis step before implementation".to_string());
+    }
+    if objective_lower.contains("test") {
+        ctx.recent_insights
+            .push("Testing tasks should verify edge cases and regression coverage".to_string());
+    }
+    if objective_lower.contains("deploy") || objective_lower.contains("release") {
+        ctx.recent_insights
+            .push("Deployment tasks benefit from staged rollout and rollback planning".to_string());
+    }
 
-        if !ctx.recent_insights.is_empty() {
-            ctx.intelligence_active = true;
-            CL_INSIGHTS_APPLIED.fetch_add(ctx.recent_insights.len() as u64, Ordering::Relaxed);
-        }
+    if !ctx.recent_insights.is_empty() {
+        ctx.intelligence_active = true;
+        CL_INSIGHTS_APPLIED.fetch_add(ctx.recent_insights.len() as u64, Ordering::Relaxed);
     }
 
     ctx

@@ -25,12 +25,7 @@ pub fn log_msg(msg: &str) {
 use crate::i18n::{I18n, Lang};
 use crate::keyring_util::REDACTED_API_KEY;
 use crate::views::chat::ChatUiRuntimeConfig;
-use crate::views::{
-    about::AboutView, autotune::AutoTuneView, chat::ChatView, config_editor::ConfigEditorView,
-    monitor::MonitorView, prompts::PromptsView, providers::ProvidersView,
-    risk_decision::RiskDecisionView, security::SecurityView, settings::SettingsView,
-    setup::SetupView, skills::SkillsView, workflow::WorkflowView,
-};
+use crate::views::settings::SettingsView;
 use std::hash::{Hash, Hasher};
 
 use std::time::Duration;

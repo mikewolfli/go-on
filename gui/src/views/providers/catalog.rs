@@ -12,7 +12,6 @@
 
 use crate::backend::BackendClient;
 use serde_json::Value;
-use std::sync::OnceLock;
 
 /// Provider metadata: agent type, default URL, default model, supports system prompt.
 pub struct ProviderSpec {
@@ -67,6 +66,7 @@ pub fn built_in_provider_specs(name: &str) -> ProviderSpec {
 
 /// Fetch provider catalog from the backend asynchronously.
 /// Returns `None` if backend is unreachable.
+#[allow(dead_code)]
 pub async fn fetch_catalog(backend: &BackendClient) -> Option<Value> {
     match tokio::time::timeout(
         std::time::Duration::from_secs(5),

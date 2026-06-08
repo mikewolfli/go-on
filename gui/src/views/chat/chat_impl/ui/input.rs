@@ -8,6 +8,7 @@ use super::super::*;
 use super::model_picker;
 
 /// Render the mode selection row (ask/plan/edit/safeguard/full_auto).
+#[allow(dead_code)]
 pub fn render_mode_row(chat: &mut ChatView, ui: &mut egui::Ui, i18n: &I18n) {
     let dark = ui.visuals().dark_mode;
     let bg = if dark {
@@ -59,6 +60,7 @@ pub fn render_mode_row(chat: &mut ChatView, ui: &mut egui::Ui, i18n: &I18n) {
 }
 
 /// Map mode ID to its i18n key for display.
+#[allow(dead_code)]
 pub fn mode_display_key(mode_id: &str) -> String {
     match mode_id {
         "ask" => "mode.ask".to_string(),
@@ -71,6 +73,7 @@ pub fn mode_display_key(mode_id: &str) -> String {
 }
 
 /// Render the send/stop button.
+#[allow(dead_code)]
 pub fn render_send_button(
     chat: &mut ChatView,
     ui: &mut egui::Ui,
@@ -110,6 +113,7 @@ pub fn render_send_button(
 }
 
 /// Handle input keyboard shortcuts (Enter to send, Escape to close windows, etc.)
+#[allow(dead_code)]
 pub fn handle_input_shortcuts(
     chat: &mut ChatView,
     ui: &mut egui::Ui,

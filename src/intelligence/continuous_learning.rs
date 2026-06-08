@@ -10,9 +10,8 @@ use crate::agents::agent::{Agent, Message, StreamingSender};
 use crate::i18n::{t, tf};
 use crate::intelligence::now_ms;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::sync::Mutex as TokioMutex;
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -21,12 +20,12 @@ use serde::{Deserialize, Serialize};
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Lock a tokio::sync::Mutex using blocking_lock.
-///
-/// tokio::sync::Mutex does not have the poisoning concept that std::sync::Mutex
-/// has, so no poison recovery is needed.
-fn lock_guard<T>(mtx: &TokioMutex<T>) -> tokio::sync::MutexGuard<'_, T> {
-    mtx.blocking_lock()
+/// Lock a std::sync::Mutex with poison recovery.
+fn lock_guard<T>(mtx: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mtx.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("continuous_learning state lock poisoned, recovering");
+        poisoned.into_inner()
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -260,7 +259,7 @@ pub struct ContinuousLearningProfile {
 /// behind a thread-safe `Arc<Mutex<>>`.
 pub struct ContinuousLearningCenter {
     config: ContinuousLearningConfig,
-    state: Arc<TokioMutex<CenterState>>,
+    state: Arc<Mutex<CenterState>>,
     /// Optional agent used for LLM-based semantic distillation.
     /// When `None`, TF-IDF keyword extraction is used as a fallback.
     agent: Option<Arc<dyn Agent>>,
@@ -321,7 +320,7 @@ impl ContinuousLearningCenter {
 
         Self {
             config,
-            state: Arc::new(TokioMutex::new(CenterState {
+            state: Arc::new(Mutex::new(CenterState {
                 tasks: HashMap::new(),
                 memories: HashMap::new(),
                 forgetting_curves: HashMap::new(),
@@ -422,7 +421,10 @@ impl ContinuousLearningCenter {
         importance: f64,
     ) -> Result<String> {
         let importance = importance.clamp(0.0, 1.0);
-        let mut state = self.state.blocking_lock();
+        let mut state = self.state.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("continuous_learning state lock poisoned, recovering");
+            poisoned.into_inner()
+        });
         // Evict the least-important memory when at capacity.
         if state.memories.len() >= self.config.max_memories {
             if let Some(oldest_id) = state
@@ -512,7 +514,7 @@ impl ContinuousLearningCenter {
             // LLM-based distillation — collect all memories and ask the agent
             // to extract semantic patterns.
             let memory_snapshots: Vec<String> = {
-                let state = self.state.lock().await;
+                let state = lock_guard(&self.state);
                 state
                     .memories
                     .values()
@@ -601,7 +603,7 @@ Memories:
             };
 
             // Persist the LLM-extracted patterns.
-            let mut state = self.state.lock().await;
+            let mut state = lock_guard(&self.state);
             let mut count = 0usize;
             for p in &llm_patterns {
                 let keywords: Vec<String> = p
@@ -1142,7 +1144,7 @@ Memories:
         let evict_ids = self.fast_evict_candidates();
         let evicted = evict_ids.len();
         {
-            let mut state = self.state.lock().await;
+            let mut state = lock_guard(&self.state);
             for id in &evict_ids {
                 state.memories.remove(id);
                 state.forgetting_curves.remove(id);

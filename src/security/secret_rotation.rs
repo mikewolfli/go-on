@@ -713,25 +713,31 @@ impl SecretManager {
         // Check if the backend already has it (tenant-qualified key_id)
         let rotator_key = Self::qualified_key(&key_id, &tenant);
         if let Some(entry) = self.rotator.retrieve_key(&rotator_key).await? {
+            // Normalize key_id: rotator uses qualified key, caller expects original
+            let mut result_entry = entry.clone();
+            result_entry.key_id = key_id.clone();
             self.secrets
                 .write()
                 .await
                 .entry(tenant.clone())
                 .or_default()
-                .insert(key_id, entry.clone());
-            return Ok(entry);
+                .insert(key_id, result_entry.clone());
+            return Ok(result_entry);
         }
 
         // Generate a new key (tenant-qualified)
         let entry = self.rotator.generate_key(&rotator_key, algorithm).await?;
+        // Normalize key_id: rotator uses qualified key, caller expects original
+        let mut result_entry = entry.clone();
+        result_entry.key_id = key_id.clone();
         self.secrets
             .write()
             .await
             .entry(tenant.clone())
             .or_default()
-            .insert(key_id.clone(), entry.clone());
+            .insert(key_id.clone(), result_entry.clone());
         info!(key = %key_id, tenant = %tenant, "New key registered");
-        Ok(entry)
+        Ok(result_entry)
     }
 
     /// Get a key by ID. Auto-rotates if the key is stale according to the policy.
@@ -762,13 +768,16 @@ impl SecretManager {
             if self.needs_rotation(&entry) && self.rotation_policy.auto_rotate_on_access {
                 return self.rotate_key(key_id, tenant_id).await;
             }
+            // Normalize key_id: rotator uses qualified key, caller expects original
+            let mut result_entry = entry.clone();
+            result_entry.key_id = key_id.to_string();
             self.secrets
                 .write()
                 .await
                 .entry(tenant.clone())
                 .or_default()
-                .insert(key_id.to_string(), entry.clone());
-            return Ok(entry);
+                .insert(key_id.to_string(), result_entry.clone());
+            return Ok(result_entry);
         }
 
         Err(SecretError::KeyNotFound(format!("{}/{}", tenant, key_id)))
@@ -817,6 +826,9 @@ impl SecretManager {
 
         // Generate new key (tenant-qualified)
         let new_entry = self.rotator.generate_key(&rotator_key, algorithm).await?;
+        // Normalize key_id: rotator uses qualified key, caller expects original
+        let mut result_entry = new_entry.clone();
+        result_entry.key_id = key_id.to_string();
 
         // Update cache
         self.secrets
@@ -824,10 +836,10 @@ impl SecretManager {
             .await
             .entry(tenant.clone())
             .or_default()
-            .insert(key_id.to_string(), new_entry.clone());
+            .insert(key_id.to_string(), result_entry.clone());
 
         info!(key = %key_id, tenant = %tenant, "Key rotated");
-        Ok(new_entry)
+        Ok(result_entry)
     }
 
     /// Get previous versions of a key (for decrypting data encrypted with old keys).

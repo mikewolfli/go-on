@@ -20,9 +20,6 @@ pub mod model_picker;
 // Note: mode_display_key, draw_role_avatar, render_token_stats, render_collapsed_bubble
 // are defined in the legacy content (as free fn or ChatView methods) and thus
 // are NOT re-exported here to avoid name conflicts.
-pub use attachments::{handle_attach_button, handle_external_editor, render_attachments};
-pub use input::{handle_input_shortcuts, render_send_button};
-pub use model_picker::render_model_picker;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Legacy content from the old monolithic ui.rs — will be migrated to

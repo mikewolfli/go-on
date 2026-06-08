@@ -48,14 +48,17 @@ fn config_has_schema_version() {
 #[test]
 fn config_has_default_phase() {
     let cfg = go_on::config::AppConfig::load(test_config_path()).expect("config must parse");
-    assert!(!cfg.default_phase.is_empty(), "default_phase must be set");
+    assert!(
+        !cfg.provider.default_phase.is_empty(),
+        "default_phase must be set"
+    );
 }
 
 #[test]
 fn config_has_model_selection_mode() {
     let cfg = go_on::config::AppConfig::load(test_config_path()).expect("config must parse");
     assert!(
-        !cfg.model_selection_mode.is_empty(),
+        !cfg.feature.model_selection_mode.is_empty(),
         "model_selection_mode must be set"
     );
 }
@@ -64,9 +67,9 @@ fn config_has_model_selection_mode() {
 fn config_has_at_least_one_agent() {
     let cfg = go_on::config::AppConfig::load(test_config_path()).expect("config must parse");
     assert!(
-        !cfg.agents.is_empty(),
+        !cfg.provider.agents.is_empty(),
         "config must define at least one agent; got {}",
-        cfg.agents.len()
+        cfg.provider.agents.len()
     );
 }
 
