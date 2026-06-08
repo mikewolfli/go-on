@@ -965,6 +965,42 @@ impl EvolutionLoop {
                     // the history system handles auto-rollback.
                 }
 
+                // Record approved capability change on evolution graph
+                if let Some(ref graph_mtx) = self.evolution_graph {
+                    let (agent, cap_name, advance_to) = match &trigger {
+                        EvolutionTrigger::DegradationDetected { capability_id, .. } => (
+                            "self_evolution".to_string(),
+                            capability_id.clone(),
+                            Some(EvolutionStage::Learning),
+                        ),
+                        other => {
+                            let label = other.label().to_string();
+                            let cap_name = format!("evolution_{}", &label);
+                            (label, cap_name, None)
+                        }
+                    };
+                    match graph_mtx.lock() {
+                        Ok(mut graph) => {
+                            let _ =
+                                graph.register_capability(&agent, &cap_name, EvolutionStage::New);
+                            let _ = graph.record_version(&agent, &cap_name, 1.0, 0.0);
+                            if let Some(stage) = advance_to {
+                                let _ = graph.advance_stage(&agent, &cap_name, stage);
+                            }
+                        }
+                        Err(poisoned) => {
+                            tracing::warn!("evolution_graph lock poisoned, recovering");
+                            let mut graph = poisoned.into_inner();
+                            let _ =
+                                graph.register_capability(&agent, &cap_name, EvolutionStage::New);
+                            let _ = graph.record_version(&agent, &cap_name, 1.0, 0.0);
+                            if let Some(stage) = advance_to {
+                                let _ = graph.advance_stage(&agent, &cap_name, stage);
+                            }
+                        }
+                    }
+                }
+
                 // Phase 7: Record in history
                 if let Some(ref history) = self.history {
                     let _ = history
@@ -1062,9 +1098,26 @@ impl EvolutionLoop {
                 capability_id,
                 trend_slope,
             } => {
+                let history_info = self
+                    .evolution_graph
+                    .as_ref()
+                    .and_then(|graph_mtx| graph_mtx.lock().ok())
+                    .and_then(|graph| {
+                        graph
+                            .get_history("self_evolution", capability_id)
+                            .map(|rec| {
+                                format!(
+                                    " (versions={}, stage={:?}, trend={:?})",
+                                    rec.versions.len(),
+                                    rec.current_stage,
+                                    rec.trend
+                                )
+                            })
+                    })
+                    .unwrap_or_default();
                 format!(
-                    "Capability '{}' is degrading (trend={:.3})",
-                    capability_id, trend_slope
+                    "Capability '{}' is degrading (trend={:.3}){}",
+                    capability_id, trend_slope, history_info
                 )
             }
         };
@@ -1097,21 +1150,29 @@ impl EvolutionLoop {
         };
 
         // Record a capability version snapshot on the evolution graph (I9).
+        // For DegradationDetected triggers, use the actual capability_id;
+        // for other triggers, derive a name from the trigger label.
         if let Some(ref graph_mtx) = self.evolution_graph {
-            let trigger_label = trigger.label();
-            let cap_name = format!("evolution_analyze_{}", trigger_label);
+            let (agent, cap_name) = match trigger {
+                EvolutionTrigger::DegradationDetected { capability_id, .. } => {
+                    ("self_evolution".to_string(), capability_id.clone())
+                }
+                other => {
+                    let label = other.label().to_string();
+                    let cap_name = format!("evolution_analyze_{}", &label);
+                    (label, cap_name)
+                }
+            };
             match graph_mtx.lock() {
                 Ok(mut graph) => {
-                    let _ =
-                        graph.register_capability(trigger_label, &cap_name, EvolutionStage::New);
-                    let _ = graph.record_version(trigger_label, &cap_name, 0.7, 0.0);
+                    let _ = graph.register_capability(&agent, &cap_name, EvolutionStage::New);
+                    let _ = graph.record_version(&agent, &cap_name, 0.7, 0.0);
                 }
                 Err(poisoned) => {
                     tracing::warn!("evolution_graph lock poisoned, recovering");
                     let mut graph = poisoned.into_inner();
-                    let _ =
-                        graph.register_capability(trigger_label, &cap_name, EvolutionStage::New);
-                    let _ = graph.record_version(trigger_label, &cap_name, 0.7, 0.0);
+                    let _ = graph.register_capability(&agent, &cap_name, EvolutionStage::New);
+                    let _ = graph.record_version(&agent, &cap_name, 0.7, 0.0);
                 }
             }
         }
@@ -1246,6 +1307,7 @@ impl EvolutionLoop {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::intelligence::evolution_graph::TrendDirection;
 
     #[test]
     fn test_evolution_trigger_label() {
@@ -1351,5 +1413,83 @@ mod tests {
             format!("{:?}", RegressionDirection::Decreasing),
             "Decreasing"
         );
+    }
+
+    #[test]
+    fn test_evolution_loop_with_evolution_graph() {
+        let graph = Arc::new(std::sync::Mutex::new(EvolutionGraph::new()));
+        let loop_ =
+            EvolutionLoop::new(PathBuf::from("/tmp/test")).with_evolution_graph(graph.clone());
+
+        // Verify the graph is wired
+        assert!(loop_.evolution_graph.is_some());
+
+        // Manually exercise the graph through the Arc to confirm it works
+        let mut g = graph.lock().unwrap();
+        g.register_capability("test_agent", "test_cap", EvolutionStage::New)
+            .unwrap();
+        let version = g
+            .record_version("test_agent", "test_cap", 0.95, 12.0)
+            .unwrap();
+        assert_eq!(version.stage, EvolutionStage::New);
+        assert!((version.success_rate - 0.95).abs() < 1e-6);
+        assert!((version.avg_latency_ms - 12.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_evolution_graph_records_degradation_version() {
+        let graph = Arc::new(std::sync::Mutex::new(EvolutionGraph::new()));
+        let _loop_ =
+            EvolutionLoop::new(PathBuf::from("/tmp/test")).with_evolution_graph(graph.clone());
+
+        // Simulate what happens when a DegradationDetected trigger is
+        // processed through the evolution pipeline:
+        // 1. analyze() registers + records a version
+        // 2. run() records another version and advances to Learning
+        {
+            let mut g = graph.lock().unwrap();
+            g.register_capability("self_evolution", "cap_alpha", EvolutionStage::New)
+                .unwrap();
+            g.record_version("self_evolution", "cap_alpha", 0.7, 0.0)
+                .unwrap();
+            g.record_version("self_evolution", "cap_alpha", 1.0, 0.0)
+                .unwrap();
+            g.advance_stage("self_evolution", "cap_alpha", EvolutionStage::Learning)
+                .unwrap();
+        }
+
+        // Verify the graph recorded the capability evolution correctly
+        let g = graph.lock().unwrap();
+        let record = g.get_record("self_evolution", "cap_alpha").unwrap();
+        assert_eq!(record.versions.len(), 2);
+        assert_eq!(record.current_stage, EvolutionStage::Learning);
+        assert_eq!(record.versions[0].success_rate, 0.7);
+        assert_eq!(record.versions[1].success_rate, 1.0);
+    }
+
+    #[test]
+    fn test_evolution_graph_provides_history_for_analysis() {
+        let graph = Arc::new(std::sync::Mutex::new(EvolutionGraph::new()));
+
+        // Pre-populate the graph with version history
+        {
+            let mut g = graph.lock().unwrap();
+            g.register_capability("self_evolution", "degrading_cap", EvolutionStage::Mature)
+                .unwrap();
+            g.record_version("self_evolution", "degrading_cap", 0.9, 10.0)
+                .unwrap();
+            g.record_version("self_evolution", "degrading_cap", 0.7, 15.0)
+                .unwrap();
+            g.record_version("self_evolution", "degrading_cap", 0.5, 20.0)
+                .unwrap();
+        }
+
+        // Query the history as analyze() would for DegradationDetected
+        let g = graph.lock().unwrap();
+        let record = g.get_history("self_evolution", "degrading_cap").unwrap();
+        assert_eq!(record.versions.len(), 3);
+        assert_eq!(record.current_stage, EvolutionStage::Mature);
+        // The trend should be Degrading since success_rate went 0.9 → 0.7 → 0.5
+        assert_eq!(record.trend, TrendDirection::Degrading);
     }
 }

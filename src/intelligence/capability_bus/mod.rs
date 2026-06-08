@@ -28,24 +28,28 @@
 //! 4. **Feedback**  — write results back to sub-buses (learning, reputation)
 //! 5. **Evolution** — update Q-table, decay exploration rate
 
+pub mod act;
 pub mod consensus;
 pub mod core;
+pub mod decide;
 pub mod discovery;
-pub mod evolution;
-pub mod learning;
-pub mod metacognition;
-pub mod orchestration;
 #[cfg(feature = "sub-bus-distributed-memory")]
 pub mod distributed_memory_bus;
+pub mod evolution;
+pub mod feedback;
+pub mod learning;
 #[cfg(feature = "sub-bus-memory")]
 pub mod memory_bus;
+pub mod metacognition;
 #[cfg(feature = "sub-bus-observability")]
 pub mod observability_bus;
 #[cfg(feature = "sub-bus-optimization")]
 pub mod optimization_bus;
+pub mod orchestration;
 #[cfg(feature = "sub-bus-orchestration")]
 pub mod orchestration_bus;
 #[cfg(feature = "sub-bus-protocol")]
 pub mod protocol_bus;
+pub mod sense;
 #[cfg(feature = "sub-bus-tool")]
 pub mod tool_bus;

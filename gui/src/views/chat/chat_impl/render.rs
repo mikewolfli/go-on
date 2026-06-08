@@ -2,14 +2,38 @@ use super::ChatView;
 use super::CHAT_DISABLE_MARKDOWN_RENDER;
 
 use crate::views::chat::types::{CachedMarkdownRender, MarkdownSegment, MarkdownStyle};
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::sync::{Mutex, OnceLock};
+
+/// Global cache for parsed markdown content, keyed by text hash.
+/// Allows large documents to be parsed once and reused across messages and frames
+/// without blocking the UI thread with comrak parsing on subsequent renders.
+static MARKDOWN_CACHE: OnceLock<Mutex<HashMap<u64, CachedMarkdownRender>>> = OnceLock::new();
+
+fn markdown_cache() -> &'static Mutex<HashMap<u64, CachedMarkdownRender>> {
+    MARKDOWN_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Compute a hash of the markdown text for cache lookup.
+fn hash_text(text: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
+}
 
 impl ChatView {
     /// Render markdown text using comrak for full markdown support.
     /// Code blocks are rendered with language label, styled Frame, scroll,
     /// and a copy button — always visible (no collapsing).
     ///
-    /// Optimization: Uses pre-parsed segments from `cached_markdown_renders`
-    /// when available. The cache is populated by `background_parse_markdown`.
+    /// Optimization: Uses a global `MARKDOWN_CACHE` keyed by text hash.
+    /// Large documents (> 500 bytes) check the cache first; on a cache hit
+    /// the pre-parsed segments are rendered directly without comrak parsing.
+    /// The cache is populated by `render_markdown` itself (first frame) and
+    /// by `background_parse_markdown` (background thread).
+    ///
+    /// Small documents (≤ 500 bytes) always parse synchronously — fast path.
     pub(super) fn render_markdown(
         ui: &mut egui::Ui,
         text: &str,
@@ -23,7 +47,29 @@ impl ChatView {
             return;
         }
 
-        // Parse with comrak and render node tree
+        // Small documents: parse and render directly (fast path, no cache overhead)
+        if text.len() <= 500 {
+            let mut options = comrak::Options::default();
+            options.extension.strikethrough = true;
+            options.extension.tagfilter = false;
+            options.render.hardbreaks = true;
+            options.render.github_pre_lang = true;
+
+            let arena = comrak::Arena::new();
+            let root = comrak::parse_document(&arena, text, &options);
+            render_node(ui, root, text_color, copy_code_hint);
+            return;
+        }
+
+        // Large documents: check global cache first
+        let hash = hash_text(text);
+        if let Ok(cache) = markdown_cache().lock() {
+            if let Some(cached) = cache.get(&hash) {
+                return Self::render_markdown_from_cache(ui, cached, copy_code_hint, text_color);
+            }
+        }
+
+        // Cache miss (first frame): parse synchronously, render, and cache
         let mut options = comrak::Options::default();
         options.extension.strikethrough = true;
         options.extension.tagfilter = false;
@@ -33,6 +79,12 @@ impl ChatView {
         let arena = comrak::Arena::new();
         let root = comrak::parse_document(&arena, text, &options);
         render_node(ui, root, text_color, copy_code_hint);
+
+        // Populate the global cache so subsequent frames avoid comrak parsing
+        let cached = parse_markdown_to_segments(text);
+        if let Ok(mut cache) = markdown_cache().lock() {
+            cache.insert(hash, cached);
+        }
     }
 
     /// Render markdown from pre-parsed segments (cache hit path).
@@ -230,9 +282,22 @@ impl ChatView {
     }
 
     /// Schedule a background markdown parse for a given message index.
-    /// The parsed result is stored in `cached_markdown_renders` and will be
-    /// used by subsequent render calls, avoiding comrak parsing on the UI thread.
+    /// Spawns a `std::thread` to perform the CPU-bound comrak parsing off the
+    /// UI thread. The result is stored in the global `MARKDOWN_CACHE` so that
+    /// `render_markdown` can find it on subsequent frames.
+    ///
+    /// If the text is already in the global cache (e.g. populated by a previous
+    /// `render_markdown` call), this method is a no-op.
     pub(crate) fn background_parse_markdown(&mut self, msg_idx: usize, text: &str) {
+        let hash = hash_text(text);
+
+        // Already cached globally — nothing to do
+        if let Ok(cache) = markdown_cache().lock() {
+            if cache.contains_key(&hash) {
+                return;
+            }
+        }
+
         // Ensure the cache vector is large enough
         if msg_idx >= self.cached_markdown_renders.len() {
             self.cached_markdown_renders
@@ -240,12 +305,12 @@ impl ChatView {
         }
 
         let text = text.to_string();
-        // Parse synchronously (this is called from the UI thread where we
-        // can't easily spawn a background task without channels). The actual
-        // CPU-bound comrak parsing is done here, but the cache prevents
-        // re-parsing on subsequent frames.
-        let cache = parse_markdown_to_segments(&text);
-        self.cached_markdown_renders[msg_idx] = Some(cache);
+        let _ = std::thread::spawn(move || {
+            let cached = parse_markdown_to_segments(&text);
+            if let Ok(mut cache) = markdown_cache().lock() {
+                cache.insert(hash, cached);
+            }
+        });
     }
 }
 

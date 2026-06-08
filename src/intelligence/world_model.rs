@@ -245,6 +245,93 @@ impl CausalReasoner {
         &self.correlations
     }
 
+    /// Chains discovered correlations into causal sequences.
+    ///
+    /// Starting from each correlation, greedily extends chains of the form
+    /// A→B, B→C, ... up to `max_chain_length`. Returns all found chains
+    /// sorted by length (longest first), then by starting confidence.
+    pub fn infer_causal_chains(&self, max_chain_length: usize) -> Vec<Vec<Correlation>> {
+        let chain_len = max_chain_length.max(2);
+        if self.correlations.is_empty() {
+            return Vec::new();
+        }
+
+        // Build a lookup: (effect_entity, effect_property) -> indices
+        let mut effect_index: HashMap<(String, String), Vec<usize>> = HashMap::new();
+        for (i, corr) in self.correlations.iter().enumerate() {
+            effect_index
+                .entry((corr.effect_entity.clone(), corr.effect_property.clone()))
+                .or_default()
+                .push(i);
+        }
+
+        let mut chains: Vec<Vec<Correlation>> = Vec::new();
+
+        for start_idx in 0..self.correlations.len() {
+            let mut chain = Vec::new();
+            chain.push(self.correlations[start_idx].clone());
+
+            // Greedily extend the chain by following effect -> cause matches
+            while chain.len() < chain_len {
+                let last = chain.last().unwrap();
+                let next_key = (last.effect_entity.clone(), last.effect_property.clone());
+                if let Some(next_indices) = effect_index.get(&next_key) {
+                    // Pick the next correlation with highest confidence,
+                    // avoiding cycles (don't revisit an entity already in the chain).
+                    let already_in_chain: Vec<&str> =
+                        chain.iter().map(|c| c.effect_entity.as_str()).collect();
+                    if let Some(&best_idx) = next_indices
+                        .iter()
+                        .filter(|&&idx| {
+                            !already_in_chain
+                                .contains(&self.correlations[idx].effect_entity.as_str())
+                        })
+                        .max_by(|&&a, &&b| {
+                            self.correlations[a]
+                                .confidence
+                                .partial_cmp(&self.correlations[b].confidence)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                    {
+                        chain.push(self.correlations[best_idx].clone());
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+
+            if chain.len() >= 2 {
+                chains.push(chain);
+            }
+        }
+
+        // Sort by length descending, then by first-link confidence descending
+        chains.sort_by(|a, b| {
+            b.len().cmp(&a.len()).then_with(|| {
+                b.first()
+                    .map(|c| c.confidence)
+                    .unwrap_or(0.0)
+                    .partial_cmp(&a.first().map(|c| c.confidence).unwrap_or(0.0))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+        });
+
+        // Deduplicate chains with identical (cause, effect) sequences
+        chains.dedup_by(|a, b| {
+            a.len() == b.len()
+                && a.iter().zip(b.iter()).all(|(ca, cb)| {
+                    ca.cause_entity == cb.cause_entity
+                        && ca.cause_property == cb.cause_property
+                        && ca.effect_entity == cb.effect_entity
+                        && ca.effect_property == cb.effect_property
+                })
+        });
+
+        chains
+    }
+
     /// Predicts probable next state changes for a given entity based on
     /// discovered correlations and historical snapshots.
     ///
@@ -563,6 +650,10 @@ struct Inner {
     max_causal_links: usize,
     /// Causal reasoner for entity state change correlation analysis.
     causal_reasoner: CausalReasoner,
+    /// Counter for tracking number of updates/events; used for periodic inference.
+    update_counter: u64,
+    /// Run correlation inference every N updates (default: 10).
+    correlation_inference_interval: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -594,6 +685,8 @@ impl WorldModel {
                 max_relationships: 5000,
                 max_causal_links: 5000,
                 causal_reasoner: CausalReasoner::new(5000, 5000),
+                update_counter: 0,
+                correlation_inference_interval: 10,
             })),
         }
     }
@@ -680,7 +773,55 @@ impl WorldModel {
             entity.properties.insert(key, value);
         }
         entity.last_seen_ms = now;
+
+        // Clone data from the entity before dropping the mutable borrow on `entity`,
+        // so we can use `inner` for causal reasoner operations below.
+        let entity_properties = entity.properties.clone();
+        let entity_id = entity.id.clone();
+
         inner.last_update_ms = now;
+
+        // Record the state update in the causal reasoner
+        inner
+            .causal_reasoner
+            .record_state(&entity_id, entity_properties, now);
+        inner.update_counter += 1;
+
+        // Periodically run correlation inference and generate causal links
+        if inner
+            .update_counter
+            .is_multiple_of(inner.correlation_inference_interval)
+        {
+            let correlations = inner.causal_reasoner.infer_correlations().to_vec();
+            for corr in &correlations {
+                let existing = inner.causal_links.iter().position(|l| {
+                    l.cause_entity_id == corr.cause_entity
+                        && l.effect_entity_id == corr.effect_entity
+                });
+
+                if let Some(pos) = existing {
+                    let link = &mut inner.causal_links[pos];
+                    link.observation_count = link.observation_count.max(corr.co_occurrence_count);
+                    link.confidence = link.confidence.max(corr.confidence);
+                } else if inner.causal_links.len() < inner.max_causal_links {
+                    let link = CausalLink {
+                        cause_entity_id: corr.cause_entity.clone(),
+                        effect_entity_id: corr.effect_entity.clone(),
+                        confidence: corr.confidence,
+                        observation_count: corr.co_occurrence_count,
+                        avg_delay_ms: corr.avg_time_delta_ms.max(0) as f64,
+                        context_tags: vec!["correlated".to_string()],
+                    };
+                    let idx = inner.causal_links.len();
+                    inner.causal_links.push(link);
+                    inner
+                        .causal_links_by_cause
+                        .entry(corr.cause_entity.clone())
+                        .or_default()
+                        .push(idx);
+                }
+            }
+        }
 
         Ok(())
     }
@@ -787,6 +928,52 @@ impl WorldModel {
         }
 
         inner.last_update_ms = now;
+        inner.update_counter += 1;
+
+        // Periodically run correlation inference from events
+        if inner
+            .update_counter
+            .is_multiple_of(inner.correlation_inference_interval)
+        {
+            // Snapshot entity state for the reasoner
+            let entity_snapshots: Vec<(String, HashMap<String, String>)> = inner
+                .entities
+                .iter()
+                .map(|e| (e.id.clone(), e.properties.clone()))
+                .collect();
+            for (eid, props) in &entity_snapshots {
+                inner.causal_reasoner.record_state(eid, props.clone(), now);
+            }
+            let correlations = inner.causal_reasoner.infer_correlations().to_vec();
+            for corr in &correlations {
+                let existing = inner.causal_links.iter().position(|l| {
+                    l.cause_entity_id == corr.cause_entity
+                        && l.effect_entity_id == corr.effect_entity
+                });
+
+                if let Some(pos) = existing {
+                    let link = &mut inner.causal_links[pos];
+                    link.observation_count = link.observation_count.max(corr.co_occurrence_count);
+                    link.confidence = link.confidence.max(corr.confidence);
+                } else if inner.causal_links.len() < inner.max_causal_links {
+                    let link = CausalLink {
+                        cause_entity_id: corr.cause_entity.clone(),
+                        effect_entity_id: corr.effect_entity.clone(),
+                        confidence: corr.confidence,
+                        observation_count: corr.co_occurrence_count,
+                        avg_delay_ms: corr.avg_time_delta_ms.max(0) as f64,
+                        context_tags: vec!["correlated".to_string()],
+                    };
+                    let idx = inner.causal_links.len();
+                    inner.causal_links.push(link);
+                    inner
+                        .causal_links_by_cause
+                        .entry(corr.cause_entity.clone())
+                        .or_default()
+                        .push(idx);
+                }
+            }
+        }
 
         Ok(id)
     }
@@ -1274,6 +1461,158 @@ impl WorldModel {
         inner
             .causal_reasoner
             .predict_next_state(entity_id, &current_props)
+    }
+
+    /// Chains discovered correlations into causal sequences.
+    ///
+    /// Delegates to `CausalReasoner::infer_causal_chains` to find
+    /// A→B→C→... patterns from the current set of discovered correlations.
+    /// Returns chains sorted by length (longest first).
+    pub fn infer_causal_chains(&self, max_chain_length: usize) -> Vec<Vec<Correlation>> {
+        let inner = lock_guard(&self.inner);
+        inner.causal_reasoner.infer_causal_chains(max_chain_length)
+    }
+
+    /// Predicts likely entity changes using both causal reasoner correlations
+    /// and recorded causal links, scoped by a time horizon.
+    ///
+    /// Returns a list of `Prediction` values sorted by confidence descending.
+    pub fn predict_entity_changes(&self, entity_id: &str, horizon_ms: u64) -> Vec<Prediction> {
+        let inner = lock_guard(&self.inner);
+        let mut predictions: Vec<Prediction> = Vec::new();
+
+        // 1. Use causal reasoner's state-based predictions
+        let current_props = inner
+            .entities
+            .iter()
+            .find(|e| e.id == entity_id)
+            .map(|e| e.properties.clone())
+            .unwrap_or_default();
+        let state_preds = inner
+            .causal_reasoner
+            .predict_next_state(entity_id, &current_props);
+
+        for (prop, val, conf) in &state_preds {
+            let mut predicted_attrs = serde_json::Map::new();
+            predicted_attrs.insert(prop.clone(), serde_json::Value::String(val.clone()));
+            predictions.push(Prediction {
+                entity_id: entity_id.to_string(),
+                predicted_attributes: serde_json::Value::Object(predicted_attrs),
+                confidence: *conf,
+                horizon_ms,
+                based_on: format!("causal_reasoner:{}", prop),
+            });
+        }
+
+        // 2. Use outgoing causal links (this entity is a cause)
+        if let Some(indices) = inner.causal_links_by_cause.get(entity_id) {
+            for &idx in indices {
+                let link = &inner.causal_links[idx];
+                predictions.push(Prediction {
+                    entity_id: link.effect_entity_id.clone(),
+                    predicted_attributes: serde_json::json!({}),
+                    confidence: link.confidence,
+                    horizon_ms: link.avg_delay_ms as u64,
+                    based_on: format!(
+                        "causal_link:{}→{}",
+                        link.cause_entity_id, link.effect_entity_id
+                    ),
+                });
+            }
+        }
+
+        // Sort by confidence descending, deduplicate by entity_id
+        predictions.sort_by(|a, b| {
+            b.confidence
+                .partial_cmp(&a.confidence)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        predictions.dedup_by(|a, b| a.entity_id == b.entity_id);
+        predictions.truncate(20);
+        predictions
+    }
+
+    /// Returns all recorded causal links.
+    pub fn get_causal_links(&self) -> Vec<CausalLink> {
+        let inner = lock_guard(&self.inner);
+        inner.causal_links.clone()
+    }
+
+    /// Predict what might happen next given an entity and attribute.
+    ///
+    /// Uses causal links to make the prediction:
+    /// - If `entity_id` has outgoing causal links, predicts the effect on the
+    ///   linked entity based on the most confident link.
+    /// - If `entity_id` has incoming causal links, suggests what inputs affect it.
+    /// - Returns `None` when no relevant causal links are found.
+    pub fn predict(&self, entity_id: &str, attribute: &str, horizon_ms: u64) -> Option<Prediction> {
+        let inner = lock_guard(&self.inner);
+
+        // Check for outgoing causal links — predict effects on linked entities
+        if let Some(indices) = inner.causal_links_by_cause.get(entity_id) {
+            // Find the most confident link
+            if let Some(&best_idx) = indices.iter().max_by(|&&a, &&b| {
+                inner.causal_links[a]
+                    .confidence
+                    .partial_cmp(&inner.causal_links[b].confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }) {
+                let link = &inner.causal_links[best_idx];
+                let effect_state = inner
+                    .entities
+                    .iter()
+                    .find(|e| e.id == link.effect_entity_id)
+                    .map(|e| {
+                        let mut attrs = serde_json::Map::new();
+                        for (k, v) in &e.properties {
+                            attrs.insert(k.clone(), serde_json::Value::String(v.clone()));
+                        }
+                        serde_json::Value::Object(attrs)
+                    })
+                    .unwrap_or_else(|| serde_json::json!({}));
+
+                return Some(Prediction {
+                    entity_id: link.effect_entity_id.clone(),
+                    predicted_attributes: effect_state,
+                    confidence: link.confidence,
+                    horizon_ms: link.avg_delay_ms as u64,
+                    based_on: format!("causal:{}→{}", link.cause_entity_id, link.effect_entity_id),
+                });
+            }
+        }
+
+        // Check for incoming causal links — suggest what inputs affect this entity
+        let affecting_links: Vec<&CausalLink> = inner
+            .causal_links
+            .iter()
+            .filter(|l| l.effect_entity_id == entity_id)
+            .collect();
+
+        if !affecting_links.is_empty() {
+            let best_input = affecting_links
+                .iter()
+                .max_by(|a, b| {
+                    a.confidence
+                        .partial_cmp(&b.confidence)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .unwrap();
+            return Some(Prediction {
+                entity_id: entity_id.to_string(),
+                predicted_attributes: serde_json::json!({
+                    "affected_by": best_input.cause_entity_id,
+                    "attribute": attribute,
+                }),
+                confidence: best_input.confidence * 0.9,
+                horizon_ms,
+                based_on: format!(
+                    "input:{}→{}",
+                    best_input.cause_entity_id, best_input.effect_entity_id
+                ),
+            });
+        }
+
+        None
     }
 
     /// Return a summary profile of the world model's current state.

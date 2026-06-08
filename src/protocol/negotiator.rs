@@ -119,6 +119,7 @@ impl ProtocolNegotiator {
     /// as a backward-compatible last resort: the server will accept the connection at
     /// its highest known version, and the client is expected to adapt or reject the
     /// handshake at the application layer.
+    #[allow(dead_code)] // F-GAP-49 — wired when GUI protocol discovery is active
     pub fn negotiate_with_versions(
         &self,
         client_hint: Option<&str>,
