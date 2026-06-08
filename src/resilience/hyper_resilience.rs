@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::watch;
 use tokio::sync::{Mutex, RwLock};
+use tokio::task::JoinHandle;
 
 /// Lock a Mutex, recovering from poison with a log.
 ///
@@ -233,6 +234,8 @@ pub struct HyperResilienceEngine {
     test_avg_latency_ms: Mutex<f64>,
     test_error_rate: Mutex<f64>,
     cancel_tx: watch::Sender<bool>,
+    /// Handle for the background health check task, used to detect panics.
+    health_check_handle: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl std::fmt::Debug for HyperResilienceEngine {
@@ -241,6 +244,7 @@ impl std::fmt::Debug for HyperResilienceEngine {
             .field("started_ms", &self.started_ms)
             .field("healing_actions_taken", &self.healing_actions_taken)
             .field("cancel_tx", &"watch::Sender")
+            .field("health_check_handle", &"Mutex<Option<JoinHandle>>")
             .finish()
     }
 }
@@ -290,6 +294,7 @@ impl Clone for HyperResilienceEngine {
             test_avg_latency_ms,
             test_error_rate,
             cancel_tx: self.cancel_tx.clone(),
+            health_check_handle: Mutex::new(None),
         }
     }
 }
@@ -308,6 +313,7 @@ impl HyperResilienceEngine {
             test_avg_latency_ms: Mutex::new(10.0),
             test_error_rate: Mutex::new(0.001),
             cancel_tx,
+            health_check_handle: Mutex::new(None),
         }
     }
 
@@ -779,22 +785,34 @@ impl HyperResilienceEngine {
 
         let engine = Arc::clone(self);
         let mut rx = self.cancel_tx.subscribe();
-        tokio::spawn(async move {
-            let mut timer = tokio::time::interval(tokio::time::Duration::from_millis(interval_ms));
-            // Skip the first tick (immediate) to give startup time
-            timer.tick().await;
-            loop {
-                tokio::select! {
-                    _ = timer.tick() => {
-                        engine.health_check_cycle().await;
-                    }
-                    _ = rx.changed() => {
-                        // Stop signal received
-                        break;
+        let handle = tokio::spawn(async move {
+            // Inner spawn so that panics surface as JoinErrors on the handle.
+            let inner = tokio::spawn(async move {
+                let mut timer =
+                    tokio::time::interval(tokio::time::Duration::from_millis(interval_ms));
+                // Skip the first tick (immediate) to give startup time
+                timer.tick().await;
+                loop {
+                    tokio::select! {
+                        _ = timer.tick() => {
+                            engine.health_check_cycle().await;
+                        }
+                        _ = rx.changed() => {
+                            // Stop signal received
+                            break;
+                        }
                     }
                 }
+            });
+            if let Err(e) = inner.await {
+                tracing::error!(
+                    target: "resilience",
+                    "health check task panicked: {:?}",
+                    e
+                );
             }
         });
+        *self.health_check_handle.lock().await = Some(handle);
     }
 
     /// Stop background health checks by signalling the cancellation token.

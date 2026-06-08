@@ -1,126 +1,8 @@
 use super::*;
 use std::hash::{Hash, Hasher};
 
-/// Map mode ID to its i18n key for display.
-fn mode_display_key(mode_id: &str) -> String {
-    match mode_id {
-        "ask" => "mode.ask".to_string(),
-        "plan" => "mode.plan".to_string(),
-        "edit" => "mode.edit".to_string(),
-        "safeguard" => "mode.safeguard".to_string(),
-        "full_auto" => "mode.full_auto".to_string(),
-        other => format!("mode.{other}"),
-    }
-}
-
 impl ChatView {
     const MAX_RENDERED_MESSAGES: usize = 250;
-
-    /// Draw a colored circle avatar with the role initial letter.
-    /// User gets a blue circle with "U", AI gets a green circle with "A".
-    fn draw_role_avatar(ui: &mut egui::Ui, is_user: bool) {
-        let size = 28.0;
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
-        let painter = ui.painter();
-        let dark = ui.visuals().dark_mode;
-        // Zed-style: subtle avatar colors
-        let color = if is_user {
-            if dark {
-                egui::Color32::from_rgb(40, 100, 200)
-            } else {
-                egui::Color32::from_rgb(0, 95, 240)
-            }
-        } else {
-            if dark {
-                egui::Color32::from_rgb(60, 64, 74)
-            } else {
-                egui::Color32::from_rgb(180, 183, 190)
-            }
-        };
-        painter.circle_filled(rect.center(), size / 2.0, color);
-        painter.text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            if is_user { "U" } else { "A" },
-            egui::FontId::proportional(14.0),
-            egui::Color32::WHITE,
-        );
-    }
-
-    fn render_token_stats(&mut self, ui: &mut egui::Ui, i18n: &I18n) {
-        if !self.show_token_details || self.model_stats.is_empty() {
-            return;
-        }
-
-        let Some(stats) = self.model_stats.get(&self.selected_model) else {
-            return;
-        };
-
-        let success_count = stats.success_count as f64;
-        let total_count = success_count + stats.error_count as f64;
-        let success_rate = if total_count > 0.0 {
-            (success_count / total_count * 100.0).round() as u32
-        } else {
-            0
-        };
-
-        let time_color = if stats.response_time_ms < 2_000 {
-            egui::Color32::from_rgb(76, 175, 80)
-        } else if stats.response_time_ms < 5_000 {
-            egui::Color32::from_rgb(255, 193, 7)
-        } else {
-            egui::Color32::from_rgb(244, 67, 54)
-        };
-
-        egui::Frame::new()
-            .fill(ui.visuals().window_fill().gamma_multiply(0.8))
-            .corner_radius(4.0)
-            .inner_margin(egui::Margin::symmetric(8i8, 4i8))
-            .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        egui::RichText::new(i18n.t("chat.tokenStats"))
-                            .strong()
-                            .size(11.0),
-                    );
-                    ui.separator();
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{}: {} ms",
-                            i18n.t("chat.responseTime"),
-                            stats.response_time_ms
-                        ))
-                        .color(time_color)
-                        .size(11.0),
-                    );
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{}: {}",
-                            i18n.t("chat.tokens"),
-                            stats.token_count
-                        ))
-                        .size(11.0),
-                    );
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{}: {}%",
-                            i18n.t("chat.successRate"),
-                            success_rate
-                        ))
-                        .size(11.0),
-                    );
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{}: {:.0}",
-                            i18n.t("chat.tokensPerMinute"),
-                            stats.avg_tokens_per_minute
-                        ))
-                        .size(11.0)
-                        .weak(),
-                    );
-                });
-            });
-    }
 
     pub fn show(
         &mut self,
@@ -618,152 +500,7 @@ impl ChatView {
             // ── Mode/Model row (top, fixed) ────────────
             // Zed-style: compact mode row with subtle background
             if CHAT_STAGE6_ENABLE_MODE_ROW {
-                let dark = ui.visuals().dark_mode;
-                let bg = if dark {
-                    egui::Color32::from_rgb(30, 32, 38)
-                } else {
-                    egui::Color32::from_rgb(245, 246, 248)
-                };
-                let fg = if dark {
-                    egui::Color32::from_rgb(190, 194, 204)
-                } else {
-                    egui::Color32::from_rgb(80, 82, 90)
-                };
-                egui::Frame::new()
-                    .fill(bg)
-                    .corner_radius(6.0)
-                    .inner_margin(egui::Margin::symmetric(10i8, 6i8))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(i18n.t("chat.mode")).color(fg).strong());
-                            ui.add_space(6.0);
-                            let prev_mode = self.selected_mode.clone();
-                            egui::ComboBox::from_id_salt("mode_sel")
-                                .selected_text(i18n.t(&mode_display_key(&self.selected_mode)))
-                                .show_ui(ui, |ui| {
-                                    for m in &["ask", "plan", "edit", "safeguard", "full_auto"] {
-                                        ui.selectable_value(
-                                            &mut self.selected_mode,
-                                            m.to_string(),
-                                            i18n.t(&mode_display_key(m)),
-                                        );
-                                    }
-                                });
-                            if self.selected_mode != prev_mode {
-                                // Mode changed — future: trigger model reload or state save
-                            }
-                            ui.add_space(8.0);
-                            ui.label(egui::RichText::new(i18n.t("chat.model")).color(fg));
-                            ui.add_space(6.0);
-                            // ── Two-level model picker: Agent → Model ────
-                            let agent_keys: Vec<String> =
-                                self.available_agent_models.keys().cloned().collect();
-                            let prev_model = self.selected_model.clone();
-
-                            // Level 1: Agent (ComboBox)
-                            let agent_text = if self.selected_agent.is_empty() {
-                                "All Agents".to_string()
-                            } else {
-                                self.selected_agent.clone()
-                            };
-                            egui::ComboBox::from_id_salt("agent_sel")
-                                .selected_text(&agent_text)
-                                .show_ui(ui, |ui| {
-                                    if ui
-                                        .selectable_value(
-                                            &mut self.selected_agent,
-                                            String::new(),
-                                            "All Agents",
-                                        )
-                                        .clicked()
-                                    {
-                                        self.selected_model = "auto".to_string();
-                                        self.sync_model_selection();
-                                    }
-                                    for agent in &agent_keys {
-                                        if ui
-                                            .selectable_value(
-                                                &mut self.selected_agent,
-                                                agent.clone(),
-                                                agent.as_str(),
-                                            )
-                                            .clicked()
-                                        {
-                                            // Reset to AUTO when agent changes
-                                            self.selected_model = "auto".to_string();
-                                            self.sync_model_selection();
-                                        }
-                                    }
-                                });
-
-                            ui.add_space(4.0);
-
-                            // Level 2: Model (ComboBox, filtered by selected agent)
-                            // ── Copilot agent: model is fixed to "copilot-auto" ──
-                            //   When the agent is "copilot", the model selection is frozen to
-                            //   "copilot-auto" because VS Code / GitHub Copilot's own extension
-                            //   handles model selection transparently.  The user can still change
-                            //   the agent to see model options for other providers.
-                            if self.selected_agent == "copilot" {
-                                ui.label("copilot/auto");
-                            } else {
-                                let model_options: Vec<String> = if self.selected_agent.is_empty() {
-                                    // Show all models from all agents
-                                    let mut all: Vec<String> = self.available_models.clone();
-                                    all.insert(0, "auto".to_string());
-                                    // Inject "copilot-auto" as a selectable option so that
-                                    // users can switch to the Copilot auto-select mode from
-                                    // the "All Agents" view.
-                                    if self.available_agent_models.contains_key("copilot") {
-                                        all.push(ChatView::COPILOT_AUTO_MODEL.to_string());
-                                    }
-                                    all
-                                } else {
-                                    let mut agent_models = self
-                                        .available_agent_models
-                                        .get(&self.selected_agent)
-                                        .cloned()
-                                        .unwrap_or_default();
-                                    agent_models.insert(0, "auto".to_string());
-                                    agent_models
-                                };
-                                egui::ComboBox::from_id_salt("model_sel")
-                                    .selected_text(if self.selected_model == "auto" {
-                                        "AUTO".to_string()
-                                    } else if self.selected_model == ChatView::COPILOT_AUTO_MODEL {
-                                        "copilot/auto".to_string()
-                                    } else {
-                                        self.selected_model.clone()
-                                    })
-                                    .show_ui(ui, |ui| {
-                                        for m in &model_options {
-                                            let label = if m == "auto" {
-                                                "AUTO"
-                                            } else if m == ChatView::COPILOT_AUTO_MODEL {
-                                                "copilot/auto"
-                                            } else {
-                                                m.as_str()
-                                            };
-                                            ui.selectable_value(
-                                                &mut self.selected_model,
-                                                m.to_string(),
-                                                label,
-                                            );
-                                        }
-                                    });
-                            }
-                            if self.selected_model != prev_model {
-                                self.sync_model_selection();
-                            }
-                            ui.add_space(12.0);
-                            let _tok_resp = ui.checkbox(
-                                &mut self.show_token_details,
-                                i18n.t("chat.showTokenDetails"),
-                            );
-                            // Token details checkbox changed — no additional action needed
-                        });
-                    });
-                ui.separator();
+                input::render_mode_row(self, ui, i18n);
             }
 
             // ── Messages area ─
@@ -791,26 +528,9 @@ impl ChatView {
                 ui.colored_label(success_color, &msg);
             }
 
-            self.render_token_stats(ui, i18n);
+            messages::render_token_stats(self, ui, i18n);
 
-            if !self.attachments.is_empty() {
-                ui.horizontal(|ui| {
-                    for a in &self.attachments {
-                        ui.label(format!(
-                            "{} {}",
-                            if a.mime.starts_with("image/") {
-                                "🖼️"
-                            } else {
-                                "📎"
-                            },
-                            a.name
-                        ));
-                    }
-                    if ui.button("✕").clicked() {
-                        self.attachments.clear();
-                    }
-                });
-            }
+            attachments::render_attachments(self, ui);
 
             // ── Paste event handling ────────────
             let pasted_atts = self.handle_paste_events(ui);
@@ -861,70 +581,8 @@ impl ChatView {
 
             ui.horizontal(|ui| {
                 if CHAT_STAGE6_ENABLE_EXTRA_BUTTONS {
-                    if ui
-                        .button("📎")
-                        .on_hover_text(i18n.t("chat.attach"))
-                        .clicked()
-                    {
-                        if let Some(files) = rfd::FileDialog::new().pick_files() {
-                            for f in files {
-                                let n = f
-                                    .file_name()
-                                    .and_then(|s| s.to_str())
-                                    .unwrap_or("file")
-                                    .to_string();
-                                self.attachments.push(Attachment {
-                                    name: n,
-                                    mime: Self::guess_mime(&f),
-                                    data: f.display().to_string(),
-                                });
-                            }
-                            self.error.clear();
-                        }
-                    }
-                    if ui
-                        .button("📝")
-                        .on_hover_text(i18n.t("chat.externalEditor"))
-                        .clicked()
-                    {
-                        let p = std::env::temp_dir().join("go_on_chat_input.txt");
-                        if let Err(e) = std::fs::write(&p, &self.input) {
-                            self.error =
-                                format!("Failed to write temp file for external editor: {e}");
-                        }
-                        #[cfg(target_os = "windows")]
-                        let editors = &["notepad", "code", "zed"];
-                        #[cfg(target_os = "macos")]
-                        let editors = &["open", "code", "zed", "TextEdit"];
-                        #[cfg(target_os = "linux")]
-                        let editors = &["zed", "code", "gedit", "vim", "nano"];
-                        #[cfg(not(any(
-                            target_os = "windows",
-                            target_os = "macos",
-                            target_os = "linux"
-                        )))]
-                        let editors: &[&str] = &["code", "vim", "nano"];
-                        for e in editors {
-                            if let Ok(mut child) = std::process::Command::new(e).arg(&p).spawn() {
-                                let p_clone = p.clone();
-                                let tx = self.pending_tx.clone();
-                                std::thread::spawn(move || {
-                                    let _ = child.wait();
-                                    // Editor closed — read the file and send result back to UI thread
-                                    if let Ok(edited) = std::fs::read_to_string(&p_clone) {
-                                        let trimmed = edited.trim().to_string();
-                                        if !trimmed.is_empty() {
-                                            // Non-blocking try_send; if the channel is full, the result is dropped gracefully.
-                                            let _ = tx.try_send(
-                                                PendingResponse::ExternalEditorResult(trimmed),
-                                            );
-                                        }
-                                    }
-                                });
-                                break;
-                            }
-                        }
-                    }
+                    attachments::handle_attach_button(self, ui);
+                    attachments::handle_external_editor(self, ui);
                     if ui
                         .button("💡")
                         .on_hover_text(i18n.t("chat.promptTemplates"))
@@ -949,94 +607,18 @@ impl ChatView {
                     .small()
                     .weak(),
                 );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if self.sending && self.ai_status == AiStatus::Thinking {
-                        if ui
-                            .add(
-                                egui::Button::new(format!("⏹ {}", i18n.t("chat.stop")))
-                                    .fill(egui::Color32::RED),
-                            )
-                            .clicked()
-                        {
-                            self.stop_sending();
-                        }
-                    } else {
-                        let (icon, col) = match self.ai_status {
-                            AiStatus::Idle => (
-                                i18n.t("chat.send").to_string(),
-                                egui::Color32::from_rgb(40, 120, 220),
-                            ),
-                            AiStatus::Thinking => {
-                                ("...".to_string(), egui::Color32::from_rgb(200, 160, 60))
-                            }
-                            AiStatus::Error => {
-                                (i18n.t("chat.retry").to_string(), egui::Color32::RED)
-                            }
-                        };
-                        if ui
-                            .add_enabled(
-                                !self.sending,
-                                egui::Button::new(format!("▶ {}", icon))
-                                    .fill(col)
-                                    .min_size(egui::vec2(80.0, 28.0)),
-                            )
-                            .clicked()
-                        {
-                            self.send_message(backend, ctx, autotune_chain_enabled);
-                        }
-                    }
-                });
+                input::render_send_button(self, ui, i18n, backend, ctx, autotune_chain_enabled);
             });
 
-            // ── Send on Enter / Ctrl+Enter ────────────────
-            // On Linux (fcitx5 IME): Ctrl+Enter to send (IME-safe),
-            // plain Enter is consumed by IME for composition commit.
-            // On all platforms: Shift+Enter inserts a newline.
-            #[cfg(target_os = "linux")]
-            {
-                // Linux: Ctrl+Enter sends; Enter and Shift+Enter insert newline.
-                let mut do_send = false;
-                ui.input_mut(|i| {
-                    if input_focus && i.consume_key(egui::Modifiers::CTRL, egui::Key::Enter) {
-                        do_send = true;
-                    }
-                });
-                if do_send {
-                    self.send_message(backend, ctx, autotune_chain_enabled);
-                }
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                // Non-Linux: Enter sends; Shift+Enter inserts newline.
-                if ui.input(|i| {
-                    !input_focus || !i.key_pressed(egui::Key::Enter) || i.modifiers.shift
-                }) {
-                    // Don't send
-                } else {
-                    self.send_message(backend, ctx, autotune_chain_enabled);
-                }
-            }
-
-            // ── Global keyboard shortcuts ─────────
-            ui.input_mut(|i| {
-                if i.consume_key(egui::Modifiers::CTRL, egui::Key::N)
-                    || i.consume_key(egui::Modifiers::COMMAND, egui::Key::N)
-                {
-                    self.new_session();
-                    self.refresh_default_session_names(i18n);
-                }
-                if i.consume_key(egui::Modifiers::CTRL, egui::Key::L)
-                    || i.consume_key(egui::Modifiers::COMMAND, egui::Key::L)
-                {
-                    self.input.clear();
-                }
-                if i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
-                    let was_open = self.show_prompts || self.show_model_picker;
-                    self.show_prompts = false;
-                    self.show_model_picker = false;
-                    if was_open {}
-                }
-            });
+            input::handle_input_shortcuts(
+                self,
+                ui,
+                input_focus,
+                i18n,
+                backend,
+                ctx,
+                autotune_chain_enabled,
+            );
         });
     }
 
@@ -1475,7 +1057,7 @@ impl ChatView {
                         // of re-running the full markdown pipeline.
                         let (is_user, timestamp, model_name) =
                             { (m.role == "user", m.timestamp, m.model.clone()) };
-                        Self::render_collapsed_bubble(
+                        messages::render_collapsed_bubble(
                             ui,
                             i18n,
                             is_user,
@@ -1620,7 +1202,7 @@ impl ChatView {
             };
             if !prev_same_role {
                 ui.horizontal(|ui| {
-                    Self::draw_role_avatar(ui, is_user);
+                    messages::draw_role_avatar(ui, is_user);
                     ui.add_space(8.0);
                     ui.label(egui::RichText::new(&name_label).strong().size(13.0));
                     ui.add_space(6.0);
@@ -1977,7 +1559,7 @@ impl ChatView {
                         // Show thinking indicator after the last placeholder message
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
-                            Self::draw_role_avatar(ui, false);
+                            messages::draw_role_avatar(ui, false);
                             ui.add_space(6.0);
                             ui.add(egui::Spinner::new());
                             ui.colored_label(weak_text, i18n.t("chat.thinking"));
@@ -2038,84 +1620,5 @@ impl ChatView {
                 );
             });
         }
-    }
-
-    /// Render a thin collapsed bubble for messages whose content has not changed
-    /// since the last frame.  Skips the expensive markdown parse + layout pass
-    /// to eliminate screen flickering on idle frames.
-    #[allow(clippy::too_many_arguments)]
-    fn render_collapsed_bubble(
-        ui: &mut egui::Ui,
-        i18n: &I18n,
-        is_user: bool,
-        timestamp: u64,
-        model_name: &str,
-        muted_text: egui::Color32,
-        weak_text: egui::Color32,
-        dark_mode: bool,
-    ) {
-        let (bubble_color, text_color) = if is_user {
-            let bc = if dark_mode {
-                egui::Color32::from_rgb(30, 100, 200)
-            } else {
-                egui::Color32::from_rgb(0, 100, 250)
-            };
-            (bc, egui::Color32::WHITE)
-        } else {
-            let bc = if dark_mode {
-                egui::Color32::from_rgb(42, 46, 56)
-            } else {
-                egui::Color32::from_rgb(235, 237, 241)
-            };
-            let tc = if dark_mode {
-                egui::Color32::from_rgb(212, 216, 226)
-            } else {
-                egui::Color32::from_rgb(30, 32, 38)
-            };
-            (bc, tc)
-        };
-
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            ui.add_space(if is_user { 60.0 } else { 8.0 });
-            Self::draw_role_avatar(ui, is_user);
-            ui.add_space(6.0);
-
-            egui::Frame::new()
-                .fill(bubble_color)
-                .corner_radius(12.0)
-                .inner_margin(egui::Margin::symmetric(14i8, 6i8))
-                .show(ui, |ui| {
-                    // Model name + timestamp line
-                    if !model_name.is_empty() {
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new(format!("🤖 {}", model_name))
-                                    .size(11.0)
-                                    .color(weak_text),
-                            );
-                            if timestamp > 0 {
-                                let ts = chrono::DateTime::from_timestamp(timestamp as i64, 0)
-                                    .map(|dt| dt.format("%H:%M").to_string())
-                                    .unwrap_or_default();
-                                ui.label(egui::RichText::new(ts).size(10.0).color(muted_text));
-                            }
-                        });
-                        ui.add_space(2.0);
-                    }
-                    // Placeholder text
-                    ui.label(
-                        egui::RichText::new(if is_user {
-                            i18n.t("chat.userMessagePlaceholder")
-                        } else {
-                            i18n.t("chat.assistantMessagePlaceholder")
-                        })
-                        .color(text_color)
-                        .size(11.0),
-                    );
-                });
-            ui.add_space(if is_user { 8.0 } else { 60.0 });
-        });
-        ui.add_space(4.0);
     }
 }

@@ -94,9 +94,12 @@ impl ProtocolVersion {
         self.0
     }
 
-    /// Select the highest common version between two supported sets.
+    /// Select the highest common version between the server's supported set and
+    /// the client's list.
+    ///
+    /// Iterates the server's supported versions in **descending** order
+    /// (V3 → V2 → V1) so that the *highest* mutually-supported version wins.
     /// Returns `None` when no common version is found.
-    #[allow(dead_code)] // F-GAP: reserved for protocol version discovery
     pub fn select_highest_common(client_versions: &[Self]) -> Option<Self> {
         Self::supported_versions()
             .iter()

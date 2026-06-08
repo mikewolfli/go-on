@@ -437,6 +437,28 @@ pub async fn perform_health_check_cycle(
     Ok(())
 }
 
+/// Spawn a background task with panic detection.
+///
+/// Wraps `tokio::spawn` so that if the future panics, the error is
+/// logged via `tracing::error!` instead of being silently swallowed.
+/// Use this for all background tasks that should not go unobserved.
+fn spawn_background_task<F>(future: F, task_name: &'static str)
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    tokio::spawn(async move {
+        let handle = tokio::spawn(future);
+        if let Err(e) = handle.await {
+            tracing::error!(
+                target: "acp",
+                task = task_name,
+                "background task panicked: {:?}",
+                e
+            );
+        }
+    });
+}
+
 /// Start background tasks for an ACP server
 pub async fn start_background_tasks(
     server: &super::server::AcpServer,
@@ -445,7 +467,7 @@ pub async fn start_background_tasks(
     let lock_monitor = Arc::clone(&server.observability.lock_monitor);
     let runtime_config = Arc::new(tokio::sync::Mutex::new(server.runtime_config.clone()));
     let memory_cache = {
-        let inner = server
+        let _inner = server
             .cache_deps
             .cache
             .memory_response_cache
@@ -454,7 +476,7 @@ pub async fn start_background_tasks(
         // MemoryResponseCache doesn't impl Clone, but we can use Default
         // since the background loop only needs a fresh monitoring instance.
         let fresh = MemoryResponseCache::default();
-        drop(inner);
+        // _inner dropped here, releasing the lock
         Arc::new(tokio::sync::Mutex::new(fresh))
     };
     let memory_store = Arc::new(tokio::sync::Mutex::new(
@@ -476,23 +498,26 @@ pub async fn start_background_tasks(
     let inflight_limiter = Arc::new(tokio::sync::Mutex::new(InflightLimiter::default()));
 
     let shutdown_notify_clone = shutdown_notify.clone();
-    tokio::spawn(async move {
-        let bg_ctx = BackgroundContext {
-            lock_monitor,
-            runtime_config,
-            memory_cache,
-            memory_store,
-            cache,
-            vector_store,
-            maintenance,
-            lifecycle,
-            circuit_breakers,
-            phase_rate_limiter,
-            inflight_limiter,
-            shutdown_notify: shutdown_notify_clone,
-        };
-        run_background_maintenance_loop(bg_ctx).await;
-    });
+    spawn_background_task(
+        async move {
+            let bg_ctx = BackgroundContext {
+                lock_monitor,
+                runtime_config,
+                memory_cache,
+                memory_store,
+                cache,
+                vector_store,
+                maintenance,
+                lifecycle,
+                circuit_breakers,
+                phase_rate_limiter,
+                inflight_limiter,
+                shutdown_notify: shutdown_notify_clone,
+            };
+            run_background_maintenance_loop(bg_ctx).await;
+        },
+        "maintenance_loop",
+    );
 
     // ── Metacognitive persistence (GAP-B53-56) ──────────────────────────
     // Save metacognitive state to disk every 60 seconds.
@@ -525,22 +550,25 @@ pub async fn start_background_tasks(
 
             let cb = Arc::clone(cb);
             let shutdown = shutdown_notify.clone();
-            tokio::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_secs(60));
-                interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-                loop {
-                    tokio::select! {
-                        _ = shutdown.notified() => break,
-                        _ = interval.tick() => {}
+            spawn_background_task(
+                async move {
+                    let mut interval = tokio::time::interval(Duration::from_secs(60));
+                    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                    loop {
+                        tokio::select! {
+                            _ = shutdown.notified() => break,
+                            _ = interval.tick() => {}
+                        }
+                        if let Err(e) = persistence.save(&cb.metacognitive) {
+                            tracing::warn!(
+                                target: "metacognitive_persistence",
+                                "background save failed: {e}"
+                            );
+                        }
                     }
-                    if let Err(e) = persistence.save(&cb.metacognitive) {
-                        tracing::warn!(
-                            target: "metacognitive_persistence",
-                            "background save failed: {e}"
-                        );
-                    }
-                }
-            });
+                },
+                "metacognitive_persistence",
+            );
         } else {
             tracing::warn!(
                 target: "metacognitive_persistence",
@@ -578,31 +606,34 @@ pub async fn start_background_tasks(
         let scanner = Arc::clone(scanner);
         let advisor = server.governance_deps.security_advisor.clone();
         let shutdown = shutdown_notify.clone();
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
-            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-            // First tick fires immediately
-            ticker.tick().await;
+        spawn_background_task(
+            async move {
+                let mut ticker = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
+                ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                // First tick fires immediately
+                ticker.tick().await;
 
-            loop {
-                tokio::select! {
-                    _ = shutdown.notified() => break,
-                    _ = ticker.tick() => {}
-                }
-
-                info!("Security scan: starting dependency vulnerability scan");
-                let result = scanner.scan(std::path::Path::new(".")).await;
-                if let Some(ref advisor) = advisor {
-                    if let Err(e) = advisor.alert_from_dependency_scan(&result).await {
-                        warn!("Failed to alert from dependency scan: {}", e);
+                loop {
+                    tokio::select! {
+                        _ = shutdown.notified() => break,
+                        _ = ticker.tick() => {}
                     }
+
+                    info!("Security scan: starting dependency vulnerability scan");
+                    let result = scanner.scan(std::path::Path::new(".")).await;
+                    if let Some(ref advisor) = advisor {
+                        if let Err(e) = advisor.alert_from_dependency_scan(&result).await {
+                            warn!("Failed to alert from dependency scan: {}", e);
+                        }
+                    }
+                    info!(
+                        "Security scan: dependency scan complete (vulnerabilities: {})",
+                        result.total()
+                    );
                 }
-                info!(
-                    "Security scan: dependency scan complete (vulnerabilities: {})",
-                    result.total()
-                );
-            }
-        });
+            },
+            "dependency_vulnerability_scan",
+        );
     }
 
     // Schedule secret exposure scan every 1 hour
@@ -610,33 +641,36 @@ pub async fn start_background_tasks(
         let detector = Arc::clone(detector);
         let advisor = server.governance_deps.security_advisor.clone();
         let shutdown = shutdown_notify.clone();
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_secs(60 * 60));
-            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-            // Skip first tick, start after one interval
-            ticker.tick().await;
+        spawn_background_task(
+            async move {
+                let mut ticker = tokio::time::interval(Duration::from_secs(60 * 60));
+                ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                // Skip first tick, start after one interval
+                ticker.tick().await;
 
-            loop {
-                tokio::select! {
-                    _ = shutdown.notified() => break,
-                    _ = ticker.tick() => {}
-                }
-
-                info!("Security scan: starting secret exposure scan");
-                let result = detector.scan_directory(std::path::Path::new(".")).await;
-                if let Ok(ref scan_result) = result {
-                    if let Some(ref advisor) = advisor {
-                        if let Err(e) = advisor.alert_from_secret_scan(scan_result).await {
-                            warn!("Failed to alert from secret scan: {}", e);
-                        }
+                loop {
+                    tokio::select! {
+                        _ = shutdown.notified() => break,
+                        _ = ticker.tick() => {}
                     }
-                    info!(
-                        "Security scan: secret scan complete (matches: {})",
-                        scan_result.total()
-                    );
+
+                    info!("Security scan: starting secret exposure scan");
+                    let result = detector.scan_directory(std::path::Path::new(".")).await;
+                    if let Ok(ref scan_result) = result {
+                        if let Some(ref advisor) = advisor {
+                            if let Err(e) = advisor.alert_from_secret_scan(scan_result).await {
+                                warn!("Failed to alert from secret scan: {}", e);
+                            }
+                        }
+                        info!(
+                            "Security scan: secret scan complete (matches: {})",
+                            scan_result.total()
+                        );
+                    }
                 }
-            }
-        });
+            },
+            "secret_exposure_scan",
+        );
     }
 
     // Start security advisor daily digest schedule
@@ -648,21 +682,24 @@ pub async fn start_background_tasks(
     if let Some(ref reloader) = server.governance_deps.policy_reloader {
         let reloader = Arc::clone(reloader);
         let shutdown = shutdown_notify.clone();
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_secs(60));
-            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-            loop {
-                tokio::select! {
-                    _ = shutdown.notified() => break,
-                    _ = ticker.tick() => {
-                        if let Ok(mut guard) = reloader.lock() {
-                            guard.reload_all();
+        spawn_background_task(
+            async move {
+                let mut ticker = tokio::time::interval(Duration::from_secs(60));
+                ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                loop {
+                    tokio::select! {
+                        _ = shutdown.notified() => break,
+                        _ = ticker.tick() => {
+                            if let Ok(mut guard) = reloader.lock() {
+                                guard.reload_all();
+                            }
+                            debug!("Policy reloader: checked for policy updates");
                         }
-                        debug!("Policy reloader: checked for policy updates");
                     }
                 }
-            }
-        });
+            },
+            "policy_reloader",
+        );
     } else {
         tracing::warn!("Policy reloader: no shared reloader available, skipping background task");
     }
@@ -680,115 +717,124 @@ pub async fn start_background_tasks(
     // ── Code quality scan every 5 minutes (GAP-B53-57) ─────────────────
     {
         let shutdown = shutdown_notify.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(300));
-            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-            // Skip first tick, start after one interval
-            interval.tick().await;
-            loop {
-                tokio::select! {
-                    _ = shutdown.notified() => break,
-                    _ = interval.tick() => {}
-                }
-                let report = tokio::task::spawn_blocking(move || {
-                    crate::intelligence::code_quality::run_code_quality_scan()
-                })
-                .await
-                .unwrap_or_else(|e| {
-                    tracing::warn!("code quality scan task failed: {}", e);
-                    crate::intelligence::code_quality::CodeQualityReport {
-                        issues: Vec::new(),
-                        health_score: 1.0,
-                        modules_scanned: 0,
-                        scanned_at_ms: crate::intelligence::now_ms(),
+        spawn_background_task(
+            async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(300));
+                interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                // Skip first tick, start after one interval
+                interval.tick().await;
+                loop {
+                    tokio::select! {
+                        _ = shutdown.notified() => break,
+                        _ = interval.tick() => {}
                     }
-                });
-                tracing::info!(
-                    target: "intelligence",
-                    health_score = report.health_score,
-                    modules_scanned = report.modules_scanned,
-                    issues = report.issues.len(),
-                    "code quality scan complete"
-                );
-            }
-        });
+                    let report = tokio::task::spawn_blocking(move || {
+                        crate::intelligence::code_quality::run_code_quality_scan()
+                    })
+                    .await
+                    .unwrap_or_else(|e| {
+                        tracing::warn!("code quality scan task failed: {}", e);
+                        crate::intelligence::code_quality::CodeQualityReport {
+                            issues: Vec::new(),
+                            health_score: 1.0,
+                            modules_scanned: 0,
+                            scanned_at_ms: crate::intelligence::now_ms(),
+                        }
+                    });
+                    tracing::info!(
+                        target: "intelligence",
+                        health_score = report.health_score,
+                        modules_scanned = report.modules_scanned,
+                        issues = report.issues.len(),
+                        "code quality scan complete"
+                    );
+                }
+            },
+            "code_quality_scan",
+        );
     }
 
     // ── Metacognitive auto-reflexion every 30 seconds (BLUE56-B10) ───────
     {
         let shutdown = shutdown_notify.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(30_000));
-            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-            loop {
-                tokio::select! {
-                    _ = shutdown.notified() => break,
-                    _ = interval.tick() => {}
+        spawn_background_task(
+            async move {
+                let mut interval = tokio::time::interval(Duration::from_millis(30_000));
+                interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                loop {
+                    tokio::select! {
+                        _ = shutdown.notified() => break,
+                        _ = interval.tick() => {}
+                    }
+                    let report_ids =
+                        crate::intelligence::metacognitive::global_metacognitive_controller()
+                            .autoreflect();
+                    if !report_ids.is_empty() {
+                        tracing::info!(
+                            target: "intelligence",
+                            count = report_ids.len(),
+                            "Metacognitive auto-reflexion generated reports"
+                        );
+                    }
                 }
-                let report_ids =
-                    crate::intelligence::metacognitive::global_metacognitive_controller()
-                        .autoreflect();
-                if !report_ids.is_empty() {
-                    tracing::info!(
-                        target: "intelligence",
-                        count = report_ids.len(),
-                        "Metacognitive auto-reflexion generated reports"
-                    );
-                }
-            }
-        });
+            },
+            "metacognitive_autoreflect",
+        );
     }
 
     // ── SelfEvolutionAgent + EvolutionLoop (BLUE56-B03) ───────────────
     {
         let shutdown = shutdown_notify.clone();
-        tokio::spawn(async move {
-            // The evolution_agent binding lives for the entire async block scope,
-            // so the agent is held alive until shutdown is notified (GAP-B58-C02/C04).
-            let evolution_agent = Arc::new(
-                crate::agents::self_evolution_agent::SelfEvolutionAgent::new(
-                    std::path::PathBuf::from("."),
-                    Vec::new(),
-                )
-                .await,
-            );
+        spawn_background_task(
+            async move {
+                // The evolution_agent binding lives for the entire async block scope,
+                // so the agent is held alive until shutdown is notified (GAP-B58-C02/C04).
+                let evolution_agent = Arc::new(
+                    crate::agents::self_evolution_agent::SelfEvolutionAgent::new(
+                        std::path::PathBuf::from("."),
+                        Vec::new(),
+                    )
+                    .await,
+                );
 
-            let workdir = std::path::PathBuf::from(".goon/evolution");
-            let mut evolution_loop =
-                crate::orchestration::self_evolution::evolution_loop::EvolutionLoop::new(workdir)
-                    .with_default_trigger_sources()
-                    .with_agent(evolution_agent)
-                    .with_approval_mode(
-                        crate::orchestration::self_evolution::evolution_loop::ApprovalMode::AutoApproval,
-                    );
-
-            tracing::info!(
-                target: "intelligence",
-                "SelfEvolutionAgent instantiated, EvolutionLoop starting"
-            );
-
-            // Bridge TripleFusion triggers into the EvolutionLoop via pubsub
-            let rx = init_fusion_evolution_bridge();
-            evolution_loop = evolution_loop.with_trigger_source(Box::new(
-                PubsubTriggerSource::new("fusion_evolution".to_string(), rx),
-            ));
-
-            // Run evolution loop until shutdown
-            tokio::select! {
-                _ = shutdown.notified() => {
-                    tracing::info!(target: "intelligence", "EvolutionLoop shutting down");
-                }
-                result = evolution_loop.run() => {
-                    if let Err(e) = result {
-                        tracing::warn!(
-                            target: "intelligence",
-                            error = %e,
-                            "EvolutionLoop exited with error, agent will be dropped"
+                let workdir = std::path::PathBuf::from(".goon/evolution");
+                let mut evolution_loop =
+                    crate::orchestration::self_evolution::evolution_loop::EvolutionLoop::new(workdir)
+                        .with_default_trigger_sources()
+                        .with_agent(evolution_agent)
+                        .with_approval_mode(
+                            crate::orchestration::self_evolution::evolution_loop::ApprovalMode::AutoApproval,
                         );
+
+                tracing::info!(
+                    target: "intelligence",
+                    "SelfEvolutionAgent instantiated, EvolutionLoop starting"
+                );
+
+                // Bridge TripleFusion triggers into the EvolutionLoop via pubsub
+                let rx = init_fusion_evolution_bridge();
+                evolution_loop = evolution_loop.with_trigger_source(Box::new(
+                    PubsubTriggerSource::new("fusion_evolution".to_string(), rx),
+                ));
+
+                // Run evolution loop until shutdown
+                tokio::select! {
+                    _ = shutdown.notified() => {
+                        tracing::info!(target: "intelligence", "EvolutionLoop shutting down");
+                    }
+                    result = evolution_loop.run() => {
+                        if let Err(e) = result {
+                            tracing::warn!(
+                                target: "intelligence",
+                                error = %e,
+                                "EvolutionLoop exited with error, agent will be dropped"
+                            );
+                        }
                     }
                 }
-            }
-        });
+            },
+            "self_evolution_agent",
+        );
     }
 
     // ── LivePerformanceFeed for model observability ────────────────────
@@ -802,7 +848,11 @@ pub async fn start_background_tasks(
     // ── BLUE56-GAP-C04: Hyper-resilience health checks ─────────────────
     // Start background health checks for circuit breaker self-healing.
     // The health check interval is configured in ResilienceConfig.
-    server.resilience.hyper_resilience.start_health_checks().await;
+    server
+        .resilience
+        .hyper_resilience
+        .start_health_checks()
+        .await;
     tracing::info!(
         target: "resilience",
         "HyperResilienceEngine health checks started"
@@ -814,33 +864,36 @@ pub async fn start_background_tasks(
     if let Some(ref harness_bus) = server.governance_deps.harness_bus {
         let ft = Arc::clone(&harness_bus.fault_tolerance);
         let shutdown = shutdown_notify.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(30));
-            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-            // Skip first tick to give startup time
-            interval.tick().await;
-            loop {
-                tokio::select! {
-                    _ = shutdown.notified() => {
-                        tracing::info!(target: "fault_tolerance", "recovery cycle shutting down");
-                        break;
-                    }
-                    _ = interval.tick() => {
-                        let summary = ft.run_recovery_cycle();
-                        if !summary.offenders.is_empty() || summary.plans_created > 0 {
-                            tracing::info!(
-                                target: "fault_tolerance",
-                                offenders = summary.offenders.len(),
-                                plans_created = summary.plans_created,
-                                plans_activated = summary.plans_activated,
-                                cluster_health = ?summary.cluster_health,
-                                "fault tolerance recovery cycle complete"
-                            );
+        spawn_background_task(
+            async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(30));
+                interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                // Skip first tick to give startup time
+                interval.tick().await;
+                loop {
+                    tokio::select! {
+                        _ = shutdown.notified() => {
+                            tracing::info!(target: "fault_tolerance", "recovery cycle shutting down");
+                            break;
+                        }
+                        _ = interval.tick() => {
+                            let summary = ft.run_recovery_cycle();
+                            if !summary.offenders.is_empty() || summary.plans_created > 0 {
+                                tracing::info!(
+                                    target: "fault_tolerance",
+                                    offenders = summary.offenders.len(),
+                                    plans_created = summary.plans_created,
+                                    plans_activated = summary.plans_activated,
+                                    cluster_health = ?summary.cluster_health,
+                                    "fault tolerance recovery cycle complete"
+                                );
+                            }
                         }
                     }
                 }
-            }
-        });
+            },
+            "fault_tolerance_recovery",
+        );
         tracing::info!(
             target: "fault_tolerance",
             "FaultToleranceEngine recovery cycle started (interval=30s)"
@@ -868,14 +921,14 @@ pub async fn run_maintenance_cycle(
     let lock_monitor = Arc::clone(&server.observability.lock_monitor);
     let runtime_config = Arc::new(tokio::sync::Mutex::new(server.runtime_config.clone()));
     let memory_cache = {
-        let inner = server
+        let _inner = server
             .cache_deps
             .cache
             .memory_response_cache
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let fresh = MemoryResponseCache::default();
-        drop(inner);
+        // _inner dropped here, releasing the lock
         Arc::new(tokio::sync::Mutex::new(fresh))
     };
     let memory_store = Arc::new(tokio::sync::Mutex::new(
@@ -908,14 +961,14 @@ pub async fn run_maintenance_cycle(
 pub async fn run_health_check(server: &super::server::AcpServer) -> Result<()> {
     let lock_monitor = Arc::clone(&server.observability.lock_monitor);
     let memory_cache = {
-        let inner = server
+        let _inner = server
             .cache_deps
             .cache
             .memory_response_cache
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let fresh = MemoryResponseCache::default();
-        drop(inner);
+        // _inner dropped here, releasing the lock
         Arc::new(tokio::sync::Mutex::new(fresh))
     };
 

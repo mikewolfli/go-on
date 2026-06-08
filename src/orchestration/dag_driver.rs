@@ -381,6 +381,7 @@ pub use crate::orchestration::core_dag::dag_trace_to_observability;
 
 #[cfg(test)]
 mod tests {
+    #![allow(deprecated)]
     use super::*;
 
     #[test]

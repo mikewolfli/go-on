@@ -240,8 +240,8 @@ pub(super) async fn handle_cache_clear(
         .cache
         .memory_response_cache
         .lock()
-        .map(|cache| cache.clear_all())
-        .unwrap_or(0);
+        .unwrap_or_else(|e| e.into_inner())
+        .clear_all();
     let persistent_removed = if let Some(cache) = server.cache_deps.cache.response_cache.clone() {
         crate::acp::r#impl::storage::cache_clear(server, cache).await?
     } else {

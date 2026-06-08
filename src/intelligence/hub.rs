@@ -113,7 +113,11 @@ pub const DEFAULT_CAPABILITY_BUS_ADDRESS: &str = "internal://capability_bus";
 /// network transport. Override by passing custom addresses if the consensus
 /// engine needs to reference external or multi-process nodes.
 pub fn init_intel_hub(enable_delphi_debate: bool) {
-    init_intel_hub_with_addrs(enable_delphi_debate, DEFAULT_LOCAL_AGENT_ADDRESS, DEFAULT_CAPABILITY_BUS_ADDRESS)
+    init_intel_hub_with_addrs(
+        enable_delphi_debate,
+        DEFAULT_LOCAL_AGENT_ADDRESS,
+        DEFAULT_CAPABILITY_BUS_ADDRESS,
+    )
 }
 
 /// Initialize intelligence hub with configurable consensus node addresses.
@@ -364,7 +368,7 @@ pub fn consensus_vote_on(
 /// * `config` – [`VoteConfig`] controlling mode, threshold, debate rounds.
 ///
 /// Returns `(approved, confidence)` — same signature as [`consensus_vote_on`].
-pub fn consensus_vote_with_reputation(
+pub async fn consensus_vote_with_reputation(
     proposal_id: &str,
     proposal: serde_json::Value,
     approve: bool,
@@ -392,46 +396,35 @@ pub fn consensus_vote_with_reputation(
         .unwrap_or(false);
 
     // Collect votes — prefer stored AgentVoter impls, fall back to hardcoded.
+    // This is now truly async-safe: we directly await the voter futures
+    // instead of blocking the current thread.
     let raw_votes = if let Some(voters) = GLOBAL_VOTERS.get() {
         // Build the voting context from the proposal
         let context = serde_json::to_string(&proposal).unwrap_or_default();
 
-        // Collect votes synchronously by blocking on the async vote() calls.
-        // This is safe because consensus_vote_with_reputation is always called
-        // from within a tokio runtime context (chat hot path or rationalize).
         let mut votes = HashMap::new();
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            // Spawn all voters concurrently using join_all.
-            // This avoids block_in_place+block_on anti-pattern that
-            // deadlocks on single-threaded runtimes.
-            let voter_futures: Vec<_> = voters
-                .iter()
-                .map(|voter| {
-                    let context = context.clone();
-                    tokio::spawn(async move {
-                        let name = voter.name().to_string();
-                        let vote = voter.vote(&context).await;
-                        (name, vote)
-                    })
+        // Spawn all voters concurrently and await them directly.
+        let voter_futures: Vec<_> = voters
+            .iter()
+            .map(|voter| {
+                let context = context.clone();
+                tokio::spawn(async move {
+                    let name = voter.name().to_string();
+                    let vote = voter.vote(&context).await;
+                    (name, vote)
                 })
-                .collect();
-            let results = tokio::task::block_in_place(|| {
-                handle.block_on(futures_util::future::join_all(voter_futures))
-            });
-            for result in results {
-                match result {
-                    Ok((name, vote)) => {
-                        votes.insert(name, vote);
-                    }
-                    Err(e) => {
-                        tracing::warn!("intel_hub: voter task failed: {}", e);
-                    }
+            })
+            .collect();
+        let results = futures_util::future::join_all(voter_futures).await;
+        for result in results {
+            match result {
+                Ok((name, vote)) => {
+                    votes.insert(name, vote);
+                }
+                Err(e) => {
+                    tracing::warn!("intel_hub: voter task failed: {}", e);
                 }
             }
-        } else {
-            tracing::warn!("intel_hub: no tokio runtime — falling back to hardcoded votes");
-            // Fallback: use consensus_vote_on which is synchronous
-            return consensus_vote_on(proposal_id, proposal, approve);
         }
         votes
     } else {
@@ -510,16 +503,10 @@ pub fn consensus_vote_with_reputation(
                         .map(|b| b.as_ref() as &dyn AgentVoter)
                         .collect();
                     let debate_question = debate_context.clone();
-                    let reputations_clone = reputations.clone();
                     let delphi_config = config.delphi.clone();
-                    let result = tokio::task::block_in_place(|| {
-                        tokio::runtime::Handle::current().block_on(delphi_debate(
-                            &agent_refs,
-                            &debate_question,
-                            &reputations_clone,
-                            &delphi_config,
-                        ))
-                    });
+                    let result =
+                        delphi_debate(&agent_refs, &debate_question, reputations, &delphi_config)
+                            .await;
                     tracing::info!(
                         "delphi_debate: {} rounds, converged={}, approved={}",
                         result.rounds,
@@ -592,7 +579,7 @@ pub fn consensus_vote_with_reputation(
 /// - Risk keywords in task description
 ///
 /// Returns (is_justified, explanation) where explanation describes concerns.
-pub fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (bool, String) {
+pub async fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (bool, String) {
     // ── Delphi debate integration ────────────────────────────────────────
     // When enabled, delegate to the weighted reputation + Delphi debate
     // voting path for higher-confidence decision verification.
@@ -617,7 +604,8 @@ pub fn rationalize_decision(agent: &str, task: &str, confidence: f64) -> (bool, 
             confidence >= 0.5,
             &reputations,
             &config,
-        );
+        )
+        .await;
         if !approved {
             let reason = "delphi_debate_rejected: weighted consensus vote did not approve";
             record_audit_entry(
@@ -939,34 +927,34 @@ mod tests {
         assert!(CONSENSUS_ROUNDS.load(Ordering::Relaxed) > 0);
     }
 
-    #[test]
-    fn test_rationalize_high_confidence() {
-        let (justified, _reason) = rationalize_decision("agent-x", "simple-task", 0.95);
+    #[tokio::test]
+    async fn test_rationalize_high_confidence() {
+        let (justified, _reason) = rationalize_decision("agent-x", "simple-task", 0.95).await;
         assert!(justified);
         assert!(RATIONALIZATION_COUNT.load(Ordering::Relaxed) > 0);
     }
 
-    #[test]
-    fn test_rationalize_low_confidence() {
+    #[tokio::test]
+    async fn test_rationalize_low_confidence() {
         let (justified, reason) =
-            rationalize_decision("agent-x", "risky-task with delete and rm", 0.15);
+            rationalize_decision("agent-x", "risky-task with delete and rm", 0.15).await;
         // Low confidence + risk keywords = rejected
         assert!(!justified);
         assert!(!reason.is_empty());
     }
 
-    #[test]
-    fn test_rationalize_safe_high_confidence() {
+    #[tokio::test]
+    async fn test_rationalize_safe_high_confidence() {
         // Safe task with high confidence should pass
-        let (justified, _reason) = rationalize_decision("agent-x", "read file content", 0.95);
+        let (justified, _reason) = rationalize_decision("agent-x", "read file content", 0.95).await;
         assert!(justified);
     }
 
-    #[test]
-    fn test_rationalize_risky_but_confident() {
+    #[tokio::test]
+    async fn test_rationalize_risky_but_confident() {
         // Risky task but very high confidence might still pass
         let (justified, _reason) =
-            rationalize_decision("agent-x", "delete temporary cache files", 0.98);
+            rationalize_decision("agent-x", "delete temporary cache files", 0.98).await;
         assert!(justified);
     }
 

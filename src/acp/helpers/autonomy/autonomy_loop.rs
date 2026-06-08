@@ -120,6 +120,7 @@ use super::autonomy_metrics::{
 
 #[cfg(test)]
 mod tests {
+    #![allow(deprecated)]
     use super::*;
 
     // ── TAO cycle AutonomyPhase state transitions ─────────────────────

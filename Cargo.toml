@@ -92,6 +92,13 @@ audio-whisper-openai = []
 audio-vosk = []
 
 # Profile definitions (mutually exclusive via compile-time assertions)
+#
+# NOTE (Q5): profile-local and profile-simple-server currently have IDENTICAL
+# feature sets. They are kept distinct for semantic clarity:
+#   - profile-local:       single-user local tool (default for `cargo build`)
+#   - profile-simple-server: single-server deployment (explicit --features)
+# Their feature lists are expected to diverge as deployment-specific
+# capabilities (telemetry exporters, cluster-aware caches, etc.) are added.
 profile-local = [
     "backend-sqlite",
     "sub-bus-tool",

@@ -18,8 +18,7 @@ pub mod model_picker;
 
 // Re-export public sub-module items that don't conflict with the legacy content.
 // Note: mode_display_key, draw_role_avatar, render_token_stats, render_collapsed_bubble
-// are defined in the legacy content (as free fn or ChatView methods) and thus
-// are NOT re-exported here to avoid name conflicts.
+// are now wired from their respective sub-modules.
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Legacy content from the old monolithic ui.rs — will be migrated to

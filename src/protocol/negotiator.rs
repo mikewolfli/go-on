@@ -103,9 +103,22 @@ impl ProtocolNegotiator {
     ///
     /// Performs real version negotiation: the highest common version between the
     /// server's supported versions and the client's list is selected as the
-    /// negotiated protocol version. Falls back to `ProtocolVersion::LATEST` when
-    /// no common version is found (backward compatibility).
-    #[allow(dead_code)] // F-GAP: reserved for protocol version discovery integration
+    /// negotiated protocol version.
+    ///
+    /// # Version descent strategy
+    ///
+    /// This method uses [`ProtocolVersion::select_highest_common`], which iterates
+    /// the server's supported versions in descending order (V3 → V2 → V1) and
+    /// returns the first version the client also supports.  This means:
+    /// - If the client supports LATEST (V3), that is used.
+    /// - If not, V2 is tried next.
+    /// - If V2 is also absent, V1 is tried last.
+    ///
+    /// When *no* common version is found at all (the client supports only versions
+    /// outside the server's range), the result falls back to `ProtocolVersion::LATEST`
+    /// as a backward-compatible last resort: the server will accept the connection at
+    /// its highest known version, and the client is expected to adapt or reject the
+    /// handshake at the application layer.
     pub fn negotiate_with_versions(
         &self,
         client_hint: Option<&str>,

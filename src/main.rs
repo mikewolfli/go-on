@@ -1,5 +1,5 @@
 #![recursion_limit = "2048"]
-#![allow(deprecated)]
+// Per-item #[allow(deprecated)] at each call site covers remaining uses
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 //! Main entry point for the go-on ACP proxy

@@ -22,6 +22,7 @@ use go_on::orchestration::distributed::remote_executor::{DagId, NodeOutput};
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 struct DistributedDagE2eContext {
+    #[allow(dead_code)]
     node_ids: Vec<String>,
     dag_id: Option<String>,
 }

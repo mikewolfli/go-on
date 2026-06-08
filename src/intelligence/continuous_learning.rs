@@ -477,6 +477,20 @@ impl ContinuousLearningCenter {
     }
 
     /// Consolidate a new experience AND run LLM distillation on the result.
+    /// Shared background runtime for async operations called from sync contexts.
+    /// Created once and reused, avoiding the overhead of creating a new
+    /// `Runtime` + OS thread on every invocation.
+    fn shared_background_runtime() -> &'static tokio::runtime::Runtime {
+        static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+        RT.get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .enable_all()
+                .build()
+                .expect("failed to create continuous_learning background runtime")
+        })
+    }
+
     /// This replaces simple JSON string rotation with semantic summarisation.
     pub fn consolidate_experience_with_distill(
         &self,
@@ -485,15 +499,16 @@ impl ContinuousLearningCenter {
         importance: f64,
     ) -> Result<String> {
         let id = self.consolidate_experience(pattern_key, data, importance)?;
-        // Non-blocking: kicks off LLM distillation in the background when an
-        // agent is configured.  Since we are in a sync context, we use
-        // std::thread::spawn to avoid blocking the caller.
+        // Non-blocking: kicks off LLM distillation in the background using
+        // the shared runtime.  This avoids creating a new OS thread + Runtime
+        // on every invocation and prevents fire-and-forget panic swallowing.
         if self.agent.is_some() {
             let center = self.clone();
-            std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new();
-                if let Ok(rt) = rt {
-                    rt.block_on(center.llm_distill());
+            let rt = Self::shared_background_runtime();
+            rt.spawn(async move {
+                let count = center.llm_distill().await;
+                if count > 0 {
+                    tracing::debug!("continuous_learning: llm_distill extracted {count} patterns");
                 }
             });
         }

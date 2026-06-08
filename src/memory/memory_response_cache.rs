@@ -45,8 +45,13 @@ impl MemoryResponseCache {
     }
 
     pub(crate) fn active_entries(&self) -> usize {
-        self.purge_expired();
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).len()
+        // Single lock scope: purge expired entries and count in one atomic
+        // operation, avoiding a TOCTOU race where a concurrent put() adds a
+        // new entry between purge and re-lock.
+        let now = now_ts();
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        guard.retain(|_, entry| entry.expires_at > now);
+        guard.len()
     }
 
     pub(crate) fn put(

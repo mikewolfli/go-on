@@ -873,15 +873,41 @@ impl BackendClient {
 
     /// Probe the backend's protocol version discovery endpoint to confirm
     /// the modern API is available.
-    /// Updates chat_endpoint based on the result (always uses /v1/chat/completions
-    /// when discovery succeeds; falls back to same default on failure).
-    /// This replaces the old dual-endpoint fallback mechanism (V1 → /chat/stream).
+    /// Parses the `/protocol/version` response to determine which API endpoint
+    /// to use. This enables backward compatibility with older backends that
+    /// only support the legacy `/chat/stream` endpoint (pre-v1.1.0).
+    /// Falls back to `/v1/chat/completions` when discovery fails.
     pub async fn discover_protocol_version(&self) -> String {
         let discovery_url = format!("{}/protocol/version", self.base_url);
         let endpoint = match self.quick_client.get(&discovery_url).send().await {
             Ok(resp) if resp.status().is_success() => {
-                eprintln!("protocol version discovery succeeded, using /v1/chat/completions");
-                "/v1/chat/completions".to_string()
+                // Try to parse the version from the response body
+                let version_str = resp.text().await.unwrap_or_default();
+                let selected = match version_str.trim() {
+                    s if s.contains("1.0") || s.contains("v1.0") => {
+                        // Legacy protocol — use /chat/stream
+                        eprintln!("protocol version 1.0 detected, using /chat/stream");
+                        "/chat/stream"
+                    }
+                    s if s.contains("1.1")
+                        || s.contains("v1.1")
+                        || s.contains("1.2")
+                        || s.contains("v1.2") =>
+                    {
+                        // Modern protocol — use /v1/chat/completions
+                        eprintln!(
+                            "protocol version {} detected, using /v1/chat/completions",
+                            s
+                        );
+                        "/v1/chat/completions"
+                    }
+                    _ => {
+                        // Unknown version — default to modern endpoint
+                        eprintln!("protocol version '{}' unrecognised, defaulting to /v1/chat/completions", version_str);
+                        "/v1/chat/completions"
+                    }
+                };
+                selected.to_string()
             }
             Ok(resp) => {
                 eprintln!("protocol version discovery returned: {}", resp.status());

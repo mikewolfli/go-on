@@ -1329,7 +1329,8 @@ pub(crate) async fn reflect_phase(
         } else {
             0.8
         },
-    );
+    )
+    .await;
     if !justified {
         debug!(
             "rationalize: blocked agent={} reason={}",

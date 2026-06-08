@@ -7,7 +7,7 @@ import { configManager } from "./configManager";
 import { RuntimeManagerLike } from "./managerTypes";
 import { normalizeProtocolMode } from "./protocolContract";
 import { ensureGoOnBinary } from "./runtimeBinaryService";
-import { asRecord } from "./utils";
+import { asRecord, getErrorMessage } from "./utils";
 import { getSettingsHtml, getConfigWizardHtml } from "./settingsHtmlTemplate";
 import { secretNameForEnvVar } from "./runtime/jsonRpc";
 import {
@@ -248,7 +248,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
         } catch (error: unknown) {
           this._postMessage({
             type: "settingsActionError",
-            message: this._getErrorMessage(error),
+            message: getErrorMessage(error),
           });
         }
       },
@@ -293,10 +293,6 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     } catch (err) {
       console.warn("[settingsView] _refreshRuntimeFeatures failed:", err);
     }
-  }
-
-  private _getErrorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
   }
 
   private async _handleWebviewMessage(message: Record<string, unknown>) {
@@ -1408,7 +1404,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       this._sendCurrentSettings();
     } catch (error: unknown) {
       vscode.window.showErrorMessage(
-        `${i18n.getMessage(MessageKeys.errorSaving)}: ${this._getErrorMessage(error)}`,
+        `${i18n.getMessage(MessageKeys.errorSaving)}: ${getErrorMessage(error)}`,
       );
     }
   }
@@ -1423,7 +1419,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       this._sendCurrentSettings();
     } catch (error: unknown) {
       vscode.window.showErrorMessage(
-        `${i18n.getMessage(MessageKeys.errorSaving)}: ${this._getErrorMessage(error)}`,
+        `${i18n.getMessage(MessageKeys.errorSaving)}: ${getErrorMessage(error)}`,
       );
     }
   }
@@ -1438,7 +1434,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       this._sendCurrentSettings();
     } catch (error: unknown) {
       vscode.window.showErrorMessage(
-        `${i18n.getMessage(MessageKeys.errorSaving)}: ${this._getErrorMessage(error)}`,
+        `${i18n.getMessage(MessageKeys.errorSaving)}: ${getErrorMessage(error)}`,
       );
     }
   }
@@ -1453,7 +1449,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       this._sendCurrentSettings();
     } catch (error: unknown) {
       vscode.window.showErrorMessage(
-        `${i18n.getMessage(MessageKeys.errorSaving)}: ${this._getErrorMessage(error)}`,
+        `${i18n.getMessage(MessageKeys.errorSaving)}: ${getErrorMessage(error)}`,
       );
     }
   }
@@ -1468,7 +1464,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       this._sendCurrentSettings();
     } catch (error: unknown) {
       vscode.window.showErrorMessage(
-        `${i18n.getMessage(MessageKeys.errorSaving)}: ${this._getErrorMessage(error)}`,
+        `${i18n.getMessage(MessageKeys.errorSaving)}: ${getErrorMessage(error)}`,
       );
     }
   }
@@ -1484,7 +1480,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       this._sendCurrentSettings();
     } catch (error: unknown) {
       vscode.window.showErrorMessage(
-        `${i18n.getMessage(MessageKeys.errorSaving)}: ${this._getErrorMessage(error)}`,
+        `${i18n.getMessage(MessageKeys.errorSaving)}: ${getErrorMessage(error)}`,
       );
     }
   }
@@ -1499,7 +1495,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       this._sendCurrentSettings();
     } catch (error: unknown) {
       vscode.window.showErrorMessage(
-        `${i18n.getMessage(MessageKeys.errorSaving)}: ${this._getErrorMessage(error)}`,
+        `${i18n.getMessage(MessageKeys.errorSaving)}: ${getErrorMessage(error)}`,
       );
     }
   }
@@ -1520,7 +1516,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       this._sendCurrentSettings();
     } catch (error: unknown) {
       vscode.window.showErrorMessage(
-        `${i18n.getMessage(MessageKeys.errorSaving)}: ${this._getErrorMessage(error)}`,
+        `${i18n.getMessage(MessageKeys.errorSaving)}: ${getErrorMessage(error)}`,
       );
     }
   }
@@ -1647,7 +1643,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     } catch (error: unknown) {
       this._postMessage({
         type: "keyringError",
-        message: this._getErrorMessage(error),
+        message: getErrorMessage(error),
       });
     }
   }
@@ -1666,7 +1662,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     } catch (error: unknown) {
       this._postMessage({
         type: "keyringError",
-        message: this._getErrorMessage(error),
+        message: getErrorMessage(error),
       });
     }
   }
@@ -1681,7 +1677,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     } catch (error: unknown) {
       this._postMessage({
         type: "keyringError",
-        message: this._getErrorMessage(error),
+        message: getErrorMessage(error),
       });
     }
   }
@@ -1698,7 +1694,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     } catch (error: unknown) {
       this._postMessage({
         type: "keyringError",
-        message: this._getErrorMessage(error),
+        message: getErrorMessage(error),
       });
     }
   }
@@ -1752,7 +1748,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     } catch (error: unknown) {
       this._postMessage({
         type: "quickSetupError",
-        message: `Setup failed: ${this._getErrorMessage(error)}`,
+        message: `Setup failed: ${getErrorMessage(error)}`,
       });
     }
   }
@@ -1770,7 +1766,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     } catch (error: unknown) {
       this._postMessage({
         type: "settingsActionError",
-        message: this._getErrorMessage(error),
+        message: getErrorMessage(error),
       });
     }
   }
@@ -1792,7 +1788,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     } catch (error: unknown) {
       this._postMessage({
         type: "settingsActionError",
-        message: this._getErrorMessage(error),
+        message: getErrorMessage(error),
       });
     }
   }
@@ -1824,7 +1820,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     } catch (error: unknown) {
       this._postMessage({
         type: "settingsActionError",
-        message: this._getErrorMessage(error),
+        message: getErrorMessage(error),
       });
     }
   }

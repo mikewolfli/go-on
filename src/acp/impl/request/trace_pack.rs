@@ -66,8 +66,8 @@ pub(super) fn build_runtime_gauge_snapshot(server: &AcpServer) -> RuntimeGaugeSn
         .cache
         .memory_response_cache
         .lock()
-        .map(|cache| cache.active_entries() as u64)
-        .unwrap_or(0);
+        .unwrap_or_else(|e| e.into_inner())
+        .active_entries() as u64;
     let sqlite_cache_entries = server
         .cache_deps
         .cache

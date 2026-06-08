@@ -614,7 +614,7 @@ impl ToolRegistry {
     ///
     /// The returned [`ToolCallResult`] has status [`ToolCallStatus::Partial`]
     /// when at least one tool succeeded and at least one failed.
-    pub fn execute_transactional(
+    pub async fn execute_transactional(
         &self,
         tool_calls: Vec<(String, ToolInput)>,
         transaction_id: String,
@@ -648,17 +648,7 @@ impl ToolRegistry {
                 }
                 _ => {
                     // Failure — roll back everything completed so far.
-                    // Use try_current to avoid panicking when no tokio runtime is active;
-                    // fall back to a temporary single-threaded runtime if necessary.
-                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                        tokio::task::block_in_place(|| {
-                            handle.block_on(scope.rollback());
-                        });
-                    } else {
-                        let rt = tokio::runtime::Runtime::new()
-                            .expect("failed to create tokio runtime for rollback");
-                        rt.block_on(scope.rollback());
-                    }
+                    scope.rollback().await;
 
                     let completed: Vec<String> = scope.completed_tools.clone();
                     let failed: Vec<String> = vec![tool_name.clone()];
@@ -986,10 +976,8 @@ mod tests {
     // -----------------------------------------------------------------------
     // execute_transactional rolls back on failure
     // -----------------------------------------------------------------------
-    #[test]
-    fn execute_transactional_rolls_back_on_failure() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let _guard = rt.enter();
+    #[tokio::test]
+    async fn execute_transactional_rolls_back_on_failure() {
         let mut registry = ToolRegistry::new_empty();
         registry.register(PassThroughTool);
         registry.register(FailTool);
@@ -1000,8 +988,9 @@ mod tests {
             ("fail_tool".to_string(), dummy_input()),
         ];
 
-        let result =
-            registry.execute_transactional(tool_calls, "txn-rollback-test".to_string(), &store);
+        let result = registry
+            .execute_transactional(tool_calls, "txn-rollback-test".to_string(), &store)
+            .await;
 
         match &result.status {
             ToolCallStatus::Partial { completed, failed } => {
@@ -1018,10 +1007,8 @@ mod tests {
     // -----------------------------------------------------------------------
     // execute_transactional succeeds when all tools succeed
     // -----------------------------------------------------------------------
-    #[test]
-    fn execute_transactional_succeeds_when_all_pass() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let _guard = rt.enter();
+    #[tokio::test]
+    async fn execute_transactional_succeeds_when_all_pass() {
         let mut registry = ToolRegistry::new_empty();
         registry.register(PassThroughTool);
         let store = IdempotencyStore::new();
@@ -1031,7 +1018,9 @@ mod tests {
             ("pass_through".to_string(), dummy_input()),
         ];
 
-        let result = registry.execute_transactional(tool_calls, "txn-all-pass".to_string(), &store);
+        let result = registry
+            .execute_transactional(tool_calls, "txn-all-pass".to_string(), &store)
+            .await;
 
         assert!(matches!(result.status, ToolCallStatus::Success));
         assert!(result.output.success);

@@ -84,9 +84,11 @@ pub trait Tool: Send + Sync {
     fn run(&self, input: &ToolInput) -> Result<ToolOutput>;
 
     /// Async variant of `run` for non-blocking execution in async contexts.
-    /// The default implementation wraps the sync `run` in `tokio::task::block_in_place`
-    /// to prevent blocking the async runtime during I/O-bound tool operations.
-    /// Tool implementations may override this to provide native async execution.
+    /// The default implementation wraps the sync `run` in `tokio::task::block_in_place`.
+    /// This is safe for CPU-bound tools that do not call async code internally.
+    /// I/O-bound tools SHOULD override this method with a native async implementation
+    /// (e.g. using `tokio::task::spawn_blocking` with owned data) to avoid
+    /// blocking the async runtime worker thread.
     fn run_async<'a>(
         &'a self,
         input: &'a ToolInput,

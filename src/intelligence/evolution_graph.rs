@@ -106,6 +106,22 @@ pub struct EvolutionGraph {
 
 impl EvolutionGraph {
     /// Create a new empty evolution graph.
+    ///
+    /// ## F-GAP: EvolutionLoop version history integration
+    ///
+    /// `EvolutionLoop::analyze()` (in `src/orchestration/self_evolution/evolution_loop.rs`)
+    /// records version snapshots on this graph via `register_capability()` +
+    /// `record_version()`. However, the integration uses **hardcoded** values
+    /// (`success_rate = 0.7`, `avg_latency_ms = 0.0`) and tracks the analysis
+    /// phase itself (`evolution_analyze_*`) rather than the actual capability
+    /// being evolved.
+    ///
+    /// **Gap**: The analyze phase does not derive real performance metrics from
+    /// the trigger source (e.g., true success rate for a degrading capability)
+    /// and does not update version history for the capability identified by
+    /// `DegradationDetected { capability_id }`. Real capability tracking
+    /// requires the caller to independently call `record_version()` with
+    /// genuine metrics after each evolve cycle completes.
     pub fn new() -> Self {
         Self {
             records: HashMap::new(),

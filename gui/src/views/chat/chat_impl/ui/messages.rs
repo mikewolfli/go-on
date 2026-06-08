@@ -7,7 +7,6 @@ use super::super::*;
 
 /// Draw a colored circle avatar with the role initial letter.
 /// User gets a blue circle with "U", AI gets a green circle with "A".
-#[allow(dead_code)]
 pub fn draw_role_avatar(ui: &mut egui::Ui, is_user: bool) {
     let size = 28.0;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
@@ -37,7 +36,6 @@ pub fn draw_role_avatar(ui: &mut egui::Ui, is_user: bool) {
 }
 
 /// Render token statistics line for the current model.
-#[allow(dead_code)]
 pub fn render_token_stats(chat: &mut ChatView, ui: &mut egui::Ui, i18n: &I18n) {
     if !chat.show_token_details || chat.model_stats.is_empty() {
         return;
@@ -115,7 +113,6 @@ pub fn render_token_stats(chat: &mut ChatView, ui: &mut egui::Ui, i18n: &I18n) {
 
 /// Render a thin collapsed bubble for unchanged messages (avoids expensive markdown re-render).
 #[allow(clippy::too_many_arguments)]
-#[allow(dead_code)]
 pub fn render_collapsed_bubble(
     ui: &mut egui::Ui,
     i18n: &I18n,

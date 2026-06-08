@@ -228,9 +228,30 @@ fn embedding_safety_check(agent_output: &str) -> f64 {
 /// Real cosine-similarity based embedding comparison (I8).
 ///
 /// Instead of set-based Jaccard, this builds a TF (term-frequency) vector
-/// for the agent output and compares it against each unsafe pattern's TF
-/// vector using cosine similarity. This more closely approximates a real
-/// embedding lookup while remaining dependency-free.
+///
+/// # Design rationale (TF-based approach)
+///
+/// This function uses term-frequency (TF) cosine similarity rather than a
+/// real neural embedding model (e.g. sentence-transformers). This is an
+/// intentional trade-off:
+///
+/// - **Deterministic & dependency-free**: No external embedding API, local
+///   model download, or GPU required. The safety check runs entirely via
+///   keyword pattern matching, which is appropriate for a safety gate where
+///   false negatives are unacceptable and the pattern space is well-defined.
+/// - **Language scope**: The UNSAFE_PATTERNS are English keywords. TF-based
+///   cosine similarity captures keyword co-occurrence density well for this
+///   domain. For multilingual semantic similarity beyond keyword presence,
+///   a real embedding model (e.g. via the MultimodalProcessor pipeline)
+///   should be plumbed in as a second-stage filter.
+/// - **Performance**: O(|output| + |patterns|) with small constant factors.
+///   A neural embedding call would add 10-100ms latency per check.
+///
+/// **When to upgrade**: If the system needs to detect paraphrased or
+/// semantically equivalent unsafe instructions that share few keywords with
+/// the patterns above, replace this function with a call to a real embedding
+/// model (e.g. via `crate::multimodal::embedding::EmbeddingModel`) and
+/// compute cosine similarity on the resulting dense vectors.
 ///
 /// Returns a safety score in [0.0, 1.0] where 1.0 = completely safe.
 #[allow(dead_code)]

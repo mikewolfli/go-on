@@ -1328,6 +1328,23 @@ pub(super) async fn handle_governance_status(
         },
     });
 
+    // ── Governance module initialized-status tracking (G2 fix) ────
+    let governance_modules = json!({
+        "approval_engine": server.governance_deps.approval_engine.is_some(),
+        "approval_learning": server.governance_deps.approval_engine.is_some(),
+        "audit": !governance_audit.is_empty(),
+        "drift": server.governance_deps.harness_bus.is_some(),
+        "hardening": true, // always available — TenantBudgetEnforcer/TaskBudget crafted at server init
+        "harness_bus": server.governance_deps.harness_bus.is_some(),
+        "pua": true, // always available — PuaEnforcementPlan created in server builder
+        "rationalization": true, // always available — harness_bus evaluator contains SelfRationalizationGuard
+        "rbac": server.governance_deps.rbac_enforcer.is_some(),
+        "reloadable_policy": server.governance_deps.policy_reloader.is_some(),
+        "review_controls": false, // separate module — no runtime instance in GovernanceServerDeps
+        "runtime_controls": server.governance_deps.approval_engine.is_some(),
+        "security_governor": false, // separate module — no runtime instance in GovernanceServerDeps
+    });
+
     let mut recommendations = Vec::new();
     if !reconciliation_ok {
         recommendations
@@ -1775,6 +1792,7 @@ pub(super) async fn handle_governance_status(
                 "observed_learning_records": pua_learning.len(),
                 "recent_failed_learning_records": recent_failed,
                 "recent_audit_events": governance_audit.len(),
+                "governance_modules": governance_modules,
                 "entry_sources_tracked": entry_sources_tracked,
                 "breaker_open_count": breaker_open_count,
                 "tool_total": tool_total,

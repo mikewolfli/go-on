@@ -9,13 +9,13 @@ import {
   normalizeProtocolMode,
   protocolContract,
 } from "./protocolContract";
-import { StreamEvent, StreamRequestOptions } from "./managerTypes";
+import { StreamRequestOptions } from "./managerTypes";
 import {
   FramedReader,
   FramedWriter,
-  FramedReaderCallbacks,
   ReadableStreamLike,
 } from "./runtime/framedProtocol";
+import { parseSseChunk } from "./runtime/sseStream";
 import {
   JsonRpcRequest,
   JsonRpcResponse,
@@ -858,7 +858,7 @@ export class GoOnManager {
         return text;
       }
 
-      // Consume SSE stream using ReadableStream
+      // Consume SSE stream using ReadableStream and parseSseChunk
       // eslint-disable-next-line @typescript-eslint/no-unsafe-call,@typescript-eslint/no-unsafe-assignment
       const reader = body.getReader();
       const decoder = new TextDecoder();
@@ -872,67 +872,39 @@ export class GoOnManager {
         if (done) break;
 
         buffer += decoder.decode(value as Uint8Array, { stream: true });
-        // Normalize line endings before splitting (handle \r\n and \r)
-        const normalizedBuffer = buffer
-          .replace(/\r\n/g, "\n")
-          .replace(/\r/g, "\n");
-        const lines = normalizedBuffer.split("\n");
-        buffer = lines.pop() || "";
 
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || !trimmed.startsWith("data:")) continue;
+        // Use parseSseChunk to extract data payloads from the SSE stream
+        const events = parseSseChunk(buffer);
+        buffer = ""; // Reset buffer as parseSseChunk consumed the text
 
-          // Handle both "data: " (with space) and "data:" (without space)
-          const prefixLen = trimmed.startsWith("data: ") ? 6 : 5;
-          const dataStr = trimmed.slice(prefixLen).trim();
-
-          // Check for OpenAI-style [DONE] marker
-          if (dataStr === protocolContract.openai.streamDoneMarker) {
-            callbacks?.onDone();
-            return fullContent;
-          }
-
-          try {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-            const event: StreamEvent = JSON.parse(dataStr);
-
-            switch (event.type) {
-              case "token":
-                if (event.content) {
-                  fullContent += event.content;
-                  callbacks?.onToken(event.content);
-                }
-                break;
-              case "done":
-                callbacks?.onDone();
-                return fullContent;
-              case "error": {
-                const err = new Error(event.message || "Stream error");
-                callbacks?.onError(err);
-                throw err;
+        for (const event of events) {
+          switch (event.type) {
+            case "token": {
+              const content = event.content as string | undefined;
+              if (content) {
+                fullContent += content;
+                callbacks?.onToken(content);
               }
-              default: {
-                // Unknown event type — handle delta-style content (OpenAI compat)
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                const content = (event as any).content as string | undefined;
-                if (content) {
-                  fullContent += content;
-                  callbacks?.onToken(content);
-                }
-                break;
-              }
+              break;
             }
-          } catch (parseErr) {
-            if (
-              parseErr instanceof Error &&
-              parseErr.message !== "Stream error"
-            ) {
-              this._outputChannel?.appendLine(
-                `[stream] SSE parse error: ${parseErr.message} for data: ${dataStr}`,
+            case "done":
+              callbacks?.onDone();
+              return fullContent;
+            case "error": {
+              const err = new Error(
+                (event.message as string) || "Stream error",
               );
-            } else if (parseErr instanceof Error) {
-              throw parseErr; // re-throw stream errors
+              callbacks?.onError(err);
+              throw err;
+            }
+            default: {
+              // Unknown event type — handle delta-style content (OpenAI compat)
+              const content = event.content as string | undefined;
+              if (content) {
+                fullContent += content;
+                callbacks?.onToken(content);
+              }
+              break;
             }
           }
         }

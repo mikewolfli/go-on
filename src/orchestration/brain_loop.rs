@@ -1806,6 +1806,7 @@ fn extract_error_type(msg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #![allow(deprecated)]
     use super::*;
 
     // -----------------------------------------------------------------------

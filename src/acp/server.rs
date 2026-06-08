@@ -197,7 +197,7 @@ impl Default for DrainGuard {
 pub struct CacheLayer {
     /// Response cache (SQLite-based)
     pub response_cache: Option<Arc<ResponseCache>>,
-    /// Memory response cache
+    /// Memory response cache (std::sync::Mutex for consistency with memory_bus set_backends)
     pub memory_response_cache: Arc<StdMutex<MemoryResponseCache>>,
     /// Vector store for similarity search and memory
     pub vector_store: Option<Arc<VectorStore>>,

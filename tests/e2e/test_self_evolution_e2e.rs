@@ -24,6 +24,7 @@ use go_on::orchestration::self_evolution::sandbox::{BuildResult, SandboxExecutor
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 struct EvolutionE2eContext {
+    #[allow(dead_code)]
     session_id: String,
     workdir: PathBuf,
 }

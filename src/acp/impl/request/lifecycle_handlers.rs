@@ -44,10 +44,10 @@ pub(super) async fn handle_health(server: &AcpServer, request_id: Option<Value>)
             "enabled": true,
             "governance": hb.governance_profile(),
             "drift": hb.drift_profile(),
-            "brain_loop": hb.brain_profile(),
+            "brain_loop": hb.brain_profile().await,
             "artifact": hb.artifact_profile(),
             "omnipotent": hb.omnipotent_profile(),
-            "brain_runner": hb.brain_runner_profile(),
+            "brain_runner": hb.brain_runner_profile().await,
             "resilience": hb.resilience_profile().await,
             "fault_tolerance": hb.fault_tolerance_profile(),
         })

@@ -449,7 +449,7 @@ pub struct AlertManagerTriggerSource {
     name: String,
     /// Cached alert fingerprints to avoid re-triggering.
     #[allow(dead_code)]
-    seen_alerts: std::sync::Mutex<Vec<String>>,
+    seen_alerts: tokio::sync::Mutex<Vec<String>>,
 }
 
 impl AlertManagerTriggerSource {
@@ -457,7 +457,7 @@ impl AlertManagerTriggerSource {
     pub fn new(name: String) -> Self {
         Self {
             name,
-            seen_alerts: std::sync::Mutex::new(Vec::new()),
+            seen_alerts: tokio::sync::Mutex::new(Vec::new()),
         }
     }
 }
@@ -467,7 +467,14 @@ impl TriggerSource for AlertManagerTriggerSource {
     async fn poll(&self) -> Vec<EvolutionTrigger> {
         // Query the alert manager (in production this connects to a real
         // alert system like Prometheus AlertManager).
-        let _ = &self.name;
+        // Currently no real alert system is connected — triggers must be
+        // injected via an alternative mechanism (e.g., ManualTriggerSource
+        // or PubsubTriggerSource).
+        warn!(
+            "AlertManagerTriggerSource[{}]: no real alert system connected; returning empty",
+            self.name
+        );
+        let _ = &self.seen_alerts.lock().await;
         Vec::new()
     }
 }
@@ -483,7 +490,7 @@ pub struct DiagnosticTriggerSource {
     /// Name of this source.
     name: String,
     /// Map of error patterns to their observed counts.
-    error_counts: std::sync::Mutex<HashMap<String, u64>>,
+    error_counts: tokio::sync::Mutex<HashMap<String, u64>>,
     /// Minimum count before triggering.
     min_count: u64,
 }
@@ -495,15 +502,20 @@ impl DiagnosticTriggerSource {
     pub fn new(name: String, min_count: u64) -> Self {
         Self {
             name,
-            error_counts: std::sync::Mutex::new(HashMap::new()),
+            error_counts: tokio::sync::Mutex::new(HashMap::new()),
             min_count,
         }
     }
 
     /// Record an observed error pattern.
+    ///
+    /// TODO-BLUE64: Wire this from error-handling paths in the LSP diagnostic
+    /// handler, test runner, or compiler output parser so that repeated errors
+    /// automatically trigger evolution cycles. The integration point should
+    /// call this method whenever a diagnostic or test failure is observed.
     #[allow(dead_code)]
     pub fn record_error(&self, pattern: String) {
-        let mut counts = self.error_counts.lock().unwrap();
+        let mut counts = self.error_counts.blocking_lock();
         *counts.entry(pattern).or_insert(0) += 1;
     }
 }
@@ -512,7 +524,7 @@ impl DiagnosticTriggerSource {
 impl TriggerSource for DiagnosticTriggerSource {
     async fn poll(&self) -> Vec<EvolutionTrigger> {
         let mut triggers = Vec::new();
-        let mut counts = self.error_counts.lock().unwrap();
+        let mut counts = self.error_counts.lock().await;
 
         let to_remove: Vec<String> = counts
             .iter()
@@ -547,7 +559,7 @@ pub struct TickTriggerSource {
     /// Interval between automatic triggers.
     interval: Duration,
     /// Timestamp (ms since epoch) of the last trigger.
-    last_trigger_ms: std::sync::Mutex<u64>,
+    last_trigger_ms: tokio::sync::Mutex<u64>,
 }
 
 #[allow(dead_code)]
@@ -557,7 +569,7 @@ impl TickTriggerSource {
         Self {
             name,
             interval,
-            last_trigger_ms: std::sync::Mutex::new(0),
+            last_trigger_ms: tokio::sync::Mutex::new(0),
         }
     }
 }
@@ -570,7 +582,7 @@ impl TriggerSource for TickTriggerSource {
             .unwrap_or_default()
             .as_millis() as u64;
 
-        let mut last = self.last_trigger_ms.lock().unwrap();
+        let mut last = self.last_trigger_ms.lock().await;
         let elapsed_ms = now.saturating_sub(*last);
 
         if elapsed_ms >= self.interval.as_millis() as u64 {
@@ -593,7 +605,7 @@ pub struct ManualTriggerSource {
     /// Name of this source.
     name: String,
     /// Receiver for manual trigger requests.
-    rx: std::sync::Mutex<mpsc::UnboundedReceiver<String>>,
+    rx: tokio::sync::Mutex<mpsc::UnboundedReceiver<String>>,
     /// Sender (cloned for external use).
     #[allow(dead_code)]
     tx: mpsc::UnboundedSender<String>,
@@ -606,7 +618,7 @@ impl ManualTriggerSource {
         let (tx, rx) = mpsc::unbounded_channel();
         Self {
             name,
-            rx: std::sync::Mutex::new(rx),
+            rx: tokio::sync::Mutex::new(rx),
             tx,
         }
     }
@@ -625,7 +637,7 @@ impl ManualTriggerSource {
 impl TriggerSource for ManualTriggerSource {
     async fn poll(&self) -> Vec<EvolutionTrigger> {
         let mut triggers = Vec::new();
-        let mut rx = self.rx.lock().unwrap();
+        let mut rx = self.rx.lock().await;
 
         loop {
             match rx.try_recv() {

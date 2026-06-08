@@ -1725,27 +1725,11 @@ impl HarnessBus {
 
     /// Brain loop orchestration profile snapshot.
     ///
-    /// ⚠️ Sync-shim: only uses `block_on` when no tokio runtime is active (safe path).
-    /// If a tokio runtime IS active, logs a warning and returns a default profile
-    /// to avoid blocking the tokio worker thread.
-    /// Lazily initialized shared tokio runtime for sync callers.
-    /// Avoids creating a new Runtime on every invocation.
-    fn shared_tokio_runtime() -> &'static tokio::runtime::Runtime {
-        static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
-        RUNTIME.get_or_init(|| {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("failed to create shared tokio runtime for sync profiles")
-        })
-    }
-
+    /// This is now truly async-safe: directly awaits the brain_loop profile
+    /// without blocking the tokio worker thread.
     #[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
-    pub fn brain_profile(&self) -> BrainLoopProfile {
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => handle.block_on(self.brain_loop.profile()),
-            Err(_) => Self::shared_tokio_runtime().block_on(self.brain_loop.profile()),
-        }
+    pub async fn brain_profile(&self) -> BrainLoopProfile {
+        self.brain_loop.profile().await
     }
 
     /// Artifact layer profile snapshot.
@@ -1781,13 +1765,12 @@ impl HarnessBus {
     }
 
     /// Brain loop runner profile snapshot (consolidated flat version).
-    /// Uses shared tokio runtime to avoid creating new Runtime per invocation.
+    ///
+    /// This is now truly async-safe: directly awaits the brain_runner profile
+    /// without blocking the tokio worker thread.
     #[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
-    pub fn brain_runner_profile(&self) -> BrainLoopProfile {
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => handle.block_on(self.brain_runner.profile()),
-            Err(_) => Self::shared_tokio_runtime().block_on(self.brain_runner.profile()),
-        }
+    pub async fn brain_runner_profile(&self) -> BrainLoopProfile {
+        self.brain_runner.profile().await
     }
 
     /// Hyper-resilience profile snapshot (F-GAP-27)
