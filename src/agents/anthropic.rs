@@ -680,7 +680,9 @@ mod tests {
             None,
         );
 
-        let system = payload["system"].as_str().unwrap();
+        let system = payload["system"]
+            .as_str()
+            .expect("system field should be a string");
         assert!(system.contains("Prefer tests"));
         assert!(system.contains("existing system"));
         assert_eq!(payload["messages"][0]["role"], "user");

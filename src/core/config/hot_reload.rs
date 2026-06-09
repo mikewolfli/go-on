@@ -24,6 +24,7 @@ use tokio::sync::RwLock;
 
 use crate::core::config::AppConfig;
 use crate::core::config_validation::ConfigValidator;
+use crate::protocol::state_sync::{self, StateSyncEvent};
 
 use anyhow::Result;
 use tracing::{info, warn};
@@ -252,6 +253,11 @@ impl WatchDog {
                 let mut guard = self.active_config.write().await;
                 *guard = new_config.clone();
                 drop(guard);
+
+                // Notify all connected clients via state sync broadcaster
+                state_sync::publish_event(StateSyncEvent::ConfigReloaded {
+                    changed_keys: vec![], // fine-grained key tracking could be added later
+                });
 
                 if let Some(ref cb) = self.on_reload {
                     let cb = cb.clone();

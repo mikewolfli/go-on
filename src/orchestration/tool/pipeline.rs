@@ -45,13 +45,13 @@ pub enum PipelineStep {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PipelineErrorStrategy {
     /// Stop execution immediately and return the partial results.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for tool subsystem
     // F-GAP-49 — reserved for future use
     Stop,
     /// Continue executing remaining steps despite the error.
     Continue,
     /// Stop execution and invoke rollback (requires transactional context).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for tool subsystem
     // F-GAP-49 — reserved for future use
     Rollback,
 }
@@ -362,7 +362,7 @@ fn evaluate_field(value: &Value, field_path: &str, expected: &Value) -> bool {
 
 /// Create a pipeline that executes a single tool.
 #[cfg(test)]
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for tool subsystem
 // F-GAP-49 — reserved for future use
 pub(crate) fn single_tool_pipeline(tool_name: impl Into<String>) -> ToolPipeline {
     let name: String = tool_name.into();
@@ -378,7 +378,7 @@ pub(crate) fn single_tool_pipeline(tool_name: impl Into<String>) -> ToolPipeline
 
 /// Construct a result for a successfully executed pipeline step.
 #[cfg(test)]
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for tool subsystem
 // F-GAP-49 — reserved for future use
 pub(crate) fn make_step_result(
     tool_name: impl Into<String>,
@@ -395,7 +395,7 @@ pub(crate) fn make_step_result(
 
 /// Format a pipeline result into a summary string.
 #[cfg(test)]
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for tool subsystem
 // F-GAP-49 — reserved for future use
 pub(crate) fn format_pipeline_summary(result: &PipelineResult) -> String {
     format!(
@@ -450,7 +450,7 @@ mod tests {
         }
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for tool subsystem
     // F-GAP-49 — reserved for future use
     fn dummy_input() -> ToolInput {
         ToolInput {

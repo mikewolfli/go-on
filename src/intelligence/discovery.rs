@@ -802,7 +802,8 @@ mod tests {
     #[test]
     fn test_search_filters_by_tags() {
         let c = DiscoveryCenter::new();
-        c.record_solution(sample_entry(1)).unwrap();
+        c.record_solution(sample_entry(1))
+            .expect("should record sample entry");
 
         let query = DiscoveryQuery {
             problem_pattern: None,
@@ -818,7 +819,9 @@ mod tests {
     #[test]
     fn test_search_filters_by_min_success_rate() {
         let c = DiscoveryCenter::new();
-        let id = c.record_solution(sample_entry(1)).unwrap();
+        let id = c
+            .record_solution(sample_entry(1))
+            .expect("should record sample entry for min_success_rate test");
         c.record_outcome(&id, true); // 1/1 = 1.0
 
         let query = DiscoveryQuery {
@@ -835,14 +838,19 @@ mod tests {
     #[test]
     fn test_record_outcome_updates_success_rate() {
         let c = DiscoveryCenter::new();
-        let id = c.record_solution(sample_entry(1)).unwrap();
+        let id = c
+            .record_solution(sample_entry(1))
+            .expect("should record entry for outcome test");
 
         c.record_outcome(&id, true);
         c.record_outcome(&id, false);
         c.record_outcome(&id, true);
 
-        let entries = c.entries.lock().unwrap();
-        let entry = entries.iter().find(|e| e.id == id).unwrap();
+        let entries = c.entries.lock().expect("Mutex should be unlocked");
+        let entry = entries
+            .iter()
+            .find(|e| e.id == id)
+            .expect("entry should exist after recording");
         assert_eq!(entry.total_attempts, 3);
         assert_eq!(entry.successful_attempts, 2);
         assert!((entry.success_rate - 2.0 / 3.0).abs() < 1e-9);
@@ -854,13 +862,17 @@ mod tests {
 
         let mut e1 = sample_entry(1);
         e1.applicability_tags = vec!["deploy".to_string()];
-        let id1 = c.record_solution(e1).unwrap();
+        let id1 = c
+            .record_solution(e1)
+            .expect("should record first entry for most_successful test");
         c.record_outcome(&id1, true);
         c.record_outcome(&id1, true);
 
         let mut e2 = sample_entry(2);
         e2.applicability_tags = vec!["deploy".to_string()];
-        let id2 = c.record_solution(e2).unwrap();
+        let id2 = c
+            .record_solution(e2)
+            .expect("should record second entry for most_successful test");
         c.record_outcome(&id2, true);
         c.record_outcome(&id2, false);
 
@@ -894,8 +906,11 @@ mod tests {
             complexity: 0.5,
             tags: vec![],
         };
-        c.register_pattern(pat).unwrap();
-        let id = c.record_solution(sample_entry(1)).unwrap();
+        c.register_pattern(pat)
+            .expect("should register pattern for profile test");
+        let id = c
+            .record_solution(sample_entry(1))
+            .expect("should record entry for profile test");
         c.record_outcome(&id, true);
 
         let p = c.profile();
@@ -912,12 +927,16 @@ mod tests {
             max_entries: 3,
             ..Default::default()
         };
-        c.record_solution(sample_entry(1)).unwrap();
-        c.record_solution(sample_entry(2)).unwrap();
-        c.record_solution(sample_entry(3)).unwrap();
+        c.record_solution(sample_entry(1))
+            .expect("should record first entry for eviction test");
+        c.record_solution(sample_entry(2))
+            .expect("should record second entry for eviction test");
+        c.record_solution(sample_entry(3))
+            .expect("should record third entry for eviction test");
         // This should evict one (the oldest by last_used_ms).
-        c.record_solution(sample_entry(4)).unwrap();
-        assert_eq!(c.entries.lock().unwrap().len(), 3);
+        c.record_solution(sample_entry(4))
+            .expect("should record fourth entry to trigger eviction");
+        assert_eq!(c.entries.lock().expect("Mutex should be unlocked").len(), 3);
     }
 
     #[test]
@@ -926,7 +945,8 @@ mod tests {
         for i in 0..10 {
             let mut e = sample_entry(i);
             e.problem_pattern = "common".to_string();
-            c.record_solution(e).unwrap();
+            c.record_solution(e)
+                .expect("should record entry for search_limit test");
         }
         let query = DiscoveryQuery {
             problem_pattern: Some("common".to_string()),
@@ -965,8 +985,8 @@ mod tests {
         let a = generate_id();
         let b = generate_id();
         // IDs are monotonic.
-        let a_num: u64 = a[5..].parse().unwrap();
-        let b_num: u64 = b[5..].parse().unwrap();
+        let a_num: u64 = a[5..].parse().expect("ID suffix should be a valid u64");
+        let b_num: u64 = b[5..].parse().expect("ID suffix should be a valid u64");
         assert!(a_num < b_num);
     }
 }

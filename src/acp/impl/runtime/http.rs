@@ -27,6 +27,8 @@ use super::openai_compat::{
 };
 use super::protocol::{extract_content_length, parse_http_request};
 use super::security::{check_http_authorization, http_entry_guard};
+use super::sse::write_sse_event;
+use super::sse::write_sse_headers;
 use super::tcp_write_timeout;
 use super::tls::build_root_capabilities_response;
 use super::RPC_SERIAL;
@@ -207,6 +209,9 @@ async fn route_http_get(
             )
             .await?;
         }
+        "/v1/state/events" => {
+            handle_state_events_sse(socket, cors_headers).await?;
+        }
         "/protocol/version" => {
             use crate::schema::ProtocolVersion;
             let versions: Vec<u16> = ProtocolVersion::supported_versions()
@@ -253,6 +258,59 @@ async fn route_http_get(
             .await?;
         }
     }
+    Ok(())
+}
+
+/// SSE handler for `/v1/state/events` — streams state sync events to connected clients.
+///
+/// Writes SSE headers, then enters a loop subscribing to the `StateSyncBroadcaster`.
+/// On each event, serializes and sends the event as an SSE frame. On disconnect,
+/// the socket write will fail and the loop exits gracefully.
+async fn handle_state_events_sse(socket: &mut TcpStream, cors_headers: &str) -> Result<()> {
+    write_sse_headers(socket, cors_headers).await?;
+
+    let mut rx = crate::protocol::state_sync::subscribe();
+    let mut heartbeat_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+
+    loop {
+        tokio::select! {
+            result = rx.recv() => {
+                match result {
+                    Ok(event) => {
+                        let payload = serde_json::to_value(&event)?;
+                        if let Err(e) = write_sse_event(socket, "state_sync", &payload).await {
+                            // Client disconnected — stop streaming
+                            debug!("state sync SSE client disconnected: {}", e);
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        // Consumer fell behind; log warning and continue
+                        debug!("state sync SSE consumer lagged by {} events", n);
+                        continue;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        // Broadcaster was closed — stop
+                        break;
+                    }
+                }
+            }
+            _ = heartbeat_interval.tick() => {
+                let heartbeat = crate::protocol::state_sync::StateSyncEvent::Heartbeat {
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                };
+                let payload = serde_json::to_value(&heartbeat)?;
+                if write_sse_event(socket, "state_sync", &payload).await.is_err() {
+                    break;
+                }
+            }
+        }
+    }
+
+    let _ = socket.shutdown().await;
     Ok(())
 }
 

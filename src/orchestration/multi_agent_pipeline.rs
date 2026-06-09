@@ -55,6 +55,7 @@ pub struct PipelineResult {
 /// Strategy for assigning agents to subtasks.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
+// F-GAP-49 — reserved for future use
 pub enum AgentAssignment {
     /// Use a specific agent by name for all subtasks
     Fixed(String),
@@ -91,6 +92,7 @@ impl MultiAgentPipeline {
 
     /// Set a custom per-subtask timeout.
     #[allow(dead_code)]
+    // F-GAP-49 — reserved for future use
     pub fn with_subtask_timeout(mut self, seconds: u64) -> Self {
         self.subtask_timeout_seconds = seconds;
         self

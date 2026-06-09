@@ -854,12 +854,20 @@ mod tests {
         let id = engine.submit_for_approval(req);
         assert!(engine.get_request(&id).is_some());
         assert_eq!(
-            engine.get_request(&id).unwrap().status,
+            engine
+                .get_request(&id)
+                .expect("request should exist after submission")
+                .status,
             ApprovalStatus::Pending
         );
 
-        engine.approve(&id, "bob", "Looks good").unwrap();
-        let status = &engine.get_request(&id).unwrap().status;
+        engine
+            .approve(&id, "bob", "Looks good")
+            .expect("approval should succeed");
+        let status = &engine
+            .get_request(&id)
+            .expect("request should still exist after approval")
+            .status;
         assert!(status.is_finalized());
         assert!(matches!(status, ApprovalStatus::Approved { .. }));
     }
@@ -873,8 +881,13 @@ mod tests {
             RiskLevel::Medium,
             HashMap::new(),
         ));
-        engine.reject(&id, "bob", "Not ready").unwrap();
-        let status = &engine.get_request(&id).unwrap().status;
+        engine
+            .reject(&id, "bob", "Not ready")
+            .expect("rejection should succeed");
+        let status = &engine
+            .get_request(&id)
+            .expect("request should exist after rejection")
+            .status;
         assert!(matches!(status, ApprovalStatus::Rejected { .. }));
     }
 
@@ -887,7 +900,9 @@ mod tests {
             RiskLevel::Low,
             HashMap::new(),
         ));
-        engine.approve(&id, "bob", "ok").unwrap();
+        engine
+            .approve(&id, "bob", "ok")
+            .expect("first approval should succeed");
         let err = engine.approve(&id, "charlie", "also ok").unwrap_err();
         assert!(matches!(err, ApprovalError::AlreadyFinalized(_, _)));
     }
@@ -913,7 +928,10 @@ mod tests {
         let changed = engine.process_timeouts();
         assert!(!changed.is_empty(), "Expected auto-deny action");
 
-        let status = &engine.get_request(&id).unwrap().status;
+        let status = &engine
+            .get_request(&id)
+            .expect("request should exist after timeout processing")
+            .status;
         assert!(
             status.is_finalized(),
             "Request should be auto-denied after deny timeout"

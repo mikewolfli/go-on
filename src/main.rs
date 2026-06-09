@@ -1,5 +1,6 @@
 #![recursion_limit = "2048"]
-// Per-item #[allow(deprecated)] at each call site covers remaining uses
+// Production #[allow(deprecated)] annotations have been migrated to
+// targeted #[expect(deprecated)] or removed.
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 //! Main entry point for the go-on ACP proxy
@@ -135,7 +136,7 @@ use crate::config::{validate_runtime_readiness, AppConfig, ConfigWarning};
 use crate::i18n::runtime::{t, tf};
 use crate::intelligence::capability_graph::CapabilityGraph;
 use crate::intelligence::continuous_learning::{
-    ContinuousLearningCenter, ContinuousLearningConfig,
+    AgentInjector, ContinuousLearningCenter, ContinuousLearningConfig,
 };
 
 use crate::protocol::access_mode::resolve_access_selection;
@@ -1053,7 +1054,11 @@ async fn run() -> Result<()> {
     // ── ContinuousLearningCenter background task ─────────────────────
     // Start a periodic review cycle that consolidates experiences, detects
     // forgetting, and advances the curriculum in the background.
+    // The center starts without an LLM agent; once agents are initialised by
+    // `start_server`, the first available agent is injected for true LLM-based
+    // semantic distillation (instead of TF-IDF fallback).
     let learning_center = ContinuousLearningCenter::new(ContinuousLearningConfig::default());
+    let cl_agent_handle = learning_center.agent_handle();
     let cl_shutdown = shutdown_notify.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(300)); // 5 min
@@ -1091,7 +1096,7 @@ async fn run() -> Result<()> {
     if crate::core::onboarding::run_onboarding(&onboarding_cfg, &config_path).await? {
         let config = Arc::new(AppConfig::load(&config_path)?);
         tokio::select! {
-            result = start_server(config, &cli, &config_path) => {
+            result = start_server(config.clone(), &cli, &config_path, Some(cl_agent_handle.clone())) => {
                 result?;
             }
             _ = shutdown_notify.notified() => {
@@ -1109,7 +1114,7 @@ async fn run() -> Result<()> {
 
     // Start the server with top-level graceful shutdown signal handling
     tokio::select! {
-        result = start_server(config, &cli, &config_path) => {
+        result = start_server(config, &cli, &config_path, Some(cl_agent_handle)) => {
             result?;
         }
         _ = shutdown_notify.notified() => {
@@ -1139,7 +1144,7 @@ async fn handle_chat_mode(
 
     // ── ProtocolNegotiator: chat mode uses ACP stdio ────────────────
     let negotiator = ProtocolNegotiator::new(NegProtocolMode::AcpStdio);
-    let negotiated = negotiator.negotiate(None);
+    let negotiated = negotiator.negotiate(None, None);
     debug!(
         "chat mode protocol: mode={}, version={}",
         negotiated.mode, negotiated.version
@@ -1377,10 +1382,16 @@ fn handle_validation_mode(
 }
 
 /// Start the server with the given configuration and CLI options.
+///
+/// `cl_agent_handle` — when `Some`, the first available agent from the registry
+/// is injected into the `ContinuousLearningCenter` for LLM-based semantic
+/// distillation (replacing the TF-IDF fallback).  Pass `None` or an empty handle
+/// to skip injection.
 async fn start_server(
     config: Arc<AppConfig>,
     cli: &Cli,
     config_path: &std::path::Path,
+    cl_agent_handle: Option<AgentInjector>,
 ) -> Result<()> {
     // Create HTTP client with timeout
     let http_client = reqwest::Client::builder()
@@ -1406,6 +1417,22 @@ async fn start_server(
         info!("  {:?}: {} agents", category, agents.len());
         for agent in agents {
             info!("    - {}", agent);
+        }
+    }
+
+    // ── Inject the first available agent into ContinuousLearningCenter ──
+    // This enables true LLM-based semantic distillation during review cycles
+    // (otherwise the center falls back to TF-IDF keyword extraction).
+    if let Some(handle) = cl_agent_handle {
+        if let Some(first_name) = registry.names().first().cloned() {
+            if let Some(agent) = registry.get(&first_name) {
+                let mut guard = handle.lock().unwrap_or_else(|e| e.into_inner());
+                info!(
+                    "ContinuousLearningCenter: injecting agent '{}' for LLM-based semantic distillation",
+                    first_name
+                );
+                *guard = Some(agent);
+            }
         }
     }
 
@@ -1572,7 +1599,7 @@ async fn start_server(
     let negotiator_mode = NegProtocolMode::from_str(dispatch_mode)
         .unwrap_or_else(|e| panic!("fatal: invalid dispatch mode '{}': {:?}", dispatch_mode, e));
     let negotiator = ProtocolNegotiator::new(negotiator_mode);
-    let negotiated = negotiator.negotiate(None);
+    let negotiated = negotiator.negotiate(None, None);
     info!(
         "protocol negotiated: mode={}, version={}, auto_detected={}",
         negotiated.mode, negotiated.version, negotiated.auto_detected

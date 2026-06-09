@@ -86,7 +86,7 @@ use std::sync::Mutex;
 /// subsystems. Additional ACP-specific fields (e.g. `RuntimeMetrics`)
 /// are wired separately in `crate::acp::server::ObservabilityLayer`.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for standalone init path (sidecars, headless agents)
 pub struct ObservabilityConfig {
     /// Service name for telemetry resource attributes.
     pub service_name: String,
@@ -116,7 +116,7 @@ impl Default for ObservabilityConfig {
 /// any ACP-specific runtime metrics or lock monitoring. If you need
 /// the full ACP observability layer, construct `ObservabilityLayer`
 /// from `crate::acp::server` instead.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for standalone init path
 pub struct ObservabilityStack {
     /// Performance monitoring (latency, throughput, error rates).
     pub performance_monitor: Arc<Mutex<crate::observability::performance::PerformanceMonitor>>,
@@ -133,7 +133,7 @@ impl ObservabilityStack {
     /// This is the primary constructor for use cases that want observability
     /// but do not need the full ACP server (sidecars, headless agents,
     /// test harnesses, etc.).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for standalone init path
     pub fn init_independent(config: &ObservabilityConfig) -> Result<Self, anyhow::Error> {
         let performance_monitor = crate::observability::performance::init_performance_monitoring();
 

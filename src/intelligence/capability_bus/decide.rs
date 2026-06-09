@@ -26,6 +26,7 @@ pub(crate) struct CandidateScoreWeights {
     pub(crate) recency: f64,
     pub(crate) task_fit: f64,
     pub(crate) recent_outcome: f64,
+    pub(crate) causal_insight: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -35,6 +36,7 @@ pub(crate) struct CandidateScoreBreakdown {
     pub(crate) recency_score: f64,
     pub(crate) task_fit_score: f64,
     pub(crate) recent_outcome_score: f64,
+    pub(crate) causal_insight_score: f64,
     pub(crate) total_score: f64,
 }
 
@@ -54,6 +56,9 @@ pub struct DecisionOutput {
     /// Phase 4: tools available for the selected agent
     #[cfg(feature = "sub-bus-tool")]
     pub available_tools: Vec<String>,
+    /// BLUE67-I2: Counterfactual score — probability that NOT selecting this
+    /// agent would lead to a worse outcome, computed from the Bayesian causal graph.
+    pub counterfactual_score: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -70,18 +75,24 @@ pub(crate) fn configured_candidate_score_weights() -> CandidateScoreWeights {
     }
 
     let weights = CandidateScoreWeights {
-        reputation: read_weight("GO_ON_CAPABILITY_WEIGHT_REPUTATION", 0.45),
-        recency: read_weight("GO_ON_CAPABILITY_WEIGHT_RECENCY", 0.15),
-        task_fit: read_weight("GO_ON_CAPABILITY_WEIGHT_TASK_FIT", 0.25),
+        reputation: read_weight("GO_ON_CAPABILITY_WEIGHT_REPUTATION", 0.40),
+        recency: read_weight("GO_ON_CAPABILITY_WEIGHT_RECENCY", 0.12),
+        task_fit: read_weight("GO_ON_CAPABILITY_WEIGHT_TASK_FIT", 0.23),
         recent_outcome: read_weight("GO_ON_CAPABILITY_WEIGHT_RECENT_OUTCOME", 0.15),
+        causal_insight: read_weight("GO_ON_CAPABILITY_WEIGHT_CAUSAL_INSIGHT", 0.10),
     };
-    let total = weights.reputation + weights.recency + weights.task_fit + weights.recent_outcome;
+    let total = weights.reputation
+        + weights.recency
+        + weights.task_fit
+        + weights.recent_outcome
+        + weights.causal_insight;
     if total <= f64::EPSILON {
         CandidateScoreWeights {
-            reputation: 0.45,
-            recency: 0.15,
-            task_fit: 0.25,
+            reputation: 0.40,
+            recency: 0.12,
+            task_fit: 0.23,
             recent_outcome: 0.15,
+            causal_insight: 0.10,
         }
     } else {
         CandidateScoreWeights {
@@ -89,6 +100,7 @@ pub(crate) fn configured_candidate_score_weights() -> CandidateScoreWeights {
             recency: weights.recency / total,
             task_fit: weights.task_fit / total,
             recent_outcome: weights.recent_outcome / total,
+            causal_insight: weights.causal_insight / total,
         }
     }
 }
@@ -237,6 +249,7 @@ impl CapabilityBus {
             return (None, Vec::new());
         }
         let weights = configured_candidate_score_weights();
+        let task_type_str = format!("{:?}", task.task_type);
         let mut scored: Vec<CandidateScoreBreakdown> = candidates
             .iter()
             .map(|name| {
@@ -250,16 +263,21 @@ impl CapabilityBus {
                 let task_fit_score = task_fit_score(task, name);
                 let recent_outcome_score =
                     recent_outcome_score(&sensing.learning_snapshot, task, name);
+                // BLUE67-I1: Query causal Bayesian graph for agent-task effectiveness
+                let causal_insight_score =
+                    self.world_model.causal_agent_insight(name, &task_type_str);
                 let total_score = (reputation_score * weights.reputation)
                     + (recency_score * weights.recency)
                     + (task_fit_score * weights.task_fit)
-                    + (recent_outcome_score * weights.recent_outcome);
+                    + (recent_outcome_score * weights.recent_outcome)
+                    + (causal_insight_score * weights.causal_insight);
                 CandidateScoreBreakdown {
                     agent: name.clone(),
                     reputation_score,
                     recency_score,
                     task_fit_score,
                     recent_outcome_score,
+                    causal_insight_score,
                     total_score,
                 }
             })
@@ -306,6 +324,7 @@ impl CapabilityBus {
                         "diagnostics".to_string(),
                         "audit".to_string(),
                     ],
+                    counterfactual_score: 0.0,
                 };
             }
             PolicyVerdict::Escalate(r) => {
@@ -330,6 +349,7 @@ impl CapabilityBus {
                         "diagnostics".to_string(),
                         "audit".to_string(),
                     ],
+                    counterfactual_score: 0.0,
                 };
             }
             PolicyVerdict::Allow
@@ -473,6 +493,7 @@ impl CapabilityBus {
                     recency_score: 1.0,
                     task_fit_score: 1.0,
                     recent_outcome_score: 1.0,
+                    causal_insight_score: 1.0,
                     total_score: 1.0,
                 }];
                 (Some(preferred.clone()), breakdown)
@@ -535,6 +556,18 @@ impl CapabilityBus {
         #[cfg(not(feature = "sub-bus-orchestration"))]
         let recommended_mode = "auto".to_string();
 
+        // BLUE67-I2: Compute counterfactual score for the selected agent
+        // Answers: "How much worse would the outcome be if we had NOT selected this agent?"
+        let counterfactual_score = selected_agent.as_ref().map_or(0.5, |agent| {
+            // Evaluate P(success | ¬agent) — the probability of success WITHOUT this agent
+            let p_without = self
+                .world_model
+                .counterfactual_probability(agent, &task_type_str);
+            // Counterfactual score: 1.0 - P(success | ¬agent)
+            // Higher means the agent is more critical (harder to replace)
+            (1.0 - p_without).clamp(0.0, 1.0)
+        });
+
         // Phase 4: Get available tools for the selected agent via ToolBus
         #[cfg(feature = "sub-bus-tool")]
         let available_tools = selected_agent
@@ -551,14 +584,16 @@ impl CapabilityBus {
             "success",
             serde_json::json!({
                 "confidence": confidence,
+                "counterfactual_score": counterfactual_score,
                 "recommended_mode": recommended_mode,
                 "available_tools": available_tools.len(),
                 "candidate_agents": candidate_agents.len(),
                 "score_weights": {
                     "reputation": configured_candidate_score_weights().reputation,
-                    "recency": configured_candidate_score_weights().recency,
-                    "task_fit": configured_candidate_score_weights().task_fit,
-                    "recent_outcome": configured_candidate_score_weights().recent_outcome,
+                            "recency": configured_candidate_score_weights().recency,
+                            "task_fit": configured_candidate_score_weights().task_fit,
+                            "recent_outcome": configured_candidate_score_weights().recent_outcome,
+                            "causal_insight": configured_candidate_score_weights().causal_insight,
                 },
                 "candidate_scores": score_breakdown,
             }),
@@ -589,6 +624,7 @@ impl CapabilityBus {
             recommended_mode,
             #[cfg(feature = "sub-bus-tool")]
             available_tools,
+            counterfactual_score,
         }
     }
 }

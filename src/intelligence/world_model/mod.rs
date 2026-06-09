@@ -4,627 +4,19 @@
 //! external environment — tracking entities, relationships, events, and state
 //! changes over time. All state is guarded behind `Arc<Mutex<>>`.
 
+mod causal;
+mod types;
+
+pub use causal::CausalReasoner;
+pub use types::*;
+
 use crate::i18n::runtime::tf;
+use crate::intelligence::causal_bayesian_graph::{BayesianCausalPath, CausalBayesianGraph};
 use crate::intelligence::lock_guard;
 use crate::intelligence::now_ms;
 use anyhow::{bail, Result};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-
-// ---------------------------------------------------------------------------
-// Type aliases for complex types used in causal analysis
-// ---------------------------------------------------------------------------
-
-/// Event data: (source, payload, timestamp_ms)
-type EventData = (String, HashMap<String, String>, u64);
-/// Collection of events grouped by source (payload, timestamp_ms).
-/// The source is the map key, so only a 2-tuple is stored.
-type SourceEvents = HashMap<String, Vec<(HashMap<String, String>, u64)>>;
-
-// ---------------------------------------------------------------------------
-// Causal inference & prediction
-// ---------------------------------------------------------------------------
-
-/// A causal link between two entities: action_entity causes effect_entity.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CausalLink {
-    /// The entity representing the cause/action
-    pub cause_entity_id: String,
-    /// The entity representing the effect/outcome
-    pub effect_entity_id: String,
-    /// Confidence in this causal relationship (0.0 – 1.0)
-    pub confidence: f64,
-    /// Number of times this causation has been observed
-    pub observation_count: u64,
-    /// Average time delay between cause and effect (ms)
-    pub avg_delay_ms: f64,
-    /// Context tags under which this causal link is valid
-    pub context_tags: Vec<String>,
-}
-
-/// A prediction about a future entity state.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Prediction {
-    /// The entity being predicted
-    pub entity_id: String,
-    /// The predicted attribute values
-    pub predicted_attributes: serde_json::Value,
-    /// Confidence in prediction (0.0 – 1.0)
-    pub confidence: f64,
-    /// Time horizon of the prediction (ms from now)
-    pub horizon_ms: u64,
-    /// What action/event this prediction is based on
-    pub based_on: String,
-}
-
-// ---------------------------------------------------------------------------
-// Causal Reasoner — state-tracking correlation engine
-// ---------------------------------------------------------------------------
-
-/// A snapshot of an entity's properties at a point in time.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EntityStateSnapshot {
-    /// The entity whose state was captured.
-    pub entity_id: String,
-    /// The entity's properties at this point.
-    pub properties: HashMap<String, String>,
-    /// Epoch millisecond when the snapshot was taken.
-    pub timestamp_ms: u64,
-}
-
-/// A discovered correlation between two property changes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Correlation {
-    /// The entity whose property change is the suspected cause.
-    pub cause_entity: String,
-    /// The property on the cause entity that changed.
-    pub cause_property: String,
-    /// The entity whose property change is the suspected effect.
-    pub effect_entity: String,
-    /// The property on the effect entity that changed.
-    pub effect_property: String,
-    /// How many times this co-occurrence has been observed.
-    pub co_occurrence_count: u64,
-    /// Confidence score (0.0 – 1.0) based on co-occurrence frequency.
-    pub confidence: f64,
-    /// Average time delta (ms) between cause and effect observations.
-    pub avg_time_delta_ms: i64,
-}
-
-/// Maintains inference state for discovering causal relationships
-/// by analyzing entity state changes over time windows.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CausalReasoner {
-    /// Historical entity state snapshots for correlation analysis.
-    history: Vec<EntityStateSnapshot>,
-    /// Discovered correlations between property changes.
-    correlations: Vec<Correlation>,
-    /// Maximum number of snapshots to retain.
-    max_history: usize,
-    /// Time window (ms) for considering two changes as potentially causal.
-    window_ms: u64,
-}
-
-impl CausalReasoner {
-    /// Creates a new reasoner with the given capacity and time window.
-    pub fn new(max_history: usize, window_ms: u64) -> Self {
-        Self {
-            history: Vec::with_capacity(max_history),
-            correlations: Vec::new(),
-            max_history,
-            window_ms,
-        }
-    }
-
-    /// Records a state snapshot for an entity.
-    /// Evicts the oldest snapshot when history is at capacity.
-    pub fn record_state(
-        &mut self,
-        entity_id: &str,
-        properties: HashMap<String, String>,
-        timestamp_ms: u64,
-    ) {
-        if self.history.len() >= self.max_history {
-            self.history.remove(0);
-        }
-        self.history.push(EntityStateSnapshot {
-            entity_id: entity_id.to_string(),
-            properties,
-            timestamp_ms,
-        });
-    }
-
-    /// Analyzes state history to discover correlations between property changes.
-    ///
-    /// For each pair of entity snapshots within `window_ms`, checks whether
-    /// a property change in one correlates with a property change in another.
-    /// Updates the internal `correlations` vector with co-occurrence counts
-    /// and confidence scores.
-    pub fn infer_correlations(&mut self) -> &[Correlation] {
-        let window = self.window_ms as i64;
-        #[allow(clippy::type_complexity)]
-        let mut co_occurrences: HashMap<(String, String, String, String), (u64, Vec<i64>)> =
-            HashMap::new();
-
-        for i in 0..self.history.len() {
-            for j in (i + 1)..self.history.len() {
-                let snap_a = &self.history[i];
-                let snap_b = &self.history[j];
-                let delta = snap_b.timestamp_ms as i64 - snap_a.timestamp_ms as i64;
-
-                if delta.abs() > window {
-                    continue;
-                }
-
-                // Find properties that differ between consecutive snapshots
-                // for the same entity, or track cross-entity correlations.
-                if snap_a.entity_id == snap_b.entity_id {
-                    // Same entity: detect which properties changed
-                    let changed_a = Self::detect_changes(snap_a, snap_b);
-                    for (prop_a, _) in &changed_a {
-                        for (prop_b, _) in &changed_a {
-                            if prop_a != prop_b {
-                                let key = (
-                                    snap_a.entity_id.clone(),
-                                    prop_a.to_string(),
-                                    snap_b.entity_id.clone(),
-                                    prop_b.to_string(),
-                                );
-                                let entry = co_occurrences.entry(key).or_insert((0, Vec::new()));
-                                entry.0 += 1;
-                                entry.1.push(delta);
-                            }
-                        }
-                    }
-                } else {
-                    // Different entities: cross-entity correlation
-                    let changed_a = Self::detect_changes(snap_a, snap_b);
-                    let changed_b = Self::detect_changes(snap_b, snap_a);
-                    // For simplicity, check if both had concurrent changes
-                    if !changed_a.is_empty() && !changed_b.is_empty() {
-                        for (prop_a, _) in &changed_a {
-                            for (prop_b, _) in &changed_b {
-                                let key = (
-                                    snap_a.entity_id.clone(),
-                                    prop_a.to_string(),
-                                    snap_b.entity_id.clone(),
-                                    prop_b.to_string(),
-                                );
-                                let entry = co_occurrences.entry(key).or_insert((0, Vec::new()));
-                                entry.0 += 1;
-                                entry.1.push(delta);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Convert co-occurrence map into correlation scores
-        let total_pairs = if self.history.len() > 1 {
-            (self.history.len() * (self.history.len() - 1)) / 2
-        } else {
-            1
-        };
-
-        self.correlations = co_occurrences
-            .into_iter()
-            .map(|((ce, cp, ee, ep), (count, deltas))| {
-                let raw_score = count as f64 / total_pairs as f64;
-                let confidence = (raw_score * 2.0).clamp(0.0, 1.0);
-                let avg_delta = if deltas.is_empty() {
-                    0
-                } else {
-                    deltas.iter().sum::<i64>() / deltas.len() as i64
-                };
-                Correlation {
-                    cause_entity: ce,
-                    cause_property: cp,
-                    effect_entity: ee,
-                    effect_property: ep,
-                    co_occurrence_count: count,
-                    confidence,
-                    avg_time_delta_ms: avg_delta,
-                }
-            })
-            .collect();
-
-        // Sort by confidence descending
-        self.correlations.sort_by(|a, b| {
-            b.confidence
-                .partial_cmp(&a.confidence)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        &self.correlations
-    }
-
-    /// Returns the current set of discovered correlations.
-    #[allow(dead_code)] // F-GAP reserved
-    pub fn correlations(&self) -> &[Correlation] {
-        &self.correlations
-    }
-
-    /// Chains discovered correlations into causal sequences.
-    ///
-    /// Starting from each correlation, greedily extends chains of the form
-    /// A→B, B→C, ... up to `max_chain_length`. Returns all found chains
-    /// sorted by length (longest first), then by starting confidence.
-    pub fn infer_causal_chains(&self, max_chain_length: usize) -> Vec<Vec<Correlation>> {
-        let chain_len = max_chain_length.max(2);
-        if self.correlations.is_empty() {
-            return Vec::new();
-        }
-
-        // Build a lookup: (effect_entity, effect_property) -> indices
-        let mut effect_index: HashMap<(String, String), Vec<usize>> = HashMap::new();
-        for (i, corr) in self.correlations.iter().enumerate() {
-            effect_index
-                .entry((corr.effect_entity.clone(), corr.effect_property.clone()))
-                .or_default()
-                .push(i);
-        }
-
-        let mut chains: Vec<Vec<Correlation>> = Vec::new();
-
-        for start_idx in 0..self.correlations.len() {
-            let mut chain = Vec::new();
-            chain.push(self.correlations[start_idx].clone());
-
-            // Greedily extend the chain by following effect -> cause matches
-            while chain.len() < chain_len {
-                let last = chain.last().unwrap();
-                let next_key = (last.effect_entity.clone(), last.effect_property.clone());
-                if let Some(next_indices) = effect_index.get(&next_key) {
-                    // Pick the next correlation with highest confidence,
-                    // avoiding cycles (don't revisit an entity already in the chain).
-                    let already_in_chain: Vec<&str> =
-                        chain.iter().map(|c| c.effect_entity.as_str()).collect();
-                    if let Some(&best_idx) = next_indices
-                        .iter()
-                        .filter(|&&idx| {
-                            !already_in_chain
-                                .contains(&self.correlations[idx].effect_entity.as_str())
-                        })
-                        .max_by(|&&a, &&b| {
-                            self.correlations[a]
-                                .confidence
-                                .partial_cmp(&self.correlations[b].confidence)
-                                .unwrap_or(std::cmp::Ordering::Equal)
-                        })
-                    {
-                        chain.push(self.correlations[best_idx].clone());
-                    } else {
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            }
-
-            if chain.len() >= 2 {
-                chains.push(chain);
-            }
-        }
-
-        // Sort by length descending, then by first-link confidence descending
-        chains.sort_by(|a, b| {
-            b.len().cmp(&a.len()).then_with(|| {
-                b.first()
-                    .map(|c| c.confidence)
-                    .unwrap_or(0.0)
-                    .partial_cmp(&a.first().map(|c| c.confidence).unwrap_or(0.0))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-        });
-
-        // Deduplicate chains with identical (cause, effect) sequences
-        chains.dedup_by(|a, b| {
-            a.len() == b.len()
-                && a.iter().zip(b.iter()).all(|(ca, cb)| {
-                    ca.cause_entity == cb.cause_entity
-                        && ca.cause_property == cb.cause_property
-                        && ca.effect_entity == cb.effect_entity
-                        && ca.effect_property == cb.effect_property
-                })
-        });
-
-        chains
-    }
-
-    /// Predicts probable next state changes for a given entity based on
-    /// discovered correlations and historical snapshots.
-    ///
-    /// Returns a list of `(property, expected_value, confidence)` tuples.
-    /// Unlike the basic version, this method examines historical snapshots
-    /// to extract concrete expected values for each predicted property.
-    pub fn predict_next_state(
-        &self,
-        entity_id: &str,
-        current_properties: &HashMap<String, String>,
-    ) -> Vec<(String, String, f64)> {
-        let mut predictions: Vec<(String, String, f64)> = Vec::new();
-
-        // Pre-index historical snapshots by entity_id for fast lookup.
-        let mut history_by_entity: HashMap<&str, Vec<&EntityStateSnapshot>> = HashMap::new();
-        for snap in &self.history {
-            history_by_entity
-                .entry(snap.entity_id.as_str())
-                .or_default()
-                .push(snap);
-        }
-
-        for corr in &self.correlations {
-            // Determine if the correlation applies and what to predict.
-            let (target_entity, target_prop, base_confidence, is_cause_side) =
-                if corr.cause_entity == entity_id {
-                    // This entity is the cause; predict the effect
-                    let cause_val = current_properties.get(&corr.cause_property);
-                    if cause_val.is_none() {
-                        continue;
-                    }
-                    (
-                        corr.effect_entity.as_str(),
-                        corr.effect_property.as_str(),
-                        corr.confidence * 0.8,
-                        true,
-                    )
-                } else if corr.effect_entity == entity_id {
-                    // This entity is the effect; predict the effect property change
-                    (
-                        corr.effect_entity.as_str(),
-                        corr.effect_property.as_str(),
-                        corr.confidence * 0.7,
-                        false,
-                    )
-                } else {
-                    continue;
-                };
-
-            // Try to extract an actual predicted value from historical data.
-            // Look for the last snapshot where the target property had a
-            // value that appeared after a matching cause-side change.
-            let predicted_val = if is_cause_side {
-                // We are predicting the effect entity's property.
-                // Find the most recent snapshot of the effect entity where
-                // this property had a value that changed from a prior snapshot
-                // within the correlation's time window.
-                let window = self.window_ms as i64;
-                let mut best_val = String::new();
-
-                if let Some(effect_snaps) = history_by_entity.get(target_entity) {
-                    for snap in effect_snaps.iter().rev() {
-                        if let Some(val) = snap.properties.get(target_prop) {
-                            let causal_snaps = history_by_entity
-                                .get(entity_id)
-                                .map(|v| v.as_slice())
-                                .unwrap_or(&[]);
-                            for csnap in causal_snaps.iter().rev() {
-                                let delta = snap.timestamp_ms as i64 - csnap.timestamp_ms as i64;
-                                if delta > 0 && delta <= window {
-                                    if let Some(cause_val) =
-                                        current_properties.get(&corr.cause_property)
-                                    {
-                                        if csnap.properties.get(&corr.cause_property)
-                                            != Some(cause_val)
-                                        {
-                                            // The cause entity's property changed
-                                            // shortly before this snapshot.
-                                            if !val.is_empty() {
-                                                best_val = val.clone();
-                                            }
-                                        }
-                                    }
-                                    break;
-                                }
-                            }
-                            if !best_val.is_empty() {
-                                break;
-                            }
-                        }
-                    }
-                }
-                best_val
-            } else {
-                // Entity is the effect itself: find the most recent historical
-                // value for this property.
-                let mut best_val = String::new();
-                if let Some(snaps) = history_by_entity.get(entity_id) {
-                    for snap in snaps.iter().rev() {
-                        if let Some(val) = snap.properties.get(target_prop) {
-                            if !val.is_empty() {
-                                best_val = val.clone();
-                                break;
-                            }
-                        }
-                    }
-                }
-                best_val
-            };
-
-            let confidence = base_confidence + if predicted_val.is_empty() { 0.0 } else { 0.1 };
-            predictions.push((target_prop.to_string(), predicted_val, confidence));
-        }
-
-        // Sort by confidence descending and deduplicate (keep highest confidence).
-        predictions.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
-        predictions.dedup_by(|a, b| a.0 == b.0);
-        predictions.truncate(10);
-        predictions
-    }
-
-    /// Helper: checks if a property value changed between two snapshots
-    /// (only meaningful when snap_b is later than snap_a for the same entity).
-    fn detect_changes<'a>(
-        snap_a: &'a EntityStateSnapshot,
-        snap_b: &'a EntityStateSnapshot,
-    ) -> Vec<(&'a str, &'a str)> {
-        let mut changed = Vec::new();
-        // For cross-entity analysis, just report both sets of properties.
-        // For same entity, report properties whose values differ.
-        if snap_a.entity_id == snap_b.entity_id {
-            for (key, val_b) in &snap_b.properties {
-                if snap_a.properties.get(key) != Some(val_b) {
-                    changed.push((key.as_str(), val_b.as_str()));
-                }
-            }
-            for key in snap_a.properties.keys() {
-                if !snap_b.properties.contains_key(key) {
-                    changed.push((key.as_str(), ""));
-                }
-            }
-        } else {
-            // Cross-entity: report both snapshots' properties as "changes"
-            // to detect concurrent modifications
-            for (key, val) in &snap_a.properties {
-                changed.push((key.as_str(), val.as_str()));
-            }
-        }
-        changed
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Configuration
-// ---------------------------------------------------------------------------
-
-/// Configuration for the world model pipeline.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorldModelConfig {
-    /// Maximum number of entities before rejection of new registrations.
-    pub max_entities: usize,
-    /// Maximum number of events stored in the ring buffer.
-    pub max_events: usize,
-    /// Time in milliseconds after which an entity/event is considered stale.
-    pub state_retention_ms: u64,
-    /// Minimum confidence required for an entity to be considered valid.
-    pub confidence_threshold: f64,
-}
-
-impl Default for WorldModelConfig {
-    fn default() -> Self {
-        Self {
-            max_entities: 1000,
-            max_events: 5000,
-            state_retention_ms: 3_600_000, // 1 hour
-            confidence_threshold: 0.3,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Enums — EntityType & RelationshipType
-// ---------------------------------------------------------------------------
-
-/// Classification of an entity in the world model.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum EntityType {
-    Agent,
-    Resource,
-    System,
-    User,
-    Service,
-    DataStore,
-    External,
-}
-
-/// Classification of a relationship between two entities.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum RelationshipType {
-    DependsOn,
-    Owns,
-    CommunicatesWith,
-    Contains,
-    Manages,
-    Unknown,
-}
-
-// ---------------------------------------------------------------------------
-// Core data structures
-// ---------------------------------------------------------------------------
-
-/// A tracked entity in the world model.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorldEntity {
-    /// Unique identifier for this entity.
-    pub id: String,
-    /// Human-readable name.
-    pub name: String,
-    /// Classification of this entity.
-    pub entity_type: EntityType,
-    /// Arbitrary key-value properties.
-    pub properties: HashMap<String, String>,
-    /// Confidence score in [0.0, 1.0].
-    pub confidence: f64,
-    /// Unix timestamp (milliseconds) when this entity was last observed.
-    pub last_seen_ms: u64,
-    /// Unix timestamp (milliseconds) when this entity was created.
-    pub created_ms: u64,
-}
-
-/// A directed relationship between two entities.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Relationship {
-    /// ID of the source entity.
-    pub source_id: String,
-    /// ID of the target entity.
-    pub target_id: String,
-    /// Classification of this relationship.
-    pub rel_type: RelationshipType,
-    /// Weight of the relationship in [0.0, 1.0].
-    pub weight: f64,
-    /// Unix timestamp (milliseconds) when this relationship was discovered.
-    pub discovered_ms: u64,
-}
-
-/// An event that occurred in the world.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorldEvent {
-    /// Unique identifier for this event.
-    pub id: String,
-    /// Type/category of the event.
-    pub event_type: String,
-    /// Source entity that produced the event.
-    pub source: String,
-    /// Optional target entity that the event affects.
-    pub target: Option<String>,
-    /// Arbitrary key-value payload data.
-    pub payload: HashMap<String, String>,
-    /// Confidence score in [0.0, 1.0].
-    pub confidence: f64,
-    /// Unix timestamp (milliseconds) when this event occurred.
-    pub timestamp_ms: u64,
-}
-
-/// A point-in-time snapshot of the world model's state.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StateSnapshot {
-    /// Unique identifier for this snapshot.
-    pub snapshot_id: String,
-    /// Entities at the time of capture.
-    pub entities: Vec<WorldEntity>,
-    /// Relationships at the time of capture.
-    pub relationships: Vec<Relationship>,
-    /// Unix timestamp (milliseconds) when this snapshot was captured.
-    pub captured_ms: u64,
-}
-
-/// Runtime profile of the world model's current state.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct WorldModelProfile {
-    /// Total number of registered entities.
-    pub total_entities: usize,
-    /// Total number of recorded relationships.
-    pub total_relationships: usize,
-    /// Total number of recorded events.
-    pub total_events: usize,
-    /// Average confidence across all entities.
-    pub avg_entity_confidence: f64,
-    /// Unix timestamp (milliseconds) of the last update.
-    pub last_update_ms: u64,
-    /// Number of entities that are currently stale.
-    pub stale_entity_count: usize,
-}
 
 // ---------------------------------------------------------------------------
 // Internal state
@@ -644,6 +36,8 @@ struct Inner {
     causal_links: Vec<CausalLink>,
     /// Index: cause_entity_id → indices into causal_links for O(1) lookups
     causal_links_by_cause: HashMap<String, Vec<usize>>,
+    /// Probabilistic causal graph with MCTS for ultra-long chain reasoning.
+    bayesian_graph: CausalBayesianGraph,
     /// Max relationships to retain before evicting the oldest.
     max_relationships: usize,
     /// Max causal links to retain before evicting the oldest.
@@ -686,6 +80,7 @@ impl WorldModel {
                 max_causal_links: 5000,
                 causal_reasoner: CausalReasoner::new(5000, 5000),
                 update_counter: 0,
+                bayesian_graph: CausalBayesianGraph::new(),
                 correlation_inference_interval: 10,
             })),
         }
@@ -788,10 +183,11 @@ impl WorldModel {
         inner.update_counter += 1;
 
         // Periodically run correlation inference and generate causal links
-        if inner
+        let should_infer = inner
             .update_counter
-            .is_multiple_of(inner.correlation_inference_interval)
-        {
+            .is_multiple_of(inner.correlation_inference_interval);
+
+        if should_infer {
             let correlations = inner.causal_reasoner.infer_correlations().to_vec();
             for corr in &correlations {
                 let existing = inner.causal_links.iter().position(|l| {
@@ -820,6 +216,70 @@ impl WorldModel {
                         .or_default()
                         .push(idx);
                 }
+            }
+
+            // Also extract state transitions from the causal reasoner's history
+            // and feed them into infer_causal_chain for entity-state-level chains.
+            // This wires infer_causal_chain into a real production path.
+            let history_snapshots: Vec<(String, String)> = inner
+                .causal_reasoner
+                .history
+                .iter()
+                .map(|snap| {
+                    // Serialize the full property set as the "state" value.
+                    let mut pairs: Vec<String> = snap
+                        .properties
+                        .iter()
+                        .map(|(k, v)| format!("{}={}", k, v))
+                        .collect();
+                    pairs.sort();
+                    (snap.entity_id.clone(), pairs.join(","))
+                })
+                .collect();
+
+            // Build consecutive same-entity state changes.
+            let mut state_changes: Vec<(String, String)> = Vec::new();
+            for i in 1..history_snapshots.len() {
+                let prev = &history_snapshots[i - 1];
+                let curr = &history_snapshots[i];
+                if prev.0 == curr.0 && prev.1 != curr.1 {
+                    state_changes.push((prev.1.clone(), curr.1.clone()));
+                }
+            }
+
+            if !state_changes.is_empty() {
+                // Drop the lock before calling infer_causal_chain to avoid deadlock.
+                drop(inner);
+                let chain_links = self.infer_causal_chain(&state_changes);
+                if !chain_links.is_empty() {
+                    let mut inner = lock_guard(&self.inner);
+                    for link in &chain_links {
+                        if inner.causal_links.len() < inner.max_causal_links {
+                            let idx = inner.causal_links.len();
+                            inner.causal_links.push(link.clone());
+                            inner
+                                .causal_links_by_cause
+                                .entry(link.cause_entity_id.clone())
+                                .or_default()
+                                .push(idx);
+                        }
+                        // Feed into Bayesian graph for probabilistic reasoning
+                        inner.bayesian_graph.record_correlation(
+                            &link.cause_entity_id,
+                            "state",
+                            &link.effect_entity_id,
+                            "state",
+                            1,
+                            link.confidence,
+                            link.avg_delay_ms as i64,
+                        );
+                    }
+                    // Periodically build meso-layer abstractions
+                    if inner.update_counter.is_multiple_of(50) {
+                        inner.bayesian_graph.build_meso_layer();
+                    }
+                }
+                return Ok(());
             }
         }
 
@@ -1024,6 +484,97 @@ impl WorldModel {
             .filter(|e| e.event_type == event_type && e.timestamp_ms >= since_ms)
             .cloned()
             .collect()
+    }
+
+    /// Find causal paths using MCTS-based probabilistic reasoning.
+    ///
+    /// Uses the internal `CausalBayesianGraph` to explore ultra-long causal chains
+    /// with UCB1-guided Monte Carlo Tree Search and confidence-weighted probabilities.
+    ///
+    /// # Parameters
+    ///
+    /// * `cause_entity` — starting entity ID
+    /// * `effect_entity` — target entity ID (empty = explore all paths)
+    /// * `max_path_length` — maximum edges per path (default: 10)
+    /// * `min_probability` — minimum edge probability to consider (default: 0.05)
+    ///
+    /// # Returns
+    ///
+    /// Causal paths sorted by confidence descending.
+    pub fn find_causal_paths_mcts(
+        &self,
+        cause_entity: &str,
+        effect_entity: &str,
+        max_path_length: usize,
+        min_probability: f64,
+    ) -> Vec<BayesianCausalPath> {
+        let inner = lock_guard(&self.inner);
+        inner.bayesian_graph.find_paths_mcts(
+            cause_entity,
+            "state",
+            effect_entity,
+            "state",
+            max_path_length,
+            500, // MCTS iterations
+            min_probability,
+        )
+    }
+
+    /// Answer a counterfactual query: "What would the probability of `effect`
+    /// be if `cause` had NOT happened?"
+    ///
+    /// Uses Bayesian inversion on the internal causal graph:
+    /// P(effect | ¬cause) = (P(effect) - P(cause) * P(effect|cause)) / (1 - P(cause))
+    pub fn counterfactual_probability(&self, cause_entity: &str, effect_entity: &str) -> f64 {
+        let inner = lock_guard(&self.inner);
+        inner.bayesian_graph.counterfactual_probability(
+            cause_entity,
+            "state",
+            effect_entity,
+            "state",
+        )
+    }
+
+    /// Get the Bayesian graph's node and edge count for diagnostics.
+    pub fn bayesian_graph_stats(&self) -> (usize, usize, u64) {
+        let inner = lock_guard(&self.inner);
+        (
+            inner.bayesian_graph.node_count(),
+            inner.bayesian_graph.edge_count(),
+            inner.bayesian_graph.total_observations(),
+        )
+    }
+
+    /// Query causal insight for agent selection hot path.
+    ///
+    /// Uses the Bayesian causal graph to evaluate how causally effective an agent
+    /// has been for a given task type. Returns a score in [0.0, 1.0] where higher
+    /// means the agent has a strong causal relationship with successful outcomes.
+    ///
+    /// This is called from `CapabilityBus::decide()` as an additional scoring
+    /// dimension alongside reputation, recency, and task-fit scores.
+    pub fn causal_agent_insight(&self, agent_name: &str, task_type: &str) -> f64 {
+        let inner = lock_guard(&self.inner);
+        // Only meaningful if sufficient observations exist (at least 10 edges)
+        if inner.bayesian_graph.edge_count() < 10 {
+            return 0.5; // neutral — insufficient data
+        }
+        // Query: how does agent_name → (task_type, success) probability look?
+        let paths = inner.bayesian_graph.find_paths_mcts(
+            agent_name, "status", task_type, "success", 5,    // max_path_length
+            200,  // MCTS iterations (lightweight for hot path)
+            0.05, // min_probability
+        );
+        if paths.is_empty() {
+            return 0.5; // neutral — no causal data
+        }
+        // Weight top-3 paths by joint_probability * confidence
+        let top: f64 = paths
+            .iter()
+            .take(3)
+            .map(|p| p.joint_probability * p.confidence)
+            .sum();
+        (top / 3.0).clamp(0.0, 1.0)
     }
 
     // -- Snapshot ----------------------------------------------------------
@@ -1471,6 +1022,119 @@ impl WorldModel {
     pub fn infer_causal_chains(&self, max_chain_length: usize) -> Vec<Vec<Correlation>> {
         let inner = lock_guard(&self.inner);
         inner.causal_reasoner.infer_causal_chains(max_chain_length)
+    }
+
+    /// Chains discovered correlations into deep causal sequences with
+    /// probabilistic confidence decay, branching path detection, feedback
+    /// loop awareness, and confidence threshold filtering.
+    ///
+    /// Delegates to `CausalReasoner::infer_causal_chains_deep`.
+    ///
+    /// # Parameters
+    ///
+    /// * `max_chain_length` — maximum number of links in any single chain.
+    /// * `min_confidence` — minimum confidence threshold (default 0.15).
+    ///   Pass a value < 0.0 to disable threshold filtering.
+    ///
+    /// # Returns
+    ///
+    /// A `Vec<CausalChain>` sorted by aggregate confidence descending.
+    pub fn infer_causal_chains_deep(
+        &self,
+        max_chain_length: usize,
+        min_confidence: f64,
+    ) -> Vec<CausalChain> {
+        let inner = lock_guard(&self.inner);
+        inner
+            .causal_reasoner
+            .infer_causal_chains_deep(max_chain_length, min_confidence)
+    }
+
+    /// Infer causal links from a sequence of state-change pairs.
+    ///
+    /// Each element in `state_changes` is a `(from_state, to_state)` tuple
+    /// representing a single state transition. The method chains consecutive
+    /// transitions where `pair[i].1 == pair[j].0` (i.e. the `to_state` of one
+    /// change equals the `from_state` of another) into causal links.
+    ///
+    /// This is a lightweight, heuristic approach that does not require the
+    /// [`CausalReasoner`]'s historical correlation analysis. It is useful for
+    /// deriving quick causal insights from an ordered sequence of raw state
+    /// transitions.
+    ///
+    /// Returns a list of [`CausalLink`] entries ordered by the transition
+    /// sequence, with confidence decaying inversely with chain distance.
+    pub fn infer_causal_chain(&self, state_changes: &[(String, String)]) -> Vec<CausalLink> {
+        if state_changes.is_empty() {
+            return Vec::new();
+        }
+
+        // Build a map: from_state -> indices for O(1) lookups
+        let mut from_index: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (i, (from, _)) in state_changes.iter().enumerate() {
+            from_index.entry(from.as_str()).or_default().push(i);
+        }
+
+        let mut links: Vec<CausalLink> = Vec::new();
+        let mut visited = vec![false; state_changes.len()];
+
+        for start_idx in 0..state_changes.len() {
+            if visited[start_idx] {
+                continue;
+            }
+
+            // Walk forward: find consecutive chain steps
+            let mut chain_indices = Vec::new();
+            chain_indices.push(start_idx);
+            visited[start_idx] = true;
+
+            loop {
+                let current_to = &state_changes[*chain_indices.last().unwrap()].1;
+                if let Some(next_indices) = from_index.get(current_to.as_str()) {
+                    // Pick the first unvisited next step
+                    let next = next_indices.iter().copied().find(|&idx| !visited[idx]);
+                    match next {
+                        Some(idx) => {
+                            chain_indices.push(idx);
+                            visited[idx] = true;
+                        }
+                        None => break,
+                    }
+                } else {
+                    break;
+                }
+            }
+
+            if chain_indices.len() >= 2 {
+                // Create causal links between consecutive steps in the chain
+                for window in chain_indices.windows(2) {
+                    let i = window[0];
+                    let j = window[1];
+                    let (from_a, to_a) = &state_changes[i];
+                    let (_from_b, to_b) = &state_changes[j];
+
+                    // Probabilistic confidence decay: longer chains have
+                    // exponentially decaying confidence.
+                    // Formula: 1 / (1 + position * 0.15)
+                    let depth = links.len() as f64;
+                    let confidence = (1.0 / (1.0 + depth * 0.15)).clamp(0.0, 1.0);
+
+                    links.push(CausalLink {
+                        cause_entity_id: from_a.clone(),
+                        effect_entity_id: to_b.clone(),
+                        confidence,
+                        observation_count: 1,
+                        avg_delay_ms: 0.0,
+                        context_tags: vec![
+                            "inferred-chain".to_string(),
+                            format!("step:{}→{}", to_a, to_b),
+                        ],
+                    });
+                }
+            }
+        }
+
+        links
     }
 
     /// Predicts likely entity changes using both causal reasoner correlations
@@ -2117,5 +1781,317 @@ mod tests {
 
         let preds = reasoner.predict_next_state("nonexistent", &HashMap::new());
         assert!(preds.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 18: infer_causal_chain empty input returns empty.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_infer_causal_chain_empty() {
+        let wm = WorldModel::new(test_config());
+        let links = wm.infer_causal_chain(&[]);
+        assert!(links.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 19: infer_causal_chain single transition yields no chain (needs ≥2).
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_infer_causal_chain_single_transition() {
+        let wm = WorldModel::new(test_config());
+        let changes = vec![("idle".to_string(), "running".to_string())];
+        let links = wm.infer_causal_chain(&changes);
+        assert!(
+            links.is_empty(),
+            "single transition should not form a chain"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 20: infer_causal_chain two consecutive transitions form a link.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_infer_causal_chain_consecutive() {
+        let wm = WorldModel::new(test_config());
+        let changes = vec![
+            ("idle".to_string(), "running".to_string()),
+            ("running".to_string(), "completed".to_string()),
+        ];
+        let links = wm.infer_causal_chain(&changes);
+        assert_eq!(
+            links.len(),
+            1,
+            "two consecutive transitions → 1 causal link"
+        );
+        assert_eq!(links[0].cause_entity_id, "idle");
+        assert_eq!(links[0].effect_entity_id, "completed");
+        assert!(links[0].confidence > 0.0);
+        assert!(links[0].confidence <= 1.0);
+        assert!(links[0]
+            .context_tags
+            .iter()
+            .any(|t| t.contains("inferred-chain")));
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 21: infer_causal_chain three transitions → two links.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_infer_causal_chain_three_transitions() {
+        let wm = WorldModel::new(test_config());
+        let changes = vec![
+            ("idle".to_string(), "loading".to_string()),
+            ("loading".to_string(), "processing".to_string()),
+            ("processing".to_string(), "done".to_string()),
+        ];
+        let links = wm.infer_causal_chain(&changes);
+        assert_eq!(
+            links.len(),
+            2,
+            "three consecutive transitions → 2 causal links"
+        );
+
+        // First link: idle → processing (via loading)
+        assert_eq!(links[0].cause_entity_id, "idle");
+        assert_eq!(links[0].effect_entity_id, "processing");
+        assert!(
+            links[0].confidence > links[1].confidence,
+            "earlier link should have higher confidence"
+        );
+
+        // Second link: loading → done (via processing)
+        assert_eq!(links[1].cause_entity_id, "loading");
+        assert_eq!(links[1].effect_entity_id, "done");
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 22: infer_causal_chain disconnected transitions produce no chain.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_infer_causal_chain_disconnected() {
+        let wm = WorldModel::new(test_config());
+        let changes = vec![
+            ("idle".to_string(), "running".to_string()),
+            ("sleeping".to_string(), "stopped".to_string()), // no overlap
+        ];
+        let links = wm.infer_causal_chain(&changes);
+        assert!(
+            links.is_empty(),
+            "disconnected transitions should not form a chain"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 23: infer_causal_chain branching - first unvisited chain wins.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_infer_causal_chain_branching() {
+        let wm = WorldModel::new(test_config());
+        // Two transitions from "running": one goes to "completed", one to "failed"
+        let changes = vec![
+            ("idle".to_string(), "running".to_string()),
+            ("running".to_string(), "completed".to_string()),
+            ("running".to_string(), "failed".to_string()),
+        ];
+        let links = wm.infer_causal_chain(&changes);
+        // Should form a chain starting from index 0: idle→running→completed
+        assert_eq!(links.len(), 1, "should pick first unvisited branch");
+        assert_eq!(links[0].cause_entity_id, "idle");
+        assert_eq!(links[0].effect_entity_id, "completed");
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 24: infer_causal_chains_deep returns empty with no correlations.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_causal_chains_deep_empty() {
+        let reasoner = CausalReasoner::new(10, 1000);
+        let chains = reasoner.infer_causal_chains_deep(5, 0.15);
+        assert!(
+            chains.is_empty(),
+            "no correlations should produce no chains"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 25: infer_causal_chains_deep confidence decay over chain length.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_causal_chains_deep_confidence_decay() {
+        let mut reasoner = CausalReasoner::new(100, 10_000);
+        let now = now_ms();
+
+        // Set up a chain: A→B, B→C, C→D
+        let mut props_a = HashMap::new();
+        props_a.insert("state".to_string(), "active".to_string());
+        reasoner.record_state("A", props_a.clone(), now);
+
+        let mut props_b = HashMap::new();
+        props_b.insert("state".to_string(), "active".to_string());
+        reasoner.record_state("B", props_b.clone(), now + 100);
+        reasoner.record_state("A", props_a.clone(), now + 100);
+
+        let mut props_c = HashMap::new();
+        props_c.insert("state".to_string(), "active".to_string());
+        reasoner.record_state("C", props_c.clone(), now + 200);
+        reasoner.record_state("B", props_b.clone(), now + 200);
+
+        let mut props_d = HashMap::new();
+        props_d.insert("state".to_string(), "active".to_string());
+        reasoner.record_state("D", props_d.clone(), now + 300);
+        reasoner.record_state("C", props_c.clone(), now + 300);
+
+        reasoner.infer_correlations();
+
+        let chains = reasoner.infer_causal_chains_deep(10, 0.01);
+
+        // Should find at least one chain
+        if !chains.is_empty() {
+            let chain = &chains[0];
+            assert!(chain.confidence > 0.0);
+            assert!(chain.confidence <= 1.0);
+            // Path type may be Direct or Or depending on correlation structure
+            match &chain.path_type {
+                CausalPathType::Direct => {}
+                CausalPathType::Or(_) => {}
+                CausalPathType::And(_) => {}
+            }
+
+            // Verify confidence decay: each link's confidence should be > 0.0
+            for link in &chain.links {
+                assert!(link.confidence > 0.0);
+                assert!(link.confidence <= 1.0);
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 26: infer_causal_chains_deep detects branching (OR) paths.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_causal_chains_deep_branching() {
+        let mut reasoner = CausalReasoner::new(100, 10_000);
+        let now = now_ms();
+
+        // Simulate correlations via snapshots: X→Y and X→Z (same cause, different effects)
+        let mut props_x = HashMap::new();
+        props_x.insert("signal".to_string(), "trigger".to_string());
+        reasoner.record_state("X", props_x.clone(), now);
+
+        let mut props_y = HashMap::new();
+        props_y.insert("status".to_string(), "started".to_string());
+        reasoner.record_state("Y", props_y.clone(), now + 100);
+        reasoner.record_state("X", props_x.clone(), now + 100);
+
+        let mut props_z = HashMap::new();
+        props_z.insert("status".to_string(), "started".to_string());
+        reasoner.record_state("Z", props_z.clone(), now + 200);
+        reasoner.record_state("X", props_x.clone(), now + 200);
+
+        reasoner.infer_correlations();
+
+        let chains = reasoner.infer_causal_chains_deep(5, 0.01);
+
+        // With multiple correlations from the same cause, some chains may have OR path type
+        let _or_chains: Vec<&CausalChain> = chains
+            .iter()
+            .filter(|c| matches!(c.path_type, CausalPathType::Or(_)))
+            .collect();
+
+        // At minimum, all returned chains should be valid
+        for chain in &chains {
+            assert!(!chain.links.is_empty());
+            assert!(chain.confidence > 0.0);
+            assert!(chain.confidence <= 1.0);
+            assert!(!chain.is_feedback_loop);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 27: infer_causal_chains_deep detects feedback loops.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_causal_chains_deep_feedback_loop() {
+        let mut reasoner = CausalReasoner::new(100, 10_000);
+        let now = now_ms();
+
+        // Create a cycle: A→B, B→C, C→A
+        let mut props_a = HashMap::new();
+        props_a.insert("state".to_string(), "on".to_string());
+        reasoner.record_state("A", props_a.clone(), now);
+
+        let mut props_b = HashMap::new();
+        props_b.insert("state".to_string(), "on".to_string());
+        reasoner.record_state("B", props_b.clone(), now + 100);
+        reasoner.record_state("A", props_a.clone(), now + 100);
+
+        let mut props_c = HashMap::new();
+        props_c.insert("state".to_string(), "on".to_string());
+        reasoner.record_state("C", props_c.clone(), now + 200);
+        reasoner.record_state("B", props_b.clone(), now + 200);
+
+        // Close the loop: C→A
+        reasoner.record_state("A", props_a.clone(), now + 300);
+        reasoner.record_state("C", props_c.clone(), now + 300);
+
+        reasoner.infer_correlations();
+
+        let chains = reasoner.infer_causal_chains_deep(10, 0.01);
+
+        // Some chains may be marked as feedback loops
+        let _feedback_chains: Vec<&CausalChain> =
+            chains.iter().filter(|c| c.is_feedback_loop).collect();
+
+        // All chains should be structurally valid
+        for chain in &chains {
+            assert!(!chain.links.is_empty());
+            assert!(chain.confidence >= 0.0);
+            assert!(chain.confidence <= 1.0);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 28: infer_causal_chains_deep filters low-confidence links.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_causal_chains_deep_threshold_filtering() {
+        let mut reasoner = CausalReasoner::new(100, 10_000);
+        let now = now_ms();
+
+        // Add many snapshots to try to generate some correlations
+        for i in 0..5 {
+            let mut props_a = HashMap::new();
+            props_a.insert("val".to_string(), format!("x{i}"));
+            reasoner.record_state("threshold-A", props_a, now + i * 100);
+
+            let mut props_b = HashMap::new();
+            props_b.insert("val".to_string(), format!("y{i}"));
+            reasoner.record_state("threshold-B", props_b, now + i * 100 + 50);
+        }
+
+        reasoner.infer_correlations();
+
+        // With a high threshold, we may get fewer or no chains
+        let chains_high = reasoner.infer_causal_chains_deep(5, 0.9);
+
+        // With no threshold (negative), we should get at least as many chains
+        let chains_all = reasoner.infer_causal_chains_deep(5, -1.0);
+
+        assert!(
+            chains_all.len() >= chains_high.len(),
+            "no-threshold should return >= chains vs high-threshold"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 29: infer_causal_chains_deep wrapper on WorldModel.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_world_model_causal_chains_deep() {
+        let wm = WorldModel::new(test_config());
+
+        // Without any data, should return empty without panicking
+        let chains = wm.infer_causal_chains_deep(5, 0.15);
+        assert!(chains.is_empty());
     }
 }

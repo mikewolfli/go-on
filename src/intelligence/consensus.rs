@@ -713,7 +713,9 @@ mod tests {
     fn test_unregister_node() {
         let engine = ConsensusEngine::default();
         let n1 = sample_node("alpha", 10, NodeRole::Follower);
-        engine.register_node(n1).unwrap();
+        engine
+            .register_node(n1)
+            .expect("register_node should succeed for new node");
 
         assert!(engine.unregister_node("alpha").is_ok());
         assert!(engine.unregister_node("alpha").is_err()); // already gone
@@ -724,7 +726,9 @@ mod tests {
     fn test_start_round() {
         let engine = ConsensusEngine::default();
         let n1 = sample_node("leader", 50, NodeRole::Leader);
-        engine.register_node(n1).unwrap();
+        engine
+            .register_node(n1)
+            .expect("register_node should succeed for leader");
 
         let proposals = vec![
             serde_json::json!({"action": "deploy", "version": "2.0.0"}),
@@ -749,38 +753,44 @@ mod tests {
         // Register 3 online nodes with weights that sum to a clear majority.
         engine
             .register_node(sample_node("alice", 30, NodeRole::Leader))
-            .unwrap();
+            .expect("register_node should succeed for alice");
         engine
             .register_node(sample_node("bob", 20, NodeRole::Follower))
-            .unwrap();
+            .expect("register_node should succeed for bob");
         engine
             .register_node(sample_node("carol", 10, NodeRole::Follower))
-            .unwrap();
+            .expect("register_node should succeed for carol");
 
         let proposals = vec![serde_json::json!({"proposal": "A"})];
-        let round_id = engine.start_round("alice", proposals).unwrap();
+        let round_id = engine
+            .start_round("alice", proposals)
+            .expect("start_round should succeed for alice");
         let prop_id = {
-            let proposals = engine.proposals.lock().unwrap();
+            let proposals = engine.proposals.lock().expect("lock proposals mutex");
             proposals
                 .iter()
                 .find(|p| p.round_id == round_id)
                 .map(|p| p.id.clone())
-                .unwrap()
+                .expect("proposal should exist for the started round")
         };
 
         // alice (30) + bob (20) = 50 approve weight > (60 / 2 = 30) => majority.
         engine
             .cast_vote(sample_vote("alice", &round_id, &prop_id, true, 30))
-            .unwrap();
+            .expect("cast_vote should succeed for alice");
         engine
             .cast_vote(sample_vote("bob", &round_id, &prop_id, true, 20))
-            .unwrap();
+            .expect("cast_vote should succeed for bob");
         engine
             .cast_vote(sample_vote("carol", &round_id, &prop_id, false, 10))
-            .unwrap();
+            .expect("cast_vote should succeed for carol");
 
-        engine.finalize_round().unwrap();
-        let round = engine.get_round(&round_id).unwrap();
+        engine
+            .finalize_round()
+            .expect("finalize_round should succeed");
+        let round = engine
+            .get_round(&round_id)
+            .expect("round should be found after finalize");
         assert_eq!(round.status, RoundStatus::Committed);
         assert_eq!(round.votes_collected, 3);
     }
@@ -791,23 +801,25 @@ mod tests {
 
         engine
             .register_node(sample_node("alice", 30, NodeRole::Leader))
-            .unwrap();
+            .expect("register_node should succeed for alice");
         engine
             .register_node(sample_node("bob", 20, NodeRole::Follower))
-            .unwrap();
+            .expect("register_node should succeed for bob");
         engine
             .register_node(sample_node("carol", 10, NodeRole::Follower))
-            .unwrap();
+            .expect("register_node should succeed for carol");
 
         let proposals = vec![serde_json::json!({"proposal": "B"})];
-        let round_id = engine.start_round("alice", proposals).unwrap();
+        let round_id = engine
+            .start_round("alice", proposals)
+            .expect("start_round should succeed for alice");
         let prop_id = {
-            let proposals = engine.proposals.lock().unwrap();
+            let proposals = engine.proposals.lock().expect("lock proposals mutex");
             proposals
                 .iter()
                 .find(|p| p.round_id == round_id)
                 .map(|p| p.id.clone())
-                .unwrap()
+                .expect("proposal should exist for the started round")
         };
 
         // Only alice (30) approves, bob (20) and carol (10) reject.
@@ -815,16 +827,20 @@ mod tests {
         // Since 30 is not > 30, consensus fails.
         engine
             .cast_vote(sample_vote("alice", &round_id, &prop_id, true, 30))
-            .unwrap();
+            .expect("cast_vote should succeed for alice");
         engine
             .cast_vote(sample_vote("bob", &round_id, &prop_id, false, 20))
-            .unwrap();
+            .expect("cast_vote should succeed for bob");
         engine
             .cast_vote(sample_vote("carol", &round_id, &prop_id, false, 10))
-            .unwrap();
+            .expect("cast_vote should succeed for carol");
 
-        engine.finalize_round().unwrap();
-        let round = engine.get_round(&round_id).unwrap();
+        engine
+            .finalize_round()
+            .expect("finalize_round should succeed");
+        let round = engine
+            .get_round(&round_id)
+            .expect("round should be found after finalize");
         assert_eq!(round.status, RoundStatus::Failed);
     }
 
@@ -833,19 +849,21 @@ mod tests {
         let engine = ConsensusEngine::default();
         engine
             .register_node(sample_node("alice", 40, NodeRole::Leader))
-            .unwrap();
+            .expect("register_node should succeed for alice");
         engine
             .register_node(sample_node("bob", 30, NodeRole::Follower))
-            .unwrap();
+            .expect("register_node should succeed for bob");
 
         let proposals = vec![serde_json::json!({"x": 1})];
-        let round_id = engine.start_round("alice", proposals).unwrap();
+        let round_id = engine
+            .start_round("alice", proposals)
+            .expect("start_round should succeed for alice");
         let prop_id = {
-            let proposals = engine.proposals.lock().unwrap();
+            let proposals = engine.proposals.lock().expect("lock proposals mutex");
             proposals
                 .iter()
                 .find(|p| p.round_id == round_id)
-                .unwrap()
+                .expect("proposal should exist for the started round")
                 .id
                 .clone()
         };
@@ -853,13 +871,17 @@ mod tests {
         // alice (40) + bob (30) approve => 70 > (70/2=35) => majority.
         engine
             .cast_vote(sample_vote("alice", &round_id, &prop_id, true, 40))
-            .unwrap();
+            .expect("cast_vote should succeed for alice");
         engine
             .cast_vote(sample_vote("bob", &round_id, &prop_id, true, 30))
-            .unwrap();
+            .expect("cast_vote should succeed for bob");
 
-        engine.finalize_round().unwrap();
-        let round = engine.get_round(&round_id).unwrap();
+        engine
+            .finalize_round()
+            .expect("finalize_round should succeed");
+        let round = engine
+            .get_round(&round_id)
+            .expect("round should be found after finalize");
         assert_eq!(round.status, RoundStatus::Committed);
     }
 
@@ -869,12 +891,17 @@ mod tests {
         let mut n1 = sample_node("alpha", 10, NodeRole::Follower);
         n1.is_online = false;
         n1.last_heartbeat_ms = 0;
-        engine.register_node(n1).unwrap();
+        engine
+            .register_node(n1)
+            .expect("register_node should succeed for alpha");
 
         // Heartbeat brings the node online and updates the timestamp.
-        engine.heartbeat("alpha").unwrap();
+        engine.heartbeat("alpha").expect("heartbeat should succeed");
         let nodes = engine.list_nodes();
-        let alpha = nodes.iter().find(|n| n.id == "alpha").unwrap();
+        let alpha = nodes
+            .iter()
+            .find(|n| n.id == "alpha")
+            .expect("alpha should be in nodes");
         assert!(alpha.is_online);
         assert!(alpha.last_heartbeat_ms > 0);
     }
@@ -886,12 +913,14 @@ mod tests {
         // Node with a very old heartbeat.
         let mut old_node = sample_node("old", 10, NodeRole::Follower);
         old_node.last_heartbeat_ms = 1; // ancient
-        engine.register_node(old_node).unwrap();
+        engine
+            .register_node(old_node)
+            .expect("register_node should succeed for old");
 
         // Node with a current heartbeat.
         engine
             .register_node(sample_node("fresh", 10, NodeRole::Follower))
-            .unwrap();
+            .expect("register_node should succeed for fresh");
 
         let failed = engine.detect_failures();
         assert!(failed.contains(&"old".to_string()));
@@ -899,7 +928,10 @@ mod tests {
 
         // Verify 'old' is now offline.
         let nodes = engine.list_nodes();
-        let old = nodes.iter().find(|n| n.id == "old").unwrap();
+        let old = nodes
+            .iter()
+            .find(|n| n.id == "old")
+            .expect("old should be in nodes");
         assert!(!old.is_online);
     }
 
@@ -912,18 +944,30 @@ mod tests {
         let mut n3 = sample_node("node-c", 30, NodeRole::Follower);
         n3.is_online = false; // offline, should not be elected
 
-        engine.register_node(n1).unwrap();
-        engine.register_node(n2).unwrap();
-        engine.register_node(n3).unwrap();
+        engine
+            .register_node(n1)
+            .expect("register_node should succeed for n1");
+        engine
+            .register_node(n2)
+            .expect("register_node should succeed for n2");
+        engine
+            .register_node(n3)
+            .expect("register_node should succeed for n3");
 
         let elected = engine.elect_leader().expect("should elect a leader");
         assert_eq!(elected, "node-b"); // highest weight among online nodes
 
         let nodes = engine.list_nodes();
-        let leader = nodes.iter().find(|n| n.role == NodeRole::Leader).unwrap();
+        let leader = nodes
+            .iter()
+            .find(|n| n.role == NodeRole::Leader)
+            .expect("leader should be in nodes");
         assert_eq!(leader.id, "node-b");
 
-        let old_follower = nodes.iter().find(|n| n.id == "node-a").unwrap();
+        let old_follower = nodes
+            .iter()
+            .find(|n| n.id == "node-a")
+            .expect("node-a should be in nodes");
         assert_eq!(old_follower.role, NodeRole::Follower);
     }
 
@@ -933,30 +977,34 @@ mod tests {
 
         engine
             .register_node(sample_node("alice", 30, NodeRole::Leader))
-            .unwrap();
+            .expect("register_node should succeed for alice");
         engine
             .register_node(sample_node("bob", 20, NodeRole::Follower))
-            .unwrap();
+            .expect("register_node should succeed for bob");
 
         // Run one successful round.
         let proposals = vec![serde_json::json!({"ok": true})];
-        let round_id = engine.start_round("alice", proposals).unwrap();
+        let round_id = engine
+            .start_round("alice", proposals)
+            .expect("start_round should succeed for alice");
         let prop_id = {
-            let proposals = engine.proposals.lock().unwrap();
+            let proposals = engine.proposals.lock().expect("lock proposals mutex");
             proposals
                 .iter()
                 .find(|p| p.round_id == round_id)
-                .unwrap()
+                .expect("proposal should exist for the started round")
                 .id
                 .clone()
         };
         engine
             .cast_vote(sample_vote("alice", &round_id, &prop_id, true, 30))
-            .unwrap();
+            .expect("cast_vote should succeed for alice");
         engine
             .cast_vote(sample_vote("bob", &round_id, &prop_id, true, 20))
-            .unwrap();
-        engine.finalize_round().unwrap();
+            .expect("cast_vote should succeed for bob");
+        engine
+            .finalize_round()
+            .expect("finalize_round should succeed");
 
         let p = engine.profile();
         assert_eq!(p.total_nodes, 2);
@@ -1009,7 +1057,9 @@ mod tests {
         let engine = ConsensusEngine::default();
         let mut n1 = sample_node("offline", 10, NodeRole::Follower);
         n1.is_online = false;
-        engine.register_node(n1).unwrap();
+        engine
+            .register_node(n1)
+            .expect("register_node should succeed for offline");
         assert!(engine.elect_leader().is_none());
     }
 

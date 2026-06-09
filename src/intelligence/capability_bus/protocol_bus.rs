@@ -397,8 +397,13 @@ mod tests {
         bus.record_protocol_latency("acp-stdio", 20);
         bus.record_protocol_latency("acp-stdio", 30);
 
-        let latency = bus.protocol_latency.read().unwrap();
-        let stats = latency.get("acp-stdio").unwrap();
+        let latency = bus
+            .protocol_latency
+            .read()
+            .expect("lock protocol_latency for read");
+        let stats = latency
+            .get("acp-stdio")
+            .expect("acp-stdio should have latency stats");
         assert_eq!(stats.average_ms(), 20); // (10 + 20 + 30) / 3
         assert_eq!(stats.count, 3);
     }
@@ -418,7 +423,10 @@ mod tests {
 
         // Mark the active transport unhealthy.
         {
-            let mut health = bus.protocol_health.write().unwrap();
+            let mut health = bus
+                .protocol_health
+                .write()
+                .expect("lock protocol_health for write");
             health.insert("auto".to_string(), false);
         }
         // Record some latency for another protocol so it gets preferred.
@@ -434,7 +442,10 @@ mod tests {
     fn test_recommend_protocol_no_healthy_protocols() {
         let bus = ProtocolBus::new();
         {
-            let mut health = bus.protocol_health.write().unwrap();
+            let mut health = bus
+                .protocol_health
+                .write()
+                .expect("lock protocol_health for write");
             for (_, v) in health.iter_mut() {
                 *v = false;
             }
@@ -453,8 +464,13 @@ mod tests {
             bus.record_protocol_latency("acp-http", i as u64);
         }
 
-        let latency = bus.protocol_latency.read().unwrap();
-        let stats = latency.get("acp-http").unwrap();
+        let latency = bus
+            .protocol_latency
+            .read()
+            .expect("lock protocol_latency for read");
+        let stats = latency
+            .get("acp-http")
+            .expect("acp-http should have latency stats");
         // The ring buffer should still hold exactly CAPACITY items.
         assert_eq!(stats.measurements.len(), LATENCY_RING_BUFFER_CAPACITY);
         // Count should reflect all inserts.
@@ -462,7 +478,11 @@ mod tests {
         // The first overwritten element should no longer be present.
         // After 110 inserts into a 100-slot buffer, the first 10 values are gone.
         // The oldest remaining value is 10, newest is 109.
-        let min_val = *stats.measurements.iter().min().unwrap();
+        let min_val = *stats
+            .measurements
+            .iter()
+            .min()
+            .expect("measurements should not be empty");
         assert_eq!(min_val, 10);
     }
 

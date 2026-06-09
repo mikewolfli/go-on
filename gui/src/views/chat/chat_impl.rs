@@ -130,13 +130,11 @@ pub struct ChatView {
     /// Per-message content hash cache: skips re-parsing unchanged messages.
     /// Key = message index, value = hash of content last rendered.
     rendered_content_hashes: Vec<u64>,
-    /// Cache of pre-rendered markdown segments (parsed on background thread).
-    /// Key = message index, value = optional cached render.
-    cached_markdown_renders: Vec<Option<crate::views::chat::types::CachedMarkdownRender>>,
     /// Per-message "expand full text" toggle for truncated content.
     /// Key = message index, value = whether full text is shown.
     expand_full_text: std::collections::HashSet<usize>,
     /// SSE JSON parse error counter for the current stream.
+    /// F-GAP-58: Reserved for future stream quality monitoring
     #[allow(dead_code)]
     sse_parse_errors: u32,
     /// Shared abort controller for cancelling in-progress streaming generations.
@@ -267,13 +265,38 @@ impl ChatView {
         }
     }
 
-    /// Handle paste events from the egui input system.
-    /// Detects pasted file paths (common on Linux with Ctrl+Shift+V) and data:image/ URLs.
-    /// Returns any attachments that were created from paste events.
+    /// Handle paste and drop events from the egui input system.
+    /// Detects pasted file paths (common on Linux with Ctrl+Shift+V), data:image/ URLs,
+    /// and dropped files (drag-and-drop from file manager).
+    /// Returns any attachments that were created from paste/drop events.
     fn handle_paste_events(&mut self, ui: &mut egui::Ui) -> Vec<Attachment> {
+        // ── Handle file drop (drag-and-drop) via egui 0.31 raw input ──
+        let dropped = ui.input(|i| i.raw.dropped_files.clone());
+        for f in &dropped {
+            if let Some(path) = &f.path {
+                let mime = Self::guess_mime(path);
+                if mime.starts_with("image/") || mime.starts_with("application/pdf") {
+                    if let Ok(data) = std::fs::read(path) {
+                        use base64::Engine;
+                        let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+                        self.attachments.push(Attachment {
+                            name: path
+                                .file_name()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("dropped")
+                                .to_string(),
+                            mime,
+                            data: b64,
+                        });
+                    }
+                }
+            }
+        }
+
         let pasted = ui.input_mut(|i| {
             let mut result = Vec::new();
             i.events.retain(|e| {
+                // ── Handle paste events ──────────────────────────
                 if let egui::Event::Paste(text) = e {
                     // Check if it looks like a file path (common on Linux)
                     let path = std::path::Path::new(text.as_str());
@@ -508,7 +531,6 @@ impl ChatView {
                         .unwrap_or_else(|_| reqwest::Client::new())
                 }),
             rendered_content_hashes: Vec::new(),
-            cached_markdown_renders: Vec::new(),
             expand_full_text: std::collections::HashSet::new(),
             sse_parse_errors: 0,
             abort_controller: None,
@@ -1068,7 +1090,6 @@ mod tests {
             model_stats: std::collections::HashMap::new(),
             stream_client: reqwest::Client::new(),
             rendered_content_hashes: Vec::new(),
-            cached_markdown_renders: Vec::new(),
             expand_full_text: std::collections::HashSet::new(),
             sse_parse_errors: 0,
             abort_controller: None,

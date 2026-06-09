@@ -192,8 +192,8 @@ mod tests {
         use std::io::Write;
         let data = b"Hello world from gzip!";
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-        encoder.write_all(data).unwrap();
-        let compressed = encoder.finish().unwrap();
+        encoder.write_all(data).expect("write_all should succeed");
+        let compressed = encoder.finish().expect("finish should succeed");
 
         // First chunk below threshold
         let r1 = comp.decompress_chunk(&compressed[..5]);
@@ -220,8 +220,8 @@ mod tests {
         use std::io::Write;
         let data = b"small data";
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-        encoder.write_all(data).unwrap();
-        let compressed = encoder.finish().unwrap();
+        encoder.write_all(data).expect("write_all should succeed");
+        let compressed = encoder.finish().expect("finish should succeed");
 
         comp.decompress_chunk(&compressed);
         let flushed = comp.flush();
@@ -259,8 +259,10 @@ mod tests {
         use flate2::Compression;
         use std::io::Write;
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-        encoder.write_all(original).unwrap();
-        let compressed = encoder.finish().unwrap();
+        encoder
+            .write_all(original)
+            .expect("write_all should succeed");
+        let compressed = encoder.finish().expect("finish should succeed");
 
         // Feed compressed data to the decompressor
         let decompressed = comp.decompress_chunk(&compressed);
@@ -279,12 +281,15 @@ mod tests {
         let large_slice: &[u8] = &large;
         let compressed = compress_sse_payload(large_slice);
         assert!(compressed.is_some());
-        let compressed = compressed.unwrap();
+        let compressed =
+            compressed.expect("compress_sse_payload should return Some for large data");
         assert!(compressed.len() < large_slice.len());
         // Verify roundtrip
         let mut decoder = MultiGzDecoder::new(&compressed[..]);
         let mut result = Vec::new();
-        decoder.read_to_end(&mut result).unwrap();
+        decoder
+            .read_to_end(&mut result)
+            .expect("decompression should succeed");
         assert_eq!(result, large_slice);
     }
 }

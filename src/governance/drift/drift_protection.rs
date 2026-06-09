@@ -653,7 +653,7 @@ mod tests {
         assert!(engine.register_policy(policy.clone()).is_ok());
         let result = engine.register_policy(policy);
         assert!(result.is_err());
-        let err = result.err().unwrap();
+        let err = result.expect_err("registering duplicate policy should fail");
         assert!(
             err.to_string().contains("error.policy_already_registered")
                 || err.to_string().contains("already registered")
@@ -776,7 +776,7 @@ mod tests {
         let engine = make_engine();
         let result = engine.resolve_alert("nonexistent-alert-id");
         assert!(result.is_err());
-        let err = result.err().unwrap();
+        let err = result.expect_err("resolving nonexistent alert should fail");
         assert!(
             err.to_string().contains("error.alert_not_found")
                 || err.to_string().contains("not found")

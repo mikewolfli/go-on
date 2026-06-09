@@ -93,8 +93,14 @@ impl AccessPattern {
         if self.recent_accesses.len() < 2 {
             return 0.0;
         }
-        let first = self.recent_accesses.front().unwrap();
-        let last = self.recent_accesses.back().unwrap();
+        let first = self
+            .recent_accesses
+            .front()
+            .expect("recent_accesses should have at least 2 elements (checked line 93)");
+        let last = self
+            .recent_accesses
+            .back()
+            .expect("recent_accesses should have at least 2 elements (checked line 93)");
         let duration = last.duration_since(*first).as_secs_f64();
         if duration < 0.001 {
             return 0.0;
@@ -301,13 +307,19 @@ impl CacheWarmingEngine {
             }
         }
 
-        let mut patterns = self.access_patterns.write().unwrap();
+        let mut patterns = self
+            .access_patterns
+            .write()
+            .expect("CacheWarming access_patterns poisoned");
         patterns
             .entry(key.to_string())
             .or_insert_with(|| AccessPattern::new(Duration::from_secs(300)))
             .record_access();
 
-        *self.last_access_time.write().unwrap() = Instant::now();
+        *self
+            .last_access_time
+            .write()
+            .expect("CacheWarming last_access_time poisoned") = Instant::now();
 
         // Forward hit to FastPathCache if connected.
         if let Ok(guard) = self.fast_path_cache.lock() {
@@ -334,14 +346,17 @@ impl CacheWarmingEngine {
     pub fn register_pre_warm_keys(&self, category: &str, keys: Vec<String>) {
         self.pre_warm_keys
             .write()
-            .unwrap()
+            .expect("CacheWarming pre_warm_keys poisoned")
             .insert(category.to_string(), keys);
     }
 
     /// Check if pre-warming should be triggered (after idle period).
     pub fn should_pre_warm(&self) -> bool {
         if let Some(idle_ms) = self.config.warm_after_idle_ms {
-            let last = *self.last_access_time.read().unwrap();
+            let last = *self
+                .last_access_time
+                .read()
+                .expect("CacheWarming last_access_time poisoned");
             last.elapsed() > Duration::from_millis(idle_ms)
         } else {
             false
@@ -350,7 +365,10 @@ impl CacheWarmingEngine {
 
     /// Get the keys that should be pre-warmed for the configured categories.
     pub fn get_pre_warm_keys(&self) -> Vec<(String, Vec<String>)> {
-        let keys = self.pre_warm_keys.read().unwrap();
+        let keys = self
+            .pre_warm_keys
+            .read()
+            .expect("CacheWarming pre_warm_keys poisoned");
         self.config
             .categories
             .iter()
@@ -360,7 +378,10 @@ impl CacheWarmingEngine {
 
     /// Get adaptive TTL for a cached key.
     pub fn adaptive_ttl(&self, key: &str, default_ttl: Duration) -> Duration {
-        let patterns = self.access_patterns.read().unwrap();
+        let patterns = self
+            .access_patterns
+            .read()
+            .expect("CacheWarming access_patterns poisoned");
         patterns
             .get(key)
             .map(|p| p.adaptive_ttl)
@@ -369,7 +390,10 @@ impl CacheWarmingEngine {
 
     /// Check if a cached entry is expired based on adaptive TTL.
     pub fn is_expired(&self, key: &str, created_at: Instant) -> bool {
-        let patterns = self.access_patterns.read().unwrap();
+        let patterns = self
+            .access_patterns
+            .read()
+            .expect("CacheWarming access_patterns poisoned");
         match patterns.get(key) {
             Some(pattern) => pattern.is_expired(Instant::now()),
             None => {
@@ -381,7 +405,10 @@ impl CacheWarmingEngine {
 
     /// Remove stale entries from the access pattern store.
     pub fn cleanup_stale_patterns(&self, max_age: Duration) -> usize {
-        let mut patterns = self.access_patterns.write().unwrap();
+        let mut patterns = self
+            .access_patterns
+            .write()
+            .expect("CacheWarming access_patterns poisoned");
         let before = patterns.len();
         patterns.retain(|_, p| {
             p.recent_accesses
@@ -399,7 +426,10 @@ impl CacheWarmingEngine {
 
     /// Promote an entry to a higher cache tier based on frequency.
     pub fn recommend_tier(&self, key: &str, current_tier: CacheTier) -> CacheTier {
-        let patterns = self.access_patterns.read().unwrap();
+        let patterns = self
+            .access_patterns
+            .read()
+            .expect("CacheWarming access_patterns poisoned");
         if let Some(pattern) = patterns.get(key) {
             let freq = pattern.frequency();
             match current_tier {

@@ -1,5 +1,8 @@
 import * as vscode from "vscode";
+import { Logger } from "../logger";
 import { i18n, MessageKeys } from "../i18n";
+
+const log = Logger.forModule("rpcCommandRegistry");
 import { asRecord as _asRecord, getErrorMessage } from "../utils";
 
 export interface RpcCommandRegistryDeps {
@@ -26,7 +29,7 @@ export function safeStringify(value: unknown): string {
   try {
     return JSON.stringify(value);
   } catch (err) {
-    console.warn("[rpcCommandRegistry] safeStringify failed:", err);
+    log.warn("safeStringify failed:", err);
     try {
       // Use a replacer that tracks visited objects
       const seen = new WeakSet<object>();
@@ -40,10 +43,7 @@ export function safeStringify(value: unknown): string {
         return val;
       });
     } catch {
-      console.error(
-        "rpcCommandRegistry: Failed to safe-stringify value",
-        value,
-      );
+      log.error("Failed to safe-stringify value", value);
       return String(value);
     }
   }

@@ -53,7 +53,10 @@ mod tests {
             .is_some());
 
         // s1 (search) and s2 (read) should be mapped; s3 (modify) should not
-        let mapped = result.get("mapped_nodes").and_then(Value::as_u64).unwrap();
+        let mapped = result
+            .get("mapped_nodes")
+            .and_then(Value::as_u64)
+            .expect("mapped_nodes should be a u64");
         assert!(mapped >= 2, "expected at least 2 mapped nodes");
     }
 
@@ -64,21 +67,30 @@ mod tests {
 
         let result = derive_response_orchestration(&plan, &results);
 
-        let nodes = result.get("nodes").and_then(Value::as_array).unwrap();
+        let nodes = result
+            .get("nodes")
+            .and_then(Value::as_array)
+            .expect("nodes should be an array");
         assert!(nodes.is_empty(), "no steps should produce no nodes");
         assert_eq!(
-            result.get("mapped_nodes").and_then(Value::as_u64).unwrap(),
+            result
+                .get("mapped_nodes")
+                .and_then(Value::as_u64)
+                .expect("mapped_nodes should be a u64"),
             0
         );
         assert_eq!(
             result
                 .get("unmapped_nodes")
                 .and_then(Value::as_u64)
-                .unwrap(),
+                .expect("unmapped_nodes should be a u64"),
             0
         );
         assert_eq!(
-            result.get("mapping_ratio").and_then(Value::as_f64).unwrap(),
+            result
+                .get("mapping_ratio")
+                .and_then(Value::as_f64)
+                .expect("mapping_ratio should be a f64"),
             1.0
         );
     }

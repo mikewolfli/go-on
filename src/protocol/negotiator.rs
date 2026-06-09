@@ -37,7 +37,7 @@ pub struct ProtocolNegotiator {
     /// Current active protocol mode
     active: ProtocolMode,
     /// Whether auto-detection is enabled
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49: wired when protocol discovery is active
     auto_detect: bool,
 }
 
@@ -59,12 +59,23 @@ impl ProtocolNegotiator {
         }
     }
 
-    /// Negotiate protocol with a client hint.
+    /// Negotiate protocol with a client hint and optional client-supported versions.
     ///
     /// Uses the server's configured mode (`self.active`) as the default,
     /// or falls back to adaptive comparison when auto-detect is enabled.
     /// Fails fast with a clear error if the client hint is unrecognized.
-    pub fn negotiate(&self, client_hint: Option<&str>) -> NegotiatedProtocol {
+    ///
+    /// # Version negotiation
+    ///
+    /// When `client_versions` is provided, the highest mutually-supported protocol
+    /// version is selected via [`select_highest_common`].  If no common version
+    /// exists, [`ProtocolVersion::LATEST`] is used as a backward-compatible
+    /// fallback.
+    pub fn negotiate(
+        &self,
+        client_hint: Option<&str>,
+        client_versions: Option<&[ProtocolVersion]>,
+    ) -> NegotiatedProtocol {
         let (mode, auto_detected) = if let Some(hint) = client_hint {
             match ProtocolMode::from_str(hint) {
                 Ok(client_mode) => {
@@ -90,49 +101,48 @@ impl ProtocolNegotiator {
             (self.active, false)
         };
 
+        // Real version negotiation: descend from LATEST until a common version is found.
+        let (protocol_version, client_versions_list) = match client_versions {
+            Some(versions) => {
+                let negotiated =
+                    Self::select_highest_common(versions).unwrap_or(ProtocolVersion::LATEST);
+                (
+                    negotiated,
+                    Some(versions.iter().map(|v| v.as_u16()).collect()),
+                )
+            }
+            None => (ProtocolVersion::LATEST, None),
+        };
+
         NegotiatedProtocol {
             mode,
             version: format!("go-on/v1.1.0/{}", mode),
             auto_detected,
-            protocol_version: ProtocolVersion::LATEST,
-            client_versions: None,
+            protocol_version,
+            client_versions: client_versions_list,
         }
     }
 
-    /// Negotiate protocol with both a client hint and a list of supported versions.
+    /// Select the highest protocol version supported by both the server and the client.
     ///
-    /// Performs real version negotiation: the highest common version between the
-    /// server's supported versions and the client's list is selected as the
-    /// negotiated protocol version.
+    /// Iterates the server's supported versions in descending order (V3 → V2 → V1)
+    /// and returns the first one present in `client_versions`.  Returns `None` when
+    /// there is no overlap at all.
+    pub fn select_highest_common(client_versions: &[ProtocolVersion]) -> Option<ProtocolVersion> {
+        ProtocolVersion::select_highest_common(client_versions)
+    }
+
+    /// Convenience wrapper around [`negotiate`] that accepts a slice of client-supported
+    /// protocol versions directly.
     ///
-    /// # Version descent strategy
-    ///
-    /// This method uses [`ProtocolVersion::select_highest_common`], which iterates
-    /// the server's supported versions in descending order (V3 → V2 → V1) and
-    /// returns the first version the client also supports.  This means:
-    /// - If the client supports LATEST (V3), that is used.
-    /// - If not, V2 is tried next.
-    /// - If V2 is also absent, V1 is tried last.
-    ///
-    /// When *no* common version is found at all (the client supports only versions
-    /// outside the server's range), the result falls back to `ProtocolVersion::LATEST`
-    /// as a backward-compatible last resort: the server will accept the connection at
-    /// its highest known version, and the client is expected to adapt or reject the
-    /// handshake at the application layer.
-    #[allow(dead_code)] // F-GAP-49 — wired when GUI protocol discovery is active
+    /// Delegates to [`Self::negotiate`] with `client_versions: Some(client_versions)`.
+    #[allow(dead_code)] // available for callers that have client version lists
     pub fn negotiate_with_versions(
         &self,
         client_hint: Option<&str>,
         client_versions: &[ProtocolVersion],
     ) -> NegotiatedProtocol {
-        let base = self.negotiate(client_hint);
-        let negotiated_version = ProtocolVersion::select_highest_common(client_versions)
-            .unwrap_or(ProtocolVersion::LATEST);
-        NegotiatedProtocol {
-            protocol_version: negotiated_version,
-            client_versions: Some(client_versions.iter().map(|v| v.as_u16()).collect()),
-            ..base
-        }
+        self.negotiate(client_hint, Some(client_versions))
     }
 
     /// Attempt fallback to next protocol in the chain
@@ -206,7 +216,7 @@ mod tests {
         // Default active is Adaptive (priority 5); McpHttp hint has priority 2.
         // Since 2 > 5 is false, the server mode (Adaptive) wins.
         let negotiator = ProtocolNegotiator::default();
-        let result = negotiator.negotiate(Some("mcp_http"));
+        let result = negotiator.negotiate(Some("mcp_http"), None);
         assert_eq!(result.mode, ProtocolMode::Adaptive);
         assert!(result.auto_detected);
     }
@@ -215,7 +225,7 @@ mod tests {
     fn test_auto_negotiate_uses_server_mode_when_higher_priority() {
         // When server mode (AcpHttp, priority 4) is higher than client hint (McpStdio, priority 1).
         let negotiator = ProtocolNegotiator::new(ProtocolMode::AcpHttp);
-        let result = negotiator.negotiate(Some("mcp_stdio"));
+        let result = negotiator.negotiate(Some("mcp_stdio"), None);
         assert_eq!(result.mode, ProtocolMode::AcpHttp);
         assert!(result.auto_detected);
     }
@@ -224,7 +234,7 @@ mod tests {
     fn test_auto_negotiate_prefers_client_when_higher_priority() {
         // Server is McpStdio (priority 1), client hints McpHttp (priority 2) — client wins.
         let negotiator = ProtocolNegotiator::new(ProtocolMode::McpStdio);
-        let result = negotiator.negotiate(Some("mcp_http"));
+        let result = negotiator.negotiate(Some("mcp_http"), None);
         assert_eq!(result.mode, ProtocolMode::McpHttp);
         assert!(result.auto_detected);
     }
@@ -238,7 +248,7 @@ mod tests {
     #[test]
     fn test_negotiate_without_hint() {
         let negotiator = ProtocolNegotiator::default();
-        let result = negotiator.negotiate(None);
+        let result = negotiator.negotiate(None, None);
         // Without a hint, uses the server's active mode (Adaptive by default)
         assert_eq!(result.mode, ProtocolMode::Adaptive);
         assert!(!result.auto_detected);
@@ -247,7 +257,7 @@ mod tests {
     #[test]
     fn test_negotiate_without_hint_explicit_mode() {
         let negotiator = ProtocolNegotiator::new(ProtocolMode::McpHttp);
-        let result = negotiator.negotiate(None);
+        let result = negotiator.negotiate(None, None);
         assert_eq!(result.mode, ProtocolMode::McpHttp);
         assert!(!result.auto_detected);
     }
@@ -262,9 +272,38 @@ mod tests {
     }
 
     #[test]
-    fn test_negotiate_protocol_version() {
+    fn test_negotiate_protocol_version_no_client_versions() {
         let negotiator = ProtocolNegotiator::new(ProtocolMode::AcpHttp);
-        let result = negotiator.negotiate(Some("acp_http"));
+        // With no client versions supplied, defaults to LATEST.
+        let result = negotiator.negotiate(Some("acp_http"), None);
+        assert_eq!(result.protocol_version, ProtocolVersion::LATEST);
+        assert!(result.client_versions.is_none());
+    }
+
+    #[test]
+    fn test_negotiate_with_client_versions_selects_highest_common() {
+        let negotiator = ProtocolNegotiator::new(ProtocolMode::AcpHttp);
+        let client_versions = vec![ProtocolVersion::V1, ProtocolVersion::V2];
+        let result = negotiator.negotiate(Some("acp_http"), Some(&client_versions));
+        // Highest common between server {1,2,3} and client {1,2} is V2
+        assert_eq!(result.protocol_version, ProtocolVersion::V2);
+        assert_eq!(result.client_versions, Some(vec![1, 2]));
+    }
+
+    #[test]
+    fn test_negotiate_with_versions_only_v1() {
+        let negotiator = ProtocolNegotiator::new(ProtocolMode::AcpHttp);
+        let client_versions = vec![ProtocolVersion::V1];
+        let result = negotiator.negotiate(Some("acp_http"), Some(&client_versions));
+        assert_eq!(result.protocol_version, ProtocolVersion::V1);
+    }
+
+    #[test]
+    fn test_negotiate_with_versions_fallback_when_no_overlap() {
+        let negotiator = ProtocolNegotiator::new(ProtocolMode::AcpHttp);
+        let client_versions = vec![ProtocolVersion::from_u16(999)];
+        let result = negotiator.negotiate(Some("acp_http"), Some(&client_versions));
+        // Falls back to LATEST for backward compatibility
         assert_eq!(result.protocol_version, ProtocolVersion::LATEST);
     }
 

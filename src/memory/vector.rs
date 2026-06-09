@@ -286,7 +286,9 @@ impl HnswIndex {
             return;
         }
 
-        let ep = self.entry_point.unwrap();
+        let ep = self
+            .entry_point
+            .expect("HNSW entry_point must be set before insert");
 
         // Phase 1: traverse from top layer down to level+1 greedily (ef=1)
         let mut curr_ep = ep;
@@ -333,7 +335,9 @@ impl HnswIndex {
         if self.vectors.is_empty() {
             return Vec::new();
         }
-        let ep = self.entry_point.unwrap();
+        let ep = self
+            .entry_point
+            .expect("HNSW entry_point must be set before search; check vectors.is_empty()");
 
         // Greedy search from top layer down to layer 1 (ef=1 per layer)
         let mut curr_ep = ep;
@@ -849,7 +853,7 @@ impl VectorStore {
     /// Reads all vectors from the database and constructs the HNSW graph.
     /// Called lazily on first search when no HNSW index exists yet.
     /// Returns true if the index was built, false if it already existed.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for HNSW index ensure
     fn ensure_hnsw_index(&self) -> Result<bool> {
         let mut hnsw_guard = self.hnsw.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("vector hnsw mutex poisoned in 'ensure_hnsw_index', recovering");

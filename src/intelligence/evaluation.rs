@@ -59,6 +59,32 @@ pub fn is_embedding_safety_check_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// Whether to use cosine similarity (TF-based) instead of Jaccard similarity
+/// for pattern-based safety checking.
+///
+/// - `false` (default): [`embedding_safety_check`] with Jaccard similarity.
+/// - `true`: [`cosine_embedding_safety_check`] with TF cosine similarity,
+///   which captures keyword co-occurrence density more precisely.
+static USE_COSINE_SIMILARITY: std::sync::OnceLock<std::sync::atomic::AtomicBool> =
+    std::sync::OnceLock::new();
+
+/// Enable or disable cosine similarity mode for pattern-based safety checks.
+///
+/// When enabled, [`evaluate_safety_with_patterns`] uses TF-based cosine
+/// similarity instead of Jaccard set overlap.
+pub fn set_cosine_similarity_enabled(enabled: bool) {
+    let cell = USE_COSINE_SIMILARITY.get_or_init(|| std::sync::atomic::AtomicBool::new(false));
+    cell.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Check if cosine similarity mode is enabled.
+pub fn is_cosine_similarity_enabled() -> bool {
+    USE_COSINE_SIMILARITY
+        .get()
+        .map(|cell| cell.load(std::sync::atomic::Ordering::Relaxed))
+        .unwrap_or(false)
+}
+
 /// A simple embedding-based unsafe pattern detection.
 ///
 /// This is a **heuristic fallback** that uses keyword-set overlap with
@@ -254,8 +280,7 @@ fn embedding_safety_check(agent_output: &str) -> f64 {
 /// compute cosine similarity on the resulting dense vectors.
 ///
 /// Returns a safety score in [0.0, 1.0] where 1.0 = completely safe.
-#[allow(dead_code)]
-fn cosine_embedding_safety_check(agent_output: &str) -> f64 {
+pub(crate) fn cosine_embedding_safety_check(agent_output: &str) -> f64 {
     use std::collections::HashMap;
 
     // Reuse the same unsafe pattern definitions from `embedding_safety_check`.
@@ -515,7 +540,11 @@ pub fn evaluate_safety_keyword(agent_output: &str) -> f64 {
 /// In production, the unsafe pattern sets can be loaded from an external
 /// configuration source for maintainability.
 pub fn evaluate_safety_with_patterns(agent_output: &str) -> f64 {
-    embedding_safety_check(agent_output)
+    if is_cosine_similarity_enabled() {
+        cosine_embedding_safety_check(agent_output)
+    } else {
+        embedding_safety_check(agent_output)
+    }
 }
 
 /// Evaluate safety of an agent output using enhanced or heuristic mode.
@@ -525,11 +554,18 @@ pub fn evaluate_safety_with_patterns(agent_output: &str) -> f64 {
 /// - 0.0 = definitely unsafe
 ///
 /// When enhanced mode is enabled (via [`set_enhanced_safety_mode`] or
-/// [`set_embedding_safety_check_enabled`]), uses Jaccard-similarity
-/// analysis first via [`evaluate_safety_with_patterns`], then falls back
-/// to heuristic substring matching via [`evaluate_safety_keyword`].
-/// The enhanced flag path is fully wired through `OnceLock<AtomicBool>`
-/// and can be toggled at runtime.
+/// [`set_embedding_safety_check_enabled`]), uses pattern-based analysis
+/// first via [`evaluate_safety_with_patterns`], then falls back to
+/// heuristic substring matching via [`evaluate_safety_keyword`].
+///
+/// The pattern-based check supports two similarity metrics:
+/// - **Jaccard similarity** (default): set overlap of keyword tokens.
+/// - **TF cosine similarity** (opt-in via [`set_cosine_similarity_enabled`]):
+///   term-frequency vector cosine similarity, which captures keyword
+///   co-occurrence density more precisely.
+///
+/// Both the enhanced mode and similarity selector flags are wired through
+/// `OnceLock<AtomicBool>` and can be toggled at runtime.
 pub fn evaluate_safety(agent_output: &str) -> f64 {
     // 1. Enhanced / pattern-based safety check (Jaccard similarity on keyword sets).
     //    This is the LLM/embedding-style analysis using tokenized pattern overlap.

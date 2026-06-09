@@ -214,6 +214,29 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
     this.streamProcessor.stop();
   }
 
+  /**
+   * Handle an image pasted or dropped in the webview.
+   * Logs a notification and provides visual feedback in the status bar.
+   * The image is already added to the webview's local attachments array;
+   * this method logs the event and shows a VS Code notification.
+   */
+  private _handlePasteImage(
+    name: string,
+    mimeType: string,
+    _dataUrl: string,
+    size: number,
+  ): void {
+    const sizeKB = (size / 1024).toFixed(1);
+    this._executionOutput.appendLine(
+      `[pasteImage] Received: ${name} (${mimeType}, ${sizeKB} KB)`,
+    );
+    // Show a brief status bar notification
+    void vscode.window.setStatusBarMessage(
+      t(MessageKeys.imagePasted, `${name} (${sizeKB} KB)`),
+      3000,
+    );
+  }
+
   public resolveWebviewView(
     webviewView: vscode.WebviewView,
     _context: vscode.WebviewViewResolveContext,
@@ -304,6 +327,14 @@ export class GoOnChatViewProvider implements vscode.WebviewViewProvider {
               break;
             case "getSessions":
               this._sendSessionsList();
+              break;
+            case "pasteImage":
+              this._handlePasteImage(
+                message.name,
+                message.mimeType,
+                message.dataUrl,
+                message.size,
+              );
               break;
             case "stopGeneration":
               this._handleStopGeneration();

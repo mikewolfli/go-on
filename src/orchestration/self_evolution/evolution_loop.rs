@@ -6,13 +6,14 @@
 
 use crate::agents::self_evolution_agent::SelfEvolutionAgent;
 use crate::intelligence::evolution_graph::{EvolutionGraph, EvolutionStage};
+use crate::observability::alert_manager::{AlertManager, AlertSeverity};
 use crate::orchestration::self_evolution::evolution_history::EvolutionHistory;
 use crate::orchestration::self_evolution::sandbox::{CodePatch, SandboxExecutor};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -398,10 +399,12 @@ pub struct MetacognitiveTriggerSource {
     interval: Duration,
     /// Thresholds for various metacognitive metrics.
     #[allow(dead_code)]
+    // F-GAP-49 — reserved for metacognitive thresholds
     thresholds: HashMap<String, f64>,
 }
 
 #[allow(dead_code)]
+// F-GAP-49 — reserved for metacognitive trigger source impl
 impl MetacognitiveTriggerSource {
     /// Create a new metacognitive trigger source.
     /// TODO-BLUE64: Activate in evolution_loop_builder when metacognitive data is available.
@@ -419,6 +422,7 @@ impl MetacognitiveTriggerSource {
 
     /// Set a custom threshold for a metric.
     #[allow(dead_code)]
+    // F-GAP-49 — reserved for with_threshold
     pub fn with_threshold(mut self, metric: &str, value: f64) -> Self {
         self.thresholds.insert(metric.to_string(), value);
         self
@@ -443,13 +447,26 @@ impl TriggerSource for MetacognitiveTriggerSource {
 
 /// A trigger source that listens to the alert manager for active alerts
 /// that should trigger an evolution cycle.
-#[derive(Debug)]
 pub struct AlertManagerTriggerSource {
     /// Name of this source.
     name: String,
+    /// Reference to the real AlertManager (when connected).
+    alert_manager: Option<Arc<StdMutex<AlertManager>>>,
     /// Cached alert fingerprints to avoid re-triggering.
-    #[allow(dead_code)]
     seen_alerts: tokio::sync::Mutex<Vec<String>>,
+}
+
+impl std::fmt::Debug for AlertManagerTriggerSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AlertManagerTriggerSource")
+            .field("name", &self.name)
+            .field(
+                "alert_manager",
+                &self.alert_manager.as_ref().map(|_| "<AlertManager>"),
+            )
+            .field("seen_alerts", &self.seen_alerts)
+            .finish()
+    }
 }
 
 impl AlertManagerTriggerSource {
@@ -457,25 +474,103 @@ impl AlertManagerTriggerSource {
     pub fn new(name: String) -> Self {
         Self {
             name,
+            alert_manager: None,
             seen_alerts: tokio::sync::Mutex::new(Vec::new()),
         }
+    }
+
+    /// Connect this trigger source to a real AlertManager instance.
+    /// When connected, `poll()` will query active alerts and convert
+    /// unseen ones into `EvolutionTrigger` values.
+    pub fn with_alert_manager(mut self, am: Arc<StdMutex<AlertManager>>) -> Self {
+        self.alert_manager = Some(am);
+        self
     }
 }
 
 #[async_trait]
 impl TriggerSource for AlertManagerTriggerSource {
     async fn poll(&self) -> Vec<EvolutionTrigger> {
-        // Query the alert manager (in production this connects to a real
-        // alert system like Prometheus AlertManager).
-        // Currently no real alert system is connected — triggers must be
-        // injected via an alternative mechanism (e.g., ManualTriggerSource
-        // or PubsubTriggerSource).
-        warn!(
-            "AlertManagerTriggerSource[{}]: no real alert system connected; returning empty",
-            self.name
-        );
-        let _ = &self.seen_alerts.lock().await;
-        Vec::new()
+        let Some(ref am) = self.alert_manager else {
+            warn!(
+                "AlertManagerTriggerSource[{}]: no AlertManager connected; returning empty",
+                self.name
+            );
+            return Vec::new();
+        };
+
+        // Query the real AlertManager for recently fired alerts.
+        let recent_alerts = match am.lock() {
+            Ok(guard) => guard.get_recent_alerts(),
+            Err(poisoned) => {
+                warn!(
+                    "AlertManagerTriggerSource[{}]: AlertManager lock poisoned",
+                    self.name
+                );
+                poisoned.into_inner().get_recent_alerts()
+            }
+        };
+
+        if recent_alerts.is_empty() {
+            return Vec::new();
+        }
+
+        // Fingerprint each alert as "rule:severity:value" to avoid re-triggering.
+        let mut seen = self.seen_alerts.lock().await;
+        let mut triggers = Vec::new();
+
+        for alert in &recent_alerts {
+            let fp = format!(
+                "{}:{}:{}",
+                alert.rule,
+                alert.severity as u8,
+                (alert.value * 100.0) as i64
+            );
+            if seen.contains(&fp) {
+                continue;
+            }
+            seen.push(fp);
+
+            let direction = if alert.value > alert.threshold {
+                RegressionDirection::Increasing
+            } else {
+                RegressionDirection::Decreasing
+            };
+
+            match alert.severity {
+                AlertSeverity::Critical => {
+                    triggers.push(EvolutionTrigger::PerformanceRegression {
+                        metric: format!("alert::critical::{}", alert.rule),
+                        threshold: alert.threshold,
+                        direction,
+                    });
+                }
+                AlertSeverity::Warning => {
+                    triggers.push(EvolutionTrigger::PerformanceRegression {
+                        metric: format!("alert::warning::{}", alert.rule),
+                        threshold: alert.threshold,
+                        direction,
+                    });
+                }
+                _ => {
+                    // Info-level alerts become manual-request triggers.
+                    triggers.push(EvolutionTrigger::ManualRequest {
+                        instruction: format!(
+                            "Alert '{}': {} (value={}, threshold={})",
+                            alert.rule, alert.message, alert.value, alert.threshold
+                        ),
+                    });
+                }
+            }
+        }
+
+        // Cap seen alerts to prevent unbounded memory growth.
+        if seen.len() > 1000 {
+            let excess = seen.len() - 500;
+            seen.drain(0..excess);
+        }
+
+        triggers
     }
 }
 
@@ -490,30 +585,50 @@ pub struct DiagnosticTriggerSource {
     /// Name of this source.
     name: String,
     /// Map of error patterns to their observed counts.
-    error_counts: tokio::sync::Mutex<HashMap<String, u64>>,
+    error_counts: Arc<tokio::sync::Mutex<HashMap<String, u64>>>,
     /// Minimum count before triggering.
     min_count: u64,
 }
 
 #[allow(dead_code)]
+// F-GAP-49 — reserved for diagnostic trigger source impl
 impl DiagnosticTriggerSource {
-    /// Create a new diagnostic trigger source.
-    /// TODO-BLUE64: Wire record_error calls from error handling paths.
+    /// Create a new diagnostic trigger source with a shared error-counts map.
+    ///
+    /// When `external_counts` is `Some`, the source uses that shared map
+    /// instead of creating its own, allowing the EvolutionLoop to inject
+    /// error patterns from its own pipeline (e.g. verify failures).
     pub fn new(name: String, min_count: u64) -> Self {
         Self {
             name,
-            error_counts: tokio::sync::Mutex::new(HashMap::new()),
+            error_counts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             min_count,
         }
     }
 
+    /// Create a diagnostic trigger source that shares an error-counts map
+    /// with an external caller (e.g. the EvolutionLoop).
+    pub fn with_shared_counts(
+        name: String,
+        min_count: u64,
+        error_counts: Arc<tokio::sync::Mutex<HashMap<String, u64>>>,
+    ) -> Self {
+        Self {
+            name,
+            error_counts,
+            min_count,
+        }
+    }
+
+    /// Returns the inner error-counts map reference for external wiring.
+    pub fn inner_counts(&self) -> &Arc<tokio::sync::Mutex<HashMap<String, u64>>> {
+        &self.error_counts
+    }
+
     /// Record an observed error pattern.
     ///
-    /// TODO-BLUE64: Wire this from error-handling paths in the LSP diagnostic
-    /// handler, test runner, or compiler output parser so that repeated errors
-    /// automatically trigger evolution cycles. The integration point should
-    /// call this method whenever a diagnostic or test failure is observed.
-    #[allow(dead_code)]
+    /// Record an observed error pattern so that repeated errors
+    /// automatically trigger evolution cycles.
     pub fn record_error(&self, pattern: String) {
         let mut counts = self.error_counts.blocking_lock();
         *counts.entry(pattern).or_insert(0) += 1;
@@ -552,6 +667,7 @@ impl TriggerSource for DiagnosticTriggerSource {
 /// This is the default trigger source that ensures the evolution loop has
 /// at least one active source, preventing `NoTriggerSources` errors.
 #[allow(dead_code)]
+// F-GAP-49 — reserved for tick trigger source
 #[derive(Debug)]
 pub struct TickTriggerSource {
     /// Name of this source.
@@ -563,6 +679,7 @@ pub struct TickTriggerSource {
 }
 
 #[allow(dead_code)]
+// F-GAP-49 — reserved for tick trigger source impl
 impl TickTriggerSource {
     /// Create a new tick trigger source that fires every `interval`.
     pub fn new(name: String, interval: Duration) -> Self {
@@ -608,10 +725,12 @@ pub struct ManualTriggerSource {
     rx: tokio::sync::Mutex<mpsc::UnboundedReceiver<String>>,
     /// Sender (cloned for external use).
     #[allow(dead_code)]
+    // F-GAP-49 — reserved for manual trigger sender
     tx: mpsc::UnboundedSender<String>,
 }
 
 #[allow(dead_code)]
+// F-GAP-49 — reserved for manual trigger source impl
 impl ManualTriggerSource {
     /// Create a new manual trigger source.
     pub fn new(name: String) -> Self {
@@ -773,6 +892,11 @@ pub struct EvolutionLoop {
     agent: Option<Arc<SelfEvolutionAgent>>,
     /// Evolution graph for capability version history tracking (I9).
     evolution_graph: Option<Arc<std::sync::Mutex<EvolutionGraph>>>,
+    /// Shared error-counts map for recording errors detected during
+    /// the evolution pipeline (e.g. verification failures).
+    /// Injected into the DiagnosticTriggerSource so repeated errors
+    /// automatically trigger evolution cycles.
+    diagnostic_error_counts: Option<Arc<tokio::sync::Mutex<HashMap<String, u64>>>>,
 }
 
 impl EvolutionLoop {
@@ -788,6 +912,7 @@ impl EvolutionLoop {
             poll_interval: Duration::from_secs(30),
             agent: None,
             evolution_graph: None,
+            diagnostic_error_counts: None,
         }
     }
 
@@ -812,24 +937,66 @@ impl EvolutionLoop {
     /// AlertManager, Diagnostic, Manual) for a fully wired evolution loop.
     pub fn with_default_trigger_sources(self) -> Self {
         let _ = &self; // borrow so we can chain
-        self.with_trigger_source(Box::new(TickTriggerSource::new(
-            "default_tick".to_string(),
-            Duration::from_secs(300),
-        )))
-        .with_trigger_source(Box::new(MetacognitiveTriggerSource::new(
-            "metacognitive_trigger".to_string(),
-            Duration::from_secs(600),
-        )))
-        .with_trigger_source(Box::new(AlertManagerTriggerSource::new(
-            "alert_manager_trigger".to_string(),
-        )))
-        .with_trigger_source(Box::new(DiagnosticTriggerSource::new(
+                       // Create a shared error-counts map so the evolution loop can
+                       // inject pipeline failures into the DiagnosticTriggerSource.
+        let shared_counts: Arc<tokio::sync::Mutex<HashMap<String, u64>>> =
+            Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+        let diagnostic = DiagnosticTriggerSource::with_shared_counts(
             "diagnostic_trigger".to_string(),
             3,
-        )))
-        .with_trigger_source(Box::new(ManualTriggerSource::new(
-            "manual_trigger".to_string(),
-        )))
+            Arc::clone(&shared_counts),
+        );
+        let mut slf = self
+            .with_trigger_source(Box::new(TickTriggerSource::new(
+                "default_tick".to_string(),
+                Duration::from_secs(300),
+            )))
+            .with_trigger_source(Box::new(MetacognitiveTriggerSource::new(
+                "metacognitive_trigger".to_string(),
+                Duration::from_secs(600),
+            )))
+            .with_trigger_source(Box::new(AlertManagerTriggerSource::new(
+                "alert_manager_trigger".to_string(),
+            )))
+            .with_trigger_source(Box::new(diagnostic))
+            .with_trigger_source(Box::new(ManualTriggerSource::new(
+                "manual_trigger".to_string(),
+            )));
+        slf.diagnostic_error_counts = Some(shared_counts);
+        slf
+    }
+
+    /// Inject a real AlertManager reference into the existing
+    /// AlertManagerTriggerSource (if present), or add a new wired one.
+    ///
+    /// Call this after `with_default_trigger_sources()` to connect
+    /// the evolution loop to the live alert system.
+    pub fn with_alert_manager(mut self, am: Arc<StdMutex<AlertManager>>) -> Self {
+        // Replace any existing AlertManagerTriggerSource with a wired one.
+        let mut found = false;
+        self.trigger_sources = self
+            .trigger_sources
+            .drain(..)
+            .filter_map(|source| {
+                // We can't downcast trait objects in stable Rust without
+                // Any, so instead we simply add the wired one and drop
+                // the unwired one by checking Debug output heuristic.
+                //
+                // Actually, the cleanest way: remove all AlertManagerTriggerSource
+                // instances by not forwarding them. We check by debug formatting.
+                let debug_str = format!("{:?}", source);
+                if debug_str.contains("AlertManagerTriggerSource") && !found {
+                    found = true;
+                    None // remove the unwired one
+                } else {
+                    Some(source)
+                }
+            })
+            .collect();
+        self.with_trigger_source(Box::new(
+            AlertManagerTriggerSource::new("alert_manager_trigger".to_string())
+                .with_alert_manager(am),
+        ))
     }
 
     /// Set the sandbox executor.
@@ -949,6 +1116,13 @@ impl EvolutionLoop {
                             error = %e,
                             "patch application failed"
                         );
+                        // Record the error pattern for repeated-failure detection.
+                        if let Some(ref counts) = self.diagnostic_error_counts {
+                            let mut guard = counts.blocking_lock();
+                            *guard
+                                .entry(format!("apply_failure::{}::{}", trigger.label(), e))
+                                .or_insert(0) += 1;
+                        }
                         continue;
                     }
                 };
@@ -961,6 +1135,18 @@ impl EvolutionLoop {
                         result = %verified.summary(),
                         "verification failed after patch"
                     );
+                    // Record the error pattern in the diagnostic trigger source
+                    // so repeated verification failures trigger evolution cycles.
+                    if let Some(ref counts) = self.diagnostic_error_counts {
+                        let mut guard = counts.blocking_lock();
+                        *guard
+                            .entry(format!(
+                                "verify_failure::{}::{}",
+                                trigger.label(),
+                                verified.summary(),
+                            ))
+                            .or_insert(0) += 1;
+                    }
                     // Record the failure but don't roll back here —
                     // the history system handles auto-rollback.
                 }

@@ -541,30 +541,31 @@ mod tests {
     use tempfile::TempDir;
 
     fn setup_engine() -> (TempDir, MemoryRetrievalEngine) {
-        let dir = TempDir::new().unwrap();
+        let dir = TempDir::new().expect("temp dir creation should succeed");
         let db_path = dir.path().join("warm.db");
         let cold_path = dir.path().join("cold");
-        let persistence = MemoryPersistence::new(&db_path, &cold_path, None).unwrap();
+        let persistence = MemoryPersistence::new(&db_path, &cold_path, None)
+            .expect("persistence should initialize");
         let engine = MemoryRetrievalEngine::new(persistence);
         (dir, engine)
     }
 
     fn seed_entry(engine: &MemoryRetrievalEngine, id: &str, content: &str, usefulness: f32) {
         let entry = MemoryEntry::new_hot(id, "test", content, usefulness);
-        engine.persistence().store(entry).unwrap();
+        engine.persistence().store(entry).expect("store should succeed");
     }
 
     #[test]
     fn test_retrieve_relevant_memories_empty_query() {
         let (_dir, engine) = setup_engine();
-        let results = engine.retrieve_relevant_memories("", 10).unwrap();
+        let results = engine.retrieve_relevant_memories("", 10).expect("retrieve relevant memories should succeed for empty query");
         assert!(results.is_empty());
     }
 
     #[test]
     fn test_retrieve_relevant_memories_zero_limit() {
         let (_dir, engine) = setup_engine();
-        let results = engine.retrieve_relevant_memories("hello", 0).unwrap();
+        let results = engine.retrieve_relevant_memories("hello", 0).expect("retrieve relevant memories should succeed for zero limit");
         assert!(results.is_empty());
     }
 
@@ -575,9 +576,9 @@ mod tests {
         seed_entry(&engine, "m1", "first memory", 0.8);
         seed_entry(&engine, "m2", "second memory", 0.6);
 
-        engine.link_memories("m1", "m2", LinkType::Similar).unwrap();
+        engine.link_memories("m1", "m2", LinkType::Similar).expect("link memories should succeed");
 
-        let links = engine.get_links("m1").unwrap();
+        let links = engine.get_links("m1").expect("get links should succeed");
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].m2, "m2");
         assert_eq!(links[0].link_type, LinkType::Similar);
@@ -596,9 +597,9 @@ mod tests {
         seed_entry(&engine, "a", "content a", 0.5);
         seed_entry(&engine, "b", "content b", 0.5);
 
-        assert!(!engine.are_linked("a", "b").unwrap());
-        engine.link_memories("a", "b", LinkType::Supports).unwrap();
-        assert!(engine.are_linked("a", "b").unwrap());
+        assert!(!engine.are_linked("a", "b").expect("are linked should succeed"));
+        engine.link_memories("a", "b", LinkType::Supports).expect("link memories should succeed");
+        assert!(engine.are_linked("a", "b").expect("are linked should succeed"));
     }
 
     #[test]
@@ -608,12 +609,12 @@ mod tests {
         seed_entry(&engine, "y", "y", 0.5);
         seed_entry(&engine, "z", "z", 0.5);
 
-        engine.link_memories("x", "y", LinkType::Similar).unwrap();
+        engine.link_memories("x", "y", LinkType::Similar).expect("link memories should succeed");
         engine
             .link_memories("y", "z", LinkType::Continuation)
-            .unwrap();
+            .expect("link memories should succeed");
 
-        assert_eq!(engine.link_count().unwrap(), 2);
+        assert_eq!(engine.link_count().expect("link count should succeed"), 2);
     }
 
     #[test]
@@ -621,9 +622,9 @@ mod tests {
         let (_dir, engine) = setup_engine();
         seed_entry(&engine, "mem1", "session content", 0.7);
 
-        engine.index_session_memory("session-123", "mem1").unwrap();
+        engine.index_session_memory("session-123", "mem1").expect("index session memory should succeed");
 
-        let entries = engine.retrieve_related_sessions("session-123").unwrap();
+        let entries = engine.retrieve_related_sessions("session-123").expect("retrieve related sessions should succeed");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].id, "mem1");
     }
@@ -633,7 +634,7 @@ mod tests {
         let (_dir, engine) = setup_engine();
         let entries = engine
             .retrieve_related_sessions("nonexistent-session")
-            .unwrap();
+            .expect("retrieve related sessions should succeed");
         assert!(entries.is_empty());
     }
 
@@ -660,10 +661,10 @@ mod tests {
         seed_entry(&engine, "a", "alpha", 0.5);
         seed_entry(&engine, "b", "beta", 0.5);
 
-        engine.link_memories("a", "b", LinkType::Similar).unwrap();
+        engine.link_memories("a", "b", LinkType::Similar).expect("link memories should succeed");
 
         // Getting links for "b" should return the link involving "b" (reverse lookup).
-        let links_for_b = engine.get_links("b").unwrap();
+        let links_for_b = engine.get_links("b").expect("get links should succeed");
 
         assert_eq!(links_for_b.len(), 1);
         // The link has m1="a", m2="b". Both endpoints should involve "b".
@@ -697,16 +698,21 @@ mod tests {
             access_count: 1,
             session_id: None,
         };
-        engine.persistence().store(entry).unwrap();
+        engine.persistence().store(entry).expect("store should succeed");
         // Promote from hot → warm so the vector index can find it
         // (auto_migrate only evicts expired entries, but this entry is fresh)
-        let stored = engine.persistence().retrieve("vec-1").unwrap().unwrap();
-        engine.persistence().promote(&stored).unwrap();
+        let stored = engine
+            .persistence()
+            .retrieve("vec-1")
+            .expect("retrieve should succeed")
+            .expect("retrieved entry should be present");
+        engine.persistence().promote(&stored).expect("promote should succeed");
 
         // Build vector index from warm store
         let mut mut_engine = engine;
         assert!(
-            mut_engine.build_vector_index_from_warm_store().unwrap(),
+            mut_engine.build_vector_index_from_warm_store()
+                .expect("build vector index should succeed"),
             "expected at least one indexed entry"
         );
 
@@ -724,7 +730,7 @@ mod tests {
         assert_eq!(results[0].id, "vec-1");
 
         // Full retrieve_relevant_memories should also pick it up via L3
-        let memories = mut_engine.retrieve_relevant_memories("cat", 10).unwrap();
+        let memories = mut_engine.retrieve_relevant_memories("cat", 10).expect("retrieve relevant memories should succeed");
         assert!(
             memories.iter().any(|m| m.id == "vec-1"),
             "retrieve_relevant_memories should include the vector-matched entry"
@@ -737,7 +743,8 @@ mod tests {
         // Seed an entry without an embedding
         seed_entry(&engine, "no-emb", "plain text", 0.5);
 
-        let indexed = engine.build_vector_index_from_warm_store().unwrap();
+        let indexed = engine.build_vector_index_from_warm_store()
+            .expect("build vector index should succeed");
         assert!(!indexed, "no entries should be indexed without embeddings");
 
         let query_embedding = vec![0.0_f64; 128];

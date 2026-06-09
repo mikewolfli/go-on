@@ -94,7 +94,7 @@ impl Drop for DrainPermit {
 impl DrainPermit {
     /// Consume the permit and return the inner semaphore permit.
     /// The caller is responsible for ensuring the inner permit is eventually dropped.
-    #[allow(dead_code)] // Reserved for future drain coordination patterns
+    #[allow(dead_code)] // F-GAP-49: reserved for future drain coordination patterns
     pub fn into_inner(mut self) -> tokio::sync::OwnedSemaphorePermit {
         self.permit.take().expect("DrainPermit already consumed")
     }
@@ -306,8 +306,14 @@ pub struct ObservabilityLayer {
     /// ACP lock monitoring and poison recovery telemetry
     pub lock_monitor: Arc<AcpLockMonitor>,
     /// Telemetry runtime
+    // SAFETY: StdMutex is never held across `.await` — all access is short synchronous
+    // critical sections (read/write metrics counters) that complete and drop the guard
+    // before any async yield point.
     pub telemetry_runtime: Arc<StdMutex<TelemetryRuntime>>,
     /// Alert manager for threshold-based alerting
+    // SAFETY: StdMutex is never held across `.await` — all access is short synchronous
+    // critical sections (evaluate alert thresholds, push/broadcast) that complete and drop
+    // the guard before any async yield point.
     pub alert_manager: Arc<StdMutex<AlertManager>>,
 }
 
@@ -333,22 +339,39 @@ pub struct ObservabilityLayer {
 /// None of these fields have an `.await` point inside their critical sections.
 pub struct ResilienceContext {
     /// Online controller for adaptive strategy from live outcomes
+    // SAFETY: StdMutex is never held across `.await` — all access uses `with_acp_lock()`
+    // which acquires, reads/writes, and drops the guard within a single synchronous closure.
     pub online_controller: Arc<StdMutex<OnlineControllerState>>,
     /// Circuit breaker registry for failure prevention
+    // SAFETY: StdMutex is never held across `.await` — all access uses `with_acp_lock()`
+    // which acquires, reads/writes, and drops the guard within a single synchronous closure.
     pub circuit_breakers: Arc<StdMutex<CircuitBreakerRegistry>>,
     /// Hyper-resilience engine for circuit breaking, failover, and self-healing (BLUE56-GAP-C04)
+    // This field is NOT a StdMutex — it is an async-safe engine.
     pub hyper_resilience: Arc<crate::resilience::hyper_resilience::HyperResilienceEngine>,
     /// Maintenance tracker for system health monitoring
+    // SAFETY: StdMutex is never held across `.await` — all access uses `with_acp_lock()`
+    // which acquires, reads/writes, and drops the guard within a single synchronous closure.
     pub maintenance_tracker: Arc<StdMutex<MaintenanceTracker>>,
     /// Inflight request limiter
+    // SAFETY: StdMutex is never held across `.await` — all access is short synchronous
+    // critical sections (check/adjust inflight count) with no `.await` inside.
     pub inflight_limiter: Arc<StdMutex<InflightLimiter>>,
     /// Lifecycle state management
+    // SAFETY: StdMutex is never held across `.await` — all access uses `with_acp_lock()`
+    // which acquires, reads/writes, and drops the guard within a single synchronous closure.
     pub lifecycle_state: Arc<StdMutex<LifecycleState>>,
     /// Review timeout policy
+    // SAFETY: StdMutex is never held across `.await` — review timeout checks are
+    // synchronous lookups that complete and drop the guard within the same scope.
     pub review_timeout_policy: Arc<StdMutex<ReviewTimeoutPolicy>>,
     /// Failure prevention system
+    // SAFETY: StdMutex is never held across `.await` — all access is short synchronous
+    // critical sections (evaluate failure conditions, update state) with no `.await` inside.
     pub failure_prevention: Arc<StdMutex<FailurePrevention>>,
     /// Phase rate limiter (held by ResilienceContext since it governs per-phase request admission)
+    // SAFETY: StdMutex is never held across `.await` — rate limit admission checks are
+    // synchronous token-bucket operations that complete before any async yield.
     pub phase_rate_limiter: Arc<StdMutex<PhaseRateLimiter>>,
 }
 
@@ -367,6 +390,8 @@ pub struct SessionContext {
     /// Thread-safe audit log with NDJSON persistence at ~/.goon/audit.ndjson
     pub audit_log: ThreadSafeAuditLog,
     /// In-memory registry for Responses API objects
+    // SAFETY: StdMutex is never held across `.await` — map lookups/inserts are
+    // short synchronous operations that complete and drop the guard before any async yield.
     pub responses_api_store: Arc<StdMutex<HashMap<String, serde_json::Value>>>,
 }
 
@@ -379,6 +404,8 @@ pub struct RateLimitContext {
     /// Tenant-level rate limit middleware (F-GAP-49)
     pub rate_limit_middleware: Option<Arc<crate::protocol::rate_limit::RateLimitMiddleware>>,
     /// TenantBudgetEnforcer — per-tenant resource quota management (F-GAP-08)
+    // SAFETY: StdMutex is never held across `.await` — `check_can_start()` and `start_task()`
+    // are synchronous token-budget operations that complete and drop the guard before any `.await`.
     pub tenant_budget: Arc<StdMutex<crate::governance::hardening::TenantBudgetEnforcer>>,
 }
 
@@ -388,16 +415,26 @@ pub struct RateLimitContext {
 /// (locking, reading/writing, releasing). No `.await` points inside any locked scope.
 pub struct RegistryContext {
     /// SchemaRegistry — task envelope validation (F-GAP-07)
+    // SAFETY: StdMutex is never held across `.await` — schema lookups are synchronous
+    // map accesses that complete and drop the guard before any async yield.
     pub schema_registry: Arc<StdMutex<crate::orchestration::task_schema::SchemaRegistry>>,
     /// OptimizerRegistry — workflow optimization plugins (ARCH-11)
+    // SAFETY: StdMutex is never held across `.await` — plugin registry lookups are synchronous
+    // that complete and drop the guard before any async yield.
     pub optimizer_registry:
         Arc<StdMutex<crate::orchestration::workflow_optimizer::OptimizerRegistry>>,
     /// PromotionRegistry — promotion plugin evaluation (ARCH-10)
+    // SAFETY: StdMutex is never held across `.await` — promotion evaluations are synchronous
+    // that complete and drop the guard before any async yield.
     pub promotion_registry:
         Arc<StdMutex<crate::orchestration::promotion_plugin::PromotionRegistry>>,
     /// BenchmarkSuite — evaluation suite for agent quality (F-GAP-06)
+    // SAFETY: StdMutex is never held across `.await` — benchmark operations are synchronous
+    // that complete and drop the guard before any async yield.
     pub evaluation_suite: Arc<StdMutex<crate::intelligence::evaluation::BenchmarkSuite>>,
     /// ForkRegistry — sub-agent process isolation (ARCH-05)
+    // SAFETY: StdMutex is never held across `.await` — fork registry operations are synchronous
+    // that complete and drop the guard before any async yield.
     pub fork_registry: Arc<StdMutex<ForkRegistry>>,
 }
 
@@ -407,8 +444,12 @@ pub struct RegistryContext {
 /// No `.await` points inside any locked scope.
 pub struct PersistenceContext {
     /// Cross-request memory policy store
+    // SAFETY: StdMutex is never held across `.await` — memory store lookups are synchronous
+    // map accesses that complete and drop the guard before any async yield.
     pub memory_store: Arc<StdMutex<MemoryStore>>,
     /// Artifact ledger
+    // SAFETY: StdMutex is never held across `.await` — artifact ledger operations are synchronous
+    // that complete and drop the guard before any async yield.
     pub artifact_ledger: Arc<StdMutex<ArtifactLedger>>,
     /// Persistent task graph store for checkpoints and recovery
     pub task_graph_store: Option<Arc<TaskGraphStore>>,
@@ -993,7 +1034,7 @@ impl ServerBuilder {
     }
 
     /// Set the runtime config for gating governance, tenant quotas, etc.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49: reserved for runtime config injection
     pub fn with_runtime_config(mut self, config: RuntimeConfig) -> Self {
         self.runtime_config = Some(config);
         self
@@ -1005,7 +1046,7 @@ impl ServerBuilder {
     /// `data:` URIs, and `file://` references through the multimodal sub-processors
     /// (document parser, audio/video processor, repo analyzer).
     /// When `None` (the default), the system falls back to text-only processing.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49: reserved for multimodal chat pipeline integration
     pub fn with_multimodal_processor(
         mut self,
         processor: crate::multimodal::MultimodalProcessor,

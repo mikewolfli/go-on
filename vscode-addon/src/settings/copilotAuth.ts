@@ -1,5 +1,8 @@
 import * as http from "http";
 import * as https from "https";
+import { Logger } from "../logger";
+
+const log = Logger.forModule("copilotAuth");
 
 // ── Copilot OAuth types ──
 
@@ -126,7 +129,7 @@ export async function requestJson(
             try {
               parsed = JSON.parse(chunks);
             } catch (err) {
-              console.warn("[copilotAuth] requestJson parse failed:", err);
+              log.warn("requestJson parse failed:", err);
               parsed = undefined;
             }
           }

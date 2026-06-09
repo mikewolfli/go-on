@@ -1,6 +1,9 @@
 import * as vscode from "vscode";
+import { Logger } from "./logger";
 import { RuntimeManagerLike } from "./managerTypes";
 import { getNonce } from "./utils";
+
+const log = Logger.forModule("multiAgentPanel");
 
 interface AgentInfo {
   name: string;
@@ -162,7 +165,7 @@ export class MultiAgentPanelProvider implements vscode.WebviewViewProvider {
             }
           }
         } catch (err) {
-          console.warn("[multiAgentPanel] agent.status RPC failed:", err);
+          log.warn("agent.status RPC failed:", err);
         }
       }
 
@@ -188,7 +191,7 @@ export class MultiAgentPanelProvider implements vscode.WebviewViewProvider {
         summary: { total, running },
       });
     } catch (err) {
-      console.warn("[multiAgentPanel] _fetchAgents failed:", err);
+      log.warn("_fetchAgents failed:", err);
     }
   }
 

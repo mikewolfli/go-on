@@ -2,7 +2,10 @@ import * as vscode from "vscode";
 import { spawn } from "child_process";
 import * as fs from "fs/promises";
 import * as path from "path";
+import { Logger } from "./logger";
 import { i18n, MessageKeys } from "./i18n";
+
+const log = Logger.forModule("settingsView");
 import { configManager } from "./configManager";
 import { RuntimeManagerLike } from "./managerTypes";
 import { normalizeProtocolMode } from "./protocolContract";
@@ -291,7 +294,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
         });
       }
     } catch (err) {
-      console.warn("[settingsView] _refreshRuntimeFeatures failed:", err);
+      log.warn("_refreshRuntimeFeatures failed:", err);
     }
   }
 
@@ -520,7 +523,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
               proc.kill("SIGKILL");
             }
           } catch (err) {
-            console.warn("[settingsView] forceKill failed:", err);
+            log.warn("forceKill failed:", err);
           }
         }, 1000);
       }, 10000);
@@ -559,7 +562,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       const token = await this._runSecretCommand("get", COPILOT_SECRET_NAME);
       return token.trim() || undefined;
     } catch (err) {
-      console.warn("[settingsView] _readCopilotToken failed:", err);
+      log.warn("_readCopilotToken failed:", err);
       return undefined;
     }
   }
@@ -1023,7 +1026,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     try {
       await this._runSecretCommand("delete", COPILOT_SECRET_NAME);
     } catch (err) {
-      console.warn("[settingsView] _deleteCopilotAuthorization failed:", err);
+      log.warn("_deleteCopilotAuthorization failed:", err);
     }
     this.manager.setRuntimeEnvOverrides?.({
       [COPILOT_ENV_VAR]: "",
@@ -1084,7 +1087,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
         return parsed;
       }
     } catch (err) {
-      console.warn("[settingsView] provider.catalog failed:", err);
+      log.warn("provider.catalog failed:", err);
     }
 
     try {
@@ -1119,7 +1122,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       );
       return parsed;
     } catch (err) {
-      console.warn("[settingsView] models/list failed:", err);
+      log.warn("models/list failed:", err);
       return [];
     }
   }
@@ -1132,7 +1135,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       const content = await fs.readFile(configPath, "utf8");
       return parseConfiguredAgents(content);
     } catch (err) {
-      console.warn("[settingsView] _loadConfiguredAgentMap failed:", err);
+      log.warn("_loadConfiguredAgentMap failed:", err);
       return new Map();
     }
   }
@@ -1211,10 +1214,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
           modelSet.add(defaultModel);
         }
       } catch (err) {
-        console.warn(
-          "[settingsView] _resolveProviderModels provider.models failed:",
-          err,
-        );
+        log.warn("_resolveProviderModels provider.models failed:", err);
         try {
           const response = await this.manager.sendRequest("models/list", {});
           const payload = asRecord(response);
@@ -1235,10 +1235,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
             }
           }
         } catch (err2) {
-          console.warn(
-            "[settingsView] _resolveProviderModels models/list failed:",
-            err2,
-          );
+          log.warn("_resolveProviderModels models/list failed:", err2);
         }
       }
     }
@@ -1360,7 +1357,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     try {
       content = await fs.readFile(configPath, "utf8");
     } catch (err) {
-      console.warn("[settingsView] _saveProviderSelection read failed:", err);
+      log.warn("_saveProviderSelection read failed:", err);
       content = "";
     }
 
@@ -1547,7 +1544,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     try {
       providerSettings = await this._buildProviderSettingsPayload();
     } catch (err) {
-      console.warn("[settingsView] _buildProviderSettingsPayload failed:", err);
+      log.warn("_buildProviderSettingsPayload failed:", err);
     }
 
     const settings = {
@@ -1829,7 +1826,7 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     try {
       this._view?.webview.postMessage(message);
     } catch (err) {
-      console.warn("[settingsView] _postMessage failed:", err);
+      log.warn("_postMessage failed:", err);
     }
   }
 

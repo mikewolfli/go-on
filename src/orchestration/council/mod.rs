@@ -6,6 +6,7 @@
 
 #[allow(clippy::module_inception)]
 pub mod council;
+pub mod member;
 pub mod proposal;
 pub mod quorum;
 pub mod types;
@@ -13,6 +14,8 @@ pub mod voting;
 
 #[allow(unused_imports)]
 pub use council::*;
+#[allow(unused_imports)]
+pub use member::*;
 #[allow(unused_imports)]
 pub use proposal::*;
 #[allow(unused_imports)]

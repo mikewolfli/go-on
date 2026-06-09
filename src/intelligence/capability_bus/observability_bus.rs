@@ -476,7 +476,9 @@ mod tests {
         assert_eq!(traces[0].duration_ms, 100);
         assert!(traces[0].success);
 
-        let latency = bus.agent_latency("agent-a").unwrap();
+        let latency = bus
+            .agent_latency("agent-a")
+            .expect("agent-a should have latency stats");
         assert_eq!(latency.sample_count, 2);
         assert!((latency.avg_duration_ms - 150.0).abs() < 0.01);
         // With only 2 samples all percentiles land on actual values.
@@ -486,7 +488,9 @@ mod tests {
                 || (latency.p50_ms - 200.0).abs() < 0.01
         );
 
-        let err_rate = bus.agent_error_rate("agent-a").unwrap();
+        let err_rate = bus
+            .agent_error_rate("agent-a")
+            .expect("agent-a should have error rate stats");
         assert_eq!(err_rate.total_calls, 2);
         assert_eq!(err_rate.error_count, 0);
         assert!((err_rate.error_rate - 0.0).abs() < f64::EPSILON);
@@ -506,7 +510,9 @@ mod tests {
         );
         bus.record_trace("agent-b", "embed", 55, false, Some("panic".to_string()), 10);
 
-        let err = bus.agent_error_rate("agent-b").unwrap();
+        let err = bus
+            .agent_error_rate("agent-b")
+            .expect("agent-b should have error rate stats");
         assert_eq!(err.total_calls, 3);
         assert_eq!(err.error_count, 2);
         assert!((err.error_rate - 2.0 / 3.0).abs() < 0.001);

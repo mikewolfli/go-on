@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 /// - `mime_type` — MIME type hint (e.g. `"image/png"`, `"image/jpeg"`, `"image/webp"`)
 /// - `alt_text` — optional human-readable description (for accessibility / logging)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-59: Wired when multimodal image attachment is enabled in chat pipeline
 pub struct ImageAttachment {
     /// Base64-encoded image bytes.
     pub data: String,
@@ -48,7 +48,7 @@ impl ImageAttachment {
     ///
     /// The `mime_type` parameter should be a valid image MIME type
     /// (e.g. `"image/png"`, `"image/jpeg"`, `"image/webp"`).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-59: Wired when multimodal image attachment is enabled
     pub fn from_bytes(
         bytes: &[u8],
         mime_type: impl Into<String>,
@@ -64,7 +64,7 @@ impl ImageAttachment {
     }
 
     /// Decode the base64 `data` field back into raw bytes.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-59: Wired when multimodal image attachment is enabled
     pub fn decode(&self) -> Result<Vec<u8>, base64::DecodeError> {
         use base64::Engine as _;
         base64::engine::general_purpose::STANDARD.decode(&self.data)

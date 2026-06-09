@@ -35,7 +35,7 @@ use tracing::info;
 pub const REPO_PREFIX: &str = "repo:";
 
 /// Default clone directory name under temp.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for repo analysis constants
 const CLONE_DIR_PREFIX: &str = "go-on-repo-";
 
 // ---------------------------------------------------------------------------
@@ -748,7 +748,7 @@ mod tests {
     fn test_parse_repo_input_url_only() {
         let result = RepoAnalyzer::parse_repo_input("repo:https://github.com/org/repo");
         assert!(result.is_some());
-        let (url, question) = result.unwrap();
+        let (url, question) = result.expect("parse_repo_input should return Some");
         assert_eq!(url, "https://github.com/org/repo");
         assert!(question.is_empty());
     }
@@ -758,7 +758,7 @@ mod tests {
         let result =
             RepoAnalyzer::parse_repo_input("repo:https://github.com/org/repo what is the API?");
         assert!(result.is_some());
-        let (url, question) = result.unwrap();
+        let (url, question) = result.expect("parse_repo_input should return Some");
         assert_eq!(url, "https://github.com/org/repo");
         assert_eq!(question, "what is the API?");
     }
@@ -841,8 +841,8 @@ mod tests {
             confidence: 0.95,
             coverage: AnswerCoverage::FullRepo,
         };
-        let json = serde_json::to_string(&answer).unwrap();
-        let deserialized: Answer = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&answer).expect("serialize answer");
+        let deserialized: Answer = serde_json::from_str(&json).expect("deserialize answer");
         assert_eq!(deserialized.text, answer.text);
         assert!((deserialized.confidence - 0.95).abs() < 1e-6);
     }
@@ -866,14 +866,14 @@ mod tests {
     fn test_answer_coverage_serialize() {
         let full = AnswerCoverage::FullRepo;
         let subset = AnswerCoverage::Subset("src/".into());
-        let json_full = serde_json::to_string(&full).unwrap();
-        let json_subset = serde_json::to_string(&subset).unwrap();
+        let json_full = serde_json::to_string(&full).expect("serialize AnswerCoverage FullRepo");
+        let json_subset = serde_json::to_string(&subset).expect("serialize AnswerCoverage Subset");
         assert_eq!(
-            serde_json::from_str::<AnswerCoverage>(&json_full).unwrap(),
+            serde_json::from_str::<AnswerCoverage>(&json_full).expect("deserialize AnswerCoverage FullRepo"),
             full
         );
         assert_eq!(
-            serde_json::from_str::<AnswerCoverage>(&json_subset).unwrap(),
+            serde_json::from_str::<AnswerCoverage>(&json_subset).expect("deserialize AnswerCoverage Subset"),
             subset
         );
     }

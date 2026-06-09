@@ -623,8 +623,8 @@ mod tests {
         bus.register_mode("edit");
         assert_eq!(bus.profile().available_modes, 3);
 
-        bus.start_flow("flow-a", "t1").unwrap();
-        bus.start_flow("flow-b", "t2").unwrap();
+        bus.start_flow("flow-a", "t1").expect("start flow-a");
+        bus.start_flow("flow-b", "t2").expect("start flow-b");
         assert_eq!(bus.profile().active_flows, 2);
 
         bus.complete_flow("flow-a", "t1");
@@ -636,8 +636,8 @@ mod tests {
     fn test_active_flows_output() {
         let bus = OrchestrationBus::new(None);
 
-        bus.start_flow("alpha", "t1").unwrap();
-        bus.start_flow("beta", "t2").unwrap();
+        bus.start_flow("alpha", "t1").expect("start flow alpha");
+        bus.start_flow("beta", "t2").expect("start flow beta");
 
         let flows = bus.active_flows();
         assert_eq!(flows.len(), 2);

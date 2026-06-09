@@ -144,7 +144,10 @@ impl SemanticResponseCache {
         let hash = simple_request_hash(request, self.config.max_request_hash_len);
         let now = Instant::now();
 
-        let mut guard = self.entries.write().unwrap();
+        let mut guard = self
+            .entries
+            .write()
+            .expect("SemanticCache entries poisoned");
         if let Some(bucket) = guard.get_mut(&hash) {
             // First, remove expired entries
             let before = bucket.len();
@@ -185,7 +188,10 @@ impl SemanticResponseCache {
         let hash = simple_request_hash(request, self.config.max_request_hash_len);
         let now = Instant::now();
 
-        let guard = self.entries.write().unwrap();
+        let guard = self
+            .entries
+            .write()
+            .expect("SemanticCache entries poisoned");
 
         // LRU eviction if over max entries
         if guard.len() >= self.config.max_entries {
@@ -207,7 +213,7 @@ impl SemanticResponseCache {
 
         self.entries
             .write()
-            .unwrap()
+            .expect("SemanticCache entries poisoned")
             .entry(hash)
             .or_default()
             .push(entry);
@@ -228,7 +234,7 @@ impl SemanticResponseCache {
         let mut oldest = Instant::now();
 
         {
-            let guard = self.entries.read().unwrap();
+            let guard = self.entries.read().expect("SemanticCache entries poisoned");
             for (key, bucket) in guard.iter() {
                 for (i, entry) in bucket.iter().enumerate() {
                     if entry.last_accessed < oldest {
@@ -241,7 +247,10 @@ impl SemanticResponseCache {
         }
 
         if let Some(key) = lru_key {
-            let mut guard = self.entries.write().unwrap();
+            let mut guard = self
+                .entries
+                .write()
+                .expect("SemanticCache entries poisoned");
             if let Some(bucket) = guard.get_mut(&key) {
                 bucket.remove(lru_idx);
                 if bucket.is_empty() {
@@ -253,7 +262,10 @@ impl SemanticResponseCache {
 
     /// Clear all entries
     pub fn clear(&mut self) {
-        self.entries.write().unwrap().clear();
+        self.entries
+            .write()
+            .expect("SemanticCache entries poisoned")
+            .clear();
         self.total_hits.store(0, Ordering::Relaxed);
         self.total_misses.store(0, Ordering::Relaxed);
     }
@@ -268,7 +280,7 @@ impl SemanticResponseCache {
         let total_entries: u64 = self
             .entries
             .read()
-            .unwrap()
+            .expect("SemanticCache entries poisoned")
             .values()
             .map(|v| v.len() as u64)
             .sum();
@@ -1207,7 +1219,7 @@ mod tests {
         cache.put("hello world", json!({"response": "hi"}));
         let result = cache.get("hello world");
         assert!(result.is_some());
-        assert_eq!(result.unwrap()["response"], "hi");
+        assert_eq!(result.expect("exact match should return Some")["response"], "hi");
     }
 
     #[test]
@@ -1236,7 +1248,7 @@ mod tests {
         cache.put("a", json!("1"));
         cache.put("b", json!("2"));
         cache.put("c", json!("3"));
-        assert_eq!(cache.entries.read().unwrap().len(), 2);
+        assert_eq!(cache.entries.read().expect("lock should not be poisoned").len(), 2);
     }
 
     #[test]
@@ -1342,7 +1354,7 @@ mod tests {
         cache.set("hello world", json!("hi there"), 3600);
         let result = cache.get("hello world");
         assert!(result.is_some(), "should get exact match");
-        assert_eq!(result.unwrap(), json!("hi there"));
+        assert_eq!(result.expect("exact match should return Some"), json!("hi there"));
     }
 
     #[test]
@@ -1364,7 +1376,7 @@ mod tests {
         // Similar query should match
         let result = cache.get("what is capital of france?");
         assert!(result.is_some(), "should get semantic match");
-        assert_eq!(result.unwrap(), json!("Paris"));
+        assert_eq!(result.expect("semantic match should return Some"), json!("Paris"));
     }
 
     #[test]
@@ -1382,7 +1394,7 @@ mod tests {
 
         let evicted = cache.evict_lru();
         assert!(evicted.is_some());
-        assert_eq!(evicted.unwrap().key, "c");
+        assert_eq!(evicted.expect("evicted entry should be Some").key, "c");
         assert_eq!(cache.len(), 2);
     }
 
@@ -1471,7 +1483,7 @@ mod tests {
         cache.set("hello world", json!("greeting"), 3600);
         let result = cache.get("hello world");
         assert!(result.is_some(), "TF-IDF should match identical texts");
-        assert_eq!(result.unwrap(), json!("greeting"));
+        assert_eq!(result.expect("identical match should return Some"), json!("greeting"));
     }
 
     #[test]
@@ -1499,7 +1511,7 @@ mod tests {
 
         let evicted = cache.evict_lru();
         assert!(evicted.is_some());
-        assert_eq!(evicted.unwrap().key, "c");
+        assert_eq!(evicted.expect("evicted entry should be Some").key, "c");
     }
 
     #[test]
@@ -1529,7 +1541,7 @@ mod tests {
         cache.set("hello", json!("world"), 3600);
         let result = cache.get("hello");
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), json!("world"));
+        assert_eq!(result.expect("exact match should return Some"), json!("world"));
     }
 
     #[test]
@@ -1541,7 +1553,7 @@ mod tests {
         let _ = cache.get("a"); // boost "a"
         let evicted = cache.evict_lru();
         assert!(evicted.is_some());
-        assert_eq!(evicted.unwrap().key, "b");
+        assert_eq!(evicted.expect("evicted entry should be Some").key, "b");
     }
 
     #[test]
@@ -1696,7 +1708,7 @@ mod tests {
         cache.set("only", json!("one"), 3600);
         let evicted = cache.evict_lru();
         assert!(evicted.is_some());
-        assert_eq!(evicted.unwrap().key, "only");
+        assert_eq!(evicted.expect("evicted entry should be Some").key, "only");
         assert!(cache.is_empty());
     }
 
@@ -1713,7 +1725,7 @@ mod tests {
         let evicted = cache.evict_lru();
         assert!(evicted.is_some());
         assert_eq!(
-            evicted.unwrap().key,
+            evicted.expect("evicted entry should be Some").key,
             "first",
             "oldest entry should be evicted on tie"
         );

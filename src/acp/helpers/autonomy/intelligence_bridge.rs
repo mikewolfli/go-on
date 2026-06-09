@@ -308,7 +308,8 @@ mod tests {
 
         let augmented = build_intelligence_augmented_context(&ctx);
         assert!(augmented.is_some());
-        let text = augmented.unwrap();
+        let text =
+            augmented.expect("build_intelligence_augmented_context should return Some when active");
         assert!(text.contains("Intelligence Context"));
         assert!(text.contains("agent1"));
         assert!(text.contains("Test insight"));
@@ -346,7 +347,8 @@ mod tests {
             evo_rec.is_some(),
             "should have recommendation for evo-agent:testing"
         );
-        let (_agent, _cap, stage, _trend) = evo_rec.unwrap();
+        let (_agent, _cap, stage, _trend) =
+            evo_rec.expect("recommendation for evo-agent:testing should exist");
         assert!(
             matches!(stage, EvolutionStage::Mature | EvolutionStage::Stable),
             "stage should have advanced beyond New/Learning, got {stage:?}"

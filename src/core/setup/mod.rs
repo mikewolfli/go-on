@@ -109,32 +109,35 @@ mod tests {
     #[test]
     fn parses_setup_profile_secret_mode_and_action() {
         assert!(matches!(
-            parse_setup_profile("adaptive").unwrap(),
+            parse_setup_profile("adaptive").expect("adaptive profile should parse"),
             SetupProfile::Adaptive
         ));
         assert!(matches!(
-            parse_setup_level("quick").unwrap(),
+            parse_setup_level("quick").expect("quick level should parse"),
             super::SetupLevel::Quick
         ));
         assert!(matches!(
-            parse_setup_level("standard").unwrap(),
+            parse_setup_level("standard").expect("standard level should parse"),
             super::SetupLevel::Standard
         ));
         assert!(matches!(
-            parse_setup_level("custom").unwrap(),
+            parse_setup_level("custom").expect("custom level should parse"),
             super::SetupLevel::Custom
         ));
         assert!(matches!(
-            parse_secret_mode("auto").unwrap(),
+            parse_secret_mode("auto").expect("auto secret mode should parse"),
             SecretMode::AutoDetect
         ));
-        assert!(matches!(parse_secret_mode("env").unwrap(), SecretMode::Env));
         assert!(matches!(
-            parse_secret_mode("keyring").unwrap(),
+            parse_secret_mode("env").expect("env secret mode should parse"),
+            SecretMode::Env
+        ));
+        assert!(matches!(
+            parse_secret_mode("keyring").expect("keyring secret mode should parse"),
             SecretMode::Keyring
         ));
         assert!(matches!(
-            parse_secret_action("list").unwrap(),
+            parse_secret_action("list").expect("list secret action should parse"),
             SecretAction::List
         ));
     }

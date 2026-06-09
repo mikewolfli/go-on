@@ -136,7 +136,7 @@ mod tests {
         let provider = JsonRpcAuthProvider { params: &None };
         let result = AuthMiddleware::authenticate(&provider, &server);
         assert!(result.is_ok());
-        assert!(result.unwrap().is_none());
+        assert!(result.expect("auth should succeed").is_none());
     }
 
     #[test]

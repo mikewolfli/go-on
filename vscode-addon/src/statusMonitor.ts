@@ -1,5 +1,8 @@
 import * as vscode from "vscode";
+import { Logger } from "./logger";
 import { i18n, MessageKeys } from "./i18n";
+
+const log = Logger.forModule("statusMonitor");
 
 import { RuntimeManagerLike } from "./managerTypes";
 
@@ -102,12 +105,11 @@ export class StatusMonitor {
         // Check provider readiness when runtime is healthy
         if (health) {
           this._checkProviderReadiness().catch((err) => {
-            // eslint-disable-next-line no-console
-            console.error("Provider readiness check failed:", err);
+            log.error("Provider readiness check failed:", err);
           });
         }
       } catch (err) {
-        console.warn("[statusMonitor] health check failed:", err);
+        log.warn("health check failed:", err);
         this.consecutiveFailures++;
         this.statusBarItem.tooltip = i18n.getMessage(
           MessageKeys.statusBarHealthCheckFailedTooltip,
@@ -185,7 +187,7 @@ export class StatusMonitor {
       this.statusBarItem.backgroundColor = undefined;
       this.updateStatus();
     } catch (err) {
-      console.warn("[statusMonitor] _checkProviderReadiness failed:", err);
+      log.warn("_checkProviderReadiness failed:", err);
     }
   }
 

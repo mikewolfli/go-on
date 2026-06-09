@@ -1195,7 +1195,7 @@ mod tests {
 
         let retrieved = cache.get("e1");
         assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap().id, "e1");
+        assert_eq!(retrieved.expect("hot cache should contain the inserted entry").id, "e1");
     }
 
     #[test]
@@ -1241,52 +1241,54 @@ mod tests {
 
     #[test]
     fn test_cold_storage_append_and_read() {
-        let dir = TempDir::new().unwrap();
+        let dir = TempDir::new().expect("temp dir creation should succeed");
         let cold = ColdStorage::new(dir.path());
         let entry = make_entry("cold1", 0.7);
-        cold.append_entry(&entry).unwrap();
+        cold.append_entry(&entry).expect("append should succeed");
 
-        let all = cold.read_all().unwrap();
+        let all = cold.read_all().expect("read all should succeed");
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].id, "cold1");
     }
 
     #[test]
     fn test_persistence_store_and_retrieve() {
-        let dir = TempDir::new().unwrap();
+        let dir = TempDir::new().expect("temp dir creation should succeed");
         let db_path = dir.path().join("warm.db");
         let cold_path = dir.path().join("cold");
 
-        let persistence = MemoryPersistence::new(&db_path, &cold_path, None).unwrap();
+        let persistence = MemoryPersistence::new(&db_path, &cold_path, None)
+            .expect("persistence should initialize");
         let entry = make_entry("p1", 0.8);
-        persistence.store(entry).unwrap();
+        persistence.store(entry).expect("store should succeed");
 
-        let retrieved = persistence.retrieve("p1").unwrap();
+        let retrieved = persistence.retrieve("p1").expect("retrieve should succeed for previously stored entry");
         assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap().id, "p1");
+        assert_eq!(retrieved.expect("retrieved entry should be present").id, "p1");
     }
 
     #[test]
     fn test_promotion_hot_to_warm() {
-        let dir = TempDir::new().unwrap();
+        let dir = TempDir::new().expect("temp dir creation should succeed");
         let db_path = dir.path().join("warm.db");
         let cold_path = dir.path().join("cold");
 
-        let persistence = MemoryPersistence::new(&db_path, &cold_path, None).unwrap();
+        let persistence = MemoryPersistence::new(&db_path, &cold_path, None)
+            .expect("persistence should initialize");
         let entry = make_entry("promo1", 0.9);
-        persistence.store(entry.clone()).unwrap();
-        persistence.promote_to_warm(entry).unwrap();
+        persistence.store(entry.clone()).expect("store should succeed");
+        persistence.promote_to_warm(entry).expect("promote to warm should succeed");
 
         // Should no longer be in hot (but still retrievable from warm).
-        let retrieved = persistence.retrieve("promo1").unwrap();
+        let retrieved = persistence.retrieve("promo1").expect("retrieve should succeed for previously stored entry");
         assert!(retrieved.is_some());
         // Access brings it back to hot
-        assert_eq!(retrieved.unwrap().tier, MemoryTier::Hot);
+        assert_eq!(retrieved.expect("retrieved entry should be present").tier, MemoryTier::Hot);
     }
 
     #[test]
     fn test_auto_migrate_evicts_expired_hot_entries() {
-        let dir = TempDir::new().unwrap();
+        let dir = TempDir::new().expect("temp dir creation should succeed");
         let db_path = dir.path().join("warm.db");
         let cold_path = dir.path().join("cold");
 
@@ -1298,32 +1300,33 @@ mod tests {
                 ..Default::default()
             }),
         )
-        .unwrap();
+        .expect("persistence should initialize");
 
         // Entry with low usefulness → gets demoted to cold (not promoted to warm)
-        persistence.store(make_entry("low", 0.1)).unwrap();
+        persistence.store(make_entry("low", 0.1)).expect("store should succeed");
 
         // Entry with high usefulness → promoted to warm
-        persistence.store(make_entry("high", 0.8)).unwrap();
+        persistence.store(make_entry("high", 0.8)).expect("store should succeed");
 
-        let report = persistence.auto_migrate().unwrap();
+        let report = persistence.auto_migrate().expect("auto migration should run");
         assert_eq!(report.promoted_hot_to_warm, 1);
         assert_eq!(report.demoted_hot_to_cold, 1);
     }
 
     #[test]
     fn test_metadata_index_load() {
-        let dir = TempDir::new().unwrap();
+        let dir = TempDir::new().expect("temp dir creation should succeed");
         let db_path = dir.path().join("warm.db");
         let cold_path = dir.path().join("cold");
 
-        let persistence = MemoryPersistence::new(&db_path, &cold_path, None).unwrap();
+        let persistence = MemoryPersistence::new(&db_path, &cold_path, None)
+            .expect("persistence should initialize");
 
         // Seed some entries
         let entry = make_entry("idx1", 0.5);
-        persistence.store(entry).unwrap();
+        persistence.store(entry).expect("store should succeed");
 
-        let index = persistence.load_metadata_index().unwrap();
+        let index = persistence.load_metadata_index().expect("load metadata index should succeed");
         // Hot-only entries don't appear in the index (only warm + cold).
         assert_eq!(index.warm_count, 0);
         assert_eq!(index.cold_count, 0);
@@ -1331,38 +1334,40 @@ mod tests {
 
     #[test]
     fn test_demote_entry() {
-        let dir = TempDir::new().unwrap();
+        let dir = TempDir::new().expect("temp dir creation should succeed");
         let db_path = dir.path().join("warm.db");
         let cold_path = dir.path().join("cold");
 
-        let persistence = MemoryPersistence::new(&db_path, &cold_path, None).unwrap();
+        let persistence = MemoryPersistence::new(&db_path, &cold_path, None)
+            .expect("persistence should initialize");
 
         let entry = make_entry("dem1", 0.5);
-        persistence.store(entry.clone()).unwrap();
-        let demoted = persistence.demote(&entry).unwrap();
+        persistence.store(entry.clone()).expect("store should succeed");
+        let demoted = persistence.demote(&entry).expect("demote should succeed");
         assert!(demoted.is_some());
-        assert_eq!(demoted.unwrap().tier, MemoryTier::Warm);
+        assert_eq!(demoted.expect("demoted entry should be present").tier, MemoryTier::Warm);
     }
 
     #[test]
     fn test_promote_entry() {
-        let dir = TempDir::new().unwrap();
+        let dir = TempDir::new().expect("temp dir creation should succeed");
         let db_path = dir.path().join("warm.db");
         let cold_path = dir.path().join("cold");
 
-        let persistence = MemoryPersistence::new(&db_path, &cold_path, None).unwrap();
+        let persistence = MemoryPersistence::new(&db_path, &cold_path, None)
+            .expect("persistence should initialize");
 
         let entry = make_entry("prom2", 0.5);
-        persistence.store(entry.clone()).unwrap();
+        persistence.store(entry.clone()).expect("store should succeed");
         // Move to warm first, then promote to cold.
         // retrieve() brings entries back to hot on access, so promote
         // a warm entry directly without going through retrieve.
-        persistence.promote_to_warm(entry.clone()).unwrap();
+        persistence.promote_to_warm(entry.clone()).expect("promote to warm should succeed");
 
         let mut warm_entry = entry;
         warm_entry.tier = MemoryTier::Warm;
-        let promoted = persistence.promote(&warm_entry).unwrap();
+        let promoted = persistence.promote(&warm_entry).expect("promote should succeed");
         assert!(promoted.is_some());
-        assert_eq!(promoted.unwrap().tier, MemoryTier::Cold);
+        assert_eq!(promoted.expect("promoted entry should be present").tier, MemoryTier::Cold);
     }
 }

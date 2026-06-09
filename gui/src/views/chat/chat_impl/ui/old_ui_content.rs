@@ -1304,26 +1304,29 @@ impl ChatView {
                                 display_content.clone()
                             };
 
-                            // ── Try cache-first markdown rendering ──
-                            let cached = self
-                                .cached_markdown_renders
-                                .get(msg_idx)
-                                .and_then(|c| c.as_ref());
+                            // ── Try global-cache-first markdown rendering ──
+                            let globally_cached = Self::try_get_cached_markdown(&render_text);
 
-                            if let Some(cache) = cached {
-                                // Cache hit — render from pre-parsed segments (fast path)
+                            if let Some(cache) = globally_cached {
+                                // Global cache hit — render from pre-parsed segments (fast path)
+                                // No comrak parsing needed, no UI thread blocking.
                                 Self::render_markdown_from_cache(
                                     ui,
-                                    cache,
+                                    &cache,
                                     &i18n.t("chat.copyCode"),
                                     text_color,
                                 );
                             } else if !content_changed && !content_text.is_empty() && !self.sending
                             {
-                                // Content unchanged and not streaming — skip parse
+                                // Content unchanged and not streaming — show raw text
+                                // to avoid flickering "Rendering…" placeholders.
+                                // The parse will be done lazily when content changes.
                                 ui.label(egui::RichText::new(&render_text).color(text_color));
                             } else {
-                                // Parse and render
+                                // Cache miss (new content or streaming): show placeholder
+                                // and spawn a background thread for CPU-bound comrak parsing.
+                                // `render_markdown` handles both the placeholder display
+                                // and the background thread — no separate call needed.
                                 let trunc_hint_msg =
                                     i18n.t("chat.largeMessageTruncated").to_string();
                                 Self::render_markdown(
@@ -1334,10 +1337,6 @@ impl ChatView {
                                     text_color,
                                     &trunc_hint_msg,
                                 );
-                                // Populate cache for next frame
-                                if !render_text.is_empty() {
-                                    self.background_parse_markdown(msg_idx, &render_text);
-                                }
                             }
 
                             // ── Expand / collapse button for truncated content ──

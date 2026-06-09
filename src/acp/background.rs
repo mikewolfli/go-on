@@ -785,6 +785,9 @@ pub async fn start_background_tasks(
     // ── SelfEvolutionAgent + EvolutionLoop (BLUE56-B03) ───────────────
     {
         let shutdown = shutdown_notify.clone();
+        // Clone the real AlertManager reference so the evolution loop can
+        // poll active alerts as evolution triggers (GAP-B52-02 I11).
+        let alert_manager = Arc::clone(&server.observability.alert_manager);
         spawn_background_task(
             async move {
                 // The evolution_agent binding lives for the entire async block scope,
@@ -801,6 +804,7 @@ pub async fn start_background_tasks(
                 let mut evolution_loop =
                     crate::orchestration::self_evolution::evolution_loop::EvolutionLoop::new(workdir)
                         .with_default_trigger_sources()
+                        .with_alert_manager(alert_manager)
                         .with_agent(evolution_agent)
                         .with_approval_mode(
                             crate::orchestration::self_evolution::evolution_loop::ApprovalMode::AutoApproval,

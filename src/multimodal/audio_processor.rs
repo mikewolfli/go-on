@@ -730,7 +730,7 @@ impl AudioProcessor {
 ///     go_on::multimodal::audio_processor::SttBackend::OpenAIWhisper,
 /// );
 /// ```
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for audio transcription API
 pub fn transcribe(
     audio: &[u8],
     format: AudioFormat,
@@ -1033,8 +1033,8 @@ mod tests {
                 m
             },
         };
-        let json = serde_json::to_string(&t).unwrap();
-        let deserialized: Transcription = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&t).expect("serialize Transcription");
+        let deserialized: Transcription = serde_json::from_str(&json).expect("deserialize Transcription");
         assert_eq!(deserialized.text, "hello world");
         assert_eq!(deserialized.segments.len(), 1);
         assert_eq!(deserialized.language, "en");
@@ -1054,8 +1054,8 @@ mod tests {
             AudioFormat::Other,
         ];
         for fmt in &formats {
-            let json = serde_json::to_string(fmt).unwrap();
-            let deserialized: AudioFormat = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(fmt).expect("serialize AudioFormat");
+            let deserialized: AudioFormat = serde_json::from_str(&json).expect("deserialize AudioFormat");
             assert_eq!(*fmt, deserialized);
         }
     }
@@ -1068,8 +1068,8 @@ mod tests {
             SttBackend::Vosk,
         ];
         for be in &backends {
-            let json = serde_json::to_string(be).unwrap();
-            let deserialized: SttBackend = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(be).expect("serialize SttBackend");
+            let deserialized: SttBackend = serde_json::from_str(&json).expect("deserialize SttBackend");
             assert_eq!(*be, deserialized);
         }
     }

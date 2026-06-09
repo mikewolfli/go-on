@@ -425,7 +425,7 @@ mod tests {
         let m = selector
             .metrics
             .get(&AdaptiveModelSelector::metrics_key("model-a", ""));
-        let metrics = m.unwrap();
+        let metrics = m.expect("metrics should exist for model-a after recording results");
         assert_eq!(metrics.total_requests, 3);
         assert_eq!(metrics.successful_requests, 2);
     }

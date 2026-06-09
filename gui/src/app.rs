@@ -1,3 +1,4 @@
+use crate::backend::StateSyncEvent;
 use crate::backend::BackendClient;
 use crate::config::{has_valid_providers, save_app_config, AppConfig};
 use crate::config_store::ConfigStore;
@@ -155,6 +156,8 @@ pub struct GoOnApp {
     last_prompts_lang: Lang,
     /// Persistent UI state shared across all views
     pub ui_state: GlobalUiState,
+    /// Receiver for cross-client state sync events
+    state_sync_rx: Option<std::sync::mpsc::Receiver<StateSyncEvent>>,
 }
 
 /// Detect system locale from environment variables.
@@ -801,6 +804,11 @@ top_k = 2
 
         let ui_state = GlobalUiState::load();
 
+        // ── Start cross-client state sync SSE listener ────────────────
+        let (state_sync_tx, state_sync_rx) = std::sync::mpsc::channel();
+        let sync_url = config.backend_url.clone();
+        crate::backend::start_state_sync_listener(&sync_url, state_sync_tx);
+
         let mut app = Self {
             config_store: ConfigStore::new(config),
             connection: ConnectionManager::new(
@@ -822,6 +830,7 @@ top_k = 2
             last_prompts_lang: lang,
             ui_state,
             render_cache: CachedRender::new(),
+            state_sync_rx: Some(state_sync_rx),
         };
 
         // Kick off async protocol version discovery to determine the chat endpoint.
@@ -883,6 +892,44 @@ top_k = 2
             .to_string();
         if self.connection.backend.base_url() != config_url {
             self.connection.backend.set_base_url(&config_url);
+        }
+    }
+
+    /// Poll cross-client state sync events and dispatch to UI.
+    ///
+    /// BLUE67-E1: Wire SSE state sync listener to actual UI responses.
+    fn poll_state_sync_events(&mut self, ctx: &egui::Context) {
+        let Some(ref rx) = self.state_sync_rx else { return };
+        let mut requested_refresh = false;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                StateSyncEvent::ConfigReloaded { .. } => {
+                    eprintln!("[state-sync] Config reloaded; refreshing backend data");
+                    requested_refresh = true;
+                }
+                StateSyncEvent::ModelsChanged { .. } => {
+                    eprintln!("[state-sync] Models changed; refreshing providers");
+                    requested_refresh = true;
+                }
+                StateSyncEvent::AgentsChanged { added, removed } => {
+                    if !added.is_empty() { eprintln!("[state-sync] Agents added: {:?}", added); }
+                    if !removed.is_empty() { eprintln!("[state-sync] Agents removed: {:?}", removed); }
+                    requested_refresh = true;
+                }
+                StateSyncEvent::BackendRestarting { reason, .. } => {
+                    eprintln!("[state-sync] Backend restarting: {}", reason);
+                    self.connection.consecutive_poll_failures = 10;
+                    self.connection.last_refresh = std::time::Instant::now()
+                        - self.backend_refresh_interval() - std::time::Duration::from_secs(1);
+                }
+                StateSyncEvent::Heartbeat { .. } => {}
+            }
+        }
+        if requested_refresh {
+            self.connection.pending_refresh = false;
+            self.connection.last_refresh = std::time::Instant::now()
+                - self.backend_refresh_interval() - std::time::Duration::from_secs(1);
+            ctx.request_repaint();
         }
     }
 
@@ -1236,6 +1283,7 @@ impl eframe::App for GoOnApp {
             self.views.chat_view.reset_loaded_state();
         }
 
+        self.poll_state_sync_events(ctx);
         self.poll_backend_updates(ctx);
         self.maybe_refresh_backend();
         self.has_providers = has_valid_providers(self.config_store.shared().as_ref());

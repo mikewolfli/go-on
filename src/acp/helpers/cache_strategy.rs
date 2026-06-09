@@ -16,7 +16,7 @@ pub enum CacheDecision {
     /// Use cached response
     Hit {
         response: String,
-        #[allow(dead_code)]
+        #[allow(dead_code)] // F-GAP-49: reserved for cache level tracking
         level: String,
     },
     /// Cache hit but refused (execution-like request)
@@ -129,7 +129,7 @@ impl CacheStrategy {
     }
 
     /// Build a structured agent_attempt entry for cache outcomes.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49: reserved for cache outcome recording
     pub fn attempt_entry(decision: &CacheDecision) -> Value {
         match decision {
             CacheDecision::Hit { level, .. } => serde_json::json!({

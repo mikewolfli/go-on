@@ -17,7 +17,7 @@ use crate::orchestration::tool::{ToolInput, ToolRegistry};
 // Errors
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed remote executor
 #[derive(Debug, Error)]
 pub enum RemoteExecutionError {
     #[error("node not found: {0}")]
@@ -136,7 +136,7 @@ pub struct TaskPacket {
     pub max_retries: u32,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed remote executor
 impl TaskPacket {
     /// Create a new TaskPacket for a given node and DAG.
     pub fn new(
@@ -186,7 +186,7 @@ pub struct NodeOutput {
     pub completed_at_ms: u64,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed remote executor
 impl NodeOutput {
     pub fn success(
         node_id: NodeId,
@@ -242,7 +242,7 @@ pub struct NodeCapabilities {
     pub additional_caps: HashMap<String, String>,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed remote executor
 impl NodeCapabilities {
     pub fn new(node_id: NodeId, supported_tools: Vec<String>) -> Self {
         Self {
@@ -302,7 +302,7 @@ impl NodeRegistration {
 // ---------------------------------------------------------------------------
 
 /// Trait for executing tasks on remote nodes.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed remote executor
 #[async_trait::async_trait]
 pub trait RemoteExecutor: Send + Sync {
     /// Execute a task packet on a remote node and return the output.
@@ -335,13 +335,13 @@ pub trait RemoteExecutor: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// In-memory node registry used as a backing store for executors.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed remote executor
 #[derive(Debug)]
 pub struct NodeRegistry {
     nodes: RwLock<HashMap<NodeId, NodeRegistration>>,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed remote executor
 impl NodeRegistry {
     pub fn new() -> Self {
         Self {
@@ -388,14 +388,14 @@ impl Default for NodeRegistry {
 
 /// An in-process remote executor that runs tasks locally.
 /// Useful for testing and single-node deployments.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed remote executor
 #[derive(Debug)]
 pub struct InProcessRemoteExecutor {
     registry: Arc<NodeRegistry>,
     tool_registry: Arc<ToolRegistry>,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed remote executor
 impl InProcessRemoteExecutor {
     pub fn new(registry: Arc<NodeRegistry>, tool_registry: Arc<ToolRegistry>) -> Self {
         Self {
@@ -540,18 +540,18 @@ impl RemoteExecutor for InProcessRemoteExecutor {
 /// Note: This is a stub that requires a proto service definition and
 /// tonic build setup for full functionality. The structure demonstrates
 /// the integration boundary.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed remote executor
 #[derive(Debug)]
 pub struct GrpcRemoteExecutor {
     registry: Arc<NodeRegistry>,
     /// gRPC channel map: node_id -> endpoint address
     channels: RwLock<HashMap<NodeId, String>>,
     /// Default timeout in seconds for gRPC calls.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for distributed remote executor
     default_timeout_s: u64,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed remote executor
 impl GrpcRemoteExecutor {
     pub fn new(registry: Arc<NodeRegistry>, default_timeout_s: u64) -> Self {
         Self {
@@ -562,7 +562,7 @@ impl GrpcRemoteExecutor {
     }
 
     /// Resolve the gRPC address for a node.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for distributed remote executor
     async fn resolve_addr(&self, node_id: &NodeId) -> Result<String, RemoteExecutionError> {
         if let Some(addr) = self.channels.read().await.get(node_id.0.as_str()) {
             return Ok(addr.clone());

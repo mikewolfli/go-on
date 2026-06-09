@@ -422,7 +422,13 @@ mod tests {
             roles.contains(&json!("planner")),
             "Planner should be suggested for planning tasks"
         );
-        assert!(routing.get("role_count").and_then(|v| v.as_u64()).unwrap() >= 1);
+        assert!(
+            routing
+                .get("role_count")
+                .and_then(|v| v.as_u64())
+                .expect("role_count should be present and a u64")
+                >= 1
+        );
         assert_eq!(
             routing.get("handoff_ready").and_then(|v| v.as_bool()),
             Some(true)
@@ -504,7 +510,7 @@ mod tests {
         // (no accidental overlap in the shared response structure)
         let orchestration_keys: Vec<&str> = orchestration
             .as_object()
-            .unwrap()
+            .expect("orchestration should be an object")
             .keys()
             .map(|s| s.as_str())
             .collect();
@@ -581,7 +587,11 @@ mod tests {
     fn build_role_routing_empty_description() {
         let routing = build_role_routing("");
         assert!(
-            routing.get("agents").is_none() || routing["agents"].as_array().unwrap().is_empty()
+            routing.get("agents").is_none()
+                || routing["agents"]
+                    .as_array()
+                    .expect("agents should be an array")
+                    .is_empty()
         );
     }
 
@@ -591,7 +601,7 @@ mod tests {
         let role_routing = &routing["role_routing"];
         assert!(role_routing["suggested_roles"]
             .as_array()
-            .unwrap()
+            .expect("suggested_roles should be an array")
             .contains(&serde_json::Value::String("coder".to_string())));
         assert_eq!(role_routing["role_count"], 1);
         assert_eq!(role_routing["handoff_ready"], true);

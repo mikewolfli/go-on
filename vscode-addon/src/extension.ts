@@ -16,6 +16,9 @@ import { registerViewCommands } from "./commandRegistry";
 import { registerRpcCommands } from "./rpcCommandRegistry";
 import { registerCoreCommands } from "./coreCommandRegistry";
 import { GoOnManager, GoOnStatusProvider } from "./runtimeManager";
+import { disposeLogger } from "./logger";
+import { startStateSyncListener, StateSyncEvent } from "./stateSync";
+import { protocolContract } from "./protocolContract";
 import {
   ensureGoOnBinary,
   pathExists,
@@ -871,6 +874,60 @@ export function activate(context: vscode.ExtensionContext) {
     registerCommands(context, statusMonitor);
 
     // Delayed check for provider readiness (warn user if API key is missing)
+    // ── Start cross-client state sync SSE listener ─────────────────
+    // BLUE67-E1: Wire SSE state sync listener to VSCode UI actions
+    const baseUrl = protocolContract.runtime.baseUrl;
+    const stopStateSync = startStateSyncListener(
+      baseUrl,
+      {
+        onConfigReloaded(changedKeys) {
+          const summary =
+            changedKeys.length > 0 ? changedKeys.join(", ") : "configuration";
+          output.appendLine(`[state-sync] Config reloaded: ${summary}`);
+          vscode.window.setStatusBarMessage(
+            `Go-On: config reloaded (${summary})`,
+            4000,
+          );
+        },
+        onModelsChanged(models) {
+          output.appendLine(
+            `[state-sync] Models changed: ${models.length} models`,
+          );
+          vscode.window.setStatusBarMessage(
+            `Go-On: models updated (${models.length} models)`,
+            3000,
+          );
+        },
+        onAgentsChanged(added, removed) {
+          if (added.length > 0) {
+            output.appendLine(`[state-sync] Agents added: ${added.join(", ")}`);
+          }
+          if (removed.length > 0) {
+            output.appendLine(
+              `[state-sync] Agents removed: ${removed.join(", ")}`,
+            );
+          }
+          vscode.window.setStatusBarMessage(
+            `Go-On: agents changed (+${added.length}/-${removed.length})`,
+            3000,
+          );
+        },
+        onBackendRestarting(reason, restartInMs) {
+          output.appendLine(`[state-sync] Backend restarting: ${reason}`);
+          vscode.window.showWarningMessage(
+            `Go-On backend restarting: ${reason}`,
+          );
+        },
+        onHeartbeat(_timestamp) {
+          // Heartbeat is informational only
+        },
+      },
+      output,
+    );
+    context.subscriptions.push({
+      dispose: stopStateSync,
+    });
+
     const providerReadyTimer = setTimeout(async () => {
       try {
         const { manager: m } = getState();
@@ -992,6 +1049,50 @@ export function activate(context: vscode.ExtensionContext) {
           runtimeBootstrap: retryRuntimeBootstrap,
         };
 
+        // ── Start cross-client state sync SSE listener (retry) ─
+        const retryBaseUrl = protocolContract.runtime.baseUrl;
+        const retryStopStateSync = startStateSyncListener(
+          retryBaseUrl,
+          {
+            onConfigReloaded(changedKeys) {
+              const summary =
+                changedKeys.length > 0
+                  ? changedKeys.join(", ")
+                  : "configuration";
+              output.appendLine(
+                `[state-sync] Config reloaded (retry): ${summary}`,
+              );
+              vscode.window.setStatusBarMessage(
+                `Go-On: config reloaded (${summary})`,
+                4000,
+              );
+            },
+            onModelsChanged(models) {
+              output.appendLine(
+                `[state-sync] Models changed (retry): ${models.length} models`,
+              );
+              vscode.window.setStatusBarMessage(
+                `Go-On: models updated (${models.length} models)`,
+                3000,
+              );
+            },
+            onAgentsChanged(added, removed) {
+              vscode.window.setStatusBarMessage(
+                `Go-On: agents changed (+${added.length}/-${removed.length})`,
+                3000,
+              );
+            },
+            onBackendRestarting(reason) {
+              vscode.window.showWarningMessage(
+                `Go-On backend restarting: ${reason}`,
+              );
+            },
+            onHeartbeat() {},
+          },
+          output,
+        );
+        context.subscriptions.push({ dispose: retryStopStateSync });
+
         new GoOnAdvancedEditProvider(retryManager, context);
         registerViewProviders(context);
         registerCommands(context, retryStatusMonitor);
@@ -1013,4 +1114,5 @@ export function deactivate() {
     if (state.manager) state.manager.stop();
     if (state.approvalPanel) state.approvalPanel.dispose();
   }
+  disposeLogger();
 }

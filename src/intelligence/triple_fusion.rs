@@ -20,7 +20,7 @@ pub struct TripleFusionConfig {
     /// Minimum consciousness awareness threshold before evolution triggers fire.
     pub min_awareness_for_evolution: f64,
     /// How often (in ms) to push metacognitive data into consciousness.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49: reserved for metacognitive sync interval configuration
     pub metacognitive_sync_interval_ms: u64,
     /// Whether to auto-generate evolution triggers from consciousness insights.
     pub auto_evolve_from_reflexion: bool,
@@ -68,7 +68,7 @@ impl TripleFusionBridge {
     }
 
     /// Returns the number of fusion cycles executed.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49: reserved for fusion cycle instrumentation
     pub fn fusion_cycles(&self) -> u64 {
         self.fusion_cycles.load(Ordering::Relaxed)
     }
@@ -148,7 +148,7 @@ impl TripleFusionBridge {
     ///
     /// Records the evolution outcome as a corrective result so the metacognitive
     /// system can learn from past evolution attempts.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49: reserved for evolution outcome feedback loop
     pub fn record_evolution_outcome(
         &self,
         metacognitive: &MetacognitiveController,

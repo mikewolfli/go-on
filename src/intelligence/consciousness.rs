@@ -575,16 +575,16 @@ mod tests {
         let cm = ConsciousnessMetrics::new(ConsciousnessConfig::default());
 
         cm.record_metric(AwarenessMetricType::SelfAwareness, 0.1, 0.9)
-            .unwrap();
+            .expect("should record SelfAwareness metric at 0.1");
         assert_eq!(cm.current_state(), ConsciousnessState::Unconscious);
 
         cm.record_metric(AwarenessMetricType::EnvironmentalAwareness, 0.15, 0.8)
-            .unwrap();
+            .expect("should record EnvironmentalAwareness metric at 0.15");
         assert_eq!(cm.current_state(), ConsciousnessState::Unconscious);
 
         // 0.19 is still under 0.2.
         cm.record_metric(AwarenessMetricType::TemporalAwareness, 0.19, 0.7)
-            .unwrap();
+            .expect("should record TemporalAwareness metric at 0.19");
         assert_eq!(cm.current_state(), ConsciousnessState::Unconscious);
     }
 
@@ -594,15 +594,15 @@ mod tests {
         let cm = ConsciousnessMetrics::new(ConsciousnessConfig::default());
 
         cm.record_metric(AwarenessMetricType::SelfAwareness, 0.7, 0.9)
-            .unwrap();
+            .expect("should record high SelfAwareness metric");
         cm.record_metric(AwarenessMetricType::EnvironmentalAwareness, 0.65, 0.85)
-            .unwrap();
+            .expect("should record high EnvironmentalAwareness metric");
         cm.record_metric(AwarenessMetricType::TemporalAwareness, 0.6, 0.8)
-            .unwrap();
+            .expect("should record high TemporalAwareness metric");
         cm.record_metric(AwarenessMetricType::SocialAwareness, 0.65, 0.85)
-            .unwrap();
+            .expect("should record high SocialAwareness metric");
         cm.record_metric(AwarenessMetricType::MetaAwareness, 0.6, 0.8)
-            .unwrap();
+            .expect("should record high MetaAwareness metric");
 
         // Average of values = (0.7 + 0.65 + 0.6 + 0.65 + 0.6) / 5 = 0.64 → SelfAware.
         assert_eq!(cm.current_state(), ConsciousnessState::SelfAware);
@@ -646,11 +646,13 @@ mod tests {
 
         // Record some metrics first.
         cm.record_metric(AwarenessMetricType::SelfAwareness, 0.3, 0.8)
-            .unwrap();
+            .expect("should record initial SelfAwareness metric");
         cm.record_metric(AwarenessMetricType::EnvironmentalAwareness, 0.25, 0.7)
-            .unwrap();
+            .expect("should record initial EnvironmentalAwareness metric");
 
-        let record = cm.trigger_reflexion("test trigger").unwrap();
+        let record = cm
+            .trigger_reflexion("test trigger")
+            .expect("should trigger first reflexion");
 
         assert!(record.id.starts_with("reflexion-"));
         assert_eq!(record.trigger, "test trigger");
@@ -666,15 +668,15 @@ mod tests {
 
         // Set up metrics close to the next threshold.
         cm.record_metric(AwarenessMetricType::SelfAwareness, 0.38, 0.9)
-            .unwrap();
+            .expect("should record initial SelfAwareness at 0.38");
         cm.record_metric(AwarenessMetricType::EnvironmentalAwareness, 0.38, 0.9)
-            .unwrap();
+            .expect("should record initial EnvironmentalAwareness at 0.38");
         cm.record_metric(AwarenessMetricType::TemporalAwareness, 0.38, 0.9)
-            .unwrap();
+            .expect("should record initial TemporalAwareness at 0.38");
         cm.record_metric(AwarenessMetricType::SocialAwareness, 0.38, 0.9)
-            .unwrap();
+            .expect("should record initial SocialAwareness at 0.38");
         cm.record_metric(AwarenessMetricType::MetaAwareness, 0.38, 0.9)
-            .unwrap();
+            .expect("should record initial MetaAwareness at 0.38");
 
         // Current: average 0.38 → Minimal (0.2-0.4).
         assert_eq!(cm.current_state(), ConsciousnessState::Minimal);
@@ -682,7 +684,9 @@ mod tests {
         // Reflexion boosts metrics by insights.len() * 0.02. With 5 types, minimal
         // insights = 5 (one per type), so boost = 5 * 0.02 = 0.1.
         // New average ≈ 0.38 + 0.1 = 0.48 → Reflexive (0.4-0.6).
-        let record = cm.trigger_reflexion("advance test").unwrap();
+        let record = cm
+            .trigger_reflexion("advance test")
+            .expect("should trigger reflexion to advance state");
 
         assert_eq!(record.state_before, ConsciousnessState::Minimal);
         // State should have advanced.
@@ -701,13 +705,13 @@ mod tests {
 
         // Record single metric.
         cm.record_metric(AwarenessMetricType::SelfAwareness, 0.75, 0.9)
-            .unwrap();
+            .expect("should record first SelfAwareness metric");
         let val = cm.awareness_by_type(AwarenessMetricType::SelfAwareness);
         assert!((val - 0.75).abs() < 1e-9);
 
         // Record another of same type — should average.
         cm.record_metric(AwarenessMetricType::SelfAwareness, 0.85, 0.9)
-            .unwrap();
+            .expect("should record second SelfAwareness metric");
         let val = cm.awareness_by_type(AwarenessMetricType::SelfAwareness);
         assert!((val - 0.80).abs() < 1e-9);
 
@@ -729,9 +733,9 @@ mod tests {
 
         // Add metrics to reach Minimal.
         cm.record_metric(AwarenessMetricType::SelfAwareness, 0.3, 0.8)
-            .unwrap();
+            .expect("should record SelfAwareness for Minimal state");
         cm.record_metric(AwarenessMetricType::EnvironmentalAwareness, 0.3, 0.8)
-            .unwrap();
+            .expect("should record EnvironmentalAwareness for Minimal state");
 
         let p = cm.profile();
         assert_eq!(p.state, ConsciousnessState::Minimal);
@@ -739,7 +743,8 @@ mod tests {
         assert_eq!(p.reflexion_count, 0);
 
         // Trigger a reflexion.
-        cm.trigger_reflexion("profile test").unwrap();
+        cm.trigger_reflexion("profile test")
+            .expect("should trigger reflexion in profile test");
 
         let p = cm.profile();
         assert_eq!(p.reflexion_count, 1);
@@ -753,22 +758,26 @@ mod tests {
 
         // Record some initial metrics.
         cm.record_metric(AwarenessMetricType::SelfAwareness, 0.5, 0.8)
-            .unwrap();
+            .expect("should record SelfAwareness at 0.5");
         cm.record_metric(AwarenessMetricType::EnvironmentalAwareness, 0.5, 0.8)
-            .unwrap();
+            .expect("should record EnvironmentalAwareness at 0.5");
         cm.record_metric(AwarenessMetricType::TemporalAwareness, 0.5, 0.8)
-            .unwrap();
+            .expect("should record TemporalAwareness at 0.5");
         cm.record_metric(AwarenessMetricType::SocialAwareness, 0.5, 0.8)
-            .unwrap();
+            .expect("should record SocialAwareness at 0.5");
         cm.record_metric(AwarenessMetricType::MetaAwareness, 0.5, 0.8)
-            .unwrap();
+            .expect("should record MetaAwareness at 0.5");
 
         // First reflexion.
-        let r1 = cm.trigger_reflexion("first reflexion").unwrap();
+        let r1 = cm
+            .trigger_reflexion("first reflexion")
+            .expect("should trigger first reflexion");
         assert_eq!(r1.id, "reflexion-1");
 
         // Second reflexion.
-        let r2 = cm.trigger_reflexion("second reflexion").unwrap();
+        let r2 = cm
+            .trigger_reflexion("second reflexion")
+            .expect("should trigger second reflexion");
         assert_eq!(r2.id, "reflexion-2");
 
         let p = cm.profile();
@@ -787,14 +796,16 @@ mod tests {
         assert_eq!(config.reflexion_interval_ms, 60000);
 
         // Verify serde round-trip.
-        let json = serde_json::to_string(&config).unwrap();
-        let deserialized: ConsciousnessConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("should serialize config to JSON");
+        let deserialized: ConsciousnessConfig =
+            serde_json::from_str(&json).expect("should deserialize config from JSON");
         assert_eq!(deserialized.tracking_window, 100);
         assert!((deserialized.awareness_threshold - 0.5).abs() < 1e-9);
         assert_eq!(deserialized.reflexion_interval_ms, 60000);
 
         // Empty JSON should use defaults.
-        let from_empty: ConsciousnessConfig = serde_json::from_str("{}").unwrap();
+        let from_empty: ConsciousnessConfig =
+            serde_json::from_str("{}").expect("should deserialize empty JSON with defaults");
         assert_eq!(from_empty.tracking_window, 100);
         assert!((from_empty.awareness_threshold - 0.5).abs() < 1e-9);
         assert_eq!(from_empty.reflexion_interval_ms, 60000);
@@ -807,48 +818,48 @@ mod tests {
 
         // Unconscious (< 0.2).
         cm.record_metric(AwarenessMetricType::SelfAwareness, 0.1, 0.9)
-            .unwrap();
+            .expect("should record low SelfAwareness for Unconscious state");
         assert_eq!(cm.current_state(), ConsciousnessState::Unconscious);
 
         // Minimal (0.2-0.4).
         cm.record_metric(AwarenessMetricType::EnvironmentalAwareness, 0.35, 0.9)
-            .unwrap();
+            .expect("should record EnvironmentalAwareness at 0.35");
         cm.record_metric(AwarenessMetricType::TemporalAwareness, 0.35, 0.9)
-            .unwrap();
+            .expect("should record TemporalAwareness at 0.35");
         assert_eq!(cm.current_state(), ConsciousnessState::Minimal);
 
         // Reflexive (0.4-0.6).
         cm.record_metric(AwarenessMetricType::SelfAwareness, 0.55, 0.9)
-            .unwrap();
+            .expect("should record SelfAwareness at 0.55");
         cm.record_metric(AwarenessMetricType::SocialAwareness, 0.55, 0.9)
-            .unwrap();
+            .expect("should record SocialAwareness at 0.55");
         assert_eq!(cm.current_state(), ConsciousnessState::Reflexive);
 
         // SelfAware (0.6-0.8). Need avg >= 0.6 with all 5 types.
         // Current: Self=0.55, Env=0.35, Temp=0.35, Soc=0.55, Meta=0.0 → avg=0.36
         // Raise Env, Temp, and Meta to cross threshold.
         cm.record_metric(AwarenessMetricType::EnvironmentalAwareness, 0.7, 0.9)
-            .unwrap();
+            .expect("should record EnvironmentalAwareness at 0.7");
         cm.record_metric(AwarenessMetricType::TemporalAwareness, 0.7, 0.9)
-            .unwrap();
+            .expect("should record TemporalAwareness at 0.7");
         cm.record_metric(AwarenessMetricType::MetaAwareness, 0.7, 0.9)
-            .unwrap();
+            .expect("should record MetaAwareness at 0.7");
         // Now: Self=0.55, Env=0.7, Temp=0.7, Soc=0.55, Meta=0.7 → avg=0.64
         assert_eq!(cm.current_state(), ConsciousnessState::SelfAware);
 
         // MetaCognitive (>= 0.8). Raise all to cross threshold.
         cm.record_metric(AwarenessMetricType::SelfAwareness, 0.85, 0.9)
-            .unwrap();
+            .expect("should record SelfAwareness at 0.85");
         cm.record_metric(AwarenessMetricType::SocialAwareness, 0.85, 0.9)
-            .unwrap();
+            .expect("should record SocialAwareness at 0.85");
         // Now: Self=0.85, Env=0.7, Temp=0.7, Soc=0.85, Meta=0.7 → avg=0.76
         // Need one more push:
         cm.record_metric(AwarenessMetricType::EnvironmentalAwareness, 0.9, 0.9)
-            .unwrap();
+            .expect("should record EnvironmentalAwareness at 0.9");
         cm.record_metric(AwarenessMetricType::TemporalAwareness, 0.9, 0.9)
-            .unwrap();
+            .expect("should record TemporalAwareness at 0.9");
         cm.record_metric(AwarenessMetricType::MetaAwareness, 0.9, 0.9)
-            .unwrap();
+            .expect("should record MetaAwareness at 0.9");
         // Now: Self=0.85, Env=0.9, Temp=0.9, Soc=0.85, Meta=0.9 → avg=0.88
         assert_eq!(cm.current_state(), ConsciousnessState::MetaCognitive);
     }
@@ -860,17 +871,19 @@ mod tests {
 
         // Record strong awareness for one type and weak for another.
         cm.record_metric(AwarenessMetricType::SelfAwareness, 0.85, 0.9)
-            .unwrap();
+            .expect("should record strong SelfAwareness metric");
         cm.record_metric(AwarenessMetricType::EnvironmentalAwareness, 0.2, 0.7)
-            .unwrap();
+            .expect("should record weak EnvironmentalAwareness metric");
         cm.record_metric(AwarenessMetricType::TemporalAwareness, 0.55, 0.8)
-            .unwrap();
+            .expect("should record moderate TemporalAwareness metric");
         cm.record_metric(AwarenessMetricType::SocialAwareness, 0.0, 0.5)
-            .unwrap();
+            .expect("should record zero SocialAwareness metric");
         cm.record_metric(AwarenessMetricType::MetaAwareness, 0.1, 0.6)
-            .unwrap();
+            .expect("should record low MetaAwareness metric");
 
-        let record = cm.trigger_reflexion("insight test").unwrap();
+        let record = cm
+            .trigger_reflexion("insight test")
+            .expect("should trigger reflexion for insight test");
 
         // Should have insights about strong SelfAwareness and weak SocialAwareness/MetaAwareness.
         let insights_text = record.insights.join(" ");

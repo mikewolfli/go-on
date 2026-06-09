@@ -267,7 +267,10 @@ mod tests {
             Err(AppError::Proxy(ProxyError::Internal("error".to_string())))
         }
 
-        assert_eq!(returns_result().unwrap(), "success");
+        assert_eq!(
+            returns_result().expect("returns_result should succeed"),
+            "success"
+        );
         assert!(returns_error().is_err());
     }
 

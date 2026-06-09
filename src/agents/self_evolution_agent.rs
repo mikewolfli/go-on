@@ -914,7 +914,7 @@ mod tests {
     /// Uses `block_on` since `SelfEvolutionAgent::new` is async and
     /// this factory is called from `#[test]` (non-async) contexts.
     fn create_test_agent() -> (SelfEvolutionAgent, TempDir) {
-        let tmp_dir = TempDir::new().unwrap();
+        let tmp_dir = TempDir::new().expect("should create temp dir for test agent");
         let project_root = tmp_dir.path().to_path_buf();
         let models = vec![ModelCharacteristics {
             id: "test-model".to_string(),
@@ -927,7 +927,8 @@ mod tests {
             context_window: 8192,
         }];
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt =
+            tokio::runtime::Runtime::new().expect("should create tokio runtime for test agent");
         let agent = rt.block_on(SelfEvolutionAgent::new(project_root.clone(), models));
         (agent, tmp_dir)
     }
@@ -935,7 +936,7 @@ mod tests {
     /// Create a test agent in an async context (for `#[tokio::test]`).
     /// Avoids nested runtime creation that would panic in async contexts.
     async fn create_test_agent_async() -> (SelfEvolutionAgent, TempDir) {
-        let tmp_dir = TempDir::new().unwrap();
+        let tmp_dir = TempDir::new().expect("should create temp dir for async test agent");
         let project_root = tmp_dir.path().to_path_buf();
         let models = vec![ModelCharacteristics {
             id: "test-model".to_string(),
@@ -990,9 +991,12 @@ mod tests {
             "pub struct Foo {}\nuse std::collections::HashMap;\nfn bar() { unsafe {} }\n// TODO: fix\n",
         )
         .await
-        .unwrap();
+        .expect("should write test file");
 
-        let report = agent.analyze_code("test.rs").await.unwrap();
+        let report = agent
+            .analyze_code("test.rs")
+            .await
+            .expect("should analyze test file");
         assert_eq!(report.source_lines, 4);
         assert!(report.type_count >= 1);
         assert!(report.dep_count >= 1);
@@ -1096,7 +1100,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_rules_empty_dir() {
-        let tmp_dir = TempDir::new().unwrap();
+        let tmp_dir = TempDir::new().expect("should create temp dir for load_rules test");
         let rules = SelfEvolutionAgent::load_rules(tmp_dir.path()).await;
         assert!(rules.is_empty());
     }
@@ -1106,7 +1110,10 @@ mod tests {
         let (agent, _tmp_dir) = create_test_agent();
         let model = agent.select_model("code_generation");
         assert!(model.is_some());
-        assert_eq!(model.unwrap(), "test-model");
+        assert_eq!(
+            model.expect("selected model should be present"),
+            "test-model"
+        );
     }
 
     #[test]

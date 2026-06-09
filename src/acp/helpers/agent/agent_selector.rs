@@ -369,8 +369,16 @@ mod tests {
         ];
         let scores = selector.score_candidates(&agents, Some("a"), None, &[], "test");
         assert!(
-            scores.iter().find(|s| s.name == "a").unwrap().total_score
-                > scores.iter().find(|s| s.name == "b").unwrap().total_score
+            scores
+                .iter()
+                .find(|s| s.name == "a")
+                .expect("agent 'a' should be in scores")
+                .total_score
+                > scores
+                    .iter()
+                    .find(|s| s.name == "b")
+                    .expect("agent 'b' should be in scores")
+                    .total_score
         );
     }
 
@@ -502,8 +510,14 @@ mod tests {
             ("generic-agent".into(), Arc::new(MockAgent)),
         ];
         let scored = selector.score_candidates(&agents, None, None, &[], "implement a feature fix");
-        let copilot_score = scored.iter().find(|s| s.name == "copilot").unwrap();
-        let generic_score = scored.iter().find(|s| s.name == "generic-agent").unwrap();
+        let copilot_score = scored
+            .iter()
+            .find(|s| s.name == "copilot")
+            .expect("copilot should be in scored list");
+        let generic_score = scored
+            .iter()
+            .find(|s| s.name == "generic-agent")
+            .expect("generic-agent should be in scored list");
         // Copilot should have a higher task_match_score due to coding task boost
         assert!(
             copilot_score.task_match_score > generic_score.task_match_score,
@@ -519,8 +533,14 @@ mod tests {
             ("deepseek".into(), Arc::new(MockAgent)),
         ];
         let scored = selector.score_candidates(&agents, None, None, &[], "write a creative story");
-        let gemini = scored.iter().find(|s| s.name == "gemini").unwrap();
-        let deepseek = scored.iter().find(|s| s.name == "deepseek").unwrap();
+        let gemini = scored
+            .iter()
+            .find(|s| s.name == "gemini")
+            .expect("gemini should be in scored list");
+        let deepseek = scored
+            .iter()
+            .find(|s| s.name == "deepseek")
+            .expect("deepseek should be in scored list");
         assert!(
             gemini.task_match_score >= deepseek.task_match_score,
             "gemini should get creative task affinity boost"

@@ -7,6 +7,10 @@
 //! All mutable state is guarded behind `Arc<Mutex<>>`.
 
 use crate::agents::agent::{Agent, Message, StreamingSender};
+
+/// A thread-safe handle for injecting an agent into the ContinuousLearningCenter
+/// after it has been moved into a background task.
+pub type AgentInjector = Arc<Mutex<Option<Arc<dyn Agent>>>>;
 use crate::i18n::{t, tf};
 use crate::intelligence::now_ms;
 use std::collections::{HashMap, HashSet};
@@ -262,15 +266,22 @@ pub struct ContinuousLearningCenter {
     state: Arc<Mutex<CenterState>>,
     /// Optional agent used for LLM-based semantic distillation.
     /// When `None`, TF-IDF keyword extraction is used as a fallback.
-    agent: Option<Arc<dyn Agent>>,
+    /// Uses `AgentInjector` so the agent can be injected after the center
+    /// has been moved into a background task (e.g. after agent registry init).
+    agent: AgentInjector,
 }
 
 impl std::fmt::Debug for ContinuousLearningCenter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let has_agent = self
+            .agent
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some();
         f.debug_struct("ContinuousLearningCenter")
             .field("config", &self.config)
             .field("state", &self.state)
-            .field("agent", &self.agent.as_ref().map(|_| "<agent>"))
+            .field("agent", &if has_agent { "<agent>" } else { "<none>" })
             .finish()
     }
 }
@@ -280,7 +291,7 @@ impl Clone for ContinuousLearningCenter {
         Self {
             config: self.config.clone(),
             state: Arc::clone(&self.state),
-            agent: self.agent.clone(),
+            agent: Arc::clone(&self.agent),
         }
     }
 }
@@ -332,13 +343,27 @@ impl ContinuousLearningCenter {
                 next_memory_id: 1,
                 next_pattern_id: 1,
             })),
-            agent: None,
+            agent: Arc::new(Mutex::new(None)),
         }
     }
 
-    /// Set the agent used for LLM-based semantic distillation.
-    pub fn with_agent(mut self, agent: Arc<dyn Agent>) -> Self {
-        self.agent = Some(agent);
+    /// Sets the agent used for LLM-based semantic distillation.
+    /// Can be called after construction, even after the center has been
+    /// moved into a background task, because `agent` is behind `Arc<Mutex<>>`.
+    pub fn inject_agent(&self, agent: Arc<dyn Agent>) {
+        let mut guard = self.agent.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = Some(agent);
+    }
+
+    /// Returns a clone of the agent handle so callers can inject the agent
+    /// after the center has been moved into a background task.
+    pub fn agent_handle(&self) -> AgentInjector {
+        Arc::clone(&self.agent)
+    }
+
+    /// Builder-style setter (consumes self) for ergonomic construction.
+    pub fn with_agent(self, agent: Arc<dyn Agent>) -> Self {
+        self.inject_agent(agent);
         self
     }
 
@@ -502,7 +527,12 @@ impl ContinuousLearningCenter {
         // Non-blocking: kicks off LLM distillation in the background using
         // the shared runtime.  This avoids creating a new OS thread + Runtime
         // on every invocation and prevents fire-and-forget panic swallowing.
-        if self.agent.is_some() {
+        if self
+            .agent
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some()
+        {
             let center = self.clone();
             let rt = Self::shared_background_runtime();
             rt.spawn(async move {
@@ -525,7 +555,8 @@ impl ContinuousLearningCenter {
     ///
     /// Returns the number of new patterns extracted.
     pub async fn llm_distill(&self) -> usize {
-        if let Some(ref agent) = self.agent {
+        let agent_opt = self.agent.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(ref agent) = agent_opt {
             // LLM-based distillation — collect all memories and ask the agent
             // to extract semantic patterns.
             let memory_snapshots: Vec<String> = {

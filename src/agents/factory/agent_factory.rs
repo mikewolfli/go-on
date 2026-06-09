@@ -547,7 +547,7 @@ mod tests {
         let factory = AgentFactory::default();
         factory
             .register_template(sample_template("writer", "anthropic", &["text", "writing"]))
-            .unwrap();
+            .expect("should register writer template");
 
         let instance = factory
             .create_agent(sample_request("writer"))
@@ -577,7 +577,9 @@ mod tests {
             ("temperature".to_string(), "0.7".to_string()),
             ("model".to_string(), "gpt-4".to_string()),
         ]);
-        factory.register_template(tmpl).unwrap();
+        factory
+            .register_template(tmpl)
+            .expect("should register tuner template");
 
         let mut overrides = HashMap::new();
         overrides.insert("temperature".to_string(), "0.2".to_string());
@@ -618,9 +620,11 @@ mod tests {
         let factory = AgentFactory::default();
         factory
             .register_template(sample_template("helper", "deepseek", &["tool"]))
-            .unwrap();
+            .expect("should register helper template");
 
-        let instance = factory.create_agent(sample_request("helper")).unwrap();
+        let instance = factory
+            .create_agent(sample_request("helper"))
+            .expect("should create helper agent");
         assert_eq!(factory.list_agents().len(), 1);
 
         factory.destroy_agent(&instance.id);
@@ -639,10 +643,12 @@ mod tests {
         let factory = AgentFactory::default();
         factory
             .register_template(sample_template("noop", "mistral", &["test"]))
-            .unwrap();
+            .expect("should register noop template");
 
         // Create one instance.
-        let _instance = factory.create_agent(sample_request("noop")).unwrap();
+        let _instance = factory
+            .create_agent(sample_request("noop"))
+            .expect("should create noop agent");
         let before = factory.profile();
 
         // Destroy a non-existent ID — should be a no-op.
@@ -661,14 +667,20 @@ mod tests {
         let factory = AgentFactory::default();
         factory
             .register_template(sample_template("alpha", "openai", &["a"]))
-            .unwrap();
+            .expect("should register alpha template");
         factory
             .register_template(sample_template("beta", "anthropic", &["b"]))
-            .unwrap();
+            .expect("should register beta template");
 
-        let a1 = factory.create_agent(sample_request("alpha")).unwrap();
-        let a2 = factory.create_agent(sample_request("alpha")).unwrap();
-        let b1 = factory.create_agent(sample_request("beta")).unwrap();
+        let a1 = factory
+            .create_agent(sample_request("alpha"))
+            .expect("should create first alpha agent");
+        let a2 = factory
+            .create_agent(sample_request("alpha"))
+            .expect("should create second alpha agent");
+        let b1 = factory
+            .create_agent(sample_request("beta"))
+            .expect("should create beta agent");
 
         let agents = factory.list_agents();
         assert_eq!(agents.len(), 3);
@@ -686,18 +698,26 @@ mod tests {
         let factory = AgentFactory::default();
         factory
             .register_template(sample_template("coder", "openai", &["code", "python"]))
-            .unwrap();
+            .expect("should register coder template");
         factory
             .register_template(sample_template("writer", "anthropic", &["text", "writing"]))
-            .unwrap();
+            .expect("should register writer template");
         factory
             .register_template(sample_template("debugger", "deepseek", &["code", "debug"]))
-            .unwrap();
+            .expect("should register debugger template");
 
-        let _c1 = factory.create_agent(sample_request("coder")).unwrap();
-        let _c2 = factory.create_agent(sample_request("coder")).unwrap();
-        let _w1 = factory.create_agent(sample_request("writer")).unwrap();
-        let _d1 = factory.create_agent(sample_request("debugger")).unwrap();
+        let _c1 = factory
+            .create_agent(sample_request("coder"))
+            .expect("should create first coder agent");
+        let _c2 = factory
+            .create_agent(sample_request("coder"))
+            .expect("should create second coder agent");
+        let _w1 = factory
+            .create_agent(sample_request("writer"))
+            .expect("should create writer agent");
+        let _d1 = factory
+            .create_agent(sample_request("debugger"))
+            .expect("should create debugger agent");
 
         let code_agents = factory.find_agents_by_capability("code");
         assert_eq!(code_agents.len(), 3); // coder (2) + debugger (1)
@@ -716,7 +736,7 @@ mod tests {
         let factory = AgentFactory::default();
         factory
             .register_template(sample_template("ephemeral", "gemini", &["short"]))
-            .unwrap();
+            .expect("should register ephemeral template");
 
         // Create an instance with an extremely short TTL so it expires immediately.
         let request = CreateAgentRequest {
@@ -726,7 +746,9 @@ mod tests {
             tags: Vec::new(),
         };
 
-        let _instance = factory.create_agent(request).unwrap();
+        let _instance = factory
+            .create_agent(request)
+            .expect("should create ephemeral agent");
         assert_eq!(factory.list_agents().len(), 1);
 
         // Small sleep to let the expiry pass.
@@ -745,18 +767,26 @@ mod tests {
 
         factory
             .register_template(sample_template("svc-a", "openai", &["svc"]))
-            .unwrap();
+            .expect("should register svc-a template");
         factory
             .register_template(sample_template("svc-b", "openai", &["svc"]))
-            .unwrap();
+            .expect("should register svc-b template");
         factory
             .register_template(sample_template("svc-c", "anthropic", &["svc"]))
-            .unwrap();
+            .expect("should register svc-c template");
 
-        let _a1 = factory.create_agent(sample_request("svc-a")).unwrap();
-        let _a2 = factory.create_agent(sample_request("svc-a")).unwrap();
-        let _b1 = factory.create_agent(sample_request("svc-b")).unwrap();
-        let _c1 = factory.create_agent(sample_request("svc-c")).unwrap();
+        let _a1 = factory
+            .create_agent(sample_request("svc-a"))
+            .expect("should create first svc-a agent");
+        let _a2 = factory
+            .create_agent(sample_request("svc-a"))
+            .expect("should create second svc-a agent");
+        let _b1 = factory
+            .create_agent(sample_request("svc-b"))
+            .expect("should create svc-b agent");
+        let _c1 = factory
+            .create_agent(sample_request("svc-c"))
+            .expect("should create svc-c agent");
 
         // Destroy one instance.
         factory.destroy_agent(&_a1.id);
@@ -785,7 +815,7 @@ mod tests {
 
         factory
             .register_template(sample_template("limited", "openai", &["test"]))
-            .unwrap();
+            .expect("should register limited template");
 
         // First two creations should succeed.
         let _first = factory
@@ -861,9 +891,11 @@ mod tests {
         let factory = AgentFactory::default();
         factory
             .register_template(sample_template("persistent", "openai", &["keep"]))
-            .unwrap();
+            .expect("should register persistent template");
 
-        let _inst = factory.create_agent(sample_request("persistent")).unwrap();
+        let _inst = factory
+            .create_agent(sample_request("persistent"))
+            .expect("should create persistent agent");
         assert_eq!(factory.list_agents().len(), 1);
 
         // No instances should be expired (long default TTL).

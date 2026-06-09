@@ -9,6 +9,15 @@
 //!
 //! FUTURE: After startup, the GUI can call `fetch_catalog()` to get the authoritative
 //! catalog and overlay it on top of the built-in fallback.
+//!
+//! TODO-BACKEND-ENDPOINT: The backend `/v1/providers/catalog` (or `provider.catalog` RPC)
+//! endpoint exists but is not yet wired into the GUI startup flow. Once wired, the startup
+//! sequence should:
+//!   1. Check backend availability via `health()`
+//!   2. Call `fetch_catalog()` to get the authoritative catalog
+//!   3. Merge or overlay the backend catalog on top of `built_in_provider_specs()`
+//!   4. Cache the result so subsequent lookups use the backend data
+//! See F-GAP-59 for tracking.
 
 use crate::backend::BackendClient;
 use serde_json::Value;
@@ -66,7 +75,8 @@ pub fn built_in_provider_specs(name: &str) -> ProviderSpec {
 
 /// Fetch provider catalog from the backend asynchronously.
 /// Returns `None` if backend is unreachable.
-#[allow(dead_code)]
+/// F-GAP-59: Reserved for post-startup catalog overlay
+#[expect(dead_code)] // F-GAP-59: Wired when startup flow calls fetch_catalog
 pub async fn fetch_catalog(backend: &BackendClient) -> Option<Value> {
     match tokio::time::timeout(
         std::time::Duration::from_secs(5),

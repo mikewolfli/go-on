@@ -28,7 +28,7 @@ pub struct SystemIntegration {
 }
 
 #[cfg(feature = "sub-bus-tool-future")]
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for future tool-bus integration
 impl SystemIntegration {
     pub fn new() -> Self {
         Self {

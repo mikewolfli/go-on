@@ -260,6 +260,26 @@
     }, 3000);
   }
 
+  // Show a temporary toast notification at the top of the messages area
+  function showToast(message) {
+    const toast = document.createElement("div");
+    toast.className = "message system";
+    toast.style.position = "sticky";
+    toast.style.top = "0";
+    toast.style.zIndex = "10";
+    toast.style.marginBottom = "4px";
+    toast.style.padding = "4px 8px";
+    toast.style.fontSize = "0.85em";
+    toast.style.opacity = "0.9";
+    toast.textContent = message;
+    messagesContainer.insertBefore(toast, messagesContainer.firstChild);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
+    setTimeout(() => {
+      toast.remove();
+    }, 2500);
+  }
+
   function updateSessionIndicator() {
     const statusBar = document.getElementById("status");
     const baseText = statusBar.textContent.split(" | ")[0];
@@ -414,6 +434,175 @@
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       sendButton.click();
+    }
+  });
+
+  // ── Multimodal paste & drop event handling ──
+
+  // Handle paste events for images (e.g. screenshots from clipboard)
+  messageInput.addEventListener("paste", (e) => {
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+
+    let imagePasted = false;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith("image/")) {
+        imagePasted = true;
+        const file = item.getAsFile();
+        if (!file) continue;
+
+        if (file.size > MAX_FILE_SIZE) {
+          showError(
+            `Pasted image exceeds the 10 MB size limit and was skipped.`,
+          );
+          continue;
+        }
+
+        const reader = new FileReader();
+        reader.onload = function (ev) {
+          const dataUrl = ev.target.result;
+          attachments.push({
+            name: file.name || "pasted_image.png",
+            type: file.type,
+            dataUrl: dataUrl,
+          });
+          renderAttachments();
+          // Send pasteImage notification to the extension host
+          vscode.postMessage({
+            type: "pasteImage",
+            name: file.name || "pasted_image.png",
+            mimeType: file.type,
+            dataUrl: dataUrl,
+            size: file.size,
+          });
+          showToast("Image pasted");
+        };
+        reader.onerror = function () {
+          showError("Failed to read pasted image.");
+        };
+        reader.readAsDataURL(file);
+      }
+    }
+
+    // If we captured an image paste, prevent the default text paste
+    if (imagePasted) {
+      e.preventDefault();
+    }
+  });
+
+  // Handle paste events on the document for images pasted outside the input
+  document.addEventListener("paste", (e) => {
+    // Only handle if the focus is NOT on the messageInput (already handled above)
+    if (document.activeElement === messageInput) return;
+
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith("image/")) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (!file) continue;
+
+        if (file.size > MAX_FILE_SIZE) {
+          showError(
+            `Pasted image exceeds the 10 MB size limit and was skipped.`,
+          );
+          continue;
+        }
+
+        const reader = new FileReader();
+        reader.onload = function (ev) {
+          const dataUrl = ev.target.result;
+          attachments.push({
+            name: file.name || "pasted_image.png",
+            type: file.type,
+            dataUrl: dataUrl,
+          });
+          renderAttachments();
+          // Send pasteImage notification to the extension host
+          vscode.postMessage({
+            type: "pasteImage",
+            name: file.name || "pasted_image.png",
+            mimeType: file.type,
+            dataUrl: dataUrl,
+            size: file.size,
+          });
+          showToast("Image pasted");
+        };
+        reader.onerror = function () {
+          showError("Failed to read pasted image.");
+        };
+        reader.readAsDataURL(file);
+        break;
+      }
+    }
+  });
+
+  // Handle drag-and-drop of image files onto the chat area
+  function preventDropDefaults(e) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  document.addEventListener("dragenter", preventDropDefaults);
+  document.addEventListener("dragover", preventDropDefaults);
+
+  document.addEventListener("drop", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const files = e.dataTransfer && e.dataTransfer.files;
+    if (!files || files.length === 0) return;
+
+    let fileHandled = false;
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+
+      // Skip non-image files for drop handling
+      if (!file.type || !file.type.startsWith("image/")) continue;
+
+      if (file.size > MAX_FILE_SIZE) {
+        showError(
+          `Dropped image exceeds the 10 MB size limit and was skipped.`,
+        );
+        continue;
+      }
+
+      fileHandled = true;
+      const reader = new FileReader();
+      reader.onload = function (ev) {
+        const dataUrl = ev.target.result;
+        attachments.push({
+          name: file.name || "dropped_image.png",
+          type: file.type,
+          dataUrl: dataUrl,
+        });
+        renderAttachments();
+        // Send pasteImage notification to the extension host (reuse the same message type)
+        vscode.postMessage({
+          type: "pasteImage",
+          name: file.name || "dropped_image.png",
+          mimeType: file.type,
+          dataUrl: dataUrl,
+          size: file.size,
+        });
+        showToast("Image dropped");
+      };
+      reader.onerror = function () {
+        showError("Failed to read dropped image.");
+      };
+      reader.readAsDataURL(file);
+    }
+
+    if (fileHandled) {
+      // Visual feedback: briefly flash the input border
+      messageInput.style.borderColor = "var(--vscode-textLink-foreground)";
+      setTimeout(() => {
+        messageInput.style.borderColor = "";
+      }, 600);
     }
   });
 

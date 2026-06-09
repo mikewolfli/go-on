@@ -67,7 +67,7 @@ impl AgentMemoryBus {
     }
 
     /// Attach a VectorStore for similarity-based memory retrieval.
-    #[allow(dead_code)] // Wired via runtime.rs init_agent_memory_bus_with_vector_store
+    #[allow(dead_code)] // F-GAP-49 — reserved for vector store wiring (wired via runtime.rs init_agent_memory_bus_with_vector_store)
     pub fn with_vector_store(mut self, vs: Arc<VectorStore>) -> Self {
         self.vector_store = Some(vs);
         self

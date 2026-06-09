@@ -459,10 +459,10 @@ mod tests {
         let mut graph = EvolutionGraph::new();
         graph
             .register_capability("agent_a", "code_review", EvolutionStage::New)
-            .unwrap();
+            .expect("register_capability for agent_a/code_review should succeed");
         let record = graph.get_history("agent_a", "code_review");
         assert!(record.is_some());
-        let r = record.unwrap();
+        let r = record.expect("get_history should return a record for agent_a/code_review");
         assert_eq!(r.agent, "agent_a");
         assert_eq!(r.capability, "code_review");
         assert_eq!(r.current_stage, EvolutionStage::New);
@@ -476,21 +476,23 @@ mod tests {
         let mut graph = EvolutionGraph::new();
         graph
             .register_capability("agent_a", "code_review", EvolutionStage::Learning)
-            .unwrap();
+            .expect("register_capability for agent_a/code_review should succeed");
 
         let v1 = graph
             .record_version("agent_a", "code_review", 0.85, 120.0)
-            .unwrap();
+            .expect("first record_version for agent_a/code_review should succeed");
         assert_eq!(v1.version, "v1");
         assert_eq!(v1.success_rate, 0.85);
         assert_eq!(v1.stage, EvolutionStage::Learning);
 
         let v2 = graph
             .record_version("agent_a", "code_review", 0.90, 110.0)
-            .unwrap();
+            .expect("second record_version for agent_a/code_review should succeed");
         assert_eq!(v2.version, "v2");
 
-        let record = graph.get_history("agent_a", "code_review").unwrap();
+        let record = graph.get_history("agent_a", "code_review").expect(
+            "get_history for agent_a/code_review should return a record after recording versions",
+        );
         assert_eq!(record.versions.len(), 2);
     }
 
@@ -501,18 +503,22 @@ mod tests {
         let mut graph = EvolutionGraph::new();
         graph
             .register_capability("agent_b", "translation", EvolutionStage::New)
-            .unwrap();
+            .expect("register_capability for agent_b/translation should succeed");
 
         graph
             .advance_stage("agent_b", "translation", EvolutionStage::Learning)
-            .unwrap();
-        let record = graph.get_history("agent_b", "translation").unwrap();
+            .expect("advance_stage from New to Learning should succeed");
+        let record = graph
+            .get_history("agent_b", "translation")
+            .expect("get_history for agent_b/translation should return a record");
         assert_eq!(record.current_stage, EvolutionStage::Learning);
 
         graph
             .advance_stage("agent_b", "translation", EvolutionStage::Mature)
-            .unwrap();
-        let record = graph.get_history("agent_b", "translation").unwrap();
+            .expect("advance_stage from Learning to Mature should succeed");
+        let record = graph.get_history("agent_b", "translation").expect(
+            "get_history for agent_b/translation should return a record after second advance",
+        );
         assert_eq!(record.current_stage, EvolutionStage::Mature);
     }
 
@@ -523,7 +529,7 @@ mod tests {
         let mut graph = EvolutionGraph::new();
         graph
             .register_capability("agent_c", "qa_testing", EvolutionStage::Retired)
-            .unwrap();
+            .expect("register_capability for agent_c/qa_testing should succeed");
 
         let result = graph.advance_stage("agent_c", "qa_testing", EvolutionStage::Mature);
         assert!(result.is_err());
@@ -532,7 +538,9 @@ mod tests {
         assert!(err.contains("Retired"));
 
         // Verify stage did not change.
-        let record = graph.get_history("agent_c", "qa_testing").unwrap();
+        let record = graph
+            .get_history("agent_c", "qa_testing")
+            .expect("get_history for agent_c/qa_testing should return a record");
         assert_eq!(record.current_stage, EvolutionStage::Retired);
     }
 
@@ -543,7 +551,7 @@ mod tests {
         let mut graph = EvolutionGraph::new();
         graph
             .register_capability("agent_d", "sentiment", EvolutionStage::New)
-            .unwrap();
+            .expect("register_capability for agent_d/sentiment should succeed on first call");
 
         let result = graph.register_capability("agent_d", "sentiment", EvolutionStage::New);
         assert!(result.is_err());
@@ -562,32 +570,32 @@ mod tests {
         // Register two capabilities: one degrading, one improving.
         graph
             .register_capability("agent_e", "summarizer", EvolutionStage::Learning)
-            .unwrap();
+            .expect("register_capability for agent_e/summarizer should succeed");
         graph
             .register_capability("agent_e", "extractor", EvolutionStage::Learning)
-            .unwrap();
+            .expect("register_capability for agent_e/extractor should succeed");
 
         // Degrading: success rates go down.
         graph
             .record_version("agent_e", "summarizer", 0.95, 100.0)
-            .unwrap();
+            .expect("first record_version for agent_e/summarizer (degrading) should succeed");
         graph
             .record_version("agent_e", "summarizer", 0.85, 105.0)
-            .unwrap();
+            .expect("second record_version for agent_e/summarizer (degrading) should succeed");
         graph
             .record_version("agent_e", "summarizer", 0.75, 110.0)
-            .unwrap();
+            .expect("third record_version for agent_e/summarizer (degrading) should succeed");
 
         // Improving: success rates go up.
         graph
             .record_version("agent_e", "extractor", 0.70, 200.0)
-            .unwrap();
+            .expect("first record_version for agent_e/extractor (improving) should succeed");
         graph
             .record_version("agent_e", "extractor", 0.80, 190.0)
-            .unwrap();
+            .expect("second record_version for agent_e/extractor (improving) should succeed");
         graph
             .record_version("agent_e", "extractor", 0.90, 180.0)
-            .unwrap();
+            .expect("third record_version for agent_e/extractor (improving) should succeed");
 
         let degrading = graph.find_degrading_capabilities();
         assert_eq!(degrading.len(), 1);
@@ -605,25 +613,25 @@ mod tests {
         // Register two capabilities: one promotable, one not.
         graph
             .register_capability("agent_f", "classifier", EvolutionStage::Learning)
-            .unwrap();
+            .expect("register_capability for agent_f/classifier should succeed");
         graph
             .register_capability("agent_f", "clusterer", EvolutionStage::Learning)
-            .unwrap();
+            .expect("register_capability for agent_f/clusterer should succeed");
 
         // promotable: 3 improving versions.
         for rate in [0.70, 0.80, 0.90] {
             graph
                 .record_version("agent_f", "classifier", rate, 50.0)
-                .unwrap();
+                .expect("record_version for agent_f/classifier (promotable) should succeed");
         }
 
         // not promotable: only 2 versions (minimum is 3).
         graph
             .record_version("agent_f", "clusterer", 0.80, 60.0)
-            .unwrap();
+            .expect("first record_version for agent_f/clusterer (not promotable) should succeed");
         graph
             .record_version("agent_f", "clusterer", 0.85, 55.0)
-            .unwrap();
+            .expect("second record_version for agent_f/clusterer (not promotable) should succeed");
 
         let candidates = graph.find_candidates_for_promotion();
         assert_eq!(candidates.len(), 1);
@@ -640,29 +648,29 @@ mod tests {
         // Mature capability.
         graph
             .register_capability("agent_g", "matcher", EvolutionStage::Mature)
-            .unwrap();
+            .expect("register_capability for agent_g/matcher should succeed");
         graph
             .record_version("agent_g", "matcher", 0.95, 10.0)
-            .unwrap();
+            .expect("record_version for agent_g/matcher should succeed");
 
         // Deprecated capability.
         graph
             .register_capability("agent_g", "legacy", EvolutionStage::Deprecated)
-            .unwrap();
+            .expect("register_capability for agent_g/legacy should succeed");
 
         // Learning + Degrading capability.
         graph
             .register_capability("agent_h", "failing", EvolutionStage::Learning)
-            .unwrap();
+            .expect("register_capability for agent_h/failing should succeed");
         graph
             .record_version("agent_h", "failing", 0.90, 30.0)
-            .unwrap();
+            .expect("first record_version for agent_h/failing should succeed");
         graph
             .record_version("agent_h", "failing", 0.80, 35.0)
-            .unwrap();
+            .expect("second record_version for agent_h/failing should succeed");
         graph
             .record_version("agent_h", "failing", 0.70, 40.0)
-            .unwrap();
+            .expect("third record_version for agent_h/failing should succeed");
 
         let p = graph.profile();
         assert_eq!(p.total_capabilities, 3);
@@ -678,15 +686,19 @@ mod tests {
         let mut graph = EvolutionGraph::new();
         graph
             .register_capability("agent_i", "improving_skill", EvolutionStage::Learning)
-            .unwrap();
+            .expect("register_capability for agent_i/improving_skill should succeed");
 
         for rate in [0.60, 0.70, 0.80, 0.90, 0.95] {
             graph
                 .record_version("agent_i", "improving_skill", rate, 100.0)
-                .unwrap();
+                .expect(
+                    "record_version for agent_i/improving_skill (improving trend) should succeed",
+                );
         }
 
-        let record = graph.get_history("agent_i", "improving_skill").unwrap();
+        let record = graph
+            .get_history("agent_i", "improving_skill")
+            .expect("get_history for agent_i/improving_skill should return a record");
         assert_eq!(record.trend, TrendDirection::Improving);
     }
 
@@ -697,15 +709,19 @@ mod tests {
         let mut graph = EvolutionGraph::new();
         graph
             .register_capability("agent_j", "degrading_skill", EvolutionStage::Learning)
-            .unwrap();
+            .expect("register_capability for agent_j/degrading_skill should succeed");
 
         for rate in [0.95, 0.85, 0.75, 0.65] {
             graph
                 .record_version("agent_j", "degrading_skill", rate, 100.0)
-                .unwrap();
+                .expect(
+                    "record_version for agent_j/degrading_skill (degrading trend) should succeed",
+                );
         }
 
-        let record = graph.get_history("agent_j", "degrading_skill").unwrap();
+        let record = graph
+            .get_history("agent_j", "degrading_skill")
+            .expect("get_history for agent_j/degrading_skill should return a record");
         assert_eq!(record.trend, TrendDirection::Degrading);
     }
 

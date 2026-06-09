@@ -86,6 +86,7 @@ pub mod hub;
 pub mod triple_fusion;
 pub mod voter_impls;
 pub mod weighted_vote;
+pub mod causal_bayesian_graph;
 pub mod world_model;
 
 // Multi-model voter for high-stakes decision consensus.

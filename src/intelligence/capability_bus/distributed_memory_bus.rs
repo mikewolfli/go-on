@@ -1084,7 +1084,7 @@ mod tests {
 
         // We cheat by storing directly so we can set created_ms
         {
-            let mut local = bus.local_entries.lock().unwrap();
+            let mut local = bus.local_entries.lock().expect("lock local_entries");
             local.push_back(MemoryBusEntry {
                 id: "expired-id".into(),
                 node_id: local_node_id(),
@@ -1204,7 +1204,7 @@ mod tests {
             ttl_ms: 0,
         }];
 
-        let json = serde_json::to_string(&entries).unwrap();
+        let json = serde_json::to_string(&entries).expect("serialize entries");
         let count = bus
             .ingest_shared(&json)
             .expect("ingest_shared should succeed");
@@ -1267,8 +1267,8 @@ mod tests {
             ttl_ms: 0,
         }];
 
-        let json = serde_json::to_string(&entries).unwrap();
-        bus.ingest_shared(&json).unwrap();
+        let json = serde_json::to_string(&entries).expect("serialize entries");
+        bus.ingest_shared(&json).expect("ingest shared entries");
 
         // Query by key
         let by_key = bus.find_by_key("remote-findable");
@@ -1288,13 +1288,14 @@ mod tests {
         let config = MemoryTransportConfig::default();
 
         // Start transport
-        bus.start_transport(config).unwrap();
+        bus.start_transport(config)
+            .expect("start transport should succeed");
 
         let p = bus.profile();
         assert!(p.transport_running, "transport should be running");
 
         // Stop and verify
-        bus.stop_transport().unwrap();
+        bus.stop_transport().expect("stop transport should succeed");
         let p = bus.profile();
         assert!(!p.transport_running, "transport should be stopped");
     }

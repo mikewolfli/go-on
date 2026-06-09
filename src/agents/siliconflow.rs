@@ -258,7 +258,7 @@ mod tests {
         assert_eq!(payload["messages"][0]["role"], "system");
         assert!(payload["messages"][0]["content"]
             .as_str()
-            .unwrap()
+            .expect("messages[0] content should be a string")
             .contains("Be clean"));
     }
 

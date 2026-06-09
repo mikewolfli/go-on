@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 
-use crate::orchestration::skill::SkillRegistry;
+use crate::orchestration::skill::{Skill, SkillRegistry};
 use crate::orchestration::tool::{ToolInput, ToolOutput, ToolRegistry, ToolRiskLevel};
 
 // ---------------------------------------------------------------------------
@@ -294,17 +294,12 @@ impl ToolBus {
 
     /// Execute a tool by name with HarnessBus-compatible validation.
     ///
-    /// The method handles both built-in tools (from `ToolRegistry`) and skills
-    /// (from `SkillRegistry`).  Skills are invoked through a synchronous
-    /// shim that blocks on the async execution (the `CapabilityBus` itself runs
-    /// inside a Tokio runtime so this is safe).
-    ///
     /// Returns an error if the tool name is unknown or execution fails.
-    pub fn execute_tool(&self, tool_name: &str, input: &ToolInput) -> Result<ToolOutput> {
+    pub async fn execute_tool(&self, tool_name: &str, input: &ToolInput) -> Result<ToolOutput> {
         // ── Lifetime / start ──────────────────────────────────────────
         let start = std::time::Instant::now();
 
-        let result = self.dispatch_tool(tool_name, input);
+        let result = self.dispatch_tool(tool_name, input).await;
 
         // ── Record statistics ────────────────────────────────────────
         let duration_ms = start.elapsed().as_millis() as u64;
@@ -320,44 +315,58 @@ impl ToolBus {
         result
     }
 
+    /// Look up a skill by name, returning an owned Arc so the caller can
+    /// drop the registry lock before .await.
+    fn lookup_skill(&self, name: &str) -> Option<Arc<dyn Skill>> {
+        match self.skill_registry.lock() {
+            Ok(guard) => {
+                // Clone is required to drop MutexGuard before .await in caller.
+                #[allow(clippy::map_clone)]
+                let skill = guard.get(name).map(|s| s.clone());
+                skill
+            }
+            Err(poisoned) => {
+                tracing::warn!("lock poisoned, recovering");
+                let guard = poisoned.into_inner();
+                // Clone is required to drop MutexGuard before .await in caller.
+                #[allow(clippy::map_clone)]
+                let skill = guard.get(name).map(|s| s.clone());
+                skill
+            }
+        }
+    }
+
     /// Inner dispatch — separate from the stats-recording wrapper.
-    fn dispatch_tool(&self, tool_name: &str, input: &ToolInput) -> Result<ToolOutput> {
+    async fn dispatch_tool(&self, tool_name: &str, input: &ToolInput) -> Result<ToolOutput> {
         // Check if it is a built-in tool.
-        let reg = self.tool_registry.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        });
-        if reg.get(tool_name).is_some() {
-            return reg.run_with_fallback(tool_name, input);
+        // Lock scope: dropped before any await point.
+        {
+            let reg = self.tool_registry.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            if reg.get(tool_name).is_some() {
+                return reg.run_with_fallback(tool_name, input);
+            }
         }
 
         // Check if it is a registered skill.
-        let reg = self.skill_registry.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned, recovering");
-            poisoned.into_inner()
+        // Lock scope: dropped before any await point.
+        let skill_name = tool_name.to_string();
+        let skill_input = serde_json::json!({
+            "task_id": input.task_id,
+            "phase": input.phase,
+            "agent_role": input.agent_role,
+            "objective": input.objective,
+            "constraints": input.constraints,
+            "evidence": input.evidence,
+            "payload": input.payload,
         });
-        if let Some(skill) = reg.get(tool_name) {
-            // Convert ToolInput → serde_json::Value for the skill.
-            let skill_input = serde_json::json!({
-                "task_id": input.task_id,
-                "phase": input.phase,
-                "agent_role": input.agent_role,
-                "objective": input.objective,
-                "constraints": input.constraints,
-                "evidence": input.evidence,
-                "payload": input.payload,
-            });
 
-            // The Skill trait is async, but dispatch_tool is sync.  Use a single
-            // block_on on the future directly — no spawn_blocking needed, since
-            // we are already inside a Tokio runtime and the skill itself is
-            // async (not CPU-bound), so a dedicated blocking thread is wasted.
-            let output_value = match tokio::runtime::Handle::try_current() {
-                Ok(handle) => handle.block_on(skill.execute(&skill_input))?,
-                Err(_) => {
-                    anyhow::bail!("ToolBus: dispatch_tool requires a tokio runtime context")
-                }
-            };
+        // Lookup skill while holding the lock, then drop the lock before .await.
+        let skill = self.lookup_skill(&skill_name);
+        if let Some(skill) = skill {
+            let output_value = skill.execute(&skill_input).await?;
 
             return Ok(ToolOutput {
                 success: true,
@@ -568,8 +577,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn execute_known_tool_succeeds() {
+    #[tokio::test]
+    async fn execute_known_tool_succeeds() {
         let bus = make_bus();
         let input = ToolInput {
             task_id: "test-001".to_string(),
@@ -583,22 +592,32 @@ mod tests {
         };
 
         // read_file should succeed (the file exists in the workspace).
-        let result = bus.execute_tool("read_file", &input);
+        let result = bus.execute_tool("read_file", &input).await;
         assert!(result.is_ok(), "read_file failed: {:?}", result.err());
 
-        let output = result.unwrap();
+        let output = result.expect("expected read_file to succeed");
         assert!(output.success, "read_file returned success=false");
 
         // Statistics should have been recorded.
         let stats = bus.tool_stats();
         let read_file_stats = stats.get("read_file");
         assert!(read_file_stats.is_some(), "no stats for read_file");
-        assert_eq!(read_file_stats.unwrap().total_calls, 1);
-        assert_eq!(read_file_stats.unwrap().success_calls, 1);
+        assert_eq!(
+            read_file_stats
+                .expect("expected stats for read_file")
+                .total_calls,
+            1
+        );
+        assert_eq!(
+            read_file_stats
+                .expect("expected stats for read_file")
+                .success_calls,
+            1
+        );
     }
 
-    #[test]
-    fn execute_unknown_tool_returns_error() {
+    #[tokio::test]
+    async fn execute_unknown_tool_returns_error() {
         let bus = make_bus();
         let input = ToolInput {
             task_id: "test-002".to_string(),
@@ -611,7 +630,7 @@ mod tests {
             allowed_base_dir: None,
         };
 
-        let result = bus.execute_tool("nonexistent_tool_xyz", &input);
+        let result = bus.execute_tool("nonexistent_tool_xyz", &input).await;
         assert!(result.is_err(), "expected error for unknown tool");
         assert!(
             result.unwrap_err().to_string().contains("not found"),
@@ -619,10 +638,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn execute_tool_ok_but_logical_failure_tracks_failure_stats() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let _guard = rt.enter();
+    #[tokio::test]
+    async fn execute_tool_ok_but_logical_failure_tracks_failure_stats() {
         let bus = make_bus();
         {
             let mut reg = bus.tool_registry.lock().unwrap_or_else(|poisoned| {
@@ -645,6 +662,7 @@ mod tests {
 
         let output = bus
             .execute_tool("logical_failure", &input)
+            .await
             .expect("tool should return logical failure output");
         assert!(
             !output.success,
@@ -696,10 +714,8 @@ mod tests {
         assert!((prof.success_rate - 1.0).abs() < 0.001);
     }
 
-    #[test]
-    fn execute_skill_echo_roundtrips() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let _guard = rt.enter();
+    #[tokio::test]
+    async fn execute_skill_echo_roundtrips() {
         let bus = make_bus();
         let input = ToolInput {
             task_id: "skill-test".to_string(),
@@ -712,10 +728,10 @@ mod tests {
             allowed_base_dir: None,
         };
 
-        let result = bus.execute_tool("builtin.echo", &input);
+        let result = bus.execute_tool("builtin.echo", &input).await;
         assert!(result.is_ok(), "echo skill failed: {:?}", result.err());
 
-        let output = result.unwrap();
+        let output = result.expect("expected echo skill to succeed");
         assert!(output.success);
         assert_eq!(
             output.result,

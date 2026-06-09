@@ -157,6 +157,7 @@ pub enum MarkdownSegment {
     /// Image with URL and alt text
     Image(String, String),
     /// Soft or hard line break
+    /// F-GAP-57: Reserved for future markdown rendering
     #[allow(dead_code)]
     LineBreak,
     /// Raw text (no markdown interpretation, plain label)

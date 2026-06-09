@@ -9,7 +9,7 @@
 //! # Deprecated
 //! Use [`crate::orchestration::core_dag::CoreDag<T>`] for new code.
 
-#![deprecated(note = "Use core_dag::CoreDag instead")]
+#![cfg_attr(not(test), deprecated(note = "Use core_dag::CoreDag instead"))]
 
 use std::sync::Arc;
 

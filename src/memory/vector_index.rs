@@ -105,7 +105,7 @@ impl VectorIndex {
     }
 
     /// Return the raw vector entries (used by `ClusterIndex` for reclustering).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for vector index entries
     pub(crate) fn entries(&self) -> &[IndexEntry] {
         &self.vectors
     }
@@ -153,7 +153,7 @@ impl VectorIndex {
 
 /// A single cluster: centroid + member entries.
 #[derive(Debug)]
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for cluster-based indexing
 struct Cluster {
     centroid: Vec<f64>,
     members: Vec<(String, Vec<f64>, String)>,
@@ -165,7 +165,7 @@ struct Cluster {
 /// * For small N (≤`flat_threshold`) search falls through to exact flat search.
 /// * For large N, only the closest clusters are examined.
 #[derive(Debug)]
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for cluster index
 pub struct ClusterIndex {
     flat: VectorIndex,
     clusters: Vec<Cluster>,
@@ -175,7 +175,7 @@ pub struct ClusterIndex {
     num_clusters: usize,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for cluster index impl
 impl ClusterIndex {
     /// Create a new `ClusterIndex` wrapping the given flat index.
     ///
@@ -356,7 +356,7 @@ impl ClusterIndex {
     }
 
     /// Access the underlying flat index (read-only).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for flat vector search
     pub fn flat(&self) -> &VectorIndex {
         &self.flat
     }

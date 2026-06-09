@@ -692,8 +692,9 @@ mod tests {
             timestamp: SystemTime::now(),
             id: "test-id".into(),
         };
-        let json = serde_json::to_string(&record).unwrap();
-        let deserialized: DecisionRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&record).expect("decision record should serialize");
+        let deserialized: DecisionRecord =
+            serde_json::from_str(&json).expect("decision record JSON should deserialize");
         assert_eq!(deserialized.approver, "alice");
         assert!(deserialized.approved);
     }
@@ -709,8 +710,9 @@ mod tests {
             confidence: 0.9,
             impact: SuggestionImpact::Medium,
         };
-        let json = serde_json::to_string(&suggestion).unwrap();
-        let deserialized: PolicySuggestion = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&suggestion).expect("policy suggestion should serialize");
+        let deserialized: PolicySuggestion =
+            serde_json::from_str(&json).expect("policy suggestion JSON should deserialize");
         assert_eq!(deserialized.title, "Test");
         assert!((deserialized.suggested_threshold - 0.85).abs() < 1e-6);
     }
@@ -735,19 +737,23 @@ mod tests {
     #[test]
     fn test_decision_variants() {
         assert_eq!(
-            serde_json::from_str::<ApprovalDecision>("\"Approved\"").unwrap(),
+            serde_json::from_str::<ApprovalDecision>("\"Approved\"")
+                .expect("Approved variant should deserialize"),
             ApprovalDecision::Approved
         );
         assert_eq!(
-            serde_json::from_str::<ApprovalDecision>("\"Rejected\"").unwrap(),
+            serde_json::from_str::<ApprovalDecision>("\"Rejected\"")
+                .expect("Rejected variant should deserialize"),
             ApprovalDecision::Rejected
         );
         assert_eq!(
-            serde_json::from_str::<ApprovalDecision>("\"Escalated\"").unwrap(),
+            serde_json::from_str::<ApprovalDecision>("\"Escalated\"")
+                .expect("Escalated variant should deserialize"),
             ApprovalDecision::Escalated
         );
         assert_eq!(
-            serde_json::from_str::<ApprovalDecision>("\"Skipped\"").unwrap(),
+            serde_json::from_str::<ApprovalDecision>("\"Skipped\"")
+                .expect("Skipped variant should deserialize"),
             ApprovalDecision::Skipped
         );
     }

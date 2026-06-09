@@ -2,6 +2,9 @@ import { ChildProcess, spawn } from "child_process";
 import * as http from "http";
 import * as os from "os";
 import * as vscode from "vscode";
+import { Logger } from "./logger";
+
+const log = Logger.forModule("runtimeManager");
 import { i18n, MessageKeys } from "./i18n";
 import {
   FramedMessage,
@@ -286,10 +289,7 @@ export class GoOnManager {
                 }
               }
             } catch (err) {
-              console.warn(
-                "[runtimeManager] JSON parse failed, buffering:",
-                err,
-              );
+              log.warn("JSON parse failed, buffering:", err);
               this.lineBuffer = combined;
               // Cap lineBuffer at 1MB to prevent memory leak
               if (this.lineBuffer.length > 1024 * 1024) {
@@ -498,7 +498,7 @@ export class GoOnManager {
           kill.unref();
         });
       } catch (err) {
-        console.warn("[runtimeManager] forceKill fallback:", err);
+        log.warn("forceKill fallback:", err);
         proc.kill();
       }
     } else {
@@ -663,6 +663,52 @@ export class GoOnManager {
     this.runtimeEnvOverrides = {
       ...this.runtimeEnvOverrides,
       ...overrides,
+    };
+  }
+
+  /**
+   * Process a pasted/dropped image into the multimodal content format
+   * accepted by the chat completion API.
+   *
+   * Returns a content block suitable for inclusion in a messages payload.
+   * The dataUrl is expected to be a base64 data URL (e.g. "data:image/png;base64,...").
+   */
+  static processImageAttachment(
+    dataUrl: string,
+    mimeType: string,
+    name: string,
+  ): {
+    type: "image_url";
+    image_url: { url: string; detail: string };
+  } {
+    return {
+      type: "image_url",
+      image_url: {
+        url: dataUrl,
+        detail: "auto",
+      },
+    };
+  }
+
+  /**
+   * Process a pasted/dropped file (non-image) into the multimodal content format
+   * accepted by the chat completion API.
+   */
+  static processFileAttachment(
+    dataUrl: string,
+    mimeType: string,
+    filename: string,
+  ): {
+    type: "file";
+    file_data: { data: string; filename: string; mime_type: string };
+  } {
+    return {
+      type: "file",
+      file_data: {
+        data: dataUrl,
+        filename: filename || "attachment",
+        mime_type: mimeType || "application/octet-stream",
+      },
     };
   }
 
@@ -1062,7 +1108,7 @@ export class GoOnManager {
       try {
         return this.process.stdin.write(Buffer.from(frame));
       } catch (err) {
-        console.warn("[runtimeManager] stdin write failed:", err);
+        log.warn("stdin write failed:", err);
         return false;
       }
     };
@@ -1216,7 +1262,7 @@ export class GoOnManager {
       this.providerReadyCache = { checkedAt: now, ready: isReady };
       return isReady;
     } catch (err) {
-      console.warn("[runtimeManager] isAnyAiProviderReady failed:", err);
+      log.warn("isAnyAiProviderReady failed:", err);
       this.providerReadyCache = { checkedAt: now, ready: false };
       return false;
     }
@@ -1256,7 +1302,7 @@ export class GoOnManager {
         secretKeyEnv: String(p.secret_key_env || ""),
       }));
     } catch (err) {
-      console.warn("[runtimeManager] fetchAvailableProviders failed:", err);
+      log.warn("fetchAvailableProviders failed:", err);
       return null;
     }
   }

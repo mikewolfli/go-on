@@ -17,8 +17,11 @@ pub mod council; // F-GAP-15
                  // DAG modules — all deprecated in favor of `core_dag`.
                  // New code should use `crate::orchestration::core_dag` directly.
 #[doc = "Deprecated legacy DAG driver — use [`core_dag`] instead."]
-#[allow(deprecated)]
-pub mod dag_driver; // BLUE42 / BLUE64: Remove in next major version — use core_dag instead
+// BLUE42 / BLUE64: Remove in next major version — use core_dag instead
+// Note: #[allow(deprecated)] is intentionally NOT used here — the inner
+// `#![deprecated]` on dag_driver only fires when the module is *accessed*,
+// not at its declaration site.
+pub mod dag_driver;
 #[allow(unused_imports)]
 pub use core_dag::TaskContext; // GAP-B50-05 (migrated from dag_executor to core_dag)
 pub mod diagnostic_feedback;

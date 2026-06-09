@@ -738,7 +738,7 @@ impl DocumentParser {
     }
 
     #[cfg(not(feature = "document-html"))]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for conditional HTML parsing
     fn parse_html_str(&self, _html_str: &str) -> Result<ParsedContent, DocumentParserError> {
         Err(DocumentParserError::feature_disabled("HTML"))
     }
@@ -883,7 +883,7 @@ impl DocumentParser {
     }
 
     #[cfg(not(feature = "document-markdown"))]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for conditional markdown parsing
     fn parse_markdown_str(&self, _md_str: &str) -> Result<ParsedContent, DocumentParserError> {
         Err(DocumentParserError::feature_disabled("Markdown"))
     }
@@ -951,8 +951,8 @@ mod tests {
                 m
             },
         };
-        let json = serde_json::to_string(&content).unwrap();
-        let deserialized: ParsedContent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&content).expect("serialize ParsedContent");
+        let deserialized: ParsedContent = serde_json::from_str(&json).expect("deserialize ParsedContent");
         assert_eq!(deserialized.text_content, "Hello");
         assert_eq!(deserialized.images.len(), 1);
         assert_eq!(deserialized.tables.len(), 1);

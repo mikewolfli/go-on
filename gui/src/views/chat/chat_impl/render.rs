@@ -28,12 +28,14 @@ impl ChatView {
     /// and a copy button — always visible (no collapsing).
     ///
     /// Optimization: Uses a global `MARKDOWN_CACHE` keyed by text hash.
-    /// Large documents (> 500 bytes) check the cache first; on a cache hit
-    /// the pre-parsed segments are rendered directly without comrak parsing.
-    /// The cache is populated by `render_markdown` itself (first frame) and
-    /// by `background_parse_markdown` (background thread).
+    /// All comrak parsing happens on a background thread; the UI thread
+    /// never blocks on markdown parsing.
     ///
-    /// Small documents (≤ 500 bytes) always parse synchronously — fast path.
+    /// Cache hit: renders pre-parsed segments directly (fast path).
+    /// Cache miss: renders plain text immediately (using markdown_to_plain_text)
+    /// for instant visual feedback, then spawns a background thread to parse
+    /// with comrak. When parsing completes, the result is cached and a repaint
+    /// is requested so the rich rendering appears next frame.
     pub(super) fn render_markdown(
         ui: &mut egui::Ui,
         text: &str,
@@ -47,21 +49,7 @@ impl ChatView {
             return;
         }
 
-        // Small documents: parse and render directly (fast path, no cache overhead)
-        if text.len() <= 500 {
-            let mut options = comrak::Options::default();
-            options.extension.strikethrough = true;
-            options.extension.tagfilter = false;
-            options.render.hardbreaks = true;
-            options.render.github_pre_lang = true;
-
-            let arena = comrak::Arena::new();
-            let root = comrak::parse_document(&arena, text, &options);
-            render_node(ui, root, text_color, copy_code_hint);
-            return;
-        }
-
-        // Large documents: check global cache first
+        // Check global cache first (for all document sizes)
         let hash = hash_text(text);
         if let Ok(cache) = markdown_cache().lock() {
             if let Some(cached) = cache.get(&hash) {
@@ -69,22 +57,26 @@ impl ChatView {
             }
         }
 
-        // Cache miss (first frame): parse synchronously, render, and cache
-        let mut options = comrak::Options::default();
-        options.extension.strikethrough = true;
-        options.extension.tagfilter = false;
-        options.render.hardbreaks = true;
-        options.render.github_pre_lang = true;
+        // Cache miss: render plain text immediately instead of "Rendering…"
+        // This provides instant visual feedback while comrak parses in background.
+        Self::render_plain_text_fallback(ui, text, text_color);
 
-        let arena = comrak::Arena::new();
-        let root = comrak::parse_document(&arena, text, &options);
-        render_node(ui, root, text_color, copy_code_hint);
-
-        // Populate the global cache so subsequent frames avoid comrak parsing
-        let cached = parse_markdown_to_segments(text);
-        if let Ok(mut cache) = markdown_cache().lock() {
-            cache.insert(hash, cached);
-        }
+        let text = text.to_string();
+        let ctx = ui.ctx().clone();
+        let _ = std::thread::spawn(move || {
+            let cached = parse_markdown_to_segments(&text);
+            if let Ok(mut cache) = markdown_cache().lock() {
+                // Bounded cache: evict oldest entry if at capacity
+                const MAX_CACHE_ENTRIES: usize = 50;
+                if cache.len() >= MAX_CACHE_ENTRIES {
+                    if let Some(key) = cache.keys().next().copied() {
+                        cache.remove(&key);
+                    }
+                }
+                cache.insert(hash, cached);
+            }
+            ctx.request_repaint();
+        });
     }
 
     /// Render markdown from pre-parsed segments (cache hit path).
@@ -98,6 +90,14 @@ impl ChatView {
         for segment in &cache.segments {
             Self::render_segment(ui, segment, copy_code_hint, text_color);
         }
+    }
+
+    /// Render plain text immediately as a visual fallback while comrak parses
+    /// in the background. Strips basic markdown syntax for readable instant display
+    /// — no comrak overhead, no UI thread blocking.
+    fn render_plain_text_fallback(ui: &mut egui::Ui, text: &str, text_color: egui::Color32) {
+        let plain = Self::markdown_to_plain_text(text);
+        ui.add(egui::Label::new(egui::RichText::new(plain).color(text_color)).wrap());
     }
 
     /// Render a single pre-parsed markdown segment.
@@ -281,36 +281,11 @@ impl ChatView {
         }
     }
 
-    /// Schedule a background markdown parse for a given message index.
-    /// Spawns a `std::thread` to perform the CPU-bound comrak parsing off the
-    /// UI thread. The result is stored in the global `MARKDOWN_CACHE` so that
-    /// `render_markdown` can find it on subsequent frames.
-    ///
-    /// If the text is already in the global cache (e.g. populated by a previous
-    /// `render_markdown` call), this method is a no-op.
-    pub(crate) fn background_parse_markdown(&mut self, msg_idx: usize, text: &str) {
+    /// Try to retrieve a cached markdown render from the global cache.
+    /// Returns `None` if the text hasn't been parsed yet.
+    pub(super) fn try_get_cached_markdown(text: &str) -> Option<CachedMarkdownRender> {
         let hash = hash_text(text);
-
-        // Already cached globally — nothing to do
-        if let Ok(cache) = markdown_cache().lock() {
-            if cache.contains_key(&hash) {
-                return;
-            }
-        }
-
-        // Ensure the cache vector is large enough
-        if msg_idx >= self.cached_markdown_renders.len() {
-            self.cached_markdown_renders
-                .resize_with(msg_idx + 1, || None);
-        }
-
-        let text = text.to_string();
-        let _ = std::thread::spawn(move || {
-            let cached = parse_markdown_to_segments(&text);
-            if let Ok(mut cache) = markdown_cache().lock() {
-                cache.insert(hash, cached);
-            }
-        });
+        markdown_cache().lock().ok()?.get(&hash).cloned()
     }
 }
 
@@ -443,6 +418,8 @@ fn collect_text_children<'a>(node: &'a comrak::nodes::AstNode<'a>) -> String {
 
 // ── Tree traversal (legacy render path) ───────────────────────────────────
 
+#[allow(dead_code)]
+// F-GAP-62: Legacy AST traversal, reserved for custom comrak rendering
 fn render_children<'a>(
     ui: &mut egui::Ui,
     node: &'a comrak::nodes::AstNode<'a>,
@@ -454,6 +431,8 @@ fn render_children<'a>(
     }
 }
 
+#[allow(dead_code)]
+// F-GAP-62: Legacy AST traversal, reserved for custom comrak rendering
 fn render_node<'a>(
     ui: &mut egui::Ui,
     node: &'a comrak::nodes::AstNode<'a>,

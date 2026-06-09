@@ -290,7 +290,9 @@ mod tests {
         );
 
         assert_eq!(payload["messages"][0]["role"], "system");
-        let content = payload["messages"][0]["content"].as_str().unwrap();
+        let content = payload["messages"][0]["content"]
+            .as_str()
+            .expect("messages[0] content should be a string");
         assert!(content.contains("Be thorough"));
         assert!(content.contains("Test everything"));
         assert_eq!(payload["messages"][1]["content"], "do it");

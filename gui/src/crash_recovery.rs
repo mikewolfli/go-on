@@ -22,6 +22,7 @@ impl CrashRecovery {
     }
 
     /// Record a backend crash event.
+    /// F-GAP-60: Reserved for future backend crash monitoring
     #[allow(dead_code)]
     pub fn record_crash(&mut self) {
         self.backend_crash_time = Some(Instant::now());

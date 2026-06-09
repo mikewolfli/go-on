@@ -59,7 +59,6 @@ use crate::governance::security_governor::{
     PolicyCondition, PolicySeverity, SecurityGovernor, SecurityGovernorConfig, SecurityPolicy,
 };
 use crate::orchestration::artifact::{ArtifactLayer, ArtifactProfile};
-#[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
 use crate::orchestration::brain_loop::{BrainLoop, BrainLoopConfig, BrainLoopProfile};
 use crate::orchestration::omnipotent::{OmnipotentMode, OmnipotentProfile};
 use crate::orchestration::promotion_plugin::PromotionRegistry;
@@ -1234,14 +1233,12 @@ pub struct HarnessBus {
     pub feedback_collector: Option<PuaFeedbackCollector>,
     pub profile: Arc<Mutex<PuaGovernanceProfile>>,
     pub drift_engine: Arc<DriftProtectionEngine>,
-    #[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
     pub brain_loop: Arc<BrainLoop>,
     pub artifact_layer: Arc<ArtifactLayer>,
     pub omnipotent_mode: Arc<OmnipotentMode>,
     pub promotion_registry: Arc<Mutex<PromotionRegistry>>,
     pub token_chain: Arc<Mutex<TokenLayerChain>>,
     /// Second brain loop instance for runner profile snapshots (consolidated with flat version).
-    #[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
     pub brain_runner: Arc<BrainLoop>,
     /// Hyper-resilience engine — circuit breakers, failover, self-healing (F-GAP-27)
     pub resilience_engine: Arc<HyperResilienceEngine>,
@@ -1288,13 +1285,11 @@ impl HarnessBus {
             feedback_collector,
             profile: Arc::new(Mutex::new(PuaGovernanceProfile::default())),
             drift_engine: Arc::new(DriftProtectionEngine::new(DriftProtectionConfig::default())),
-            #[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
             brain_loop: Arc::new(BrainLoop::new(BrainLoopConfig::default())),
             artifact_layer: Arc::new(ArtifactLayer::new()),
             omnipotent_mode: Arc::new(OmnipotentMode::new()),
             promotion_registry: Arc::new(Mutex::new(PromotionRegistry::new())),
             token_chain: Arc::new(Mutex::new(TokenLayerChain::new())),
-            #[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
             brain_runner: Arc::new(BrainLoop::new(BrainLoopConfig::default())),
             // GAP-B58-C13: Use shared engine from AcpServer when provided
             resilience_engine: external_resilience_engine.unwrap_or_else(|| {
@@ -1727,7 +1722,6 @@ impl HarnessBus {
     ///
     /// This is now truly async-safe: directly awaits the brain_loop profile
     /// without blocking the tokio worker thread.
-    #[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
     pub async fn brain_profile(&self) -> BrainLoopProfile {
         self.brain_loop.profile().await
     }
@@ -1768,7 +1762,6 @@ impl HarnessBus {
     ///
     /// This is now truly async-safe: directly awaits the brain_runner profile
     /// without blocking the tokio worker thread.
-    #[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
     pub async fn brain_runner_profile(&self) -> BrainLoopProfile {
         self.brain_runner.profile().await
     }

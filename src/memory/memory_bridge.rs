@@ -261,17 +261,17 @@ mod tests {
     #[test]
     fn test_bridge_store_and_promote() {
         let store = Mutex::new(MemoryStore::new(MemoryPolicy::default()));
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tempfile::tempdir().expect("create temp dir");
         let db_path = tmp.path().join("warm.db");
         let cold_path = tmp.path().join("cold");
-        let persistence = MemoryPersistence::new(&db_path, &cold_path, None).unwrap();
+        let persistence = MemoryPersistence::new(&db_path, &cold_path, None).expect("create MemoryPersistence");
 
         // Store an entry via the bridge
         let entry = make_canonical("bridge-test-1", MemoryClass::Observation, 0.80);
-        bridge_store(&store, &persistence, entry).unwrap();
+        bridge_store(&store, &persistence, entry).expect("bridge_store should succeed");
 
         // Promote via the bridge
-        let report = bridge_promote(&store, &persistence).unwrap();
+        let report = bridge_promote(&store, &persistence).expect("bridge_promote should succeed");
         // The entry with usefulness 0.80 from Observation should promote to Episodic
         assert_eq!(
             report.promoted_count, 1,
@@ -281,13 +281,13 @@ mod tests {
 
     #[test]
     fn test_background_task_cancellation() {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = tempfile::tempdir().expect("create temp dir");
         let db_path = tmp.path().join("warm.db");
         let cold_path = tmp.path().join("cold");
-        let persistence = Arc::new(MemoryPersistence::new(&db_path, &cold_path, None).unwrap());
+        let persistence = Arc::new(MemoryPersistence::new(&db_path, &cold_path, None).expect("create MemoryPersistence"));
 
         let cancel = CancellationToken::new();
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
         let mut handle: Option<tokio::task::JoinHandle<()>> = None;
         rt.block_on(async {
             let h = start_auto_migrate_task(Arc::clone(&persistence), Some(cancel.clone()));

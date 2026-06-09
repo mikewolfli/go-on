@@ -101,7 +101,6 @@ use tracing::warn;
 #[cfg(test)]
 pub(crate) use super::decide::{
     configured_candidate_score_weights, recency_score, recent_outcome_score, task_fit_score,
-    CandidateScoreBreakdown, DecisionOutput,
 };
 #[cfg(test)]
 pub(crate) use super::sense::SensingOutput;
@@ -1346,7 +1345,7 @@ impl CapabilityBus {
 }
 
 // ---------------------------------------------------------------------------
-/// Stage output types
+// Stage output types
 // ---------------------------------------------------------------------------
 
 #[cfg(all(test, feature = "sub-bus-tool"))]
@@ -1375,7 +1374,7 @@ pub(crate) mod tests {
             allowed_base_dir: None,
         };
 
-        let result = bus.execute_tool("read_file", &input);
+        let result = bus.execute_tool("read_file", &input).await;
         assert!(
             result.is_ok(),
             "execute_tool should succeed: {:?}",
@@ -1415,8 +1414,11 @@ pub(crate) mod tests {
     #[test]
     fn configured_candidate_score_weights_are_normalized() {
         let weights = super::configured_candidate_score_weights();
-        let total =
-            weights.reputation + weights.recency + weights.task_fit + weights.recent_outcome;
+        let total = weights.reputation
+            + weights.recency
+            + weights.task_fit
+            + weights.recent_outcome
+            + weights.causal_insight;
         assert!((total - 1.0).abs() < 0.0001);
     }
 
@@ -1451,8 +1453,11 @@ pub(crate) mod tests {
     #[test]
     fn configured_weights_env_override_respected_and_normalized() {
         let weights = super::configured_candidate_score_weights();
-        let total =
-            weights.reputation + weights.recency + weights.task_fit + weights.recent_outcome;
+        let total = weights.reputation
+            + weights.recency
+            + weights.task_fit
+            + weights.recent_outcome
+            + weights.causal_insight;
         assert!(
             (total - 1.0).abs() < 0.0001,
             "weights must sum to 1.0, got {}",
@@ -1531,14 +1536,20 @@ pub(crate) mod tests {
         let bus = CapabilityBus::new_default(harness, None);
 
         {
-            let mut graph = bus.capability_graph.lock().unwrap();
+            let mut graph = bus
+                .capability_graph
+                .lock()
+                .expect("capability_graph lock should not be poisoned");
             register_test_agent(&mut graph, "security-auditor", vec!["security"]);
             register_test_agent(&mut graph, "general-coder", vec!["general"]);
             register_test_agent(&mut graph, "fix-specialist", vec!["bugfix", "general"]);
         }
 
         {
-            let mut rep = bus.reputation.lock().unwrap();
+            let mut rep = bus
+                .reputation
+                .lock()
+                .expect("reputation lock should not be poisoned");
             rep.record_outcome("security-auditor", true);
             rep.record_outcome("general-coder", true);
             rep.record_outcome("general-coder", true);
@@ -1599,14 +1610,20 @@ pub(crate) mod tests {
         let bus = CapabilityBus::new_default(harness, None);
 
         {
-            let mut graph = bus.capability_graph.lock().unwrap();
+            let mut graph = bus
+                .capability_graph
+                .lock()
+                .expect("capability_graph lock should not be poisoned");
             register_test_agent(&mut graph, "refactor-expert", vec!["refactor", "general"]);
             register_test_agent(&mut graph, "general-coder", vec!["general"]);
             register_test_agent(&mut graph, "debugger", vec!["bugfix", "general"]);
         }
 
         {
-            let mut rep = bus.reputation.lock().unwrap();
+            let mut rep = bus
+                .reputation
+                .lock()
+                .expect("reputation lock should not be poisoned");
             rep.record_outcome("refactor-expert", true);
             rep.record_outcome("general-coder", true);
             rep.record_outcome("debugger", true);
@@ -1672,12 +1689,18 @@ pub(crate) mod tests {
         let bus = CapabilityBus::new_default(harness, None);
 
         {
-            let mut graph = bus.capability_graph.lock().unwrap();
+            let mut graph = bus
+                .capability_graph
+                .lock()
+                .expect("capability_graph lock should not be poisoned");
             register_test_agent(&mut graph, "test-agent", vec!["general"]);
         }
 
         {
-            let mut rep = bus.reputation.lock().unwrap();
+            let mut rep = bus
+                .reputation
+                .lock()
+                .expect("reputation lock should not be poisoned");
             rep.record_outcome("test-agent", true);
         }
 
@@ -1779,11 +1802,17 @@ pub(crate) mod tests {
         let bus = CapabilityBus::new_default(harness, None);
 
         {
-            let mut graph = bus.capability_graph.lock().unwrap();
+            let mut graph = bus
+                .capability_graph
+                .lock()
+                .expect("capability_graph lock should not be poisoned");
             register_test_agent(&mut graph, "solo-agent", vec!["general"]);
         }
         {
-            let mut rep = bus.reputation.lock().unwrap();
+            let mut rep = bus
+                .reputation
+                .lock()
+                .expect("reputation lock should not be poisoned");
             rep.record_outcome("solo-agent", true);
         }
 
@@ -1816,7 +1845,10 @@ pub(crate) mod tests {
         // Register agents but do NOT add any reputation events so all scores
         // start at the same baseline (reputation=0.5, recency=0.0, etc.)
         {
-            let mut graph = bus.capability_graph.lock().unwrap();
+            let mut graph = bus
+                .capability_graph
+                .lock()
+                .expect("capability_graph lock should not be poisoned");
             register_test_agent(&mut graph, "zulu-agent", vec!["general"]);
             register_test_agent(&mut graph, "alpha-agent", vec!["general"]);
             register_test_agent(&mut graph, "beta-agent", vec!["general"]);

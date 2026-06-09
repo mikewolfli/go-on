@@ -372,7 +372,7 @@ mod tests {
         ];
         let result = detect_repeated_task_pattern(messages);
         assert!(result.is_some());
-        let pattern = result.unwrap();
+        let pattern = result.expect("should detect refactor pattern");
         assert_eq!(pattern.name, "code-refactoring");
         assert_eq!(pattern.occurrence_count, 3);
     }

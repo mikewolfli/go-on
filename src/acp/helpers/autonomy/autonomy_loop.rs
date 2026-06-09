@@ -827,7 +827,8 @@ pub async fn run_autonomy_loop(
                 }
 
                 let tool_results: Vec<(String, LoopDecision)> = if config.use_dag_execution {
-                    #[allow(deprecated)] // TODO: migrate to crate::orchestration::core_dag
+                    // F-GAP-42: Legacy dag_driver — pending migration to core_dag
+                    #[allow(deprecated)] // F-GAP-42 — pending migration to core_dag
                     let (nodes, dag_trace_data) =
                         crate::orchestration::dag_driver::execute_tool_dag(
                             Arc::clone(registry),
@@ -837,7 +838,6 @@ pub async fn run_autonomy_loop(
                             Some(&plan),
                         )
                         .await;
-                    #[allow(deprecated)] // TODO: migrate to crate::orchestration::core_dag
                     let dag_results: Vec<(String, LoopDecision)> = nodes
                         .iter()
                         .map(|n| {
@@ -878,8 +878,7 @@ pub async fn run_autonomy_loop(
                             (n.tool_name.clone(), decision)
                         })
                         .collect::<Vec<(String, LoopDecision)>>();
-                    // TODO: migrate to crate::orchestration::core_dag
-                    #[allow(deprecated)]
+                    // F-GAP-42: Legacy dag_driver — pending migration to core_dag
                     let trace_data = crate::orchestration::dag_driver::dag_trace_to_observability(
                         &dag_trace_data,
                     );

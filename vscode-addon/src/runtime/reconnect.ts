@@ -3,7 +3,9 @@ import * as vscode from "vscode";
 /**
  * Manages reconnection logic with exponential backoff.
  *
- * Backoff formula: min(2000 * 2^attempt, 300000)ms with 30% jitter.
+ * Unified strategy (see contracts/cross-client-sync.md):
+ * Backoff formula: min(1000 * 2^attempt, 30000)ms with 30% jitter.
+ * Attempt 0: ~1000ms, 1: ~2000ms, 2: ~4000ms, 3: ~8000ms, 4: ~16000ms, 5+: ~30000ms
  * Supports unlimited retries for long-running multi-agent workflows.
  */
 export class ReconnectManager {
@@ -27,8 +29,9 @@ export class ReconnectManager {
 
   /** Calculate exponential backoff delay for the given attempt. */
   backoffMs(attempt: number): number {
-    const baseDelay = 2000 * Math.pow(2, attempt);
-    const cappedDelay = Math.min(baseDelay, 300000);
+    // Unified: 1000ms base, 30s cap, 30% jitter
+    const baseDelay = 1000 * Math.pow(2, attempt);
+    const cappedDelay = Math.min(baseDelay, 30000);
     const jitter = 0.7 + Math.random() * 0.3;
     return Math.round(cappedDelay * jitter);
   }

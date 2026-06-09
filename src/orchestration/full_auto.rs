@@ -24,7 +24,6 @@ use tracing::{debug, info, warn};
 
 use crate::i18n::runtime::tf;
 use crate::intelligence::adaptive_selector::AdaptiveModelSelector;
-#[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
 use crate::orchestration::brain_loop::{
     BrainLoop, BrainLoopConfig, BrainLoopPhase, BrainLoopStep, StepStatus,
 };
@@ -773,7 +772,6 @@ impl FullAutoFlow {
     /// 6. Return a complete `AutoExecutionReport`.
     ///
     /// This is an `async` method because skill execution may involve I/O.
-    #[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
     pub async fn run(&mut self, task: &str) -> AutoExecutionReport {
         let flow_start = Instant::now();
         let mut errors: Vec<String> = Vec::new();

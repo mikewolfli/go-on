@@ -272,14 +272,32 @@ mod tests {
     #[test]
     fn test_run_code_quality_scan() {
         let report = run_code_quality_scan();
-        // Stub returns clean.
-        assert!(report.is_clean());
-        assert!(report.scanned_at_ms > 0);
+        // The scan runs cargo clippy as a subprocess. We validate the report
+        // structure is valid regardless of whether clippy found issues.
+        assert!(report.scanned_at_ms > 0, "scan should produce a timestamp");
+        // health_score is 1.0 if no issues, lower if issues found, 0.0 if scan failed.
+        assert!(
+            report.health_score >= 0.0,
+            "health_score must be non-negative"
+        );
+        assert!(
+            report.health_score <= 1.0,
+            "health_score must not exceed 1.0"
+        );
     }
 
     #[test]
     fn test_post_plan_quality_hook() {
         let report = post_plan_quality_hook();
-        assert!(report.is_clean());
+        // post_plan_quality_hook delegates to run_code_quality_scan.
+        // Validate report structure.
+        assert!(
+            report.scanned_at_ms > 0,
+            "post_plan hook should produce a timestamp"
+        );
+        assert!(
+            report.health_score >= 0.0,
+            "health_score must be non-negative"
+        );
     }
 }

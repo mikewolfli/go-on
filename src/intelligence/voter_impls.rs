@@ -1,13 +1,20 @@
 //! Concrete [`AgentVoter`] implementations for the weighted-vote / Delphi-method
 //! debate system.
 //!
-//! Provides three voter strategies:
+//! Provides five voter strategies:
 //!
 //! | Voter | Strategy |
 //! |---|---|
 //! | [`CapabilityBusVoter`] | Wraps `Arc<CapabilityBus>`, votes via capability matching |
 //! | [`LocalAgentVoter`] | Keyword-heuristic voter using `contains` checks |
 //! | [`RationalizationGuardVoter`] | Safety-guard voter based on confidence thresholds |
+//! | [`DeepSeekVoter`] | LLM-based voter via DeepSeek API |
+//! | [`LocalVoter`] | Configurable local model voter using `AgentConfig` |
+//!
+//! **Wiring**: The `#[async_trait]` AgentVoter trait allows all voters to run
+//! asynchronously. Voters are registered in `hub::init_intel_voters()` and
+//! participate in the Delphi debate path via
+//! `hub::consensus_vote_with_reputation()`.
 
 use std::sync::Arc;
 
@@ -37,7 +44,12 @@ pub struct CapabilityBusVoter {
 
 impl CapabilityBusVoter {
     /// Create a new voter wrapping the given capability bus.
-    /// TODO-BLUE64: Wire into hub.rs Delphi debate path once async AgentVoter is integrated.
+    ///
+    /// **Wiring status**: The async `AgentVoter` trait is now integrated via
+    /// `#[async_trait]`, and this voter is registered in `hub::init_intel_voters()`.
+    /// The Delphi debate path (`consensus_vote_with_reputation` with
+    /// `VoteMode::DelphiDebate`) delegates to the stored voters. The TODO-BLUE64
+    /// wiring is **complete**.
     pub fn new(name: impl Into<String>, bus: Arc<CapabilityBus>) -> Self {
         Self {
             name: name.into(),

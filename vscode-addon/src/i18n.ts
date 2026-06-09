@@ -18,6 +18,9 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { Logger } from "./logger";
+
+const log = Logger.forModule("i18n");
 
 interface I18nMessages {
   [key: string]: string | I18nMessages;
@@ -171,6 +174,11 @@ export const MessageKeys = {
   runtimeDownloadComplete: "messages.runtimeDownloadComplete",
   requestFailed: "chat.requestFailed",
   responseLabel: "chat.responseLabel",
+  imagePasted: "chat.imagePasted",
+  fileDropped: "chat.fileDropped",
+  multimodalInput: "chat.multimodalInput",
+  imageAttachment: "chat.imageAttachment",
+  fileAttachment: "chat.fileAttachment",
 
   // Config Wizard
   configWizardTitle: "configWizard.title",
@@ -436,7 +444,7 @@ class I18nManager {
         const parsed = JSON.parse(env.VSCODE_NLS_CONFIG);
         lang = parsed.locale || "en";
       } catch (err) {
-        console.warn("[i18n] detectLanguage parse failed:", err);
+        log.warn("detectLanguage parse failed:", err);
         lang = env.LANG || env.LANGUAGE || "en";
       }
     } else {
@@ -502,7 +510,7 @@ class I18nManager {
         return;
       }
     } catch (err) {
-      console.warn("[i18n] loadMessages failed for locale path:", err);
+      log.warn("loadMessages failed for locale path:", err);
     }
 
     // Fallback: try relative path for development
@@ -521,7 +529,7 @@ class I18nManager {
         return;
       }
     } catch (err) {
-      console.warn("[i18n] loadMessages failed for dev path:", err);
+      log.warn("loadMessages failed for dev path:", err);
     }
 
     // If all else fails, use built-in minimal fallback
@@ -630,7 +638,7 @@ class I18nManager {
           }
         }
       } catch (err) {
-        console.warn("[i18n] getFallbackValue failed:", err);
+        log.warn("getFallbackValue failed:", err);
         return key;
       }
     }

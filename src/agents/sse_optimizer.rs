@@ -257,7 +257,9 @@ mod tests {
         let mut collector = AdaptiveBatchCollector::new();
         assert!(collector.push("hello ").is_none());
         assert!(collector.push("world").is_none());
-        let batch = collector.flush().unwrap();
+        let batch = collector
+            .flush()
+            .expect("flush should return the buffered text");
         assert_eq!(batch, "hello world");
     }
 
@@ -267,7 +269,7 @@ mod tests {
         let big = "x".repeat(260);
         let result = collector.push(&big);
         assert!(result.is_some());
-        assert_eq!(result.unwrap().len(), 260);
+        assert_eq!(result.expect("push should flush the batch").len(), 260);
     }
 
     #[test]

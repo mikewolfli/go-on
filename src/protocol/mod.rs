@@ -3,6 +3,7 @@ pub mod acp_methods;
 pub mod mcp_server;
 pub mod negotiator;
 pub mod session_sync;
+pub mod state_sync;
 // BLUE56-GAP-A03: multi_channel_transport.rs (v2) removed — it was dead code with zero callers.
 // V1 `transport::MultiChannelTransport` has all essential features (QoS, TTL, priority).
 // V2's unique serde_json::Value payload support can be re-added when a concrete need arises.
@@ -21,5 +22,7 @@ pub mod websocket;
 // Re-exports
 #[allow(unused_imports)]
 pub use session_sync::*;
+#[allow(unused_imports)]
+pub use state_sync::*;
 #[allow(unused_imports)]
 pub use websocket::*;

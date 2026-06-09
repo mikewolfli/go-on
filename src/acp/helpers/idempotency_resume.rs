@@ -1,6 +1,6 @@
 use serde_json::{json, Value};
 
-#[allow(dead_code)] // helper for derive_idempotency_continuation (currently dead)
+#[allow(dead_code)] // F-GAP-49 — reserved for idempotency path readers (used by derive_idempotency_continuation)
 fn bool_at_path(payload: &Value, path: &[&str]) -> bool {
     let mut current = payload;
     for segment in path {
@@ -12,7 +12,7 @@ fn bool_at_path(payload: &Value, path: &[&str]) -> bool {
     current.as_bool().unwrap_or(false)
 }
 
-#[allow(dead_code)] // helper for derive_idempotency_continuation (currently dead)
+#[allow(dead_code)] // F-GAP-49 — reserved for idempotency path readers
 fn string_at_path(payload: &Value, path: &[&str]) -> Option<String> {
     let mut current = payload;
     for segment in path {
@@ -22,7 +22,7 @@ fn string_at_path(payload: &Value, path: &[&str]) -> Option<String> {
     current.as_str().map(|value| value.to_string())
 }
 
-#[allow(dead_code)] // helper for derive_idempotency_continuation (currently dead)
+#[allow(dead_code)] // F-GAP-49 — reserved for idempotency path readers
 fn u64_at_path(payload: &Value, path: &[&str]) -> Option<u64> {
     let mut current = payload;
     for segment in path {

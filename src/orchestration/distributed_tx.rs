@@ -153,6 +153,7 @@ impl DistributedTransaction {
     /// Count participants by their acknowledge status.
     #[cfg(test)]
     #[allow(dead_code)]
+    // F-GAP-49 — reserved for future use
     pub fn count_acknowledgements(&self) -> (usize, usize) {
         let acked = self.participants.iter().filter(|p| p.acknowledged).count();
         let total = self.participants.len();
@@ -486,13 +487,16 @@ mod tests {
         coord
             .add_participant(&tx_id, "node-1", "127.0.0.1:9001")
             .await
-            .unwrap();
+            .expect("should add participant node-1");
         coord
             .add_participant(&tx_id, "node-2", "127.0.0.1:9002")
             .await
-            .unwrap();
+            .expect("should add participant node-2");
 
-        let tx = coord.get_transaction(&tx_id).await.unwrap();
+        let tx = coord
+            .get_transaction(&tx_id)
+            .await
+            .expect("should get transaction after adding participants");
         assert_eq!(tx.participants.len(), 2);
     }
 
@@ -505,11 +509,11 @@ mod tests {
         coord
             .add_participant(&tx_id, "node-1", "127.0.0.1:9001")
             .await
-            .unwrap();
+            .expect("should add participant node-1 for 2pc");
         coord
             .add_participant(&tx_id, "node-2", "127.0.0.1:9002")
             .await
-            .unwrap();
+            .expect("should add participant node-2 for 2pc");
 
         let result = coord.execute_2pc(&tx_id).await;
         assert_eq!(result.status, DistributedTxStatus::Committed);
@@ -538,12 +542,18 @@ mod tests {
         coord
             .add_participant(&tx_id, "node-1", "127.0.0.1:9001")
             .await
-            .unwrap();
+            .expect("should add single participant for 2pc");
 
         let result = coord.execute_2pc(&tx_id).await;
         assert_eq!(result.status, DistributedTxStatus::Committed);
-        assert!(result.participants[0].voted_yes);
-        assert!(result.participants[0].acknowledged);
+        assert!(
+            result.participants[0].voted_yes,
+            "participant should vote yes"
+        );
+        assert!(
+            result.participants[0].acknowledged,
+            "participant should acknowledge"
+        );
     }
 
     #[test]

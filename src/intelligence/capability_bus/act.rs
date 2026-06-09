@@ -15,7 +15,7 @@ impl CapabilityBus {
     // ------------------------------------------------------------------
 
     /// Execute a tool through the ToolBus with HarnessBus validation
-    pub fn execute_tool(
+    pub async fn execute_tool(
         &self,
         tool_name: &str,
         input: &crate::orchestration::tool::ToolInput,
@@ -42,7 +42,7 @@ impl CapabilityBus {
         // Step 2: Execute via ToolBus
         let start = Instant::now();
         #[cfg(feature = "sub-bus-tool")]
-        let result = self.tool_bus.execute_tool(tool_name, input);
+        let result = self.tool_bus.execute_tool(tool_name, input).await;
         #[cfg(not(feature = "sub-bus-tool"))]
         let result: anyhow::Result<crate::orchestration::tool::ToolOutput> =
             Err(anyhow::anyhow!("ToolBus not available in this profile"));

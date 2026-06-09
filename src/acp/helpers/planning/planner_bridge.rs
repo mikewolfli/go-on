@@ -34,7 +34,6 @@ pub fn build_planner_bridge(
 
 /// Apply DAG phased execution order to workflow artifact.
 /// Returns true if workflow execution order was updated.
-#[allow(deprecated)] // TODO: migrate to crate::orchestration::core_dag
 pub fn apply_dag_order_to_workflow(
     workflow: &mut WorkflowGeneratedArtifact,
     bridge: &PlannerExecutionBridge,
@@ -48,7 +47,6 @@ pub fn apply_dag_order_to_workflow(
 }
 
 /// Build rich planner execution graph payload for response observability.
-#[allow(deprecated)] // TODO: migrate to crate::orchestration::core_dag
 pub fn planner_execution_graph_payload(bridge: &PlannerExecutionBridge) -> Value {
     let mut payload = dag_progress_with_suggested_next(bridge);
     if let Some(obj) = payload.as_object_mut() {

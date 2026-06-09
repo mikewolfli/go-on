@@ -640,11 +640,11 @@ mod tests {
     /// Verify that resolve_safe_path with file that exists works.
     #[test]
     fn test_resolve_safe_path_existing_file() {
-        let cwd = std::env::current_dir().unwrap();
+        let cwd = std::env::current_dir().expect("current directory should be available");
         // Try to resolve the src dir which definitely exists
         let result = resolve_safe_path("src", false);
         assert!(result.is_ok(), "src dir should be resolvable");
-        let path = result.unwrap();
+        let path = result.expect("resolve_safe_path should succeed for src dir");
         assert!(
             path.starts_with(&cwd),
             "resolved path should start with cwd"

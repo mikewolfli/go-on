@@ -246,7 +246,7 @@ pub fn routing_handles(server: &AcpServer) -> Result<(Arc<FlowManager>, Arc<Agen
 }
 
 /// Get cache handle.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49: reserved for runtime diagnostics access
 #[must_use]
 pub fn cache_handle(server: &AcpServer) -> Option<Arc<crate::cache::ResponseCache>> {
     server.cache_deps.cache.response_cache.clone()
@@ -267,21 +267,21 @@ pub fn artifact_ledger(_server: &AcpServer) -> crate::reinforcement::ArtifactLed
 }
 
 /// Get vector store handle.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49: reserved for runtime diagnostics access
 #[must_use]
 pub fn vector_store_handle(server: &AcpServer) -> Option<Arc<VectorStore>> {
     server.cache_deps.cache.vector_store.clone()
 }
 
 /// Get vector configuration snapshot.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49: reserved for runtime diagnostics access
 #[must_use]
 pub fn vector_config_snapshot(server: &AcpServer) -> Option<VectorConfig> {
     server.cache_deps.vector_config.clone()
 }
 
 /// Get autotune handle.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49: reserved for runtime diagnostics access
 #[must_use]
 pub fn autotune_handle(server: &AcpServer) -> Option<Arc<tokio::sync::Mutex<AutoTuneState>>> {
     server.cache_deps.autotune.clone()

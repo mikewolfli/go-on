@@ -851,7 +851,7 @@ mod tests {
 
         let budget = std::sync::Mutex::new(TenantBudgetEnforcer::new());
         {
-            let mut b = budget.lock().unwrap();
+            let mut b = budget.lock().expect("should acquire budget lock");
             b.set_quota(TenantResourceQuota {
                 tenant_id: "tenant-a".to_string(),
                 daily_token_limit: 1_000_000,
@@ -877,7 +877,7 @@ mod tests {
 
         let budget = std::sync::Mutex::new(TenantBudgetEnforcer::new());
         {
-            let mut b = budget.lock().unwrap();
+            let mut b = budget.lock().expect("should acquire budget lock");
             b.set_quota(TenantResourceQuota {
                 tenant_id: "tenant-b".to_string(),
                 daily_token_limit: 1_000_000,
@@ -913,7 +913,7 @@ mod tests {
 
         let budget = std::sync::Mutex::new(TenantBudgetEnforcer::new());
         {
-            let mut b = budget.lock().unwrap();
+            let mut b = budget.lock().expect("should acquire budget lock");
             b.set_quota(TenantResourceQuota {
                 tenant_id: "acme".to_string(),
                 daily_token_limit: 500_000,

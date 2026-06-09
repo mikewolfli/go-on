@@ -27,6 +27,7 @@ pub fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
 }
 
 /// Save with backup: copy existing file to `.bak` before atomic write.
+/// F-GAP-61: Reserved for future safe-save operations
 #[allow(dead_code)]
 pub fn save_with_backup(path: &Path, content: &str) -> std::io::Result<()> {
     if path.exists() {

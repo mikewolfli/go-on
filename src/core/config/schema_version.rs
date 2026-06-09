@@ -310,7 +310,7 @@ mod tests {
         let manager = SchemaManager::new();
         let path = manager.find_migration_path(&SchemaVersion::CURRENT);
         assert!(path.is_some());
-        assert!(path.unwrap().is_empty());
+        assert!(path.expect("migration path should exist for CURRENT").is_empty());
     }
 
     #[test]
@@ -331,7 +331,7 @@ mod tests {
         let path = manager.find_migration_path(&current);
         assert!(path.is_some(), "Migration path should be found for CURRENT");
         assert!(
-            path.as_ref().unwrap().is_empty(),
+            path.as_ref().expect("migration path should be Some for CURRENT").is_empty(),
             "Same version should produce empty migration path"
         );
 

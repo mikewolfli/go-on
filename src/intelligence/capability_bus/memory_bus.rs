@@ -466,7 +466,7 @@ mod tests {
         bus.store("k1", b"hello world".to_vec(), &strategy);
         let result = bus.lookup("k1", &strategy);
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), b"hello world");
+        assert_eq!(result.expect("lookup should return value"), b"hello world");
 
         let p = bus.profile();
         assert!(p.total_cache_hits >= 1);

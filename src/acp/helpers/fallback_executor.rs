@@ -190,13 +190,17 @@ mod tests {
                 content: "hello".into(),
             }];
             let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(64);
-            let _permit = semaphore.clone().acquire_owned().await.unwrap();
+            let _permit = semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .expect("semaphore should not be closed during test");
 
             let start = std::time::Instant::now();
             agent
                 .chat(msgs, None, None, crate::agent::StreamingSender::new(tx))
                 .await
-                .unwrap();
+                .expect("MockChatAgent should always return Ok");
             let duration_ms = start.elapsed().as_millis() as u64;
 
             let mut response = String::new();
@@ -245,6 +249,10 @@ mod tests {
 
         let best = select_best_fallback_result(&results);
         assert!(best.is_some());
-        assert_eq!(best.unwrap().agent_name, "b");
+        assert_eq!(
+            best.expect("select_best_fallback_result should return Some for valid results")
+                .agent_name,
+            "b"
+        );
     }
 }

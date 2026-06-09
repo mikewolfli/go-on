@@ -582,7 +582,12 @@
     "thinking": "Thinking...",
     "responseReceived": "Response received",
     "requestFailed": "Request failed: {0}",
-    "responseLabel": "Response: {0}"
+    "responseLabel": "Response: {0}",
+    "imagePasted": "Image pasted from clipboard",
+    "fileDropped": "File dropped: {0}",
+    "multimodalInput": "Multimodal input (text + images/files)",
+    "imageAttachment": "Image attachment",
+    "fileAttachment": "File attachment"
   },
   "configWizard": {
     "title": "Go-On Configuration Wizard",

@@ -119,7 +119,7 @@ impl MetacognitivePersistence {
     }
 
     /// Remove the saved snapshot from disk.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49: reserved for metacognitive snapshot cleanup
     pub fn clear(&self) -> std::io::Result<()> {
         let path = self.snapshot_path();
         if path.exists() {

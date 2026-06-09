@@ -336,30 +336,32 @@ mod tests {
     fn dispatch_server_unsupported_protocol_returns_error() {
         // We can't easily run dispatch_server without a full server, but we
         // can verify that unsupported protocol modes would bail.
-        let result = tokio::runtime::Runtime::new().unwrap().block_on(async {
-            let cache_dir = tempfile::tempdir().unwrap();
-            let config_path = cache_dir.path().join("config.toml");
+        let result = tokio::runtime::Runtime::new()
+            .expect("should create tokio runtime")
+            .block_on(async {
+                let cache_dir = tempfile::tempdir().expect("should create temp dir");
+                let config_path = cache_dir.path().join("config.toml");
 
-            let registry = Arc::new(AgentRegistry::new());
-            let client = reqwest::Client::new();
+                let registry = Arc::new(AgentRegistry::new());
+                let client = reqwest::Client::new();
 
-            let outcome = dispatch_server(
-                registry,
-                None,
-                None,
-                &config_path,
-                crate::config::RuntimeConfig::default(),
-                "unsupported_mode",
-                "127.0.0.1:0",
-                None,
-                None,
-                None,
-                client,
-            )
-            .await;
+                let outcome = dispatch_server(
+                    registry,
+                    None,
+                    None,
+                    &config_path,
+                    crate::config::RuntimeConfig::default(),
+                    "unsupported_mode",
+                    "127.0.0.1:0",
+                    None,
+                    None,
+                    None,
+                    client,
+                )
+                .await;
 
-            outcome
-        });
+                outcome
+            });
 
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
@@ -371,7 +373,9 @@ mod tests {
     #[tokio::test]
     async fn initialize_cache_disabled_returns_none() {
         let config_path = Path::new("/tmp");
-        let result = initialize_cache(config_path, None).await.unwrap();
+        let result = initialize_cache(config_path, None)
+            .await
+            .expect("initialize_cache(None) should succeed");
         assert!(result.is_none());
     }
 
@@ -385,14 +389,18 @@ mod tests {
             max_entries: 1000,
             connection_string: None,
         };
-        let result = initialize_cache(config_path, Some(cfg)).await.unwrap();
+        let result = initialize_cache(config_path, Some(cfg))
+            .await
+            .expect("initialize_cache(disabled) should succeed");
         assert!(result.is_none());
     }
 
     #[tokio::test]
     async fn initialize_vector_store_disabled_returns_none() {
         let config_path = Path::new("/tmp");
-        let result = initialize_vector_store(config_path, None).await.unwrap();
+        let result = initialize_vector_store(config_path, None)
+            .await
+            .expect("initialize_vector_store(None) should succeed");
         assert!(result.is_none());
     }
 
@@ -416,7 +424,7 @@ mod tests {
         };
         let result = initialize_vector_store(config_path, Some(cfg))
             .await
-            .unwrap();
+            .expect("initialize_vector_store(disabled) should succeed");
         assert!(result.is_none());
     }
 
@@ -425,7 +433,9 @@ mod tests {
     #[tokio::test]
     async fn initialize_autotune_disabled_returns_none() {
         let config_path = Path::new("/tmp");
-        let (state, cfg, path) = initialize_autotune(config_path, None).await.unwrap();
+        let (state, cfg, path) = initialize_autotune(config_path, None)
+            .await
+            .expect("initialize_autotune(None) should succeed");
         assert!(state.is_none());
         assert!(cfg.is_none());
         assert!(path.is_none());
@@ -436,7 +446,9 @@ mod tests {
         let config_path = Path::new("/tmp");
         // AutoTuneConfig does not impl Default, so we construct via load_or_default path
         // by providing a None config which returns (None, None, None)
-        let (state, _, _) = initialize_autotune(config_path, None).await.unwrap();
+        let (state, _, _) = initialize_autotune(config_path, None)
+            .await
+            .expect("initialize_autotune(None) should succeed");
         assert!(state.is_none());
     }
 }

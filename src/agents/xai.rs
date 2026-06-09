@@ -249,7 +249,7 @@ mod tests {
         assert_eq!(payload["messages"][0]["role"], "system");
         assert!(payload["messages"][0]["content"]
             .as_str()
-            .unwrap()
+            .expect("messages[0] content should be a string")
             .contains("Be concise"));
         assert_eq!(payload["messages"][1]["content"], "do it");
     }
@@ -262,6 +262,6 @@ mod tests {
         assert!(models.iter().any(|m| m.id == "grok-3-mini"));
         let default = agent().default_model();
         assert!(default.is_some());
-        assert_eq!(default.unwrap().id, "grok-3");
+        assert_eq!(default.expect("default model should be Some").id, "grok-3");
     }
 }

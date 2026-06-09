@@ -18,3 +18,7 @@ fastrand.workspace = true
 
 [dev-dependencies]
 tokio-test.workspace = true
+
+[[example]]
+name = "multi_agent_orchestration"
+path = "examples/multi_agent_orchestration.rs"

@@ -428,7 +428,7 @@ impl std::fmt::Debug for TransactionScope {
 /// If any tool fails, the coordinator triggers abort and rollback via
 /// the `TransactionScope` compensation actions.
 // Reserved for future 2PC integration (F-GAP-29).
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for tool subsystem
 // F-GAP-49 — reserved for future use
 pub async fn execute_with_two_phase_coordination(
     coordinator: &TwoPhaseCoordinator,

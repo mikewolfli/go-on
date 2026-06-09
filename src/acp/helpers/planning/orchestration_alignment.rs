@@ -333,7 +333,9 @@ mod tests {
         assert!(alignment.get("executed_tools").is_some());
         assert!(alignment.get("missing_steps").is_some());
 
-        let coverage = alignment["coverage_ratio"].as_f64().unwrap();
+        let coverage = alignment["coverage_ratio"]
+            .as_f64()
+            .expect("coverage_ratio should be a f64");
         assert!(
             (0.0..=1.0).contains(&coverage),
             "coverage should be in [0, 1]"
@@ -346,8 +348,16 @@ mod tests {
         let results: Vec<Value> = vec![];
         let alignment = derive_plan_trace_alignment(&plan, &results);
 
-        assert_eq!(alignment["executed_tools"].as_array().unwrap().len(), 0);
-        let coverage = alignment["coverage_ratio"].as_f64().unwrap();
+        assert_eq!(
+            alignment["executed_tools"]
+                .as_array()
+                .expect("executed_tools should be an array")
+                .len(),
+            0
+        );
+        let coverage = alignment["coverage_ratio"]
+            .as_f64()
+            .expect("coverage_ratio should be a f64");
         assert!((0.0..=1.0).contains(&coverage));
     }
 
@@ -362,13 +372,17 @@ mod tests {
         assert!(decisions.get("unmapped_nodes").is_some());
         assert!(decisions.get("mapping_ratio").is_some());
 
-        let mapping_ratio = decisions["mapping_ratio"].as_f64().unwrap();
+        let mapping_ratio = decisions["mapping_ratio"]
+            .as_f64()
+            .expect("mapping_ratio should be a f64");
         assert!(
             (0.0..=1.0).contains(&mapping_ratio),
             "mapping_ratio should be in [0, 1]"
         );
 
-        let nodes = decisions["nodes"].as_array().unwrap();
+        let nodes = decisions["nodes"]
+            .as_array()
+            .expect("nodes should be an array");
         assert!(!nodes.is_empty(), "should have at least one node");
     }
 
@@ -381,25 +395,67 @@ mod tests {
         ];
         let decisions = derive_runtime_subtask_node_decisions(&records);
 
-        assert_eq!(decisions["mapped_nodes"].as_u64().unwrap(), 1);
-        assert_eq!(decisions["unmapped_nodes"].as_u64().unwrap(), 2);
-        let nodes = decisions["nodes"].as_array().unwrap();
+        assert_eq!(
+            decisions["mapped_nodes"]
+                .as_u64()
+                .expect("mapped_nodes should be a u64"),
+            1
+        );
+        assert_eq!(
+            decisions["unmapped_nodes"]
+                .as_u64()
+                .expect("unmapped_nodes should be a u64"),
+            2
+        );
+        let nodes = decisions["nodes"]
+            .as_array()
+            .expect("nodes should be an array");
         assert_eq!(nodes.len(), 3);
 
         // First should be tool_executed
-        assert_eq!(nodes[0]["decision"].as_str().unwrap(), "tool_executed");
+        assert_eq!(
+            nodes[0]["decision"]
+                .as_str()
+                .expect("decision should be a string"),
+            "tool_executed"
+        );
         // Second should be replan_required
-        assert_eq!(nodes[1]["decision"].as_str().unwrap(), "replan_required");
+        assert_eq!(
+            nodes[1]["decision"]
+                .as_str()
+                .expect("decision should be a string"),
+            "replan_required"
+        );
         // Third should be observe_only (not a terminal outcome)
-        assert_eq!(nodes[2]["decision"].as_str().unwrap(), "observe_only");
+        assert_eq!(
+            nodes[2]["decision"]
+                .as_str()
+                .expect("decision should be a string"),
+            "observe_only"
+        );
     }
 
     #[test]
     fn test_derive_runtime_subtask_node_decisions_empty_records() {
         let records: Vec<Value> = vec![];
         let decisions = derive_runtime_subtask_node_decisions(&records);
-        assert_eq!(decisions["mapped_nodes"].as_u64().unwrap(), 0);
-        assert_eq!(decisions["unmapped_nodes"].as_u64().unwrap(), 0);
-        assert_eq!(decisions["mapping_ratio"].as_f64().unwrap(), 1.0);
+        assert_eq!(
+            decisions["mapped_nodes"]
+                .as_u64()
+                .expect("mapped_nodes should be a u64"),
+            0
+        );
+        assert_eq!(
+            decisions["unmapped_nodes"]
+                .as_u64()
+                .expect("unmapped_nodes should be a u64"),
+            0
+        );
+        assert_eq!(
+            decisions["mapping_ratio"]
+                .as_f64()
+                .expect("mapping_ratio should be a f64"),
+            1.0
+        );
     }
 }

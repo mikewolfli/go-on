@@ -357,7 +357,10 @@ mod tests {
     fn validate_storage_key_accepts_valid_keys() {
         let result = validate_storage_key("my-key_1/abc:def", "test", 256);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "my-key_1/abc:def");
+        assert_eq!(
+            result.expect("validate_storage_key should return Ok for valid keys"),
+            "my-key_1/abc:def"
+        );
     }
 
     #[test]
@@ -501,7 +504,13 @@ mod tests {
         // stale branch should be dropped (no checkpoint with cp-3)
         assert!(!state.branch_heads.contains_key("stale"));
         // main branch should still point to cp-2
-        assert_eq!(state.branch_heads.get("main").unwrap(), "cp-2");
+        assert_eq!(
+            state
+                .branch_heads
+                .get("main")
+                .expect("main branch should still exist"),
+            "cp-2"
+        );
     }
 
     // ── enforce_checkpoint_capacity ────────────────────────────────────
@@ -641,7 +650,9 @@ mod tests {
         };
         let violation = pipeline_gate_violation(&task, &routing, ApprovalStrategy::None);
         assert!(violation.is_some());
-        assert!(violation.unwrap().contains("no roles"));
+        assert!(violation
+            .expect("violation should be present for missing roles")
+            .contains("no roles"));
     }
 
     #[test]
@@ -667,7 +678,9 @@ mod tests {
         };
         let violation = pipeline_gate_violation(&task, &routing, ApprovalStrategy::None);
         assert!(violation.is_some());
-        assert!(violation.unwrap().contains("dual review"));
+        assert!(violation
+            .expect("violation should be present when dual review is missing")
+            .contains("dual review"));
     }
 
     #[test]
@@ -693,7 +706,9 @@ mod tests {
         };
         let violation = pipeline_gate_violation(&task, &routing, ApprovalStrategy::Dual);
         assert!(violation.is_some());
-        assert!(violation.unwrap().contains("safeguards"));
+        assert!(violation
+            .expect("violation should be present for missing safeguards")
+            .contains("safeguards"));
     }
 
     #[test]
@@ -793,7 +808,9 @@ mod tests {
     #[test]
     fn normalize_trace_attributes_adds_default_fields() {
         let result = normalize_trace_attributes("phase.start", "coding", "ok", Value::Null);
-        let obj = result.as_object().unwrap();
+        let obj = result
+            .as_object()
+            .expect("normalize_trace_attributes should return an object");
         assert_eq!(obj["event_type"], "phase.start");
         assert_eq!(obj["phase"], "coding");
         assert_eq!(obj["policy_status"], "pass");
@@ -803,7 +820,9 @@ mod tests {
     fn normalize_trace_attributes_preserves_input_object() {
         let input = json!({"existing": "value"});
         let result = normalize_trace_attributes("test", "phase-1", "error", input);
-        let obj = result.as_object().unwrap();
+        let obj = result
+            .as_object()
+            .expect("normalize_trace_attributes should preserve the input object");
         assert_eq!(obj["existing"], "value");
         assert_eq!(obj["policy_status"], "error");
     }

@@ -1,5 +1,8 @@
 import * as crypto from "crypto";
+import { Logger } from "../logger";
 import { FramedMessage } from "../protocolContract";
+
+const log = Logger.forModule("framedProtocol");
 
 // ── Framed stdio protocol ────────────────────────────────────────────
 
@@ -157,7 +160,7 @@ export class FramedReader {
           this.callbacks.onMessage(msg);
         }
       } catch (err) {
-        console.warn("[framedProtocol] processBuffer parse failed:", err);
+        log.warn("processBuffer parse failed:", err);
         this.callbacks.onError?.(
           new Error(`Invalid JSON in frame: ${jsonStr.slice(0, 200)}`),
         );
@@ -207,7 +210,7 @@ export class FramedReader {
         const msg = JSON.parse(trimmed) as FramedMessage;
         this.callbacks.onMessage(msg);
       } catch (err) {
-        console.warn("[framedProtocol] fallbackParse failed:", err);
+        log.warn("fallbackParse failed:", err);
       }
     }
   }
@@ -269,7 +272,7 @@ export class FramedWriter {
       }
       return canWrite;
     } catch (err) {
-      console.warn("[framedProtocol] writeFrame failed:", err);
+      log.warn("writeFrame failed:", err);
       this.queue.push(frame);
       return false;
     }
@@ -287,7 +290,7 @@ export class FramedWriter {
           break;
         }
       } catch (err) {
-        console.warn("[framedProtocol] flush failed:", err);
+        log.warn("flush failed:", err);
         break;
       }
     }

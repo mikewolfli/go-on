@@ -1428,9 +1428,12 @@ mod tests {
             std::env::set_var(env_name, "alpha-key\nbeta-key\ngamma-key");
         }
 
-        let one = resolve_secret(env_name, "openai.api_key_env").unwrap();
-        let two = resolve_secret(env_name, "openai.api_key_env").unwrap();
-        let three = resolve_secret(env_name, "openai.api_key_env").unwrap();
+        let one = resolve_secret(env_name, "openai.api_key_env")
+            .expect("first call should resolve secret");
+        let two = resolve_secret(env_name, "openai.api_key_env")
+            .expect("second call should resolve secret");
+        let three = resolve_secret(env_name, "openai.api_key_env")
+            .expect("third call should resolve secret");
 
         assert_eq!(one, "alpha-key");
         assert_eq!(two, "beta-key");

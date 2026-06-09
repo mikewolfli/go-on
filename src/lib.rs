@@ -1,6 +1,7 @@
 #![recursion_limit = "2048"]
-// deprecated items used by tests of deprecated API surface —
-// per-item #[allow(deprecated)] at each call site covers remaining uses
+// Production #[allow(deprecated)] annotations have been migrated to
+// targeted #[expect(deprecated)] or removed. Remaining test-only
+// #[allow(deprecated)] are in #[cfg(test)] blocks.
 
 //! go-on – ACP runtime proxy with integrated multi-agent orchestration.
 //!

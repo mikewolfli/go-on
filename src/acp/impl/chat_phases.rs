@@ -1360,7 +1360,6 @@ pub(crate) async fn reflect_phase(
     );
 
     // BrainLoop post-execution reflection
-    #[allow(deprecated)] // TODO: migrate to cognitive loop in chat_phases.rs
     if let Some(ref harness) = server.governance_deps.harness_bus {
         let bl = harness.brain_loop.clone();
         let task_type = extract_task_description(&params.messages);

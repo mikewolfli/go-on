@@ -1,6 +1,9 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
+import { Logger } from "./logger";
+
+const log = Logger.forModule("protocolContract");
 
 type SurfaceSupport = {
   openAiCompat: boolean;
@@ -154,6 +157,8 @@ export type ProtocolContract = {
     baseUrl: string;
     healthPath: string;
   };
+  /** Negotiated ACP protocol version from the backend, or 0 if unknown. */
+  backendProtocolVersion: number;
   protocol: ProtocolSupport;
   openai: {
     modelsPath: string;
@@ -195,6 +200,7 @@ const fallbackContract: ProtocolContract = {
     baseUrl: "http://127.0.0.1:8090",
     healthPath: "/health",
   },
+  backendProtocolVersion: 0,
   protocol: {
     supportedModes: [
       "adaptive",
@@ -440,6 +446,89 @@ function resolveBaseUrl(): string {
   return "http://127.0.0.1:8090";
 }
 
+/**
+ * The GUI-supported protocol versions that this addon can handle (ascending).
+ * Used when negotiating with the backend's /protocol/version endpoint.
+ */
+const CLIENT_SUPPORTED_VERSIONS: number[] = [1, 2, 3];
+
+/**
+ * Select the highest protocol version common to both the client and server
+ * lists. Iterates `clientVersions` in descending order and returns the first
+ * version found in `serverVersions`, or `0` when there is no overlap.
+ */
+function selectHighestCommon(
+  clientVersions: number[],
+  serverVersions: number[],
+): number {
+  for (let i = clientVersions.length - 1; i >= 0; i--) {
+    if (serverVersions.includes(clientVersions[i])) {
+      return clientVersions[i];
+    }
+  }
+  return 0;
+}
+
+/**
+ * Map a negotiated protocol version number to the chat completions path.
+ * V2+ → /v1/chat/completions
+ * V1   → /chat/stream
+ */
+function chatPathForVersion(version: number): string {
+  return version >= 2 ? "/v1/chat/completions" : "/chat/stream";
+}
+
+/**
+ * Fetch the backend's protocol version from `/protocol/version` and re-negotiate
+ * the `protocolContract` fields (`backendProtocolVersion`, chat path, etc.).
+ *
+ * Returns the negotiated version number (0 on failure).
+ */
+export async function renegotiateWithBackend(): Promise<number> {
+  const baseUrl = protocolContract.runtime.baseUrl;
+  const protoUrl = `${baseUrl}/protocol/version`;
+
+  try {
+    const response = await fetch(protoUrl);
+    if (!response.ok) {
+      log.warn(`renegotiate: backend returned ${response.status}`);
+      return 0;
+    }
+    const data = (await response.json()) as {
+      supported_versions?: number[];
+      latest?: number;
+    };
+    const serverVersions: number[] = data.supported_versions ?? [];
+    if (serverVersions.length === 0) {
+      log.warn("renegotiate: no supported_versions in response");
+      return 0;
+    }
+
+    const version = selectHighestCommon(
+      CLIENT_SUPPORTED_VERSIONS,
+      serverVersions,
+    );
+    if (version === 0) {
+      log.warn(
+        `renegotiate: no common version (client=${CLIENT_SUPPORTED_VERSIONS}, server=${serverVersions})`,
+      );
+      return 0;
+    }
+
+    // Update the live contract with the negotiated version and matching chat path.
+    protocolContract.backendProtocolVersion = version;
+    protocolContract.openai.chatCompletionsPath = chatPathForVersion(version);
+
+    log.info(
+      `renegotiate: negotiated version ${version}, chat path ${protocolContract.openai.chatCompletionsPath}`,
+    );
+    return version;
+  } catch (err) {
+    log.warn(`renegotiate: fetch failed: ${String(err)}`);
+    return 0;
+  }
+}
+
 /** @returns {ProtocolContract} the parsed contract, or fallback on failure. */
 function loadProtocolContract(): ProtocolContract {
   // NOTE: __dirname is used because VS Code extensions use CommonJS.
@@ -457,12 +546,15 @@ function loadProtocolContract(): ProtocolContract {
     const contract = JSON.parse(raw) as ProtocolContract;
     // Override baseUrl with resolved value so consumers get the correct backend address.
     contract.runtime.baseUrl = resolveBaseUrl();
+    // Default backendProtocolVersion to 0 when the file doesn't carry it yet.
+    contract.backendProtocolVersion ??= 0;
     return contract;
   } catch (err) {
-    console.warn("[protocolContract] load failed:", err);
+    log.warn("load failed:", err);
     return {
       ...fallbackContract,
       runtime: { ...fallbackContract.runtime, baseUrl: resolveBaseUrl() },
+      backendProtocolVersion: 0,
     };
   }
 }
@@ -482,14 +574,17 @@ function refreshProtocolContract(): void {
     const contract = loadProtocolContract();
     protocolContract = contract;
   } catch (err) {
-    console.warn(
-      "[protocolContract] refresh failed, keeping stale contract:",
-      err,
-    );
+    log.warn("refresh failed, keeping stale contract:", err);
   }
   // Re-resolve baseUrl on refresh so config/env changes are picked up.
   const newBaseUrl = resolveBaseUrl();
   protocolContract.runtime.baseUrl = newBaseUrl;
+
+  // Fire-and-forget backend renegotiation so the chat path and protocol version
+  // stay in sync with the running backend instance.
+  renegotiateWithBackend().catch((err: unknown) => {
+    log.warn("renegotiate on refresh failed:", String(err));
+  });
 }
 
 // Periodically refresh the contract so the extension adapts to backend upgrades.

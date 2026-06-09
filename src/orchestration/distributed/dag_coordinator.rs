@@ -20,7 +20,7 @@ use tracing::{debug, error, info, warn};
 // Errors
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
 #[derive(Debug, Error)]
 pub enum DagCoordinatorError {
     #[error("DAG not found: {0}")]
@@ -49,7 +49,7 @@ pub enum DagCoordinatorError {
 // NodeState
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum NodeState {
     Online,
@@ -62,7 +62,7 @@ pub enum NodeState {
 // DistributedDagState
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeInfo {
     pub node_id: NodeId,
@@ -73,7 +73,7 @@ pub struct NodeInfo {
     pub lease_expiry_ms: u64,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
 impl NodeInfo {
     pub fn new(node_id: NodeId, address: String, port: u16) -> Self {
         let now = current_timestamp_ms();
@@ -105,7 +105,7 @@ impl NodeInfo {
 ///
 /// Both fields are optional — when `None` no validation is performed
 /// for that direction.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SchemaContract {
     /// JSON Schema document describing the expected input shape.
@@ -119,7 +119,7 @@ pub struct SchemaContract {
 /// Returns `Ok(())` when every present schema passes.  Returns
 /// `Err(reason)` with a human-readable description of the first
 /// constraint violation found.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
 pub fn validate_contract(
     data: &serde_json::Value,
     contract: &SchemaContract,
@@ -260,7 +260,7 @@ fn type_name_of(v: &serde_json::Value) -> &'static str {
 // DagNodeAssignment
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DagNodeAssignment {
     pub dag_node_id: String, // Logical node ID within the DAG
@@ -273,7 +273,7 @@ pub struct DagNodeAssignment {
     pub contract: Option<SchemaContract>,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DagExecutionPlan {
     pub dag_id: DagId,
@@ -325,7 +325,7 @@ impl DagExecutionPlan {
     }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum DagStatus {
     Pending,
@@ -339,7 +339,7 @@ pub enum DagStatus {
 // DistributedDagState (state machine)
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DistributedDagState {
     pub plan: DagExecutionPlan,
@@ -349,7 +349,7 @@ pub struct DistributedDagState {
     pub leader_id: Option<NodeId>,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
 impl DistributedDagState {
     pub fn new(dag_id: DagId) -> Self {
         Self {
@@ -404,7 +404,7 @@ impl DistributedDagState {
 // RaftLogEntry
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RaftCommand {
     AssignNode {
@@ -436,7 +436,7 @@ pub enum RaftCommand {
     UpdateDagStatus(DagStatus),
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RaftLogEntry {
     pub index: u64,
@@ -448,7 +448,7 @@ pub struct RaftLogEntry {
 // FaultDetectionConfig
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
 #[derive(Debug, Clone)]
 pub struct FaultDetectionConfig {
     /// Heartbeat interval in seconds.
@@ -476,7 +476,7 @@ impl Default for FaultDetectionConfig {
 // DistributedDAGCoordinator
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
 pub struct DistributedDAGCoordinator {
     /// DAG state map: dag_id -> DistributedDagState
     dag_states: RwLock<HashMap<DagId, DistributedDagState>>,
@@ -494,7 +494,7 @@ pub struct DistributedDAGCoordinator {
     self_node_id: NodeId,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
 impl DistributedDAGCoordinator {
     pub fn new(self_node_id: NodeId, executor: Arc<dyn RemoteExecutor>) -> Self {
         Self {
@@ -855,7 +855,7 @@ impl DistributedDAGCoordinator {
 // Helpers
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
 fn current_timestamp_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

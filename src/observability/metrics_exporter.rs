@@ -103,13 +103,13 @@ impl SlidingWindowBuckets {
     }
 
     /// Return the number of snapshots currently in the window.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for diagnostics/scrape inspection
     pub fn len(&self) -> usize {
         self.windows.len()
     }
 
     /// Return whether the window is empty (no snapshots recorded).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for diagnostics/scrape inspection
     pub fn is_empty(&self) -> bool {
         self.windows.is_empty()
     }
@@ -141,7 +141,7 @@ impl MetricsSlidingWindow {
     }
 
     /// Reset the sliding window.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for diagnostics/scrape inspection
     pub fn reset(&self) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.reset();
@@ -168,7 +168,7 @@ static P95_SLIDING_WINDOW: LazyLock<MetricsSlidingWindow> =
 ///
 /// This is an alternative to the sliding window — call it periodically
 /// (e.g. every 5 minutes) to clear the underlying bucket counters.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for diagnostics/scrape inspection
 pub fn reset_buckets(buckets: &mut [u64; 10]) {
     for b in buckets.iter_mut() {
         *b = 0;

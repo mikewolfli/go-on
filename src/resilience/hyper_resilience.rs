@@ -34,7 +34,7 @@ async fn read_lock<T>(rw: &RwLock<T>) -> tokio::sync::RwLockReadGuard<'_, T> {
 }
 
 /// Lock a RwLock for writing, recovering from poison with a log.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for hyper-resilience write lock
 async fn write_lock<T>(rw: &RwLock<T>) -> tokio::sync::RwLockWriteGuard<'_, T> {
     rw.write().await
 }
@@ -161,28 +161,28 @@ pub struct ResilienceConfig {
     pub half_open_probe_interval_ms: u64,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for circuit breaker defaults
 fn default_circuit_breaker_threshold() -> u64 {
     5
 }
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for recovery timeout defaults
 fn default_recovery_timeout_ms() -> u64 {
     30_000
 }
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for health check interval defaults
 fn default_health_check_interval_ms() -> u64 {
     5_000
 }
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for max failover defaults
 fn default_max_failover_attempts() -> u32 {
     3
 }
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for self-healing default
 fn default_self_healing_enabled() -> bool {
     true
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for half-open probe interval default
 fn default_half_open_probe_interval_ms() -> u64 {
     5000
 }
@@ -1008,7 +1008,7 @@ impl HyperResilienceEngine {
 // ---------------------------------------------------------------------------
 
 /// A vote from a single node in the fault detection consensus.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for fault vote types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FaultVote {
     /// Node identifier casting the vote.
@@ -1029,7 +1029,7 @@ pub struct FaultVote {
 /// when a majority of voters agree the target is unhealthy within a
 /// configurable window. This prevents a single faulty probe from
 /// triggering an unnecessary failover.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for fault consensus types
 #[derive(Debug, Clone)]
 pub struct FaultConsensus {
     /// Minimum votes required to reach a decision.
@@ -1042,7 +1042,7 @@ pub struct FaultConsensus {
     max_votes_per_target: usize,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for fault consensus default
 impl Default for FaultConsensus {
     fn default() -> Self {
         Self {
@@ -1054,7 +1054,7 @@ impl Default for FaultConsensus {
     }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for fault consensus impl
 impl FaultConsensus {
     /// Create a new fault consensus with the given quorum size and vote window.
     pub fn new(quorum_size: usize, vote_window_ms: u64) -> Self {
@@ -1144,7 +1144,7 @@ impl FaultConsensus {
 // ---------------------------------------------------------------------------
 
 /// A recovery plan step.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for recovery step types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecoveryStep {
     /// Step description.
@@ -1160,7 +1160,7 @@ pub struct RecoveryStep {
 }
 
 /// A persisted recovery plan.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for recovery plan types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecoveryPlan {
     /// Unique plan identifier.
@@ -1175,7 +1175,7 @@ pub struct RecoveryPlan {
     pub source: String,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for recovery plan impl
 impl RecoveryPlan {
     /// Create a new recovery plan.
     pub fn new(
@@ -1198,14 +1198,14 @@ impl RecoveryPlan {
 ///
 /// Saves plans to a configurable directory in NDJSON format so they
 /// survive process restarts and can be audited.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for recovery plan store
 #[derive(Debug, Clone)]
 pub struct RecoveryPlanStore {
     /// Directory where plans are persisted.
     store_dir: std::path::PathBuf,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for recovery plan store impl
 impl RecoveryPlanStore {
     /// Create a new store rooted at the given directory.
     /// Creates the directory if it does not exist.
@@ -1302,7 +1302,7 @@ mod tests {
         engine
             .register_circuit_breaker("cb-gateway", 3, 10_000)
             .await
-            .unwrap();
+            .expect("register_circuit_breaker should succeed");
         let p = engine.profile().await;
         assert_eq!(p.total_circuit_breakers, 1);
     }
@@ -1314,20 +1314,20 @@ mod tests {
         engine
             .register_circuit_breaker("cb-db", 3, 10_000)
             .await
-            .unwrap();
+            .expect("register_circuit_breaker should succeed");
 
         // First two failures — still closed.
         assert_eq!(
-            engine.record_failure("cb-db").await.unwrap(),
+            engine.record_failure("cb-db").await.expect("record_failure should return a state"),
             CircuitState::Closed
         );
         assert_eq!(
-            engine.record_failure("cb-db").await.unwrap(),
+            engine.record_failure("cb-db").await.expect("record_failure should return a state"),
             CircuitState::Closed
         );
         // Third failure trips to open.
         assert_eq!(
-            engine.record_failure("cb-db").await.unwrap(),
+            engine.record_failure("cb-db").await.expect("record_failure should trip breaker to Open"),
             CircuitState::Open
         );
     }
@@ -1340,11 +1340,11 @@ mod tests {
         engine
             .register_circuit_breaker("cb-cache", 1, 1)
             .await
-            .unwrap();
+            .expect("register_circuit_breaker should succeed");
 
         // Single failure trips to open.
         assert_eq!(
-            engine.record_failure("cb-cache").await.unwrap(),
+            engine.record_failure("cb-cache").await.expect("record_failure should return a state"),
             CircuitState::Open
         );
 
@@ -1365,10 +1365,10 @@ mod tests {
         engine
             .register_circuit_breaker("cb-api", 1, 1)
             .await
-            .unwrap();
+            .expect("register_circuit_breaker should succeed");
 
         // Trip to open.
-        engine.record_failure("cb-api").await.unwrap();
+        engine.record_failure("cb-api").await.expect("record_failure should not fail");
         assert!(!engine.is_available("cb-api").await);
 
         // Wait for recovery timeout.
@@ -1378,7 +1378,7 @@ mod tests {
         assert!(engine.probe("cb-api").await);
 
         // Record a success — should close the breaker.
-        engine.record_success("cb-api").await.unwrap();
+        engine.record_success("cb-api").await.expect("record_success should not fail");
         let health = engine.system_health().await;
         assert_eq!(health.open_circuits, 0);
     }
@@ -1390,10 +1390,10 @@ mod tests {
         engine
             .register_circuit_breaker("cb-slow", 2, 60_000)
             .await
-            .unwrap();
+            .expect("register_circuit_breaker should succeed");
 
-        engine.record_failure("cb-slow").await.unwrap();
-        engine.record_failure("cb-slow").await.unwrap();
+        engine.record_failure("cb-slow").await.expect("record_failure should not fail");
+        engine.record_failure("cb-slow").await.expect("record_failure should not fail");
 
         // Should be open and unavailable.
         assert!(!engine.is_available("cb-slow").await);
@@ -1410,7 +1410,7 @@ mod tests {
                 vec!["node-replica-1".to_string(), "node-replica-2".to_string()],
             )
             .await
-            .unwrap();
+            .expect("register_failover_group should succeed");
         let p = engine.profile().await;
         assert_eq!(p.failover_groups, 1);
     }
@@ -1426,17 +1426,17 @@ mod tests {
                 vec!["node-r1".to_string(), "node-r2".to_string()],
             )
             .await
-            .unwrap();
+            .expect("register_failover_group should succeed");
 
-        let new_leader = engine.trigger_failover("group-beta").await.unwrap();
+        let new_leader = engine.trigger_failover("group-beta").await.expect("trigger_failover should succeed");
         assert_eq!(new_leader, "node-r1");
 
         // A second failover should go to the next replica.
-        let new_leader2 = engine.trigger_failover("group-beta").await.unwrap();
+        let new_leader2 = engine.trigger_failover("group-beta").await.expect("trigger_failover should succeed");
         assert_eq!(new_leader2, "node-r2");
 
         // Third failover wraps around.
-        let new_leader3 = engine.trigger_failover("group-beta").await.unwrap();
+        let new_leader3 = engine.trigger_failover("group-beta").await.expect("trigger_failover should succeed");
         assert_eq!(new_leader3, "node-r1");
     }
 
@@ -1447,11 +1447,11 @@ mod tests {
         engine
             .register_circuit_breaker("cb-1", 1, 60_000)
             .await
-            .unwrap();
+            .expect("register_circuit_breaker should succeed");
         engine
             .register_circuit_breaker("cb-2", 1, 60_000)
             .await
-            .unwrap();
+            .expect("register_circuit_breaker should succeed");
 
         let health = engine.system_health().await;
         assert_eq!(health.active_circuit_breakers, 2);
@@ -1459,7 +1459,7 @@ mod tests {
         assert_eq!(health.level, DegradationLevel::Normal);
 
         // Trip one breaker.
-        engine.record_failure("cb-1").await.unwrap();
+        engine.record_failure("cb-1").await.expect("record_failure should not fail");
         let health2 = engine.system_health().await;
         assert_eq!(health2.open_circuits, 1);
         // One out of two open breakers triggers Constrained (more than 1/3 threshold)
@@ -1473,13 +1473,13 @@ mod tests {
         engine
             .register_circuit_breaker("cb-broken", 1, 10_000)
             .await
-            .unwrap();
-        engine.record_failure("cb-broken").await.unwrap();
+            .expect("register_circuit_breaker should succeed");
+        engine.record_failure("cb-broken").await.expect("record_failure should not fail");
 
         let report = engine
             .execute_healing(SelfHealingAction::ClearCircuitBreaker, "cb-broken")
             .await
-            .unwrap();
+            .expect("execute_healing should succeed");
         assert!(report.success);
         assert_eq!(report.target, "cb-broken");
         assert!(report.duration_ms > 0);
@@ -1496,20 +1496,20 @@ mod tests {
         engine
             .register_circuit_breaker("cb-1", 3, 10_000)
             .await
-            .unwrap();
+            .expect("register_circuit_breaker should succeed");
         engine
             .register_circuit_breaker("cb-2", 3, 10_000)
             .await
-            .unwrap();
+            .expect("register_circuit_breaker should succeed");
         engine
             .register_failover_group("group-gamma", "node-p", vec!["node-r1".to_string()])
             .await
-            .unwrap();
+            .expect("register_failover_group should succeed");
 
         // Trip one breaker.
-        engine.record_failure("cb-1").await.unwrap();
-        engine.record_failure("cb-1").await.unwrap();
-        engine.record_failure("cb-1").await.unwrap();
+        engine.record_failure("cb-1").await.expect("record_failure should not fail");
+        engine.record_failure("cb-1").await.expect("record_failure should not fail");
+        engine.record_failure("cb-1").await.expect("record_failure should not fail");
 
         let p = engine.profile().await;
         assert_eq!(p.total_circuit_breakers, 2);
@@ -1524,7 +1524,7 @@ mod tests {
         engine
             .register_circuit_breaker("cb-dup", 5, 10_000)
             .await
-            .unwrap();
+            .expect("register_circuit_breaker should succeed");
         let result = engine.register_circuit_breaker("cb-dup", 3, 20_000).await;
         assert!(result.is_err());
         let err = result.unwrap_err();

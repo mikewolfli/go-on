@@ -36,7 +36,7 @@ pub mod vector_index;
 /// configured but no explicit `memory_retrieval_engine` has been set.
 /// Build and wire a MemoryRetrievalEngine from an existing MemoryPersistence.
 /// TODO-BLUE64: Wire into production server builder path.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for memory retrieval wiring
 pub fn wire_memory_retrieval(
     persistence: crate::memory::memory_persistence::MemoryPersistence,
 ) -> crate::memory::memory_retrieval::MemoryRetrievalEngine {

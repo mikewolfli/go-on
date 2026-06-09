@@ -4,7 +4,9 @@
 )]
 
 mod app;
+mod backend_manager;
 mod backend;
+mod state_sync;
 mod config;
 mod config_store;
 mod connection;

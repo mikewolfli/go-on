@@ -582,7 +582,12 @@
     "thinking": "思考中...",
     "responseReceived": "收到回复",
     "requestFailed": "请求失败: {0}",
-    "responseLabel": "回复: {0}"
+    "responseLabel": "回复: {0}",
+    "imagePasted": "从剪贴板粘贴的图片",
+    "fileDropped": "拖放的文件: {0}",
+    "multimodalInput": "多模态输入（文本 + 图片/文件）",
+    "imageAttachment": "图片附件",
+    "fileAttachment": "文件附件"
   },
   "configWizard": {
     "title": "Go-On 配置向导",

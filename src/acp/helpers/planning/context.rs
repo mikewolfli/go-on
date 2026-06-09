@@ -328,7 +328,10 @@ mod tests {
             |_| anyhow::anyhow!("timeout"),
         )
         .await;
-        assert_eq!(result.unwrap(), 42);
+        assert_eq!(
+            result.expect("run_with_optional_timeout should complete successfully"),
+            42
+        );
     }
 
     #[tokio::test]
@@ -339,7 +342,11 @@ mod tests {
             |_| anyhow::anyhow!("timeout"),
         )
         .await;
-        assert_eq!(result.unwrap(), "done");
+        assert_eq!(
+            result
+                .expect("run_with_optional_timeout without timeout should pass through the result"),
+            "done"
+        );
     }
 
     // ── EndpointProbeResult equality ──────────────────────────────────

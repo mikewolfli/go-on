@@ -211,10 +211,8 @@ pub fn delete_api_key(provider: &str) -> Result<()> {
 }
 
 /// Delete a provider secret key from the system keyring (silent if missing).
-/// F-GAP-48: Reserved for future secret key management feature
-/// DEPRECATED: Unused. Secret key deletion is handled via platform::delete_secret_key
-/// internally when providers are removed through the GUI. Retained for reference;
-/// remove in a future cleanup round.
+/// F-GAP-48: Wired — called from providers/mod.rs when removing dual-auth providers.
+/// The platform::delete_secret_key call handles the actual keyring deletion.
 #[allow(dead_code)]
 pub fn delete_secret_key(provider: &str) -> Result<()> {
     platform::delete_secret_key(provider)

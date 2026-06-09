@@ -789,7 +789,7 @@ mod tests {
             ]),
             "review",
         )
-        .unwrap();
+        .expect("merge_phase_principles should succeed");
         assert_eq!(
             merged
                 .iter()

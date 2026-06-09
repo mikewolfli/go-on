@@ -1,12 +1,20 @@
+pub mod rpc;
+pub mod state;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-const QUICK_RPC_ATTEMPTS: usize = 2;
-const FULL_RPC_ATTEMPTS: usize = 3;
+// Re-export standalone types from sub-modules
+pub use state::{AbortController, StreamProcessor, TokenProgress};
+
+// ── Constants ───────────────────────────────────────────────────────────────
+
 const MODELS_CACHE_TTL_SECS: u64 = 300;
+
+// ── Type aliases ────────────────────────────────────────────────────────────
 
 type ProviderModels = std::collections::HashMap<String, Vec<String>>;
 type ModelsCacheState = (Option<ProviderModels>, std::time::Instant);
@@ -27,238 +35,7 @@ pub fn validate_input_size(data: &[u8], max_bytes: usize) -> Result<(), String> 
     Ok(())
 }
 
-// ── StreamProcessor ────────────────────────────────────────────────────────
-
-const MAX_SSE_LINE_LENGTH: usize = 1024 * 1024; // 1 MB per SSE line
-const MAX_SSE_CHUNK_SIZE: usize = 16 * 1024 * 1024; // 16 MB total per push call
-
-/// Incrementally parses an SSE byte stream frame-by-frame, extracting `event:`
-/// and `data:` fields. Returns parsed JSON values with the event type attached
-/// (either as a top-level `"_event_type"` field, or through the existing structure).
-/// Tracks token count and total bytes processed for progress reporting in the UI.
-pub struct StreamProcessor {
-    buffer: String,
-    max_buffer_size: usize,
-    /// Number of JSON tokens (events) parsed so far.
-    pub token_count: usize,
-    /// Total bytes consumed from the wire.
-    pub total_bytes_processed: usize,
-}
-
-impl StreamProcessor {
-    pub fn new() -> Self {
-        Self {
-            buffer: String::with_capacity(16_384),
-            max_buffer_size: MAX_SSE_LINE_LENGTH,
-            token_count: 0,
-            total_bytes_processed: 0,
-        }
-    }
-
-    /// Feed a chunk of raw bytes into the processor.
-    /// Returns a batch of parsed results (Ok(values) or Err(errors)).
-    /// Each parsed value now includes an `"_event_type"` field extracted from
-    /// the SSE `event:` line, allowing the caller to distinguish between chunk,
-    /// done, telemetry, and other event types emitted by the backend.
-    pub fn push_chunk(&mut self, chunk: &[u8]) -> Vec<Result<Value, String>> {
-        let mut events: Vec<Result<Value, String>> = Vec::new();
-
-        // Validate input size before processing
-        if let Err(e) = validate_input_size(chunk, MAX_SSE_CHUNK_SIZE) {
-            events.push(Err(e));
-            return events;
-        }
-
-        // Overflow guard
-        if self.buffer.len() + chunk.len() > self.max_buffer_size {
-            events.push(Err("SSE buffer overflow (exceeded 1 MB)".to_string()));
-            return events;
-        }
-
-        self.total_bytes_processed += chunk.len();
-
-        // Normalise CRLF → LF for consistent frame splitting
-        let part = String::from_utf8_lossy(chunk);
-        self.buffer.push_str(&part.replace('\r', ""));
-
-        // Consume complete SSE frames (delimited by \n\n, fallback \n)
-        loop {
-            let (delim, delim_len) = if self.buffer.contains("\n\n") {
-                ("\n\n", 2usize)
-            } else {
-                ("\n", 1usize)
-            };
-
-            let pos = match self.buffer.find(delim) {
-                Some(p) => p,
-                None => break,
-            };
-
-            let segment = self.buffer[..pos].to_string();
-            self.buffer = self.buffer[pos + delim_len..].to_string();
-
-            // Safety: reject unbounded lines
-            if segment.len() > MAX_SSE_LINE_LENGTH {
-                events.push(Err("SSE line exceeds maximum length (1 MB)".to_string()));
-                return events;
-            }
-
-            // Collect lines from the segment.
-            // When using \n\n delimiter the segment may contain embedded \n
-            // (multi-line SSE data), so split further on single \n.
-            let sub_lines: Vec<&str> = if delim_len == 2 {
-                segment.split('\n').collect()
-            } else {
-                vec![&segment]
-            };
-
-            let mut current_event_type: Option<String> = None;
-            let mut current_data: Option<String> = None;
-
-            for line in &sub_lines {
-                if let Some(event) = line.strip_prefix("event: ") {
-                    current_event_type = Some(event.trim().to_string());
-                } else if let Some(data) = line.strip_prefix("data: ") {
-                    current_data = Some(data.trim().to_string());
-                } else if let Some(data) = line.strip_prefix("data:") {
-                    // Handle "data: {json}" without space after colon
-                    current_data = Some(data.trim().to_string());
-                }
-            }
-
-            // Emit a single event per frame, combining event type + data
-            if let Some(data_str) = current_data {
-                if data_str == "[DONE]" {
-                    let mut val = Value::String("[DONE]".to_string());
-                    if let Some(ev) = current_event_type {
-                        // Wrap [DONE] in an object with event type
-                        val = serde_json::json!({
-                            "_event_type": ev,
-                            "data": "[DONE]",
-                        });
-                    }
-                    events.push(Ok(val));
-                    continue;
-                }
-
-                match serde_json::from_str::<Value>(&data_str) {
-                    Ok(mut val) => {
-                        self.token_count += 1;
-                        // Inject the event type so callers can distinguish
-                        // "chunk", "done", "telemetry", etc.
-                        if let Some(ev) = current_event_type {
-                            if let Some(obj) = val.as_object_mut() {
-                                obj.insert("_event_type".to_string(), Value::String(ev));
-                            }
-                        }
-                        events.push(Ok(val));
-                    }
-                    Err(e) => {
-                        events.push(Err(format!("JSON parse error: {}", e)));
-                    }
-                }
-            } else if let Some(ev) = current_event_type {
-                // Event with no data payload — emit a minimal object
-                events.push(Ok(serde_json::json!({
-                    "_event_type": ev,
-                    "_no_data": true,
-                })));
-            }
-        }
-
-        events
-    }
-
-    /// Drain any remaining partial segment from the buffer.
-    /// Returns `None` if the buffer is empty.
-    #[allow(dead_code)]
-    pub fn drain_remaining(&mut self) -> Option<String> {
-        if self.buffer.is_empty() {
-            None
-        } else {
-            Some(std::mem::take(&mut self.buffer))
-        }
-    }
-}
-
-impl Default for StreamProcessor {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// ── AbortController ────────────────────────────────────────────────────────
-
-/// Shared cancellation signal for in-progress SSE streams.
-/// Cloning produces another handle to the same underlying signal.
-/// Uses a `tokio::sync::Notify` so callers can `tokio::select!` on the
-/// abort signal and cancel the actual in-flight HTTP request.
-#[derive(Clone)]
-pub struct AbortController {
-    cancelled: Arc<AtomicBool>,
-    notify: Arc<tokio::sync::Notify>,
-}
-
-impl AbortController {
-    pub fn new() -> Self {
-        Self {
-            cancelled: Arc::new(AtomicBool::new(false)),
-            notify: Arc::new(tokio::sync::Notify::new()),
-        }
-    }
-
-    /// Signal abort.  Idempotent — safe to call multiple times.
-    pub fn abort(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
-        self.notify.notify_waiters();
-    }
-
-    /// Returns `true` if abort has been signalled.
-    pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::SeqCst)
-    }
-
-    /// Returns a future that resolves when `abort()` is called.
-    /// Use with `tokio::select!` to cancel in-flight HTTP requests:
-    ///
-    /// ```ignore
-    /// tokio::select! {
-    ///     result = http_request => { … },
-    ///     _ = abort_ctrl.wait_for_abort() => { … },
-    /// }
-    /// ```
-    pub async fn wait_for_abort(&self) {
-        self.notify.notified().await;
-    }
-
-    /// Reset the signal for reuse.
-    pub fn reset(&self) {
-        self.cancelled.store(false, Ordering::SeqCst);
-    }
-}
-
-impl Default for AbortController {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// ── TokenProgress ───────────────────────────────────────────────────────────
-
-/// Lightweight snapshot of streaming progress for the UI.
-#[derive(Debug, Clone, Default)]
-pub struct TokenProgress {
-    /// Number of tokens (SSE events) received so far.
-    pub tokens_received: usize,
-    /// Total bytes processed from the wire.
-    pub bytes_processed: usize,
-    /// Input token count reported by telemetry.
-    pub input_tokens: usize,
-    /// Output token count reported by telemetry.
-    pub output_tokens: usize,
-    /// Total token count reported by telemetry.
-    pub total_tokens: usize,
-}
+// ── BackendClient ───────────────────────────────────────────────────────────
 
 #[derive(Clone)]
 pub struct BackendClient {
@@ -270,77 +47,15 @@ pub struct BackendClient {
     /// Discovered chat endpoint (set by discover_protocol_version, falls back to /v1/chat/completions).
     /// Wrapped in Arc<Mutex<>> because BackendClient is Clone and shared across async tasks.
     chat_endpoint: Arc<std::sync::Mutex<String>>,
+    /// Negotiated ACP protocol version (set by discover_protocol_version).
+    /// 0 means discovery has not completed yet.
+    protocol_version: Arc<std::sync::Mutex<u16>>,
     /// Monotonically increasing JSON-RPC request id (per JSON-RPC 2.0 spec)
     next_id: Arc<AtomicU64>,
     /// Model list cache with timestamp
     models_cache: ModelsCache,
     /// Flag set when fetch_models falls back to expired cache
     stale_models_flag: Arc<AtomicBool>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct HealthStatus {
-    pub connected: bool,
-    pub healthy: bool,
-    pub uptime: u64,
-    pub requests_per_minute: f64,
-    pub success_rate: f64,
-    pub avg_latency_ms: f64,
-    pub backend_version: Option<String>,
-    pub backend_build: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProviderStatus {
-    pub name: String,
-    pub ready: bool,
-    pub model: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct WorkflowRunRecord {
-    pub run_id: String,
-    pub task: String,
-    pub status: String,
-    pub created_at: i64,
-    pub started_at: Option<i64>,
-    pub ended_at: Option<i64>,
-    pub phase: String,
-    pub error: Option<String>,
-    pub artifacts: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct WorkflowRunsResult {
-    pub runs: Vec<WorkflowRunRecord>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct MetricsWindowPoint {
-    pub ts: i64,
-    pub qps: f64,
-    pub p95: f64,
-    pub error_rate: f64,
-    pub success_rate: f64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ErrorGroup {
-    pub error_type: String,
-    pub count: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ProviderCapabilityModel {
-    pub id: String,
-    pub name: Option<String>,
-    pub description: Option<String>,
-    pub is_default: Option<bool>,
-    pub context_window: Option<u64>,
-    pub capabilities: Option<Vec<String>>,
-    pub tool_calling: Option<bool>,
-    pub vision: Option<bool>,
-    pub cost_tier: Option<String>,
 }
 
 impl BackendClient {
@@ -378,6 +93,7 @@ impl BackendClient {
             long_client,
             base_url: base_url.trim_end_matches('/').to_string(),
             chat_endpoint: Arc::new(std::sync::Mutex::new("/v1/chat/completions".to_string())),
+            protocol_version: Arc::new(std::sync::Mutex::new(0)),
             next_id: Arc::new(AtomicU64::new(1)),
             models_cache: Arc::new(std::sync::Mutex::new((None, std::time::Instant::now()))),
             stale_models_flag: Arc::new(AtomicBool::new(false)),
@@ -512,228 +228,30 @@ impl BackendClient {
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
+}
 
-    fn is_retryable_status(status: reqwest::StatusCode) -> bool {
-        matches!(status.as_u16(), 408 | 429 | 502 | 503 | 504)
-    }
+// ── Health & Status ─────────────────────────────────────────────────────────
 
-    fn is_retryable_rpc_error_code(code: i64) -> bool {
-        code == -32603 || (-32099..=-32000).contains(&code)
-    }
+#[derive(Debug, Clone, PartialEq)]
+pub struct HealthStatus {
+    pub connected: bool,
+    pub healthy: bool,
+    pub uptime: u64,
+    pub requests_per_minute: f64,
+    pub success_rate: f64,
+    pub avg_latency_ms: f64,
+    pub backend_version: Option<String>,
+    pub backend_build: Option<String>,
+}
 
-    fn is_retryable_transport_error(err: &reqwest::Error) -> bool {
-        // Timeouts are always retryable
-        if err.is_timeout() {
-            return true;
-        }
-        // Connection errors
-        if err.is_connect() {
-            return true;
-        }
-        // Body I/O errors (connection interrupted mid-response)
-        if err.is_body() {
-            return true;
-        }
-        // Status errors: check both server errors (5xx) and client errors (408 Request Timeout, 429 Too Many Requests)
-        if let Some(status) = err.status() {
-            return status.is_server_error() || status.as_u16() == 429 || status.as_u16() == 408;
-        }
-        false
-    }
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderStatus {
+    pub name: String,
+    pub ready: bool,
+    pub model: String,
+}
 
-    fn retry_backoff(attempt: usize) -> Duration {
-        // Exponential backoff with 30% jitter to prevent thundering herd:
-        // delay = base * (0.7 + random * 0.3)
-        // Attempt 1: ~100ms, Attempt 2: ~200ms, Attempt 3+: ~400ms
-        let base_ms: u64 = match attempt {
-            1 => 100,
-            2 => 200,
-            _ => 400,
-        };
-        let jitter_factor = 0.7 + fastrand::f64() * 0.3;
-        Duration::from_secs_f64((base_ms as f64 * jitter_factor) / 1000.0)
-    }
-
-    fn parse_rpc_error(err: &Value) -> String {
-        err.get("message")
-            .and_then(Value::as_str)
-            .or_else(|| err.get("data").and_then(Value::as_str))
-            .filter(|s| !s.is_empty())
-            .map(ToString::to_string)
-            .unwrap_or_else(|| err.to_string())
-    }
-
-    fn summarize_http_body(body: &str) -> String {
-        let trimmed = body.trim();
-        if trimmed.is_empty() {
-            return "empty response body".to_string();
-        }
-        let mut compact = trimmed.replace(['\n', '\r'], " ");
-        if compact.len() > 240 {
-            compact.truncate(240);
-            compact.push_str("...");
-        }
-        compact
-    }
-
-    async fn rpc_call_internal(
-        &self,
-        client: &reqwest::Client,
-        method: &str,
-        params: Option<Value>,
-        attempts: usize,
-    ) -> Result<Value, String> {
-        let req_id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let body = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": req_id,
-            "method": method,
-            "params": params.unwrap_or(Value::Null),
-        });
-        let url = format!("{}/rpc", self.base_url);
-        let mut last_err = String::new();
-
-        const MAX_RPC_RESPONSE_BYTES: usize = 64 * 1024 * 1024; // 64 MB
-
-        for attempt in 1..=attempts {
-            let response = match client.post(&url).json(&body).send().await {
-                Ok(resp) => resp,
-                Err(err) => {
-                    last_err = format!("HTTP error: {err}");
-                    let retryable = Self::is_retryable_transport_error(&err);
-                    if attempt < attempts && retryable {
-                        let backoff = Self::retry_backoff(attempt);
-                        eprintln!(
-                            "[RPC] Attempt {}/{} transport error (retryable={}): {}, backing off {:?}",
-                            attempt,
-                            attempts,
-                            retryable,
-                            err,
-                            backoff
-                        );
-                        tokio::time::sleep(backoff).await;
-                        continue;
-                    }
-                    return Err(last_err);
-                }
-            };
-
-            // Pre-validate content-length header if present
-            if let Some(cl) = response.content_length() {
-                if (cl as usize) > MAX_RPC_RESPONSE_BYTES {
-                    last_err = format!("response content length too large: {} bytes > 64 MB", cl);
-                    return Err(last_err);
-                }
-            }
-
-            let status = response.status();
-            let response_text = match response.text().await {
-                Ok(text) => {
-                    // Validate actual body size
-                    if let Err(e) = validate_input_size(text.as_bytes(), MAX_RPC_RESPONSE_BYTES) {
-                        last_err = e;
-                        return Err(last_err);
-                    }
-                    text
-                }
-                Err(err) => {
-                    last_err = format!("HTTP body read error: {err}");
-                    // Retry on ANY body read error regardless of status code
-                    if attempt < attempts {
-                        let backoff = Self::retry_backoff(attempt);
-                        eprintln!("[RPC] Attempt {}: Body read error, retrying", attempt);
-                        tokio::time::sleep(backoff).await;
-                        continue;
-                    }
-                    return Err(last_err);
-                }
-            };
-
-            if !status.is_success() {
-                let detail = serde_json::from_str::<Value>(&response_text)
-                    .ok()
-                    .and_then(|json| json.get("error").cloned())
-                    .map(|err| Self::parse_rpc_error(&err))
-                    .unwrap_or_else(|| Self::summarize_http_body(&response_text));
-                last_err = format!("HTTP status error {}: {}", status.as_u16(), detail);
-                if attempt < attempts && Self::is_retryable_status(status) {
-                    let backoff = Self::retry_backoff(attempt);
-                    eprintln!(
-                        "[RPC] Attempt {}: Status {} (retryable), backing off {:?}",
-                        attempt,
-                        status.as_u16(),
-                        backoff
-                    );
-                    tokio::time::sleep(backoff).await;
-                    continue;
-                }
-                return Err(last_err);
-            }
-
-            // Parse JSON with better error context
-            let result: Value = match serde_json::from_str(&response_text) {
-                Ok(json) => json,
-                Err(parse_err) => {
-                    let detail = Self::summarize_http_body(&response_text);
-                    let err_msg = format!(
-                        "JSON parse error: {} (attempt {}/{}); body={}",
-                        parse_err, attempt, attempts, detail
-                    );
-                    // Retry on JSON parse errors as they might be transient
-                    if attempt < attempts {
-                        let backoff = Self::retry_backoff(attempt);
-                        eprintln!("[RPC] Attempt {}: JSON parse failed, retrying", attempt);
-                        tokio::time::sleep(backoff).await;
-                        continue;
-                    }
-                    return Err(err_msg);
-                }
-            };
-
-            // Check for RPC error in response - might be retryable
-            if let Some(rpc_err) = result.get("error") {
-                let err_msg = Self::parse_rpc_error(rpc_err);
-                // RPC error codes that might be transient:
-                // -32603: Internal error (could be backend temporarily overwhelmed)
-                // -32000 to -32099: Reserved for implementation-defined server errors
-                let code = rpc_err.get("code").and_then(|v| v.as_i64());
-                if attempt < attempts && code.is_some_and(Self::is_retryable_rpc_error_code) {
-                    let backoff = Self::retry_backoff(attempt);
-                    eprintln!(
-                        "[RPC] Attempt {}: RPC error code {:?} (retryable), backing off {:?}",
-                        attempt, code, backoff
-                    );
-                    tokio::time::sleep(backoff).await;
-                    continue;
-                }
-                return Err(err_msg);
-            }
-
-            // Extract result field, fallback to entire response if no "result" key
-            return Ok(result.get("result").cloned().unwrap_or(result));
-        }
-
-        Err(if last_err.is_empty() {
-            "RPC request failed for unknown reason".to_string()
-        } else {
-            last_err
-        })
-    }
-
-    /// Quick RPC call for health / status checks (5s timeout).
-    /// Returns None if the backend is unreachable (no error message).
-    async fn rpc_call_quick(&self, method: &str, params: Option<Value>) -> Option<Value> {
-        self.rpc_call_internal(&self.quick_client, method, params, QUICK_RPC_ATTEMPTS)
-            .await
-            .ok()
-    }
-
-    /// Full RPC call for normal requests (180s timeout).
-    pub async fn rpc_call(&self, method: &str, params: Option<Value>) -> Result<Value, String> {
-        self.rpc_call_internal(&self.long_client, method, params, FULL_RPC_ATTEMPTS)
-            .await
-    }
-
+impl BackendClient {
     /// Check backend health (5s timeout, silent on failure)
     pub async fn health(&self) -> HealthStatus {
         match self.rpc_call_quick("runtime.health", None).await {
@@ -870,61 +388,92 @@ impl BackendClient {
             }
         }
     }
+}
 
-    /// Probe the backend's protocol version discovery endpoint to confirm
-    /// the modern API is available.
-    /// Parses the `/protocol/version` response to determine which API endpoint
-    /// to use. This enables backward compatibility with older backends that
-    /// only support the legacy `/chat/stream` endpoint (pre-v1.1.0).
-    /// Falls back to `/v1/chat/completions` when discovery fails.
+// ── Protocol Discovery ───────────────────────────────────────────────────────
+
+impl BackendClient {
+    /// Probe the backend's protocol version discovery endpoint to negotiate
+    /// a mutually-supported protocol version.
+    ///
+    /// Parses the `/protocol/version` JSON response, finds the highest common
+    /// version between the GUI's supported set and the backend's advertised set,
+    /// and selects the corresponding HTTP endpoint.
+    ///
+    /// Falls back to `/v1/chat/completions` (with protocol version 3 / LATEST)
+    /// when discovery fails entirely.
     pub async fn discover_protocol_version(&self) -> String {
         let discovery_url = format!("{}/protocol/version", self.base_url);
-        let endpoint = match self.quick_client.get(&discovery_url).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                // Try to parse the version from the response body
-                let version_str = resp.text().await.unwrap_or_default();
-                let selected = match version_str.trim() {
-                    s if s.contains("1.0") || s.contains("v1.0") => {
-                        // Legacy protocol — use /chat/stream
-                        eprintln!("protocol version 1.0 detected, using /chat/stream");
-                        "/chat/stream"
-                    }
-                    s if s.contains("1.1")
-                        || s.contains("v1.1")
-                        || s.contains("1.2")
-                        || s.contains("v1.2") =>
-                    {
-                        // Modern protocol — use /v1/chat/completions
-                        eprintln!(
-                            "protocol version {} detected, using /v1/chat/completions",
-                            s
+        let (endpoint, negotiated_version) =
+            match self.quick_client.get(&discovery_url).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    // Parse the JSON response body.
+                    let body = resp.text().await.unwrap_or_default();
+                    match serde_json::from_str::<serde_json::Value>(&body) {
+                        Ok(json) => {
+                            let server_versions: Vec<u16> = json
+                                .get("supported_versions")
+                                .and_then(|v| v.as_array())
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|e| e.as_u64())
+                                        .map(|n| n as u16)
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+
+                            let version = Self::select_highest_common(
+                                Self::GUI_SUPPORTED_VERSIONS,
+                                &server_versions,
+                            )
+                            .unwrap_or(3); // fall back to LATEST
+
+                            let ep = Self::endpoint_for_version(version);
+                            eprintln!("protocol negotiation: version={}, endpoint={}", version, ep);
+                            (ep.to_string(), version)
+                        }
+                        Err(parse_err) => {
+                            eprintln!(
+                            "protocol version parse failed: {}, defaulting to /v1/chat/completions",
+                            parse_err
                         );
-                        "/v1/chat/completions"
+                            ("/v1/chat/completions".to_string(), 3)
+                        }
                     }
-                    _ => {
-                        // Unknown version — default to modern endpoint
-                        eprintln!("protocol version '{}' unrecognised, defaulting to /v1/chat/completions", version_str);
-                        "/v1/chat/completions"
-                    }
-                };
-                selected.to_string()
-            }
-            Ok(resp) => {
-                eprintln!("protocol version discovery returned: {}", resp.status());
-                "/v1/chat/completions".to_string()
-            }
-            Err(e) => {
-                eprintln!("protocol version discovery failed: {}", e);
-                "/v1/chat/completions".to_string()
-            }
-        };
+                }
+                Ok(resp) => {
+                    eprintln!(
+                    "protocol version discovery returned: {}, defaulting to /v1/chat/completions",
+                    resp.status()
+                );
+                    ("/v1/chat/completions".to_string(), 3)
+                }
+                Err(e) => {
+                    eprintln!(
+                        "protocol version discovery failed: {}, defaulting to /v1/chat/completions",
+                        e
+                    );
+                    ("/v1/chat/completions".to_string(), 3)
+                }
+            };
         {
             let mut ep = self.chat_endpoint.lock().unwrap_or_else(|e| e.into_inner());
             *ep = endpoint.clone();
         }
+        {
+            let mut pv = self
+                .protocol_version
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            *pv = negotiated_version;
+        }
         endpoint
     }
+}
 
+// ── Chat ────────────────────────────────────────────────────────────────────
+
+impl BackendClient {
     #[allow(clippy::too_many_arguments)]
     pub async fn chat_with_options(
         &self,
@@ -1161,7 +710,11 @@ impl BackendClient {
             Ok((response_text, thinking_text, agent_text, selected_model))
         }
     }
+}
 
+// ── Provider RPC wrappers ───────────────────────────────────────────────────
+
+impl BackendClient {
     pub async fn configure_provider(
         &self,
         name: &str,
@@ -1197,6 +750,110 @@ impl BackendClient {
         self.rpc_call("runtime.restart", None).await
     }
 
+    pub async fn provider_test_connection(&self, provider: &str) -> Result<Value, String> {
+        self.rpc_call(
+            "provider.test_connection",
+            Some(serde_json::json!({"provider": provider})),
+        )
+        .await
+    }
+
+    pub async fn provider_test_completion(
+        &self,
+        provider: &str,
+        model: Option<&str>,
+    ) -> Result<Value, String> {
+        let mut params = serde_json::json!({"provider": provider});
+        if let Some(model) = model {
+            params["model"] = Value::String(model.to_string());
+        }
+        self.rpc_call("provider.test_completion", Some(params))
+            .await
+    }
+
+    /// Fetch the full provider catalog from the backend.
+    /// Returns a JSON value with provider specs including agent_type, default_url,
+    /// default_model, and supports_system per provider.
+    /// This is the canonical source when the backend is reachable; the GUI falls
+    /// back to `built_in_provider_specs()` in `catalog.rs` when offline.
+    pub async fn provider_catalog(&self) -> Result<Value, String> {
+        self.rpc_call_quick("provider.catalog", None)
+            .await
+            .ok_or_else(|| "Failed to fetch provider catalog from backend".to_string())
+    }
+
+    /// Fetch the provider catalog from the backend with availability checking.
+    ///
+    /// First checks backend health, then calls the catalog endpoint.
+    /// Returns `Ok(Some(catalog))` on success, `Ok(None)` if backend is unreachable,
+    /// and `Err` on communication failure. This is the preferred async entry point
+    /// for GUI startup flows; it wraps health check + remote call in one call.
+    ///
+    /// F-GAP-59: Async wrapper for post-startup catalog overlay
+    #[allow(dead_code)] // F-GAP-59: Wired when startup flow calls fetch_catalog
+    pub async fn fetch_provider_catalog_async(
+        &self,
+        health_timeout: std::time::Duration,
+    ) -> Result<Option<Value>, String> {
+        // Step 1: Quick health check
+        // health() returns HealthStatus directly (not Result), so timeout returns
+        // Result<HealthStatus, Elapsed>.
+        match tokio::time::timeout(health_timeout, self.health()).await {
+            Ok(status) if status.healthy => {
+                // Step 2: Backend is healthy — fetch catalog
+                match self.provider_catalog().await {
+                    Ok(catalog) => Ok(Some(catalog)),
+                    Err(e) => Err(e),
+                }
+            }
+            Ok(_) | Err(_) => {
+                // Backend unreachable or unhealthy — return None so caller falls back
+                Ok(None)
+            }
+        }
+    }
+
+    pub async fn provider_capabilities(
+        &self,
+        provider: &str,
+    ) -> Result<Vec<ProviderCapabilityModel>, String> {
+        let result = self
+            .rpc_call(
+                "provider.capabilities",
+                Some(serde_json::json!({"provider": provider})),
+            )
+            .await?;
+        let models = result
+            .get("capabilities")
+            .and_then(|caps| caps.get("models"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        Ok(models
+            .into_iter()
+            .filter_map(|value| serde_json::from_value::<ProviderCapabilityModel>(value).ok())
+            .collect())
+    }
+}
+
+// ── Provider Capability Model ───────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProviderCapabilityModel {
+    pub id: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub is_default: Option<bool>,
+    pub context_window: Option<u64>,
+    pub capabilities: Option<Vec<String>>,
+    pub tool_calling: Option<bool>,
+    pub vision: Option<bool>,
+    pub cost_tier: Option<String>,
+}
+
+// ── Skill RPC wrappers ──────────────────────────────────────────────────────
+
+impl BackendClient {
     pub async fn create_skill(
         &self,
         name: &str,
@@ -1296,7 +953,29 @@ impl BackendClient {
         )
         .await
     }
+}
 
+// ── Workflow RPC wrappers ───────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WorkflowRunRecord {
+    pub run_id: String,
+    pub task: String,
+    pub status: String,
+    pub created_at: i64,
+    pub started_at: Option<i64>,
+    pub ended_at: Option<i64>,
+    pub phase: String,
+    pub error: Option<String>,
+    pub artifacts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WorkflowRunsResult {
+    pub runs: Vec<WorkflowRunRecord>,
+}
+
+impl BackendClient {
     pub async fn list_workflow_runs(
         &self,
         limit: usize,
@@ -1339,45 +1018,6 @@ impl BackendClient {
             .map_err(|e| format!("workflow.run.get decode error: {e}"))
     }
 
-    fn decode_workflow_runs(value: Value) -> Result<Vec<WorkflowRunRecord>, String> {
-        if let Ok(parsed) = serde_json::from_value::<WorkflowRunsResult>(value.clone()) {
-            return Ok(parsed.runs);
-        }
-
-        if let Some(runs) = value.get("runs").and_then(Value::as_array) {
-            return runs
-                .iter()
-                .cloned()
-                .map(serde_json::from_value::<WorkflowRunRecord>)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| format!("workflow.run.list decode error: {e}"));
-        }
-
-        if let Some(runs) = value
-            .get("result")
-            .and_then(|r| r.get("runs"))
-            .and_then(Value::as_array)
-        {
-            return runs
-                .iter()
-                .cloned()
-                .map(serde_json::from_value::<WorkflowRunRecord>)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| format!("workflow.run.list decode error: {e}"));
-        }
-
-        if let Some(runs) = value.as_array() {
-            return runs
-                .iter()
-                .cloned()
-                .map(serde_json::from_value::<WorkflowRunRecord>)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| format!("workflow.run.list decode error: {e}"));
-        }
-
-        Err("workflow.run.list decode error: unsupported payload shape".to_string())
-    }
-
     pub async fn transition_workflow_run(
         &self,
         run_id: &str,
@@ -1410,61 +1050,26 @@ impl BackendClient {
         }
         self.rpc_call("workflow.execute", Some(params)).await
     }
+}
 
-    pub async fn provider_test_connection(&self, provider: &str) -> Result<Value, String> {
-        self.rpc_call(
-            "provider.test_connection",
-            Some(serde_json::json!({"provider": provider})),
-        )
-        .await
-    }
+// ── Metrics RPC wrappers ────────────────────────────────────────────────────
 
-    pub async fn provider_test_completion(
-        &self,
-        provider: &str,
-        model: Option<&str>,
-    ) -> Result<Value, String> {
-        let mut params = serde_json::json!({"provider": provider});
-        if let Some(model) = model {
-            params["model"] = Value::String(model.to_string());
-        }
-        self.rpc_call("provider.test_completion", Some(params))
-            .await
-    }
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MetricsWindowPoint {
+    pub ts: i64,
+    pub qps: f64,
+    pub p95: f64,
+    pub error_rate: f64,
+    pub success_rate: f64,
+}
 
-    /// Fetch the full provider catalog from the backend.
-    /// Returns a JSON value with provider specs including agent_type, default_url,
-    /// default_model, and supports_system per provider.
-    /// This is the canonical source when the backend is reachable; the GUI falls
-    /// back to `built_in_provider_specs()` in `catalog.rs` when offline.
-    pub async fn provider_catalog(&self) -> Result<Value, String> {
-        self.rpc_call_quick("provider.catalog", None)
-            .await
-            .ok_or_else(|| "Failed to fetch provider catalog from backend".to_string())
-    }
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ErrorGroup {
+    pub error_type: String,
+    pub count: usize,
+}
 
-    pub async fn provider_capabilities(
-        &self,
-        provider: &str,
-    ) -> Result<Vec<ProviderCapabilityModel>, String> {
-        let result = self
-            .rpc_call(
-                "provider.capabilities",
-                Some(serde_json::json!({"provider": provider})),
-            )
-            .await?;
-        let models = result
-            .get("capabilities")
-            .and_then(|caps| caps.get("models"))
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        Ok(models
-            .into_iter()
-            .filter_map(|value| serde_json::from_value::<ProviderCapabilityModel>(value).ok())
-            .collect())
-    }
-
+impl BackendClient {
     pub async fn metrics_window_query(
         &self,
         window: &str,
@@ -1518,12 +1123,6 @@ impl BackendClient {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SkillRecord {
-    pub name: Option<String>,
-    pub description: Option<String>,
-    pub version: Option<String>,
-    pub enabled: Option<bool>,
-    #[serde(alias = "importedAt")]
-    pub imported_at: Option<u64>,
-}
+// ── Re-exports from state_sync ──────────────────────────────────────────────
+
+pub use crate::state_sync::{SkillRecord, StateSyncEvent, start_state_sync_listener};

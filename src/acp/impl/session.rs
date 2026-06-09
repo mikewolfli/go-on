@@ -599,7 +599,7 @@ mod tests {
 
         let result = mgr.validate_token(&token);
         assert!(result.valid);
-        let session = result.session.unwrap();
+        let session = result.session.expect("valid token should have a session");
         assert_eq!(session.user_id, "dave");
         assert_eq!(session.roles, vec!["admin", "superuser"]);
         assert_eq!(session.tenant_id, Some("tenant-42".into()));
@@ -613,9 +613,15 @@ mod tests {
     fn test_revoke_token_for_user() {
         let mgr = test_manager();
 
-        let t1 = mgr.issue_token("eve", &["user"], None, 3600).unwrap();
-        let t2 = mgr.issue_token("eve", &["admin"], None, 3600).unwrap();
-        let t3 = mgr.issue_token("frank", &["user"], None, 3600).unwrap();
+        let t1 = mgr
+            .issue_token("eve", &["user"], None, 3600)
+            .expect("should issue token for eve");
+        let t2 = mgr
+            .issue_token("eve", &["admin"], None, 3600)
+            .expect("should issue admin token for eve");
+        let t3 = mgr
+            .issue_token("frank", &["user"], None, 3600)
+            .expect("should issue token for frank");
 
         // Revoke all of eve's sessions.
         assert!(
@@ -625,7 +631,7 @@ mod tests {
 
         // Eve's tokens should no longer be present in the store.
         // (validate_token auto-provisions a fresh session, so the cached entry is gone.)
-        let inner = mgr.inner.read().unwrap();
+        let inner = mgr.inner.read().expect("should acquire read lock");
         assert!(!inner.sessions.contains_key(&t1));
         assert!(!inner.sessions.contains_key(&t2));
         assert!(inner.sessions.contains_key(&t3));
@@ -639,14 +645,16 @@ mod tests {
     fn test_revoke_single_session() {
         let mgr = test_manager();
 
-        let token = mgr.issue_token("grace", &["user"], None, 3600).unwrap();
+        let token = mgr
+            .issue_token("grace", &["user"], None, 3600)
+            .expect("should issue token for grace");
         assert!(mgr.revoke_session(&token), "should remove the session");
         assert!(
             !mgr.revoke_session(&token),
             "second removal should return false"
         );
 
-        let inner = mgr.inner.read().unwrap();
+        let inner = mgr.inner.read().expect("should acquire read lock");
         assert!(!inner.sessions.contains_key(&token));
     }
 
@@ -657,7 +665,9 @@ mod tests {
     #[test]
     fn test_extract_user_from_request() {
         let mgr = test_manager();
-        let token = mgr.issue_token("hank", &["user"], None, 3600).unwrap();
+        let token = mgr
+            .issue_token("hank", &["user"], None, 3600)
+            .expect("should issue token for hank");
 
         let headers = format!(
             "Authorization: Bearer {}\r\nContent-Type: application/json",
@@ -665,7 +675,10 @@ mod tests {
         );
         let session = mgr.extract_user_from_request(&headers);
         assert!(session.is_some());
-        assert_eq!(session.unwrap().user_id, "hank");
+        assert_eq!(
+            session.expect("should extract user session").user_id,
+            "hank"
+        );
     }
 
     #[test]
@@ -691,8 +704,12 @@ mod tests {
     #[test]
     fn test_cleanup_expired_sessions() {
         let mgr = test_manager();
-        let _alice = mgr.issue_token("alice", &["user"], None, 3600).unwrap();
-        let _bob = mgr.issue_token("bob", &["user"], None, 1).unwrap();
+        let _alice = mgr
+            .issue_token("alice", &["user"], None, 3600)
+            .expect("should issue token for alice");
+        let _bob = mgr
+            .issue_token("bob", &["user"], None, 1)
+            .expect("should issue token for bob");
 
         // Bob's token will expire after ~1 s.
         thread::sleep(Duration::from_millis(1100));
@@ -710,11 +727,17 @@ mod tests {
         let mgr = test_manager();
         let result = mgr.validate_token("too-few-parts");
         assert!(!result.valid);
-        assert!(result.reason.unwrap().contains("malformed"));
+        assert!(result
+            .reason
+            .expect("malformed token should have a reason")
+            .contains("malformed"));
 
         let result2 = mgr.validate_token("a:b:c:d:extra");
         assert!(!result2.valid);
-        assert!(result2.reason.unwrap().contains("malformed"));
+        assert!(result2
+            .reason
+            .expect("malformed token should have a reason")
+            .contains("malformed"));
     }
 
     #[test]
