@@ -17,7 +17,7 @@
 //!   2. Call `fetch_catalog()` to get the authoritative catalog
 //!   3. Merge or overlay the backend catalog on top of `built_in_provider_specs()`
 //!   4. Cache the result so subsequent lookups use the backend data
-//! See F-GAP-59 for tracking.
+//!      See F-GAP-59 for tracking.
 
 use crate::backend::BackendClient;
 use serde_json::Value;

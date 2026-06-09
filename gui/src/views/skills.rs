@@ -3,8 +3,9 @@ use std::sync::mpsc;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::backend::{BackendClient, SkillRecord};
+use crate::backend::BackendClient;
 use crate::i18n::I18n;
+use crate::state_sync::SkillRecord;
 use crate::views::security_prefs;
 use crate::widgets::cache::CachedView;
 

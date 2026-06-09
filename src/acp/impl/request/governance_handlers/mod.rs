@@ -1,0 +1,37 @@
+//! governance_handlers -- Governance status, plan, audit, and remediation handlers.
+//!
+//! Split from the monolithic `governance_handlers.rs` into sub-modules:
+//! - `audit`:   Audit event types and persistence (append / load)
+//! - `status`:  `handle_governance_status` — comprehensive governance status
+//! - `plan`:    Plan get/update handlers and norms helper
+//! - `actions`: `handle_governance_audit_recent`, `handle_governance_remediate`,
+//!   `handle_governance_config_save`
+
+pub(super) mod actions;
+pub(super) mod audit;
+pub(super) mod plan;
+pub(super) mod status;
+
+// ── Import everything from parent `request.rs` so sub-modules
+//     can access sibling-pack items via `super::<name>`.
+use super::*;
+
+// ── Re-exports for parent module (`request.rs` `use self::governance_handlers::*`) ──
+
+#[allow(unused_imports)] // re-exports used by sibling packs via super::governance_handlers::*
+pub(super) use audit::{
+    append_governance_audit_event, load_governance_audit_events, GovernanceAuditEvent,
+};
+
+#[allow(unused_imports)]
+pub(super) use status::handle_governance_status;
+
+#[allow(unused_imports)]
+pub(super) use plan::{
+    handle_governance_plan_get, handle_governance_plan_update, norms_tracked_for,
+};
+
+#[allow(unused_imports)]
+pub(super) use actions::{
+    handle_governance_audit_recent, handle_governance_config_save, handle_governance_remediate,
+};

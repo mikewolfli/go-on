@@ -77,24 +77,28 @@ pub struct ToolCapabilityProfile {
 /// Tool trait
 ///
 /// All tools must implement this trait. The `run` method should be instrumented for tracing and performance monitoring in the implementation, not on the trait itself.
-pub trait Tool: Send + Sync {
+pub trait Tool: Send + Sync + 'static {
     /// Returns the tool's unique name.
     fn name(&self) -> &'static str;
     /// Executes the tool with the given input. Should emit tracing spans for performance analysis (implementations only).
     fn run(&self, input: &ToolInput) -> Result<ToolOutput>;
 
     /// Async variant of `run` for non-blocking execution in async contexts.
-    /// The default implementation wraps the sync `run` in `tokio::task::block_in_place`.
-    /// This is safe for CPU-bound tools that do not call async code internally.
-    /// I/O-bound tools SHOULD override this method with a native async implementation
-    /// (e.g. using `tokio::task::spawn_blocking` with owned data) to avoid
-    /// blocking the async runtime worker thread.
-    fn run_async<'a>(
-        &'a self,
-        input: &'a ToolInput,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send + 'a>> {
-        let input = input.clone();
-        Box::pin(async move { tokio::task::block_in_place(move || self.run(&input)) })
+    /// The default implementation offloads the synchronous `run` call to
+    /// `tokio::task::spawn_blocking`, which moves the work off the async
+    /// runtime worker thread and onto the blocking thread pool.
+    ///
+    /// I/O-bound tools SHOULD override this method with a fully async
+    /// implementation for optimal performance.
+    fn run_async(
+        self: std::sync::Arc<Self>,
+        input: ToolInput,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ToolOutput>> + Send>> {
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || self.run(&input))
+                .await
+                .map_err(|e| anyhow::anyhow!("tool blocking task failed: {}", e))?
+        })
     }
 }
 

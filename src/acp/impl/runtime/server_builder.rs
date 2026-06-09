@@ -31,7 +31,7 @@ use crate::vector::VectorStore;
 ///
 /// This function replaces the `AcpServer::new` constructor.
 #[allow(clippy::too_many_arguments)]
-pub fn new_acp_server(
+pub async fn new_acp_server(
     flow: Arc<FlowManager>,
     registry: Arc<AgentRegistry>,
     cache: Option<Arc<crate::cache::ResponseCache>>,
@@ -258,7 +258,7 @@ pub fn new_acp_server(
     {
         use crate::memory::memory_bridge::memory_base_path;
         use crate::memory::memory_persistence::MemoryPersistence;
-        use crate::memory::memory_retrieval::MemoryRetrievalEngine;
+        use crate::memory::wire_memory_retrieval;
         let base = memory_base_path();
         let db_path = base.join("warm.db");
         let cold_path = base.join("cold");
@@ -267,7 +267,7 @@ pub fn new_acp_server(
             // Both instances share the same underlying SQLite database store.
             let retrieval_engine = MemoryPersistence::new(&db_path, &cold_path, None)
                 .ok()
-                .map(|retrieval_mp| Arc::new(MemoryRetrievalEngine::new(retrieval_mp)));
+                .map(|retrieval_mp| Arc::new(wire_memory_retrieval(retrieval_mp)));
             let mp = Arc::new(mp);
             builder = builder.with_memory_persistence(mp);
             if let Some(engine) = retrieval_engine {
@@ -386,7 +386,7 @@ pub fn new_acp_server(
             ));
 
             // B51-26: Shared wiring extracted to wire_server()
-            wire_server(&mut server, &registry);
+            wire_server(&mut server, &registry).await;
 
             // GAP-B52-30: Register security advisor alert channel with the alert manager.
             // Forward security alerts to the observability pipeline.
@@ -693,7 +693,7 @@ pub fn new_acp_server(
             fallback_server.governance_deps.rbac_enforcer = Some(rbac_enforcer);
 
             // B51-26: Shared wiring extracted to wire_server()
-            wire_server(&mut fallback_server, &registry);
+            wire_server(&mut fallback_server, &registry).await;
 
             fallback_server
         }
@@ -703,7 +703,7 @@ pub fn new_acp_server(
 /// Shared wiring applied after AcpServer construction in both the primary builder
 /// success path and the fallback path.  Extracted to eliminate ~250 lines of
 /// duplicated code between the two branches (B51-26).
-fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
+async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
     // Create session manager if user auth is enabled
     if server.runtime_config.user_auth_enabled {
         use crate::acp::r#impl::session::{AuthConfig, SessionManager};
@@ -821,32 +821,11 @@ fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
 
     // Start WebSocket heartbeat and wire broadcast fn.
     //
-    // R6 (ARCH-07): wire_server() is called from new_acp_server(), which is
-    // intentionally synchronous — it constructs an AcpServer from builder and
-    // config, not from an async context.  The WebSocket heartbeat is a one-time
-    // async setup step that must complete before the server starts, so we wrap
-    // it in block_in_place + block_on to run it on the current thread without
-    // requiring the caller to be in an async context.  tokio::spawn would race
-    // with subsequent synchronous wiring (session_registry assignment below).
-    // Use try_current() to avoid panicking if no runtime is present (GAP-B58-C07).
-    {
-        let handle = match tokio::runtime::Handle::try_current() {
-            Ok(h) => h,
-            Err(_) => {
-                tracing::warn!("No tokio runtime available — skipping WebSocket heartbeat setup");
-                return;
-            }
-        };
-        let ws = ws_hub.clone();
-        let sr = session_registry.clone();
-        tokio::task::block_in_place(move || {
-            handle.block_on(async {
-                ws.start_heartbeat().await;
-                let broadcast_fn = ws.create_broadcast_fn();
-                sr.set_broadcast_fn(broadcast_fn).await;
-            });
-        });
-    }
+    // BLUE67-R9: wire_server() is now async, so we can directly .await
+    // the WebSocket heartbeat setup instead of using block_in_place + block_on.
+    ws_hub.start_heartbeat().await;
+    let broadcast_fn = ws_hub.create_broadcast_fn();
+    session_registry.set_broadcast_fn(broadcast_fn).await;
 
     server.session.session_registry = Some(session_registry);
     server.websocket_hub = Some(ws_hub);

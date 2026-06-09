@@ -1122,7 +1122,3 @@ impl BackendClient {
         self.rpc_call("config.baseline", None).await
     }
 }
-
-// ── Re-exports from state_sync ──────────────────────────────────────────────
-
-pub use crate::state_sync::{SkillRecord, StateSyncEvent, start_state_sync_listener};

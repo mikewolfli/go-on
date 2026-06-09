@@ -1,67 +1,12 @@
+//! Governance status handler — comprehensive governance status report.
+
 use super::*;
-
-// ---------------------------------------------------------------------------
-// Governance audit event types
-// ---------------------------------------------------------------------------
-
-const GOVERNANCE_AUDIT_DIR: &str = ".goon/governance";
-const GOVERNANCE_AUDIT_FILE: &str = "audit.ndjson";
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct GovernanceAuditEvent {
-    timestamp: u64,
-    action: String,
-    actor: String,
-    result: String,
-    detail: Value,
-}
-
-fn append_governance_audit_event(event: &GovernanceAuditEvent) -> Result<()> {
-    let dir = std::path::Path::new(GOVERNANCE_AUDIT_DIR);
-    fs::create_dir_all(dir)?;
-    let path = dir.join(GOVERNANCE_AUDIT_FILE);
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
-    let line = serde_json::to_string(event)?;
-    writeln!(file, "{}", line)?;
-    Ok(())
-}
-
-pub(super) fn load_governance_audit_events(limit: usize) -> Result<Vec<GovernanceAuditEvent>> {
-    if limit == 0 {
-        return Ok(Vec::new());
-    }
-
-    let path = std::path::Path::new(GOVERNANCE_AUDIT_DIR).join(GOVERNANCE_AUDIT_FILE);
-    let content = match fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(e.into()),
-    };
-    let mut events = Vec::new();
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let event: GovernanceAuditEvent = serde_json::from_str(trimmed)?;
-        events.push(event);
-    }
-
-    if events.len() > limit {
-        Ok(events.split_off(events.len() - limit))
-    } else {
-        Ok(events)
-    }
-}
 
 // ---------------------------------------------------------------------------
 // governance.status — comprehensive governance status
 // ---------------------------------------------------------------------------
 
-pub(super) async fn handle_governance_status(
+pub(crate) async fn handle_governance_status(
     server: &AcpServer,
     params: Value,
     request_id: Option<Value>,
@@ -80,7 +25,7 @@ pub(super) async fn handle_governance_status(
         .extract_learning_data(200)
         .unwrap_or_default();
     let recent_failed = pua_learning.iter().filter(|record| !record.passed).count();
-    let governance_audit = load_governance_audit_events(20).unwrap_or_default();
+    let governance_audit = super::audit::load_governance_audit_events(20).unwrap_or_default();
 
     let rules = super::config_pack::governance_rule_fingerprint(server.config_path.as_deref());
     let config_summary =
@@ -1334,15 +1279,15 @@ pub(super) async fn handle_governance_status(
         "approval_learning": server.governance_deps.approval_engine.is_some(),
         "audit": !governance_audit.is_empty(),
         "drift": server.governance_deps.harness_bus.is_some(),
-        "hardening": true, // always available — TenantBudgetEnforcer/TaskBudget crafted at server init
+        "hardening": true,
         "harness_bus": server.governance_deps.harness_bus.is_some(),
-        "pua": true, // always available — PuaEnforcementPlan created in server builder
-        "rationalization": true, // always available — harness_bus evaluator contains SelfRationalizationGuard
+        "pua": true,
+        "rationalization": true,
         "rbac": server.governance_deps.rbac_enforcer.is_some(),
         "reloadable_policy": server.governance_deps.policy_reloader.is_some(),
-        "review_controls": false, // separate module — no runtime instance in GovernanceServerDeps
+        "review_controls": false,
         "runtime_controls": server.governance_deps.approval_engine.is_some(),
-        "security_governor": false, // separate module — no runtime instance in GovernanceServerDeps
+        "security_governor": false,
     });
 
     let mut recommendations = Vec::new();
@@ -1741,7 +1686,6 @@ pub(super) async fn handle_governance_status(
                     "capability_consistency_mainchain": capability_consistency_mainchain_profile,
                     "shared_learning_data_flow": shared_learning_data_flow_profile,
                     "self_evolution_flow": self_evolution_flow_profile,
-                    // BLUE27 S0-S17 profiles
                     "task_graph_persistence": task_graph_persistence_profile,
                     "evaluation_harness_baseline": evaluation_harness_baseline_profile,
                     "memory_write_policy": memory_write_policy_profile,
@@ -1788,7 +1732,7 @@ pub(super) async fn handle_governance_status(
                 "workflow": workflow_profile,
                 "startup_context": startup_context_profile,
                 "rules": rules,
-                "sources": norms_tracked_for(&pua_plan),
+                "sources": super::plan::norms_tracked_for(&pua_plan),
                 "observed_learning_records": pua_learning.len(),
                 "recent_failed_learning_records": recent_failed,
                 "recent_audit_events": governance_audit.len(),
@@ -1804,293 +1748,4 @@ pub(super) async fn handle_governance_status(
         }),
     )
     .await
-}
-
-// ---------------------------------------------------------------------------
-// governance.plan.get — retrieve current PUA enforcement plan
-// ---------------------------------------------------------------------------
-
-pub(super) async fn handle_governance_plan_get(
-    server: &AcpServer,
-    request_id: Option<Value>,
-) -> Result<()> {
-    let plan = server
-        .governance_deps
-        .pua_enforcement_plan
-        .lock()
-        .map(|guard| guard.clone())
-        .unwrap_or_default();
-
-    send_result(server, request_id, json!({ "ok": true, "plan": plan })).await
-}
-
-// ---------------------------------------------------------------------------
-// governance.plan.update — modify PUA enforcement plan
-// ---------------------------------------------------------------------------
-
-pub(super) async fn handle_governance_plan_update(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    let plan = match server.governance_deps.pua_enforcement_plan.lock() {
-        Ok(mut guard) => {
-            if let Some(level) = params.get("escalation_level").and_then(Value::as_str) {
-                guard.escalation_level = level.to_string();
-            }
-            if let Some(items) = params.get("red_lines").and_then(Value::as_array) {
-                guard.red_lines = items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(ToString::to_string)
-                    .collect();
-            }
-            if let Some(items) = params.get("quality_compass").and_then(Value::as_array) {
-                guard.quality_compass = items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(ToString::to_string)
-                    .collect();
-            }
-            if let Some(items) = params.get("mandatory_safeguards").and_then(Value::as_array) {
-                guard.mandatory_safeguards = items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(ToString::to_string)
-                    .collect();
-            }
-            if let Some(items) = params.get("mandatory_evidence").and_then(Value::as_array) {
-                guard.mandatory_evidence = items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(ToString::to_string)
-                    .collect();
-            }
-            if let Some(stage_requirements) = params.get("stage_requirements") {
-                guard.stage_requirements =
-                    serde_json::from_value::<Vec<PuaStageRequirement>>(stage_requirements.clone())?;
-            }
-            guard.clone()
-        }
-        Err(_) => PuaEnforcementPlan::default(),
-    };
-
-    let event = GovernanceAuditEvent {
-        timestamp: crate::acp::prelude::now_ts().max(0) as u64,
-        action: "governance.plan.update".to_string(),
-        actor: "rpc".to_string(),
-        result: "success".to_string(),
-        detail: json!({
-            "escalation_level": plan.escalation_level,
-            "red_line_count": plan.red_lines.len(),
-            "stage_requirement_count": plan.stage_requirements.len(),
-            "mandatory_safeguards_count": plan.mandatory_safeguards.len(),
-            "mandatory_evidence_count": plan.mandatory_evidence.len(),
-        }),
-    };
-    let _ = append_governance_audit_event(&event);
-
-    send_result(server, request_id, json!({ "ok": true, "plan": plan })).await
-}
-
-// ---------------------------------------------------------------------------
-// governance.audit.recent — recent governance audit events
-// ---------------------------------------------------------------------------
-
-pub(super) async fn handle_governance_audit_recent(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    let limit = params
-        .get("limit")
-        .and_then(Value::as_u64)
-        .map(|value| value as usize)
-        .unwrap_or(20)
-        .clamp(1, 200);
-    let events = load_governance_audit_events(limit).unwrap_or_default();
-
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "audit": {
-                "limit": limit,
-                "events": events,
-            }
-        }),
-    )
-    .await
-}
-
-// ---------------------------------------------------------------------------
-// governance.remediate — apply a fix for a given risk type
-// ---------------------------------------------------------------------------
-
-pub(super) async fn handle_governance_remediate(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    let risk_id = params
-        .get("risk_id")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-
-    let action_taken = match risk_id.as_str() {
-        rid if rid.contains("pua") || rid.contains("PUA") => {
-            tracing::info!(
-                risk_id = %risk_id,
-                "governance.remediate: resetting PUA counters"
-            );
-            let mut plan = server.governance_deps.pua_enforcement_plan.lock().unwrap_or_else(|poisoned| {
-                tracing::warn!("PUA enforcement plan lock poisoned in handle_governance_remediate, recovering");
-                poisoned.into_inner()
-            });
-            *plan = PuaEnforcementPlan::default();
-            "pua_counters_reset".to_string()
-        }
-        rid if rid.contains("breaker") || rid.contains("circuit") => {
-            let reset_count = server
-                .resilience
-                .circuit_breakers
-                .lock()
-                .map(|guard| guard.reset(None))
-                .unwrap_or(0);
-            tracing::info!(
-                risk_id = %risk_id,
-                reset_count = reset_count,
-                "governance.remediate: circuit breakers reset"
-            );
-            format!("circuit_breakers_reset({})", reset_count)
-        }
-        rid if rid.contains("config") || rid.contains("warning") => {
-            let reloaded = if let Some(ref config_path) = server.config_path {
-                match crate::config::AppConfig::load(std::path::Path::new(config_path)) {
-                    Ok(_cfg) => {
-                        tracing::info!(
-                            risk_id = %risk_id,
-                            config_path = %config_path,
-                            "governance.remediate: config reloaded"
-                        );
-                        true
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            risk_id = %risk_id,
-                            error = %e,
-                            "governance.remediate: config reload failed"
-                        );
-                        false
-                    }
-                }
-            } else {
-                tracing::info!(
-                    risk_id = %risk_id,
-                    "governance.remediate: no config path to reload"
-                );
-                false
-            };
-            if reloaded {
-                "config_reloaded".to_string()
-            } else {
-                "config_reload_skipped".to_string()
-            }
-        }
-        rid if rid.contains("strict") => {
-            tracing::info!(
-                risk_id = %risk_id,
-                "governance.remediate: strict violation acknowledged"
-            );
-            "strict_violation_acknowledged".to_string()
-        }
-        _ => {
-            tracing::info!(
-                risk_id = %risk_id,
-                "governance.remediate: unknown risk type, acknowledged"
-            );
-            "acknowledged".to_string()
-        }
-    };
-
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "risk_id": risk_id,
-            "action_taken": action_taken,
-        }),
-    )
-    .await
-}
-
-// ---------------------------------------------------------------------------
-// governance.config.save — persist governance settings
-// ---------------------------------------------------------------------------
-
-pub(super) async fn handle_governance_config_save(
-    server: &AcpServer,
-    params: Value,
-    request_id: Option<Value>,
-) -> Result<()> {
-    let auto_mask_sensitive = params
-        .get("autoMaskSensitive")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let audit_enabled = params
-        .get("auditEnabled")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-
-    let mut applied: Vec<&str> = Vec::new();
-
-    if auto_mask_sensitive {
-        if server.governance_deps.harness_bus.is_some() {
-            tracing::info!("governance.config.save: autoMaskSensitive enabled");
-        }
-        applied.push("autoMaskSensitive");
-    }
-
-    if server.governance_deps.harness_bus.is_some() {
-        tracing::info!(
-            audit_enabled = audit_enabled,
-            "governance.config.save: audit toggled"
-        );
-    }
-    applied.push("auditEnabled");
-
-    tracing::debug!(
-        "governance.config.save: runtime state updated (disk persistence is a future enhancement)"
-    );
-
-    send_result(
-        server,
-        request_id,
-        json!({
-            "ok": true,
-            "applied": applied,
-        }),
-    )
-    .await
-}
-
-/// Helper: extract tracked norms from a PUA enforcement plan.
-fn norms_tracked_for(plan: &PuaEnforcementPlan) -> Vec<&str> {
-    let mut sources = Vec::new();
-    if !plan.quality_compass.is_empty() {
-        sources.push("quality_compass");
-    }
-    if !plan.red_lines.is_empty() {
-        sources.push("red_lines");
-    }
-    if !plan.mandatory_safeguards.is_empty() {
-        sources.push("mandatory_safeguards");
-    }
-    if !plan.mandatory_evidence.is_empty() {
-        sources.push("mandatory_evidence");
-    }
-    sources
 }

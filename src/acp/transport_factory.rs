@@ -219,7 +219,8 @@ pub async fn dispatch_server(
                 Some(client),
                 false,
                 None,
-            );
+            )
+            .await;
             crate::acp::r#impl::runtime::run_acp_server(&mut server).await
         }
         "acp_http" => {
@@ -237,7 +238,8 @@ pub async fn dispatch_server(
                 Some(client),
                 false,
                 None,
-            );
+            )
+            .await;
             crate::acp::r#impl::runtime::run_acp_http_server(
                 Arc::new(server),
                 acp_http_bind.to_string(),

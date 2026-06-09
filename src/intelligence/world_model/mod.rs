@@ -551,6 +551,11 @@ impl WorldModel {
     /// has been for a given task type. Returns a score in [0.0, 1.0] where higher
     /// means the agent has a strong causal relationship with successful outcomes.
     ///
+    /// IMPORTANT: All edges are recorded by `record_correlation` with property
+    /// `"state"` for both cause and effect nodes. Queries MUST use `"state"` as
+    /// the property name to match recorded observations — using `"status"` or
+    /// `"success"` would cause zero matches and always return neutral 0.5.
+    ///
     /// This is called from `CapabilityBus::decide()` as an additional scoring
     /// dimension alongside reputation, recency, and task-fit scores.
     pub fn causal_agent_insight(&self, agent_name: &str, task_type: &str) -> f64 {
@@ -559,9 +564,10 @@ impl WorldModel {
         if inner.bayesian_graph.edge_count() < 10 {
             return 0.5; // neutral — insufficient data
         }
-        // Query: how does agent_name → (task_type, success) probability look?
+        // Query: how does agent_name → (task_type) causal strength look?
+        // Using "state" as property to match record_correlation() calls.
         let paths = inner.bayesian_graph.find_paths_mcts(
-            agent_name, "status", task_type, "success", 5,    // max_path_length
+            agent_name, "state", task_type, "state", 5,    // max_path_length
             200,  // MCTS iterations (lightweight for hot path)
             0.05, // min_probability
         );

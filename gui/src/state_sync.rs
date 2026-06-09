@@ -74,7 +74,6 @@ impl StateSyncEvent {
 /// endpoint and forwards parsed events into a provided channel.
 ///
 /// The listener retries indefinitely with exponential backoff on disconnect.
-#[allow(dead_code)] // F-GAP-49 — wiring pending BLUE67 backend_manager re-integration
 pub fn start_state_sync_listener(
     base_url: &str,
     event_tx: std::sync::mpsc::Sender<StateSyncEvent>,
@@ -98,7 +97,6 @@ pub fn start_state_sync_listener(
 }
 
 /// Connect to the SSE stream once, parse frames, and forward parsed events.
-#[allow(dead_code)] // F-GAP-49 — wiring pending BLUE67 backend_manager re-integration
 async fn listen_sse_once(
     client: &reqwest::Client,
     url: &str,
@@ -140,7 +138,6 @@ async fn listen_sse_once(
 }
 
 /// Extract the `data:` field value from a single SSE frame.
-#[allow(dead_code)] // F-GAP-49 — wiring pending BLUE67 backend_manager re-integration
 fn extract_sse_data(frame: &str) -> Option<String> {
     for line in frame.lines() {
         if let Some(value) = line.strip_prefix("data: ") {

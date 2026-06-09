@@ -22,21 +22,12 @@ pub mod semantic_cache;
 pub mod summarization;
 pub mod vector_index;
 
-// NOTE: MemoryRetrievalEngine (GAP-B52-13) is implemented and ready for
-// integration. It should be injected into AcpServer via ServerBuilder once
-// the server startup path is updated to pass the persistence layer.
-// Calling code example:
-//   let engine = MemoryRetrievalEngine::new(persistence);
-//           let router = MemoryRetrievalRouter::new(engine);
-//           builder = builder.with_memory_retrieval(Arc::new(router));
-
 /// Create a `MemoryRetrievalEngine` wired for server injection.
 ///
-/// Called from `ServerBuilder::build()` when a `memory_persistence` is
-/// configured but no explicit `memory_retrieval_engine` has been set.
+/// Called from `ServerBuilder::build()` / `wire_server()` when a
+/// `MemoryPersistence` is configured but no explicit
+/// `memory_retrieval_engine` has been set via the builder.
 /// Build and wire a MemoryRetrievalEngine from an existing MemoryPersistence.
-/// TODO-BLUE64: Wire into production server builder path.
-#[allow(dead_code)] // F-GAP-49 — reserved for memory retrieval wiring
 pub fn wire_memory_retrieval(
     persistence: crate::memory::memory_persistence::MemoryPersistence,
 ) -> crate::memory::memory_retrieval::MemoryRetrievalEngine {

@@ -1,0 +1,350 @@
+//! Main entry point for the go-on ACP proxy
+//!
+//! This module handles command-line arguments, configuration loading, and server initialization.
+//!
+//! # Features
+//!
+//! - **Structured Logging**: Uses `tracing` for comprehensive observability
+//! - **Performance Monitoring**: Integrated performance metrics and profiling
+//! - **Configuration Validation**: Advanced validation with dependency analysis
+//! - **Agent Management**: Support for multiple AI agent vendors
+//! - **Error Handling**: Comprehensive error handling with panic recovery
+//! - **Internationalization**: Multi-language support with hot-reloading
+//!
+//! # Usage Examples
+//!
+//! ```bash
+//! # Start server with default configuration
+//! go-on
+//!
+//! # Start server with custom configuration
+//! go-on --config /path/to/config.toml
+//!
+//! # Validate configuration without starting server
+//! go-on --doctor --config /path/to/config.toml
+//!
+//! # Run guided onboarding
+//! go-on --init --config /path/to/config.toml
+//!
+//! # Check readiness and completeness
+//! go-on --check --config /path/to/config.toml
+//!
+//! # Enable verbose logging
+//! go-on --verbose
+//!
+//! # Specify phase to run
+//! go-on --phase review
+//! ```
+//!
+//! # Architecture Overview
+//!
+//! The application follows a modular architecture:
+//!
+//! 1. **Configuration Layer**: `config.rs`, `config_validation.rs`
+//! 2. **Telemetry Layer**: `telemetry.rs`, `telemetry_enhanced.rs`
+//! 3. **Performance Layer**: `performance.rs`, `observability.rs`
+//! 4. **Agent Layer**: `agent.rs`, `agents/` directory
+//! 5. **Protocol Layer**: `acp.rs`, `rpc_protocol.rs`
+//! 6. **Business Logic**: `flow.rs`, `task_router.rs`, `orchestrator.rs`
+//!
+//! Each layer has clear responsibilities and well-defined interfaces.
+
+pub(crate) mod cli;
+pub(crate) mod report;
+pub(crate) mod server;
+
+#[cfg(test)]
+mod tests;
+
+use std::io::IsTerminal;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use anyhow::Result;
+use clap::Parser;
+use tokio::sync::Notify;
+use tracing::{error, info};
+
+// Re-exports used by tests (via use super::*;)
+#[cfg(test)]
+pub(crate) use cli::validate_cli_protocol_mode;
+#[cfg(test)]
+pub(crate) use report::{build_completeness_report, RecommendationLevel};
+
+use crate::config::AppConfig;
+use crate::i18n::runtime::tf;
+use crate::intelligence::continuous_learning::{
+    ContinuousLearningCenter, ContinuousLearningConfig,
+};
+
+/// Get the default configuration file path
+///
+/// Search order:
+/// 1) ./config.toml
+/// 2) Platform config dir + /go-on/config.toml (created if missing)
+/// 3) Exe directory (fallback only — may not be writable)
+pub(crate) fn default_config_path() -> Result<PathBuf> {
+    let cwd_candidate = std::env::current_dir()?.join("config.toml");
+    if cwd_candidate.exists() {
+        return Ok(cwd_candidate);
+    }
+
+    let config_root = preferred_config_root(std::env::consts::OS, |key| {
+        std::env::var_os(key).map(PathBuf::from)
+    });
+    if let Some(root) = config_root {
+        let home_candidate = root.join("go-on").join("config.toml");
+        if home_candidate.exists() {
+            return Ok(home_candidate);
+        }
+        if let Some(parent) = home_candidate.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        return Ok(home_candidate);
+    }
+
+    // Last resort: exe directory (may not be writable, but better than nothing)
+    let exe = std::env::current_exe()?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("failed to resolve executable directory"))?;
+    Ok(dir.join("config.toml"))
+}
+
+pub(crate) fn preferred_config_root<F>(current_os: &str, env_get: F) -> Option<PathBuf>
+where
+    F: Fn(&str) -> Option<PathBuf>,
+{
+    if current_os == "windows" {
+        if let Some(appdata) = env_get("APPDATA") {
+            return Some(appdata);
+        }
+        return env_get("USERPROFILE").map(|p| p.join("AppData").join("Roaming"));
+    }
+
+    if let Some(xdg) = env_get("XDG_CONFIG_HOME") {
+        return Some(xdg);
+    }
+    env_get("HOME").map(|p| p.join(".config"))
+}
+
+/// Main function - entry point for the application
+pub(crate) async fn main() {
+    // NativeToolBridge and CapabilityBus are wired inside the ACP runtime
+    // (transport_factory::dispatch_server → new_acp_server), where they are
+    // genuinely used for tool execution and cognitive orchestration.
+    // No orphaned scaffolding needed here.
+
+    // Set up enhanced panic hook for production
+    std::panic::set_hook(Box::new(|panic_info| {
+        let location = panic_info
+            .location()
+            .map(|loc| loc.to_string())
+            .unwrap_or_else(|| "unknown location".to_string());
+        let payload = panic_info.payload();
+        let message = if let Some(s) = payload.downcast_ref::<&str>() {
+            *s
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            s.as_str()
+        } else {
+            "unknown panic"
+        };
+
+        error!("panic captured at {}: {}", location, message);
+
+        // Log backtrace if available
+        #[cfg(debug_assertions)]
+        {
+            let backtrace = std::backtrace::Backtrace::capture();
+            error!("backtrace:\n{:?}", backtrace);
+        }
+
+        // Exit with error code
+        std::process::exit(1);
+    }));
+
+    // Run the application and handle any errors
+    if let Err(err) = run().await {
+        error!("fatal error: {err:#}");
+        eprintln!("{}", tf("error.fatal", &[("error", &format!("{err:#}"))]));
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<()> {
+    // GAP-46-12: PluginRegistry is now properly initialized and registered.
+    // SessionCompressor and TransactionScope use targeted #[allow(dead_code)]
+    // for scaffolded API surface — no touch function needed.
+    // The registry is lazily populated with built-in plugin manifests
+    // and is available for runtime plugin discovery.
+    let plugin_registry = crate::orchestration::plugin_system::PluginRegistry::new();
+
+    // Register built-in plugins (Tool, Skill, Mode, Policy) at startup.
+    // This ensures the registry is always populated with core plugins
+    // without requiring an external registration step (B51-11).
+    plugin_registry.register_builtin_plugins();
+
+    let plugin_count = plugin_registry.count();
+    tracing::info!(
+        "PluginRegistry initialized with {} registered plugins",
+        plugin_count
+    );
+    // Register the plugin registry in capabilities for external access.
+    crate::orchestration::capabilities_registry::register_plugin_registry(plugin_registry);
+
+    // Parse command-line arguments
+    let mut cli = cli::Cli::parse();
+    if let Some(command) = cli.command.take() {
+        match command {
+            cli::CliCommand::Init => cli.setup = true,
+            cli::CliCommand::Status => cli.status = true,
+            cli::CliCommand::Diagnose => cli.diagnose = true,
+        }
+    }
+
+    // Determine configuration file path
+    let config_path = match cli.config {
+        Some(ref path) => path.clone(),
+        None => default_config_path()?,
+    };
+
+    // Perform system bootstrap (telemetry, i18n, memory health, etc.)
+    let bootstrap_cfg = crate::core::bootstrap::BootstrapConfig {
+        config_path: config_path.clone(),
+        ..Default::default()
+    };
+    crate::core::bootstrap::perform_bootstrap(&bootstrap_cfg).await?;
+
+    // GAP-B50-33: Check startup memory and start background memory monitor
+    let memory_health = crate::observability::memory_health::check_startup_memory();
+    tracing::info!(?memory_health, "startup memory check");
+    crate::observability::memory_health::print_memory_health(&memory_health);
+    if let crate::observability::memory_health::MemoryHealth::Critical { free_mb, message } =
+        &memory_health
+    {
+        anyhow::bail!(
+            "Insufficient memory to start server: {} MB free — {}",
+            free_mb,
+            message
+        );
+    }
+    crate::observability::memory_health::start_memory_monitor();
+
+    // Handle secret management commands, local model setup, and onboarding
+    if server::handle_secret_commands(&cli, &config_path)? {
+        return Ok(());
+    }
+
+    // Load, validate configuration, and handle validation-only modes
+    let config = match server::handle_validation_mode(&cli, &config_path)? {
+        Some(config) => config,
+        None => return Ok(()),
+    };
+
+    // Wrap config for hot-reload watchdog
+    let active_config: Arc<tokio::sync::RwLock<AppConfig>> =
+        Arc::new(tokio::sync::RwLock::new((*config).clone()));
+
+    // Start config hot-reload watchdog
+    let hot_reload_cfg = crate::core::config::hot_reload::HotReloadConfig {
+        config_path: config_path.clone(),
+        enabled: true,
+        ..Default::default()
+    };
+    let watchdog = crate::core::config::hot_reload::WatchDog::new(hot_reload_cfg, active_config);
+    tokio::spawn(async move {
+        if let Err(e) = watchdog.start().await {
+            tracing::warn!("Config hot-reload watchdog failed: {e}");
+        }
+    });
+
+    // ── Graceful shutdown notify (shared with all background tasks) ──
+    let shutdown_notify = Arc::new(Notify::new());
+    let sig_shutdown = shutdown_notify.clone();
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.ok();
+        info!("Received SIGINT, initiating top-level graceful shutdown");
+        sig_shutdown.notify_waiters();
+    });
+
+    // Initialize the CacheWarmingEngine for post-execution cache hit tracking.
+    // The engine is pre-warmed at startup if PreWarmConfig::warm_at_startup is true.
+    let cache_engine = crate::orchestration::orchestrator::init_cache_warming();
+    tracing::info!("CacheWarmingEngine initialized and ready");
+
+    // ── ContinuousLearningCenter background task ─────────────────────
+    // Start a periodic review cycle that consolidates experiences, detects
+    // forgetting, and advances the curriculum in the background.
+    // The center starts without an LLM agent; once agents are initialised by
+    // `start_server`, the first available agent is injected for true LLM-based
+    // semantic distillation (instead of TF-IDF fallback).
+    let learning_center = ContinuousLearningCenter::new(ContinuousLearningConfig::default());
+    let cl_agent_handle = learning_center.agent_handle();
+    let cl_shutdown = shutdown_notify.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300)); // 5 min
+        tracing::info!("ContinuousLearningCenter background task started");
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    // Run a review cycle: detect forgetting, replay important memories,
+                    // and advance curriculum stage when ready.
+                    let (replayed, evicted, patterns) = learning_center.review_cycle("system").await;
+                    if replayed > 0 || evicted > 0 {
+                        tracing::debug!(
+                            "ContinuousLearningCenter review: {replayed} replayed, {evicted} evicted, {patterns} patterns"
+                        );
+                    }
+                }
+                _ = cl_shutdown.notified() => {
+                    tracing::info!("ContinuousLearningCenter background task shutting down");
+                    break;
+                }
+            }
+        }
+    });
+    tracing::info!("ContinuousLearningCenter background task spawned");
+
+    // Delegate interactive agent onboarding to the onboarding module
+    let onboarding_cfg = crate::core::onboarding::OnboardingConfig {
+        enabled: !cli.setup
+            && !cli.chat
+            && std::env::var("GO_ON_ENABLE_LOCAL_TEST_AGENTS").is_err(),
+        is_terminal: std::io::stdin().is_terminal()
+            && std::io::stdout().is_terminal()
+            && !std::env::args().any(|a| a == "--setup" || a == "--init"),
+    };
+    if crate::core::onboarding::run_onboarding(&onboarding_cfg, &config_path).await? {
+        let config = Arc::new(AppConfig::load(&config_path)?);
+        tokio::select! {
+            result = server::start_server(config.clone(), &cli, &config_path, Some(cl_agent_handle.clone())) => {
+                result?;
+            }
+            _ = shutdown_notify.notified() => {
+                info!("Top-level shutdown signal received during onboarding server start");
+            }
+        }
+        crate::orchestration::orchestrator::warm_cache_after_success(&cache_engine);
+        return Ok(());
+    }
+
+    // Handle terminal chat mode
+    if cli.chat {
+        return server::handle_chat_mode(config, &cli, &config_path).await;
+    }
+
+    // Start the server with top-level graceful shutdown signal handling
+    tokio::select! {
+        result = server::start_server(config, &cli, &config_path, Some(cl_agent_handle)) => {
+            result?;
+        }
+        _ = shutdown_notify.notified() => {
+            info!("Top-level shutdown signal received, server exiting");
+        }
+    }
+
+    // Warm cache after successful server execution.
+    crate::orchestration::orchestrator::warm_cache_after_success(&cache_engine);
+
+    Ok(())
+}
