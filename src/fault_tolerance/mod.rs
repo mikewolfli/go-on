@@ -3,9 +3,9 @@
 //! Provides node-level fault isolation, heartbeat-based failure detection,
 //! and automatic recovery coordination across a distributed cluster.
 
-mod types;
 mod detector;
 mod recovery;
+mod types;
 
 pub use types::*;
 

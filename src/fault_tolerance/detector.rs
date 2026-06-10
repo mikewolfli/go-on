@@ -7,7 +7,7 @@ use anyhow::{anyhow, Result};
 
 use crate::fault_tolerance::{
     cluster_health_from_counts, now_millis, read_guard, write_guard, ClusterHealth,
-    EscalationLevel, FaultEvent, FaultType, FaultToleranceEngine, IsolationLevel, NodeStatus,
+    EscalationLevel, FaultEvent, FaultToleranceEngine, FaultType, IsolationLevel, NodeStatus,
     RecoveryState, MAX_FAULTS, MAX_GROUPS, MAX_HEARTBEATS,
 };
 

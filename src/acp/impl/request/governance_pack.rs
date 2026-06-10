@@ -1239,8 +1239,8 @@ mod tests {
         );
         assert_eq!(bundle["status"], "failed");
         assert!(bundle["rollback_recommendation"]["recommended"]
-                    .as_bool()
-                    .expect("rollback_recommendation.recommended should be a bool"));
+            .as_bool()
+            .expect("rollback_recommendation.recommended should be a bool"));
     }
 
     #[test]
@@ -1253,7 +1253,10 @@ mod tests {
             "msg".to_string(),
             vec![],
         );
-        assert!(bundle["files"].as_array().expect("files should be an array").is_empty());
+        assert!(bundle["files"]
+            .as_array()
+            .expect("files should be an array")
+            .is_empty());
     }
 
     // ── build_universal_governance_profile ─────────────────────────────

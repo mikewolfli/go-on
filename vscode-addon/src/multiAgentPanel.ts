@@ -14,20 +14,6 @@ interface AgentInfo {
   lastUpdated?: string;
 }
 
-const _STATUS_ICONS: Record<AgentInfo["status"], string> = {
-  thinking: "$(sync~spin)",
-  working: "$(tools)",
-  idle: "$(circle-outline)",
-  error: "$(error)",
-};
-
-const _STATUS_CLASSES: Record<AgentInfo["status"], string> = {
-  thinking: "status-thinking",
-  working: "status-working",
-  idle: "status-idle",
-  error: "status-error",
-};
-
 export class MultiAgentPanelProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "go-on-multi-agent";
   private _view?: vscode.WebviewView;

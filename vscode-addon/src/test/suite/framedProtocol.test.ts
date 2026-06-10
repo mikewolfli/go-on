@@ -358,8 +358,8 @@ suite("framedProtocol", () => {
 
       setTimeout(() => {
         // With compatibility mode, huge prefix means fallback
-        // We just verify no crash; the fallback parse attempts JSON
-        assert.ok(true, "compatibility mode handled oversized prefix");
+        // Verify the onError callback was triggered
+        assert.ok(errored, "onError should have been called");
         reader.abort();
         done();
       }, 50);

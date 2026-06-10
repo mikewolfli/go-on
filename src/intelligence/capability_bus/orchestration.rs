@@ -10,11 +10,7 @@ use tracing::warn;
 
 impl CapabilityBus {
     /// Send an evolve summary event through the transport layer.
-    pub(crate) fn evolve_send_transport_event(
-        &self,
-        q_value: f64,
-        exploration_rate: f64,
-    ) {
+    pub(crate) fn evolve_send_transport_event(&self, q_value: f64, exploration_rate: f64) {
         let transport = lock_guard(&self.transport);
         let summary = serde_json::json!({
             "q_value": q_value,

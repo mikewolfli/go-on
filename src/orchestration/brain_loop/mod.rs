@@ -569,9 +569,10 @@ impl DeepReasoningEngine {
         let agent_clone = Arc::clone(agent);
         let msg_clone = msg.clone();
 
-        let task = tokio::spawn(
-            async move { agent_clone.chat(vec![msg_clone], None, None, sender).await },
-        );
+        let task =
+            tokio::spawn(
+                async move { agent_clone.chat(vec![msg_clone], None, None, sender).await },
+            );
 
         let mut response = String::new();
         while let Some(token) = rx.recv().await {

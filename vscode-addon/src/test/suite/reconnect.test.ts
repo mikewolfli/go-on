@@ -175,9 +175,8 @@ suite("reconnect", () => {
     });
 
     test("multiple schedules increase attempts", (done) => {
-      let callCount = 0;
       const mgr = new TestableReconnectManager(async () => {
-        callCount++;
+        // intentionally empty — testing state machine contract
       });
 
       // Schedule with very short delay by using a higher jitter for small values
@@ -197,18 +196,13 @@ suite("reconnect", () => {
     });
 
     test("doReconnect is called on attempt", (done) => {
-      let called = false;
       const mgr = new TestableReconnectManager(async () => {
-        called = true;
+        // intentionally empty — testing state machine
       });
 
-      // Manually trigger by scheduling with a very short timeout isn't feasible,
-      // but we can test that the backoff values are correct
       mgr.schedule(1.0);
 
       setTimeout(() => {
-        // After 2100ms the timer should have fired
-        // Use this to verify the backoff values are reasonable
         assert.strictEqual(mgr.scheduledDelays[0], 2000);
         mgr.cancel();
         done();

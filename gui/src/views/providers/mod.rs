@@ -779,5 +779,4 @@ impl ProvidersView {
         }
         deduped
     }
-
 }

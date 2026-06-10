@@ -1,15 +1,7 @@
 use crate::views::{
-    about::AboutView,
-    autotune::AutoTuneView,
-    chat::ChatView,
-    config_editor::ConfigEditorView,
-    monitor::MonitorView,
-    prompts::PromptsView,
-    providers::ProvidersView,
-    risk_decision::RiskDecisionView,
-    security::SecurityView,
-    setup::SetupView,
-    skills::SkillsView,
+    about::AboutView, autotune::AutoTuneView, chat::ChatView, config_editor::ConfigEditorView,
+    monitor::MonitorView, prompts::PromptsView, providers::ProvidersView,
+    risk_decision::RiskDecisionView, security::SecurityView, setup::SetupView, skills::SkillsView,
     workflow::WorkflowView,
 };
 

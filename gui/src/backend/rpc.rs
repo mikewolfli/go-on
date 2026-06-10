@@ -218,7 +218,11 @@ impl BackendClient {
 
     /// Quick RPC call for health / status checks (5s timeout).
     /// Returns None if the backend is unreachable (no error message).
-    pub(crate) async fn rpc_call_quick(&self, method: &str, params: Option<Value>) -> Option<Value> {
+    pub(crate) async fn rpc_call_quick(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> Option<Value> {
         self.rpc_call_internal(&self.quick_client, method, params, QUICK_RPC_ATTEMPTS)
             .await
             .ok()
@@ -237,7 +241,10 @@ impl BackendClient {
     /// Select the highest protocol version supported by both the GUI client and
     /// the backend.  Iterates `client_versions` in descending order and returns
     /// the first version present in `server_versions`.
-    pub(crate) fn select_highest_common(client_versions: &[u16], server_versions: &[u16]) -> Option<u16> {
+    pub(crate) fn select_highest_common(
+        client_versions: &[u16],
+        server_versions: &[u16],
+    ) -> Option<u16> {
         client_versions
             .iter()
             .rev()
@@ -256,7 +263,9 @@ impl BackendClient {
         }
     }
 
-    pub(crate) fn decode_workflow_runs(value: Value) -> Result<Vec<super::WorkflowRunRecord>, String> {
+    pub(crate) fn decode_workflow_runs(
+        value: Value,
+    ) -> Result<Vec<super::WorkflowRunRecord>, String> {
         if let Ok(parsed) = serde_json::from_value::<super::WorkflowRunsResult>(value.clone()) {
             return Ok(parsed.runs);
         }

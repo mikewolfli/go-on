@@ -58,7 +58,7 @@ export class Logger {
     console.error(formatted);
   }
 
-  private format(level: string, message: string, args: unknown[]): string {
+  private format(_level: string, message: string, args: unknown[]): string {
     const prefix = `[${this.moduleName}]`;
     if (args.length === 0) {
       return `${prefix} ${message}`;

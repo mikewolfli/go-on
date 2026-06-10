@@ -38,12 +38,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let init_result = client.initialize("full").await?;
     println!(
         "   ✓ Runtime initialized: {}",
-        init_result.get("status").and_then(|v| v.as_str()).unwrap_or("ok")
+        init_result
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("ok")
     );
 
     // ── 4. Check health ─────────────────────────────────────────────────
     let health = client.health().await?;
-    println!("   ✓ Health: {} (uptime: {}s)", health.status, health.uptime_seconds);
+    println!(
+        "   ✓ Health: {} (uptime: {}s)",
+        health.status, health.uptime_seconds
+    );
 
     // ── 5. Check governance status (agents, capabilities, phases) ───────
     println!("📋 Checking governance status...");
@@ -97,10 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── 9. Fetch runtime metrics ────────────────────────────────────────
     println!("📊 Fetching runtime metrics...");
     let metrics = client.metrics_get().await?;
-    println!(
-        "   ✓ Metrics: {}",
-        serde_json::to_string(&metrics.metrics)?
-    );
+    println!("   ✓ Metrics: {}", serde_json::to_string(&metrics.metrics)?);
 
     // ── 10. View learning summary (agent performance data) ──────────────
     println!("🧠 Fetching learning summary...");
@@ -121,10 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── 12. Retrieve health probes (module-level health) ────────────────
     println!("💓 Retrieving health probes...");
     let probes = client.health_probes().await?;
-    println!(
-        "   ✓ Probes: {}",
-        serde_json::to_string(&probes.modules)?
-    );
+    println!("   ✓ Probes: {}", serde_json::to_string(&probes.modules)?);
 
     // ── Summary ─────────────────────────────────────────────────────────
     println!();

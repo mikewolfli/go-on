@@ -12,13 +12,6 @@ interface ApprovalRequest {
   timestamp: string;
 }
 
-const _RISK_COLORS: Record<ApprovalRequest["riskLevel"], string> = {
-  low: "var(--vscode-testing-iconPassed)",
-  medium: "var(--vscode-notificationsInfoIcon-foreground)",
-  high: "var(--vscode-notificationsWarningIcon-foreground)",
-  critical: "var(--vscode-notificationsErrorIcon-foreground)",
-};
-
 export class ApprovalPanelProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "go-on-approval";
   private _view?: vscode.WebviewView;

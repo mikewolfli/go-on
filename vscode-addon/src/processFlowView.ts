@@ -44,14 +44,6 @@ export class GoOnProcessFlowViewProvider implements vscode.WebviewViewProvider {
     );
   }
 
-  private _extractResponseText(result: unknown): string | undefined {
-    if (!result || typeof result !== "object") {
-      return undefined;
-    }
-    const candidate = (result as { response?: unknown }).response;
-    return typeof candidate === "string" ? candidate : undefined;
-  }
-
   public resolveWebviewView(
     webviewView: vscode.WebviewView,
     _context: vscode.WebviewViewResolveContext,

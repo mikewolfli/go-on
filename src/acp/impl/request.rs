@@ -58,6 +58,7 @@ use crate::orchestration::skill_import::{
     SkillImportStore,
 };
 use crate::orchestration::task_router::TaskRouter;
+use crate::protocol::access_mode::RequestDispatchMode;
 use crate::pua::{
     load_learning_records, DynamicQualityCompass, LearningRecord, PuaEnforcementPlan,
     PuaExecutionReport, PuaFeedbackCollector, PuaRuleEngine, PuaStageRequirement, TaskContext,
@@ -78,7 +79,6 @@ use crate::reinforcement::{
     PrimarySecondaryPolicyArtifact, RequirementContractArtifact, WorkflowGeneratedArtifact,
     WorkflowLearningBusArtifact, WorkflowLearningEvent, WorkflowResearchArtifact,
 };
-use crate::protocol::access_mode::RequestDispatchMode;
 use crate::tool::{ToolInput, ToolRegistry};
 
 use crate::rpc_protocol::{value_to_id, JsonRpcRequest, RequestTraceContext};
@@ -101,16 +101,16 @@ mod method_router;
 mod metrics_pack;
 mod ops_pack;
 pub mod prompts_pack;
-mod protocol_pack;
 mod protocol;
+mod protocol_pack;
 mod pua_pack;
 mod repro_handlers;
 mod repro_pack;
-mod util;
 mod runtime_pack;
 mod status_pack;
 pub(crate) mod tools_pack;
 mod trace_pack;
+mod util;
 pub(crate) mod workflow_pack;
 use self::chat_pack::{parse_messages, send_error, send_result};
 pub(crate) use self::checkpoint_pack::create_checkpoint_record;
@@ -128,6 +128,7 @@ use self::hardness_pack::*;
 use self::health_pack::*;
 use self::learning_pack::*;
 use self::lifecycle_pack::*;
+use self::protocol::*;
 pub use self::protocol_pack::record_tool_call_audit_with_protocol;
 use self::protocol_pack::*;
 use self::pua_pack::*;
@@ -135,7 +136,6 @@ use self::runtime_pack::*;
 use self::status_pack::*;
 use self::tools_pack::*;
 use self::trace_pack::*;
-use self::protocol::*;
 use self::util::*;
 
 pub(crate) fn append_trace_event(event: TraceEvent) {
@@ -1616,12 +1616,6 @@ pub async fn handle_request(
 
     result
 }
-
-
-
-
-
-
 
 #[cfg(test)]
 mod tests {

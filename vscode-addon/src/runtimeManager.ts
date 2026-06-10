@@ -46,7 +46,6 @@ export class GoOnManager {
   private _outputChannel?: vscode.OutputChannel;
   private stdoutBuffer = "";
   private lineBuffer = "";
-  private _droppedBytes = 0;
   /**
    * Removed fixed limit (was 3). Now uses unlimited exponential backoff
    * to support long-running multi-agent workflows (10+ min).
@@ -244,7 +243,6 @@ export class GoOnManager {
           this.stdoutBuffer += output;
           // Cap buffer at 1MB to prevent memory leak
           if (this.stdoutBuffer.length > 1024 * 1024) {
-            const excess = this.stdoutBuffer.length - 1024 * 1024;
             // Cut at line boundary to avoid truncating mid-line
             const cutPoint = this.stdoutBuffer.length - 1024 * 1024;
             const lastNewline = this.stdoutBuffer.lastIndexOf("\n", cutPoint);
@@ -255,7 +253,7 @@ export class GoOnManager {
               // No newline found — cut at boundary and note the dropped bytes
               this.stdoutBuffer = this.stdoutBuffer.slice(cutPoint);
             }
-            this._droppedBytes += excess;
+            // dropped bytes tracking reserved for future metrics
           }
           const lines = this.stdoutBuffer.split("\n");
           // Keep the last (potentially incomplete) fragment in the buffer
@@ -675,8 +673,8 @@ export class GoOnManager {
    */
   static processImageAttachment(
     dataUrl: string,
-    mimeType: string,
-    name: string,
+    _mimeType: string,
+    _name: string,
   ): {
     type: "image_url";
     image_url: { url: string; detail: string };

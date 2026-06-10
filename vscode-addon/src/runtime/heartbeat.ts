@@ -12,7 +12,6 @@ export class HeartbeatManager {
 
   private _legacyTimer: ReturnType<typeof setInterval> | null = null;
   private _legacyTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
-  private _nextPongExpectedBy = 0;
   private _framedIntervalTimer: ReturnType<typeof setInterval> | null = null;
   private _framedTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -67,7 +66,6 @@ export class HeartbeatManager {
     this._legacyTimer = setInterval(() => {
       this.sendLegacyPing();
     }, this.HEARTBEAT_INTERVAL_MS);
-    this._nextPongExpectedBy = Date.now() + this.HEARTBEAT_TIMEOUT_MS;
     this.resetLegacyTimeout();
   }
 
@@ -77,7 +75,6 @@ export class HeartbeatManager {
       clearTimeout(this._legacyTimeoutTimer);
       this._legacyTimeoutTimer = null;
     }
-    this._nextPongExpectedBy = Date.now() + this.HEARTBEAT_TIMEOUT_MS;
     this._legacyTimeoutTimer = setTimeout(() => {
       this.handleTimeout("legacy");
     }, this.HEARTBEAT_TIMEOUT_MS);

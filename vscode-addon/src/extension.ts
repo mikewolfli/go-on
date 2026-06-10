@@ -17,7 +17,7 @@ import { registerRpcCommands } from "./rpcCommandRegistry";
 import { registerCoreCommands } from "./coreCommandRegistry";
 import { GoOnManager, GoOnStatusProvider } from "./runtimeManager";
 import { disposeLogger } from "./logger";
-import { startStateSyncListener, StateSyncEvent } from "./stateSync";
+import { startStateSyncListener } from "./stateSync";
 import { protocolContract } from "./protocolContract";
 import {
   ensureGoOnBinary,
@@ -125,14 +125,6 @@ async function runGoOnSecretCommand(
  * Larger files are rejected to prevent OOM on malformed responses.
  */
 const MAX_TOML_SIZE = 1024 * 1024;
-
-/**
- * Returns all workspace folder URIs. Falls back to an empty array if no
- * workspace is open, making multi-root workspace scenarios first-class.
- */
-function _getWorkspaceRoots(): vscode.Uri[] {
-  return vscode.workspace.workspaceFolders?.map((f) => f.uri) ?? [];
-}
 
 /**
  * Returns the primary (first) workspace root URI, or undefined if no
@@ -912,7 +904,7 @@ export function activate(context: vscode.ExtensionContext) {
             3000,
           );
         },
-        onBackendRestarting(reason, restartInMs) {
+        onBackendRestarting(reason, _restartInMs) {
           output.appendLine(`[state-sync] Backend restarting: ${reason}`);
           vscode.window.showWarningMessage(
             `Go-On backend restarting: ${reason}`,

@@ -65,10 +65,15 @@ pub async fn handle_chat(
 
     let result = async {
         let lifecycle_snapshot = {
-            let lifecycle_guard = server.resilience.lifecycle_state.lock().unwrap_or_else(|poisoned| {
-                warn!("handle_chat: lifecycle_state poisoned, recovering");
-                poisoned.into_inner()
-            });
+            let lifecycle_guard =
+                server
+                    .resilience
+                    .lifecycle_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| {
+                        warn!("handle_chat: lifecycle_state poisoned, recovering");
+                        poisoned.into_inner()
+                    });
             if lifecycle_guard.is_shutting_down() {
                 Some(serde_json::to_value(lifecycle_guard.snapshot())?)
             } else {

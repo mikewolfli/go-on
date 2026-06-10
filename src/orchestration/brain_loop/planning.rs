@@ -63,7 +63,10 @@ impl BrainLoop {
     ///
     /// When set, the brain loop will emit phase and progress tokens
     /// through the reporter during its Think-Act-Observe cycle.
-    pub fn set_progress_reporter(&self, reporter: crate::agents::progress_reporter::ProgressReporter) {
+    pub fn set_progress_reporter(
+        &self,
+        reporter: crate::agents::progress_reporter::ProgressReporter,
+    ) {
         let mut inner = self.sync_write();
         inner.progress_reporter = Some(reporter);
     }
@@ -73,7 +76,10 @@ impl BrainLoop {
     /// When set, `run_async` will query the controller for historical
     /// corrective actions and inject preventive measures as constraints
     /// into the planning loop.
-    pub fn set_metacognitive(&self, mc: crate::intelligence::metacognitive::MetacognitiveController) {
+    pub fn set_metacognitive(
+        &self,
+        mc: crate::intelligence::metacognitive::MetacognitiveController,
+    ) {
         let mut inner = self.sync_write();
         inner.metacognitive = Some(mc);
     }
@@ -199,11 +205,7 @@ impl BrainLoop {
     ///
     /// When TaskContexts exist on completed steps, they are merged and
     /// assigned to new steps for reasoning chain continuity.
-    pub async fn replan(
-        &self,
-        plan_id: &str,
-        new_steps: Vec<BrainLoopStep>,
-    ) -> anyhow::Result<()> {
+    pub async fn replan(&self, plan_id: &str, new_steps: Vec<BrainLoopStep>) -> anyhow::Result<()> {
         let mut inner = write_guard(&self.inner).await;
 
         let plan = inner
@@ -362,11 +364,7 @@ impl BrainLoop {
         let avg_step_score = if inner.reflections.is_empty() {
             0.0
         } else {
-            inner
-                .reflections
-                .iter()
-                .map(|r| r.confidence)
-                .sum::<f64>()
+            inner.reflections.iter().map(|r| r.confidence).sum::<f64>()
                 / inner.reflections.len() as f64
         };
 
@@ -873,11 +871,7 @@ impl BrainLoop {
         note = "use run_async instead — this wrapper will be removed in a future release"
     )]
     // F-GAP-17: The deprecated run() wraps run_async internally
-    pub fn run(
-        &self,
-        task: &str,
-        steps: Vec<BrainLoopStep>,
-    ) -> anyhow::Result<BrainLoopProfile> {
+    pub fn run(&self, task: &str, steps: Vec<BrainLoopStep>) -> anyhow::Result<BrainLoopProfile> {
         tracing::error!(
             "BrainLoop::run() is DEPRECATED and scheduled for removal — use run_async() directly instead"
         );

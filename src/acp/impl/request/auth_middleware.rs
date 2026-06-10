@@ -125,7 +125,8 @@ mod tests {
         server.runtime_config.user_auth_enabled = enabled;
         if enabled {
             let auth_cfg = AuthConfig::from(&server.runtime_config);
-            server.session.session_manager = Some(Arc::new(SessionManager::with_auth_config(auth_cfg)));
+            server.session.session_manager =
+                Some(Arc::new(SessionManager::with_auth_config(auth_cfg)));
         }
         server
     }

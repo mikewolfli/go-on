@@ -344,7 +344,10 @@ mod tests {
 
         let default = agent.default_model();
         assert!(default.is_some(), "should have a default model");
-        assert_eq!(default.expect("default model should be Some").id, "deepseek-v4-flash");
+        assert_eq!(
+            default.expect("default model should be Some").id,
+            "deepseek-v4-flash"
+        );
     }
 
     #[test]
@@ -362,7 +365,9 @@ mod tests {
             &None,
         );
 
-        let content = payload["messages"][0]["content"].as_str().expect("messages[0] content should be a string");
+        let content = payload["messages"][0]["content"]
+            .as_str()
+            .expect("messages[0] content should be a string");
         assert!(content.contains("Be concise"));
         assert!(content.contains("Use examples"));
         assert_eq!(payload["model"], "deepseek-v4-flash");

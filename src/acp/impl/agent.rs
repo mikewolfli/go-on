@@ -181,12 +181,16 @@ fn build_review_context(
     let _original_reviewer_order = reviewer_names.clone();
 
     let reviewer_scores = {
-        let state = server.resilience.online_controller.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!(
-                "Agent online_controller lock poisoned in run_dual_review_gate, recovering"
-            );
-            poisoned.into_inner()
-        });
+        let state = server
+            .resilience
+            .online_controller
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!(
+                    "Agent online_controller lock poisoned in run_dual_review_gate, recovering"
+                );
+                poisoned.into_inner()
+            });
         state.rank_agent_names_for_phase(&review_phase_name, &reviewer_names)
     };
 
@@ -456,10 +460,16 @@ async fn run_single_review(
     // Run deterministic signals and summarize into comments (BLUE8-M6/M7)
     // M3: record reviewer outcome into online controller (learning loop)
     let elapsed_ms = started.elapsed().as_millis() as u64;
-    let mut ctrl = server.resilience.online_controller.lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("Agent online_controller lock poisoned in run_single_review, recovering");
-        poisoned.into_inner()
-    });
+    let mut ctrl = server
+        .resilience
+        .online_controller
+        .lock()
+        .unwrap_or_else(|poisoned| {
+            tracing::warn!(
+                "Agent online_controller lock poisoned in run_single_review, recovering"
+            );
+            poisoned.into_inner()
+        });
     ctrl.record_agent_outcome("review", reviewer, passed, elapsed_ms);
 
     let syntax_signal = DeterministicVerifier::run_syntax_check("");

@@ -270,7 +270,10 @@ mod tests {
                     "summary entry should be present"
                 );
                 // The summary entry should have usefulness 1.0
-                let summary = c.iter().find(|e| e.id.starts_with("summary-")).expect("summary entry should be present");
+                let summary = c
+                    .iter()
+                    .find(|e| e.id.starts_with("summary-"))
+                    .expect("summary entry should be present");
                 assert_eq!(summary.usefulness, 1.0);
                 assert_eq!(summary.class, "Summarized");
             }
@@ -304,7 +307,10 @@ mod tests {
 
         match summarizer.summarize(&entries).await {
             SummarizedMemory::Compressed(c) => {
-                let summary = c.iter().find(|e| e.id.starts_with("summary-")).expect("summary entry should be present");
+                let summary = c
+                    .iter()
+                    .find(|e| e.id.starts_with("summary-"))
+                    .expect("summary entry should be present");
                 // The summary should mention discarded entries
                 let keep_count = 4 / 2; // threshold / 2 = 2
                 for i in 0..8 {

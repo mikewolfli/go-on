@@ -266,10 +266,11 @@ async fn test_multimodal_audio_processor_config() {
 async fn test_multimodal_serialization_round_trip() {
     // ── ImageAttachment round-trip ───────────────────────────────────────
     let raw_png: Vec<u8> = vec![
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
-        0x44, 0x52,
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52,
     ];
-    let attachment = ImageAttachment::from_bytes(&raw_png, "image/png", Some("test screenshot".into()));
+    let attachment =
+        ImageAttachment::from_bytes(&raw_png, "image/png", Some("test screenshot".into()));
 
     // Serialize to JSON
     let json = serde_json::to_string(&attachment).expect("serialize ImageAttachment");
@@ -309,10 +310,7 @@ async fn test_multimodal_serialization_round_trip() {
     let no_alt_decoded: ImageAttachment =
         serde_json::from_str(&no_alt_json).expect("deserialize without alt");
     assert!(no_alt_decoded.alt_text.is_none());
-    assert_eq!(
-        no_alt_decoded.decode().expect("base64 decode"),
-        b"raw data"
-    );
+    assert_eq!(no_alt_decoded.decode().expect("base64 decode"), b"raw data");
 
     sleep(Duration::from_millis(10)).await;
 }

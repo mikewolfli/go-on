@@ -2,8 +2,8 @@
 
 This book documents the current `1.1.0` architecture and usage model of `go-on`.
 
-The runtime implements a **14-bus capability architecture** with **35 AI provider integrations**,
-**4699+ tests**, and **zero clippy warnings across all 4 build profiles**.
+The runtime implements a **14-bus capability architecture** with **35+ AI provider integrations**,
+**2252 unit tests** (zero failures), and **zero clippy warnings across all 4 build profiles**.
 
 It is organized as a bilingual mdBook:
 

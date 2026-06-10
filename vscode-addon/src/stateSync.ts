@@ -20,7 +20,9 @@ export type StateSyncEvent =
 
 /** Callbacks for each event type. */
 export interface StateSyncCallbacks {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   onModelsChanged?: (models: string[]) => void;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   onConfigReloaded?: (changedKeys: string[]) => void;
   onAgentsChanged?: (added: string[], removed: string[]) => void;
   onBackendRestarting?: (reason: string, restartInMs: number) => void;
@@ -39,7 +41,8 @@ export function stateSyncEventSummary(event: StateSyncEvent): string {
     case "agents_changed": {
       const parts: string[] = [];
       if (event.added.length > 0) parts.push(`+${event.added.length} agents`);
-      if (event.removed.length > 0) parts.push(`-${event.removed.length} agents`);
+      if (event.removed.length > 0)
+        parts.push(`-${event.removed.length} agents`);
       return `Agents changed (${parts.join(", ")})`;
     }
     case "backend_restarting":
@@ -118,13 +121,10 @@ function processFrame(
   callbacks: StateSyncCallbacks,
   log: (msg: string) => void,
 ): void {
-  let eventType = "";
   let dataStr = "";
 
   for (const line of frame.split("\n")) {
-    if (line.startsWith("event: ")) {
-      eventType = line.slice(7).trim();
-    } else if (line.startsWith("data: ")) {
+    if (line.startsWith("data: ")) {
       dataStr = line.slice(6).trim();
     }
   }

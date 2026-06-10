@@ -314,7 +314,7 @@ impl Default for ToolRecommender {
 /// Build a recommender with default search/write patterns.
 #[cfg(test)]
 #[allow(dead_code)] // F-GAP-49 — reserved for tool subsystem
-// F-GAP-49 — reserved for future use
+                    // F-GAP-49 — reserved for future use
 pub(crate) fn default_recommender() -> ToolRecommender {
     let mut rec = ToolRecommender::new();
     rec.add_pattern(TaskToolPattern {
@@ -337,7 +337,7 @@ pub(crate) fn default_recommender() -> ToolRecommender {
 /// Format a single recommendation for display.
 #[cfg(test)]
 #[allow(dead_code)] // F-GAP-49 — reserved for tool subsystem
-// F-GAP-49 — reserved for future use
+                    // F-GAP-49 — reserved for future use
 pub fn format_recommendation(rec: &ToolRecommendation) -> String {
     format!(
         "{} (score={:.3}): {}",
@@ -348,7 +348,7 @@ pub fn format_recommendation(rec: &ToolRecommendation) -> String {
 /// Look up usage stats for a tool, returning a reference.
 #[cfg(test)]
 #[allow(dead_code)] // F-GAP-49 — reserved for tool subsystem
-// F-GAP-49 — reserved for future use
+                    // F-GAP-49 — reserved for future use
 pub fn get_tool_stats<'a>(
     recommender: &'a ToolRecommender,
     tool_name: &str,

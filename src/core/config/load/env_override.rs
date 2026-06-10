@@ -215,7 +215,6 @@ pub(crate) fn validate_secret_ref(value: &str, field_name: &str) -> Result<()> {
 /// # Returns
 /// * `Result<()>` - `Ok` if the secret is considered safe; an error otherwise.
 pub(crate) fn validate_secret_security(secret: &str, field_name: &str) -> Result<()> {
-
     if secret.trim().is_empty() {
         anyhow::bail!("{}", tf("error.missing_field", &[("field", field_name)]));
     }

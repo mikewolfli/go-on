@@ -42,12 +42,12 @@ cargo run --manifest-path gui/Cargo.toml
 
 | 配置文件 | `cargo clippy -D warnings` | 测试数 |
 |:--------|:--------------------------:|:------:|
-| **profile-local** | ✅ **零警告** | **4699** |
-| **profile-simple-server** | ✅ **零警告** | **3400+** |
-| **profile-full** | ✅ **零警告** | **4000+** |
-| **profile-multi-users-server** | ✅ **零警告** | **3800+** |
+| **profile-local** | ✅ **零警告** | **2252** |
+| **profile-simple-server** | ✅ **零警告** | **全部通过** |
+| **profile-full** | ✅ **零警告** | **全部通过** |
+| **profile-multi-users-server** | ✅ **零警告** | **全部通过** |
 
-所有 19 个测试二进制文件均可编译通过。23 个 E2e 测试（需要基础设施）标记为 `#[ignore]`，不会在本地运行中执行。
+全部 2252 个单元测试零失败、零忽略通过。E2E 测试（需要基础设施）标记为 `#[ignore]`。
 
 ## 运行时协议模式
 

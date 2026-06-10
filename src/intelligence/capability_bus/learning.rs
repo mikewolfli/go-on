@@ -7,11 +7,9 @@
 //! lock ordering discipline documented in `core::CapabilityBus`.
 
 use super::core::CapabilityBus;
-use crate::intelligence::now_ms;
-use crate::intelligence::reinforcement::learning::{
-    RlTaskExecutionMetrics, SuccessCase,
-};
 use crate::intelligence::lock_guard;
+use crate::intelligence::now_ms;
+use crate::intelligence::reinforcement::learning::{RlTaskExecutionMetrics, SuccessCase};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::warn;
 

@@ -4,9 +4,8 @@
 )]
 
 mod app;
-mod backend_manager;
 mod backend;
-mod state_sync;
+mod backend_manager;
 mod config;
 mod config_store;
 mod connection;
@@ -14,6 +13,7 @@ mod crash_recovery;
 mod fs_util;
 mod i18n;
 mod keyring_util;
+mod state_sync;
 #[cfg(test)]
 mod tests;
 mod theme;

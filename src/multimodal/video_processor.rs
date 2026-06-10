@@ -530,8 +530,13 @@ mod tests {
         let proc = VideoProcessor::new(config);
         let dir = tempfile::TempDir::new().expect("create temp dir");
         let path = dir.path().join("test.mp4");
-        tokio::fs::write(&path, &[0u8; 100]).await.expect("write test file");
-        let frames = proc.extract_frames(&path, 1.0).await.expect("extract frames");
+        tokio::fs::write(&path, &[0u8; 100])
+            .await
+            .expect("write test file");
+        let frames = proc
+            .extract_frames(&path, 1.0)
+            .await
+            .expect("extract frames");
         assert!(frames.is_empty() || frames.len() <= 1);
     }
 
@@ -545,7 +550,8 @@ mod tests {
             tags: vec!["person".into(), "office".into()],
         };
         let json = serde_json::to_string(&scene).expect("serialize SceneDescription");
-        let deserialized: SceneDescription = serde_json::from_str(&json).expect("deserialize SceneDescription");
+        let deserialized: SceneDescription =
+            serde_json::from_str(&json).expect("deserialize SceneDescription");
         assert_eq!(deserialized.label, "intro");
         assert!((deserialized.confidence - 0.95).abs() < 1e-6);
     }
@@ -558,7 +564,8 @@ mod tests {
             message: Some("halfway".into()),
         };
         let json = serde_json::to_string(&p).expect("serialize VideoProgress");
-        let deserialized: VideoProgress = serde_json::from_str(&json).expect("deserialize VideoProgress");
+        let deserialized: VideoProgress =
+            serde_json::from_str(&json).expect("deserialize VideoProgress");
         assert_eq!(deserialized.step, "extract_frames");
     }
 

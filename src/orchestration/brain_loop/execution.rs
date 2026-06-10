@@ -3,7 +3,7 @@
 //! ⚠️ **DEPRECATED** (non-test): Use cognitive loop in chat_phases.rs instead.
 
 use super::{
-    read_guard, write_guard, now_epoch_ms, tf, BrainLoop, BrainLoopPhase, StepStatus, TaskContext,
+    now_epoch_ms, read_guard, tf, write_guard, BrainLoop, BrainLoopPhase, StepStatus, TaskContext,
 };
 
 // ---------------------------------------------------------------------------
@@ -54,8 +54,8 @@ impl BrainLoop {
             }
 
             // Iteration transition – check limit BEFORE incrementing.
-            let was_planning = plan.phase == BrainLoopPhase::Planning
-                || plan.phase == BrainLoopPhase::Replanning;
+            let was_planning =
+                plan.phase == BrainLoopPhase::Planning || plan.phase == BrainLoopPhase::Replanning;
             if was_planning && plan.steps[step_idx].status == StepStatus::Pending {
                 if plan.current_iteration >= plan.max_iterations {
                     plan.phase = BrainLoopPhase::Failed;

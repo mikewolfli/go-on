@@ -1318,16 +1318,25 @@ mod tests {
 
         // First two failures — still closed.
         assert_eq!(
-            engine.record_failure("cb-db").await.expect("record_failure should return a state"),
+            engine
+                .record_failure("cb-db")
+                .await
+                .expect("record_failure should return a state"),
             CircuitState::Closed
         );
         assert_eq!(
-            engine.record_failure("cb-db").await.expect("record_failure should return a state"),
+            engine
+                .record_failure("cb-db")
+                .await
+                .expect("record_failure should return a state"),
             CircuitState::Closed
         );
         // Third failure trips to open.
         assert_eq!(
-            engine.record_failure("cb-db").await.expect("record_failure should trip breaker to Open"),
+            engine
+                .record_failure("cb-db")
+                .await
+                .expect("record_failure should trip breaker to Open"),
             CircuitState::Open
         );
     }
@@ -1344,7 +1353,10 @@ mod tests {
 
         // Single failure trips to open.
         assert_eq!(
-            engine.record_failure("cb-cache").await.expect("record_failure should return a state"),
+            engine
+                .record_failure("cb-cache")
+                .await
+                .expect("record_failure should return a state"),
             CircuitState::Open
         );
 
@@ -1368,7 +1380,10 @@ mod tests {
             .expect("register_circuit_breaker should succeed");
 
         // Trip to open.
-        engine.record_failure("cb-api").await.expect("record_failure should not fail");
+        engine
+            .record_failure("cb-api")
+            .await
+            .expect("record_failure should not fail");
         assert!(!engine.is_available("cb-api").await);
 
         // Wait for recovery timeout.
@@ -1378,7 +1393,10 @@ mod tests {
         assert!(engine.probe("cb-api").await);
 
         // Record a success — should close the breaker.
-        engine.record_success("cb-api").await.expect("record_success should not fail");
+        engine
+            .record_success("cb-api")
+            .await
+            .expect("record_success should not fail");
         let health = engine.system_health().await;
         assert_eq!(health.open_circuits, 0);
     }
@@ -1392,8 +1410,14 @@ mod tests {
             .await
             .expect("register_circuit_breaker should succeed");
 
-        engine.record_failure("cb-slow").await.expect("record_failure should not fail");
-        engine.record_failure("cb-slow").await.expect("record_failure should not fail");
+        engine
+            .record_failure("cb-slow")
+            .await
+            .expect("record_failure should not fail");
+        engine
+            .record_failure("cb-slow")
+            .await
+            .expect("record_failure should not fail");
 
         // Should be open and unavailable.
         assert!(!engine.is_available("cb-slow").await);
@@ -1428,15 +1452,24 @@ mod tests {
             .await
             .expect("register_failover_group should succeed");
 
-        let new_leader = engine.trigger_failover("group-beta").await.expect("trigger_failover should succeed");
+        let new_leader = engine
+            .trigger_failover("group-beta")
+            .await
+            .expect("trigger_failover should succeed");
         assert_eq!(new_leader, "node-r1");
 
         // A second failover should go to the next replica.
-        let new_leader2 = engine.trigger_failover("group-beta").await.expect("trigger_failover should succeed");
+        let new_leader2 = engine
+            .trigger_failover("group-beta")
+            .await
+            .expect("trigger_failover should succeed");
         assert_eq!(new_leader2, "node-r2");
 
         // Third failover wraps around.
-        let new_leader3 = engine.trigger_failover("group-beta").await.expect("trigger_failover should succeed");
+        let new_leader3 = engine
+            .trigger_failover("group-beta")
+            .await
+            .expect("trigger_failover should succeed");
         assert_eq!(new_leader3, "node-r1");
     }
 
@@ -1459,7 +1492,10 @@ mod tests {
         assert_eq!(health.level, DegradationLevel::Normal);
 
         // Trip one breaker.
-        engine.record_failure("cb-1").await.expect("record_failure should not fail");
+        engine
+            .record_failure("cb-1")
+            .await
+            .expect("record_failure should not fail");
         let health2 = engine.system_health().await;
         assert_eq!(health2.open_circuits, 1);
         // One out of two open breakers triggers Constrained (more than 1/3 threshold)
@@ -1474,7 +1510,10 @@ mod tests {
             .register_circuit_breaker("cb-broken", 1, 10_000)
             .await
             .expect("register_circuit_breaker should succeed");
-        engine.record_failure("cb-broken").await.expect("record_failure should not fail");
+        engine
+            .record_failure("cb-broken")
+            .await
+            .expect("record_failure should not fail");
 
         let report = engine
             .execute_healing(SelfHealingAction::ClearCircuitBreaker, "cb-broken")
@@ -1507,9 +1546,18 @@ mod tests {
             .expect("register_failover_group should succeed");
 
         // Trip one breaker.
-        engine.record_failure("cb-1").await.expect("record_failure should not fail");
-        engine.record_failure("cb-1").await.expect("record_failure should not fail");
-        engine.record_failure("cb-1").await.expect("record_failure should not fail");
+        engine
+            .record_failure("cb-1")
+            .await
+            .expect("record_failure should not fail");
+        engine
+            .record_failure("cb-1")
+            .await
+            .expect("record_failure should not fail");
+        engine
+            .record_failure("cb-1")
+            .await
+            .expect("record_failure should not fail");
 
         let p = engine.profile().await;
         assert_eq!(p.total_circuit_breakers, 2);

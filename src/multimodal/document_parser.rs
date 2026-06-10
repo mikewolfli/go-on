@@ -952,7 +952,8 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&content).expect("serialize ParsedContent");
-        let deserialized: ParsedContent = serde_json::from_str(&json).expect("deserialize ParsedContent");
+        let deserialized: ParsedContent =
+            serde_json::from_str(&json).expect("deserialize ParsedContent");
         assert_eq!(deserialized.text_content, "Hello");
         assert_eq!(deserialized.images.len(), 1);
         assert_eq!(deserialized.tables.len(), 1);

@@ -10,9 +10,9 @@
 use super::core::CapabilityBus;
 use crate::intelligence::consciousness::AwarenessMetricType;
 use crate::intelligence::evolution_graph::{EvolutionStage, TrendDirection};
+use crate::intelligence::lock_guard;
 use crate::intelligence::self_model::SelfPerformanceSnapshot;
 use crate::intelligence::world_model::EntityType;
-use crate::intelligence::lock_guard;
 use tracing::warn;
 
 impl CapabilityBus {
@@ -102,10 +102,10 @@ impl CapabilityBus {
 
     /// Update WorldModel with entity state.
     pub(crate) fn evolve_world_model(&self, action: &str, state: &(String, String), reward: f64) {
-        if let Err(e) = self.world_model.register_entity(
-            &format!("action_{}", action),
-            EntityType::System,
-        ) {
+        if let Err(e) = self
+            .world_model
+            .register_entity(&format!("action_{}", action), EntityType::System)
+        {
             warn!("evolve: world_model.register_entity failed: {}", e);
         } else {
             let mut props = std::collections::HashMap::new();

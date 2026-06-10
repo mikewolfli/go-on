@@ -1917,11 +1917,4 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  private _getHtmlForWebview(webview: vscode.Webview) {
-    return getSettingsHtml(
-      webview,
-      this._extensionUri,
-      this.manager.isRunning(),
-    );
-  }
 }

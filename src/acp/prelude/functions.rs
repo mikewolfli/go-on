@@ -5,11 +5,9 @@
 use std::collections::HashMap;
 use std::sync::Mutex as StdMutex;
 
-use crate::agent::Message;
-use crate::acp::prelude::constants::{
-    MAX_CHECKPOINTS_PER_CONVERSATION, MAX_CONVERSATIONS_TRACKED,
-};
+use crate::acp::prelude::constants::{MAX_CHECKPOINTS_PER_CONVERSATION, MAX_CONVERSATIONS_TRACKED};
 use crate::acp::prelude::types::ConversationState;
+use crate::agent::Message;
 
 /// Get current timestamp in seconds (delegates to `crate::shared::timestamps`).
 pub fn now_ts() -> i64 {

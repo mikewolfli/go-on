@@ -1195,7 +1195,12 @@ mod tests {
 
         let retrieved = cache.get("e1");
         assert!(retrieved.is_some());
-        assert_eq!(retrieved.expect("hot cache should contain the inserted entry").id, "e1");
+        assert_eq!(
+            retrieved
+                .expect("hot cache should contain the inserted entry")
+                .id,
+            "e1"
+        );
     }
 
     #[test]
@@ -1262,9 +1267,14 @@ mod tests {
         let entry = make_entry("p1", 0.8);
         persistence.store(entry).expect("store should succeed");
 
-        let retrieved = persistence.retrieve("p1").expect("retrieve should succeed for previously stored entry");
+        let retrieved = persistence
+            .retrieve("p1")
+            .expect("retrieve should succeed for previously stored entry");
         assert!(retrieved.is_some());
-        assert_eq!(retrieved.expect("retrieved entry should be present").id, "p1");
+        assert_eq!(
+            retrieved.expect("retrieved entry should be present").id,
+            "p1"
+        );
     }
 
     #[test]
@@ -1276,14 +1286,23 @@ mod tests {
         let persistence = MemoryPersistence::new(&db_path, &cold_path, None)
             .expect("persistence should initialize");
         let entry = make_entry("promo1", 0.9);
-        persistence.store(entry.clone()).expect("store should succeed");
-        persistence.promote_to_warm(entry).expect("promote to warm should succeed");
+        persistence
+            .store(entry.clone())
+            .expect("store should succeed");
+        persistence
+            .promote_to_warm(entry)
+            .expect("promote to warm should succeed");
 
         // Should no longer be in hot (but still retrievable from warm).
-        let retrieved = persistence.retrieve("promo1").expect("retrieve should succeed for previously stored entry");
+        let retrieved = persistence
+            .retrieve("promo1")
+            .expect("retrieve should succeed for previously stored entry");
         assert!(retrieved.is_some());
         // Access brings it back to hot
-        assert_eq!(retrieved.expect("retrieved entry should be present").tier, MemoryTier::Hot);
+        assert_eq!(
+            retrieved.expect("retrieved entry should be present").tier,
+            MemoryTier::Hot
+        );
     }
 
     #[test]
@@ -1303,12 +1322,18 @@ mod tests {
         .expect("persistence should initialize");
 
         // Entry with low usefulness → gets demoted to cold (not promoted to warm)
-        persistence.store(make_entry("low", 0.1)).expect("store should succeed");
+        persistence
+            .store(make_entry("low", 0.1))
+            .expect("store should succeed");
 
         // Entry with high usefulness → promoted to warm
-        persistence.store(make_entry("high", 0.8)).expect("store should succeed");
+        persistence
+            .store(make_entry("high", 0.8))
+            .expect("store should succeed");
 
-        let report = persistence.auto_migrate().expect("auto migration should run");
+        let report = persistence
+            .auto_migrate()
+            .expect("auto migration should run");
         assert_eq!(report.promoted_hot_to_warm, 1);
         assert_eq!(report.demoted_hot_to_cold, 1);
     }
@@ -1326,7 +1351,9 @@ mod tests {
         let entry = make_entry("idx1", 0.5);
         persistence.store(entry).expect("store should succeed");
 
-        let index = persistence.load_metadata_index().expect("load metadata index should succeed");
+        let index = persistence
+            .load_metadata_index()
+            .expect("load metadata index should succeed");
         // Hot-only entries don't appear in the index (only warm + cold).
         assert_eq!(index.warm_count, 0);
         assert_eq!(index.cold_count, 0);
@@ -1342,10 +1369,15 @@ mod tests {
             .expect("persistence should initialize");
 
         let entry = make_entry("dem1", 0.5);
-        persistence.store(entry.clone()).expect("store should succeed");
+        persistence
+            .store(entry.clone())
+            .expect("store should succeed");
         let demoted = persistence.demote(&entry).expect("demote should succeed");
         assert!(demoted.is_some());
-        assert_eq!(demoted.expect("demoted entry should be present").tier, MemoryTier::Warm);
+        assert_eq!(
+            demoted.expect("demoted entry should be present").tier,
+            MemoryTier::Warm
+        );
     }
 
     #[test]
@@ -1358,16 +1390,25 @@ mod tests {
             .expect("persistence should initialize");
 
         let entry = make_entry("prom2", 0.5);
-        persistence.store(entry.clone()).expect("store should succeed");
+        persistence
+            .store(entry.clone())
+            .expect("store should succeed");
         // Move to warm first, then promote to cold.
         // retrieve() brings entries back to hot on access, so promote
         // a warm entry directly without going through retrieve.
-        persistence.promote_to_warm(entry.clone()).expect("promote to warm should succeed");
+        persistence
+            .promote_to_warm(entry.clone())
+            .expect("promote to warm should succeed");
 
         let mut warm_entry = entry;
         warm_entry.tier = MemoryTier::Warm;
-        let promoted = persistence.promote(&warm_entry).expect("promote should succeed");
+        let promoted = persistence
+            .promote(&warm_entry)
+            .expect("promote should succeed");
         assert!(promoted.is_some());
-        assert_eq!(promoted.expect("promoted entry should be present").tier, MemoryTier::Cold);
+        assert_eq!(
+            promoted.expect("promoted entry should be present").tier,
+            MemoryTier::Cold
+        );
     }
 }

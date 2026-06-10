@@ -178,7 +178,12 @@ mod tests {
             .dispatch("ping", &server, Value::Null, None, &trace)
             .await;
         assert!(result.is_some(), "registered handler should return Some");
-        assert!(result.expect("registered handler should return Some").is_ok(), "handler should succeed");
+        assert!(
+            result
+                .expect("registered handler should return Some")
+                .is_ok(),
+            "handler should succeed"
+        );
 
         // Unregistered method returns None
         let result = router

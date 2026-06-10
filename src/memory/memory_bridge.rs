@@ -264,7 +264,8 @@ mod tests {
         let tmp = tempfile::tempdir().expect("create temp dir");
         let db_path = tmp.path().join("warm.db");
         let cold_path = tmp.path().join("cold");
-        let persistence = MemoryPersistence::new(&db_path, &cold_path, None).expect("create MemoryPersistence");
+        let persistence =
+            MemoryPersistence::new(&db_path, &cold_path, None).expect("create MemoryPersistence");
 
         // Store an entry via the bridge
         let entry = make_canonical("bridge-test-1", MemoryClass::Observation, 0.80);
@@ -284,7 +285,9 @@ mod tests {
         let tmp = tempfile::tempdir().expect("create temp dir");
         let db_path = tmp.path().join("warm.db");
         let cold_path = tmp.path().join("cold");
-        let persistence = Arc::new(MemoryPersistence::new(&db_path, &cold_path, None).expect("create MemoryPersistence"));
+        let persistence = Arc::new(
+            MemoryPersistence::new(&db_path, &cold_path, None).expect("create MemoryPersistence"),
+        );
 
         let cancel = CancellationToken::new();
         let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");

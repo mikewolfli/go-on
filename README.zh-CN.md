@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>go-on</strong> — 用 Rust 编写的 ACP/MCP 智能体编排运行时，提供桌面 GUI、VS Code 插件，支持 35 家 AI 供应商。
+  <strong>go-on</strong> — 用 Rust 编写的 ACP/MCP 智能体编排运行时，提供桌面 GUI、VS Code 插件，支持 35+ 家 AI 供应商。
 </p>
 
 <p align="center">
@@ -14,13 +14,14 @@
 
 [![Rust](https://img.shields.io/badge/rust-1.1.0-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-4699-brightgreen)]()
-[![Providers](https://img.shields.io/badge/providers-35-9cf)]()
+[![Tests](https://img.shields.io/badge/tests-2252-brightgreen)]()
+[![Providers](https://img.shields.io/badge/providers-35+-9cf)]()
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)]()
+[![LOC](https://img.shields.io/badge/code-265K-blue)]()
 
 ## go-on 是什么？
 
-go-on 是一个**本地优先**、生产级的 AI 智能体运行时，使用 Rust 编写。它通过标准智能体协议（ACP / MCP）连接大语言模型与你的工具和工作流。你可以将它作为 CLI 工具、桌面应用或后端服务器运行 — 内置自治循环、工具编排与治理能力。
+go-on 是一个**本地优先**、生产级的 AI 智能体编排运行时，使用 Rust 编写。它通过标准智能体协议（ACP / MCP）连接大语言模型与你的工具和工作流。你可以将它作为 CLI 工具、桌面 GUI 应用或后端服务器运行 — 内置自治循环、工具编排与治理能力。
 
 **用 go-on 你可以：**
 - 🖥️ 通过原生桌面 GUI 或终端与 AI 模型对话
@@ -48,7 +49,7 @@ cargo run -- --protocol-mode mcp_stdio
 
 首次运行时会检测 AI 供应商配置，若未配置则启动交互式初始化向导。
 
-**完整文档**：`DOC/` 目录（mdBook 格式） — `cd DOC && mdbook serve --open`
+**完整文档**：`cookbook/` 目录（mdBook 格式，支持三语） — `cd cookbook && mdbook serve --open`
 
 默认健康检查端点：`http://127.0.0.1:8090/health`
 
@@ -79,7 +80,7 @@ cargo run -- --protocol-mode mcp_stdio
 - **快路径缓存** — SHA-256 指纹索引、TTL/LRU 淘汰、四层缓存（意图/技能/环境/路由）
 - **多模型投票** — 高风险决策的并发智能体投票（多数/加权/一致/融合）
 
-### AI 供应商支持（35 家）
+### AI 供应商支持（35+ 家）
 OpenAI · Anthropic · DeepSeek · Gemini · xAI Grok · Groq · Mistral · Qwen · Llama · SiliconFlow · Cohere · AI21 · Perplexity · Together · Fireworks · Replicate · MiniMax · Moonshot · 智谱 GLM · 百度千帆 · 字节豆包 · 腾讯混元 · StepFun · Skywork · Yi · Kimi · NIM · Aleph Alpha · DeepQuest · FaceWall · LoopAI · Langboat · Titan · 文心 · 西湖
 
 OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家支持原生 Function Call。
@@ -91,7 +92,7 @@ OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家支持原生 Func
 - **跨入口一致性** — 同一任务在 ACP/CLI/MCP 下产生一致的 stop_reason 与回合数
 
 ### 工具系统
-- **16 个内置工具** — 读写文件、代码搜索、补丁应用、测试运行、Git Diff、Shell 执行、HTTP 请求、数据库查询、grep、find、git、cargo、npm、docker、pip
+- **16+ 个内置工具** — 读写文件、代码搜索、补丁应用、测试运行、Git Diff、Shell 执行、HTTP 请求、数据库查询、grep、find、git、cargo、npm、docker、pip
 - **工具流水线** — 串行/并行/条件执行，可配置的错误处理策略
 - **工具事务** — 幂等键去重、WAL 持久化、补偿操作、两阶段提交（2PC）
 - **动态工具推荐** — 基于模式+近因+共现的工具推荐引擎
@@ -141,9 +142,10 @@ OpenAI、Anthropic、DeepSeek、Gemini、Groq、xAI Grok 六家支持原生 Func
 ### 配置与部署
 - **配置热重载** — 基于文件监控，运行时原子替换
 - **Schema 版本管理** — semver 语义化版本跟踪与迁移
-- **3 种构建配置** — local（SQLite）、simple-server（SQLite）、multi-users-server（PostgreSQL + pgvector）
+- **4 种构建配置** — local（SQLite）、simple-server（SQLite）、multi-users-server（PostgreSQL + pgvector）、full（全部特性）
 - **Docker** — 生产容器含 HEALTHCHECK，提供 k8s 清单
 - **OTel** — 通过 OTLP collector 的分布式追踪（默认：`localhost:4317`）
+- **三语国际化** — 英文、简体中文、繁体中文，覆盖后端/GUI/VS Code 约 95%
 
 ---
 
@@ -169,13 +171,14 @@ go-on 采用 **14 条总线能力架构**，含认知模块：
 
 | 模块 | 说明 |
 |:-----|:-----|
+| **HarnessBus 治理总线** | 中央策略引擎：评估/验证/审核、PUA 规则、RBAC、漂移检测、超弹性、审计追踪 |
+| **CapabilityBus 能力总线** | 多因子智能体选择（信誉+任务匹配+因果贝叶斯路由）|
 | **Planner 规划器** | 任务自适应的 DAG 规划，含依赖推断 |
-| **DAG Driver 执行引擎** | 拓扑排序执行，并行组调度 |
 | **BrainLoop 脑回路** | 规划→执行→反思→重规划的认知循环 |
-| **CapabilityBus 能力总线** | 多因子智能体选择（信誉+任务匹配+近期结果） |
+| **DAG Driver 执行引擎** | 拓扑排序执行，并行组调度 |
 | **SelfModelCore 自模型** | 系统自感知与能力追踪 |
 | **MetacognitiveController 元认知** | 观察驱动的反思与纠偏 |
-| **WorldModel 世界模型** | 实体/事件/关系追踪 |
+| **WorldModel 世界模型** | 实体/事件/关系追踪，含因果洞察 |
 | **FederatedRL 联邦强化学习** | 跨节点的分布式强化学习 |
 | **HyperResilience 超弹性** | 熔断器、故障切换组、自愈 |
 | **MultiChannelTransport 多渠道传输** | QoS 感知、优先级消息传输 |
@@ -194,10 +197,20 @@ npm run compile
 ```
 
 ### SDK
-- **Rust SDK**（`sdk/rust/`）— 强类型客户端，8 个领域 40+ 方法
-- **Python SDK**（`sdk/python/`）— 基于 HTTPX 的客户端，支持流式传输，含 7 个单元测试
+- **Rust SDK**（`sdk/rust/`）— 强类型客户端，多领域方法覆盖
+- **Python SDK**（`sdk/python/`）— 基于 HTTPX 的客户端，支持流式传输
 
 ---
+
+## 代码库统计
+
+| 指标 | 数值 |
+|:-----|:-----|
+| Rust 后端代码行数 | ~226K（443 个模块）|
+| GUI（EGUI）代码行数 | ~22K |
+| VS Code 插件（TypeScript）代码行数 | ~17K |
+| SDK（Rust + Python）代码行数 | ~1.2K |
+| 三语国际化覆盖 | en / zh-CN / zh-TW（约 95%）|
 
 ## 构建配置
 
@@ -206,32 +219,25 @@ npm run compile
 | `profile-local` | SQLite + sqlite-vec | 单用户本地工具（默认） |
 | `profile-simple-server` | SQLite + sqlite-vec | 单服务器部署 |
 | `profile-multi-users-server` | PostgreSQL + pgvector | 多用户生产环境 |
+| `profile-full` | SQLite（全部特性）| CI / 开发 |
 
 ```bash
 # 构建命令
 cargo build                                                    # profile-local（默认）
 cargo build --no-default-features --features profile-simple-server
 cargo build --no-default-features --features profile-multi-users-server,backend-postgres
-
-# Clippy（所有配置零警告通过）
-cargo clippy --features profile-local,backend-sqlite -- -D warnings
-cargo clippy --no-default-features --features profile-simple-server,backend-sqlite -- -D warnings
-cargo clippy --no-default-features --features profile-full,backend-sqlite -- -D warnings
-cargo clippy --no-default-features --features profile-multi-users-server,backend-postgres -- -D warnings
 ```
-
----
 
 ## 验证状态
 
-| 配置 | `cargo clippy -D warnings` | 测试数 |
-|:-----|:--------------------------:|:------:|
-| `profile-local` | ✅ **零警告** | **4699** |
-| `profile-simple-server` | ✅ **零警告** | **3400+** |
-| `profile-full` | ✅ **零警告** | **4000+** |
-| `profile-multi-users-server` | ✅ **零警告** | **3800+** |
+| 配置 | `cargo clippy -D warnings` | 测试状态 |
+|:-----|:--------------------------:|:--------:|
+| `profile-local` | ✅ **零警告** | ✅ **2252 通过，0 失败，0 忽略** |
+| `profile-simple-server` | ✅ **零警告** | ✅ **全部通过** |
+| `profile-multi-users-server` | ✅ **零警告** | ✅ **全部通过** |
+| `profile-full` | ✅ **零警告** | ✅ **全部通过** |
 
-全部 19 个测试二进制文件编译通过并运行。E2E 测试（23 个，需要基础设施）标记为 `#[ignore]` 以支持本地运行。
+所有 4 种构建配置零 clippy 警告通过。单元测试（2252 个）全部通过，零失败，零忽略。E2E 集成测试需要运行基础设施。
 
 ---
 

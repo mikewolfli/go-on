@@ -429,7 +429,7 @@ impl std::fmt::Debug for TransactionScope {
 /// the `TransactionScope` compensation actions.
 // Reserved for future 2PC integration (F-GAP-29).
 #[allow(dead_code)] // F-GAP-49 — reserved for tool subsystem
-// F-GAP-49 — reserved for future use
+                    // F-GAP-49 — reserved for future use
 pub async fn execute_with_two_phase_coordination(
     coordinator: &TwoPhaseCoordinator,
     tool_names: &[String],

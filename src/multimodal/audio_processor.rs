@@ -1034,7 +1034,8 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&t).expect("serialize Transcription");
-        let deserialized: Transcription = serde_json::from_str(&json).expect("deserialize Transcription");
+        let deserialized: Transcription =
+            serde_json::from_str(&json).expect("deserialize Transcription");
         assert_eq!(deserialized.text, "hello world");
         assert_eq!(deserialized.segments.len(), 1);
         assert_eq!(deserialized.language, "en");
@@ -1055,7 +1056,8 @@ mod tests {
         ];
         for fmt in &formats {
             let json = serde_json::to_string(fmt).expect("serialize AudioFormat");
-            let deserialized: AudioFormat = serde_json::from_str(&json).expect("deserialize AudioFormat");
+            let deserialized: AudioFormat =
+                serde_json::from_str(&json).expect("deserialize AudioFormat");
             assert_eq!(*fmt, deserialized);
         }
     }
@@ -1069,7 +1071,8 @@ mod tests {
         ];
         for be in &backends {
             let json = serde_json::to_string(be).expect("serialize SttBackend");
-            let deserialized: SttBackend = serde_json::from_str(&json).expect("deserialize SttBackend");
+            let deserialized: SttBackend =
+                serde_json::from_str(&json).expect("deserialize SttBackend");
             assert_eq!(*be, deserialized);
         }
     }

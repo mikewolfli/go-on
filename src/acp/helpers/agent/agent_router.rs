@@ -118,7 +118,9 @@ mod tests {
         assert_eq!(newest_rate, 1.0, "newest entry should remain");
 
         // Entry count must not exceed the cap.
-        let guard = route_table().lock().expect("route table lock should not be poisoned");
+        let guard = route_table()
+            .lock()
+            .expect("route table lock should not be poisoned");
         assert!(guard.len() <= MAX_ROUTE_ENTRIES);
     }
 

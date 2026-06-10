@@ -391,7 +391,12 @@ mod tests {
         let allowed = header_value(&headers, "Access-Control-Allow-Headers");
         // Since neither "X-Invented" nor "X-Other" are in the configured
         // allowed_headers list, the intersection is empty → no header emitted.
-        assert!(allowed.is_none() || allowed.expect("allowed headers should be present").is_empty());
+        assert!(
+            allowed.is_none()
+                || allowed
+                    .expect("allowed headers should be present")
+                    .is_empty()
+        );
     }
 
     // -- Default config construction ---------------------------------------

@@ -137,12 +137,7 @@ impl Agent for TitanAgent {
 
         for attempt in 0..=2 {
             match self
-                .chat_once(
-                    &chat_messages,
-                    &principles,
-                    &options,
-                    sender.clone(),
-                )
+                .chat_once(&chat_messages, &principles, &options, sender.clone())
                 .await
             {
                 Ok(()) => return Ok(()),

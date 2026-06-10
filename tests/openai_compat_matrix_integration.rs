@@ -12,7 +12,6 @@ use tempfile::tempdir;
 pub mod common;
 use common::CrossProcessLock;
 
-
 struct HttpHarness {
     child: Child,
     bind_addr: String,

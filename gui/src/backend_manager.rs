@@ -372,7 +372,9 @@ api_key_env = "{}"
         .unzip();
 
     if provider_lines.is_empty() && !config.providers.is_empty() {
-        eprintln!("WARNING: No providers have valid API keys. Generated config.toml will have no agents.");
+        eprintln!(
+            "WARNING: No providers have valid API keys. Generated config.toml will have no agents."
+        );
     } else if provider_lines.is_empty() {
         eprintln!("INFO: No providers configured. Generated config.toml will be minimal.");
     }
@@ -563,10 +565,9 @@ top_k = 2
                         tmp.persist(zed_path)?;
                         Ok(())
                     })() {
-                        Ok(_) => eprintln!(
-                            "backend: wrote zed-config.toml to {}",
-                            zed_path.display()
-                        ),
+                        Ok(_) => {
+                            eprintln!("backend: wrote zed-config.toml to {}", zed_path.display())
+                        }
                         Err(e) => eprintln!("backend: failed to write zed-config.toml: {}", e),
                     }
                 }

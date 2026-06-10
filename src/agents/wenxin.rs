@@ -349,7 +349,9 @@ mod tests {
             ])),
         );
 
-        let system = payload["messages"][0]["content"].as_str().expect("messages[0] content should be a string");
+        let system = payload["messages"][0]["content"]
+            .as_str()
+            .expect("messages[0] content should be a string");
         assert_eq!(payload["messages"][0]["role"], "system");
         assert!(system.contains("Check safety"));
         assert!(system.contains(STRICT_STAGE_NOTE));
@@ -370,7 +372,9 @@ mod tests {
             ])),
         );
 
-        let system = payload["messages"][0]["content"].as_str().expect("messages[0] content should be a string");
+        let system = payload["messages"][0]["content"]
+            .as_str()
+            .expect("messages[0] content should be a string");
         assert!(system.contains("Check safety"));
         assert!(!system.contains(STRICT_STAGE_NOTE));
     }

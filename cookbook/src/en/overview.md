@@ -42,12 +42,12 @@ Three build profiles support different deployment scenarios, plus a `profile-ful
 
 | Profile | `cargo clippy -D warnings` | Tests |
 |:--------|:--------------------------:|:-----:|
-| **profile-local** | ✅ **Zero warnings** | **4699** |
-| **profile-simple-server** | ✅ **Zero warnings** | **3400+** |
-| **profile-full** | ✅ **Zero warnings** | **4000+** |
-| **profile-multi-users-server** | ✅ **Zero warnings** | **3800+** |
+| **profile-local** | ✅ **Zero warnings** | **2252** |
+| **profile-simple-server** | ✅ **Zero warnings** | **all pass** |
+| **profile-full** | ✅ **Zero warnings** | **all pass** |
+| **profile-multi-users-server** | ✅ **Zero warnings** | **all pass** |
 
-All 19 test binaries compile and pass. E2e tests (23, requiring infrastructure) are marked `#[ignore]` for local runs.
+All 2252 unit tests pass with zero failures and zero ignored tests. E2e tests (requiring infrastructure) are marked `#[ignore]` for local runs.
 
 ## Runtime Protocol Modes
 

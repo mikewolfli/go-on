@@ -869,11 +869,13 @@ mod tests {
         let json_full = serde_json::to_string(&full).expect("serialize AnswerCoverage FullRepo");
         let json_subset = serde_json::to_string(&subset).expect("serialize AnswerCoverage Subset");
         assert_eq!(
-            serde_json::from_str::<AnswerCoverage>(&json_full).expect("deserialize AnswerCoverage FullRepo"),
+            serde_json::from_str::<AnswerCoverage>(&json_full)
+                .expect("deserialize AnswerCoverage FullRepo"),
             full
         );
         assert_eq!(
-            serde_json::from_str::<AnswerCoverage>(&json_subset).expect("deserialize AnswerCoverage Subset"),
+            serde_json::from_str::<AnswerCoverage>(&json_subset)
+                .expect("deserialize AnswerCoverage Subset"),
             subset
         );
     }
