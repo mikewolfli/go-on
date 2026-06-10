@@ -198,7 +198,8 @@ npm run compile
 
 ### SDKs
 - **Rust SDK** (`sdk/rust/`) — Strongly typed client with methods across multiple domains
-- **Python SDK** (`sdk/python/`) — HTTPX-based client with streaming support
+- **Python SDK** (`sdk/python/`) — HTTPX-based async client with streaming support
+- **Node.js SDK** (`sdk/nodejs/`) — TypeScript async client with 30+ methods across all API domains
 
 ---
 

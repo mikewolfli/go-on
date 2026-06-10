@@ -6,10 +6,30 @@ requires-python = ">=3.9"
 dependencies = ["httpx>=0.27"]
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "pytest-asyncio>=0.21"]
+dev = ["pytest>=7"]
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
+minversion = "7"
+
+[tool.pyright]
+include = ["go_on_sdk"]
+# JSON-RPC client inherently deals with dynamic/Any types from server responses.
+# Disable strict typing warnings that are impractical for API client code.
+reportExplicitAny = false
+reportUnknownVariableType = false
+reportUnknownArgumentType = false
+reportUnknownMemberType = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+
+[tool.ruff.lint.per-file-ignores]
+"examples/*.py" = ["T201"]  # allow print in examples
+"__init__.py" = ["D100"]  # allow missing module docstring in __init__
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

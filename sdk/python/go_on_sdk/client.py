@@ -1,12 +1,15 @@
+"""Async JSON-RPC client for go-on."""
+
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import random
 import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -152,11 +155,11 @@ class GoOnClient:
         retry_delay: float = 1.0,
         use_exponential_backoff: bool = True,
     ) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
-        self.max_retries = max_retries
-        self.retry_delay = retry_delay
-        self._use_exponential_backoff = use_exponential_backoff
+        self.base_url: str = base_url.rstrip("/")
+        self.timeout: float = timeout
+        self.max_retries: int = max_retries
+        self.retry_delay: float = retry_delay
+        self._use_exponential_backoff: bool = use_exponential_backoff
         self._client: httpx.AsyncClient = httpx.AsyncClient(
             timeout=httpx.Timeout(timeout),
             limits=httpx.Limits(
@@ -175,12 +178,10 @@ class GoOnClient:
         - attempt 2: 4.0s + jitter
         - attempt 3+: 8.0s + jitter (capped)
         """
-        import random as _random
-
         if not self._use_exponential_backoff:
             return self.retry_delay
         base = self.retry_delay * (2.0 ** min(attempt, 3))  # cap at 8x
-        jitter = _random.uniform(0, 0.1)  # 0-100ms jitter
+        jitter = random.uniform(0, 0.1)  # 0-100ms jitter
         return base + jitter
 
     async def aclose(self) -> None:
@@ -188,7 +189,8 @@ class GoOnClient:
 
     # ── Internal helpers ──────────────────────────────────────────────
 
-    async def _json_rpc(self, method: str, params: dict[str, Any] | None = None) -> Any:
+    async def _json_rpc(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Perform a JSON-RPC call and return the result dict."""
         payload: dict[str, Any] = {
             "jsonrpc": "2.0",
             "id": str(uuid.uuid4()),
@@ -203,19 +205,19 @@ class GoOnClient:
                 resp = await self._client.post(f"{self.base_url}/rpc", json=payload)
                 _ = resp.raise_for_status()
                 try:
-                    data = resp.json()
+                    data = cast(dict[str, Any], resp.json())
                 except json.JSONDecodeError:
                     raise GoOnClientError(
                         f"Server returned non-JSON response: {resp.text[:500]}"
                     ) from None
 
                 if "error" in data:
-                    err = data["error"]
+                    err = cast(dict[str, Any], data["error"])
                     raise GoOnJsonRpcError(
-                        code=err.get("code", -1),
-                        message=err.get("message", "unknown"),
+                        code=cast(int, err.get("code", -1)),
+                        message=cast(str, err.get("message", "unknown")),
                     )
-                return data.get("result", {})
+                return cast(dict[str, Any], data.get("result", {}))
             except (
                 httpx.TimeoutException,
                 httpx.PoolTimeout,
@@ -244,9 +246,7 @@ class GoOnClient:
 
     # ── Streaming chat ────────────────────────────────────────────────
 
-    async def chat_stream(
-        self, request: ChatRequest
-    ) -> AsyncGenerator[dict[str, Any], None]:
+    async def chat_stream(self, request: ChatRequest) -> AsyncGenerator[dict[str, Any], None]:
         """Send a chat request and yield SSE events as they arrive.
 
         Each yielded value is a parsed JSON object from a ``data:`` line
@@ -258,9 +258,7 @@ class GoOnClient:
             A JSON chunk from the stream.
         """
         request_dict: dict[str, Any] = {
-            "messages": [
-                {"role": m.role, "content": m.content} for m in request.messages
-            ],
+            "messages": [{"role": m.role, "content": m.content} for m in request.messages],
         }
         if request.model is not None:
             request_dict["model"] = request.model
@@ -297,22 +295,22 @@ class GoOnClient:
         """GET /health — quick health check."""
         resp = await self._client.get(f"{self.base_url}/health")
         _ = resp.raise_for_status()
-        data = resp.json()
+        data = cast(dict[str, Any], resp.json())
         return HealthResponse(
-            status=data.get("status", "unknown"),
-            version=data.get("version", ""),
-            uptime_seconds=data.get("uptime_seconds", 0),
-            modules=data.get("modules", {}),
+            status=cast(str, data.get("status", "unknown")),
+            version=cast(str, data.get("version", "")),
+            uptime_seconds=cast(int, data.get("uptime_seconds", 0)),
+            modules=cast(dict[str, Any], data.get("modules", {})),
         )
 
     async def runtime_health(self) -> HealthResponse:
         """runtime.health — full runtime health via JSON-RPC."""
         result = await self._json_rpc("runtime.health")
         return HealthResponse(
-            status=result.get("status", "unknown"),
-            version=result.get("version", ""),
-            uptime_seconds=result.get("uptime_seconds", 0),
-            modules=result.get("modules", {}),
+            status=cast(str, result.get("status", "unknown")),
+            version=cast(str, result.get("version", "")),
+            uptime_seconds=cast(int, result.get("uptime_seconds", 0)),
+            modules=cast(dict[str, Any], result.get("modules", {})),
         )
 
     async def runtime_stability(self) -> dict[str, Any]:
@@ -333,8 +331,8 @@ class GoOnClient:
         """governance.status — full governance status (~120+ profiles)."""
         result = await self._json_rpc("governance.status")
         return GovernanceStatusResponse(
-            ok=bool(result.get("ok", False)),
-            governance=result.get("governance", {}),
+            ok=bool(cast(object, result.get("ok", False))),
+            governance=cast(dict[str, Any], result.get("governance", {})),
         )
 
     async def governance_plan_get(self) -> dict[str, Any]:
@@ -350,12 +348,12 @@ class GoOnClient:
     async def health_probes(self) -> HealthProbesResponse:
         """health.probes — module-level health probes (harness_bus + capability_bus)."""
         result = await self._json_rpc("health.probes")
-        return HealthProbesResponse(modules=result.get("modules", {}))
+        return HealthProbesResponse(modules=cast(dict[str, Any], result.get("modules", {})))
 
     async def metrics_get(self) -> MetricsResponse:
         """metrics.get — get current runtime metrics."""
         result = await self._json_rpc("metrics.get")
-        return MetricsResponse(metrics=result.get("metrics", {}))
+        return MetricsResponse(metrics=cast(dict[str, Any], result.get("metrics", {})))
 
     async def metrics_prometheus(self) -> str:
         """metrics.prometheus — get Prometheus-formatted metrics."""
@@ -371,7 +369,7 @@ class GoOnClient:
     async def breaker_status(self) -> BreakerStatusResponse:
         """breaker.status — get circuit breaker status."""
         result = await self._json_rpc("breaker.status")
-        return BreakerStatusResponse(breakers=result.get("breakers", {}))
+        return BreakerStatusResponse(breakers=cast(dict[str, Any], result.get("breakers", {})))
 
     async def breaker_reset(self, name: str) -> dict[str, Any]:
         """breaker.reset — reset a circuit breaker."""
@@ -390,13 +388,13 @@ class GoOnClient:
     async def checkpoint_list(self) -> CheckpointListResponse:
         """checkpoint.list — list available checkpoints."""
         result = await self._json_rpc("checkpoint.list")
-        return CheckpointListResponse(checkpoints=result.get("checkpoints", []))
+        return CheckpointListResponse(
+            checkpoints=cast(list[dict[str, Any]], result.get("checkpoints", []))
+        )
 
     async def conversation_rollback(self, checkpoint_id: str) -> dict[str, Any]:
         """conversation.rollback — roll back to a checkpoint."""
-        return await self._json_rpc(
-            "conversation.rollback", {"checkpoint_id": checkpoint_id}
-        )
+        return await self._json_rpc("conversation.rollback", {"checkpoint_id": checkpoint_id})
 
     # ── Workflow / Task ───────────────────────────────────────────────
 
@@ -407,7 +405,7 @@ class GoOnClient:
     async def task_plan(self, description: str) -> TaskPlanResponse:
         """task.plan — plan a task."""
         result = await self._json_rpc("task.plan", {"description": description})
-        return TaskPlanResponse(plan=result.get("plan", {}))
+        return TaskPlanResponse(plan=cast(dict[str, Any], result.get("plan", {})))
 
     async def task_execute(self, plan_id: str) -> dict[str, Any]:
         """task.execute — execute a planned task."""
@@ -418,12 +416,12 @@ class GoOnClient:
     async def learning_summary(self) -> LearningSummaryResponse:
         """learning.summary — get learning loop summary."""
         result = await self._json_rpc("learning.summary")
-        return LearningSummaryResponse(summary=result.get("summary", {}))
+        return LearningSummaryResponse(summary=cast(dict[str, Any], result.get("summary", {})))
 
     async def selector_status(self) -> SelectorStatusResponse:
         """selector.status — get model selector status."""
         result = await self._json_rpc("selector.status")
-        return SelectorStatusResponse(selector=result.get("selector", {}))
+        return SelectorStatusResponse(selector=cast(dict[str, Any], result.get("selector", {})))
 
     async def knowledge_distill(self, source: str) -> dict[str, Any]:
         """knowledge.distill — run knowledge distillation."""
@@ -438,12 +436,12 @@ class GoOnClient:
     async def cost_status(self) -> CostStatusResponse:
         """cost.status — get cost optimization status."""
         result = await self._json_rpc("cost.status")
-        return CostStatusResponse(cost=result.get("cost", {}))
+        return CostStatusResponse(cost=cast(dict[str, Any], result.get("cost", {})))
 
     async def config_baseline(self) -> ConfigBaselineResponse:
         """config.baseline — get config baseline snapshot."""
         result = await self._json_rpc("config.baseline")
-        return ConfigBaselineResponse(baseline=result.get("baseline", {}))
+        return ConfigBaselineResponse(baseline=cast(dict[str, Any], result.get("baseline", {})))
 
     async def config_reload(self) -> dict[str, Any]:
         """config.reload — reload runtime config."""
@@ -452,4 +450,4 @@ class GoOnClient:
     async def harness_status(self) -> HarnessStatusResponse:
         """harness.status — get test harness status."""
         result = await self._json_rpc("harness.status")
-        return HarnessStatusResponse(harness=result.get("harness", {}))
+        return HarnessStatusResponse(harness=cast(dict[str, Any], result.get("harness", {})))

@@ -20,6 +20,7 @@ The content is based on the current workspace structure and runtime surfaces:
 - Zed integration through ACP stdio and ACP or MCP HTTP
 - VS Code addon runtime wiring
 - EGUI GUI configuration and operations
+- Node.js SDK — TypeScript async client (30+ methods)
 - Governance, security (mTLS, request signing, content safety, prompt injection detection)
 - Observability (Prometheus `/metrics`, OTel tracing, governance status endpoint)
 - Full i18n coverage (~95%) across backend, GUI, and VS Code addon

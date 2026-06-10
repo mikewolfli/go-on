@@ -198,7 +198,8 @@ npm run compile
 
 ### SDK
 - **Rust SDK**（`sdk/rust/`）— 强类型客户端，多领域方法覆盖
-- **Python SDK**（`sdk/python/`）— 基于 HTTPX 的客户端，支持流式传输
+- **Python SDK**（`sdk/python/`）— 基于 HTTPX 的异步客户端，支持流式传输
+- **Node.js SDK**（`sdk/nodejs/`）— TypeScript 异步客户端，30+ 方法覆盖全部 API 领域
 
 ---
 
