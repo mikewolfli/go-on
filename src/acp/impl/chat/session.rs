@@ -499,7 +499,7 @@ fn infer_optimal_mode(messages: &[Message], _server: &AcpServer) -> String {
 async fn send_error(
     server: &AcpServer,
     id: Option<Value>,
-    code: i64,
+    code: i32,
     message: String,
     data: Option<Value>,
 ) -> Result<()> {

@@ -6,9 +6,21 @@
  *
  * Architecture (see contracts/cross-client-sync.md):
  *   Backend → SSE stream → stateSync.ts → callbacks → UI updates
+ *
+ * BLUE68 P5-4: SSE connections use AbortController with configurable
+ * timeout and exponential backoff with full jitter for reconnection.
  */
 
 import * as vscode from "vscode";
+
+/** Default SSE connection timeout (in ms). */
+const DEFAULT_SSE_TIMEOUT_MS = 15_000;
+
+/** Maximum delay cap for exponential backoff (60 seconds). */
+const MAX_BACKOFF_MS = 60_000;
+
+/** Base delay for exponential backoff (1 second). */
+const BASE_DELAY_MS = 1_000;
 
 /** Mirror of the backend's `StateSyncEvent` (see src/protocol/state_sync.rs). */
 export type StateSyncEvent =
@@ -53,6 +65,22 @@ export function stateSyncEventSummary(event: StateSyncEvent): string {
 }
 
 /**
+ * Compute exponential backoff delay with full jitter.
+ *
+ * Implements AWS full-jitter strategy: delay = random(0, min(cap, base * 2^attempt))
+ * This prevents thundering herd when multiple clients reconnect simultaneously.
+ *
+ * @param attempt - zero-based retry attempt number
+ * @returns delay in milliseconds
+ */
+function backoffDelay(attempt: number): number {
+  const exponential = BASE_DELAY_MS * Math.pow(2, Math.min(attempt, 6)); // cap exponent at 6 (64s)
+  const capped = Math.min(exponential, MAX_BACKOFF_MS);
+  // Full jitter: random between 0 and capped
+  return Math.floor(Math.random() * capped);
+}
+
+/**
  * Start listening for state sync events from the backend.
  * Returns an abort function to stop listening.
  */
@@ -60,8 +88,10 @@ export function startStateSyncListener(
   baseUrl: string,
   callbacks: StateSyncCallbacks,
   outputChannel?: vscode.OutputChannel,
+  sseTimeoutMs: number = DEFAULT_SSE_TIMEOUT_MS,
 ): () => void {
   let aborted = false;
+  let retryAttempt = 0;
   const url = `${baseUrl.replace(/\/+$/, "")}/v1/state/events`;
 
   const log = (msg: string) => {
@@ -72,14 +102,30 @@ export function startStateSyncListener(
 
   async function connect() {
     while (!aborted) {
+      let controller: AbortController | null = null;
       try {
         log(`connecting to ${url}...`);
-        const response = await fetch(url);
+
+        // AbortController with configurable timeout for SSE connection
+        controller = new AbortController();
+        const timeoutId = setTimeout(() => {
+          controller!.abort();
+          log(`SSE connection timed out after ${sseTimeoutMs}ms`);
+        }, sseTimeoutMs);
+
+        const response = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeoutId);
+
         if (!response.ok || !response.body) {
           log(`connection failed: ${response.status}`);
-          await sleep(5000);
+          const delay = backoffDelay(retryAttempt);
+          retryAttempt++;
+          await sleep(delay);
           continue;
         }
+
+        // Successful connection — reset retry counter
+        retryAttempt = 0;
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -101,10 +147,22 @@ export function startStateSyncListener(
         }
 
         log("stream ended, reconnecting...");
-        if (!aborted) await sleep(5000);
-      } catch (err) {
-        log(`error: ${err}, reconnecting in 10s...`);
-        if (!aborted) await sleep(10000);
+        if (!aborted) {
+          const delay = backoffDelay(retryAttempt);
+          retryAttempt++;
+          await sleep(delay);
+        }
+      } catch (err: unknown) {
+        if (controller && (err as Error)?.name === "AbortError") {
+          log(`SSE connection timed out (${sseTimeoutMs}ms)`);
+        } else {
+          log(`error: ${err}`);
+        }
+        const delay = backoffDelay(retryAttempt);
+        retryAttempt++;
+        if (!aborted) await sleep(delay);
+      } finally {
+        controller = null;
       }
     }
   }

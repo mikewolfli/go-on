@@ -62,15 +62,20 @@ use crate::intelligence::continuous_learning::ContinuousLearningCenter;
 use crate::intelligence::discovery::DiscoveryCenter;
 use crate::intelligence::evolution_graph::EvolutionGraph;
 
+use crate::intelligence::adaptive_selector::AdaptiveModelSelector;
+use crate::intelligence::hot_failover::HotFailover;
 use crate::intelligence::matcher::ScenarioMatcher;
 use crate::intelligence::metacognitive::MetacognitiveController;
 use crate::intelligence::now_ms;
+use crate::intelligence::reinforcement::federated::FederatedLearning;
 use crate::intelligence::reinforcement::federated::FederatedRL;
 use crate::intelligence::reinforcement::learning::{
     ExperienceKnowledgeBase, QLearningAgent, RewardFunction,
 };
 use crate::intelligence::reputation::ReputationStore;
 use crate::intelligence::self_model::SelfModelCore;
+use crate::intelligence::token_cache::TokenMultiLevelCache;
+use crate::observability::live_performance::LivePerformanceFeed;
 
 use crate::intelligence::world_model::WorldModel;
 use crate::intelligence::{lock_guard, read_guard, write_guard};
@@ -500,6 +505,21 @@ pub struct CapabilityBus {
     /// Multi-channel message transport — protocol layer (F-GAP-29)
     pub transport: Arc<Mutex<MultiChannelTransport>>,
 
+    /// Token multi-level cache for LLM response caching (P2-1)
+    pub token_cache: Option<Arc<TokenMultiLevelCache>>,
+
+    /// Adaptive model selector for context-aware model routing (P2-3)
+    pub model_selector: Option<Mutex<AdaptiveModelSelector>>,
+
+    /// Federated learning coordinator — cross-node policy aggregation (P2-4)
+    pub federated_learning: Option<Arc<Mutex<FederatedLearning>>>,
+
+    /// Live performance feed — EMA-smoothed model cost estimates (P2-6)
+    pub live_performance: Option<Arc<LivePerformanceFeed>>,
+
+    /// Hot failover manager — transparent model failover with cooldown (P2-7)
+    pub hot_failover: Option<Arc<HotFailover>>,
+
     /// Configuration for capability bus lifecycle (GAP-B50-21)
     pub config: CapabilityBusConfig,
 
@@ -619,6 +639,11 @@ impl CapabilityBus {
                 Default::default(),
             ))),
             transport: Arc::new(Mutex::new(MultiChannelTransport::new(Default::default()))),
+            token_cache: None,
+            model_selector: None,
+            federated_learning: None,
+            live_performance: None,
+            hot_failover: None,
             config: CapabilityBusConfig::default(),
             evolve_timeout_count: std::sync::atomic::AtomicU64::new(0),
             #[cfg(feature = "sub-bus-voter-future")]
@@ -719,6 +744,36 @@ impl CapabilityBus {
     /// root cause analysis instead of template-based fallback.
     pub fn with_metacognitive_llm(mut self, agent: Arc<dyn crate::agent::Agent>) -> Self {
         self.metacognitive.set_llm_agent(agent);
+        self
+    }
+
+    /// Attach a TokenMultiLevelCache to the CapabilityBus (P2-1).
+    pub fn with_token_cache(mut self, cache: Arc<TokenMultiLevelCache>) -> Self {
+        self.token_cache = Some(cache);
+        self
+    }
+
+    /// Attach an AdaptiveModelSelector to the CapabilityBus (P2-3).
+    pub fn with_model_selector(mut self, selector: AdaptiveModelSelector) -> Self {
+        self.model_selector = Some(Mutex::new(selector));
+        self
+    }
+
+    /// Attach a FederatedLearning coordinator to the CapabilityBus (P2-4).
+    pub fn with_federated_learning(mut self, fl: Arc<Mutex<FederatedLearning>>) -> Self {
+        self.federated_learning = Some(fl);
+        self
+    }
+
+    /// Attach a LivePerformanceFeed to the CapabilityBus (P2-6).
+    pub fn with_live_performance(mut self, feed: Arc<LivePerformanceFeed>) -> Self {
+        self.live_performance = Some(feed);
+        self
+    }
+
+    /// Attach a HotFailover manager to the CapabilityBus (P2-7).
+    pub fn with_hot_failover(mut self, hf: Arc<HotFailover>) -> Self {
+        self.hot_failover = Some(hf);
         self
     }
 
@@ -1317,6 +1372,64 @@ impl CapabilityBus {
             self.evolve_timeout_count
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             warn!("evolve: evolve_consensus timed out — skipping");
+        }
+
+        // ── P2-4: Federated learning aggregation — merge client policies ──
+        if let Some(ref federated) = self.federated_learning {
+            if timeout(timeout_dur, async {
+                match federated.lock() {
+                    Ok(mut fl) => {
+                        // Only aggregate if enough clients have contributed
+                        if fl.pending_weights_count() >= fl.min_clients_required() {
+                            match fl.aggregate_round() {
+                                Ok(round) => {
+                                    tracing::info!(
+                                        "evolve: federated aggregation round {} completed with {} clients",
+                                        round.round_id,
+                                        round.clients_participated.len(),
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::debug!(
+                                        "evolve: federated aggregation skipped: {}",
+                                        e
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Err(poisoned) => {
+                        warn!("evolve: federated_learning lock poisoned");
+                        drop(poisoned.into_inner());
+                    }
+                }
+            })
+            .await
+            .is_err()
+            {
+                self.evolve_timeout_count
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                warn!("evolve: federated_learning timed out — skipping");
+            }
+        }
+
+        // ── P2-5: Metacognitive autoreflect ──────────────────────────────
+        if timeout(timeout_dur, async {
+            let report_ids = self.metacognitive.autoreflect();
+            if !report_ids.is_empty() {
+                tracing::info!(
+                    "evolve: metacognitive autoreflect generated {} report(s): {:?}",
+                    report_ids.len(),
+                    report_ids
+                );
+            }
+        })
+        .await
+        .is_err()
+        {
+            self.evolve_timeout_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            warn!("evolve: metacognitive.autoreflect timed out — skipping");
         }
 
         self.record_event(

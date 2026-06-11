@@ -216,7 +216,7 @@ pub async fn handle_request(
             return send_error(
                 server,
                 request.id,
-                AcpErrorCode::AuthRequired as i64,
+                AcpErrorCode::AuthRequired as i32,
                 format!("Authentication failed: {}", reason),
                 Some(serde_json::json!({
                     "code": "AUTH_REQUIRED",
@@ -310,7 +310,7 @@ pub async fn handle_request(
                             return send_error(
                                 server,
                                 request.id,
-                                AcpErrorCode::AuthRequired as i64,
+                                AcpErrorCode::AuthRequired as i32,
                                 "Request signature verification failed".into(),
                                 Some(serde_json::json!({
                                     "code": "SIGNATURE_INVALID",
@@ -327,7 +327,7 @@ pub async fn handle_request(
                     return send_error(
                         server,
                         request.id,
-                        AcpErrorCode::AuthRequired as i64,
+                        AcpErrorCode::AuthRequired as i32,
                         "Request signature required but not provided".into(),
                         Some(serde_json::json!({
                             "code": "SIGNATURE_REQUIRED",
@@ -388,7 +388,7 @@ pub async fn handle_request(
                 return send_error(
                     server,
                     request.id,
-                    AcpErrorCode::MethodNotFound as i64,
+                    AcpErrorCode::MethodNotFound as i32,
                     tf("error.acp_mode_unsupported", &[("method", method.as_ref())]),
                     None,
                 )
@@ -400,7 +400,7 @@ pub async fn handle_request(
                 return send_error(
                     server,
                     request.id,
-                    AcpErrorCode::MethodNotFound as i64,
+                    AcpErrorCode::MethodNotFound as i32,
                     tf("error.mcp_mode_unsupported", &[("method", method.as_ref())]),
                     None,
                 )
@@ -443,7 +443,7 @@ pub async fn handle_request(
         return send_error(
             server,
             request.id,
-            AcpErrorCode::AuthRequired as i64,
+            AcpErrorCode::AuthRequired as i32,
             error_msg,
             Some(serde_json::json!({
                 "code": if is_escalation { "ESCALATION_REQUIRED" } else { "ACCESS_DENIED" },
@@ -819,7 +819,7 @@ pub async fn handle_request(
                             send_error(
                                 server,
                                 request_id,
-                                AcpErrorCode::InternalError as i64,
+                                AcpErrorCode::InternalError as i32,
                                 tf(
                                     "error.request.prompts_list_failed",
                                     &[("error", &e.to_string())],
@@ -852,7 +852,7 @@ pub async fn handle_request(
                             send_error(
                                 server,
                                 request_id,
-                                AcpErrorCode::InternalError as i64,
+                                AcpErrorCode::InternalError as i32,
                                 tf(
                                     "error.request.prompts_search_failed",
                                     &[("error", &e.to_string())],
@@ -884,7 +884,7 @@ pub async fn handle_request(
                                     send_error(
                                         server,
                                         request_id,
-                                        AcpErrorCode::InvalidParams as i64,
+                                        AcpErrorCode::InvalidParams as i32,
                                         format!("{}", e),
                                         None,
                                     )
@@ -896,7 +896,7 @@ pub async fn handle_request(
                             send_error(
                                 server,
                                 request_id,
-                                AcpErrorCode::InvalidParams as i64,
+                                AcpErrorCode::InvalidParams as i32,
                                 tf("error.request.missing_field_id", &[]),
                                 None,
                             )
@@ -919,7 +919,7 @@ pub async fn handle_request(
                             send_error(
                                 server,
                                 request_id,
-                                AcpErrorCode::InternalError as i64,
+                                AcpErrorCode::InternalError as i32,
                                 tf(
                                     "error.request.prompts_create_failed",
                                     &[("error", &e.to_string())],
@@ -945,7 +945,7 @@ pub async fn handle_request(
                             send_error(
                                 server,
                                 request_id,
-                                AcpErrorCode::InternalError as i64,
+                                AcpErrorCode::InternalError as i32,
                                 tf(
                                     "error.request.prompts_update_failed",
                                     &[("error", &e.to_string())],
@@ -971,7 +971,7 @@ pub async fn handle_request(
                             send_error(
                                 server,
                                 request_id,
-                                AcpErrorCode::InternalError as i64,
+                                AcpErrorCode::InternalError as i32,
                                 tf(
                                     "error.request.prompts_delete_failed",
                                     &[("error", &e.to_string())],
@@ -1577,7 +1577,7 @@ pub async fn handle_request(
                     send_error(
                         server,
                         request_id,
-                        AcpErrorCode::MethodNotFound as i64,
+                        AcpErrorCode::MethodNotFound as i32,
                         if localized.contains("unknown method")
                             || localized.contains("method not found")
                         {
@@ -1790,7 +1790,7 @@ mod tests {
     #[test]
     fn with_error_contract_data_preserves_explicit_kind_and_detail() {
         let data = with_error_contract_data(
-            AcpErrorCode::InternalError as i64,
+            AcpErrorCode::InternalError as i32,
             "generic failure",
             Some(json!({"kind": "PuaViolation", "detail": "acp.handle_request.dispatch"})),
         )

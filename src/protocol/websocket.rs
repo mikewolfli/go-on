@@ -444,6 +444,15 @@ impl WebSocketHub {
                     conns.remove(id);
                 }
 
+                // Clean up topic subscriptions for stale connections.
+                if !stale_ids.is_empty() {
+                    let mut subs = inner.topic_subscriptions.write().await;
+                    for topic_members in subs.values_mut() {
+                        topic_members.retain(|member| !stale_ids.contains(member));
+                    }
+                    subs.retain(|_topic, members| !members.is_empty());
+                }
+
                 // Send ping to remaining connections.
                 for (conn_id, sender) in conns.iter_mut() {
                     if !sender.send(ping.clone()) {

@@ -1,0 +1,42 @@
+//! Application phase — error types for the evolution pipeline.
+//!
+//! Contains [`EvolutionLoopError`] used across the evolution lifecycle
+//! (apply, verify, approval stages).
+
+use thiserror::Error;
+
+// ---------------------------------------------------------------------------
+// EvolutionLoopError
+// ---------------------------------------------------------------------------
+
+/// Errors that can occur during evolution loop operations.
+#[derive(Debug, Error)]
+pub enum EvolutionLoopError {
+    /// No trigger sources are configured.
+    #[error("no trigger sources configured")]
+    NoTriggerSources,
+
+    /// No sandbox executor is configured.
+    #[error("no sandbox executor configured")]
+    NoSandbox,
+
+    /// A trigger source failed to poll.
+    #[error("trigger source poll error: {0}")]
+    TriggerPollError(String),
+
+    /// Patch application failed.
+    #[error("patch application failed: {0}")]
+    PatchApplyFailed(String),
+
+    /// Build or test verification failed.
+    #[error("verification failed: {0}")]
+    VerificationFailed(String),
+
+    /// Approval was rejected.
+    #[error("evolution rejected: {0}")]
+    Rejected(String),
+
+    /// History recording failed.
+    #[error("history error: {0}")]
+    HistoryError(String),
+}

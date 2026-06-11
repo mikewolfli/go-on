@@ -221,6 +221,71 @@ impl AlertManager {
         all_fired
     }
 
+    /// Evaluate all registered alert rules against currently available system metrics.
+    ///
+    /// Collects memory, latency, error-rate, and cache-hit metrics from the runtime
+    /// and evaluates every registered rule. This ensures all 8 default rules are
+    /// checked even when triggered from a periodic background task.
+    ///
+    /// Returns the list of alerts that fired during evaluation.
+    pub fn evaluate_all_rules(&mut self) -> Vec<Alert> {
+        let mut metrics = Vec::new();
+
+        // Memory metrics (from memory_health runtime atomics)
+        {
+            let free_mb = crate::observability::memory_health::runtime_free_mb() as f64;
+            metrics.push(("memory_free_mb", free_mb));
+        }
+
+        // Performance metrics (from performance global snapshot)
+        if let Some(perf) = crate::observability::performance::global_metrics_snapshot() {
+            metrics.push(("latency_p95_ms", perf.p95_latency_ms));
+            metrics.push(("latency_avg_ms", perf.avg_latency_ms));
+            let error_rate_pct = if perf.total_ops > 0 {
+                (perf.failed_ops as f64 / perf.total_ops as f64) * 100.0
+            } else {
+                0.0
+            };
+            metrics.push(("error_rate_pct", error_rate_pct));
+            metrics.push(("cache_hit_ratio_pct", perf.cache_hit_rate));
+        }
+
+        self.evaluate_all(&metrics)
+    }
+
+    /// Start a periodic background task that evaluates all alert rules at a
+    /// fixed interval. This ensures rules that are not evaluated during
+    /// normal request processing still fire when thresholds are breached.
+    ///
+    /// The interval is specified in seconds.
+    pub fn start_periodic_evaluation(interval_secs: u64)
+    where
+        Self: 'static,
+    {
+        let interval = Duration::from_secs(interval_secs);
+        let global = crate::observability::alert_manager::alert_manager();
+
+        tokio::spawn(async move {
+            let mut timer = tokio::time::interval(interval);
+            loop {
+                timer.tick().await;
+                if let Ok(mut mgr) = global.lock() {
+                    let fired = mgr.evaluate_all_rules();
+                    for alert in &fired {
+                        tracing::warn!(
+                            target = "alert_manager",
+                            rule = %alert.rule,
+                            severity = %alert.severity,
+                            value = %alert.value,
+                            threshold = %alert.threshold,
+                            "Periodic alert evaluation: {}", alert.message
+                        );
+                    }
+                }
+            }
+        });
+    }
+
     /// Configure webhook from environment variables.
     /// Reads `GO_ON_ALERT_WEBHOOK_URL`, `GO_ON_ALERT_WEBHOOK_ENABLED`,
     /// and `GO_ON_ALERT_WEBHOOK_TIMEOUT`.

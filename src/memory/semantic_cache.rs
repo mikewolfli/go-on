@@ -382,6 +382,8 @@ pub struct EmbeddingCacheConfig {
     pub cache_mode: CacheMode,
     /// Interval in seconds for background cleanup of expired entries
     pub background_cleanup_interval_secs: u64,
+    /// Maximum number of entries before LRU eviction kicks in (0 = unlimited)
+    pub max_entries: usize,
 }
 
 impl Default for EmbeddingCacheConfig {
@@ -392,6 +394,7 @@ impl Default for EmbeddingCacheConfig {
             cosine_threshold: 0.92,
             cache_mode: CacheMode::Simple,
             background_cleanup_interval_secs: 300,
+            max_entries: 0,
         }
     }
 }
@@ -966,6 +969,8 @@ struct RemoteEmbeddingCacheInner {
     embedding_dim: usize,
     /// Configurable remote endpoint label/URL
     endpoint: String,
+    /// Maximum number of entries before LRU eviction.
+    max_entries: usize,
 }
 
 #[allow(dead_code)] // F-GAP-49 — reserved semantic cache feature
@@ -981,6 +986,7 @@ impl RemoteEmbeddingCache {
                 cosine_threshold: config.cosine_threshold,
                 embedding_dim: config.embedding_dim,
                 endpoint,
+                max_entries: config.max_entries,
             }),
         }
     }
@@ -1061,6 +1067,15 @@ impl RemoteEmbeddingCache {
             if let Some(pos) = entries.iter().position(|e| request_hash(&e.key) == hash) {
                 entries[pos] = entry;
             } else {
+                // Evict LRU if at max capacity
+                if entries.len() >= self.inner.max_entries {
+                    if let Some(evicted) = self.evict_lru_inner(&mut entries) {
+                        tracing::trace!(
+                            "RemoteEmbeddingCache: evicted LRU entry {:?}",
+                            evicted.key
+                        );
+                    }
+                }
                 entries.push(entry);
             }
         }
@@ -1069,6 +1084,14 @@ impl RemoteEmbeddingCache {
     /// Evict the entry with the lowest access count (LRU).
     pub fn evict_lru(&self) -> Option<EmbeddingCacheEntry> {
         let mut entries = self.inner.entries.write().ok()?;
+        self.evict_lru_inner(&mut entries)
+    }
+
+    /// Internal helper: evicts one LRU entry from a mutable entries vec.
+    fn evict_lru_inner(
+        &self,
+        entries: &mut Vec<EmbeddingCacheEntry>,
+    ) -> Option<EmbeddingCacheEntry> {
         if entries.is_empty() {
             return None;
         }

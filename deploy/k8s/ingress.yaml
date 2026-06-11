@@ -6,6 +6,10 @@ metadata:
     cert-manager.io/cluster-issuer: letsencrypt-prod
 spec:
   ingressClassName: nginx
+  tls:
+    - hosts:
+        - go-on.example.com
+      secretName: go-on-tls
   rules:
     - host: go-on.example.com
       http:

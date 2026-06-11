@@ -397,6 +397,7 @@ mod tests {
             embedding: None,
             access_count: 1,
             session_id: None,
+            user_id: None,
         }
     }
 

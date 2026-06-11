@@ -299,6 +299,25 @@ impl Clone for HyperResilienceEngine {
     }
 }
 
+/// Convert a legacy bare-bones circuit breaker (name + state) into the full
+/// unified `CircuitBreaker` with sensible defaults for threshold, recovery
+/// timeout, and other fields.
+impl From<crate::optimization::failure_prevention::CircuitBreaker> for CircuitBreaker {
+    fn from(legacy: crate::optimization::failure_prevention::CircuitBreaker) -> Self {
+        Self {
+            name: legacy.name,
+            state: legacy.state,
+            failure_count: 0,
+            threshold: 5,
+            recovery_timeout_ms: 30_000,
+            last_failure_ms: 0,
+            half_open_attempts: 0,
+            last_failure_mode: None,
+            failure_history: Vec::new(),
+        }
+    }
+}
+
 impl HyperResilienceEngine {
     /// Create a new hyper-resilience engine with the given configuration.
     pub fn new(config: ResilienceConfig) -> Self {
@@ -911,18 +930,59 @@ impl HyperResilienceEngine {
         }
     }
 
-    /// Record an execution outcome (success/failure) against a named circuit
-    /// breaker.  If the breaker does not exist it will be automatically
-    /// registered with the engine's default threshold and recovery timeout.
-    /// Record an execution result for a circuit breaker.  If the breaker does
-    /// not exist it will be automatically registered with the engine's default
-    /// threshold and recovery timeout.
+    /// Persist current circuit breaker state to a JSON file via tokio::fs.
     ///
-    /// Registration is performed under a single lock to avoid a TOCTOU race
-    /// between the existence check and the registration call.
+    /// Stores the circuit_breakers HashMap as a JSON blob, enabling recovery
+    /// across process restarts. Uses the provided `path` for the output file.
+    pub async fn persist_to_db(&self, path: &str) -> Result<()> {
+        let cbs = lock_mutex(&self.circuit_breakers).await;
+        let json = serde_json::to_string_pretty(&*cbs)
+            .context("failed to serialize circuit breakers for persistence")?;
+        tokio::fs::write(path, &json)
+            .await
+            .context("failed to write resilience state to disk")?;
+        Ok(())
+    }
+
+    /// Load circuit breaker state from a JSON file and populate the engine.
     ///
-    /// This is the primary integration point for production code paths such as
-    /// `HarnessBus::evaluate()` and `verify_output()`.
+    /// Reads the JSON blob written by `persist_to_db` and reconstructs the
+    /// `circuit_breakers` HashMap. Returns a new engine with the loaded state.
+    /// If the file does not exist, returns a fresh engine with default config.
+    pub async fn load_from_db(path: &str, config: ResilienceConfig) -> Result<Self> {
+        let json = match tokio::fs::read_to_string(path).await {
+            Ok(content) => content,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::new(config));
+            }
+            Err(e) => {
+                return Err(e).context("failed to read resilience state file");
+            }
+        };
+        let circuit_breakers: HashMap<String, CircuitBreaker> =
+            serde_json::from_str(&json).context("failed to deserialize circuit breakers")?;
+
+        let now_ms = now_millis();
+        let (cancel_tx, _) = watch::channel(false);
+        Ok(Self {
+            config: RwLock::new(config),
+            circuit_breakers: Mutex::new(circuit_breakers),
+            failover_groups: Mutex::new(HashMap::new()),
+            healing_actions_taken: AtomicU64::new(0),
+            started_ms: now_ms,
+            test_avg_latency_ms: Mutex::new(10.0),
+            test_error_rate: Mutex::new(0.001),
+            cancel_tx,
+            health_check_handle: Mutex::new(None),
+        })
+    }
+
+    /// Record an execution outcome (success or failure) against the named
+    /// circuit breaker, auto-registering if it does not exist yet.
+    ///
+    /// This is the preferred method for production code paths that do not
+    /// need explicit registration. For retry / recovery orchestration,
+    /// prefer the pair of `is_available()` → `record_failure()` / `record_success()`.
     pub async fn record_execution(&self, breaker_name: &str, success: bool) {
         // Phase 1: Read config for auto-register defaults (read lock, fast path).
         let threshold: u64;

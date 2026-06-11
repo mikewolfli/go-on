@@ -232,7 +232,6 @@ pub struct MtlsAcceptor {
 impl MtlsAcceptor {
     /// Create a new MtlsAcceptor from configuration.
     /// TODO-BLUE64: Wire into ACP runtime accept path.
-    #[allow(dead_code)]
     pub fn new(config: MtlsConfig) -> Self {
         Self {
             config,

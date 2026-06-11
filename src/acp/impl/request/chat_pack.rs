@@ -34,7 +34,7 @@ pub(super) fn parse_messages(params: &Value) -> Option<Vec<Message>> {
 pub(super) async fn send_error(
     server: &AcpServer,
     id: Option<Value>,
-    code: i64,
+    code: i32,
     message: String,
     data: Option<Value>,
 ) -> Result<()> {

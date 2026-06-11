@@ -11,11 +11,7 @@ import * as http from "http";
 import * as url from "url";
 import { v4 as uuidv4 } from "uuid";
 
-import {
-  GoOnClientError,
-  GoOnJsonRpcError,
-  GoOnHttpError,
-} from "./errors";
+import { GoOnClientError, GoOnJsonRpcError, GoOnHttpError } from "./errors";
 import type {
   BreakerStatusResponse,
   CheckpointListResponse,
@@ -79,11 +75,16 @@ export class GoOnClient {
 
   // ── Internal helpers ──────────────────────────────────────────────
 
-  /** Compute retry delay with exponential backoff + jitter. */
+  /**
+   * Compute retry delay with exponential backoff + full jitter.
+   *
+   * Uses AWS full-jitter strategy: delay = random(0, min(cap, base * 2^attempt))
+   * This prevents thundering herd during recovery from transient failures.
+   */
   private _retryDelayForAttempt(attempt: number): number {
-    const base = this.retryDelayMs * Math.pow(2, Math.min(attempt, 3));
-    const jitter = Math.random() * 100; // 0-100ms jitter
-    return base + jitter;
+    const baseMs = this.retryDelayMs * Math.pow(2, Math.min(attempt, 6)); // cap at 64x
+    // Full jitter: random between 0 and baseMs
+    return Math.floor(Math.random() * baseMs);
   }
 
   /** Build URL from base + path. */
@@ -119,11 +120,9 @@ export class GoOnClient {
       }
 
       try {
-        const response = await this._httpPost(
-          "/rpc",
-          payload,
-          { "Content-Type": "application/json" },
-        );
+        const response = await this._httpPost("/rpc", payload, {
+          "Content-Type": "application/json",
+        });
 
         const body = JSON.parse(response.body) as {
           result?: unknown;
@@ -187,11 +186,7 @@ export class GoOnClient {
         res.on("data", (chunk: Buffer) => chunks.push(chunk));
         res.on("end", () => {
           const responseBody = Buffer.concat(chunks).toString("utf-8");
-          if (
-            res.statusCode &&
-            res.statusCode >= 200 &&
-            res.statusCode < 300
-          ) {
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
             resolve({
               statusCode: res.statusCode,
               statusMessage: res.statusMessage || "",
@@ -330,9 +325,10 @@ export class GoOnClient {
 
   /** Get runtime stability metrics. */
   async runtimeStability(): Promise<Record<string, unknown>> {
-    return (await this._jsonRpc(
-      "runtime.stability",
-    )) as Record<string, unknown>;
+    return (await this._jsonRpc("runtime.stability")) as Record<
+      string,
+      unknown
+    >;
   }
 
   /** Initialize the runtime with a profile. */
@@ -376,9 +372,7 @@ export class GoOnClient {
 
   /** Get health probes for all modules. */
   async healthProbes(): Promise<HealthProbesResponse> {
-    return (await this._jsonRpc(
-      "health.probes",
-    )) as HealthProbesResponse;
+    return (await this._jsonRpc("health.probes")) as HealthProbesResponse;
   }
 
   /** Get runtime metrics as structured data. */
@@ -402,14 +396,15 @@ export class GoOnClient {
 
   /** Get circuit breaker status for all groups. */
   async breakerStatus(): Promise<BreakerStatusResponse> {
-    return (await this._jsonRpc(
-      "breaker.status",
-    )) as BreakerStatusResponse;
+    return (await this._jsonRpc("breaker.status")) as BreakerStatusResponse;
   }
 
   /** Reset a circuit breaker by group name. */
   async breakerReset(group: string): Promise<Record<string, unknown>> {
-    return (await this._jsonRpc("breaker.reset", { group })) as Record<string, unknown>;
+    return (await this._jsonRpc("breaker.reset", { group })) as Record<
+      string,
+      unknown
+    >;
   }
 
   /** Trigger garbage collection for the maintenance engine. */
@@ -421,14 +416,15 @@ export class GoOnClient {
 
   /** Create a checkpoint for the current conversation. */
   async checkpointCreate(): Promise<Record<string, unknown>> {
-    return (await this._jsonRpc("checkpoint.create")) as Record<string, unknown>;
+    return (await this._jsonRpc("checkpoint.create")) as Record<
+      string,
+      unknown
+    >;
   }
 
   /** List available checkpoints. */
   async checkpointList(): Promise<CheckpointListResponse> {
-    return (await this._jsonRpc(
-      "checkpoint.list",
-    )) as CheckpointListResponse;
+    return (await this._jsonRpc("checkpoint.list")) as CheckpointListResponse;
   }
 
   /** Rollback a conversation to a checkpoint. */
@@ -461,9 +457,7 @@ export class GoOnClient {
   }
 
   /** Execute a planned task. */
-  async taskExecute(
-    planId: string,
-  ): Promise<Record<string, unknown>> {
+  async taskExecute(planId: string): Promise<Record<string, unknown>> {
     return (await this._jsonRpc("task.execute", {
       plan_id: planId,
     })) as Record<string, unknown>;
@@ -473,26 +467,28 @@ export class GoOnClient {
 
   /** Get learning summary (FederatedRL + reinforcement stats). */
   async learningSummary(): Promise<LearningSummaryResponse> {
-    return (await this._jsonRpc(
-      "learning.summary",
-    )) as LearningSummaryResponse;
+    return (await this._jsonRpc("learning.summary")) as LearningSummaryResponse;
   }
 
   /** Get agent selector status. */
   async selectorStatus(): Promise<SelectorStatusResponse> {
-    return (await this._jsonRpc(
-      "selector.status",
-    )) as SelectorStatusResponse;
+    return (await this._jsonRpc("selector.status")) as SelectorStatusResponse;
   }
 
   /** Trigger knowledge distillation. */
   async knowledgeDistill(): Promise<Record<string, unknown>> {
-    return (await this._jsonRpc("knowledge.distill")) as Record<string, unknown>;
+    return (await this._jsonRpc("knowledge.distill")) as Record<
+      string,
+      unknown
+    >;
   }
 
   /** Run offline RL alignment evaluation. */
   async rlAlignmentOfflineEval(): Promise<Record<string, unknown>> {
-    return (await this._jsonRpc("rl.alignment.offline_eval")) as Record<string, unknown>;
+    return (await this._jsonRpc("rl.alignment.offline_eval")) as Record<
+      string,
+      unknown
+    >;
   }
 
   // ── Optimization & Operations API ─────────────────────────────────
@@ -504,9 +500,7 @@ export class GoOnClient {
 
   /** Get configuration baseline. */
   async configBaseline(): Promise<ConfigBaselineResponse> {
-    return (await this._jsonRpc(
-      "config.baseline",
-    )) as ConfigBaselineResponse;
+    return (await this._jsonRpc("config.baseline")) as ConfigBaselineResponse;
   }
 
   /** Reload configuration at runtime. */
@@ -516,8 +510,6 @@ export class GoOnClient {
 
   /** Get harness (governance) status. */
   async harnessStatus(): Promise<HarnessStatusResponse> {
-    return (await this._jsonRpc(
-      "harness.status",
-    )) as HarnessStatusResponse;
+    return (await this._jsonRpc("harness.status")) as HarnessStatusResponse;
   }
 }

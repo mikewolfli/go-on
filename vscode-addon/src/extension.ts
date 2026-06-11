@@ -1100,11 +1100,15 @@ export function activate(context: vscode.ExtensionContext) {
   });
 }
 
-export function deactivate() {
+export async function deactivate(): Promise<void> {
   const state = extensionState;
   if (state) {
-    if (state.manager) state.manager.stop();
-    if (state.approvalPanel) state.approvalPanel.dispose();
+    if (state.manager) {
+      await state.manager.stop();
+    }
+    if (state.approvalPanel) {
+      state.approvalPanel.dispose();
+    }
   }
   disposeLogger();
 }

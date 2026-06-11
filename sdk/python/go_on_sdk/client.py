@@ -117,6 +117,34 @@ class HarnessStatusResponse:
     harness: dict[str, Any]
 
 
+# ── BLUE68 P5-10: Missing key types ────────────────────────────────────────
+
+
+@dataclass
+class ToolCall:
+    """Record of a tool call made by an agent."""
+
+    tool_name: str
+    arguments: dict[str, Any]
+    agent_name: str
+    result: dict[str, Any] | None = None
+    duration_ms: int = 0
+
+
+@dataclass
+class MultimodalInput:
+    """Multimodal input for rich chat requests."""
+
+    type: str  # "text" | "image" | "document" | "audio"
+    text: str | None = None
+    image_url: str | None = None
+    detail: str | None = None  # "auto" | "low" | "high"
+    data: str | None = None
+    mime_type: str | None = None
+    filename: str | None = None
+    format: str | None = None
+
+
 # ── Client ──────────────────────────────────────────────────────────
 
 
@@ -170,19 +198,20 @@ class GoOnClient:
         )
 
     def _retry_delay_for_attempt(self, attempt: int) -> float:
-        """Compute retry delay with exponential backoff and jitter.
+        """Compute retry delay with exponential backoff and full jitter.
 
-        B48-R4: Uses exponential backoff + random jitter for faster recovery.
-        - attempt 0: 1.0s + jitter
-        - attempt 1: 2.0s + jitter
-        - attempt 2: 4.0s + jitter
-        - attempt 3+: 8.0s + jitter (capped)
+        Uses AWS full-jitter strategy: delay = random(0, min(cap, base * 2^attempt))
+        Prevents thundering herd during recovery from transient failures.
+        - attempt 0: random(0, 1.0s)
+        - attempt 1: random(0, 2.0s)
+        - attempt 2: random(0, 4.0s)
+        - attempt 3+: random(0, 64.0s) (capped)
         """
         if not self._use_exponential_backoff:
             return self.retry_delay
-        base = self.retry_delay * (2.0 ** min(attempt, 3))  # cap at 8x
-        jitter = random.uniform(0, 0.1)  # 0-100ms jitter
-        return base + jitter
+        base = self.retry_delay * (2.0 ** min(attempt, 6))  # cap at 64x
+        # Full jitter: random between 0 and base
+        return random.uniform(0, base)
 
     async def aclose(self) -> None:
         await self._client.aclose()

@@ -160,7 +160,7 @@ impl eframe::App for GoOnApp {
         if self.last_applied_theme != self.config_store.shared().theme {
             self.last_applied_theme = self.config_store.shared().theme.clone();
             let theme = crate::theme::Theme::from_name(&self.config_store.shared().theme);
-            theme.apply(ctx, self.config_store.config.font_scale);
+            theme.apply(ctx, self.config_store.read().font_scale);
         }
 
         if !self.connection.pending_refresh && !self.views.chat_view.sending {
@@ -194,16 +194,22 @@ impl eframe::App for GoOnApp {
         }
 
         if self.show_setup {
-            let done = self.views.setup_view.show(
-                ctx,
-                &self.i18n,
-                &mut self.config_store.config,
-                &self.connection.backend,
-            );
+            let done = {
+                let mut cfg = self.config_store.write();
+                let result = self.views.setup_view.show(
+                    ctx,
+                    &self.i18n,
+                    &mut *cfg,
+                    &self.connection.backend,
+                );
+                if result {
+                    self.show_setup = false;
+                    self.has_providers = has_valid_providers(&*cfg);
+                    save_app_config(&*cfg);
+                }
+                result
+            };
             if done {
-                self.show_setup = false;
-                self.has_providers = has_valid_providers(&self.config_store.config);
-                save_app_config(&self.config_store.config);
                 self.config_store.sync_shared_if_needed();
                 self.restart_backend(ctx);
             }
@@ -523,48 +529,57 @@ impl eframe::App for GoOnApp {
                         let has_backend = self.has_providers;
                         match self.active_tab.as_str() {
                             "monitor" => {
+                                let cfg = self.config_store.read();
                                 self.views.monitor_view.show(
                                     ui,
                                     &self.i18n,
                                     has_backend,
                                     &self.connection.backend,
-                                    self.config_store.config.features.monitor_history_alerts,
+                                    cfg.features.monitor_history_alerts,
                                     self.connection.backend_reused_external,
                                 );
                             }
                             "chat" => {
-                                let stability = &self.config_store.config.ui_stability;
+                                let cfg = self.config_store.read();
+                                let autotune_chain = cfg.features.autotune_chain_injection;
                                 self.views.chat_view.show(
                                     ui,
                                     &self.i18n,
                                     &self.connection.backend,
                                     ctx,
-                                    self.config_store.config.features.autotune_chain_injection,
+                                    autotune_chain,
                                     ChatUiRuntimeConfig {
-                                        repaint_interval_ms: stability.chat_repaint_interval_ms,
-                                        stream_chunk_flush_ms: stability.chat_stream_chunk_flush_ms,
-                                        max_pending_events_per_frame: stability
+                                        repaint_interval_ms: cfg
+                                            .ui_stability
+                                            .chat_repaint_interval_ms,
+                                        stream_chunk_flush_ms: cfg
+                                            .ui_stability
+                                            .chat_stream_chunk_flush_ms,
+                                        max_pending_events_per_frame: cfg
+                                            .ui_stability
                                             .chat_max_pending_events_per_frame,
-                                        stream_token_flush_ms: stability.stream_token_flush_ms,
+                                        stream_token_flush_ms: cfg
+                                            .ui_stability
+                                            .stream_token_flush_ms,
                                     },
                                 );
                                 let draft = self.views.chat_view.risk_decision_draft();
                                 self.views.risk_decision_view.apply_draft(&draft);
                             }
                             "skills" => {
+                                let cfg = self.config_store.read();
                                 self.views.skills_view.show(
                                     ui,
                                     &self.i18n,
                                     &self.connection.backend,
                                     ctx,
-                                    self.config_store.config.features.skills_lifecycle,
+                                    cfg.features.skills_lifecycle,
                                 );
                             }
                             "settings" => {
-                                SettingsView::show(ui, &self.i18n, &mut self.config_store.config);
-                                if self.config_store.config.backend_url
-                                    != self.connection.backend_url_original
-                                {
+                                let mut cfg = self.config_store.write();
+                                SettingsView::show(ui, &self.i18n, &mut *cfg);
+                                if cfg.backend_url != self.connection.backend_url_original {
                                     ui.add_space(8.0);
                                     ui.separator();
                                     ui.add_space(4.0);
@@ -573,7 +588,8 @@ impl eframe::App for GoOnApp {
                                         .clicked()
                                     {
                                         self.connection.backend_url_original =
-                                            self.config_store.config.backend_url.clone();
+                                            cfg.backend_url.clone();
+                                        drop(cfg);
                                         self.restart_backend(ctx);
                                     }
                                     ui.label(
@@ -583,12 +599,13 @@ impl eframe::App for GoOnApp {
                                 }
                             }
                             "workflow" => {
+                                let cfg = self.config_store.read();
                                 self.views.workflow_view.show(
                                     ui,
                                     &self.i18n,
                                     ctx,
                                     &self.connection.backend,
-                                    self.config_store.config.features.workflow_run_center,
+                                    cfg.features.workflow_run_center,
                                 );
                             }
                             "prompts" => {
@@ -619,32 +636,35 @@ impl eframe::App for GoOnApp {
                                 ctx,
                             ),
                             "config" => {
-                                let config_safe_mode =
-                                    self.config_store.config.features.config_safe_mode;
+                                let mut cfg = self.config_store.write();
+                                let config_safe_mode = cfg.features.config_safe_mode;
                                 self.views.config_editor_view.show(
                                     ui,
                                     &self.i18n,
-                                    &mut self.config_store.config,
+                                    &mut *cfg,
                                     config_safe_mode,
                                 );
                                 if self.views.config_editor_view.applied {
                                     self.views.config_editor_view.applied = false;
                                     self.views.chat_view.reset_loaded_state();
+                                    drop(cfg);
                                     self.restart_backend(ctx);
                                 }
                             }
                             "providers" => {
-                                let providers_ops = self.config_store.config.features.providers_ops;
+                                let mut cfg = self.config_store.write();
+                                let providers_ops = cfg.features.providers_ops;
                                 let changed = self.views.providers_view.show(
                                     ui,
                                     &self.i18n,
-                                    &mut self.config_store.config,
+                                    &mut *cfg,
                                     &self.connection.backend,
                                     ctx,
                                     providers_ops,
                                 );
                                 if changed {
-                                    save_app_config(&self.config_store.config);
+                                    save_app_config(&*cfg);
+                                    drop(cfg);
                                     self.config_store.sync_shared_if_needed();
                                     self.restart_backend(ctx);
                                 }

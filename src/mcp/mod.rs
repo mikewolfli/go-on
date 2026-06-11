@@ -1,6 +1,6 @@
 //! MCP (Model Context Protocol) compatibility layer.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use crate::acp::server::AcpServer;
@@ -35,10 +35,15 @@ pub struct McpServer {
     pub acp_server: Option<Arc<AcpServer>>,
 
     /// Current logging level, set via logging/setLevel.
-    /// F-GAP-10 — planned wiring: expose level to subsystem log filters.
     pub logging_level: Arc<Mutex<Option<String>>>,
     /// Request IDs flagged by `notifications/cancelled`.
     pub(crate) cancelled_requests: Arc<Mutex<HashSet<String>>>,
+    /// Resource subscription tracking: resource URI → set of subscriber identifiers.
+    pub(crate) resource_subscriptions: Arc<Mutex<HashMap<String, HashSet<String>>>>,
+    /// Optional SSE broadcaster for pushing real-time notifications to
+    /// connected SSE clients (resource changes, tool list changes, etc.).
+    /// Set by `McpHttpServer` during construction.
+    pub(crate) sse_broadcaster: Option<Arc<crate::protocol::mcp_server::SseBroadcaster>>,
 }
 
 impl McpServer {
@@ -58,7 +63,9 @@ impl McpServer {
             },
             logging_level: Arc::new(Mutex::new(None)),
             cancelled_requests: Arc::new(Mutex::new(HashSet::new())),
+            resource_subscriptions: Arc::new(Mutex::new(HashMap::new())),
             acp_server: None,
+            sse_broadcaster: None,
         }
     }
 
@@ -79,8 +86,21 @@ impl McpServer {
             },
             logging_level: Arc::new(Mutex::new(None)),
             cancelled_requests: Arc::new(Mutex::new(HashSet::new())),
+            resource_subscriptions: Arc::new(Mutex::new(HashMap::new())),
             acp_server,
+            sse_broadcaster: None,
         }
+    }
+
+    /// Attach an SSE broadcaster to this MCP server instance.
+    /// Enables real-time push of resource-change and other subscription-based
+    /// notifications to SSE-connected clients.
+    pub fn with_sse_broadcaster(
+        mut self,
+        broadcaster: Arc<crate::protocol::mcp_server::SseBroadcaster>,
+    ) -> Self {
+        self.sse_broadcaster = Some(broadcaster);
+        self
     }
 
     /// Get a reference to the token cache if available

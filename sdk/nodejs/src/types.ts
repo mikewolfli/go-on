@@ -78,3 +78,26 @@ export interface ConfigBaselineResponse {
 export interface HarnessStatusResponse {
   harness: Record<string, unknown>;
 }
+
+// ── BLUE68 P5-10: Missing key types ────────────────────────────────────────
+
+/** Record of a tool call made by an agent. */
+export interface ToolCall {
+  /** Name of the tool that was called. */
+  tool_name: string;
+  /** Arguments passed to the tool. */
+  arguments: Record<string, unknown>;
+  /** The agent that made the call. */
+  agent_name: string;
+  /** Optional result of the tool execution. */
+  result?: Record<string, unknown>;
+  /** Duration of the tool call in milliseconds. */
+  duration_ms: number;
+}
+
+/** Multimodal input types for rich chat requests. */
+export type MultimodalInput =
+  | { type: "text"; text: string }
+  | { type: "image"; image_url: string; detail?: "auto" | "low" | "high" }
+  | { type: "document"; data: string; mime_type: string; filename?: string }
+  | { type: "audio"; data: string; format: string };

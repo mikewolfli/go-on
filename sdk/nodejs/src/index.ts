@@ -6,11 +6,7 @@
 
 export { GoOnClient } from "./client";
 export type { GoOnClientOptions } from "./client";
-export {
-  GoOnClientError,
-  GoOnJsonRpcError,
-  GoOnHttpError,
-} from "./errors";
+export { GoOnClientError, GoOnJsonRpcError, GoOnHttpError } from "./errors";
 export type {
   BreakerStatusResponse,
   ChatMessage,
@@ -24,6 +20,8 @@ export type {
   HealthResponse,
   LearningSummaryResponse,
   MetricsResponse,
+  MultimodalInput,
   SelectorStatusResponse,
   TaskPlanResponse,
+  ToolCall,
 } from "./types";

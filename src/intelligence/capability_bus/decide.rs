@@ -11,6 +11,8 @@ use super::core::WorkflowLearningEvent;
 use super::sense::SensingOutput;
 use crate::governance::harness_bus::{AgentExecutionPolicy, PolicyVerdict};
 use crate::governance::pua::TaskContext;
+use crate::intelligence::adaptive_selector::ContextFeatures;
+use crate::intelligence::token_cache::{estimate_token_count, ContextLengthClass};
 use crate::intelligence::{lock_guard, write_guard};
 use serde::Serialize;
 use std::env;
@@ -365,6 +367,45 @@ impl CapabilityBus {
             self.matcher
                 .match_task(&task_type_str, &task_type_str, 0.5, task.risk_score, &[]);
 
+        // ── P2-1: TokenCache check ────────────────────────────────────────
+        // If a cached decision exists for this task type, return it directly
+        // to skip full agent selection (hot path optimization).
+        if let Some(ref cache) = self.token_cache {
+            let context_class = ContextLengthClass::from_token_count(task_type_str.len());
+            if let Some((_level, entry)) = cache.lookup(&task_type_str, context_class).await {
+                tracing::info!(
+                    "decide: token_cache hit for task_type={}, cached_agent={}",
+                    task_type_str,
+                    entry.agent_name.as_deref().unwrap_or("unknown")
+                );
+                let agent_policy = entry
+                    .agent_name
+                    .as_ref()
+                    .map(|agent| self.harness.get_agent_policy(agent, &task_type_str));
+                self.record_event(
+                    "decision",
+                    entry.agent_name.clone(),
+                    None,
+                    "cache_hit",
+                    serde_json::json!({
+                        "task_type": task_type_str,
+                        "cached_agent": entry.agent_name,
+                    }),
+                );
+                return DecisionOutput {
+                    verdict: PolicyVerdict::Allow,
+                    selected_agent: entry.agent_name.clone(),
+                    agent_policy,
+                    confidence: 0.9,
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    recommended_mode: "auto".to_string(),
+                    #[cfg(feature = "sub-bus-tool")]
+                    available_tools: vec![],
+                    counterfactual_score: 0.5,
+                };
+            }
+        }
+
         // Step C: pick best agent from capability graph + reputation
         // BLUE56-B11: Also query QLearningAgent for learned routing preferences
         // First build candidate agent list, then use Q-learning to inform selection.
@@ -516,26 +557,113 @@ impl CapabilityBus {
             (None, None) => None,
         };
 
-        let (selected_agent, score_breakdown) =
-            if let Some(ref preferred) = q_learning_override.or(scenario_preferred_agent) {
-                let breakdown = vec![CandidateScoreBreakdown {
-                    agent: preferred.clone(),
-                    reputation_score: 1.0,
-                    recency_score: 1.0,
-                    task_fit_score: 1.0,
-                    recent_outcome_score: 1.0,
-                    causal_insight_score: 1.0,
-                    total_score: 1.0,
-                }];
-                (Some(preferred.clone()), breakdown)
-            } else {
-                self.select_best_agent(task, &candidate_agents, sensing)
-            };
+        // ── P2-3: AdaptiveModelSelector — re-rank candidates by performance context ──
+        let model_selector_ranked: Option<Vec<String>> =
+            self.model_selector.as_ref().map(|selector| {
+                let context = ContextFeatures::from_time_and_task(&task_type_str);
+                let candidates_with_models: Vec<(String, Option<String>)> = candidate_agents
+                    .iter()
+                    .map(|name| (name.clone(), None))
+                    .collect();
+                selector
+                    .lock()
+                    .map(|sel| sel.rank_candidates_with_context(&candidates_with_models, &context))
+                    .unwrap_or_else(|_| {
+                        tracing::warn!(
+                            "decide: model_selector lock poisoned, using original order"
+                        );
+                        candidate_agents.clone()
+                    })
+            });
+        let selection_candidates: &[String] = match model_selector_ranked {
+            Some(ref ranked) => ranked.as_slice(),
+            None => &candidate_agents,
+        };
+
+        // ── P2-7: HotFailover — check if preferred agents are blacklisted ──
+        let effective_override =
+            q_learning_override
+                .or(scenario_preferred_agent)
+                .and_then(|agent| {
+                    if let Some(ref hf) = self.hot_failover {
+                        if hf.is_blacklisted(&agent) {
+                            tracing::warn!(
+                        "decide: preferred agent {} is blacklisted by hot_failover, falling back",
+                        agent
+                    );
+                            return None;
+                        }
+                    }
+                    Some(agent)
+                });
+
+        let (selected_agent, score_breakdown) = if let Some(ref preferred) = effective_override {
+            let breakdown = vec![CandidateScoreBreakdown {
+                agent: preferred.clone(),
+                reputation_score: 1.0,
+                recency_score: 1.0,
+                task_fit_score: 1.0,
+                recent_outcome_score: 1.0,
+                causal_insight_score: 1.0,
+                total_score: 1.0,
+            }];
+            (Some(preferred.clone()), breakdown)
+        } else {
+            self.select_best_agent(task, selection_candidates, sensing)
+        };
         tracing::info!(
-            candidates = ?candidate_agents,
+            candidates = ?selection_candidates,
             selected = ?selected_agent,
             "capability_bus agent selection"
         );
+
+        // ── P2-3: Record model selection outcome for adaptive learning ──
+        if let Some(ref selector) = self.model_selector {
+            let context = ContextFeatures::from_time_and_task(&task_type_str);
+            if let Ok(mut sel) = selector.lock() {
+                sel.record_result_with_context(
+                    selected_agent.as_deref().unwrap_or("unknown"),
+                    true,
+                    Some(&context),
+                );
+            }
+        }
+
+        // ── P2-1: Store decision result in token_cache for future lookups ──
+        if let Some(ref cache) = self.token_cache {
+            if let Some(ref agent) = selected_agent {
+                let token_count = estimate_token_count(&task_type_str);
+                cache
+                    .store(
+                        &task_type_str,
+                        agent,
+                        token_count,
+                        Some(agent.clone()),
+                        None,
+                    )
+                    .await;
+            }
+        }
+
+        // ── P2-6: LivePerformanceFeed — get real-time model cost estimates ──
+        if let Some(ref perf) = self.live_performance {
+            if let Some(ref agent) = selected_agent {
+                if let Some(cost) = perf.get_cost_estimate(agent) {
+                    tracing::debug!(
+                        "decide: live performance cost estimate for {}: {:.2}",
+                        agent,
+                        cost
+                    );
+                }
+                if let Some(latency) = perf.get_latency_estimate(agent) {
+                    tracing::debug!(
+                        "decide: live performance latency estimate for {}: {:.1}ms",
+                        agent,
+                        latency
+                    );
+                }
+            }
+        }
 
         // Step B2: Consult WorkflowRegistry for workflow-based routing metadata
         let workflow_preset = self.workflow_registry.as_ref().and_then(|wr| {

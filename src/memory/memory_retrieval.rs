@@ -312,6 +312,24 @@ impl MemoryRetrievalEngine {
             }
         }
 
+        // ── L4: Cold storage search (long-term archival) ──
+        {
+            // Scan cold storage via the persistence layer.
+            // This is a linear scan of all cold shards and should be optimized
+            // with ColdStorageIndex in production.
+            let cold_entries = self.persistence().cold_entries().unwrap_or_default();
+            for mut entry in cold_entries {
+                if seen.contains(&entry.id) {
+                    continue;
+                }
+                if self.text_matches_query(&entry.content, &query_tokens) {
+                    entry.touch();
+                    seen.insert(entry.id.clone());
+                    results.push(entry);
+                }
+            }
+        }
+
         // ── Sort by usefulness descending, then by accessed_at descending ──
         results.sort_by(|a, b| {
             b.usefulness
@@ -720,6 +738,7 @@ mod tests {
             )),
             access_count: 1,
             session_id: None,
+            user_id: None,
         };
         engine
             .persistence()

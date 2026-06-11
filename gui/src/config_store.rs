@@ -1,13 +1,17 @@
 use crate::config::AppConfig;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 /// Manages application configuration loading, saving, and shared access.
 /// Provides fingerprint-based change detection to avoid unnecessary syncs.
+///
+/// All access to the mutable configuration goes through `Arc<RwLock<>>` to
+/// prevent data races between the UI thread (which mutates config) and async
+/// tasks (which read the shared snapshot).
 pub struct ConfigStore {
-    /// Mutable application configuration
-    pub config: AppConfig,
+    /// Mutable application configuration, synchronized via RwLock.
+    inner: Arc<RwLock<AppConfig>>,
     /// Immutable snapshot shared across threads for use in async tasks
-    pub config_shared: Arc<AppConfig>,
+    config_shared: Arc<AppConfig>,
     /// Fingerprint of the last synced config; used to detect changes
     pub config_shared_fingerprint: u64,
 }
@@ -17,10 +21,28 @@ impl ConfigStore {
         let config_shared = Arc::new(config.clone());
         let config_shared_fingerprint = Self::config_fingerprint(&config);
         Self {
-            config,
+            inner: Arc::new(RwLock::new(config)),
             config_shared,
             config_shared_fingerprint,
         }
+    }
+
+    /// Acquire a read lock on the inner config.
+    /// Returns a `RwLockReadGuard` that derefs to `AppConfig`.
+    ///
+    /// # Panics
+    /// Panics if the lock is poisoned (i.e. a previous write panicked).
+    pub fn read(&self) -> std::sync::RwLockReadGuard<'_, AppConfig> {
+        self.inner.read().expect("ConfigStore lock poisoned")
+    }
+
+    /// Acquire a write lock on the inner config.
+    /// Returns a `RwLockWriteGuard` that derefs to `AppConfig`.
+    ///
+    /// # Panics
+    /// Panics if the lock is poisoned (i.e. a previous write panicked).
+    pub fn write(&self) -> std::sync::RwLockWriteGuard<'_, AppConfig> {
+        self.inner.write().expect("ConfigStore lock poisoned")
     }
 
     /// Compute a fingerprint of config fields that affect rendering or backend behavior.
@@ -82,10 +104,12 @@ impl ConfigStore {
     }
 
     /// Sync the shared config snapshot if the mutable config has changed.
+    /// Takes a read lock on the inner config to compute the fingerprint and clone.
     pub fn sync_shared_if_needed(&mut self) {
-        let fingerprint = Self::config_fingerprint(&self.config);
+        let config = self.inner.read().expect("ConfigStore lock poisoned");
+        let fingerprint = Self::config_fingerprint(&config);
         if fingerprint != self.config_shared_fingerprint {
-            self.config_shared = Arc::new(self.config.clone());
+            self.config_shared = Arc::new(AppConfig::clone(&config));
             self.config_shared_fingerprint = fingerprint;
         }
     }

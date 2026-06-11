@@ -27,6 +27,7 @@ use crate::agent::AgentRegistry;
 use crate::governance::rbac::{AccessDecision, Permission, Principal};
 use crate::i18n::runtime::{t, tf};
 use crate::mcp::{JsonRpcRequest, JsonRpcResponse, McpServer};
+use crate::security::mtls::{MtlsAcceptor, MtlsConfig};
 use crate::tool::ToolRegistry;
 
 /// MCP Server with stdio transport
@@ -184,6 +185,11 @@ impl AsyncWrite for MaybeTlsStream {
     }
 }
 
+/// Shared SSE client registry for MCP HTTP server.
+/// Uses a broadcast channel so that resource-change notifications can be
+/// pushed to all connected SSE clients in real time.
+pub(crate) type SseBroadcaster = tokio::sync::broadcast::Sender<String>;
+
 pub struct McpHttpServer {
     mcp_server: Arc<McpServer>,
     bind_addr: String,
@@ -194,6 +200,18 @@ pub struct McpHttpServer {
     /// wrapped with TLS before handling HTTP requests. Defaults to `None`
     /// for local development / plaintext operation.
     tls_acceptor: Option<tokio_rustls::TlsAcceptor>,
+    /// Optional mTLS configuration. When set, a `TlsAcceptor` is built from
+    /// this config (with client CA certificate verification) during `run()`.
+    /// This is a configuration wiring field — the actual acceptor is lazily
+    /// initialised if `tls_acceptor` is `None` and `tls_config` is `Some`.
+    tls_config: Option<MtlsConfig>,
+    /// Optional rate limit middleware. When set, `check()` is called before
+    /// processing each request in `handle_http_connection`.
+    rate_limiter: Option<Arc<crate::protocol::rate_limit::RateLimitMiddleware>>,
+    /// SSE broadcaster for pushing MCP notifications to connected SSE clients.
+    /// Subscription-based (resource change, tool list change, etc.) notifications
+    /// are sent through this channel.
+    sse_broadcaster: Arc<SseBroadcaster>,
 }
 
 impl McpHttpServer {
@@ -205,7 +223,9 @@ impl McpHttpServer {
         server_version: String,
         bind_addr: String,
     ) -> Self {
-        let mcp_server = McpServer::new(agent_registry, tool_registry, server_name, server_version);
+        let sse_broadcaster = Arc::new(tokio::sync::broadcast::channel::<String>(256).0);
+        let mcp_server = McpServer::new(agent_registry, tool_registry, server_name, server_version)
+            .with_sse_broadcaster(Arc::clone(&sse_broadcaster));
         Self {
             mcp_server: Arc::new(mcp_server),
             bind_addr,
@@ -213,6 +233,9 @@ impl McpHttpServer {
             connection_semaphore: Arc::new(Semaphore::new(256)),
             acp_server: None,
             tls_acceptor: None,
+            tls_config: None,
+            rate_limiter: None,
+            sse_broadcaster,
         }
     }
 
@@ -225,13 +248,15 @@ impl McpHttpServer {
         bind_addr: String,
         acp_server: Option<Arc<AcpServer>>,
     ) -> Self {
+        let sse_broadcaster = Arc::new(tokio::sync::broadcast::channel::<String>(256).0);
         let mcp_server = McpServer::new_with_acp(
             agent_registry,
             tool_registry,
             server_name,
             server_version,
             acp_server.clone(),
-        );
+        )
+        .with_sse_broadcaster(Arc::clone(&sse_broadcaster));
         Self {
             mcp_server: Arc::new(mcp_server),
             bind_addr,
@@ -239,11 +264,31 @@ impl McpHttpServer {
             connection_semaphore: Arc::new(Semaphore::new(256)),
             acp_server,
             tls_acceptor: None,
+            tls_config: None,
+            rate_limiter: None,
+            sse_broadcaster,
         }
     }
 
     /// Run the HTTP server
     pub async fn run(&self) -> Result<()> {
+        // Lazy initialise the TLS acceptor from mTLS config when the
+        // `tls_acceptor` has not been explicitly set but `tls_config` is
+        // provided. This wires client CA certificate verification through
+        // the MtlsAcceptor's build_server_config.
+        let effective_acceptor: Option<tokio_rustls::TlsAcceptor> = if self.tls_acceptor.is_some() {
+            self.tls_acceptor.clone()
+        } else if let Some(ref cfg) = self.tls_config {
+            let mtls_acceptor = MtlsAcceptor::new(cfg.clone());
+            let server_config = mtls_acceptor
+                .build_server_config()
+                .map_err(|e| anyhow::anyhow!("failed to build mTLS server config: {e}"))?;
+            info!("MCP HTTP: TLS acceptor configured from mTLS config");
+            Some(tokio_rustls::TlsAcceptor::from(server_config))
+        } else {
+            None
+        };
+
         info!(
             "{}",
             tf("info.mcp_server_listening", &[("address", &self.bind_addr)])
@@ -302,7 +347,9 @@ impl McpHttpServer {
                     let (socket, peer_addr) = result?;
                     let mcp_server = Arc::clone(&self.mcp_server);
                     let acp_server = self.acp_server.clone();
-                    let tls_acceptor = self.tls_acceptor.clone();
+                    let tls_acceptor = effective_acceptor.clone();
+                    let rate_limiter = self.rate_limiter.clone();
+                    let sse_broadcaster = Arc::clone(&self.sse_broadcaster);
 
                     tokio::spawn(async move {
                         // Hold permit for the whole connection handler lifetime.
@@ -328,7 +375,7 @@ impl McpHttpServer {
                             }
                             None => MaybeTlsStream::Plain(socket),
                         };
-                        if let Err(err) = handle_http_connection(&mut stream, mcp_server, acp_server).await {
+                        if let Err(err) = handle_http_connection(&mut stream, mcp_server, acp_server, rate_limiter, sse_broadcaster).await {
                             warn!(
                                 "{}",
                                 tf(
@@ -373,9 +420,49 @@ impl McpHttpServer {
         self
     }
 
+    /// Configure the server with an mTLS config. If `tls_acceptor` has not
+    /// been set directly, the `TlsAcceptor` will be built from this config
+    /// when `run()` is called (lazy initialisation of the TLS acceptor from
+    /// the mTLS configuration with client CA certificate verification).
+    pub fn with_tls_config(mut self, config: MtlsConfig) -> Self {
+        self.tls_config = Some(config);
+        self
+    }
+
+    /// Configure the server with a rate limit middleware.
+    /// Every request processed by `handle_http_connection` will be checked
+    /// against this rate limiter before processing.
+    pub fn with_rate_limiter(
+        mut self,
+        rate_limiter: Arc<crate::protocol::rate_limit::RateLimitMiddleware>,
+    ) -> Self {
+        self.rate_limiter = Some(rate_limiter);
+        self
+    }
+
     /// Request a graceful shutdown of the HTTP server.
     pub fn shutdown(&self) {
         self.shutdown_notify.notify_waiters();
+    }
+
+    /// Get a reference to the SSE broadcaster for pushing resource-change
+    /// and other subscription-based notifications to connected SSE clients.
+    pub fn sse_broadcaster(&self) -> Arc<SseBroadcaster> {
+        Arc::clone(&self.sse_broadcaster)
+    }
+
+    /// Broadcast a JSON-RPC notification to all connected SSE clients.
+    ///
+    /// The notification is serialised as an SSE `event: message` frame with
+    /// the JSON-RPC notification body as the `data:` field.
+    pub fn broadcast_sse(&self, method: &str, params: &serde_json::Value) {
+        let notification = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+        });
+        let payload = serde_json::to_string(&notification).unwrap_or_default();
+        let _ = self.sse_broadcaster.send(payload);
     }
 }
 
@@ -383,6 +470,8 @@ async fn handle_http_connection(
     socket: &mut MaybeTlsStream,
     mcp_server: Arc<McpServer>,
     acp_server: Option<Arc<AcpServer>>,
+    rate_limiter: Option<Arc<crate::protocol::rate_limit::RateLimitMiddleware>>,
+    sse_broadcaster: Arc<SseBroadcaster>,
 ) -> Result<()> {
     let mut buffer = vec![0u8; 64 * 1024];
     let bytes_read =
@@ -444,6 +533,13 @@ async fn handle_http_connection(
 
     // ── CORS headers ─────────────────────────────────────────────────────
     let cors_headers = compute_mcp_cors_headers(header_part, &acp_server);
+
+    // ── SSE endpoint (GET /sse or /mcp-sse) — must be checked before the
+    //     POST-only guard below so SSE connections bypass the POST requirement.
+    //     MCP SSE Streamable HTTP transport per MCP spec.
+    if method == "GET" && (path == "/sse" || path == "/mcp-sse") {
+        return handle_mcp_sse_connection(socket, sse_broadcaster).await;
+    }
 
     // ── Health endpoint (no auth) ────────────────────────────────────────
     if method == "GET" && path == "/health" {
@@ -606,6 +702,37 @@ async fn handle_http_connection(
         }
     }
 
+    // ── Rate limit check (if middleware configured) ───────────────────────
+    if let Some(ref limiter) = rate_limiter {
+        // Derive tenant identifier from the session (if auth is enabled) or
+        // fall back to a default tenant for unauthenticated requests.
+        let tenant_id = acp_server
+            .as_ref()
+            .and_then(|s| s.session.session_manager.as_ref())
+            .and_then(|sm| sm.extract_user_from_request(header_part))
+            .and_then(|u| u.tenant_id)
+            .unwrap_or_else(|| "default".to_string());
+
+        if let Err(retry_after) = limiter.check(&tenant_id) {
+            warn!(
+                tenant = %tenant_id,
+                retry_after = retry_after,
+                "rate limit exceeded"
+            );
+            let error_body = inject_platform_profiles_if_absent(
+                serde_json::json!({
+                    "error": "rate limit exceeded",
+                    "code": "RATE_LIMITED",
+                    "retryAfter": retry_after
+                }),
+                "mcp.rate_limited",
+            );
+            let cors = compute_mcp_cors_headers(header_part, &acp_server);
+            write_http_json_response(socket, 429, error_body, &cors).await?;
+            return Ok(());
+        }
+    }
+
     let content_length = extract_content_length(header_part).unwrap_or(0);
     let mut body_bytes = body_initial_part.as_bytes().to_vec();
     if body_bytes.len() < content_length {
@@ -666,6 +793,105 @@ async fn handle_http_connection(
 
     write_http_json_response(socket, 200, serde_json::to_value(response)?, &cors_headers).await?;
 
+    Ok(())
+}
+
+/// Handle an MCP SSE (Server-Sent Events) connection.
+///
+/// Sends the SSE headers, an initial `endpoint` event advertising the
+/// JSON-RPC POST URL, then enters a loop forwarding broadcast notifications
+/// (resource changes, tool list changes, etc.) to the connected SSE client.
+/// The connection remains open until the client disconnects or the server
+/// shuts down.
+async fn handle_mcp_sse_connection(
+    socket: &mut MaybeTlsStream,
+    sse_broadcaster: Arc<SseBroadcaster>,
+) -> Result<()> {
+    // ── SSE headers ───────────────────────────────────────────────────
+    // Per the MCP Streamable HTTP spec, the SSE endpoint must advertise
+    // the POST endpoint URL and keep the connection alive.
+    let extra_headers = "Access-Control-Allow-Origin: *\r\n";
+    let header = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\n{}\r\n\r\n",
+        extra_headers
+    );
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        socket.write_all(header.as_bytes()),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("timeout writing SSE headers"))??;
+    socket.flush().await?;
+
+    // ── Initial endpoint event ─────────────────────────────────────────
+    // Advertise the JSON-RPC POST endpoint so the client knows where to
+    // send its requests.
+    let endpoint_event = "event: endpoint\ndata: /mcp\n\n".to_string();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        socket.write_all(endpoint_event.as_bytes()),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("timeout writing SSE endpoint event"))??;
+    socket.flush().await?;
+
+    // ── Subscribe to broadcast channel ─────────────────────────────────
+    let mut rx = sse_broadcaster.subscribe();
+    let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(30));
+
+    loop {
+        tokio::select! {
+            result = rx.recv() => {
+                match result {
+                    Ok(payload) => {
+                        let frame = format!("event: message\ndata: {}\n\n", payload);
+                        if tokio::time::timeout(
+                            std::time::Duration::from_secs(30),
+                            socket.write_all(frame.as_bytes()),
+                        )
+                        .await
+                        .is_err()
+                        {
+                            // Client disconnected
+                            break;
+                        }
+                        let _ = socket.flush().await;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        debug!("MCP SSE consumer lagged by {} messages", n);
+                        continue;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        // Broadcaster was closed — stop
+                        break;
+                    }
+                }
+            }
+            _ = heartbeat.tick() => {
+                // SSE keepalive heartbeat — prevents proxies from closing
+                // idle connections.
+                let heartbeat_event = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": "ping",
+                    "params": {}
+                });
+                let payload = serde_json::to_string(&heartbeat_event).unwrap_or_default();
+                let frame = format!("event: message\ndata: {}\n\n", payload);
+                if tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    socket.write_all(frame.as_bytes()),
+                )
+                .await
+                .is_err()
+                {
+                    break;
+                }
+                let _ = socket.flush().await;
+            }
+        }
+    }
+
+    let _ = socket.shutdown().await;
     Ok(())
 }
 

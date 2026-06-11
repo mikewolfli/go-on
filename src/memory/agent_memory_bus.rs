@@ -132,6 +132,7 @@ impl AgentMemoryBus {
             ),
             usefulness: importance,
             staleness: 0,
+            user_id: None,
         };
         self.store_memory(entry);
     }
@@ -201,13 +202,14 @@ impl AgentMemoryBus {
     pub fn retrieve_memories(&self, query: &str, limit: usize) -> Vec<MemoryEntry> {
         // Fast path: vector similarity search via VectorStore
         if let Some(ref vs) = self.vector_store {
-            return match vs.search("agent_memory", query, limit, 0.0, 512) {
+            match vs.search("agent_memory", query, limit, 0.0, 512) {
                 Ok((hits, _)) => {
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_millis() as u64)
                         .unwrap_or(0);
-                    hits.into_iter()
+                    return hits
+                        .into_iter()
                         .map(|hit| MemoryEntry {
                             id: format!("vec_{:x}", {
                                 use sha2::Digest;
@@ -221,15 +223,15 @@ impl AgentMemoryBus {
                             timestamp: now.to_string(),
                             usefulness: hit.similarity.clamp(0.0, 1.0),
                             staleness: 0,
+                            user_id: None,
                         })
-                        .collect()
+                        .collect();
                 }
                 Err(e) => {
                     warn!("AgentMemoryBus: vector search failed, falling back to linear scan: {e}");
                     // Fall through to linear-scan fallback
-                    Vec::new()
                 }
-            };
+            }
         }
 
         // Fallback: linear substring/tag scan with recency/importance weighting

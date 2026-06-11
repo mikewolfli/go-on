@@ -7,6 +7,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Re-export the unified circuit breaker type from the hyper-resilience module.
+///
+/// All new code should use `UnifiedCircuitBreaker` or import directly from
+/// `go_on::resilience::hyper_resilience::CircuitBreaker`. The legacy
+/// `CircuitBreaker` struct below exists only for backward compatibility and
+/// can be converted via `From<CircuitBreaker> for UnifiedCircuitBreaker`.
+pub use crate::resilience::hyper_resilience::CircuitBreaker as UnifiedCircuitBreaker;
+
 fn now_epoch_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -28,6 +36,18 @@ pub enum CircuitBreakerState {
     Closed,
     Open,
     HalfOpen,
+}
+
+/// Legacy circuit breaker (name + state) for migration to the unified type.
+///
+/// This bare-bones representation is preserved for backward compatibility
+/// with callers that hold the old `(String, CircuitBreakerState)` pair.
+/// Convert to [`UnifiedCircuitBreaker`] via `From` to gain access to full
+/// resilience features (threshold, recovery timeout, failure history, etc.).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CircuitBreaker {
+    pub name: String,
+    pub state: CircuitBreakerState,
 }
 
 /// Anomaly type

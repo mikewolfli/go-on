@@ -78,7 +78,7 @@ pub(crate) fn classify_request_error_kind(error: &anyhow::Error) -> &'static str
 }
 
 pub(super) fn infer_error_contract_kind(
-    code: i64,
+    code: i32,
     message: &str,
     explicit: Option<&str>,
 ) -> String {
@@ -141,7 +141,7 @@ pub(crate) fn build_retry_policy_for_kind(kind: &str) -> Value {
 }
 
 pub(super) fn with_error_contract_data(
-    code: i64,
+    code: i32,
     message: &str,
     data: Option<Value>,
 ) -> Option<Value> {

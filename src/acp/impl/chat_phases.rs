@@ -719,6 +719,20 @@ pub(crate) async fn act_phase(
         )
         .await?
         {
+            // ── Provenance recording (P2-12) ─────────────────────────────
+            let success = !response_text.is_empty() && last_err.is_none();
+            if let Some(ref ledger) = server.governance_deps.provenance_ledger {
+                let _ = ledger
+                    .record_provenance(
+                        &trace.trace_id,
+                        &extract_task_description(&params.messages),
+                        &selected_agent,
+                        success,
+                        act_started.elapsed().as_millis() as u64,
+                    )
+                    .await;
+            }
+
             return Ok(ActOutput {
                 selected_agent,
                 response_text,
@@ -898,6 +912,19 @@ pub(crate) async fn act_phase(
         let elapsed_ms = act_started.elapsed().as_secs_f64() * 1000.0;
         record_global_operation(success, elapsed_ms);
 
+        // ── Provenance recording (P2-12) ─────────────────────────────────
+        if let Some(ref ledger) = server.governance_deps.provenance_ledger {
+            let _ = ledger
+                .record_provenance(
+                    &trace.trace_id,
+                    &extract_task_description(&params.messages),
+                    &selected_agent,
+                    success,
+                    act_started.elapsed().as_millis() as u64,
+                )
+                .await;
+        }
+
         return Ok(ActOutput {
             selected_agent,
             response_text,
@@ -930,6 +957,19 @@ pub(crate) async fn act_phase(
     let success = !response_text.is_empty() && last_err.is_none();
     let elapsed_ms = act_started.elapsed().as_secs_f64() * 1000.0;
     record_global_operation(success, elapsed_ms);
+
+    // ── Provenance recording (P2-12) ─────────────────────────────────────
+    if let Some(ref ledger) = server.governance_deps.provenance_ledger {
+        let _ = ledger
+            .record_provenance(
+                &trace.trace_id,
+                &extract_task_description(&params.messages),
+                &selected_agent,
+                success,
+                act_started.elapsed().as_millis() as u64,
+            )
+            .await;
+    }
 
     Ok(ActOutput {
         selected_agent,
@@ -1001,6 +1041,7 @@ async fn observe_submit_to_scheduler(
             submitted_at,
             retries: 0,
             max_retries: 3,
+            provider: None,
         };
         if let Err(e) = sched.level1.submit(task) {
             let s = format!("{}", e);
@@ -1487,6 +1528,7 @@ pub(crate) async fn reflect_phase(
                 .to_string(),
             usefulness: 0.5,
             staleness: 0,
+            user_id: None,
         };
         let _ = crate::memory::memory_bridge::bridge_store(
             &server.persistence.memory_store,

@@ -26,6 +26,8 @@ pub struct MemoryEntry {
     pub timestamp: String,
     pub usefulness: f32,
     pub staleness: u32,
+    /// Optional user_id for multi-user isolation.
+    pub user_id: Option<String>,
 }
 
 /// Memory policy governs storage, promotion, retrieval, and GC

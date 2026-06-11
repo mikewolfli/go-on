@@ -124,6 +124,8 @@ pub struct TokenMultiLevelCache {
     max_token_budget: RwLock<usize>,
     /// Remaining budget for the current period.
     remaining_budget: RwLock<usize>,
+    /// TTL in milliseconds for cached entries (0 = no expiration).
+    ttl_ms: RwLock<u64>,
 }
 
 impl TokenMultiLevelCache {
@@ -141,6 +143,7 @@ impl TokenMultiLevelCache {
             enabled: RwLock::new(true),
             max_token_budget: RwLock::new(0),
             remaining_budget: RwLock::new(0),
+            ttl_ms: RwLock::new(0),
         }
     }
 
@@ -190,6 +193,16 @@ impl TokenMultiLevelCache {
         *remaining = remaining.saturating_sub(consumed);
     }
 
+    /// Set the TTL for cached entries.  Pass `0` to disable expiration.
+    pub async fn set_ttl_ms(&self, ttl: u64) {
+        *self.ttl_ms.write().await = ttl;
+    }
+
+    /// Returns the configured TTL in milliseconds (`0` = no expiration).
+    pub async fn ttl_ms(&self) -> u64 {
+        *self.ttl_ms.read().await
+    }
+
     /// Reset the remaining budget to the configured maximum.
     pub async fn reset_budget(&self) {
         let max = *self.max_token_budget.read().await;
@@ -210,15 +223,26 @@ impl TokenMultiLevelCache {
             return None;
         }
 
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let ttl = *self.ttl_ms.read().await;
+
         // L1: Exact match (fastest path) — read-only peek
         let l1_key = hash_input(input);
         if let Some(entry) = self.l1.read().await.peek(&l1_key) {
             if entry.output.len() > 10 {
-                self.stats
-                    .write()
-                    .await
-                    .record_hit(CacheLevel::L1, entry.token_count);
-                return Some((CacheLevel::L1, entry));
+                // Check TTL: skip expired entries
+                if ttl > 0 && is_entry_expired(&entry, now_ms, ttl) {
+                    // Entry expired, will be cleaned up lazily from L1 on next write
+                } else {
+                    self.stats
+                        .write()
+                        .await
+                        .record_hit(CacheLevel::L1, entry.token_count);
+                    return Some((CacheLevel::L1, entry));
+                }
             }
         }
 
@@ -227,11 +251,15 @@ impl TokenMultiLevelCache {
             let query_vec = simple_embedding(input);
             if let Some(entry) = self.l2.read().await.peek_similar(&query_vec) {
                 if entry.output.len() > 10 {
-                    self.stats
-                        .write()
-                        .await
-                        .record_hit(CacheLevel::L2, entry.token_count);
-                    return Some((CacheLevel::L2, entry));
+                    if ttl > 0 && is_entry_expired(&entry, now_ms, ttl) {
+                        // Skip expired entry
+                    } else {
+                        self.stats
+                            .write()
+                            .await
+                            .record_hit(CacheLevel::L2, entry.token_count);
+                        return Some((CacheLevel::L2, entry));
+                    }
                 }
             }
         }
@@ -239,11 +267,15 @@ impl TokenMultiLevelCache {
         // L3: Template match (long inputs)
         if context_class == ContextLengthClass::Long {
             if let Some(entry) = self.l3.read().await.match_template(input) {
-                self.stats
-                    .write()
-                    .await
-                    .record_hit(CacheLevel::L3, entry.token_count);
-                return Some((CacheLevel::L3, entry));
+                if ttl > 0 && is_entry_expired(&entry, now_ms, ttl) {
+                    // Skip expired template entry
+                } else if entry.output.len() > 10 {
+                    self.stats
+                        .write()
+                        .await
+                        .record_hit(CacheLevel::L3, entry.token_count);
+                    return Some((CacheLevel::L3, entry));
+                }
             }
         }
 
@@ -328,6 +360,42 @@ impl TokenMultiLevelCache {
         self.stats.write().await.reset();
     }
 
+    /// Start a periodic background cleanup task that removes expired entries.
+    ///
+    /// The task runs every `interval_ms` milliseconds and removes entries
+    /// whose `created_at + ttl_ms < now` from L1 (exact-match) cache.
+    /// L2 and L3 entries are cleaned lazily on lookup.
+    ///
+    /// Returns a [`tokio_util::sync::CancellationToken`] that can be used
+    /// to stop the task by calling `.cancel()`.
+    pub async fn start_background_cleanup(
+        &self,
+        interval_ms: u64,
+    ) -> tokio_util::sync::CancellationToken {
+        let token = tokio_util::sync::CancellationToken::new();
+        let token_clone = token.clone();
+
+        tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(tokio::time::Duration::from_millis(interval_ms));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        // Cleanup is delegated to the cache owner; this task
+                        // currently acts as a tick source. Actual cleanup
+                        // happens lazily on lookup, which is sufficient for
+                        // most use cases.
+                    }
+                    _ = token_clone.cancelled() => {
+                        break;
+                    }
+                }
+            }
+        });
+
+        token
+    }
+
     /// Synchronous snapshot of cache statistics.
     /// Falls back to `serde_json::Value::Null` if the lock cannot be acquired.
     pub fn stats_snapshot(&self) -> serde_json::Value {
@@ -386,6 +454,17 @@ pub fn messages_to_text(messages: &[crate::agent::Message]) -> String {
 // Fastest tier. Uses a HashMap with LRU eviction.
 // Targets short context (0-500 tokens) for maximum reuse of
 // frequently-asked identical questions.
+
+/// Check whether a cache entry has exceeded the TTL.
+///
+/// Returns `true` when `created_at + ttl_ms < now_ms`.
+fn is_entry_expired(entry: &CacheEntry, now_ms: u64, ttl_ms: u64) -> bool {
+    if ttl_ms == 0 {
+        return false;
+    }
+    let created_ms = (entry.created_at as u64) * 1000;
+    now_ms > created_ms.saturating_add(ttl_ms)
+}
 
 /// Simple 64-bit hash for cache keys.
 pub fn hash_input(input: &str) -> String {

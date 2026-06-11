@@ -8,10 +8,17 @@
 //! Provides automatic migration (promotion/demotion) between tiers and
 //! metadata indexing on startup.
 
+#[cfg(feature = "backend-postgres")]
 use anyhow::{Context, Result};
+
+#[cfg(not(feature = "backend-postgres"))]
+use anyhow::{Context, Result};
+
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
+#[cfg(feature = "backend-postgres")]
+use postgres::{Client as PgClient, NoTls as PgNoTls};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -69,6 +76,8 @@ pub struct MemoryEntry {
     pub access_count: i64,
     /// Optional session_id this entry belongs to.
     pub session_id: Option<String>,
+    /// Optional user_id for multi-user isolation.
+    pub user_id: Option<String>,
 }
 
 impl MemoryEntry {
@@ -91,6 +100,7 @@ impl MemoryEntry {
             embedding: None,
             access_count: 0,
             session_id: None,
+            user_id: None,
         }
     }
 
@@ -269,12 +279,75 @@ impl HotCache {
 // L3: Cold Tier — gzip NDJSON on disk
 // ===========================================================================
 
+/// Lightweight sidecar index: (user_id, memory_id) → cold storage location.
+///
+/// Maps each memory entry to the shard file where it is stored in cold
+/// storage, enabling O(1) retrieval without scanning all shards.
+#[derive(Debug, Clone, Default)]
+pub struct ColdStorageIndex {
+    /// Index: (user_id_or_empty, memory_id) → (year_month, shard_name, line_offset)
+    entries: HashMap<(String, String), (String, String, u64)>,
+}
+
+#[allow(dead_code)]
+impl ColdStorageIndex {
+    /// Record a cold storage location for a memory entry.
+    pub fn store(
+        &mut self,
+        user_id: Option<&str>,
+        memory_id: &str,
+        year_month: &str,
+        shard_name: &str,
+        line_offset: u64,
+    ) {
+        let uid = user_id.unwrap_or("").to_string();
+        self.entries.insert(
+            (uid, memory_id.to_string()),
+            (year_month.to_string(), shard_name.to_string(), line_offset),
+        );
+    }
+
+    /// Look up the cold storage location for a memory entry.
+    pub fn retrieve(
+        &self,
+        user_id: Option<&str>,
+        memory_id: &str,
+    ) -> Option<&(String, String, u64)> {
+        let uid = user_id.unwrap_or("").to_string();
+        self.entries.get(&(uid, memory_id.to_string()))
+    }
+
+    /// Returns the number of indexed entries.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Returns true if the index is empty.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Remove an entry from the index.
+    pub fn remove(&mut self, user_id: Option<&str>, memory_id: &str) {
+        let uid = user_id.unwrap_or("").to_string();
+        self.entries.remove(&(uid, memory_id.to_string()));
+    }
+
+    /// Clear all entries.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+}
+
 /// Manages cold storage: `.goon/memory/cold/YYYY-MM/*.ndjson.gz`
 #[derive(Debug, Clone)]
 struct ColdStorage {
     base_path: PathBuf,
     max_shard_size_bytes: u64,
     max_total_shards: usize,
+    /// Sidecar index for O(1) cold storage lookups.
+    #[allow(dead_code)]
+    index: ColdStorageIndex,
 }
 
 impl ColdStorage {
@@ -283,6 +356,7 @@ impl ColdStorage {
             base_path: base_path.to_path_buf(),
             max_shard_size_bytes: 10 * 1024 * 1024, // 10 MB default
             max_total_shards: 100,
+            index: ColdStorageIndex::default(),
         }
     }
 
@@ -498,7 +572,8 @@ impl WarmStore {
                 usefulness REAL NOT NULL DEFAULT 0.0,
                 embedding_json TEXT,
                 access_count INTEGER NOT NULL DEFAULT 0,
-                session_id TEXT
+                session_id TEXT,
+                user_id TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_warm_memory_accessed_at
@@ -509,6 +584,9 @@ impl WarmStore {
 
             CREATE INDEX IF NOT EXISTS idx_warm_memory_session_id
                 ON warm_memory(session_id);
+
+            CREATE INDEX IF NOT EXISTS idx_warm_memory_user_id
+                ON warm_memory(user_id);
             ",
         )?;
         Ok(Self {
@@ -527,8 +605,8 @@ impl WarmStore {
             poisoned.into_inner()
         });
         conn.execute(
-            "INSERT INTO warm_memory(id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            "INSERT INTO warm_memory(id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id, user_id)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(id) DO UPDATE SET
                 tier = excluded.tier,
                 class = excluded.class,
@@ -537,7 +615,8 @@ impl WarmStore {
                 usefulness = excluded.usefulness,
                 embedding_json = excluded.embedding_json,
                 access_count = excluded.access_count,
-                session_id = excluded.session_id",
+                session_id = excluded.session_id,
+                user_id = excluded.user_id",
             rusqlite::params![
                 entry.id,
                 entry.tier.label(),
@@ -549,6 +628,7 @@ impl WarmStore {
                 embedding_json,
                 entry.access_count,
                 entry.session_id,
+                entry.user_id,
             ],
         )?;
         // Enforce max entries (evict oldest by accessed_at)
@@ -567,7 +647,7 @@ impl WarmStore {
             poisoned.into_inner()
         });
         let mut stmt = conn.prepare(
-            "SELECT id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id
+            "SELECT id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id, user_id
              FROM warm_memory WHERE id = ?1",
         )?;
         let mut rows = stmt.query(rusqlite::params![id])?;
@@ -587,6 +667,7 @@ impl WarmStore {
                     embedding,
                     access_count: row.get(8)?,
                     session_id: row.get(9)?,
+                    user_id: row.get(10)?,
                 }))
             }
             None => Ok(None),
@@ -615,7 +696,7 @@ impl WarmStore {
             poisoned.into_inner()
         });
         let mut stmt = conn.prepare(
-            "SELECT id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id
+            "SELECT id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id, user_id
              FROM warm_memory WHERE usefulness >= ?1 ORDER BY usefulness DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(rusqlite::params![min_usefulness, limit as i64], |row| {
@@ -632,6 +713,7 @@ impl WarmStore {
                 embedding,
                 access_count: row.get(8)?,
                 session_id: row.get(9)?,
+                user_id: row.get(10)?,
             })
         })?;
         let mut results = Vec::new();
@@ -657,7 +739,7 @@ impl WarmStore {
             .lock()
             .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
         let mut stmt = conn.prepare(
-            "SELECT id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id
+            "SELECT id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id, user_id
              FROM warm_memory",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -674,6 +756,7 @@ impl WarmStore {
                 embedding,
                 access_count: row.get(8)?,
                 session_id: row.get(9)?,
+                user_id: row.get(10)?,
             })
         })?;
         let mut results = Vec::new();
@@ -689,7 +772,7 @@ impl WarmStore {
             .lock()
             .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
         let mut stmt = conn.prepare(
-            "SELECT id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id
+            "SELECT id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id, user_id
              FROM warm_memory WHERE session_id = ?1 ORDER BY accessed_at DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(rusqlite::params![session_id, limit as i64], |row| {
@@ -706,6 +789,7 @@ impl WarmStore {
                 embedding,
                 access_count: row.get(8)?,
                 session_id: row.get(9)?,
+                user_id: row.get(10)?,
             })
         })?;
         let mut results = Vec::new();
@@ -720,15 +804,264 @@ impl WarmStore {
 // Memory Persistence Manager (tier orchestration)
 // ===========================================================================
 
-/// No-op WarmStore stub for non-sqlite backends (e.g. postgres).
-#[cfg(not(feature = "backend-sqlite"))]
+/// PostgreSQL-backed WarmStore for multi-user deployments.
+///
+/// Uses `postgres::Client` with a `warm_memory` table that mirrors
+/// the SQLite schema, including pgvector support for future use.
+#[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
 #[derive(Debug)]
 pub struct WarmStore {
-    #[allow(dead_code)] // F-GAP-49 — planned memory persistence feature
+    conn: Mutex<PgClient>,
     max_entries: usize,
 }
 
-#[cfg(not(feature = "backend-sqlite"))]
+#[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+impl WarmStore {
+    fn new(db_conn_str: &Path, max_entries: usize) -> Result<Self> {
+        let conn_str = db_conn_str.to_string_lossy();
+        let mut client = PgClient::connect(&conn_str, PgNoTls)?;
+
+        client.batch_execute(
+            "
+            CREATE TABLE IF NOT EXISTS warm_memory (
+                id TEXT PRIMARY KEY,
+                tier TEXT NOT NULL DEFAULT 'warm',
+                class TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at BIGINT NOT NULL,
+                accessed_at BIGINT NOT NULL,
+                usefulness REAL NOT NULL DEFAULT 0.0,
+                embedding_json TEXT,
+                access_count BIGINT NOT NULL DEFAULT 0,
+                session_id TEXT,
+                user_id TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_warm_memory_accessed_at
+                ON warm_memory(accessed_at DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_warm_memory_usefulness
+                ON warm_memory(usefulness DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_warm_memory_session_id
+                ON warm_memory(session_id);
+
+            CREATE INDEX IF NOT EXISTS idx_warm_memory_user_id
+                ON warm_memory(user_id);
+            ",
+        )?;
+
+        Ok(Self {
+            conn: Mutex::new(client),
+            max_entries,
+        })
+    }
+
+    fn upsert(&self, entry: &MemoryEntry) -> Result<()> {
+        let embedding_json = entry
+            .embedding
+            .as_ref()
+            .map(|v| serde_json::to_string(v).unwrap_or_default());
+        let mut conn = self.conn.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("warm store mutex poisoned, recovering");
+            poisoned.into_inner()
+        });
+        conn.execute(
+            "INSERT INTO warm_memory(id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id, user_id)
+             VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+             ON CONFLICT(id) DO UPDATE SET
+                tier = EXCLUDED.tier,
+                class = EXCLUDED.class,
+                content = EXCLUDED.content,
+                accessed_at = EXCLUDED.accessed_at,
+                usefulness = EXCLUDED.usefulness,
+                embedding_json = EXCLUDED.embedding_json,
+                access_count = EXCLUDED.access_count,
+                session_id = EXCLUDED.session_id,
+                user_id = EXCLUDED.user_id",
+            &[
+                &entry.id,
+                &entry.tier.label().to_string(),
+                &entry.class,
+                &entry.content,
+                &entry.created_at,
+                &entry.accessed_at,
+                &entry.usefulness,
+                &embedding_json,
+                &entry.access_count,
+                &entry.session_id,
+                &entry.user_id,
+            ],
+        )?;
+
+        // Enforce max entries (evict oldest by accessed_at)
+        conn.execute(
+            "DELETE FROM warm_memory WHERE id IN (
+                SELECT id FROM warm_memory ORDER BY accessed_at ASC LIMIT MAX(0, (SELECT COUNT(*) FROM warm_memory) - $1)
+            )",
+            &[&(self.max_entries as i64)],
+        )?;
+        Ok(())
+    }
+
+    fn get(&self, id: &str) -> Result<Option<MemoryEntry>> {
+        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("warm store mutex poisoned, recovering");
+            poisoned.into_inner()
+        });
+        let rows = conn.query(
+            "SELECT id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id, user_id
+             FROM warm_memory WHERE id = $1",
+            &[&id],
+        )?;
+        match rows.first() {
+            Some(row) => {
+                let embedding_json: Option<String> = row.get(7);
+                let embedding =
+                    embedding_json.and_then(|j| serde_json::from_str::<Vec<f32>>(&j).ok());
+                Ok(Some(MemoryEntry {
+                    id: row.get(0),
+                    tier: MemoryTier::Warm,
+                    class: row.get(2),
+                    content: row.get(3),
+                    created_at: row.get(4),
+                    accessed_at: row.get(5),
+                    usefulness: row.get(6),
+                    embedding,
+                    access_count: row.get(8),
+                    session_id: row.get(9),
+                    user_id: row.get(10),
+                }))
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub fn search_by_usefulness(
+        &self,
+        min_usefulness: f32,
+        limit: usize,
+    ) -> Result<Vec<MemoryEntry>> {
+        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("warm store mutex poisoned, recovering");
+            poisoned.into_inner()
+        });
+        let rows = conn.query(
+            "SELECT id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id, user_id
+             FROM warm_memory WHERE usefulness >= $1 ORDER BY usefulness DESC LIMIT $2",
+            &[&min_usefulness, &(limit as i64)],
+        )?;
+        let mut results = Vec::with_capacity(rows.len());
+        for row in rows {
+            let embedding_json: Option<String> = row.get(7);
+            let embedding = embedding_json.and_then(|j| serde_json::from_str::<Vec<f32>>(&j).ok());
+            results.push(MemoryEntry {
+                id: row.get(0),
+                tier: MemoryTier::Warm,
+                class: row.get(2),
+                content: row.get(3),
+                created_at: row.get(4),
+                accessed_at: row.get(5),
+                usefulness: row.get(6),
+                embedding,
+                access_count: row.get(8),
+                session_id: row.get(9),
+                user_id: row.get(10),
+            });
+        }
+        Ok(results)
+    }
+
+    fn remove(&self, id: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("warm store mutex poisoned, recovering");
+            poisoned.into_inner()
+        });
+        let affected = conn.execute("DELETE FROM warm_memory WHERE id = $1", &[&id])?;
+        Ok(affected > 0)
+    }
+
+    fn iterate_all(&self) -> Result<Vec<MemoryEntry>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
+        let rows = conn.query(
+            "SELECT id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id, user_id
+             FROM warm_memory",
+            &[],
+        )?;
+        let mut results = Vec::with_capacity(rows.len());
+        for row in rows {
+            let embedding_json: Option<String> = row.get(7);
+            let embedding = embedding_json.and_then(|j| serde_json::from_str::<Vec<f32>>(&j).ok());
+            results.push(MemoryEntry {
+                id: row.get(0),
+                tier: MemoryTier::Warm,
+                class: row.get(2),
+                content: row.get(3),
+                created_at: row.get(4),
+                accessed_at: row.get(5),
+                usefulness: row.get(6),
+                embedding,
+                access_count: row.get(8),
+                session_id: row.get(9),
+                user_id: row.get(10),
+            });
+        }
+        Ok(results)
+    }
+
+    fn search_by_session(&self, session_id: &str, limit: usize) -> Result<Vec<MemoryEntry>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
+        let rows = conn.query(
+            "SELECT id, tier, class, content, created_at, accessed_at, usefulness, embedding_json, access_count, session_id, user_id
+             FROM warm_memory WHERE session_id = $1 ORDER BY accessed_at DESC LIMIT $2",
+            &[&session_id, &(limit as i64)],
+        )?;
+        let mut results = Vec::with_capacity(rows.len());
+        for row in rows {
+            let embedding_json: Option<String> = row.get(7);
+            let embedding = embedding_json.and_then(|j| serde_json::from_str::<Vec<f32>>(&j).ok());
+            results.push(MemoryEntry {
+                id: row.get(0),
+                tier: MemoryTier::Warm,
+                class: row.get(2),
+                content: row.get(3),
+                created_at: row.get(4),
+                accessed_at: row.get(5),
+                usefulness: row.get(6),
+                embedding,
+                access_count: row.get(8),
+                session_id: row.get(9),
+                user_id: row.get(10),
+            });
+        }
+        Ok(results)
+    }
+
+    fn count(&self) -> Result<usize> {
+        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("warm store mutex poisoned, recovering");
+            poisoned.into_inner()
+        });
+        let row = conn.query_one("SELECT COUNT(*) FROM warm_memory", &[])?;
+        let count: i64 = row.get(0);
+        Ok(count as usize)
+    }
+}
+
+/// WarmStore stub for backends without a warm persistence layer.
+#[cfg(not(any(feature = "backend-sqlite", feature = "backend-postgres")))]
+#[derive(Debug)]
+pub struct WarmStore {
+    max_entries: usize,
+}
+
+#[cfg(not(any(feature = "backend-sqlite", feature = "backend-postgres")))]
 impl WarmStore {
     fn new(_path: &Path, max_entries: usize) -> Result<Self> {
         Ok(Self { max_entries })
@@ -742,10 +1075,9 @@ impl WarmStore {
         Ok(None)
     }
 
-    /// Retrieve entries by usefulness, ordered descending.
     pub fn search_by_usefulness(
         &self,
-        _min_usefulness: f64,
+        _min_usefulness: f32,
         _limit: usize,
     ) -> Result<Vec<MemoryEntry>> {
         Ok(Vec::new())
@@ -755,23 +1087,16 @@ impl WarmStore {
         Ok(false)
     }
 
-    /// Iterate all entries in the warm store (for cold migration).
     fn iterate_all(&self) -> Result<Vec<MemoryEntry>> {
         Ok(Vec::new())
     }
 
-    #[allow(dead_code)] // F-GAP-49 — planned memory persistence feature
     fn search_by_session(&self, _session_id: &str, _limit: usize) -> Result<Vec<MemoryEntry>> {
         Ok(Vec::new())
     }
 
-    /// Return the number of entries in the warm store.
     fn count(&self) -> Result<usize> {
-        Ok(self.len())
-    }
-
-    fn len(&self) -> usize {
-        0
+        Ok(0)
     }
 }
 
@@ -1089,6 +1414,14 @@ impl MemoryPersistence {
     /// Returns a reference to the warm store for direct querying.
     pub fn warm_store(&self) -> &WarmStore {
         &self.warm
+    }
+
+    /// Read all entries from cold storage.
+    ///
+    /// This is an expensive operation (linear scan of all shards).
+    /// Prefer the `ColdStorageIndex` when available for O(1) lookups.
+    pub fn cold_entries(&self) -> Result<Vec<MemoryEntry>> {
+        self.cold.read_all()
     }
 }
 

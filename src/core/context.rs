@@ -62,6 +62,7 @@ impl SystemContext {
                     timestamp: ts(),
                     usefulness: 1.0,
                     staleness: 0,
+                    user_id: None,
                 };
                 self.memory_store.store(entry);
                 tracing::debug!(repo = %repo_path, chars = excerpt.len(), "stored README excerpt in memory");
@@ -97,6 +98,7 @@ impl SystemContext {
                 timestamp: ts(),
                 usefulness: 0.9,
                 staleness: 0,
+                user_id: None,
             };
             self.memory_store.store(entry);
             tracing::debug!(repo = %repo_path, commands = ?build_commands, "stored build commands in memory");
@@ -119,6 +121,7 @@ impl SystemContext {
                         timestamp: ts(),
                         usefulness: 0.8,
                         staleness: 0,
+                        user_id: None,
                     };
                     self.memory_store.store(entry);
                     tracing::debug!(repo = %repo_path, count = commits.len(), "stored recent commits in memory");

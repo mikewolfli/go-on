@@ -171,3 +171,24 @@ jobs:
           npm install -g @vscode/vsce 2>/dev/null || true
           cd vscode-addon && vsce package --out go-on-vscode.vsix 2>&1 || \
             echo "[warn] VSIX packaging skipped (requires marketplace publisher)"
+
+  # ── Docker image ─────────────────────────────────────────────
+  gate-docker:
+    name: Docker (build)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image (simple-server)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: deploy/simple-server/Dockerfile
+          push: false
+          tags: go-on:ci-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -60,6 +60,7 @@ impl From<CanonicalEntry> for PersistenceEntry {
             embedding: None,
             access_count: 1,
             session_id: None,
+            user_id: entry.user_id,
         }
     }
 }
@@ -255,6 +256,7 @@ mod tests {
             timestamp: String::new(),
             usefulness,
             staleness: 0,
+            user_id: None,
         }
     }
 

@@ -45,11 +45,11 @@ pub struct BackendClient {
     long_client: reqwest::Client,
     base_url: String,
     /// Discovered chat endpoint (set by discover_protocol_version, falls back to /v1/chat/completions).
-    /// Wrapped in Arc<Mutex<>> because BackendClient is Clone and shared across async tasks.
-    chat_endpoint: Arc<std::sync::Mutex<String>>,
+    /// Wrapped in Arc<tokio::sync::Mutex<>> because BackendClient is Clone and shared across async tasks.
+    chat_endpoint: Arc<tokio::sync::Mutex<String>>,
     /// Negotiated ACP protocol version (set by discover_protocol_version).
     /// 0 means discovery has not completed yet.
-    protocol_version: Arc<std::sync::Mutex<u16>>,
+    protocol_version: Arc<tokio::sync::Mutex<u16>>,
     /// Monotonically increasing JSON-RPC request id (per JSON-RPC 2.0 spec)
     next_id: Arc<AtomicU64>,
     /// Model list cache with timestamp
@@ -92,8 +92,8 @@ impl BackendClient {
             quick_client,
             long_client,
             base_url: base_url.trim_end_matches('/').to_string(),
-            chat_endpoint: Arc::new(std::sync::Mutex::new("/v1/chat/completions".to_string())),
-            protocol_version: Arc::new(std::sync::Mutex::new(0)),
+            chat_endpoint: Arc::new(tokio::sync::Mutex::new("/v1/chat/completions".to_string())),
+            protocol_version: Arc::new(tokio::sync::Mutex::new(0)),
             next_id: Arc::new(AtomicU64::new(1)),
             models_cache: Arc::new(std::sync::Mutex::new((None, std::time::Instant::now()))),
             stale_models_flag: Arc::new(AtomicBool::new(false)),
@@ -457,14 +457,11 @@ impl BackendClient {
                 }
             };
         {
-            let mut ep = self.chat_endpoint.lock().unwrap_or_else(|e| e.into_inner());
+            let mut ep = self.chat_endpoint.lock().await;
             *ep = endpoint.clone();
         }
         {
-            let mut pv = self
-                .protocol_version
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let mut pv = self.protocol_version.lock().await;
             *pv = negotiated_version;
         }
         endpoint
@@ -535,11 +532,7 @@ impl BackendClient {
 
         // Use the endpoint discovered via /protocol/version at startup.
         // This replaces the old dual-endpoint fallback (Round 3 unification).
-        let endpoint = self
-            .chat_endpoint
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let endpoint = self.chat_endpoint.lock().await.clone();
         for attempt in 1..=3 {
             match self
                 .long_client

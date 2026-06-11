@@ -91,6 +91,7 @@ pub(crate) async fn persist_chat_knowledge(
         timestamp: crate::acp::prelude::now_ts().to_string(),
         usefulness: confidence as f32,
         staleness: 0,
+        user_id: None,
     });
     store.gc();
     let promotion = store.promote();

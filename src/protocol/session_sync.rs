@@ -295,15 +295,14 @@ impl SessionRegistry {
     /// Returns `Err` with a descriptive message when the global `MAX_SESSIONS`
     /// limit has been reached.
     pub async fn create_session(&self) -> Result<SessionId, String> {
-        let sessions = self.sessions.read().await;
+        let mut sessions = self.sessions.write().await;
         if sessions.len() >= MAX_SESSIONS {
             return Err(format!("session limit reached (max={MAX_SESSIONS})"));
         }
-        drop(sessions);
 
         let id = uuid::Uuid::new_v4().to_string();
         let session = SharedSession::new(id.clone());
-        self.sessions.write().await.insert(id.clone(), session);
+        sessions.insert(id.clone(), session);
         debug!(session_id = %id, "session created");
         Ok(id)
     }
@@ -340,10 +339,11 @@ impl SessionRegistry {
         session_id: &str,
         tenant_id: Option<&str>,
     ) {
-        // Tenant isolation guard: if both the session and the caller specify
-        // a tenant, they must match.
+        // Tenant isolation guard: hold the write lock across the tenant check
+        // and the frontend connection insert to prevent a TOCTOU race where
+        // the session could be deleted between the check and the insert.
+        let sessions = self.sessions.write().await;
         if let Some(tenant) = tenant_id {
-            let sessions = self.sessions.read().await;
             if let Some(session) = sessions.get(session_id) {
                 if let Some(session_tenant) = &session.tenant_id {
                     if session_tenant != tenant {
@@ -359,6 +359,16 @@ impl SessionRegistry {
                 }
             }
         }
+        // Re-check that the session still exists before inserting.
+        if !sessions.contains_key(session_id) {
+            warn!(
+                frontend_id = %frontend_id,
+                session_id = %session_id,
+                "session disappeared before frontend connection – rejected"
+            );
+            return;
+        }
+        drop(sessions);
 
         let mut fe_conns = self.frontend_connections.write().await;
         fe_conns

@@ -297,6 +297,7 @@ impl MemoryBus {
                 timestamp: now_iso8601(),
                 usefulness: 1.0,
                 staleness: 0,
+                user_id: None,
             };
             guard.store(entry);
         }

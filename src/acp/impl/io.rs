@@ -58,7 +58,7 @@ pub async fn send_typed<T: serde::Serialize>(
 pub async fn send_error(
     server: &AcpServer,
     id: Option<Value>,
-    code: i64,
+    code: i32,
     message: String,
     data: Option<Value>,
 ) -> Result<()> {

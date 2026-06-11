@@ -2,6 +2,7 @@ pub mod artifact;
 pub mod audit;
 pub mod autonomy_runtime;
 pub mod brain_loop; // F-GAP-17 (flat, legacy — kept for backward compatibility; use `r#loop` for new code)
+pub mod bulkhead; // BLUE68 P1-7: Bulkhead pattern for LLM provider/tool executor
 pub mod cache_warming;
 pub mod capabilities_registry;
 pub mod capability_signals; // BLUE41: Structured capability decision data

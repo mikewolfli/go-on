@@ -628,6 +628,7 @@ pub(crate) async fn execute_runtime_subtasks(
                     timestamp: crate::acp::prelude::now_ts().to_string(),
                     usefulness: 0.8,
                     staleness: 0,
+                    user_id: None,
                 });
                 memory_entries_written += 1;
             }

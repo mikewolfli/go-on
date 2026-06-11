@@ -4,6 +4,7 @@
 //! exceed a threshold, they are summarized into a compressed form so that
 //! important context is retained without unbounded growth.
 
+use crate::memory::embedding_provider::local_hash_embed;
 use crate::memory::memory_persistence::{MemoryEntry, MemoryTier};
 
 /// Configuration for memory summarization.
@@ -62,6 +63,7 @@ impl MemorySummarizer {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs() as i64;
+            let summary_embedding = local_hash_embed(&summary, 128);
             return SummarizedMemory::Compressed(vec![MemoryEntry {
                 id: format!("llm-summary-{}", now_secs * 1000),
                 tier: MemoryTier::Hot,
@@ -70,9 +72,10 @@ impl MemorySummarizer {
                 created_at: now_secs,
                 accessed_at: now_secs,
                 usefulness: 1.0,
-                embedding: None,
+                embedding: Some(summary_embedding),
                 access_count: 1,
                 session_id: None,
+                user_id: None,
             }]);
         }
 
@@ -106,6 +109,8 @@ impl MemorySummarizer {
             .unwrap_or_default()
             .as_secs() as i64;
 
+        let summary_embedding = local_hash_embed(&summary_text, 128);
+
         compressed.push(MemoryEntry {
             id: format!("summary-{}", now_secs * 1000),
             tier: MemoryTier::Hot,
@@ -114,9 +119,10 @@ impl MemorySummarizer {
             created_at: now_secs,
             accessed_at: now_secs,
             usefulness: 1.0, // summaries are always high-value for retrieval
-            embedding: None,
+            embedding: Some(summary_embedding),
             access_count: 1,
             session_id: None,
+            user_id: None,
         });
 
         SummarizedMemory::Compressed(compressed)
@@ -222,6 +228,7 @@ mod tests {
             embedding: None,
             access_count: 1,
             session_id: None,
+            user_id: None,
         }
     }
 

@@ -446,13 +446,90 @@ pub(crate) async fn process_chat_request(
     let started = std::time::Instant::now();
     let ctx = ctx.unwrap_or_else(|| ChatRequestContext::new(None));
 
-    // ── Phase 1: Observe ──────────────────────────────────────────
+    // ── OTel: Ensure a parent span exists for the chat pipeline ─────
+    // If no span was provided by the caller, create a root span so that
+    // child spans for each phase still appear in the trace tree.
+    let parent_span = span.cloned().or_else(|| {
+        server
+            .observability
+            .telemetry_runtime
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("telemetry_runtime mutex poisoned");
+                poisoned.into_inner()
+            })
+            .start_root_span(
+                "acp.process_chat",
+                &trace.trace_id,
+                vec![opentelemetry::KeyValue::new(
+                    "request_id",
+                    trace.request_id.clone(),
+                )],
+            )
+    });
+
+    // ── Phase 1: Observe (with OTel child span) ─────────────────────
+    let observe_cx = parent_span.as_ref().and_then(|parent| {
+        server
+            .observability
+            .telemetry_runtime
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("telemetry_runtime mutex poisoned");
+                poisoned.into_inner()
+            })
+            .start_child_span(parent, "chat.observe", vec![])
+    });
     let mut resolve_out = observe_phase(server, params, trace, ctx).await?;
+    if let Some(cx) = observe_cx {
+        server
+            .observability
+            .telemetry_runtime
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("telemetry_runtime mutex poisoned");
+                poisoned.into_inner()
+            })
+            .end_span(cx, vec![]);
+    }
 
-    // ── Phase 2: Think ────────────────────────────────────────────
+    // ── Phase 2: Think (with OTel child span) ───────────────────────
+    let think_cx = parent_span.as_ref().and_then(|parent| {
+        server
+            .observability
+            .telemetry_runtime
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("telemetry_runtime mutex poisoned");
+                poisoned.into_inner()
+            })
+            .start_child_span(parent, "chat.think", vec![])
+    });
     let routing_out = think_phase(server, params, &mut resolve_out, trace).await?;
+    if let Some(cx) = think_cx {
+        server
+            .observability
+            .telemetry_runtime
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("telemetry_runtime mutex poisoned");
+                poisoned.into_inner()
+            })
+            .end_span(cx, vec![]);
+    }
 
-    // ── Phase 3: Act ──────────────────────────────────────────────
+    // ── Phase 3: Act (with OTel child span) ─────────────────────────
+    let act_cx = parent_span.as_ref().and_then(|parent| {
+        server
+            .observability
+            .telemetry_runtime
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("telemetry_runtime mutex poisoned");
+                poisoned.into_inner()
+            })
+            .start_child_span(parent, "chat.act", vec![])
+    });
     let mut exec_out = act_phase(
         server,
         params,
@@ -463,8 +540,21 @@ pub(crate) async fn process_chat_request(
         &routing_out,
     )
     .await?;
+    if let Some(cx) = act_cx {
+        server
+            .observability
+            .telemetry_runtime
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("telemetry_runtime mutex poisoned");
+                poisoned.into_inner()
+            })
+            .end_span(cx, vec![]);
+    }
 
     // ── Phase 4: Reflect ──────────────────────────────────────────
+    // The reflect phase receives the original span for downstream use
+    // (e.g., full_auto_executor span propagation).
     reflect_phase(
         server,
         params,
@@ -1154,6 +1244,7 @@ pub(crate) async fn apply_review_gate_assemble(
             ),
             usefulness: 0.8,
             staleness: 0,
+            user_id: None,
         };
 
         let mut memory_store = MemoryStore::new(MemoryPolicy::default());

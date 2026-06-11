@@ -276,11 +276,67 @@ impl McpServer {
             "resources/list" => Ok(self.handle_list_resources(&request).await),
             "resources/read" => self.handle_read_resource(&request).await,
             "resources/subscribe" => {
-                // F-GAP-10 — planned wiring: persistent subscription tracking.
-                info!(
-                    "MCP: resource subscription requested (params: {:?})",
-                    request.params
-                );
+                let uri = request
+                    .params
+                    .as_ref()
+                    .and_then(|p| p.get("uri"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let uri = match uri {
+                    Some(u) => u,
+                    None => return Err(invalid_params("missing 'uri' in params")),
+                };
+                {
+                    let mut subs = self
+                        .resource_subscriptions
+                        .lock()
+                        .unwrap_or_else(|poisoned| {
+                            warn!("resource_subscriptions lock poisoned, recovering");
+                            poisoned.into_inner()
+                        });
+                    // Use the request id as the subscriber identifier.
+                    let subscriber = request
+                        .id
+                        .as_ref()
+                        .map(|id| id.to_string())
+                        .unwrap_or_default();
+                    subs.entry(uri.clone()).or_default().insert(subscriber);
+                }
+                info!("MCP: subscribed to resource '{}'", uri);
+                Ok(json!({"meta": {}}))
+            }
+            "resources/unsubscribe" => {
+                let uri = request
+                    .params
+                    .as_ref()
+                    .and_then(|p| p.get("uri"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let uri = match uri {
+                    Some(u) => u,
+                    None => return Err(invalid_params("missing 'uri' in params")),
+                };
+                {
+                    let mut subs = self
+                        .resource_subscriptions
+                        .lock()
+                        .unwrap_or_else(|poisoned| {
+                            warn!("resource_subscriptions lock poisoned, recovering");
+                            poisoned.into_inner()
+                        });
+                    let subscriber = request
+                        .id
+                        .as_ref()
+                        .map(|id| id.to_string())
+                        .unwrap_or_default();
+                    if let Some(members) = subs.get_mut(&uri) {
+                        members.retain(|s| s != &subscriber);
+                        if members.is_empty() {
+                            subs.remove(&uri);
+                        }
+                    }
+                }
+                info!("MCP: unsubscribed from resource '{}'", uri);
                 Ok(json!({"meta": {}}))
             }
             "prompts/list" => Ok(self.handle_list_prompts(&request).await),
@@ -466,9 +522,23 @@ impl McpServer {
         serde_json::to_value(McpInitializeResult::new(
             MCP_VERSION,
             json!({
-                "resources": {},
-                "tools": {},
-                "prompts": {}
+                "resources": {
+                    "subscribe": true,
+                    "listChanged": true
+                },
+                "tools": {
+                    "listChanged": true
+                },
+                "prompts": {
+                    "listChanged": true
+                },
+                "roots": {
+                    "listChanged": false
+                },
+                "sampling": {},
+                "experimental": {
+                    "agents": {}
+                }
             }),
             self.server_info.clone(),
         ))
@@ -1108,5 +1178,52 @@ impl McpServer {
                 "content": "Hello!"
             }),
         ])
+    }
+
+    /// Notify all subscribers that a resource has changed.
+    ///
+    /// Logs the change event and updates the subscription tracking.
+    /// Transport-level push of `notifications/resources/list_changed`
+    /// is wired when the ACP server provides a notification channel.
+    ///
+    /// This is a public API surface reserved for external callers who
+    /// need to notify subscribers of resource changes.
+    #[allow(dead_code)]
+    pub fn notify_resource_changed(&self, resource_uri: &str) {
+        let has_subscribers = {
+            let subs = self
+                .resource_subscriptions
+                .lock()
+                .unwrap_or_else(|poisoned| {
+                    warn!("resource_subscriptions lock poisoned, recovering");
+                    poisoned.into_inner()
+                });
+            subs.get(resource_uri)
+                .map(|s| !s.is_empty())
+                .unwrap_or(false)
+        };
+
+        if !has_subscribers {
+            return;
+        }
+
+        info!(
+            "MCP: resource '{}' changed, notifying subscriber(s)",
+            resource_uri,
+        );
+
+        // Push the change notification through the SSE broadcaster if one is
+        // configured, so connected SSE clients receive the real-time update.
+        if let Some(ref broadcaster) = self.sse_broadcaster {
+            let notification = serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/resources/updated",
+                "params": {
+                    "uri": resource_uri,
+                },
+            });
+            let payload = serde_json::to_string(&notification).unwrap_or_default();
+            let _ = broadcaster.send(payload);
+        }
     }
 }

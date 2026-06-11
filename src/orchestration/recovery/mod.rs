@@ -5,12 +5,18 @@
 //! tracks success rates, and escalates to human intervention only after
 //! all automatic recovery attempts are exhausted.
 
+use crate::resilience::hyper_resilience::HyperResilienceEngine;
 use fastrand;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::fmt;
+use std::sync::Arc;
 use uuid::Uuid;
+
+pub mod escalation;
+pub mod strategies;
+
+pub use strategies::{default_strategies, select_strategy};
 
 // ---------------------------------------------------------------------------
 // Exponential backoff with jitter
@@ -195,7 +201,7 @@ impl RecoveryAction {
     }
 
     /// Returns the action as a JSON value for evidence logging.
-    #[allow(dead_code)] // F-GAP-17 — reserved for evidence logging integration
+    #[allow(dead_code)]
     pub fn to_json(&self) -> Value {
         match self {
             RecoveryAction::Retry {
@@ -293,7 +299,7 @@ impl RecoveryStrategy {
     }
 
     /// Returns the success rate of this strategy (0.0–1.0).
-    #[allow(dead_code)] // F-GAP-17 — reserved for recovery diagnostics
+    #[allow(dead_code)]
     pub fn success_rate(&self) -> f64 {
         if self.attempt_count == 0 {
             0.0
@@ -371,8 +377,13 @@ pub struct RecoveryOrchestrator {
     total_auto_attempts: u32,
     /// Total number of escalation events.
     total_escalations: u32,
+    /// Hyper-resilience engine for circuit breaker checks and failure recording.
+    /// Skipped in serialization since `Arc` is not `Serialize`.
+    #[serde(skip)]
+    engine: Option<Arc<HyperResilienceEngine>>,
 }
 
+#[allow(dead_code)]
 impl RecoveryOrchestrator {
     /// Create a new recovery orchestrator with default thresholds.
     ///
@@ -389,74 +400,28 @@ impl RecoveryOrchestrator {
         human_intervention_threshold: u32,
     ) -> Self {
         Self {
-            strategies: Self::default_strategies(),
+            strategies: default_strategies(),
             recovery_attempts: Vec::new(),
             max_auto_recovery_attempts,
             human_intervention_threshold,
             consecutive_auto_failures: 0,
             total_auto_attempts: 0,
             total_escalations: 0,
+            engine: None,
         }
     }
 
-    /// Build the default set of recovery strategies.
-    fn default_strategies() -> Vec<RecoveryStrategy> {
-        vec![
-            RecoveryStrategy::new(
-                "timeout_retry",
-                vec![RecoveryAction::Retry {
-                    tool_name: ToolReference::Auto,
-                    attempt: 1,
-                    max_attempts: 3,
-                    backoff_ms: 1000, // base — exp_backoff_ms applies jitter at runtime
-                }],
-            ),
-            RecoveryStrategy::new(
-                "empty_response_retry",
-                vec![
-                    RecoveryAction::Retry {
-                        tool_name: ToolReference::Auto,
-                        attempt: 1,
-                        max_attempts: 2,
-                        backoff_ms: 500, // base
-                    },
-                    RecoveryAction::Repair {
-                        tool_name: ToolReference::Auto,
-                        repair_strategy: "request_structured_intermediate_output".to_string(),
-                    },
-                ],
-            ),
-            RecoveryStrategy::new(
-                "permission_reroute",
-                vec![RecoveryAction::Reroute {
-                    from_agent: ToolReference::Current,
-                    to_agent: ToolReference::Fallback,
-                    reason: "permission_denied".to_string(),
-                }],
-            ),
-            RecoveryStrategy::new(
-                "rate_limit_backoff",
-                vec![
-                    RecoveryAction::Retry {
-                        tool_name: ToolReference::Auto,
-                        attempt: 1,
-                        max_attempts: 3,
-                        backoff_ms: 5000, // base — applied with exp backoff + jitter
-                    },
-                    RecoveryAction::Degrade {
-                        fallback_tool: "lower_cost_mode".to_string(),
-                        rationale: "rate_limit_avoidance".to_string(),
-                    },
-                ],
-            ),
-            RecoveryStrategy::new(
-                "generic_failure_replan",
-                vec![RecoveryAction::Replan {
-                    reason: "generic_failure".to_string(),
-                    new_objective: "try_alternative_approach".to_string(),
-                }],
-            ),
-        ]
+    /// Wire hyper-resilience into tool execution.
+    /// Called from the scheduler/executor when a tool call fails.
+    /// Stores the engine in the orchestrator and uses it in `attempt_recovery()`
+    /// to report failures and check circuit breaker state before retrying.
+    ///
+    /// This is a public API surface for external wiring (e.g. from server
+    /// startup code).  It is not called internally because the engine is
+    /// injected via builder pattern.
+    pub fn with_resilience_engine(mut self, engine: Arc<HyperResilienceEngine>) -> Self {
+        self.engine = Some(engine);
+        self
     }
 
     /// Attempt recovery by selecting the best strategy for the given failure type.
@@ -470,31 +435,35 @@ impl RecoveryOrchestrator {
     ) -> Result<RecoveryAction, String> {
         let failure_lower = failure_type.to_ascii_lowercase();
 
-        // Check escalation thresholds first.
-        if self.consecutive_auto_failures >= self.human_intervention_threshold {
-            self.total_escalations += 1;
-            return Ok(RecoveryAction::Escalate {
-                reason: format!(
-                    "{} consecutive auto-recovery failures exceeded threshold of {}",
-                    self.consecutive_auto_failures, self.human_intervention_threshold
-                ),
-                context,
-            });
+        // Check circuit breaker availability before attempting recovery.
+        if let Some(ref engine) = self.engine {
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                let available =
+                    handle.block_on(async { engine.is_available("tool_execution").await });
+                if !available {
+                    self.total_escalations += 1;
+                    return Ok(RecoveryAction::Escalate {
+                        reason: "circuit breaker open: tool_execution is unavailable until recovery timeout elapses".to_string(),
+                        context,
+                    });
+                }
+            }
         }
 
-        if self.total_auto_attempts >= self.max_auto_recovery_attempts {
+        // Check escalation thresholds first.
+        if let Some(escalate) = escalation::should_escalate(
+            self.consecutive_auto_failures,
+            self.human_intervention_threshold,
+            self.total_auto_attempts,
+            self.max_auto_recovery_attempts,
+            context.clone(),
+        ) {
             self.total_escalations += 1;
-            return Ok(RecoveryAction::Escalate {
-                reason: format!(
-                    "max auto recovery attempts ({}) exhausted",
-                    self.max_auto_recovery_attempts
-                ),
-                context,
-            });
+            return Ok(escalate);
         }
 
         // Select the best strategy based on failure type classification.
-        let strategy = self.select_strategy(&failure_lower)?;
+        let strategy = select_strategy(&self.strategies, &failure_lower)?;
         let strategy_index = self.strategies.iter().position(|s| s.name == strategy.name);
 
         // Clone only the first action; subsequent actions are tried on re-entry.
@@ -522,6 +491,16 @@ impl RecoveryOrchestrator {
             }
             other => other.clone(),
         };
+
+        // Record the failure with the resilience engine before retrying.
+        if let Some(ref engine) = self.engine {
+            if matches!(action, RecoveryAction::Retry { .. }) {
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    let _ =
+                        handle.block_on(async { engine.record_failure("tool_execution").await });
+                }
+            }
+        }
 
         // Record the auto-recovery attempt (pre-execution, marked as pending).
         // duration_ms is left as 0 — it will be populated by record_outcome()
@@ -589,36 +568,10 @@ impl RecoveryOrchestrator {
         }
     }
 
-    /// Select the best matching strategy for a given failure type.
-    ///
-    /// Uses the explicit `FailureKind` classification instead of fragile
-    /// string similarity scoring.
-    fn select_strategy(&self, failure_lower: &str) -> Result<&RecoveryStrategy, String> {
-        let kind = classify_failure(failure_lower);
-        let name = match kind {
-            FailureKind::Timeout => "timeout_retry",
-            FailureKind::RateLimit => "rate_limit_backoff",
-            FailureKind::PermissionDenied => "permission_reroute",
-            // Tool execution errors (empty responses, crashes) → empty_response_retry
-            FailureKind::ToolExecutionError => "empty_response_retry",
-            // Everything else falls through to the generic replan strategy.
-            FailureKind::NetworkError
-            | FailureKind::ToolNotFound
-            | FailureKind::InvalidInput
-            | FailureKind::ResourceExhausted
-            | FailureKind::Unknown => "generic_failure_replan",
-        };
-        self.strategies
-            .iter()
-            .find(|s| s.name == name)
-            .ok_or_else(|| format!("no strategy matches failure: {failure_lower}"))
-    }
-
     /// Returns the auto-recovery success rate (0.0–1.0).
     ///
     /// This measures how often automatic recovery attempts succeed.
     /// A low rate suggests the system should escalate to human sooner.
-    #[allow(dead_code)] // F-GAP-17 — reserved for recovery diagnostics
     pub fn auto_recovery_rate(&self) -> f64 {
         let auto_attempts: Vec<&RecoveryAttempt> = self
             .recovery_attempts
@@ -639,7 +592,6 @@ impl RecoveryOrchestrator {
     /// The ratio of escalation actions to all recovery attempts.
     /// A value near 1.0 means almost all failures escalate to human.
     /// A value near 0.0 means auto-recovery handles most failures.
-    #[allow(dead_code)] // F-GAP-17 — reserved for recovery diagnostics
     pub fn human_intervention_ratio(&self) -> f64 {
         let total = self.recovery_attempts.len();
         if total == 0 {
@@ -657,7 +609,6 @@ impl RecoveryOrchestrator {
     ///
     /// Each entry corresponds to one recovery attempt containing the failure,
     /// action taken, success status, duration, and evidence context.
-    #[allow(dead_code)] // F-GAP-17 — reserved for recovery diagnostics
     pub fn recovery_evidence_chain(&self) -> Vec<Value> {
         self.recovery_attempts
             .iter()

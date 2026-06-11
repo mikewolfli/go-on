@@ -330,9 +330,43 @@ impl HnswIndex {
         }
     }
 
+    /// Remove a node from the index by its memory_key.
+    ///
+    /// Replaces the node's vector with a zero-vector and clears metadata
+    /// so it is effectively filtered out during distance computations.
+    fn remove(&mut self, memory_key: &str) {
+        if let Some(pos) = self
+            .metadata
+            .iter()
+            .position(|m| m.memory_key == memory_key)
+        {
+            // Zero out the vector (distance will be ~1.0, effectively invisible)
+            self.vectors[pos].fill(0.0);
+            // Clear metadata so the node won't be matched again
+            self.metadata[pos] = HnswNodeMeta {
+                memory_key: String::new(),
+                response_text: String::new(),
+                updated_at: 0,
+            };
+        }
+    }
+
     /// Search the index, returning up to `ef` nearest neighbours sorted by distance.
+    ///
+    /// Filters out removed entries (those with empty memory_key metadata).
     fn search(&self, query: &[f32], ef: usize) -> Vec<HnswNodeDist> {
         if self.vectors.is_empty() {
+            return Vec::new();
+        }
+        // Build a set of valid (non-removed) node indices for post-filtering.
+        let valid: std::collections::HashSet<usize> = self
+            .metadata
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| !m.memory_key.is_empty())
+            .map(|(i, _)| i)
+            .collect();
+        if valid.is_empty() {
             return Vec::new();
         }
         let ep = self
@@ -352,7 +386,13 @@ impl HnswIndex {
 
         // Search layer 0 with ef
         let ef_actual = ef.max(self.ef_search);
-        self.search_layer(query, curr_ep, 0, ef_actual)
+        let results = self.search_layer(query, curr_ep, 0, ef_actual);
+
+        // Filter out removed entries (empty memory_key)
+        results
+            .into_iter()
+            .filter(|nd| valid.contains(&nd.idx))
+            .collect()
     }
 }
 
@@ -430,11 +470,15 @@ impl VectorStore {
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 hit_count INTEGER NOT NULL DEFAULT 0,
-                last_hit_at INTEGER
+                last_hit_at INTEGER,
+                user_id TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_vector_memory_phase_updated_at
                 ON vector_memory(phase, updated_at DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_vector_memory_user_id
+                ON vector_memory(user_id);
 
             CREATE TABLE IF NOT EXISTS phase_summary (
                 phase TEXT PRIMARY KEY,
@@ -538,6 +582,21 @@ impl VectorStore {
             params![memory_key, phase, query, response, json_value, blob_value, now,],
         )?;
 
+        // Collect evicted memory keys before deleting from SQLite.
+        let evicted_keys: Vec<String> = {
+            let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("vector mutex poisoned in 'upsert', recovering");
+                poisoned.into_inner()
+            });
+            let mut stmt = conn.prepare(
+                "SELECT memory_key FROM vector_memory ORDER BY updated_at DESC LIMIT -1 OFFSET ?1",
+            )?;
+            let rows = stmt.query_map(params![self.max_entries as i64], |row| {
+                row.get::<_, String>(0)
+            })?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+
         conn.execute(
             "
             DELETE FROM vector_memory
@@ -550,6 +609,15 @@ impl VectorStore {
             ",
             params![self.max_entries as i64],
         )?;
+
+        // Also remove evicted entries from HNSW index if it exists
+        if let Ok(mut hnsw_guard) = self.hnsw.lock() {
+            if let Some(ref mut hnsw) = *hnsw_guard {
+                for key in &evicted_keys {
+                    hnsw.remove(key);
+                }
+            }
+        }
 
         // Update HNSW index if it exists
         if let Ok(mut hnsw_guard) = self.hnsw.lock() {
@@ -1442,12 +1510,15 @@ impl VectorStore {
                 created_at      BIGINT NOT NULL,
                 updated_at      BIGINT NOT NULL,
                 hit_count       BIGINT NOT NULL DEFAULT 0,
-                last_hit_at     BIGINT
+                last_hit_at     BIGINT,
+                user_id         TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_vector_memory_phase_updated_at
                 ON vector_memory(phase, updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_vector_memory_embedding_cosine
                 ON vector_memory USING hnsw (embedding vector_cosine_ops);
+            CREATE INDEX IF NOT EXISTS idx_vector_memory_user_id
+                ON vector_memory(user_id);
             CREATE TABLE IF NOT EXISTS phase_summary (
                 phase           TEXT PRIMARY KEY,
                 summary_text    TEXT NOT NULL,

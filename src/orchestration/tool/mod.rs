@@ -406,13 +406,27 @@ impl ToolRegistry {
         serde_json::json!({ "tools": matrix })
     }
 
+    #[tracing::instrument(level = "debug", skip(self, input), fields(tool = %name, success = false, latency_ms = 0u64, fallback_used = false))]
     pub fn run_with_fallback(&self, name: &str, input: &ToolInput) -> Result<ToolOutput> {
+        let start = std::time::Instant::now();
+
         let Some(primary) = self.get(name) else {
+            let elapsed = start.elapsed().as_millis() as u64;
+            tracing::warn!(target: "tool_execution", tool = %name, latency_ms = elapsed, "tool not found");
             anyhow::bail!("{}", tf("error.tool_not_found", &[("name", name)]));
         };
 
         let mut primary_result = primary.run(input)?;
         if primary_result.success {
+            let elapsed = start.elapsed().as_millis() as u64;
+            tracing::debug!(
+                target: "tool_execution",
+                tool = %name,
+                latency_ms = elapsed,
+                success = true,
+                "tool executed successfully"
+            );
+            record_tool_execution("tool_execution_total", name, true, elapsed);
             return Ok(primary_result);
         }
 
@@ -425,16 +439,37 @@ impl ToolRegistry {
             if let Some(fallback_tool) = self.get(&fallback_name) {
                 let mut fallback_result = fallback_tool.run(input)?;
                 if fallback_result.success {
+                    let elapsed = start.elapsed().as_millis() as u64;
                     fallback_result.audit_log = Some(format!(
                         "primary '{}' failed, fallback '{}' succeeded",
                         name, fallback_name
                     ));
+                    tracing::info!(
+                        target: "tool_execution",
+                        primary = %name,
+                        fallback = %fallback_name,
+                        latency_ms = elapsed,
+                        success = true,
+                        fallback_used = true,
+                        "fallback tool executed successfully"
+                    );
+                    record_tool_execution("tool_execution_total", name, true, elapsed);
                     return Ok(fallback_result);
                 }
                 primary_result = fallback_result;
             }
         }
 
+        let elapsed = start.elapsed().as_millis() as u64;
+        tracing::warn!(
+            target: "tool_execution",
+            tool = %name,
+            latency_ms = elapsed,
+            success = false,
+            fallback_used = !self.profile(name).map(|p| p.fallback_chain.is_empty()).unwrap_or(true),
+            "tool execution failed after all fallbacks"
+        );
+        record_tool_execution("tool_execution_total", name, false, elapsed);
         Ok(primary_result)
     }
 }
@@ -443,6 +478,22 @@ impl Default for ToolRegistry {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Record a tool execution metric via the global performance monitor.
+///
+/// Tracks tool call count, latency, and success/failure for observability
+/// and alert-rule evaluation (P3-9).
+fn record_tool_execution(_metric_name: &str, _tool: &str, success: bool, latency_ms: u64) {
+    crate::observability::performance::record_global_operation(success, latency_ms as f64);
+    tracing::trace!(
+        target: "tool_execution",
+        metric = %_metric_name,
+        tool = %_tool,
+        success = success,
+        latency_ms = latency_ms,
+        "tool execution metric"
+    );
 }
 
 /// Sanitize and validate a file path against the allowed base directory.

@@ -14,8 +14,10 @@ from .client import (
     HealthResponse,
     LearningSummaryResponse,
     MetricsResponse,
+    MultimodalInput,
     SelectorStatusResponse,
     TaskPlanResponse,
+    ToolCall,
 )
 
 __all__ = [
@@ -32,8 +34,10 @@ __all__ = [
     "CheckpointListResponse",
     "TaskPlanResponse",
     "LearningSummaryResponse",
+    "MultimodalInput",
     "SelectorStatusResponse",
     "CostStatusResponse",
     "ConfigBaselineResponse",
     "HarnessStatusResponse",
+    "ToolCall",
 ]

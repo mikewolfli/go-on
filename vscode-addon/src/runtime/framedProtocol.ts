@@ -246,8 +246,8 @@ export class FramedWriter {
    */
   writeMessage(msg: unknown): boolean {
     const enriched: FramedMessage = {
-      message_id: `msg-${this.sessionId}-${++this.messageCounter}`,
       ...(msg as Record<string, unknown>),
+      message_id: `msg-${this.sessionId}-${++this.messageCounter}`,
     };
     const json = JSON.stringify(enriched);
     const encoder = new TextEncoder();

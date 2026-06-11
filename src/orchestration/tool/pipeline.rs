@@ -190,6 +190,14 @@ async fn run_single_tool(
     tool_name: &str,
     input: &Value,
 ) -> PipelineStepResult {
+    let span = tracing::info_span!(
+        "tool.run_single",
+        tool = %tool_name,
+        input_size = input.to_string().len() as u64,
+        latency_ms = 0u64,
+        success = false,
+    );
+    let _guard = span.enter();
     let start = Instant::now();
 
     let tool_input = ToolInput {
@@ -207,6 +215,15 @@ async fn run_single_tool(
         Ok(out) => out,
         Err(e) => {
             let duration_ms = start.elapsed().as_millis() as u64;
+            span.record("latency_ms", duration_ms);
+            span.record("success", false);
+            tracing::warn!(
+                target: "tool_execution",
+                tool = %tool_name,
+                duration_ms = duration_ms,
+                error = %e,
+                "tool execution failed"
+            );
             return PipelineStepResult {
                 tool_name: tool_name.to_string(),
                 output: None,
@@ -218,8 +235,12 @@ async fn run_single_tool(
 
     let duration_ms = start.elapsed().as_millis() as u64;
     let logical_error = if output.success {
+        span.record("latency_ms", duration_ms);
+        span.record("success", true);
         None
     } else {
+        span.record("latency_ms", duration_ms);
+        span.record("success", false);
         Some(
             output
                 .error

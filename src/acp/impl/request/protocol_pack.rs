@@ -1,9 +1,11 @@
+use std::sync::OnceLock;
 use tracing::warn;
 
 use super::*;
 use crate::mcp::MCP_VERSION;
 use crate::schema::{
-    ImportedSkillRecordView, ModelsListResponse, PhaseResponse, SkillActionResponse,
+    ImportedSkillRecordView, ModelsListResponse, PhaseResponse, ProtocolVersion,
+    SkillActionResponse,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -242,7 +244,11 @@ pub(super) async fn handle_initialize(server: &AcpServer, request_id: Option<Val
         SessionResumeCapabilities,
     };
 
-    let resp = InitializeResponse::new(ProtocolVersion::V1)
+    let negotiated_version = NEGOTIATED_PROTOCOL_VERSION
+        .get()
+        .copied()
+        .unwrap_or(ProtocolVersion::LATEST);
+    let resp = InitializeResponse::new(negotiated_version)
         .agent_info(Implementation::new("go-on", env!("CARGO_PKG_VERSION")))
         .agent_capabilities(AgentCapabilities {
             load_session: true,
@@ -272,6 +278,7 @@ pub(super) async fn handle_initialize(server: &AcpServer, request_id: Option<Val
     // The previous hardcoded json!() response included top-level fields
     // that clients (tests, older IDE integrations) depend on.
     // Merge them into the new structured response so old callers still work.
+    let negotiated_ver_num = negotiated_version.as_u16();
     if let Some(obj) = value.as_object_mut() {
         // "name" was used as a quick-access alias for agent_info.name
         obj.insert("name".to_string(), serde_json::json!("go-on"));
@@ -283,8 +290,13 @@ pub(super) async fn handle_initialize(server: &AcpServer, request_id: Option<Val
             serde_json::json!(env!("CARGO_PKG_VERSION")),
         );
         // "protocol_version" — expose as a plain number for compatibility
-        obj.insert("protocol_version".to_string(), serde_json::json!(1u16));
+        obj.insert(
+            "protocol_version".to_string(),
+            serde_json::json!(negotiated_ver_num),
+        );
         // "capabilities" — flatten the chat/phase/health/etc. booleans
+        // Version-specific capabilities: V3+ enables SSE transport by default
+        let sse_enabled = negotiated_ver_num >= 3;
         let caps_obj = serde_json::json!({
             "chat": true,
             "phase": true,
@@ -293,6 +305,7 @@ pub(super) async fn handle_initialize(server: &AcpServer, request_id: Option<Val
             "health": true,
             "debug_panel": true,
             "mcp_adapter": true,
+            "sse_transport": sse_enabled,
         });
         obj.insert("capabilities".to_string(), caps_obj);
     }
@@ -306,6 +319,20 @@ pub(super) async fn handle_initialize(server: &AcpServer, request_id: Option<Val
 
     crate::acp::r#impl::io::send_result(server, request_id, value).await
 }
+
+/// Set the negotiated protocol version for the ACP initialize response.
+///
+/// Must be called once before the first `handle_initialize` invocation,
+/// typically immediately after protocol negotiation completes.
+/// If never called, defaults to `ProtocolVersion::LATEST` (V3).
+#[allow(dead_code)] // Public API for protocol integration; called after negotiation completes
+pub fn set_negotiated_protocol_version(version: ProtocolVersion) {
+    let _ = NEGOTIATED_PROTOCOL_VERSION.set(version);
+}
+
+/// Module-level storage for the negotiated protocol version, initially unset.
+/// When unset, `handle_initialize` falls back to `ProtocolVersion::LATEST`.
+static NEGOTIATED_PROTOCOL_VERSION: OnceLock<ProtocolVersion> = OnceLock::new();
 
 pub(super) async fn handle_mcp_initialize(
     server: &AcpServer,

@@ -35,9 +35,26 @@ pub struct JsonRpcResponse {
     pub(crate) error: Option<JsonRpcError>,
 }
 
+/// JSON-RPC 2.0 standard error codes.
+#[allow(dead_code)]
+pub mod error_codes {
+    /// Invalid JSON was received by the server.
+    pub const PARSE_ERROR: i32 = -32700;
+    /// The JSON sent is not a valid Request object.
+    pub const INVALID_REQUEST: i32 = -32600;
+    /// The method does not exist / is not available.
+    pub const METHOD_NOT_FOUND: i32 = -32601;
+    /// Invalid method parameter(s).
+    pub const INVALID_PARAMS: i32 = -32602;
+    /// Internal JSON-RPC error.
+    pub const INTERNAL_ERROR: i32 = -32603;
+    /// Reserved for implementation-defined server-errors.
+    pub const SERVER_ERROR: i32 = -32000;
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct JsonRpcError {
-    pub(crate) code: i64,
+    pub(crate) code: i32,
     pub(crate) message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) data: Option<Value>,
