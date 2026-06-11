@@ -492,11 +492,14 @@ pub struct DistributedDAGCoordinator {
     leader_lease: RwLock<u64>,
     /// Our own node ID.
     self_node_id: NodeId,
+    /// Shutdown signal for fault detection loop.
+    shutdown_tx: tokio::sync::watch::Sender<bool>,
 }
 
 #[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
 impl DistributedDAGCoordinator {
     pub fn new(self_node_id: NodeId, executor: Arc<dyn RemoteExecutor>) -> Self {
+        let (shutdown_tx, _) = tokio::sync::watch::channel(false);
         Self {
             dag_states: RwLock::new(HashMap::new()),
             executor,
@@ -505,6 +508,7 @@ impl DistributedDAGCoordinator {
             current_term: RwLock::new(0),
             leader_lease: RwLock::new(0),
             self_node_id,
+            shutdown_tx,
         }
     }
 
@@ -614,10 +618,11 @@ impl DistributedDAGCoordinator {
 
         // In a real implementation, an execution loop would be spawned here
         // that completes the DAG asynchronously.
-        let _executor = self.executor.clone();
+        let exec = self.executor.clone();
         tokio::spawn(async move {
             info!(dag = %dag_id_str, "DAG execution started");
             // Future: iterate over ready_nodes, dispatch via executor, collect results
+            let _ = exec;
         });
 
         Ok(())
@@ -796,10 +801,17 @@ impl DistributedDAGCoordinator {
     pub fn start_fault_detection(self: &Arc<Self>) {
         let coord = self.clone();
         let config = self.fault_config.clone();
-        tokio::spawn(async move {
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
+        let handle = tokio::spawn(async move {
             let mut interval = time::interval(Duration::from_secs(config.check_interval_s));
             loop {
-                interval.tick().await;
+                tokio::select! {
+                    _ = interval.tick() => {}
+                    _ = shutdown_rx.changed() => {
+                        info!("fault detection loop shutting down");
+                        return;
+                    }
+                }
                 let failed = coord.check_leases().await;
                 if !failed.is_empty() {
                     warn!(nodes = ?failed, "Fault detection: nodes marked offline");
@@ -848,6 +860,9 @@ impl DistributedDAGCoordinator {
                 }
             }
         });
+        // Handle is intentionally detached — the fault detection loop
+        // terminates via the shutdown_tx signal.
+        drop(handle);
     }
 }
 

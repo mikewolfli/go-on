@@ -5,6 +5,9 @@
 //! SelfRationalizationGuard, SecurityGovernor, RBAC enforcer) into a single
 //! evaluate/validate/verify suite.
 
+use crate::governance::approval_engine::ApprovalEngine;
+use crate::governance::approval_learning::ApprovalPreferenceLearner;
+use crate::governance::drift::drift_protection::DriftProtectionEngine;
 use crate::governance::hardening::{
     rbac_fallback_allows_action, BudgetTracker, GovernanceAction, IdempotencyCache, SandboxLevel,
     SandboxPolicy,
@@ -16,6 +19,7 @@ use crate::governance::harness_bus::types::{
 use crate::governance::pua::{PuaRuleEngine, TaskContext};
 use crate::governance::rationalization::{RationalizationAnnotation, SelfRationalizationGuard};
 use crate::governance::rbac::{AccessDecision, Permission, Principal, RbacEnforcer};
+use crate::governance::reloadable_policy::PolicyReloader;
 use crate::governance::review_controls::{
     review_verdict, ReviewGateOutcome, ReviewTimeoutPolicyKind, ReviewVerdict,
 };
@@ -49,6 +53,14 @@ pub struct PolicyEvaluator {
     pub guard: Arc<Mutex<SelfRationalizationGuard>>,
     pub security_governor: Arc<SecurityGovernor>,
     pub rbac_enforcer: RwLock<Option<Arc<RwLock<RbacEnforcer>>>>,
+    /// Approval engine for structured review/approval workflows.
+    pub approval_engine: Option<Arc<ApprovalEngine>>,
+    /// Drift protection engine for detecting config/metric drift.
+    pub drift_protection: Option<Arc<Mutex<DriftProtectionEngine>>>,
+    /// Approval preference learner for auto-approval decisions.
+    pub approval_learner: Option<Arc<Mutex<ApprovalPreferenceLearner>>>,
+    /// Policy reloader for hot-reloadable policy files.
+    pub policy_reloader: Option<Arc<Mutex<PolicyReloader>>>,
     /// Thread-safe, runtime-registerable policies keyed by name.
     /// Evaluated after the built-in checks; the first matching policy short-circuits.
     pub policies: Arc<RwLock<HashMap<String, PolicyFn>>>,
@@ -75,6 +87,10 @@ impl PolicyEvaluator {
             runtime_control,
             guard,
             rbac_enforcer: RwLock::new(None),
+            approval_engine: None,
+            drift_protection: None,
+            approval_learner: None,
+            policy_reloader: None,
             policies: Arc::new(RwLock::new(HashMap::new())),
             security_governor: Arc::new({
                 let gov = SecurityGovernor::new(SecurityGovernorConfig {

@@ -180,6 +180,16 @@ impl OrchestrationCouncil {
     /// `Rejected`, or `Tied`. If quorum is not met, the proposal is
     /// marked as `Rejected`.
     pub fn tally_votes(&self, proposal_id: &str) -> Result<VoteResult> {
+        // Acquire locks in canonical order: members → proposals → votes
+        let members = self
+            .members
+            .lock()
+            .map_err(|e| anyhow!("Failed to acquire lock on members: {}", e))?;
+
+        let active_members = members.values().filter(|m| m.is_active).count() as u32;
+        // Drop members lock before acquiring proposals to minimize hold time.
+        drop(members);
+
         let mut proposals = self
             .proposals
             .lock()
@@ -212,15 +222,6 @@ impl OrchestrationCouncil {
             .values()
             .filter(|v| v.proposal_id == proposal_id)
             .collect();
-
-        // Count active members for quorum check.
-        let active_members = {
-            let members = self
-                .members
-                .lock()
-                .map_err(|e| anyhow!("Failed to acquire lock on members: {}", e))?;
-            members.values().filter(|m| m.is_active).count() as u32
-        };
 
         // Check quorum: at least min_members_for_quorum must vote.
         let quorum_met = proposal_votes.len() as u32 >= self.config.min_members_for_quorum

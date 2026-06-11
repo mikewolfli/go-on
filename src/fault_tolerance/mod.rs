@@ -39,14 +39,22 @@ pub(crate) struct Inner {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Acquire a write lock on the RwLock, logging if contention is high.
+/// Acquire a write lock on the RwLock.
+///
+/// Uses `block_in_place` to safely call `blocking_write()` from any context
+/// (including within a tokio runtime), so callers (CLI + server) can remain
+/// synchronous while the runtime drives background tasks.
 pub(crate) fn write_guard<T>(lock: &RwLock<T>) -> tokio::sync::RwLockWriteGuard<'_, T> {
-    lock.blocking_write()
+    tokio::task::block_in_place(|| lock.blocking_write())
 }
 
 /// Acquire a read lock on the RwLock.
+///
+/// Uses `block_in_place` to safely call `blocking_read()` from any context
+/// (including within a tokio runtime), so callers (CLI + server) can remain
+/// synchronous while the runtime drives background tasks.
 pub(crate) fn read_guard<T>(lock: &RwLock<T>) -> tokio::sync::RwLockReadGuard<'_, T> {
-    lock.blocking_read()
+    tokio::task::block_in_place(|| lock.blocking_read())
 }
 
 /// Compute cluster health from raw counts (shared by `profile` and `cluster_health`).

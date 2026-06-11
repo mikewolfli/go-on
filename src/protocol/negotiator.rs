@@ -89,11 +89,11 @@ impl ProtocolNegotiator {
                     }
                 }
                 Err(_) => {
-                    // Fail fast with clear error per P2 recommendation
-                    panic!(
-                        "unknown client protocol hint: '{}'. Supported modes: adaptive, acp_stdio, acp_http, mcp_stdio, mcp_http",
+                    warn!(
+                        "unknown client protocol hint: '{}' — falling back to server mode",
                         hint
                     );
+                    (self.active, false)
                 }
             }
         } else {

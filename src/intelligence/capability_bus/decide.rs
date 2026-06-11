@@ -367,9 +367,7 @@ impl CapabilityBus {
 
         // Step C: pick best agent from capability graph + reputation
         // BLUE56-B11: Also query QLearningAgent for learned routing preferences
-        let q_learning_state = (task_type_str.clone(), "select_agent".to_string());
-        let _q_preferred_action =
-            lock_guard(&self.q_learning).choose_action(&q_learning_state, &[]);
+        // First build candidate agent list, then use Q-learning to inform selection.
         let candidate_agents = self
             .capability_graph
             .lock()
@@ -448,6 +446,23 @@ impl CapabilityBus {
             agents
         };
 
+        // Step C2: Query QLearningAgent for learned routing preferences.
+        let q_learning_state = (task_type_str.clone(), "select_agent".to_string());
+        let q_preferred_action =
+            lock_guard(&self.q_learning).choose_action(&q_learning_state, &candidate_agents);
+        if let Some(ref preferred) = q_preferred_action {
+            self.record_event(
+                "decision",
+                None,
+                None,
+                "q_learning_preference",
+                serde_json::json!({
+                    "preferred_agent": preferred,
+                    "state": q_learning_state.0,
+                }),
+            );
+        }
+
         // Step E: Query SemanticCapabilityMatcher for semantic agent-task fit (I7).
         //         Logs the top-3 matches for observability.
         let semantic_matches = query_capabilities_semantic(self, &task_type_str);
@@ -485,8 +500,24 @@ impl CapabilityBus {
             None
         };
 
+        // If Q-learning has a strong preference and no scenario override, prefer the learned action.
+        let q_learning_override = match (
+            scenario_preferred_agent.as_ref(),
+            q_preferred_action.as_ref(),
+        ) {
+            (Some(_), _) => None, // Scenario takes priority over Q-learning
+            (None, Some(q_agent)) => {
+                if candidate_agents.contains(q_agent) {
+                    Some(q_agent.clone())
+                } else {
+                    None
+                }
+            }
+            (None, None) => None,
+        };
+
         let (selected_agent, score_breakdown) =
-            if let Some(ref preferred) = scenario_preferred_agent {
+            if let Some(ref preferred) = q_learning_override.or(scenario_preferred_agent) {
                 let breakdown = vec![CandidateScoreBreakdown {
                     agent: preferred.clone(),
                     reputation_score: 1.0,

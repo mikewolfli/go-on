@@ -17,7 +17,7 @@ use std::sync::Mutex;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
-use tokio::time::Duration;
+use tokio::time::{timeout, Duration};
 use tracing::{debug, warn};
 
 use crate::acp::helpers::autonomy::run_followup_after_tool_observation;
@@ -477,15 +477,23 @@ async fn execute_simple_tool(name: &str, args: &Value) -> Result<String> {
                 .or_else(|| args["cmd"].as_str())
                 .ok_or_else(|| anyhow::anyhow!("missing command argument"))?;
             let output = if cfg!(target_os = "windows") {
-                tokio::process::Command::new("cmd")
-                    .args(["/c", command])
-                    .output()
-                    .await
+                timeout(
+                    Duration::from_secs(300),
+                    tokio::process::Command::new("cmd")
+                        .args(["/c", command])
+                        .output(),
+                )
+                .await
+                .map_err(|_| anyhow::anyhow!("command timed out after 300s: {command}"))?
             } else {
-                tokio::process::Command::new("sh")
-                    .args(["-c", command])
-                    .output()
-                    .await
+                timeout(
+                    Duration::from_secs(300),
+                    tokio::process::Command::new("sh")
+                        .args(["-c", command])
+                        .output(),
+                )
+                .await
+                .map_err(|_| anyhow::anyhow!("command timed out after 300s: {command}"))?
             }
             .with_context(|| format!("failed to execute: {command}"))?;
             let stdout = String::from_utf8_lossy(&output.stdout);

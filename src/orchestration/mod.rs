@@ -34,7 +34,7 @@ pub mod flow_with_models;
 pub mod fork_registry;
 pub mod full_auto; // BLUE43 Step 10: Full-auto flow orchestrator
 pub mod integration;
-pub mod r#loop; // F-GAP-17 (structured sub-module — replaces brain_loop; new code should use this)
+
 pub mod mode;
 pub mod multi_agent_pipeline;
 pub mod omnipotent;

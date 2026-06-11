@@ -1,4 +1,5 @@
 use crate::shared::protocol_mode::ProtocolMode;
+use tracing::warn;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtocolCapability {
@@ -142,10 +143,18 @@ pub fn resolve_access_selection(
             selection_reason: "configured_explicit_mode",
         },
         other => {
-            panic!(
-                "fatal: unknown protocol mode '{}' — must be one of: adaptive, acp_stdio, acp_http, mcp_stdio, mcp_http",
+            warn!(
+                "unknown protocol mode '{}' — falling back to adaptive",
                 other
             );
+            AccessSelection {
+                configured_mode: "adaptive".to_string(),
+                protocol_capability: ProtocolCapability::DualStack,
+                request_dispatch_mode: RequestDispatchMode::Auto,
+                startup_transport: TransportMode::Stdio,
+                transport_strategy: "fallback_from_unknown",
+                selection_reason: "fallback_unknown_mode",
+            }
         }
     }
 }

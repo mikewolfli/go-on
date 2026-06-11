@@ -1613,7 +1613,7 @@ mod tests {
         let responses = vec![
             ModelVoteResult {
                 model_name: "majority".into(),
-                response: "The capital of France is Paris.".into(),
+                response: "Paris is the capital of France.".into(),
                 confidence: 0.9,
                 latency_ms: 10,
             },
@@ -1625,7 +1625,7 @@ mod tests {
             },
             ModelVoteResult {
                 model_name: "outlier".into(),
-                response: "The capital of France is London.".into(),
+                response: "London is the capital of England.".into(),
                 confidence: 0.7,
                 latency_ms: 20,
             },

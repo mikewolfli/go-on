@@ -17,6 +17,10 @@ use crate::reinforcement::{
     build_runtime_healthcheck_report, build_task_plan, persist_runtime_healthcheck,
     persist_task_plan, run_action_check, ActionCheckKind, ArtifactLedger,
 };
+use crate::security::{
+    start_secret_rotation_if_configured, wire_cert_monitor, wire_content_safety,
+    wire_prompt_injection,
+};
 use crate::setup::{
     add_local_model, apply_recommended_to_config, parse_secret_action, parse_secret_mode,
     parse_setup_level, parse_setup_profile, LocalModelOptions, SetupOptions,
@@ -123,6 +127,16 @@ pub(crate) async fn start_server(
         "memory-aware limits applied: cache_max={}, vector_max={}",
         safe_cache_max, safe_vector_max
     );
+
+    // ── Security wiring (GAP-B52) ──────────────────────────────────────────
+    // Wire security components into the server startup path.
+    // Only call wire functions when runtime config is available.
+    if let Some(ref rt) = config.runtime {
+        wire_content_safety(rt);
+        wire_prompt_injection(rt);
+        let _secret_rotation_handle = start_secret_rotation_if_configured(rt);
+        wire_cert_monitor(rt);
+    }
 
     // Initialize StartupContext (load project context once per process)
     let startup_cfg = crate::orchestration::startup_context::StartupContextConfig {

@@ -1,5 +1,4 @@
-//! GAP-B53-51: Resilience contract tests for circuit-breaker and self
--healing.
+//! GAP-B53-51: Resilience contract tests for circuit-breaker and self-healing.
 //!
 //! Each test verifies a specific behavioral contract that the resilience
 //! system must uphold under various failure conditions.
@@ -66,7 +65,11 @@ fn contract_circuit_breaker_half_open_after_timeout() {
     let mut cb = CircuitBreaker::new("test-service", 2, 10); // 10ms timeout
     cb.record_failure();
     cb.record_failure();
-    assert_eq!(cb.state(), CircuitState::Open, "CB should be open after 2 failures");
+    assert_eq!(
+        cb.state(),
+        CircuitState::Open,
+        "CB should be open after 2 failures"
+    );
 
     // Wait for the timeout to expire.
     std::thread::sleep(std::time::Duration::from_millis(20));
@@ -94,7 +97,10 @@ fn contract_self_healing_action_transitions_to_healthy() {
     );
     for action in &report.actions {
         assert!(
-            matches!(action, SelfHealingAction::Restart(_) | SelfHealingAction::Retry(_)),
+            matches!(
+                action,
+                SelfHealingAction::Restart(_) | SelfHealingAction::Retry(_)
+            ),
             "Healing actions should be concrete (Restart or Retry)"
         );
     }
@@ -107,7 +113,11 @@ fn contract_self_healing_action_transitions_to_healthy() {
 fn contract_degradation_level_escalates() {
     // Simulate that with more failures, degradation level increases.
     let mut health = SystemHealth::default();
-    assert_eq!(health.degradation, DegradationLevel::None, "Fresh health has no degradation");
+    assert_eq!(
+        health.degradation,
+        DegradationLevel::None,
+        "Fresh health has no degradation"
+    );
 
     health.degradation = DegradationLevel::Low;
     assert!(
@@ -143,8 +153,5 @@ fn contract_resilience_profile_provides_config() {
         config.health_check_interval_ms > 0,
         "Health check interval must be positive"
     );
-    assert!(
-        config.max_retries > 0,
-        "Max retries must be positive"
-    );
+    assert!(config.max_retries > 0, "Max retries must be positive");
 }

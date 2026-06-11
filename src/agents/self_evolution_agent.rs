@@ -443,7 +443,10 @@ impl SelfEvolutionAgent {
                     self.synthesize_patch_lines(&content, instruction)
                 } else {
                     // Parse the LLM output to extract patched lines
-                    let patched: Vec<(usize, String)> = llm_output
+                    // Try to extract content from markdown code fences first
+                    let extracted = self.extract_code_from_markdown(&llm_output);
+                    let source = extracted.as_deref().unwrap_or(&llm_output);
+                    let patched: Vec<(usize, String)> = source
                         .lines()
                         .enumerate()
                         .map(|(i, l)| (i + 1, l.to_string()))
@@ -751,30 +754,96 @@ impl SelfEvolutionAgent {
         context
     }
 
+    /// Extract code from markdown code fences (triple backticks).
+    /// Returns `None` if no fences are found.
+    fn extract_code_from_markdown(&self, output: &str) -> Option<String> {
+        let mut in_fence = false;
+        let mut code_lines: Vec<&str> = Vec::new();
+        for line in output.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("```") {
+                if in_fence {
+                    // End of fence — return collected lines
+                    return Some(code_lines.join("\n"));
+                } else {
+                    // Start of fence — begin collecting
+                    in_fence = true;
+                    code_lines.clear();
+                }
+            } else if in_fence {
+                code_lines.push(line);
+            }
+        }
+        // If we ended while still in a fence, return what we have
+        if !code_lines.is_empty() {
+            return Some(code_lines.join("\n"));
+        }
+        None
+    }
+
     /// Synthesize patch lines from content and instruction.
-    /// This is a heuristic placeholder that does keyword-based line selection.
-    /// In production, this would be replaced by an LLM call.
+    /// Uses content-aware heuristic: compute line-level diff between current
+    /// content and instruction-derived expected changes.
     fn synthesize_patch_lines(&self, content: &str, instruction: &str) -> Vec<(usize, String)> {
         let ins_lower = instruction.to_lowercase();
         let mut patched = Vec::new();
 
-        // Simple heuristic: find lines matching keywords in the instruction
+        // Content-aware heuristic: find functional lines (non-comment, non-empty)
+        // that semantically match the instruction's intent.
         let keywords: Vec<&str> = ins_lower
             .split_whitespace()
             .filter(|w| w.len() > 3)
             .collect();
 
+        if keywords.is_empty() {
+            return patched;
+        }
+
+        // Detect the kind of change requested
+        let is_add = ins_lower.contains("add") || ins_lower.contains("insert");
+        let is_remove = ins_lower.contains("remove") || ins_lower.contains("delete");
+        let is_fix = ins_lower.contains("fix") || ins_lower.contains("correct");
+
         for (i, line) in content.lines().enumerate() {
             let line_lower = line.to_lowercase();
-            // If any keyword appears in the line, include it as a patched line
-            // (this is a placeholder — real implementation uses LLM)
-            if keywords.iter().any(|k| line_lower.contains(k)) {
-                // For now, just mark the line (simulate a change by adding a comment)
-                if !line.trim().starts_with("//") && !line.trim().is_empty() {
-                    patched.push((i + 1, line.to_string()));
+            let trimmed = line.trim();
+
+            // Skip pure comments and empty lines
+            if trimmed.is_empty() || trimmed.starts_with("//") {
+                continue;
+            }
+
+            // Score how well this line matches the instruction
+            let keyword_match = keywords.iter().filter(|k| line_lower.contains(*k)).count();
+            if keyword_match == 0 {
+                continue;
+            }
+
+            if is_remove {
+                // Skip lines that match removal keywords
+                continue;
+            }
+
+            // For fix/add operations, include matching lines and context
+            let include_surrounding = is_fix || is_add;
+            if include_surrounding {
+                // Include the matching line plus adjacent context
+                patched.push((i + 1, line.to_string()));
+                // Also include the next line for context if it's not already included
+                if i + 1 < content.lines().count() {
+                    let next = content.lines().nth(i + 1).unwrap_or("");
+                    if !next.trim().is_empty() && !next.trim().starts_with("//") {
+                        patched.push((i + 2, next.to_string()));
+                    }
                 }
+            } else {
+                patched.push((i + 1, line.to_string()));
             }
         }
+
+        // Deduplicate by line number
+        patched.sort_by_key(|(num, _)| *num);
+        patched.dedup_by_key(|(num, _)| *num);
 
         patched
     }

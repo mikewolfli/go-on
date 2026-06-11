@@ -630,7 +630,7 @@ impl DiagnosticTriggerSource {
     /// Record an observed error pattern so that repeated errors
     /// automatically trigger evolution cycles.
     pub fn record_error(&self, pattern: String) {
-        let mut counts = self.error_counts.blocking_lock();
+        let mut counts = tokio::task::block_in_place(|| self.error_counts.blocking_lock());
         *counts.entry(pattern).or_insert(0) += 1;
     }
 }
@@ -1118,7 +1118,7 @@ impl EvolutionLoop {
                         );
                         // Record the error pattern for repeated-failure detection.
                         if let Some(ref counts) = self.diagnostic_error_counts {
-                            let mut guard = counts.blocking_lock();
+                            let mut guard = tokio::task::block_in_place(|| counts.blocking_lock());
                             *guard
                                 .entry(format!("apply_failure::{}::{}", trigger.label(), e))
                                 .or_insert(0) += 1;

@@ -341,6 +341,105 @@ pub struct DagMetrics {
     pub depth: usize,
 }
 
+// ── Unified Dag trait (A7 resolution) ────────────────────────────────────
+
+/// Unified trait for all DAG implementations.
+///
+/// All four DAG types (CoreDag, DagDriver, ExecutionGraph, TaskGraph)
+/// implement this trait, enabling polymorphic DAG operations across the
+/// orchestration layer.
+#[allow(dead_code)]
+pub trait Dag<NodeId: ?Sized = str> {
+    type NodeData;
+
+    /// Add a node with the given dependencies.
+    fn add_node(&mut self, id: &str, data: Self::NodeData, dependencies: &[&str]);
+
+    /// Remove a node by ID.
+    fn remove_node(&mut self, id: &str) -> bool;
+
+    /// Get a reference to a node.
+    fn get(&self, id: &str) -> Option<&DagNode<Self::NodeData>>;
+
+    /// Return the number of nodes.
+    fn len(&self) -> usize;
+
+    /// Returns `true` if no nodes exist.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Check if a node exists.
+    fn contains(&self, id: &str) -> bool;
+
+    /// Return children (direct successors) of a node.
+    fn children(&self, id: &str) -> Vec<&str>;
+
+    /// Return parents (direct dependencies) of a node.
+    fn parents(&self, id: &str) -> Vec<&str>;
+
+    /// Perform topological sort.
+    fn topological_sort(&self) -> Result<Vec<&str>, String>;
+
+    /// Detect cycles.
+    fn has_cycle(&self) -> bool {
+        self.topological_sort().is_err()
+    }
+
+    /// Compute DAG metrics (width, depth).
+    fn metrics(&self) -> DagMetrics;
+}
+
+impl<T> Dag for CoreDag<T> {
+    type NodeData = T;
+
+    fn add_node(&mut self, id: &str, data: T, dependencies: &[&str]) {
+        self.add_node(
+            id.to_string(),
+            data,
+            dependencies.iter().map(|s| s.to_string()).collect(),
+        );
+    }
+
+    fn remove_node(&mut self, id: &str) -> bool {
+        self.remove_node(id).is_some()
+    }
+
+    fn get(&self, id: &str) -> Option<&DagNode<T>> {
+        self.nodes.get(id)
+    }
+
+    fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    fn contains(&self, id: &str) -> bool {
+        self.nodes.contains_key(id)
+    }
+
+    fn children(&self, id: &str) -> Vec<&str> {
+        self.edges
+            .get(id)
+            .map(|children| children.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_default()
+    }
+
+    fn parents(&self, id: &str) -> Vec<&str> {
+        self.nodes
+            .get(id)
+            .map(|node| node.dependencies.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_default()
+    }
+
+    fn topological_sort(&self) -> Result<Vec<&str>, String> {
+        CoreDag::topological_sort(self)
+    }
+
+    fn metrics(&self) -> DagMetrics {
+        CoreDag::metrics(self)
+    }
+}
+
 // ── Conversion traits (reserved for future use) ─────────────────────────────
 
 /// Trait for converting from a `CoreDag<T>` to another DAG type.

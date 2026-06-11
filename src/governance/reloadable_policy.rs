@@ -289,6 +289,8 @@ pub struct RedLinePolicy {
     /// SHA-256 checksum of the last loaded file content, used to skip
     /// redundant reloads when the file hasn't actually changed.
     checksum: Option<Vec<u8>>,
+    /// Parsed TOML configuration, preserved for policy consumers.
+    config: Option<serde_json::Value>,
 }
 
 impl RedLinePolicy {
@@ -297,7 +299,14 @@ impl RedLinePolicy {
             path: path.into(),
             last_reload: 0,
             checksum: None,
+            config: None,
         }
+    }
+
+    /// Returns a reference to the parsed config, if any.
+    #[allow(dead_code)]
+    pub fn config(&self) -> Option<&serde_json::Value> {
+        self.config.as_ref()
     }
 }
 
@@ -323,9 +332,10 @@ impl ReloadablePolicy for RedLinePolicy {
             return Ok(());
         }
 
-        let _config: serde_json::Value = toml::from_str(&content)?;
+        let config: serde_json::Value = toml::from_str(&content)?;
         self.last_reload = now_ms();
         self.checksum = Some(new_checksum);
+        self.config = Some(config);
         info!("RedLine policy reloaded from {}", self.path.display());
         Ok(())
     }
@@ -341,6 +351,8 @@ pub struct QualityCompassPolicy {
     last_reload: u64,
     /// SHA-256 checksum of the last loaded file content.
     checksum: Option<Vec<u8>>,
+    /// Parsed TOML configuration, preserved for policy consumers.
+    config: Option<serde_json::Value>,
 }
 
 impl QualityCompassPolicy {
@@ -349,7 +361,14 @@ impl QualityCompassPolicy {
             path: path.into(),
             last_reload: 0,
             checksum: None,
+            config: None,
         }
+    }
+
+    /// Returns a reference to the parsed config, if any.
+    #[allow(dead_code)]
+    pub fn config(&self) -> Option<&serde_json::Value> {
+        self.config.as_ref()
     }
 }
 
@@ -381,9 +400,10 @@ impl ReloadablePolicy for QualityCompassPolicy {
             return Ok(());
         }
 
-        let _config: serde_json::Value = toml::from_str(&content)?;
+        let config: serde_json::Value = toml::from_str(&content)?;
         self.last_reload = now_ms();
         self.checksum = Some(new_checksum);
+        self.config = Some(config);
         info!(
             "QualityCompass policy reloaded from {}",
             self.path.display()
@@ -402,6 +422,8 @@ pub struct SandboxPolicyReloadable {
     last_reload: u64,
     /// SHA-256 checksum of the last loaded file content.
     checksum: Option<Vec<u8>>,
+    /// Parsed TOML configuration, preserved for policy consumers.
+    config: Option<serde_json::Value>,
 }
 
 impl SandboxPolicyReloadable {
@@ -410,7 +432,14 @@ impl SandboxPolicyReloadable {
             path: path.into(),
             last_reload: 0,
             checksum: None,
+            config: None,
         }
+    }
+
+    /// Returns a reference to the parsed config, if any.
+    #[allow(dead_code)]
+    pub fn config(&self) -> Option<&serde_json::Value> {
+        self.config.as_ref()
     }
 }
 
@@ -436,9 +465,10 @@ impl ReloadablePolicy for SandboxPolicyReloadable {
             return Ok(());
         }
 
-        let _config: serde_json::Value = toml::from_str(&content)?;
+        let config: serde_json::Value = toml::from_str(&content)?;
         self.last_reload = now_ms();
         self.checksum = Some(new_checksum);
+        self.config = Some(config);
         info!("Sandbox policy reloaded from {}", self.path.display());
         Ok(())
     }

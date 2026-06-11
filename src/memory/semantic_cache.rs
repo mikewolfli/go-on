@@ -35,6 +35,8 @@ use tokio_util::sync::CancellationToken;
 struct CacheEntry {
     /// Response content
     response: Value,
+    /// Original request text for Jaccard similarity matching
+    request_text: String,
     /// Request hash for exact matching
     request_hash: u64,
     /// When this entry was created
@@ -163,8 +165,7 @@ impl SemanticResponseCache {
                 })
                 .or_else(|| {
                     bucket.iter().position(|entry| {
-                        let similarity =
-                            jaccard_similarity(request, &format!("{:?}", entry.request_hash));
+                        let similarity = jaccard_similarity(request, &entry.request_text);
                         similarity >= self.config.similarity_threshold
                     })
                 });
@@ -203,6 +204,7 @@ impl SemanticResponseCache {
 
         let entry = CacheEntry {
             response,
+            request_text: request.to_string(),
             request_hash: hash,
             created_at: now,
             ttl: Duration::from_secs(self.config.default_ttl_seconds),

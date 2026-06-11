@@ -27,7 +27,6 @@ static CONTENT_SAFETY_CHECKER: OnceLock<content_safety::SafetyChecker> = OnceLoc
 /// Wire content safety checking into the server startup path.
 /// Instantiates a `SafetyChecker` if governance is enabled.
 /// Returns `true` if content safety was enabled.
-#[allow(dead_code)] // Reserved—wired via server startup path
 pub fn wire_content_safety(config: &crate::config::types::RuntimeConfig) -> bool {
     if !config.governance_enabled {
         tracing::info!("Content safety: disabled (governance not enabled)");
@@ -60,7 +59,6 @@ static PROMPT_INJECTION_DETECTOR: OnceLock<prompt_injection::InjectionDetector> 
 /// Wire prompt injection detection into the server startup path.
 /// Instantiates an `InjectionDetector` if governance is enabled.
 /// Returns `true` if prompt injection was enabled.
-#[allow(dead_code)] // Reserved—wired via server startup path
 pub fn wire_prompt_injection(config: &crate::config::types::RuntimeConfig) -> bool {
     if !config.governance_enabled {
         tracing::info!("Prompt injection: disabled (governance not enabled)");
@@ -88,7 +86,6 @@ pub fn wire_prompt_injection(config: &crate::config::types::RuntimeConfig) -> bo
 
 /// Start secret rotation if vault is configured.
 /// Returns a `JoinHandle` if the rotation task was spawned, or `None`.
-#[allow(dead_code)] // Reserved—wired via server startup path
 pub fn start_secret_rotation_if_configured(
     config: &crate::config::types::RuntimeConfig,
 ) -> Option<tokio::task::JoinHandle<()>> {
@@ -148,7 +145,6 @@ pub fn start_secret_rotation_if_configured(
 /// Spawn the certificate monitor if mTLS is configured.
 /// Wraps `spawn_cert_monitor_if_configured` for use from the server
 /// startup path with a `RuntimeConfig`.
-#[allow(dead_code)] // Reserved—wired via server startup path
 pub fn wire_cert_monitor(config: &crate::config::types::RuntimeConfig) {
     if config.mtls_enabled {
         let mtls_config = crate::security::mtls::MtlsConfig::new(

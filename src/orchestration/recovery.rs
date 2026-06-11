@@ -5,11 +5,33 @@
 //! tracks success rates, and escalates to human intervention only after
 //! all automatic recovery attempts are exhausted.
 
+use fastrand;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_json::Value;
 use std::fmt;
 use uuid::Uuid;
+
+// ---------------------------------------------------------------------------
+// Exponential backoff with jitter
+// ---------------------------------------------------------------------------
+
+/// Compute exponential backoff with full jitter for retry delays.
+///
+/// Formula: `random_between(0, base_ms * 2^(attempt-1))`
+/// This spreads the retry load across competing clients and prevents
+/// thundering herd problems.
+///
+/// # Arguments
+/// * `base_ms` - Base delay in milliseconds.
+/// * `attempt` - Which attempt number (1-based).
+pub fn exp_backoff_ms(base_ms: u64, attempt: u32) -> u64 {
+    let max_delay = base_ms.saturating_mul(1u64 << (attempt.saturating_sub(1)).min(10));
+    if max_delay == 0 {
+        return 0;
+    }
+    fastrand::u64(0..max_delay)
+}
 
 // ---------------------------------------------------------------------------
 // Failure classification
@@ -386,7 +408,7 @@ impl RecoveryOrchestrator {
                     tool_name: ToolReference::Auto,
                     attempt: 1,
                     max_attempts: 3,
-                    backoff_ms: 1000,
+                    backoff_ms: 1000, // base — exp_backoff_ms applies jitter at runtime
                 }],
             ),
             RecoveryStrategy::new(
@@ -396,7 +418,7 @@ impl RecoveryOrchestrator {
                         tool_name: ToolReference::Auto,
                         attempt: 1,
                         max_attempts: 2,
-                        backoff_ms: 500,
+                        backoff_ms: 500, // base
                     },
                     RecoveryAction::Repair {
                         tool_name: ToolReference::Auto,
@@ -419,7 +441,7 @@ impl RecoveryOrchestrator {
                         tool_name: ToolReference::Auto,
                         attempt: 1,
                         max_attempts: 3,
-                        backoff_ms: 5000,
+                        backoff_ms: 5000, // base — applied with exp backoff + jitter
                     },
                     RecoveryAction::Degrade {
                         fallback_tool: "lower_cost_mode".to_string(),
@@ -481,6 +503,25 @@ impl RecoveryOrchestrator {
             .first()
             .cloned()
             .ok_or_else(|| format!("strategy '{}' has no actions", strategy.name))?;
+
+        // Apply exponential backoff with jitter for retry actions.
+        let action = match &action {
+            RecoveryAction::Retry {
+                tool_name,
+                attempt,
+                max_attempts,
+                backoff_ms: base,
+            } => {
+                let actual_backoff = exp_backoff_ms(*base, *attempt);
+                RecoveryAction::Retry {
+                    tool_name: tool_name.clone(),
+                    attempt: *attempt,
+                    max_attempts: *max_attempts,
+                    backoff_ms: actual_backoff,
+                }
+            }
+            other => other.clone(),
+        };
 
         // Record the auto-recovery attempt (pre-execution, marked as pending).
         // duration_ms is left as 0 — it will be populated by record_outcome()
@@ -668,8 +709,9 @@ mod tests {
         );
         if let RecoveryAction::Retry { backoff_ms, .. } = action {
             assert!(
-                backoff_ms >= 1000,
-                "timeout retry backoff should be at least 1000ms"
+                backoff_ms <= 1000,
+                "timeout retry backoff with jitter should be <= 1000ms, got {}",
+                backoff_ms
             );
         }
     }

@@ -10,10 +10,12 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::Instant;
 use thiserror::Error;
 use tokio::fs;
 use tokio::process::Command;
+use tokio::time::timeout;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
@@ -23,6 +25,15 @@ use uuid::Uuid;
 
 /// Hard limit on the number of patch iterations allowed in a single sandbox session.
 const MAX_ITERATIONS: u64 = 10;
+
+/// Timeout for `cargo build` inside the sandbox (10 minutes).
+const BUILD_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// Timeout for `cargo test` inside the sandbox (10 minutes).
+const TEST_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// Timeout for `git` operations inside the sandbox (60 seconds).
+const GIT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Hosts file entry to block network access from the sandbox.
 #[allow(dead_code)]
@@ -409,12 +420,18 @@ impl SandboxExecutor {
         // Apply network sandboxing
         self.apply_network_sandbox(&mut cmd);
 
-        let output = match cmd.output().await {
-            Ok(out) => out,
-            Err(e) => {
+        let output = match timeout(BUILD_TIMEOUT, cmd.output()).await {
+            Ok(Ok(out)) => out,
+            Ok(Err(e)) => {
                 return BuildResult::CompileError {
                     errors: 1,
                     lines: vec![format!("Failed to spawn cargo build: {}", e)],
+                };
+            }
+            Err(_) => {
+                return BuildResult::CompileError {
+                    errors: 1,
+                    lines: vec!["cargo build timed out after 600s".to_string()],
                 };
             }
         };
@@ -472,9 +489,15 @@ impl SandboxExecutor {
         // Apply network sandboxing
         self.apply_network_sandbox(&mut cmd);
 
-        let output = match cmd.output().await {
-            Ok(out) => out,
-            Err(_e) => {
+        let output = match timeout(TEST_TIMEOUT, cmd.output()).await {
+            Ok(Ok(out)) => out,
+            Ok(Err(_e)) => {
+                return BuildResult::TestFailure {
+                    failed: 1,
+                    passed: 0,
+                };
+            }
+            Err(_) => {
                 return BuildResult::TestFailure {
                     failed: 1,
                     passed: 0,
@@ -526,9 +549,9 @@ impl SandboxExecutor {
         cmd.args(["add", "-A"]);
         self.apply_network_sandbox(&mut cmd);
 
-        let add_output = cmd
-            .output()
+        let add_output = timeout(GIT_TIMEOUT, cmd.output())
             .await
+            .map_err(|_| SandboxError::GitError("git add timed out".to_string()))?
             .map_err(|e| SandboxError::GitError(format!("git add failed: {}", e)))?;
 
         if !add_output.status.success() {
@@ -549,9 +572,9 @@ impl SandboxExecutor {
         ]);
         self.apply_network_sandbox(&mut cmd);
 
-        let commit_output = cmd
-            .output()
+        let commit_output = timeout(GIT_TIMEOUT, cmd.output())
             .await
+            .map_err(|_| SandboxError::GitError("git commit timed out".to_string()))?
             .map_err(|e| SandboxError::GitError(format!("git commit failed: {}", e)))?;
 
         if !commit_output.status.success() {
