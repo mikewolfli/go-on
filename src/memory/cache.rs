@@ -211,6 +211,7 @@ impl ResponseCache {
             params![cache_key, response_text, agent_name, now, expires_at],
         )?;
 
+        const SENTINEL_LIMIT: i64 = 2_147_483_647; // max INT32 — portable replacement for SQLite's LIMIT -1
         conn.execute(
             "
             DELETE FROM response_cache
@@ -218,12 +219,10 @@ impl ResponseCache {
                 SELECT cache_key
                 FROM response_cache
                 ORDER BY updated_at DESC
-                -- LIMIT -1 in SQLite means \"no limit\" (unbounded),
-                -- so this deletes all rows beyond the newest max_entries.
-                LIMIT -1 OFFSET ?1
+                LIMIT ?1 OFFSET ?2
             )
             ",
-            params![self.max_entries as i64],
+            params![SENTINEL_LIMIT, self.max_entries as i64],
         )?;
 
         Ok(())

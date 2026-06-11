@@ -91,8 +91,20 @@ pub(crate) fn review_verdict(response: &str, min_response_chars: usize) -> Revie
 
     let first_line = response.lines().find(|line| !line.trim().is_empty());
     match first_line.map(|line| line.trim().to_ascii_uppercase()) {
-        Some(value) if value.starts_with("APPROVE") => ReviewVerdict::Approve,
-        Some(value) if value.starts_with("REJECT") => ReviewVerdict::Reject,
+        Some(value)
+            if value == "APPROVE"
+                || value.starts_with("APPROVE ")
+                || value.starts_with("APPROVE:") =>
+        {
+            ReviewVerdict::Approve
+        }
+        Some(value)
+            if value == "REJECT"
+                || value.starts_with("REJECT ")
+                || value.starts_with("REJECT:") =>
+        {
+            ReviewVerdict::Reject
+        }
         _ => ReviewVerdict::Invalid,
     }
 }

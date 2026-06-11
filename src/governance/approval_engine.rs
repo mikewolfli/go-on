@@ -5,6 +5,7 @@
 
 use super::approval_learning::ApprovalPreferenceLearner;
 use super::pua::PuaRuleEngine;
+use super::security_governor::{AuditEntry, PolicyVerdict, SecurityGovernor};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -270,6 +271,8 @@ pub struct ApprovalEngine {
     approver_registry: ApproverRegistry,
     /// Optional SQLite database path for persistent approval queue.
     db_path: Option<String>,
+    /// Optional SecurityGovernor for audit logging.
+    security_governor: Option<Arc<SecurityGovernor>>,
 }
 
 impl std::fmt::Debug for ApprovalEngine {
@@ -282,6 +285,13 @@ impl std::fmt::Debug for ApprovalEngine {
             .field("learner", &self.learner)
             .field("approver_registry", &"<ApproverRegistry>")
             .field("db_path", &self.db_path)
+            .field(
+                "security_governor",
+                &self
+                    .security_governor
+                    .as_ref()
+                    .map(|_| "<SecurityGovernor>"),
+            )
             .finish()
     }
 }
@@ -297,6 +307,7 @@ impl ApprovalEngine {
             learner: None,
             approver_registry: ApproverRegistry::new(),
             db_path: None,
+            security_governor: None,
         }
     }
 
@@ -422,6 +433,12 @@ impl ApprovalEngine {
         self
     }
 
+    /// Attach a SecurityGovernor for audit logging.
+    pub fn with_security_governor(mut self, governor: Arc<SecurityGovernor>) -> Self {
+        self.security_governor = Some(governor);
+        self
+    }
+
     /// Set the approval preference learner (mutating variant for already-constructed engines).
     pub fn set_learner(&mut self, learner: Arc<StdRwLock<ApprovalPreferenceLearner>>) {
         self.learner = Some(learner);
@@ -520,6 +537,19 @@ impl ApprovalEngine {
         };
 
         info!(%id, approver = %approver, "Approval request approved");
+
+        // Record audit entry for this approval.
+        if let Some(ref governor) = self.security_governor {
+            let audit_entry = AuditEntry::new(
+                format!("approval-{}", id),
+                PolicyVerdict::allow(),
+                format!("approval:{}:{}", status.user, status.action),
+                approver.to_string(),
+                format!("Approved by {}: {}", approver, comment),
+            );
+            governor.record_audit(audit_entry);
+        }
+
         self.feedback_to_pua(&status);
         self.feedback_to_learner(&status);
 
@@ -561,6 +591,19 @@ impl ApprovalEngine {
         };
 
         warn!(%id, approver = %approver, reason = %reason, "Approval request rejected");
+
+        // Record audit entry for this rejection.
+        if let Some(ref governor) = self.security_governor {
+            let audit_entry = AuditEntry::new(
+                format!("approval-{}", id),
+                PolicyVerdict::deny("approval-engine", "Rejected by approver"),
+                format!("approval:{}:{}", request_clone.user, request_clone.action),
+                approver.to_string(),
+                format!("Rejected by {}: {}", approver, reason),
+            );
+            governor.record_audit(audit_entry);
+        }
+
         self.feedback_to_pua(&request_clone);
         self.feedback_to_learner(&request_clone);
 
@@ -785,24 +828,46 @@ impl ApprovalEngine {
     /// Record the approval decision in the preference learner (if attached).
     fn feedback_to_learner(&self, request: &ApprovalRequest) {
         if let Some(ref learner) = self.learner {
-            let (approver, approved) = match &request.status {
-                ApprovalStatus::Approved { approver, .. } => (approver.clone(), true),
-                ApprovalStatus::Rejected { approver, .. } => (approver.clone(), false),
-                _ => return,
-            };
             if let Ok(mut guard) = learner.write() {
-                guard.record_decision(
-                    &approver,
-                    &request.action,
-                    approved,
-                    std::collections::HashMap::new(),
-                );
-                debug!(
-                    action = %request.action,
-                    approver = %approver,
-                    approved = approved,
-                    "Approval decision recorded in preference learner"
-                );
+                match &request.status {
+                    ApprovalStatus::Approved { approver, .. } => {
+                        guard.record_approval(&request.action, approver);
+                        debug!(
+                            action = %request.action,
+                            approver = %approver,
+                            "Approval decision recorded in preference learner"
+                        );
+                    }
+                    ApprovalStatus::Rejected {
+                        approver, reason, ..
+                    } => {
+                        guard.record_rejection(&request.action, reason);
+                        debug!(
+                            action = %request.action,
+                            approver = %approver,
+                            reason = %reason,
+                            "Rejection decision recorded in preference learner"
+                        );
+                    }
+                    ApprovalStatus::EscalatedToManager { from_level, .. } => {
+                        let level_str = format!("{:?}", from_level);
+                        guard.record_escalation(&request.action, &level_str);
+                        debug!(
+                            action = %request.action,
+                            from_level = %level_str,
+                            "Escalation recorded in preference learner"
+                        );
+                    }
+                    ApprovalStatus::AutoDenied { reason, .. } => {
+                        guard.record_auto_denial(&request.action, reason);
+                        debug!(
+                            action = %request.action,
+                            reason = %reason,
+                            "Auto-denial recorded in preference learner"
+                        );
+                    }
+                    ApprovalStatus::Pending => {}
+                }
             }
         }
     }

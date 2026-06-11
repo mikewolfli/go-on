@@ -6,13 +6,15 @@
 // activated, formerly F-GAP-51: all items below are active WebSocket code
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
@@ -120,25 +122,29 @@ impl RateLimitState {
 // activated, formerly F-GAP-51
 #[derive(Debug)]
 pub struct WsSender {
-    /// The unbounded sender used to push messages into the connection's task.
-    pub sender: UnboundedSender<WsMessage>,
+    /// The bounded sender used to push messages into the connection's task.
+    pub sender: Sender<WsMessage>,
     /// Connection metadata.
     pub metadata: ConnectionMetadata,
     /// Authenticated principal (empty/anonymous when RBAC is not configured).
     pub principal: Principal,
     /// Number of reconnection attempts (0 = first connection).
     pub reconnect_count: u64,
-    /// Timestamp of the last heartbeat ping sent to this connection.
-    pub last_heartbeat: Instant,
+    /// Timestamp of the last heartbeat-related activity (ping send or pong receive).
+    last_heartbeat: Mutex<Instant>,
     /// Per-connection rate limiting state.
     rate_limit: Mutex<RateLimitState>,
+    /// The sequence number of the last heartbeat ping sent to this connection.
+    heartbeat_seq: AtomicU64,
+    /// Consecutive heartbeat cycles without a matching pong response.
+    missed_pongs: AtomicU16,
 }
 
 // activated, formerly F-GAP-51
 impl WsSender {
     /// Create a new `WsSender` wrapping the given channel sender.
     pub fn new(
-        sender: UnboundedSender<WsMessage>,
+        sender: Sender<WsMessage>,
         metadata: ConnectionMetadata,
         principal: Principal,
     ) -> Self {
@@ -147,15 +153,25 @@ impl WsSender {
             metadata,
             principal,
             reconnect_count: 0,
-            last_heartbeat: Instant::now(),
+            last_heartbeat: Mutex::new(Instant::now()),
             rate_limit: Mutex::new(RateLimitState::new()),
+            heartbeat_seq: AtomicU64::new(0),
+            missed_pongs: AtomicU16::new(0),
         }
     }
 
     /// Send a message to this connection. Returns `true` if the message was
-    /// successfully enqueued, `false` if the receiver has been dropped.
+    /// successfully enqueued, `false` if the receiver has been dropped or the
+    /// channel is full (backpressure applied).
     pub fn send(&self, message: WsMessage) -> bool {
-        self.sender.send(message).is_ok()
+        match self.sender.try_send(message) {
+            Ok(()) => true,
+            Err(TrySendError::Full(_)) => {
+                warn!("connection channel full, dropping message (backpressure)");
+                false
+            }
+            Err(TrySendError::Closed(_)) => false,
+        }
     }
 
     /// Check whether this connection is within its per-second message rate limit
@@ -186,7 +202,14 @@ impl WsSender {
         // If the connection has been stable for longer than the threshold,
         // treat this as a fresh reconnection rather than a continuation of
         // an old backoff series.
-        if self.last_heartbeat.elapsed().as_secs() >= DECAY_THRESHOLD_SECS {
+        if self
+            .last_heartbeat
+            .lock()
+            .expect("last_heartbeat lock")
+            .elapsed()
+            .as_secs()
+            >= DECAY_THRESHOLD_SECS
+        {
             self.reconnect_count = 0;
         }
         self.reconnect_count = self.reconnect_count.saturating_add(1);
@@ -198,6 +221,35 @@ impl WsSender {
     /// re-established to allow the backoff strategy to start fresh.
     pub fn reset_reconnect_count(&mut self) {
         self.reconnect_count = 0;
+    }
+
+    /// Record a pong response from this connection.
+    ///
+    /// Verifies that the received sequence number matches the last ping sent.
+    /// On success, updates `last_heartbeat`, resets the missed-pong counter,
+    /// and returns `true`. On seq mismatch, returns `false`.
+    pub fn record_pong(&self, seq: u64) -> bool {
+        let current_seq = self.heartbeat_seq.load(Ordering::Relaxed);
+        if seq == current_seq {
+            let mut hb = self.last_heartbeat.lock().expect("last_heartbeat lock");
+            self.missed_pongs.store(0, Ordering::Release);
+            let elapsed = hb.elapsed();
+            *hb = Instant::now();
+            drop(hb);
+            debug!(
+                heartbeat_seq = seq,
+                rtt_ms = elapsed.as_millis(),
+                "pong received, RTT computed"
+            );
+            true
+        } else {
+            warn!(
+                expected_seq = current_seq,
+                received_seq = seq,
+                "pong seq mismatch"
+            );
+            false
+        }
     }
 }
 
@@ -391,8 +443,9 @@ impl Default for WebSocketHub {
 impl WebSocketHub {
     /// Start the background heartbeat task if it isn't already running.
     ///
-    /// The task will ping all connections at the configured interval and
-    /// remove any that have been unresponsive for more than one interval.
+    /// The task will ping all connections at the configured interval.
+    /// Connections that fail to respond with a matching pong for 3 consecutive
+    /// heartbeat cycles are removed as stale.
     pub async fn start_heartbeat(&self) {
         let mut handle_lock = self.inner.heartbeat_handle.write().await;
         if handle_lock.is_some() {
@@ -402,7 +455,6 @@ impl WebSocketHub {
 
         let inner = Arc::clone(&self.inner);
         let interval = Duration::from_secs(inner.config.heartbeat_interval_secs);
-        let stale_timeout = inner.config.heartbeat_interval_secs * 2;
 
         let handle: JoinHandle<()> = tokio::spawn(async move {
             let mut ticker = tokio::time::interval(interval);
@@ -430,17 +482,19 @@ impl WebSocketHub {
                 );
 
                 let mut conns = inner.connections.write().await;
-                let stale_threshold = Instant::now() - Duration::from_secs(stale_timeout);
 
-                // Separate stale connections for removal.
+                // Separate connections with 3+ consecutive missed pongs.
                 let stale_ids: Vec<ConnectionId> = conns
                     .iter()
-                    .filter(|(_, sender)| sender.last_heartbeat < stale_threshold)
+                    .filter(|(_, sender)| sender.missed_pongs.load(Ordering::Acquire) >= 3)
                     .map(|(id, _)| id.clone())
                     .collect();
 
                 for id in &stale_ids {
-                    warn!(connection_id = %id, "removing stale connection (heartbeat timeout)");
+                    warn!(
+                        connection_id = %id,
+                        "removing stale connection (no pong for 3 consecutive heartbeats)"
+                    );
                     conns.remove(id);
                 }
 
@@ -453,11 +507,19 @@ impl WebSocketHub {
                     subs.retain(|_topic, members| !members.is_empty());
                 }
 
-                // Send ping to remaining connections.
+                // Send ping to remaining connections, record their seq,
+                // and increment the missed-pong counter.
                 for (conn_id, sender) in conns.iter_mut() {
+                    // Stamp the seq so record_pong can verify it later.
+                    sender.heartbeat_seq.store(current_seq, Ordering::Release);
+                    *sender.last_heartbeat.lock().expect("last_heartbeat lock") = Instant::now();
+
                     if !sender.send(ping.clone()) {
                         debug!(connection_id = %conn_id, "connection channel closed, removing");
                     }
+
+                    // Increment missed-pongs; record_pong resets to 0.
+                    sender.missed_pongs.fetch_add(1, Ordering::AcqRel);
                 }
 
                 let remaining = conns.len();
@@ -501,7 +563,7 @@ impl WebSocketHub {
         &self,
         metadata: ConnectionMetadata,
         principal: Principal,
-    ) -> Result<(ConnectionId, UnboundedReceiver<WsMessage>), WebSocketError> {
+    ) -> Result<(ConnectionId, Receiver<WsMessage>), WebSocketError> {
         // ── Step 0: Auth downgrade guard ────────────────────────────────
         if self.inner.config.require_auth {
             let rbac = self.inner.rbac_enforcer.read().await;
@@ -557,7 +619,7 @@ impl WebSocketHub {
 
         // ── Step 3: Create the connection ──────────────────────────────
         let connection_id = Uuid::new_v4().to_string();
-        let (tx, rx) = unbounded_channel();
+        let (tx, rx) = channel(1024);
         let sender = WsSender::new(tx, metadata, principal);
 
         conns.insert(connection_id.clone(), sender);
@@ -827,6 +889,20 @@ impl WebSocketHub {
             .read()
             .await
             .contains_key(connection_id)
+    }
+
+    /// Record a pong response from a connection, verifying the sequence number.
+    ///
+    /// Call this when a [`HeartbeatPong`] message is received from the client.
+    /// Returns `true` if the seq matched and the connection is considered alive,
+    /// `false` if the connection is unknown or the seq was mismatched.
+    pub async fn record_pong(&self, connection_id: &str, seq: u64) -> bool {
+        let conns = self.inner.connections.read().await;
+        if let Some(sender) = conns.get(connection_id) {
+            sender.record_pong(seq)
+        } else {
+            false
+        }
     }
 
     /// Create a broadcast function that publishes messages to all WebSocket connections.

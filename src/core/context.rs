@@ -12,6 +12,12 @@ use anyhow::Result;
 const DEFAULT_AUDIT_LOG_CAPACITY: usize = 1000;
 
 /// System context for agent execution
+///
+/// Intended for future integration into mode runtimes and agent orchestration
+/// (Phase 0-9 architecture). Currently reserved — the struct, its impl, and
+/// wrappers are defined in advance so the type system and call sites are ready
+/// when wiring begins. Marked `#[allow(dead_code)]` until instantiation is wired.
+#[allow(dead_code)]
 pub struct SystemContext {
     pub memory_store: MemoryStore,
     pub audit_log: AuditLog,
@@ -163,6 +169,9 @@ impl Default for SystemContext {
 }
 
 /// Global context holder (can be made thread-safe with Arc<Mutex<>>)
+///
+/// See [`SystemContext`] for dead-code rationale.
+#[allow(dead_code)]
 pub struct GlobalContext {
     pub system: SystemContext,
 }

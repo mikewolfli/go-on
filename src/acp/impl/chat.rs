@@ -552,10 +552,21 @@ pub(crate) async fn process_chat_request(
             .end_span(cx, vec![]);
     }
 
-    // ── Phase 4: Reflect ──────────────────────────────────────────
+    // ── Phase 4: Reflect (with OTel child span) ────────────────────
     // The reflect phase receives the original span for downstream use
     // (e.g., full_auto_executor span propagation).
-    reflect_phase(
+    let reflect_cx = parent_span.as_ref().and_then(|parent| {
+        server
+            .observability
+            .telemetry_runtime
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("telemetry_runtime mutex poisoned");
+                poisoned.into_inner()
+            })
+            .start_child_span(parent, "chat.reflect", vec![])
+    });
+    let result = reflect_phase(
         server,
         params,
         trace,
@@ -566,7 +577,19 @@ pub(crate) async fn process_chat_request(
         &routing_out,
         &mut exec_out,
     )
-    .await
+    .await;
+    if let Some(cx) = reflect_cx {
+        server
+            .observability
+            .telemetry_runtime
+            .lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("telemetry_runtime mutex poisoned");
+                poisoned.into_inner()
+            })
+            .end_span(cx, vec![]);
+    }
+    result
 }
 
 // ═════════════════════════════════════════════════════════════════════

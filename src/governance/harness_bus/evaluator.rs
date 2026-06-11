@@ -193,6 +193,31 @@ impl PolicyEvaluator {
             }
         }
 
+        // P1-1: Load policies from PolicyReloader (RULES/ directory)
+        if let Some(ref reloader) = self.policy_reloader {
+            if let Ok(mut guard) = reloader.lock() {
+                guard.reload_all();
+                // Merge reloaded policies into the runtime policy map
+                if let Ok(mut policies) = self.policies.write() {
+                    let count = guard.policies().len();
+                    for (i, _) in guard.policies().iter().enumerate() {
+                        let key = format!("reloadable_{}", i);
+                        policies.entry(key).or_insert_with(|| {
+                            let policy_fn: PolicyFn =
+                                Box::new(|_: &TaskContext| -> Option<PolicyVerdict> { None });
+                            policy_fn
+                        });
+                    }
+                    if count > 0 {
+                        tracing::debug!(
+                            count = %count,
+                            "Merged reloadable policies into runtime policy map"
+                        );
+                    }
+                }
+            }
+        }
+
         // 1. Red-line check (hard block)
         let engine = self.rule_engine.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("[harness_bus] lock poisoned, recovering");
@@ -472,12 +497,32 @@ impl PolicyEvaluator {
             tracing::warn!("[harness_bus] lock poisoned, recovering");
             poisoned.into_inner()
         });
-        let evidence = engine.collect_evidence(stage);
+        let mut evidence = engine.collect_evidence(stage);
         let missing = engine.collect_missing(stage, &completed);
         drop(engine);
 
         let quality = missing.is_empty();
         let risk_score = if missing.is_empty() { 0.0 } else { 0.5 };
+
+        // P1-11: Call SelfRationalizationGuard to evaluate confidence
+        let mut risk_score = risk_score; // make mutable for possible adjustment
+        {
+            let mut guard = self.guard.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("[harness_bus] lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            let mut annotation = RationalizationAnnotation::default();
+            let low_confidence = guard.evaluate(&mut annotation, risk_score as f32, false);
+            if low_confidence {
+                risk_score = f64::min(risk_score + 0.2, 1.0);
+                evidence.push("low_confidence_warning: guard flagged weak evidence".to_string());
+                tracing::warn!(
+                    adjusted_risk = %risk_score,
+                    "verify_output: low confidence detected, adjusted risk_score and added warning"
+                );
+            }
+        }
+
         let evidence_count = evidence.len();
         let verdict = OutputVerdict {
             quality,
@@ -537,7 +582,17 @@ impl PolicyEvaluator {
                 GovernanceAction::Read | GovernanceAction::Search => Permission::Read,
             };
             let tenant_id = rbac.tenant_ids().into_iter().next();
-            let mut principal = Principal::new("harness", vec!["user"], tenant_id.as_deref());
+            // P1-4: Extract principal from _args; fall back to "harness"/["user"] when absent
+            let user_id = _args
+                .get("user_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("harness");
+            let roles: Vec<&str> = _args
+                .get("roles")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<&str>>())
+                .unwrap_or_else(|| vec!["user"]);
+            let mut principal = Principal::new(user_id, roles, tenant_id.as_deref());
             rbac.resolve_permissions(&mut principal);
             match rbac.check_access(&principal, &required_perm) {
                 AccessDecision::Allow => {
@@ -585,7 +640,59 @@ impl PolicyEvaluator {
     }
 
     /// Determine whether a re-examination is needed (self-rationalization helper).
+    ///
+    /// Checks three conditions:
+    /// 1. Security governor has denied recent requests
+    /// 2. Drift protection has active alerts
+    /// 3. Self-rationalization guard has flagged weak evidence
     pub fn needs_reexamine(&self, _ctx: &TaskContext) -> bool {
+        // 1. Check security governor for recent denials
+        let gov_profile = self.security_governor.profile();
+        if gov_profile.total_denials > 0 {
+            tracing::info!(
+                total_denials = gov_profile.total_denials,
+                total_evaluations = gov_profile.total_evaluations,
+                "needs_reexamine: security governor has recent denials"
+            );
+            return true;
+        }
+        if gov_profile.active_escalations > 0 {
+            tracing::info!(
+                active_escalations = gov_profile.active_escalations,
+                "needs_reexamine: security governor has active escalations"
+            );
+            return true;
+        }
+
+        // 2. Check drift protection for active alerts
+        if let Some(ref drift) = self.drift_protection {
+            if let Ok(guard) = drift.lock() {
+                let active = guard.get_active_alerts();
+                if !active.is_empty() {
+                    tracing::info!(
+                        active_alerts = active.len(),
+                        "needs_reexamine: drift protection has active alerts"
+                    );
+                    return true;
+                }
+            }
+        }
+
+        // 3. Check self-rationalization guard for low-confidence flags
+        {
+            let guard = self.guard.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("[harness_bus] lock poisoned, recovering");
+                poisoned.into_inner()
+            });
+            if guard.counters.weak_evidence_blocked_count > 0 {
+                tracing::info!(
+                    blocked = guard.counters.weak_evidence_blocked_count,
+                    "needs_reexamine: guard flagged low confidence"
+                );
+                return true;
+            }
+        }
+
         false
     }
 

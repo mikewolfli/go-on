@@ -103,17 +103,18 @@ const MAX_SESSIONS: usize = 10_000;
 /// can be shared across tasks and frontend handlers.
 ///
 /// Every mutation bumps `version` so that sync consumers can perform
-/// incremental diffs.
+/// incremental diffs.  Fields are encapsulated behind getter/setter methods
+/// to enforce capacity limits and maintain a consistent public API.
 // activated, formerly F-GAP-51
 #[derive(Debug, Clone)]
 pub struct SharedSession {
-    pub id: SessionId,
-    pub tenant_id: Option<String>,
-    pub chat_history: Vec<ChatMessage>,
-    pub active_tasks: Vec<ActiveTask>,
-    pub council_proposals: Vec<CouncilProposal>,
-    pub last_active: u64,
-    pub version: u64,
+    id: SessionId,
+    tenant_id: Option<String>,
+    chat_history: Vec<ChatMessage>,
+    active_tasks: Vec<ActiveTask>,
+    council_proposals: Vec<CouncilProposal>,
+    last_active: u64,
+    version: u64,
 }
 
 // activated, formerly F-GAP-51
@@ -143,6 +144,93 @@ impl SharedSession {
         }
     }
 
+    // ── Getters ──────────────────────────────────────────────────────────
+
+    /// Session identifier.
+    pub fn id(&self) -> &SessionId {
+        &self.id
+    }
+
+    /// Optional tenant identifier for multi-tenant isolation.
+    pub fn tenant_id(&self) -> &Option<String> {
+        &self.tenant_id
+    }
+
+    /// Chat message history.
+    pub fn chat_history(&self) -> &[ChatMessage] {
+        &self.chat_history
+    }
+
+    /// Currently active tasks.
+    pub fn active_tasks(&self) -> &[ActiveTask] {
+        &self.active_tasks
+    }
+
+    /// Council proposals.
+    pub fn council_proposals(&self) -> &[CouncilProposal] {
+        &self.council_proposals
+    }
+
+    /// Timestamp (ms) of the last activity.
+    pub fn last_active(&self) -> u64 {
+        self.last_active
+    }
+
+    /// Monotonically increasing version number, bumped on every mutation.
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    // ── Setters ──────────────────────────────────────────────────────────
+
+    /// Set the tenant identifier.
+    pub fn set_tenant_id(&mut self, tenant_id: Option<String>) {
+        self.tenant_id = tenant_id;
+    }
+
+    /// Set the last-active timestamp.
+    pub fn set_last_active(&mut self, ts: u64) {
+        self.last_active = ts;
+    }
+
+    // ── Mutation helpers ─────────────────────────────────────────────────
+
+    /// Append a message to chat history, enforcing capacity limits.
+    pub fn push_message(&mut self, msg: ChatMessage) {
+        self.chat_history.push(msg);
+        self.enforce_capacity();
+    }
+
+    /// Add an active task, enforcing capacity limits.
+    pub fn add_task(&mut self, task: ActiveTask) {
+        self.active_tasks.push(task);
+        self.enforce_capacity();
+    }
+
+    /// Add a council proposal, enforcing capacity limits.
+    pub fn add_proposal(&mut self, proposal: CouncilProposal) {
+        self.council_proposals.push(proposal);
+        self.enforce_capacity();
+    }
+
+    /// Find and update a task's status and progress by task ID.
+    /// Returns `Err` if the task is not found.
+    pub fn update_task(
+        &mut self,
+        task_id: &str,
+        status: String,
+        progress: f64,
+    ) -> Result<(), String> {
+        let task = self
+            .active_tasks
+            .iter_mut()
+            .find(|t| t.id == task_id)
+            .ok_or_else(|| format!("task {task_id} not found"))?;
+        task.status = status;
+        task.progress = progress;
+        Ok(())
+    }
+
     /// Touch the `last_active` timestamp and bump the version.
     fn touch(&mut self) {
         self.last_active = now_ms();
@@ -150,7 +238,6 @@ impl SharedSession {
     }
 
     /// Evict oldest entries when capacity limits are exceeded.
-    #[allow(dead_code)] // activated, formerly F-GAP-51 — reserved for internal call
     fn enforce_capacity(&mut self) {
         while self.chat_history.len() > MAX_CHAT_HISTORY {
             self.chat_history.remove(0);
@@ -345,7 +432,7 @@ impl SessionRegistry {
         let sessions = self.sessions.write().await;
         if let Some(tenant) = tenant_id {
             if let Some(session) = sessions.get(session_id) {
-                if let Some(session_tenant) = &session.tenant_id {
+                if let Some(session_tenant) = session.tenant_id() {
                     if session_tenant != tenant {
                         warn!(
                             frontend_id = %frontend_id,
@@ -408,14 +495,9 @@ impl SessionRegistry {
         let session = sessions
             .get_mut(session_id)
             .ok_or_else(|| format!("session {session_id} not found"))?;
-        session.chat_history.push(message);
-        // Enforce chat_history capacity: oldest entries evicted first
-        while session.chat_history.len() > MAX_CHAT_HISTORY {
-            session.chat_history.remove(0);
-        }
+        session.push_message(message);
         session.touch();
-        let new_version = session.version;
-        Ok(new_version)
+        Ok(session.version())
     }
 
     /// Add an active task with capacity enforcement.
@@ -424,13 +506,9 @@ impl SessionRegistry {
         let session = sessions
             .get_mut(session_id)
             .ok_or_else(|| format!("session {session_id} not found"))?;
-        session.active_tasks.push(task);
-        // Enforce active_tasks capacity
-        while session.active_tasks.len() > MAX_ACTIVE_TASKS {
-            session.active_tasks.remove(0);
-        }
+        session.add_task(task);
         session.touch();
-        Ok(session.version)
+        Ok(session.version())
     }
 
     /// Update the status and/or progress of an existing task.
@@ -446,16 +524,11 @@ impl SessionRegistry {
             .get_mut(session_id)
             .ok_or_else(|| format!("session {session_id} not found"))?;
 
-        let task = session
-            .active_tasks
-            .iter_mut()
-            .find(|t| t.id == task_id)
-            .ok_or_else(|| format!("task {task_id} not found in session {session_id}"))?;
-
-        task.status = status;
-        task.progress = progress;
+        session
+            .update_task(task_id, status, progress)
+            .map_err(|e| format!("{e} in session {session_id}"))?;
         session.touch();
-        Ok(session.version)
+        Ok(session.version())
     }
 
     /// Add a council proposal with capacity enforcement.
@@ -468,13 +541,9 @@ impl SessionRegistry {
         let session = sessions
             .get_mut(session_id)
             .ok_or_else(|| format!("session {session_id} not found"))?;
-        session.council_proposals.push(proposal);
-        // Enforce council_proposals capacity
-        while session.council_proposals.len() > MAX_COUNCIL_PROPOSALS {
-            session.council_proposals.remove(0);
-        }
+        session.add_proposal(proposal);
         session.touch();
-        Ok(session.version)
+        Ok(session.version())
     }
 
     // ── Sync diff computation ────────────────────────────────────────────
@@ -519,23 +588,24 @@ impl SessionRegistry {
         let mut diffs: Vec<DiffEntry> = Vec::new();
 
         // Include active tasks as TaskAdded diffs.
-        for task in &session.active_tasks {
+        for task in session.active_tasks() {
             diffs.push(DiffEntry::TaskAdded(task.clone()));
         }
 
         // Include recent messages (last 50) as MessageAdded diffs.
-        let start = session.chat_history.len().saturating_sub(50);
-        for msg in &session.chat_history[start..] {
+        let chat_history = session.chat_history();
+        let start = chat_history.len().saturating_sub(50);
+        for msg in &chat_history[start..] {
             diffs.push(DiffEntry::MessageAdded(msg.clone()));
         }
 
         // Include council proposals.
-        for proposal in &session.council_proposals {
+        for proposal in session.council_proposals() {
             diffs.push(DiffEntry::ProposalAdded(proposal.clone()));
         }
 
         vec![SyncDiff {
-            version: session.version,
+            version: session.version(),
             diffs,
         }]
     }
@@ -616,7 +686,7 @@ impl SessionRegistry {
         let mut sessions = self.sessions.write().await;
         let stale_ids: Vec<SessionId> = sessions
             .iter()
-            .filter(|(_, s)| s.last_active < threshold)
+            .filter(|(_, s)| s.last_active() < threshold)
             .map(|(id, _)| id.clone())
             .collect();
 
@@ -701,7 +771,7 @@ mod tests {
         let id = registry.create_session().await.unwrap();
         let session = registry.get_session(&id).await;
         assert!(session.is_some());
-        assert_eq!(session.unwrap().id, id);
+        assert_eq!(*session.unwrap().id(), id);
     }
 
     #[tokio::test]
@@ -795,9 +865,9 @@ mod tests {
         assert!(version > 0);
 
         let session = registry.get_session(&sid).await.unwrap();
-        assert_eq!(session.chat_history.len(), 1);
-        assert_eq!(session.chat_history[0].content, "hello");
-        assert_eq!(session.version, version);
+        assert_eq!(session.chat_history().len(), 1);
+        assert_eq!(session.chat_history()[0].content, "hello");
+        assert_eq!(session.version(), version);
     }
 
     #[tokio::test]
@@ -821,8 +891,8 @@ mod tests {
         assert!(version > 0);
 
         let session = registry.get_session(&sid).await.unwrap();
-        assert_eq!(session.active_tasks.len(), 1);
-        assert_eq!(session.active_tasks[0].status, "running");
+        assert_eq!(session.active_tasks().len(), 1);
+        assert_eq!(session.active_tasks()[0].status, "running");
     }
 
     #[tokio::test]
@@ -838,9 +908,9 @@ mod tests {
             .expect("update should succeed");
 
         let session = registry.get_session(&sid).await.unwrap();
-        assert_eq!(session.active_tasks[0].status, "completed");
-        assert!((session.active_tasks[0].progress - 1.0).abs() < f64::EPSILON);
-        assert_eq!(session.version, version);
+        assert_eq!(session.active_tasks()[0].status, "completed");
+        assert!((session.active_tasks()[0].progress - 1.0).abs() < f64::EPSILON);
+        assert_eq!(session.version(), version);
     }
 
     #[tokio::test]
@@ -865,9 +935,9 @@ mod tests {
             .expect("add should succeed");
 
         let session = registry.get_session(&sid).await.unwrap();
-        assert_eq!(session.council_proposals.len(), 1);
-        assert_eq!(session.council_proposals[0].title, "test proposal");
-        assert_eq!(session.version, version);
+        assert_eq!(session.council_proposals().len(), 1);
+        assert_eq!(session.council_proposals()[0].title, "test proposal");
+        assert_eq!(session.version(), version);
     }
 
     #[tokio::test]
@@ -984,7 +1054,7 @@ mod tests {
         {
             let mut sessions = registry.sessions.write().await;
             if let Some(s) = sessions.get_mut(&sid) {
-                s.last_active = 1; // way in the past
+                s.set_last_active(1); // way in the past
             }
         }
 
@@ -1018,7 +1088,7 @@ mod tests {
         {
             let mut sessions = registry.sessions.write().await;
             if let Some(s) = sessions.get_mut(&sid) {
-                s.last_active = 1;
+                s.set_last_active(1);
             }
         }
 
@@ -1068,7 +1138,7 @@ mod tests {
         );
 
         let session = registry.get_session(&sid).await.unwrap();
-        assert_eq!(session.chat_history.len(), 10);
+        assert_eq!(session.chat_history().len(), 10);
     }
 
     #[tokio::test]

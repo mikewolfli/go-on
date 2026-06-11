@@ -32,7 +32,7 @@ pub async fn perform_bootstrap(config: &BootstrapConfig) -> Result<()> {
         let telemetry_cfg = crate::observability::telemetry_enhanced::TelemetryConfig {
             enable_logging: true,
             enable_tracing: true,
-            enable_metrics: false,
+            enable_metrics: true,
             service_name: "go-on".to_string(),
             ..Default::default()
         };

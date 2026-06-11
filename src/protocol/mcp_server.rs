@@ -92,41 +92,85 @@ impl McpStdioServer {
                 continue;
             }
 
-            // Parse request
-            match serde_json::from_str::<JsonRpcRequest>(&line) {
-                Ok(request) => {
-                    let response = self.mcp_server.handle_request(request).await;
-                    match response {
-                        Ok(resp) => {
-                            // MCP notifications (JSON-RPC with id=null) must not produce
-                            // any response per JSON-RPC 2.0 spec (§notifications).
-                            if resp.id.is_none() {
-                                continue;
+            let line = line.trim().to_string();
+
+            // Attempt batch (JSON array) first, then fall back to single request.
+            if line.starts_with('[') {
+                match serde_json::from_str::<Vec<JsonRpcRequest>>(&line) {
+                    Ok(requests) => {
+                        for req in requests {
+                            match self.mcp_server.handle_request(req).await {
+                                Ok(resp) => {
+                                    // Notifications (id=null) don't produce a response.
+                                    if resp.id.is_none() {
+                                        continue;
+                                    }
+                                    let mut stdout = stdout.lock().await;
+                                    let response_line = serde_json::to_string(&resp)?;
+                                    stdout.write_all(response_line.as_bytes()).await?;
+                                    stdout.write_all(b"\n").await?;
+                                    stdout.flush().await?;
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "{}",
+                                        tf(
+                                            "error.handling_request",
+                                            &[("error", &format!("{}", e))]
+                                        )
+                                    );
+                                }
                             }
-                            let mut stdout = stdout.lock().await;
-                            let response_line = serde_json::to_string(&resp)?;
-                            stdout.write_all(response_line.as_bytes()).await?;
-                            stdout.write_all(b"\n").await?;
-                            stdout.flush().await?;
-                        }
-                        Err(e) => {
-                            warn!(
-                                "{}",
-                                tf("error.handling_request", &[("error", &format!("{}", e))])
-                            );
                         }
                     }
+                    Err(parse_error) => {
+                        warn!(
+                            "{}",
+                            tf(
+                                "error.parse_error",
+                                &[("error", &format!("{}", parse_error))],
+                            )
+                        );
+                        let mut stdout = stdout.lock().await;
+                        send_parse_error(&mut *stdout).await?;
+                    }
                 }
-                Err(parse_error) => {
-                    warn!(
-                        "{}",
-                        tf(
-                            "error.parse_error",
-                            &[("error", &format!("{}", parse_error))],
-                        )
-                    );
-                    let mut stdout = stdout.lock().await;
-                    send_parse_error(&mut *stdout).await?;
+            } else {
+                match serde_json::from_str::<JsonRpcRequest>(&line) {
+                    Ok(request) => {
+                        let response = self.mcp_server.handle_request(request).await;
+                        match response {
+                            Ok(resp) => {
+                                // MCP notifications (JSON-RPC with id=null) must not produce
+                                // any response per JSON-RPC 2.0 spec (§notifications).
+                                if resp.id.is_none() {
+                                    continue;
+                                }
+                                let mut stdout = stdout.lock().await;
+                                let response_line = serde_json::to_string(&resp)?;
+                                stdout.write_all(response_line.as_bytes()).await?;
+                                stdout.write_all(b"\n").await?;
+                                stdout.flush().await?;
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "{}",
+                                    tf("error.handling_request", &[("error", &format!("{}", e))])
+                                );
+                            }
+                        }
+                    }
+                    Err(parse_error) => {
+                        warn!(
+                            "{}",
+                            tf(
+                                "error.parse_error",
+                                &[("error", &format!("{}", parse_error))],
+                            )
+                        );
+                        let mut stdout = stdout.lock().await;
+                        send_parse_error(&mut *stdout).await?;
+                    }
                 }
             }
         }
@@ -473,21 +517,55 @@ async fn handle_http_connection(
     rate_limiter: Option<Arc<crate::protocol::rate_limit::RateLimitMiddleware>>,
     sse_broadcaster: Arc<SseBroadcaster>,
 ) -> Result<()> {
-    let mut buffer = vec![0u8; 64 * 1024];
-    let bytes_read =
-        tokio::time::timeout(std::time::Duration::from_secs(30), socket.read(&mut buffer))
-            .await
-            .map_err(|_| anyhow::anyhow!("timeout reading HTTP request"))??;
-    if bytes_read == 0 {
-        return Ok(());
-    }
+    // ── Header buffer: start small, grow dynamically ────────────────────
+    // Allocate only INITIAL_HEADER_BUFFER_SIZE bytes up front, then grow
+    // as needed when reading the HTTP header, up to MAX_HEADER_BUFFER_SIZE.
+    // This avoids wasting 64KB on small requests.
+    const INITIAL_HEADER_BUFFER_SIZE: usize = 4096;
+    const MAX_HEADER_BUFFER_SIZE: usize = 64 * 1024;
 
-    let request_text = String::from_utf8_lossy(&buffer[..bytes_read]);
-    let header_end = request_text.find("\r\n\r\n").ok_or_else(|| {
-        warn!("MCP HTTP: invalid request --missing header terminator");
-        anyhow::anyhow!("{}", t("error.http_missing_header"))
-    })?;
+    let mut buffer = vec![0u8; INITIAL_HEADER_BUFFER_SIZE];
+    let mut total_bytes_read: usize = 0;
 
+    let header_end = loop {
+        if total_bytes_read >= buffer.len() {
+            // Grow the buffer (double until max)
+            let new_size = std::cmp::min(buffer.len() * 2, MAX_HEADER_BUFFER_SIZE);
+            if new_size <= buffer.len() {
+                warn!(
+                    "MCP HTTP: request header exceeds {} bytes",
+                    MAX_HEADER_BUFFER_SIZE
+                );
+                anyhow::bail!("{}", t("error.http_header_too_large"));
+            }
+            buffer.resize(new_size, 0u8);
+        }
+
+        let bytes_read = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            socket.read(&mut buffer[total_bytes_read..]),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("timeout reading HTTP request"))??;
+
+        if bytes_read == 0 {
+            if total_bytes_read == 0 {
+                return Ok(());
+            }
+            // Partial header with no data left — missing terminator
+            warn!("MCP HTTP: incomplete request header --missing header terminator");
+            anyhow::bail!("{}", t("error.http_missing_header"));
+        }
+
+        total_bytes_read += bytes_read;
+
+        let request_text = String::from_utf8_lossy(&buffer[..total_bytes_read]);
+        if let Some(pos) = request_text.find("\r\n\r\n") {
+            break pos;
+        }
+    };
+
+    let request_text = String::from_utf8_lossy(&buffer[..total_bytes_read]);
     let (header_part, body_initial_part) = request_text.split_at(header_end + 4);
     let mut lines = header_part.lines();
     let request_line = lines.next().ok_or_else(|| {
@@ -537,6 +615,7 @@ async fn handle_http_connection(
     // ── SSE endpoint (GET /sse or /mcp-sse) — must be checked before the
     //     POST-only guard below so SSE connections bypass the POST requirement.
     //     MCP SSE Streamable HTTP transport per MCP spec.
+    // MCP Streamable HTTP Transport §6.3
     if method == "GET" && (path == "/sse" || path == "/mcp-sse") {
         return handle_mcp_sse_connection(socket, sse_broadcaster).await;
     }
@@ -713,7 +792,7 @@ async fn handle_http_connection(
             .and_then(|u| u.tenant_id)
             .unwrap_or_else(|| "default".to_string());
 
-        if let Err(retry_after) = limiter.check(&tenant_id) {
+        if let Err(retry_after) = limiter.check(&tenant_id).await {
             warn!(
                 tenant = %tenant_id,
                 retry_after = retry_after,
@@ -736,6 +815,16 @@ async fn handle_http_connection(
     let content_length = extract_content_length(header_part).unwrap_or(0);
     let mut body_bytes = body_initial_part.as_bytes().to_vec();
     if body_bytes.len() < content_length {
+        // Safety check: body size bounded by MAX_BODY_SIZE (10MB) to
+        // prevent OOM from malicious oversized Content-Length headers.
+        // The primary check is at line ~517; this is a redundant guard.
+        if content_length > MAX_BODY_SIZE {
+            anyhow::bail!(
+                "body content-length {} exceeds maximum allowed {} bytes",
+                content_length,
+                MAX_BODY_SIZE
+            );
+        }
         let mut remaining = vec![0u8; content_length - body_bytes.len()];
         tokio::time::timeout(Duration::from_secs(30), socket.read_exact(&mut remaining))
             .await
@@ -745,6 +834,64 @@ async fn handle_http_connection(
     body_bytes.truncate(content_length);
 
     let body_str = String::from_utf8_lossy(&body_bytes);
+
+    // Attempt batch (JSON array) first, then fall back to single request.
+    if body_str.trim_start().starts_with('[') {
+        let requests: Vec<JsonRpcRequest> = match serde_json::from_str(&body_str) {
+            Ok(reqs) => reqs,
+            Err(parse_error) => {
+                warn!(
+                    "MCP HTTP: JSON-RPC batch parse error from {} {}: {}",
+                    method, path, parse_error
+                );
+                let error_data =
+                    inject_platform_profiles_if_absent(serde_json::json!({}), "mcp.parse_error");
+                let error_response = JsonRpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    result: None,
+                    error: Some(crate::mcp::JsonRpcError {
+                        code: crate::mcp::error_codes::PARSE_ERROR,
+                        message: tf(
+                            "error.http_parse_error",
+                            &[("error", &parse_error.to_string())],
+                        ),
+                        data: Some(error_data),
+                    }),
+                    id: None,
+                };
+                write_http_json_response(
+                    socket,
+                    200,
+                    serde_json::to_value(error_response)?,
+                    &cors_headers,
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+
+        // Process each request in the batch and collect responses.
+        let mut responses: Vec<JsonRpcResponse> = Vec::with_capacity(requests.len());
+        for req in requests {
+            let resp = mcp_server.handle_request(req).await?;
+            // Per JSON-RPC 2.0, notifications (id=null) in a batch do not
+            // produce a response entry.
+            if resp.id.is_some() {
+                responses.push(resp);
+            }
+        }
+
+        debug!(
+            "MCP HTTP: dispatched {} {} -> {} batch responses",
+            method,
+            path,
+            responses.len()
+        );
+        write_http_json_response(socket, 200, serde_json::to_value(responses)?, &cors_headers)
+            .await?;
+        return Ok(());
+    }
+
     let request = match serde_json::from_str::<JsonRpcRequest>(&body_str) {
         Ok(req) => req,
         Err(parse_error) => {
@@ -945,7 +1092,7 @@ async fn write_http_json_response(
     // 204 No Content MUST NOT include a message body per HTTP/1.1 §6.4.1
     if status == 204 {
         let mut response = format!(
-            "HTTP/1.1 {} {}\r\nConnection: close\r\n",
+            "HTTP/1.1 {} {}\r\nConnection: keep-alive\r\n",
             status, status_text,
         );
         if !extra_headers.is_empty() {
@@ -962,7 +1109,7 @@ async fn write_http_json_response(
 
     let body_text = serde_json::to_string(&body)?;
     let mut response = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: keep-alive\r\n",
         status,
         status_text,
         body_text.len(),

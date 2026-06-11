@@ -16,7 +16,7 @@ use super::tools::validate_required_arguments;
 use super::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpCallToolResult, McpInitializeResult,
     McpListResourcesResult, McpListToolsResult, McpResource, McpServer, JSONRPC_VERSION,
-    MCP_VERSION,
+    MCP_VERSION, SUPPORTED_MCP_VERSIONS,
 };
 
 /// Signals an invalid / missing parameter in an MCP request.
@@ -518,9 +518,34 @@ impl McpServer {
         })
     }
 
-    async fn handle_initialize(&self, _request: &JsonRpcRequest) -> Value {
+    async fn handle_initialize(&self, request: &JsonRpcRequest) -> Value {
+        // ── Version negotiation ───────────────────────────────────────────
+        // Extract the client's requested protocol version, defaulting to the
+        // latest supported version if not provided.
+        let client_version = request
+            .params
+            .as_ref()
+            .and_then(|p| p.get("protocolVersion"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(MCP_VERSION);
+
+        // Negotiate the highest mutually supported version.
+        let negotiated_version = SUPPORTED_MCP_VERSIONS
+            .iter()
+            .rev()
+            .find(|v| **v == client_version)
+            .copied()
+            .unwrap_or(MCP_VERSION);
+
+        if negotiated_version != client_version {
+            info!(
+                "MCP: version negotiation: client requested '{}', negotiated to '{}'",
+                client_version, negotiated_version
+            );
+        }
+
         serde_json::to_value(McpInitializeResult::new(
-            MCP_VERSION,
+            negotiated_version,
             json!({
                 "resources": {
                     "subscribe": true,

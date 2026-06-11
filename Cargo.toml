@@ -107,7 +107,6 @@ profile-local = [
     "sub-bus-optimization",
     "sub-bus-memory",
     "sub-bus-protocol",
-    "sync-secrets",
 ]
 profile-simple-server = [
     "backend-sqlite",
@@ -117,7 +116,7 @@ profile-simple-server = [
     "sub-bus-optimization",
     "sub-bus-memory",
     "sub-bus-protocol",
-    "sync-secrets",
+    "telemetry-export",
 ]
 profile-multi-users-server = [
     "backend-postgres",
@@ -130,7 +129,6 @@ profile-multi-users-server = [
     "sub-bus-protocol",
     "sub-bus-orchestration",
     "sub-bus-distributed-memory",
-    "sync-secrets",
 ]
 
 # Full-feature profile for local development and CI testing
@@ -150,7 +148,6 @@ profile-full = [
     "audio-vosk",
     "vault",
     "temp_env",
-    "sync-secrets",
 ]
 
 # Backend implementations
@@ -167,7 +164,8 @@ temp_env = []
 
 # Sync boundary: keyring secrets I/O runs synchronously.  Future callers from
 # async contexts should wrap `run_secret_command()` in `spawn_blocking`.
-sync-secrets = []
+# Telemetry export for server deployments (OTLP, stdout exporters)
+telemetry-export = []
 
 [dependencies]
 tokio.workspace = true

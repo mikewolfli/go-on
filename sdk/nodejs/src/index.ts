@@ -8,6 +8,7 @@ export { GoOnClient } from "./client";
 export type { GoOnClientOptions } from "./client";
 export { GoOnClientError, GoOnJsonRpcError, GoOnHttpError } from "./errors";
 export type {
+  AgentInfo,
   BreakerStatusResponse,
   ChatMessage,
   ChatRequest,
@@ -22,6 +23,7 @@ export type {
   MetricsResponse,
   MultimodalInput,
   SelectorStatusResponse,
+  StreamChunk,
   TaskPlanResponse,
   ToolCall,
 } from "./types";

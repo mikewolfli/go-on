@@ -18,6 +18,8 @@ use crate::config::RuntimeConfig;
 use crate::intelligence::fusion_evolution_bridge::init_fusion_evolution_bridge;
 use crate::memory_module::MemoryStore;
 use crate::memory_response_cache::MemoryResponseCache;
+use crate::observability::metrics_exporter::bridge_metrics_recorder;
+use crate::observability::telemetry_enhanced::global_metrics_recorder;
 use crate::orchestration::self_evolution::evolution_loop::PubsubTriggerSource;
 use crate::vector::VectorStore;
 
@@ -906,6 +908,30 @@ pub async fn start_background_tasks(
         tracing::warn!(
             target: "fault_tolerance",
             "harness_bus is None — fault tolerance recovery cycle not started"
+        );
+    }
+
+    // ── Metrics bridge (P5-6): periodically sync OTLP MetricsRecorder → RuntimeMetrics ──
+    {
+        let runtime_metrics = server.observability.metrics.clone();
+        let shutdown = shutdown_notify.clone();
+        spawn_background_task(
+            async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(15));
+                interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                loop {
+                    tokio::select! {
+                        _ = shutdown.notified() => break,
+                        _ = interval.tick() => {}
+                    }
+                    bridge_metrics_recorder(&runtime_metrics, global_metrics_recorder());
+                }
+            },
+            "metrics_bridge",
+        );
+        tracing::debug!(
+            target: "acp",
+            "metrics bridge background task started (interval=15s)"
         );
     }
 

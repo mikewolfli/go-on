@@ -839,7 +839,7 @@ pub(super) async fn handle_session_close(
         state.remove(session_id);
         // B51-36: Evict tenant rate limiter state on session close.
         if let Some(ref limiter) = server.rate_limiting.rate_limit_middleware {
-            limiter.evict_tenant(session_id);
+            limiter.evict_tenant(session_id).await;
         }
     }
     crate::acp::r#impl::io::send_typed(
@@ -1025,7 +1025,7 @@ pub(super) async fn handle_logout(
     if let Some(session_id) = params.get("sessionId").and_then(Value::as_str) {
         if !session_id.is_empty() {
             if let Some(ref limiter) = server.rate_limiting.rate_limit_middleware {
-                limiter.evict_tenant(session_id);
+                limiter.evict_tenant(session_id).await;
             }
         }
     }

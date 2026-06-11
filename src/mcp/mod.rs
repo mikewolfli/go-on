@@ -24,6 +24,10 @@ pub use tools::error_codes;
 /// MCP Protocol Version — latest stable spec
 pub const MCP_VERSION: &str = "2024-11-05";
 
+/// All MCP protocol versions supported by this server, ordered from oldest
+/// to newest. Used for version negotiation during `initialize`.
+pub const SUPPORTED_MCP_VERSIONS: &[&str] = &["2024-11-05"];
+
 /// MCP Server implementation — struct IS used via new/new_with_acp, serve, etc.
 pub struct McpServer {
     pub(crate) agent_registry: Arc<AgentRegistry>,

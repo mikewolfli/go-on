@@ -203,7 +203,24 @@ impl DriftProtectionEngine {
         baseline_value: f64,
         drift_type: DriftType,
     ) -> Result<()> {
-        let deviation = compute_deviation(current_value, baseline_value);
+        // Auto-baseline: if baseline is 0 (unset), use first historical value.
+        let effective_baseline = if baseline_value == 0.0 {
+            let history = self.metric_history.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!(target: "drift_protection", "metric_history Mutex poisoned – recovering");
+                poisoned.into_inner()
+            });
+            if let Some(historical) = history.get(&drift_type) {
+                historical
+                    .first()
+                    .map(|m| m.current_value)
+                    .unwrap_or(current_value)
+            } else {
+                current_value // First measurement: use itself as baseline
+            }
+        } else {
+            baseline_value
+        };
+        let deviation = compute_deviation(current_value, effective_baseline);
         let now_ms = current_time_ms();
         let drift_type_for_history = drift_type.clone();
         let metric = DriftMetric {

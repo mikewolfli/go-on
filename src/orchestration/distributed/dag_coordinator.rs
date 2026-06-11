@@ -444,6 +444,19 @@ pub struct RaftLogEntry {
     pub command: RaftCommand,
 }
 
+/// A snapshot of the Raft state machine at a given log index.
+/// Used for log compaction and install-snapshot RPCs during leader election.
+#[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RaftSnapshot {
+    /// The index of the last log entry included in this snapshot.
+    pub last_included_index: u64,
+    /// The term of `last_included_index`.
+    pub last_included_term: u64,
+    /// The serialised state machine at the snapshot point.
+    pub state: HashMap<DagId, DistributedDagState>,
+}
+
 // ---------------------------------------------------------------------------
 // FaultDetectionConfig
 // ---------------------------------------------------------------------------
@@ -494,6 +507,12 @@ pub struct DistributedDAGCoordinator {
     self_node_id: NodeId,
     /// Shutdown signal for fault detection loop.
     shutdown_tx: tokio::sync::watch::Sender<bool>,
+    /// Index of the last entry included in the most recent snapshot.
+    /// All entries with index <= last_snapshot_index have been compacted.
+    last_snapshot_index: RwLock<u64>,
+    /// Raft log compaction threshold: when the log exceeds this many entries
+    /// (beyond the last snapshot), a new snapshot is automatically triggered.
+    snapshot_threshold: u64,
 }
 
 #[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
@@ -509,6 +528,8 @@ impl DistributedDAGCoordinator {
             leader_lease: RwLock::new(0),
             self_node_id,
             shutdown_tx,
+            last_snapshot_index: RwLock::new(0),
+            snapshot_threshold: 1000,
         }
     }
 
@@ -788,12 +809,67 @@ impl DistributedDAGCoordinator {
     async fn append_raft_log(&self, command: RaftCommand) {
         let mut log = self.raft_log.write().await;
         let term = *self.current_term.read().await;
-        let index = log.len() as u64 + 1;
+        let last_snapshot = *self.last_snapshot_index.read().await;
+        let index = log.len() as u64 + 1 + last_snapshot;
         log.push(RaftLogEntry {
             index,
             term,
             command,
         });
+
+        // Trigger compaction if log exceeds threshold.
+        let log_len = log.len() as u64;
+        if log_len >= self.snapshot_threshold {
+            // Snapshot index is the last index we snapshotted; new entries are beyond it.
+            let new_snapshot_index = index;
+            // Compact: keep only the most recent entries (configurable tail size).
+            let tail_keep = 64u64.min(log_len / 4);
+            let truncate_at = (log_len - tail_keep) as usize;
+            if truncate_at > 0 {
+                let remaining: Vec<RaftLogEntry> = log.drain(truncate_at..).collect();
+                *log = remaining;
+            }
+            *self.last_snapshot_index.write().await = new_snapshot_index;
+            debug!(
+                log_entries_before = log_len,
+                snapshot_index = new_snapshot_index,
+                remaining = log.len(),
+                "Raft log snapshot + compacted"
+            );
+        }
+    }
+
+    /// Serialise the current state machine as a Raft snapshot.
+    /// Used by log compaction and for install-snapshot RPCs.
+    #[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
+    pub async fn take_snapshot(&self) -> RaftSnapshot {
+        let states = self.dag_states.read().await;
+        let last_index = *self.last_snapshot_index.read().await;
+        let term = *self.current_term.read().await;
+        RaftSnapshot {
+            last_included_index: last_index,
+            last_included_term: term,
+            state: states.clone(),
+        }
+    }
+
+    /// Install a snapshot received from a leader.
+    /// Replaces the current state and truncates the log.
+    #[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
+    pub async fn install_snapshot(&self, snapshot: RaftSnapshot) {
+        let mut states = self.dag_states.write().await;
+        *states = snapshot.state;
+        let mut last_idx = self.last_snapshot_index.write().await;
+        *last_idx = snapshot.last_included_index;
+        let mut log = self.raft_log.write().await;
+        log.clear();
+        let mut term = self.current_term.write().await;
+        *term = snapshot.last_included_term;
+        info!(
+            snapshot_index = snapshot.last_included_index,
+            snapshot_term = snapshot.last_included_term,
+            "installed Raft snapshot"
+        );
     }
 
     /// Start the background fault detection loop.

@@ -51,7 +51,7 @@ describe("GoOnClient", () => {
     client.close();
   });
 
-  it("computes retry delay with exponential backoff", () => {
+  it("computes retry delay with exponential backoff + full jitter", () => {
     const client = new GoOnClient({ baseUrl: "http://localhost:8090" });
     // Access private method via bracket notation for testing
     const delay0 = (client as any)._retryDelayForAttempt(0);
@@ -59,19 +59,20 @@ describe("GoOnClient", () => {
     const delay2 = (client as any)._retryDelayForAttempt(2);
     const delay3 = (client as any)._retryDelayForAttempt(3);
 
-    // Base is 1000ms, so:
-    // attempt 0: 1000*1 + jitter
-    // attempt 1: 1000*2 + jitter
-    // attempt 2: 1000*4 + jitter
-    // attempt 3: 1000*8 + jitter (capped)
-    expect(delay0).toBeGreaterThanOrEqual(1000);
-    expect(delay0).toBeLessThan(1100);
-    expect(delay1).toBeGreaterThanOrEqual(2000);
-    expect(delay1).toBeLessThan(2100);
-    expect(delay2).toBeGreaterThanOrEqual(4000);
-    expect(delay2).toBeLessThan(4100);
-    expect(delay3).toBeGreaterThanOrEqual(8000);
-    expect(delay3).toBeLessThan(8100);
+    // Base is 1000ms, full jitter (AWS strategy: random(0, base * 2^attempt)):
+    // attempt 0: random(0, 1000)
+    // attempt 1: random(0, 2000)
+    // attempt 2: random(0, 4000)
+    // attempt 3: random(0, 8000)
+    // attempt 6: capped at random(0, 64000)
+    expect(delay0).toBeGreaterThanOrEqual(0);
+    expect(delay0).toBeLessThan(1000);
+    expect(delay1).toBeGreaterThanOrEqual(0);
+    expect(delay1).toBeLessThan(2000);
+    expect(delay2).toBeGreaterThanOrEqual(0);
+    expect(delay2).toBeLessThan(4000);
+    expect(delay3).toBeGreaterThanOrEqual(0);
+    expect(delay3).toBeLessThan(8000);
 
     client.close();
   });

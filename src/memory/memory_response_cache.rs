@@ -1,5 +1,6 @@
-use std::collections::HashMap;
 use std::sync::Mutex;
+
+use indexmap::IndexMap;
 
 use crate::acp::prelude::now_ts;
 
@@ -11,20 +12,24 @@ pub(crate) struct MemoryCachedResponse {
 
 #[derive(Debug, Default)]
 pub struct MemoryResponseCache {
-    inner: Mutex<HashMap<String, MemoryCachedResponse>>,
+    inner: Mutex<IndexMap<String, MemoryCachedResponse>>,
 }
 
 impl MemoryResponseCache {
     pub(crate) fn get(&self, key: &str) -> Option<MemoryCachedResponse> {
         let now = now_ts();
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        // Only evict the requested key if expired; bulk cleanup happens in purge_expired().
+        // Check expiry and promote to MRU position on access.
         if let Some(entry) = guard.get(key) {
             if entry.expires_at <= now {
-                guard.remove(key);
+                guard.shift_remove(key);
                 return None;
             }
-            return Some(entry.clone());
+            // Promote to MRU (back of IndexMap) by removing and re-inserting.
+            let entry = entry.clone();
+            guard.shift_remove(key);
+            guard.insert(key.to_string(), entry.clone());
+            return Some(entry);
         }
         None
     }
@@ -67,6 +72,9 @@ impl MemoryResponseCache {
 
         let expires_at = now_ts() + ttl_seconds as i64;
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Remove old entry first if it exists (so re-insert moves to back).
+        guard.shift_remove(&key);
         guard.insert(
             key,
             MemoryCachedResponse {
@@ -76,17 +84,13 @@ impl MemoryResponseCache {
         );
 
         // Keep L1 cache bounded to avoid unbounded memory growth.
-        // Eviction strategy: first purge expired entries (O(n)), then
-        // drain excess entries arbitrarily without sorting (O(excess)).
-        // This avoids the O(n log n) sort on every insert over the limit.
-        if guard.len() > 2048 {
+        // LRU eviction: first purge expired entries, then evict oldest (front).
+        const MAX_ENTRIES: usize = 2048;
+        if guard.len() > MAX_ENTRIES {
             guard.retain(|_, v| v.expires_at > now_ts());
-            if guard.len() > 2048 {
-                let excess = guard.len() - 2048;
-                let keys: Vec<String> = guard.keys().take(excess).cloned().collect();
-                for k in keys {
-                    guard.remove(&k);
-                }
+            while guard.len() > MAX_ENTRIES {
+                // IndexMap preserves insertion order: front = LRU, back = MRU.
+                guard.swap_remove_index(0);
             }
         }
     }

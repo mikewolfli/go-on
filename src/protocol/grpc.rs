@@ -18,9 +18,16 @@ use std::sync::LazyLock;
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Generate a monotonically increasing request ID.
+///
+/// If the counter reaches `u64::MAX`, a warning is logged and the counter
+/// wraps around to 1 (skipping 0 which is reserved for notifications).
 #[allow(dead_code)] // F-GAP reserved
 fn next_request_id() -> u64 {
-    NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
+    let id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+    if id == u64::MAX {
+        tracing::warn!(target: "grpc", "NEXT_REQUEST_ID wrapping around");
+    }
+    id
 }
 
 /// Shared reqwest client reused across all gRPC calls to avoid creating

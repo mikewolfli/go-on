@@ -101,3 +101,35 @@ export type MultimodalInput =
   | { type: "image"; image_url: string; detail?: "auto" | "low" | "high" }
   | { type: "document"; data: string; mime_type: string; filename?: string }
   | { type: "audio"; data: string; format: string };
+
+/** A single chunk in an SSE streaming response. */
+export interface StreamChunk {
+  /** The token text content. */
+  token: string;
+  /** Whether this is the final chunk. */
+  done: boolean;
+  /** Optional reasoning content. */
+  reasoning?: string;
+  /** Optional tool calls included in this chunk. */
+  tool_calls?: ToolCall[];
+  /** Chunk index in the stream. */
+  index: number;
+  /** Total characters sent so far. */
+  total_chars: number;
+}
+
+/** Metadata about an available agent. */
+export interface AgentInfo {
+  /** Unique agent name/ID. */
+  name: string;
+  /** Agent type (e.g. "copilot", "custom"). */
+  agent_type: string;
+  /** Human-readable description. */
+  description: string;
+  /** Available model names this agent can use. */
+  models?: string[];
+  /** Capability tags (e.g. "coding", "review"). */
+  capabilities?: string[];
+  /** Whether this agent is currently healthy. */
+  healthy?: boolean;
+}

@@ -397,11 +397,11 @@ impl EmbeddingProvider for Qwen3EmbeddingProvider {
         {
             Ok(resp) => {
                 if !resp.status().is_success() {
-                    error!(
-                        "Qwen3EmbeddingProvider: DashScope API returned {} — real embedding failed",
+                    warn!(
+                        "Qwen3EmbeddingProvider: DashScope API returned {} — using local hash fallback",
                         resp.status()
                     );
-                    return vec![0.0; self.config.dimensions];
+                    return local_hash_embed(text, self.config.dimensions);
                 }
                 match resp.json::<serde_json::Value>() {
                     Ok(json) => {
@@ -432,13 +432,14 @@ impl EmbeddingProvider for Qwen3EmbeddingProvider {
                 }
             }
             Err(e) => {
-                error!(
-                    "Qwen3EmbeddingProvider: HTTP error: {} — returning zero vector",
+                warn!(
+                    "Qwen3EmbeddingProvider: HTTP error: {} — using local hash fallback",
                     e
                 );
             }
         }
-        vec![0.0; self.config.dimensions]
+        warn!("Qwen3EmbeddingProvider: returning local hash embedding as fallback");
+        local_hash_embed(text, self.config.dimensions)
     }
 }
 

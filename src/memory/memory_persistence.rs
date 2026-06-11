@@ -289,7 +289,6 @@ pub struct ColdStorageIndex {
     entries: HashMap<(String, String), (String, String, u64)>,
 }
 
-#[allow(dead_code)]
 impl ColdStorageIndex {
     /// Record a cold storage location for a memory entry.
     pub fn store(
@@ -318,36 +317,39 @@ impl ColdStorageIndex {
     }
 
     /// Returns the number of indexed entries.
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
     /// Returns true if the index is empty.
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
     /// Remove an entry from the index.
+    #[allow(dead_code)]
     pub fn remove(&mut self, user_id: Option<&str>, memory_id: &str) {
         let uid = user_id.unwrap_or("").to_string();
         self.entries.remove(&(uid, memory_id.to_string()));
     }
 
     /// Clear all entries.
+    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.entries.clear();
     }
 }
 
 /// Manages cold storage: `.goon/memory/cold/YYYY-MM/*.ndjson.gz`
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct ColdStorage {
     base_path: PathBuf,
     max_shard_size_bytes: u64,
     max_total_shards: usize,
     /// Sidecar index for O(1) cold storage lookups.
-    #[allow(dead_code)]
-    index: ColdStorageIndex,
+    index: Mutex<ColdStorageIndex>,
 }
 
 impl ColdStorage {
@@ -356,7 +358,7 @@ impl ColdStorage {
             base_path: base_path.to_path_buf(),
             max_shard_size_bytes: 10 * 1024 * 1024, // 10 MB default
             max_total_shards: 100,
-            index: ColdStorageIndex::default(),
+            index: Mutex::new(ColdStorageIndex::default()),
         }
     }
 
@@ -453,6 +455,20 @@ impl ColdStorage {
             .finish()
             .context("failed to finalize cold storage gzip")?;
 
+        // Record entry location in the sidecar index for O(1) lookups.
+        if let Ok(mut idx) = self.index.lock() {
+            idx.store(
+                entry.user_id.as_deref(),
+                &entry.id,
+                &format!("{:04}-{:02}", year, month),
+                &shard,
+                // Approximate line offset; the actual offset within this shard
+                // is not tracked precisely, but the index still narrows the
+                // search to a single shard instead of scanning all shards.
+                0,
+            );
+        }
+
         // Enforce max total shards: if we just created a new shard, evict oldest.
         let current_count = self.total_shard_count();
         if current_count > self.max_total_shards {
@@ -502,6 +518,30 @@ impl ColdStorage {
             entries.push(entry);
         }
         Ok(entries)
+    }
+
+    /// Look up an entry by ID using the sidecar index for O(1) shard resolution.
+    /// Falls back to full scan when the ID is not in the index.
+    fn retrieve_by_id(&self, id: &str) -> Result<Option<MemoryEntry>> {
+        // Fast path: check index to find which shard contains this entry.
+        if let Ok(idx) = self.index.lock() {
+            if let Some((year_month, shard_name, _line_offset)) = idx.retrieve(None, id) {
+                let path = self
+                    .base_path
+                    .join(year_month)
+                    .join(format!("{}.ndjson.gz", shard_name));
+                if path.exists() {
+                    let entries = self.read_shard(&path)?;
+                    if let Some(entry) = entries.into_iter().find(|e| e.id == id) {
+                        return Ok(Some(entry));
+                    }
+                }
+            }
+        }
+
+        // Fallback: full scan when index miss or lock poisoned.
+        let all = self.read_all()?;
+        Ok(all.into_iter().find(|e| e.id == id))
     }
 
     /// Iterate all shards across all months, returning (path, entries).
@@ -1205,10 +1245,9 @@ impl MemoryPersistence {
         }
 
         // Check cold.
-        // Cold is file-based; we scan all shards. For efficiency, a real
-        // implementation would maintain an index. Here we do a linear scan.
-        let cold_entries = self.cold.read_all()?;
-        if let Some(mut entry) = cold_entries.into_iter().find(|e| e.id == id) {
+        // Uses the ColdStorageIndex sidecar for O(1) shard lookup instead of
+        // scanning all shards. Falls back to full scan on index miss.
+        if let Some(mut entry) = self.cold.retrieve_by_id(id)? {
             entry.touch();
             entry.tier = MemoryTier::Warm;
             // Promote back to warm on access.

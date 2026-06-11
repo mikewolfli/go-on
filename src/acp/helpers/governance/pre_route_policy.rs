@@ -110,7 +110,7 @@ pub(crate) async fn evaluate_pre_route_policies(
     // Check per-tenant token bucket rate limits alongside phase-level rate
     // limiting (PhaseRateLimiter). Returns 429 with retry-after when exceeded.
     if let Some(ref limiter) = server.rate_limiting.rate_limit_middleware {
-        if let Err(retry_after) = limiter.check(tenant_id) {
+        if let Err(retry_after) = limiter.check(tenant_id).await {
             anyhow::bail!(
                 "rate limited for tenant '{}': retry after {}s",
                 tenant_id,

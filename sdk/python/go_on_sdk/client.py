@@ -145,6 +145,30 @@ class MultimodalInput:
     format: str | None = None
 
 
+@dataclass
+class StreamChunk:
+    """A single chunk in an SSE streaming response."""
+
+    token: str
+    done: bool = False
+    reasoning: str | None = None
+    tool_calls: list[ToolCall] | None = None
+    index: int = 0
+    total_chars: int = 0
+
+
+@dataclass
+class AgentInfo:
+    """Metadata about an available agent."""
+
+    name: str
+    agent_type: str
+    description: str
+    models: list[str] | None = None
+    capabilities: list[str] | None = None
+    healthy: bool = True
+
+
 # ── Client ──────────────────────────────────────────────────────────
 
 

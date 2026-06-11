@@ -6,8 +6,9 @@
 // F-GAP-49: Module wired into production protocol pipeline.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 use tracing::warn;
 
 /// Rate limit configuration for a tenant
@@ -128,21 +129,15 @@ impl RateLimitMiddleware {
     }
 
     /// Evict a specific tenant from the rate limiter.
-    pub fn evict_tenant(&self, tenant_id: &str) {
-        let mut buckets = self.buckets.lock().unwrap_or_else(|poisoned| {
-            warn!("rate limit evict lock poisoned, recovering");
-            poisoned.into_inner()
-        });
+    pub async fn evict_tenant(&self, tenant_id: &str) {
+        let mut buckets = self.buckets.lock().await;
         buckets.remove(tenant_id);
     }
 
     /// Check if a request from the given tenant should be allowed.
     /// Returns Ok(()) if allowed, or the number of seconds to wait before retrying.
-    pub fn check(&self, tenant_id: &str) -> Result<(), u64> {
-        let mut buckets = self.buckets.lock().unwrap_or_else(|poisoned| {
-            warn!("rate limit buckets lock poisoned, recovering");
-            poisoned.into_inner()
-        });
+    pub async fn check(&self, tenant_id: &str) -> Result<(), u64> {
+        let mut buckets = self.buckets.lock().await;
 
         // Lazy eviction: only evict when we're at capacity to keep common path fast.
         self.lazy_evict(&mut buckets);
@@ -171,11 +166,8 @@ impl RateLimitMiddleware {
 
     /// Get current rate limit state for a tenant
     #[allow(dead_code)] // F-GAP-49 — reserved for observability/metrics integration
-    pub fn state(&self, tenant_id: &str) -> RateLimitState {
-        let buckets = self.buckets.lock().unwrap_or_else(|poisoned| {
-            warn!("rate limit state lock poisoned, recovering");
-            poisoned.into_inner()
-        });
+    pub async fn state(&self, tenant_id: &str) -> RateLimitState {
+        let buckets = self.buckets.lock().await;
 
         if let Some(bucket) = buckets.get(tenant_id) {
             RateLimitState {
@@ -197,11 +189,8 @@ impl RateLimitMiddleware {
     /// Returns the number of seconds the client should wait before making
     /// another request.  Useful for constructing a 429 response with the
     /// `Retry-After` HTTP header.
-    pub fn retry_after(&self, tenant_id: &str) -> u64 {
-        let buckets = self.buckets.lock().unwrap_or_else(|poisoned| {
-            warn!("rate limit retry_after lock poisoned, recovering");
-            poisoned.into_inner()
-        });
+    pub async fn retry_after(&self, tenant_id: &str) -> u64 {
+        let buckets = self.buckets.lock().await;
 
         if let Some(bucket) = buckets.get(tenant_id) {
             let wait_ms = bucket.wait_time_ms();
@@ -227,13 +216,7 @@ impl RateLimitMiddleware {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(check_interval).await;
-                let mut guard = match buckets.lock() {
-                    Ok(g) => g,
-                    Err(poisoned) => {
-                        warn!("rate limit eviction task lock poisoned, recovering");
-                        poisoned.into_inner()
-                    }
-                };
+                let mut guard = buckets.lock().await;
                 let before = guard.len();
                 guard.retain(|_, bucket| !bucket.is_idle(idle_timeout));
                 let after = guard.len();
@@ -275,45 +258,45 @@ pub fn rate_limiter() -> &'static RateLimitMiddleware {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_basic_rate_limiting() {
+    #[tokio::test]
+    async fn test_basic_rate_limiting() {
         let limiter = RateLimitMiddleware::new(TenantRateLimit { rpm: 60, burst: 5 });
         // First 5 requests should pass (burst)
         for _ in 0..5 {
-            assert!(limiter.check("tenant-1").is_ok());
+            assert!(limiter.check("tenant-1").await.is_ok());
         }
         // 6th should be rate limited
-        assert!(limiter.check("tenant-1").is_err());
+        assert!(limiter.check("tenant-1").await.is_err());
     }
 
-    #[test]
-    fn test_different_tenants_independent() {
+    #[tokio::test]
+    async fn test_different_tenants_independent() {
         let limiter = RateLimitMiddleware::new(TenantRateLimit { rpm: 60, burst: 2 });
-        assert!(limiter.check("tenant-a").is_ok());
-        assert!(limiter.check("tenant-a").is_ok());
-        assert!(limiter.check("tenant-a").is_err());
+        assert!(limiter.check("tenant-a").await.is_ok());
+        assert!(limiter.check("tenant-a").await.is_ok());
+        assert!(limiter.check("tenant-a").await.is_err());
         // Different tenant is not affected
-        assert!(limiter.check("tenant-b").is_ok());
+        assert!(limiter.check("tenant-b").await.is_ok());
     }
 
-    #[test]
-    fn test_retry_after() {
+    #[tokio::test]
+    async fn test_retry_after() {
         let limiter = RateLimitMiddleware::new(TenantRateLimit {
             rpm: 60, // 1 per second
             burst: 1,
         });
-        assert!(limiter.check("test").is_ok());
-        let err = limiter.check("test").unwrap_err();
+        assert!(limiter.check("test").await.is_ok());
+        let err = limiter.check("test").await.unwrap_err();
         assert!(err >= 1);
     }
 
-    #[test]
-    fn test_state_reporting() {
+    #[tokio::test]
+    async fn test_state_reporting() {
         let limiter = RateLimitMiddleware::new(TenantRateLimit {
             rpm: 120,
             burst: 10,
         });
-        let state = limiter.state("test");
+        let state = limiter.state("test").await;
         assert_eq!(state.capacity, 10);
         assert!((state.refill_per_second - 2.0).abs() < 0.001);
     }

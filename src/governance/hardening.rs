@@ -41,7 +41,7 @@ pub struct TenantBudgetEnforcer {
     quotas: HashMap<String, TenantResourceQuota>,
     token_usage: std::sync::Mutex<HashMap<String, usize>>,
     api_call_usage: std::sync::Mutex<HashMap<String, usize>>,
-    active_tasks: HashMap<String, usize>,
+    active_tasks: std::sync::Mutex<HashMap<String, usize>>,
     /// The "day number" (unix_ts / 86400) last observed, used to reset daily counters.
     current_day: AtomicI64,
 }
@@ -52,7 +52,7 @@ impl TenantBudgetEnforcer {
             quotas: HashMap::new(),
             token_usage: std::sync::Mutex::new(HashMap::new()),
             api_call_usage: std::sync::Mutex::new(HashMap::new()),
-            active_tasks: HashMap::new(),
+            active_tasks: std::sync::Mutex::new(HashMap::new()),
             current_day: AtomicI64::new(Self::today()),
         }
     }
@@ -97,7 +97,11 @@ impl TenantBudgetEnforcer {
             .get(tenant_id)
             .ok_or_else(|| format!("no quota configured for tenant '{}'", tenant_id))?;
 
-        let current_tasks = self.active_tasks.get(tenant_id).copied().unwrap_or(0);
+        let active_tasks = self.active_tasks.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("active_tasks lock poisoned: recovering");
+            poisoned.into_inner()
+        });
+        let current_tasks = active_tasks.get(tenant_id).copied().unwrap_or(0);
         if current_tasks >= quota.concurrent_tasks_limit {
             return Err(format!(
                 "tenant '{}' at concurrent task limit ({}/{})",
@@ -152,7 +156,11 @@ impl TenantBudgetEnforcer {
             .get(tenant_id)
             .ok_or_else(|| format!("no quota configured for tenant '{}'", tenant_id))?;
 
-        let current_tasks = self.active_tasks.get(tenant_id).copied().unwrap_or(0);
+        let mut active_tasks = self.active_tasks.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("active_tasks lock poisoned: recovering");
+            poisoned.into_inner()
+        });
+        let current_tasks = active_tasks.get(tenant_id).copied().unwrap_or(0);
         if current_tasks >= quota.concurrent_tasks_limit {
             return Err(format!(
                 "tenant '{}' at concurrent task limit ({}/{})",
@@ -195,7 +203,7 @@ impl TenantBudgetEnforcer {
         }
 
         // All checks passed — atomically consume the slot.
-        *self.active_tasks.entry(tenant_id.to_string()).or_insert(0) += 1;
+        *active_tasks.entry(tenant_id.to_string()).or_insert(0) += 1;
         Ok(())
     }
 
@@ -204,7 +212,11 @@ impl TenantBudgetEnforcer {
     /// Prefer [`check_and_start_task`] over calling this separately after
     /// [`check_can_start`] to avoid TOCTOU races.
     pub fn start_task(&mut self, tenant_id: &str) {
-        *self.active_tasks.entry(tenant_id.to_string()).or_insert(0) += 1;
+        let mut active_tasks = self.active_tasks.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("active_tasks lock poisoned: recovering");
+            poisoned.into_inner()
+        });
+        *active_tasks.entry(tenant_id.to_string()).or_insert(0) += 1;
     }
 
     /// Record resource consumption after a task completes.
@@ -229,7 +241,11 @@ impl TenantBudgetEnforcer {
             };
             *au.entry(tenant_id.to_string()).or_insert(0) += api_calls;
         }
-        let tasks = self.active_tasks.entry(tenant_id.to_string()).or_insert(0);
+        let mut active_tasks = self.active_tasks.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("active_tasks lock poisoned: recovering");
+            poisoned.into_inner()
+        });
+        let tasks = active_tasks.entry(tenant_id.to_string()).or_insert(0);
         *tasks = tasks.saturating_sub(1);
     }
 

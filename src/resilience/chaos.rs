@@ -162,12 +162,30 @@ pub struct ChaosEngine {
 
 impl ChaosEngine {
     /// Create a new ChaosEngine (disabled by default).
+    /// Seeds fastrand with system time to ensure non-deterministic behavior across runs.
     pub fn new() -> Self {
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+        fastrand::seed(seed);
         Self {
             injections: Arc::new(RwLock::new(Vec::new())),
             injection_counts: Arc::new(Mutex::new(HashMap::new())),
             enabled: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Probabilistically determine whether a fault of the given type should be injected.
+    ///
+    /// Returns `true` when the engine is enabled and the random roll passes.
+    /// Uses `fastrand` for lightweight, non-cryptographic randomness.
+    pub fn should_inject_fault(&self, _fault_type: FaultType) -> bool {
+        if !self.is_enabled() {
+            return false;
+        }
+        // Default 50% probability — can be refined per FaultType if needed.
+        fastrand::f64() < 0.5
     }
 
     /// Enable or disable chaos injection.

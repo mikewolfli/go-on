@@ -390,15 +390,17 @@ impl GoOnClient {
         }))
     }
 
-    /// Compute exponential backoff delay with 30% jitter for a given attempt.
-    /// delay = base * 2^attempt * (0.7 + random * 0.3), capped at 30s.
+    /// Compute retry delay with exponential backoff + full jitter.
+    ///
+    /// Uses AWS full-jitter strategy: delay = random(0, min(cap, base * 2^attempt))
+    /// This prevents thundering herd during recovery from transient failures.
     fn backoff_delay(base: Duration, attempt: u32) -> Duration {
-        let raw = base
+        let cap = base
             .checked_mul(2u32.saturating_pow(attempt))
             .unwrap_or(Duration::from_secs(30))
             .min(Duration::from_secs(30));
-        let jitter_factor = 0.7 + fastrand::f64() * 0.3;
-        Duration::from_secs_f64(raw.as_secs_f64() * jitter_factor)
+        // Full jitter: random between 0 and the capped exponential base
+        Duration::from_secs_f64(fastrand::f64() * cap.as_secs_f64())
     }
 
     fn extract<T>(&self, result: Value) -> Result<T, SdkError>

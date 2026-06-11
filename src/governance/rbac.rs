@@ -56,7 +56,7 @@ impl BuiltinRole {
                 Permission::ManageConfig,
                 Permission::Audit,
             ],
-            BuiltinRole::User => vec![Permission::Read, Permission::Write, Permission::Execute],
+            BuiltinRole::User => vec![Permission::Read, Permission::Write],
             BuiltinRole::Viewer => vec![Permission::Read],
             BuiltinRole::Monitor => vec![Permission::Read, Permission::Monitor],
         }

@@ -19,7 +19,9 @@ use tracing::{info, warn};
 /// Shared memory bus for agents.
 ///
 /// Agents use this bus to persist insights after completing a task and to
-/// retrieve relevant context before starting a new task.
+/// retrieve relevant context before starting a new task.  When `user_id` is
+/// set, all stored memories are tagged with that user and retrieval filters
+/// by that user, providing multi-user isolation.
 pub struct AgentMemoryBus {
     /// The underlying memory store (shared so agents and the bus see the
     /// same data without additional synchronisation).
@@ -30,16 +32,21 @@ pub struct AgentMemoryBus {
     /// When set, `retrieve_memories` uses vector search instead of
     /// linear substring/tag scanning.
     vector_store: Option<Arc<VectorStore>>,
+    /// Optional user identifier for multi-user isolation.
+    /// When set, stored entries are tagged with this user_id and retrieval
+    /// filters by this user_id.
+    user_id: Option<String>,
 }
 
 impl AgentMemoryBus {
-    #[allow(dead_code)] // F-GAP-49 — reserved agent memory bus feature
     /// Create a new agent memory bus wrapping the given store.
+    #[allow(dead_code)]
     pub fn new(store: Arc<Mutex<MemoryStore>>) -> Self {
         Self {
             store,
             max_insights_per_task: 5,
             vector_store: None,
+            user_id: None,
         }
     }
 
@@ -50,24 +57,35 @@ impl AgentMemoryBus {
             store,
             max_insights_per_task: 5,
             vector_store: None,
+            user_id: None,
         }
     }
 
-    #[allow(dead_code)] // F-GAP-49 — reserved agent memory bus feature
+    /// Set the user_id for multi-user isolation.
+    /// When set, stored memories are tagged with this user_id and retrieval
+    /// filters by it.
+    #[allow(dead_code)]
+    pub fn with_user_id(mut self, user_id: String) -> Self {
+        self.user_id = Some(user_id);
+        self
+    }
+
     /// Set the maximum number of insights stored per task completion.
+    #[allow(dead_code)]
     pub fn with_max_insights_per_task(mut self, n: usize) -> Self {
         self.max_insights_per_task = n;
         self
     }
 
-    #[allow(dead_code)] // F-GAP-49 — reserved agent memory bus feature
     /// Return a reference to the underlying store.
+    #[allow(dead_code)]
     pub fn store(&self) -> &Arc<Mutex<MemoryStore>> {
         &self.store
     }
 
     /// Attach a VectorStore for similarity-based memory retrieval.
-    #[allow(dead_code)] // F-GAP-49 — reserved for vector store wiring (wired via runtime.rs init_agent_memory_bus_with_vector_store)
+    /// Wired via runtime.rs init_agent_memory_bus_with_vector_store.
+    #[allow(dead_code)]
     pub fn with_vector_store(mut self, vs: Arc<VectorStore>) -> Self {
         self.vector_store = Some(vs);
         self
@@ -132,7 +150,7 @@ impl AgentMemoryBus {
             ),
             usefulness: importance,
             staleness: 0,
-            user_id: None,
+            user_id: self.user_id.clone(),
         };
         self.store_memory(entry);
     }
@@ -234,7 +252,8 @@ impl AgentMemoryBus {
             }
         }
 
-        // Fallback: linear substring/tag scan with recency/importance weighting
+        // Fallback: linear substring/tag scan with recency/importance weighting.
+        // When user_id is set, filter entries to only those belonging to this user.
         let store = match self.store.lock() {
             Ok(s) => s,
             Err(poisoned) => {
@@ -245,6 +264,15 @@ impl AgentMemoryBus {
 
         let all: Vec<MemoryEntry> = store.retrieve(MemoryClass::Semantic, usize::MAX);
         drop(store);
+
+        // Multi-user isolation: filter by user_id when set.
+        let all: Vec<MemoryEntry> = match self.user_id {
+            Some(ref uid) => all
+                .into_iter()
+                .filter(|e| e.user_id.as_deref() == Some(uid))
+                .collect(),
+            None => all,
+        };
 
         if all.is_empty() {
             return Vec::new();
@@ -388,6 +416,7 @@ pub fn init_agent_memory_bus_with_vector_store(vs: Arc<VectorStore>) {
             store,
             max_insights_per_task: 5,
             vector_store: Some(vs),
+            user_id: None,
         }
     });
     info!("AgentMemoryBus: pre-initialised with VectorStore for similarity search");

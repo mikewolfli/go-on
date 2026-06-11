@@ -267,6 +267,30 @@ impl ApprovalPreferenceLearner {
         id
     }
 
+    /// Record an approval decision.
+    pub fn record_approval(&mut self, action_type: &str, approver: &str) -> String {
+        self.record_decision(approver, action_type, true, HashMap::new())
+    }
+
+    /// Record a rejection decision.
+    pub fn record_rejection(&mut self, action_type: &str, _reason: &str) -> String {
+        self.record_decision("system", action_type, false, HashMap::new())
+    }
+
+    /// Record an escalation event.
+    pub fn record_escalation(&mut self, action_type: &str, from_level: &str) -> String {
+        let mut context = HashMap::new();
+        context.insert("escalation_from".to_string(), from_level.to_string());
+        self.record_decision("system", action_type, false, context)
+    }
+
+    /// Record an auto-denial event.
+    pub fn record_auto_denial(&mut self, action_type: &str, reason: &str) -> String {
+        let mut context = HashMap::new();
+        context.insert("auto_deny_reason".to_string(), reason.to_string());
+        self.record_decision("system", action_type, false, context)
+    }
+
     // ── Prediction ──────────────────────────────────────────────────────
 
     /// Predict the likelihood (0.0 – 1.0) that an action of the given type

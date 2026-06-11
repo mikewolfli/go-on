@@ -21,6 +21,9 @@
 //! println!("{:?}", verdict);
 //! ```
 
+/// Maximum number of audit entries retained in memory to prevent unbounded growth.
+const MAX_AUDIT_ENTRIES: usize = 10_000;
+
 use crate::i18n::{t, tf};
 use anyhow::Result;
 use indexmap::IndexMap;
@@ -584,6 +587,39 @@ impl SecurityGovernor {
             return Ok(PolicyVerdict::allow());
         }
 
+        // Check policy mode: "advisory" logs but does not enforce.
+        let policy_mode = inner.config.policy_mode.clone();
+        if policy_mode == "advisory" {
+            // In advisory mode, run evaluation but always allow (for dry-run/testing).
+            let advisory_result = self.do_evaluate(&mut inner, resource, actor, context)?;
+            if !advisory_result.allowed || advisory_result.required_review {
+                tracing::warn!(
+                    target: "security_governor",
+                    policy_mode = "advisory",
+                    resource = %resource,
+                    actor = %actor,
+                    would_deny = !advisory_result.allowed,
+                    would_review = advisory_result.required_review,
+                    "Advisory mode: policy violation detected but not enforced"
+                );
+            }
+            return Ok(PolicyVerdict::allow());
+        }
+
+        // Enforce mode (or empty/default): evaluate and return the actual verdict.
+        self.do_evaluate(&mut inner, resource, actor, context)
+    }
+
+    /// Core evaluation logic shared by enforce and advisory modes.
+    /// Runs policy first-match then default-action fallback, mutating counters
+    /// on `inner` as side-effects.
+    fn do_evaluate(
+        &self,
+        inner: &mut Inner,
+        resource: &str,
+        actor: &str,
+        context: &HashMap<String, String>,
+    ) -> Result<PolicyVerdict> {
         // First-match: iterate over all policies and return on first match.
         // Collect matched policy data first to avoid borrow conflicts.
         let matched: Option<(String, String, PolicyAction, Option<String>)> = inner
@@ -729,6 +765,9 @@ impl SecurityGovernor {
             inner.active_escalations += 1;
         }
         inner.audit_log.push(entry);
+        if inner.audit_log.len() > MAX_AUDIT_ENTRIES {
+            inner.audit_log.remove(0);
+        }
     }
 
     /// Return all recorded audit log entries.

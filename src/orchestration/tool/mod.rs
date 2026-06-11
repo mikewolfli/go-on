@@ -22,6 +22,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Instant;
 use tempfile::NamedTempFile;
 use tracing::{debug, info, warn};
 
@@ -426,7 +427,13 @@ impl ToolRegistry {
                 success = true,
                 "tool executed successfully"
             );
-            record_tool_execution("tool_execution_total", name, true, elapsed);
+            record_tool_execution(
+                "tool_execution_total",
+                name,
+                true,
+                elapsed,
+                serde_json::to_string(&input.payload).ok().map(|s| s.len()),
+            );
             return Ok(primary_result);
         }
 
@@ -453,7 +460,13 @@ impl ToolRegistry {
                         fallback_used = true,
                         "fallback tool executed successfully"
                     );
-                    record_tool_execution("tool_execution_total", name, true, elapsed);
+                    record_tool_execution(
+                        "tool_execution_total",
+                        name,
+                        true,
+                        elapsed,
+                        serde_json::to_string(&input.payload).ok().map(|s| s.len()),
+                    );
                     return Ok(fallback_result);
                 }
                 primary_result = fallback_result;
@@ -469,7 +482,13 @@ impl ToolRegistry {
             fallback_used = !self.profile(name).map(|p| p.fallback_chain.is_empty()).unwrap_or(true),
             "tool execution failed after all fallbacks"
         );
-        record_tool_execution("tool_execution_total", name, false, elapsed);
+        record_tool_execution(
+            "tool_execution_total",
+            name,
+            false,
+            elapsed,
+            serde_json::to_string(&input.payload).ok().map(|s| s.len()),
+        );
         Ok(primary_result)
     }
 }
@@ -483,13 +502,33 @@ impl Default for ToolRegistry {
 /// Record a tool execution metric via the global performance monitor.
 ///
 /// Tracks tool call count, latency, and success/failure for observability
-/// and alert-rule evaluation (P3-9).
-fn record_tool_execution(_metric_name: &str, _tool: &str, success: bool, latency_ms: u64) {
+/// and alert-rule evaluation (P3-9). Uses an explicit info_span to record
+/// the tool name, input size (when available), latency, and success status
+/// into the distributed trace tree.
+pub fn record_tool_execution(
+    metric_name: &str,
+    tool: &str,
+    success: bool,
+    latency_ms: u64,
+    input_size: Option<usize>,
+) {
     crate::observability::performance::record_global_operation(success, latency_ms as f64);
+
+    let span = tracing::info_span!(
+        target: "tool_execution",
+        "tool.execute",
+        tool = %tool,
+        input_size = input_size.unwrap_or(0),
+        latency_ms = latency_ms,
+        success = success,
+    );
+    let _guard = span.enter();
+
     tracing::trace!(
         target: "tool_execution",
-        metric = %_metric_name,
-        tool = %_tool,
+        metric = %metric_name,
+        tool = %tool,
+        input_size = input_size.unwrap_or(0),
         success = success,
         latency_ms = latency_ms,
         "tool execution metric"
@@ -590,11 +629,26 @@ impl Tool for ReadFileTool {
         "read_file"
     }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
+        let span = tracing::info_span!(
+            "tool.run",
+            tool = self.name(),
+            input_size = serde_json::to_string(&input.payload)
+                .unwrap_or_default()
+                .len() as u64,
+            latency_ms = 0u64,
+            success = false,
+        );
+        let _guard = span.enter();
+        let start = Instant::now();
+
         let path = input.payload["path"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_path")))?;
         let validated_path = sanitize_path(input, path)?;
         let content = std::fs::read_to_string(&validated_path)?;
+        let elapsed = start.elapsed().as_millis() as u64;
+        span.record("latency_ms", elapsed);
+        span.record("success", true);
         Ok(ToolOutput {
             success: true,
             result: Some(serde_json::json!({"content": content})),
@@ -612,6 +666,18 @@ impl Tool for WriteFileTool {
         "write_file"
     }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
+        let span = tracing::info_span!(
+            "tool.run",
+            tool = self.name(),
+            input_size = serde_json::to_string(&input.payload)
+                .unwrap_or_default()
+                .len() as u64,
+            latency_ms = 0u64,
+            success = false,
+        );
+        let _guard = span.enter();
+        let start = Instant::now();
+
         let path = input.payload["path"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_path")))?;
@@ -642,6 +708,9 @@ impl Tool for WriteFileTool {
             }
         }
 
+        let elapsed = start.elapsed().as_millis() as u64;
+        span.record("latency_ms", elapsed);
+        span.record("success", true);
         Ok(ToolOutput {
             success: true,
             result: Some(serde_json::json!({"path": path, "mode": mode})),
@@ -659,6 +728,18 @@ impl Tool for SearchFilesTool {
         "search_files"
     }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
+        let span = tracing::info_span!(
+            "tool.run",
+            tool = self.name(),
+            input_size = serde_json::to_string(&input.payload)
+                .unwrap_or_default()
+                .len() as u64,
+            latency_ms = 0u64,
+            success = false,
+        );
+        let _guard = span.enter();
+        let start = Instant::now();
+
         let pattern = input.payload["pattern"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_pattern")))?;
@@ -668,6 +749,9 @@ impl Tool for SearchFilesTool {
         let mut files = Vec::new();
         collect_matching_files(&root, &root, &matcher, &mut files)?;
 
+        let elapsed = start.elapsed().as_millis() as u64;
+        span.record("latency_ms", elapsed);
+        span.record("success", true);
         Ok(ToolOutput {
             success: true,
             result: Some(serde_json::json!({"files": files})),
@@ -689,6 +773,18 @@ impl Tool for ApplyPatchTool {
         "apply_patch"
     }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
+        let span = tracing::info_span!(
+            "tool.run",
+            tool = self.name(),
+            input_size = serde_json::to_string(&input.payload)
+                .unwrap_or_default()
+                .len() as u64,
+            latency_ms = 0u64,
+            success = false,
+        );
+        let _guard = span.enter();
+        let start = Instant::now();
+
         let patch = input.payload["patch"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("{}", t("error.missing_patch")))?;
@@ -717,6 +813,9 @@ impl Tool for ApplyPatchTool {
             );
         }
 
+        let elapsed = start.elapsed().as_millis() as u64;
+        span.record("latency_ms", elapsed);
+        span.record("success", success);
         Ok(ToolOutput {
             success,
             result: Some(serde_json::json!({
@@ -758,6 +857,18 @@ impl Tool for RunTestsTool {
         "run_tests"
     }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
+        let span = tracing::info_span!(
+            "tool.run",
+            tool = self.name(),
+            input_size = serde_json::to_string(&input.payload)
+                .unwrap_or_default()
+                .len() as u64,
+            latency_ms = 0u64,
+            success = false,
+        );
+        let _guard = span.enter();
+        let start = Instant::now();
+
         let command_name = input.payload["command"].as_str().unwrap_or("cargo");
         if !ALLOWED_TEST_COMMANDS.contains(&command_name) {
             anyhow::bail!(
@@ -805,6 +916,9 @@ impl Tool for RunTestsTool {
             );
         }
 
+        let elapsed = start.elapsed().as_millis() as u64;
+        span.record("latency_ms", elapsed);
+        span.record("success", success);
         Ok(ToolOutput {
             success,
             result: Some(serde_json::json!({
@@ -828,6 +942,18 @@ impl Tool for InspectGitDiffTool {
         "inspect_git_diff"
     }
     fn run(&self, input: &ToolInput) -> Result<ToolOutput> {
+        let span = tracing::info_span!(
+            "tool.run",
+            tool = self.name(),
+            input_size = serde_json::to_string(&input.payload)
+                .unwrap_or_default()
+                .len() as u64,
+            latency_ms = 0u64,
+            success = false,
+        );
+        let _guard = span.enter();
+        let start = Instant::now();
+
         let current_dir = input.payload["directory"].as_str().unwrap_or(".");
         let staged = input.payload["staged"].as_bool().unwrap_or(false);
         let files = input.payload["files"]
@@ -851,6 +977,9 @@ impl Tool for InspectGitDiffTool {
         let output = command.output()?;
         let success = output.status.success();
 
+        let elapsed = start.elapsed().as_millis() as u64;
+        span.record("latency_ms", elapsed);
+        span.record("success", success);
         Ok(ToolOutput {
             success,
             result: Some(serde_json::json!({

@@ -363,13 +363,13 @@ impl TokenMultiLevelCache {
     /// Start a periodic background cleanup task that removes expired entries.
     ///
     /// The task runs every `interval_ms` milliseconds and removes entries
-    /// whose `created_at + ttl_ms < now` from L1 (exact-match) cache.
-    /// L2 and L3 entries are cleaned lazily on lookup.
+    /// whose `created_at * 1000 + ttl_ms < now_ms` from L1 (exact-match)
+    /// cache. L2 and L3 entries are cleaned lazily on lookup.
     ///
     /// Returns a [`tokio_util::sync::CancellationToken`] that can be used
     /// to stop the task by calling `.cancel()`.
     pub async fn start_background_cleanup(
-        &self,
+        self: Arc<Self>,
         interval_ms: u64,
     ) -> tokio_util::sync::CancellationToken {
         let token = tokio_util::sync::CancellationToken::new();
@@ -381,10 +381,39 @@ impl TokenMultiLevelCache {
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
-                        // Cleanup is delegated to the cache owner; this task
-                        // currently acts as a tick source. Actual cleanup
-                        // happens lazily on lookup, which is sufficient for
-                        // most use cases.
+                        let ttl_ms = *self.ttl_ms.read().await;
+                        if ttl_ms == 0 {
+                            continue;
+                        }
+                        let now_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64;
+
+                        let expired_keys = {
+                            let l1 = self.l1.read().await;
+                            l1.entries()
+                                .iter()
+                                .filter(|entry| {
+                                    let created_ms = (entry.created_at as u64) * 1000;
+                                    now_ms > created_ms.saturating_add(ttl_ms)
+                                })
+                                .map(|entry| entry.key.clone())
+                                .collect::<Vec<String>>()
+                        };
+
+                        let expired_count = expired_keys.len();
+                        if expired_count > 0 {
+                            let mut l1 = self.l1.write().await;
+                            for key in &expired_keys {
+                                l1.remove(key);
+                            }
+                            tracing::debug!(
+                                target: "token_cache",
+                                expired_count,
+                                "background cleanup removed expired L1 entries"
+                            );
+                        }
                     }
                     _ = token_clone.cancelled() => {
                         break;

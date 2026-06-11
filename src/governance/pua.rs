@@ -9,7 +9,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 
+use crate::governance::rbac::{AccessDecision, Permission, Principal, RbacEnforcer};
 use crate::roles::AgentRole;
+use std::sync::RwLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PuaStageRequirement {
@@ -79,6 +81,7 @@ impl std::error::Error for PuaViolation {}
 #[derive(Debug)]
 pub struct PuaRuleEngine {
     plan: Arc<StdMutex<PuaEnforcementPlan>>,
+    rbac_enforcer: Option<Arc<RwLock<RbacEnforcer>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -327,7 +330,37 @@ impl DynamicQualityCompass {
 
 impl PuaRuleEngine {
     pub fn new(plan: Arc<StdMutex<PuaEnforcementPlan>>) -> Self {
-        Self { plan }
+        Self {
+            plan,
+            rbac_enforcer: None,
+        }
+    }
+
+    /// Set the RBAC enforcer for this engine.
+    pub fn with_rbac_enforcer(mut self, enforcer: Arc<RwLock<RbacEnforcer>>) -> Self {
+        self.rbac_enforcer = Some(enforcer);
+        self
+    }
+
+    /// Check whether the caller has Execute permission via the RBAC enforcer.
+    /// Returns `true` if escalation is permitted, `false` if denied.
+    fn check_escalation_permission(&self) -> bool {
+        let enforcer = match &self.rbac_enforcer {
+            Some(e) => e,
+            None => return true, // no enforcer configured = allow
+        };
+        let enforcer = match enforcer.read() {
+            Ok(e) => e,
+            Err(poisoned) => {
+                tracing::warn!("RBAC enforcer lock poisoned: recovering");
+                poisoned.into_inner()
+            }
+        };
+        // Build a minimal principal with Admin role to check Execute permission
+        let mut principal = Principal::new("pua-escalation-checker", vec!["Admin"], None);
+        principal.permissions.insert(Permission::Execute);
+        let decision = enforcer.check_access(&principal, &Permission::Execute);
+        matches!(decision, AccessDecision::Allow)
     }
 
     /// Evaluate approval feedback from the ApprovalEngine.
@@ -479,6 +512,14 @@ impl PuaRuleEngine {
     }
 
     pub fn escalate(&self, _reason: &str) -> u8 {
+        if !self.check_escalation_permission() {
+            tracing::warn!("Escalation denied: caller lacks Execute permission");
+            let plan = self.plan.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("PUA plan lock poisoned: recovering");
+                poisoned.into_inner()
+            });
+            return parse_escalation_level(&plan.escalation_level);
+        }
         tracing::debug!("Escalation triggered: {}", _reason);
         let mut plan = self.plan.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("PUA plan lock poisoned: recovering");
@@ -497,6 +538,14 @@ impl PuaRuleEngine {
     /// (e.g., after successful recovery from a security incident).
     /// The level is floored at L0 (no escalation).
     pub fn de_escalate(&self, _reason: &str) -> u8 {
+        if !self.check_escalation_permission() {
+            tracing::warn!("De-escalation denied: caller lacks Execute permission");
+            let plan = self.plan.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("PUA plan lock poisoned: recovering");
+                poisoned.into_inner()
+            });
+            return parse_escalation_level(&plan.escalation_level);
+        }
         tracing::debug!("De-escalation triggered: {}", _reason);
         let mut plan = self.plan.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("PUA plan lock poisoned: recovering");

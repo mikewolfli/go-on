@@ -4,6 +4,9 @@
 //! exceed a threshold, they are summarized into a compressed form so that
 //! important context is retained without unbounded growth.
 
+use std::sync::Arc;
+
+use crate::agent::{Agent, Message, StreamingSender};
 use crate::memory::embedding_provider::local_hash_embed;
 use crate::memory::memory_persistence::{MemoryEntry, MemoryTier};
 
@@ -35,13 +38,26 @@ impl Default for SummarizationConfig {
 #[allow(dead_code)] // F-GAP reserved
 pub struct MemorySummarizer {
     config: SummarizationConfig,
+    /// Optional LLM agent for actual LLM-based summarization.
+    /// When set, `llm_summarize` will call this agent instead of truncating text.
+    llm_agent: Option<Arc<dyn Agent>>,
 }
 
 impl MemorySummarizer {
     /// Create a new summarizer with the given configuration.
     #[allow(dead_code)] // F-GAP reserved
     pub fn new(config: SummarizationConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            llm_agent: None,
+        }
+    }
+
+    /// Attach an LLM agent for actual summarization.
+    #[allow(dead_code)] // F-GAP reserved
+    pub fn with_llm_agent(mut self, agent: Arc<dyn Agent>) -> Self {
+        self.llm_agent = Some(agent);
+        self
     }
 
     /// Summarize a list of memory entries, returning a compressed representation.
@@ -58,7 +74,7 @@ impl MemorySummarizer {
 
         // Use LLM-based summarization when configured
         if self.config.use_llm_summarization {
-            let summary = llm_summarize(entries).await;
+            let summary = llm_summarize(entries, self.llm_agent.as_ref()).await;
             let now_secs = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -138,19 +154,15 @@ impl MemorySummarizer {
 
 /// LLM-based summarization of memory entries.
 ///
-/// Builds a prompt from the given entries and produces a concise summary.
-/// Currently uses a simple text-truncation approach with token counting
-/// as the default fallback. To use a real LLM, inject an LLM client and
-/// call it with the built prompt instead.
-///
-/// TODO-BLUE64: Replace the fallback concatenation with an actual LLM
-/// call when an LLM client is available in this module.
-pub async fn llm_summarize(entries: &[MemoryEntry]) -> String {
+/// Builds a prompt from the given entries and calls the optional LLM agent
+/// to produce a concise summary. If no agent is provided, falls back to a
+/// simple concatenation of entry content snippets.
+pub async fn llm_summarize(entries: &[MemoryEntry], agent: Option<&Arc<dyn Agent>>) -> String {
     if entries.is_empty() {
         return String::new();
     }
 
-    // Build a prompt that a real LLM would receive
+    // Build a prompt for summarization
     let mut prompt = String::from("Please summarize the following memory entries:\n\n");
     for entry in entries {
         prompt.push_str(&format!(
@@ -160,19 +172,48 @@ pub async fn llm_summarize(entries: &[MemoryEntry]) -> String {
     }
     prompt.push_str("\nProvide a concise summary capturing the key information.");
 
-    // Fallback: simple token-counting and text truncation.
-    // A real LLM client would call an API here and return the response.
-    const AVG_CHARS_PER_TOKEN: usize = 4;
-    const MAX_TOKENS: usize = 1024;
-    let max_chars = MAX_TOKENS * AVG_CHARS_PER_TOKEN;
+    // If an LLM agent is available, use it for real summarization
+    if let Some(agent) = agent {
+        let msg = Message {
+            role: "user".to_string(),
+            content: prompt,
+        };
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(1024);
+        let sender = StreamingSender::from(tx);
+        let agent = Arc::clone(agent);
 
-    // Build a truncated summary from the entry contents
+        let task = tokio::spawn(async move { agent.chat(vec![msg], None, None, sender).await });
+
+        let mut response = String::new();
+        while let Some(token) = rx.recv().await {
+            if token.starts_with("__model_used__:") || token.starts_with("__tool_call__:") {
+                continue;
+            }
+            if let Some(reasoning) = token.strip_prefix("__thinking__") {
+                response.push_str(reasoning);
+            } else {
+                response.push_str(&token);
+            }
+        }
+
+        if let Err(e) = task.await {
+            tracing::warn!(
+                target: "memory_summarizer",
+                "LLM summarization agent task failed: {e}; using fallback"
+            );
+        } else if !response.is_empty() {
+            return response;
+        }
+    }
+
+    // Fallback: simple concatenation of entry content snippets
+    const MAX_CHARS: usize = 4096;
     let mut summary = String::new();
     let mut char_count = 0;
     for entry in entries {
         let snippet = entry.content.chars().take(200).collect::<String>();
-        if char_count + snippet.len() > max_chars {
-            let remaining = max_chars.saturating_sub(char_count);
+        if char_count + snippet.len() > MAX_CHARS {
+            let remaining = MAX_CHARS.saturating_sub(char_count);
             if remaining > 20 {
                 let truncated: String = snippet.chars().take(remaining).collect();
                 summary.push_str(&truncated);
@@ -186,14 +227,13 @@ pub async fn llm_summarize(entries: &[MemoryEntry]) -> String {
     }
 
     if summary.is_empty() {
-        // Absolute fallback: just use the first entry's truncated content
         entries
             .first()
             .map(|e| e.content.chars().take(500).collect())
             .unwrap_or_default()
     } else {
         format!(
-            "[LLM summarization pending — LLM client not injected; using fallback]\n\nSummarized {} entries:\n{}",
+            "[Summarized {} entries using fallback]\n\n{}",
             entries.len(),
             summary
         )

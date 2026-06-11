@@ -78,10 +78,7 @@ pub fn parse_secret_action(value: &str) -> Result<SecretAction> {
 /// This function performs synchronous keyring I/O via the `keyring` crate.
 /// When called from an async context (e.g. a tokio task), the caller MUST
 /// wrap this call in `tokio::task::spawn_blocking` to avoid blocking the
-/// async runtime.  The `#[cfg(feature = "sync-secrets")]` attribute on this
-/// function marks it as a synchronous boundary — profiles that disable this
-/// feature will not have access to keyring operations.
-#[cfg(feature = "sync-secrets")]
+/// async runtime.
 pub fn run_secret_command(
     action: SecretAction,
     name: Option<&str>,
