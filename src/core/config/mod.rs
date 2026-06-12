@@ -30,12 +30,3 @@ pub use types::{
     ProviderConfig, ReputationConfig, RuntimeConfig, SchedulerConfig, SecurityConfig,
     StartupContextConfig, VectorConfig, WorkflowType,
 };
-
-// Suppress dead-code warnings for not-yet-integrated modules.
-// These modules are publicly exported and will be fully wired in upcoming integrations.
-#[cfg(test)]
-mod integration_gate {
-    fn _gate_schema_manager() {
-        let _ = super::schema_version::SchemaManager::default();
-    }
-}

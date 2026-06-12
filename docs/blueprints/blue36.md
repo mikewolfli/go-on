@@ -43,9 +43,9 @@
 
 执行：
 - backend 三模式一致性：
-  - `cargo check --no-default-features -F profile-local`
-  - `cargo check --no-default-features -F profile-simple-server`
-  - `cargo check --no-default-features -F profile-multi-users-server`
+  - `cargo check --no-default-features -F local`
+  - `cargo check --no-default-features -F simple-server`
+  - `cargo check --no-default-features -F multi-users-server`
 - backend 严格 lint：`cargo clippy --all-features -- -D warnings`
 - backend 测试：`cargo test --all-features --tests`
 - GUI: `npm run build && npm test`
@@ -107,7 +107,7 @@
 
 7) 特性组合条件判断修复（all-features 下的断言分支）
 - 文件：`tests/acp_runtime_rpc_integration.rs`
-- 动作：将 `profile-local` 分支调整为“仅本地特性独占时”才走降级成功断言，避免与多特性组合冲突
+- 动作：将 `local` 分支调整为“仅本地特性独占时”才走降级成功断言，避免与多特性组合冲突
 
 8) 测试模块 dead_code warning 收口
 - 文件：`tests/pua_contract_smoke.rs`

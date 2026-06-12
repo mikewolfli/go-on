@@ -8,6 +8,7 @@
 use super::types::*;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use tokio::time::{self, Duration};
 
 /// Multi-agent orchestration council — F-GAP-15.
 ///
@@ -69,6 +70,36 @@ impl OrchestrationCouncil {
             deliberations: Arc::new(Mutex::new(HashMap::new())),
             deliberation_config,
         }
+    }
+
+    /// Start a background task that periodically auto-ejects low-performer
+    /// members based on `ejection_threshold` / `ejection_window` config values.
+    ///
+    /// This should be called during initialization whenever the council is
+    /// wrapped in `Arc<Mutex<>>` (e.g. from `CapabilityBus::new`).
+    ///
+    /// The check runs every 300 seconds (5 minutes) by default.
+    pub fn start_auto_ejection(council: Arc<Mutex<Self>>) {
+        let interval_secs = {
+            let guard = council.lock().unwrap_or_else(|e| e.into_inner());
+            let cfg = &guard.config;
+            // Use the ejection check interval if configured, otherwise 300s
+            cfg.ejection_check_interval_s.unwrap_or(300)
+        };
+        tokio::spawn(async move {
+            let mut interval = time::interval(Duration::from_secs(interval_secs));
+            // Skip the first tick to give the system time to stabilize
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                if let Ok(mut council) = council.lock() {
+                    let ejected = council.auto_eject_low_performers();
+                    if !ejected.is_empty() {
+                        tracing::info!(?ejected, "Council auto-ejected low-performer members");
+                    }
+                }
+            }
+        });
     }
 }
 

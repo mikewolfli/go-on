@@ -95,6 +95,22 @@ impl StateSyncEvent {
 /// Uses a global static `broadcast::Sender` so that config reload observers,
 /// agent registries, and model list updaters can all publish without needing
 /// to thread a shared reference through every layer.
+///
+/// # Single-process limitation
+///
+/// This is a single-process in-memory broadcaster. The `static` ties all
+/// publishers and subscribers to the same process, so it cannot coordinate
+/// across multiple backend instances.
+///
+/// For multi-process deployments (horizontal scaling, blue/green), this
+/// should be replaced with a distributed pub/sub system such as:
+/// - **NATS** (JetStream) for lightweight messaging
+/// - **Redis Pub/Sub** for simple fan-out
+/// - **Kafka / Pulsar** for durable event logs
+///
+/// The capacity of 256 is set intentionally to provide backpressure — if a
+/// consumer falls behind by more than 256 events, the oldest events are
+/// dropped rather than unboundedly growing memory.
 static BROADCASTER: LazyLock<broadcast::Sender<StateSyncEvent>> = LazyLock::new(|| {
     let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
     tx

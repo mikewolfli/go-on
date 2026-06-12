@@ -2,7 +2,7 @@
 
 ## Overview
 
-Simple Server mode (`profile-simple-server`) is designed for single-server deployments that require better performance and reliability than local mode, while maintaining simplicity. It uses SQLite with required vector extensions and is suitable for small teams or production-like environments.
+Simple Server mode (`simple-server`) is designed for single-server deployments that require better performance and reliability than local mode, while maintaining simplicity. It uses SQLite with required vector extensions and is suitable for small teams or production-like environments.
 
 ## Features
 
@@ -13,7 +13,7 @@ Simple Server mode (`profile-simple-server`) is designed for single-server deplo
 - **Better reliability**: Enhanced error handling and recovery
 - **Production readiness**: Suitable for small-scale production use
 - **Full Phase 4 architecture**: All 14 buses and 21 F-GAP modules, including AgentFactory and OrchestrationCouncil
-- **Conditionally compiled modules**: AgentFactory and Council are gated with `#[cfg(feature = "profile-simple-server")]`
+- **Conditionally compiled modules**: AgentFactory and Council are gated with `#[cfg(feature = "simple-server")]`
 
 ### Architecture
 ```
@@ -77,7 +77,7 @@ Simple Server mode requires:
 ### Building for Server Deployment
 ```bash
 # Build with simple-server profile
-cargo build --no-default-features -F profile-simple-server
+cargo build --no-default-features -F simple-server
 
 # Or explicitly enable features
 cargo build --features "backend-sqlite sqlite-vec"

@@ -5,7 +5,7 @@
 //! and automatic node reassignment on failure.
 
 use crate::orchestration::distributed::remote_executor::{
-    DagId, NodeId, NodeOutput, NodeRegistration, RemoteExecutor,
+    DagId, NodeId, NodeOutput, NodeRegistration, RemoteExecutor, TaskPacket,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -446,7 +446,6 @@ pub struct RaftLogEntry {
 
 /// A snapshot of the Raft state machine at a given log index.
 /// Used for log compaction and install-snapshot RPCs during leader election.
-#[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RaftSnapshot {
     /// The index of the last log entry included in this snapshot.
@@ -493,6 +492,9 @@ impl Default for FaultDetectionConfig {
 pub struct DistributedDAGCoordinator {
     /// DAG state map: dag_id -> DistributedDagState
     dag_states: RwLock<HashMap<DagId, DistributedDagState>>,
+    /// Reverse index: node_id -> DAGs the node participates in.
+    /// Avoids O(dags × nodes) scanning in heartbeat / lease checks.
+    node_to_dags: RwLock<HashMap<NodeId, Vec<DagId>>>,
     /// The remote executor used to dispatch tasks.
     executor: Arc<dyn RemoteExecutor>,
     /// Fault detection configuration.
@@ -521,6 +523,7 @@ impl DistributedDAGCoordinator {
         let (shutdown_tx, _) = tokio::sync::watch::channel(false);
         Self {
             dag_states: RwLock::new(HashMap::new()),
+            node_to_dags: RwLock::new(HashMap::new()),
             executor,
             fault_config: FaultDetectionConfig::default(),
             raft_log: RwLock::new(Vec::new()),
@@ -553,11 +556,17 @@ impl DistributedDAGCoordinator {
         port: u16,
     ) -> Result<(), DagCoordinatorError> {
         let mut states = self.dag_states.write().await;
+        let dag_ids: Vec<DagId> = states.keys().cloned().collect();
         for state in states.values_mut() {
             state.nodes.insert(
                 node_id.clone(),
                 NodeInfo::new(node_id.clone(), address.clone(), port),
             );
+        }
+        // Update the reverse index: node participates in all existing DAGs
+        if !dag_ids.is_empty() {
+            let mut idx = self.node_to_dags.write().await;
+            idx.insert(node_id.clone(), dag_ids);
         }
 
         // Also register with the underlying executor
@@ -621,7 +630,7 @@ impl DistributedDAGCoordinator {
     }
 
     /// Execute the DAG by dispatching ready nodes to their assigned executors.
-    pub async fn execute_dag(&self, dag_id: &DagId) -> Result<(), DagCoordinatorError> {
+    pub async fn execute_dag(self: &Arc<Self>, dag_id: &DagId) -> Result<(), DagCoordinatorError> {
         let mut states = self.dag_states.write().await;
         let state = states
             .get_mut(dag_id)
@@ -637,13 +646,159 @@ impl DistributedDAGCoordinator {
         let dag_id_str = dag_id.clone();
         drop(states);
 
-        // In a real implementation, an execution loop would be spawned here
-        // that completes the DAG asynchronously.
-        let exec = self.executor.clone();
+        let coord = self.clone();
         tokio::spawn(async move {
             info!(dag = %dag_id_str, "DAG execution started");
-            // Future: iterate over ready_nodes, dispatch via executor, collect results
-            let _ = exec;
+
+            loop {
+                // --- Phase 1: Identify ready nodes under a read lock ---
+                let ready: Vec<(
+                    String,                             // dag_node_id
+                    String,                             // tool_name
+                    NodeId,                             // assigned_node_id
+                    HashMap<NodeId, serde_json::Value>, // dep_outputs
+                )> = {
+                    let states = coord.dag_states.read().await;
+                    let Some(state) = states.get(&dag_id_str) else {
+                        error!(dag = %dag_id_str, "DAG not found during execution");
+                        return;
+                    };
+
+                    // Honour cancellation.
+                    if state.plan.status == DagStatus::Cancelled {
+                        info!(dag = %dag_id_str, "DAG execution cancelled");
+                        return;
+                    }
+
+                    // Check if every node has been completed.
+                    if state.is_complete() {
+                        drop(states);
+                        let mut states_w = coord.dag_states.write().await;
+                        if let Some(s) = states_w.get_mut(&dag_id_str) {
+                            s.plan.status = DagStatus::Completed;
+                        }
+                        info!(dag = %dag_id_str, "DAG execution completed");
+                        return;
+                    }
+
+                    let ready_nodes = state.ready_nodes();
+                    if ready_nodes.is_empty() {
+                        // No nodes ready and DAG is not complete – deadlocked or
+                        // nodes are still being assigned.
+                        error!(
+                            dag = %dag_id_str,
+                            "DAG stalled – no ready nodes but DAG is not complete"
+                        );
+                        return;
+                    }
+
+                    ready_nodes
+                        .iter()
+                        .filter_map(|n| {
+                            let node_id = n.assigned_node_id.clone()?;
+
+                            // Collect outputs from dependency nodes to pass as
+                            // dep_outputs.
+                            let mut dep_outputs = HashMap::new();
+                            if let Some(deps) = state.plan.adjacency.get(&n.dag_node_id) {
+                                for dep_id in deps {
+                                    if let Some(dep_assign) = state
+                                        .plan
+                                        .assignments
+                                        .iter()
+                                        .find(|a| a.dag_node_id == *dep_id)
+                                    {
+                                        if let Some(ref output) = dep_assign.output {
+                                            if let Some(ref val) = output.output {
+                                                dep_outputs
+                                                    .insert(NodeId(dep_id.clone()), val.clone());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            Some((
+                                n.dag_node_id.clone(),
+                                n.tool_name.clone(),
+                                node_id,
+                                dep_outputs,
+                            ))
+                        })
+                        .collect()
+                };
+
+                // If every ready node lacked an assignment skip back to the
+                // top of the loop so the next iteration re-checks.
+                if ready.is_empty() {
+                    continue;
+                }
+
+                // --- Phase 2: Dispatch ready nodes via the remote executor ---
+                let mut completed: Vec<(String, NodeOutput)> = Vec::new();
+                let mut failed = false;
+                let mut fail_reason = String::new();
+
+                for (dag_node_id, tool_name, node_id, dep_outputs) in ready {
+                    let packet = TaskPacket {
+                        node_id,
+                        dag_id: dag_id_str.clone(),
+                        tool_name,
+                        input: serde_json::Value::Null,
+                        dep_outputs,
+                        retry_count: 0,
+                        max_retries: 3,
+                    };
+
+                    match coord.executor.execute_remote(packet).await {
+                        Ok(output) => {
+                            completed.push((dag_node_id, output));
+                        }
+                        Err(e) => {
+                            error!(
+                                dag = %dag_id_str,
+                                dag_node = %dag_node_id,
+                                error = %e,
+                                "Node execution failed"
+                            );
+                            failed = true;
+                            fail_reason = e.to_string();
+                            break;
+                        }
+                    }
+                }
+
+                // --- Phase 3: Persist results (or mark as failed) ---
+                if failed {
+                    let mut states_w = coord.dag_states.write().await;
+                    if let Some(s) = states_w.get_mut(&dag_id_str) {
+                        s.plan.status = DagStatus::Failed(fail_reason);
+                    }
+                    error!(dag = %dag_id_str, "DAG execution failed");
+                    return;
+                }
+
+                {
+                    let mut states_w = coord.dag_states.write().await;
+                    let Some(state) = states_w.get_mut(&dag_id_str) else {
+                        error!(dag = %dag_id_str, "DAG not found for state update");
+                        return;
+                    };
+                    for (dag_node_id, output) in &completed {
+                        if let Some(assign) = state
+                            .plan
+                            .assignments
+                            .iter_mut()
+                            .find(|a| a.dag_node_id == *dag_node_id)
+                        {
+                            assign.output = Some(output.clone());
+                            assign.completed = true;
+                        }
+                    }
+                }
+
+                // Loop back to Phase 1 so newly-ready nodes are discovered.
+            }
         });
 
         Ok(())
@@ -651,16 +806,28 @@ impl DistributedDAGCoordinator {
 
     /// Handle a heartbeat from a node.
     pub async fn handle_heartbeat(&self, node_id: &NodeId) -> Result<(), DagCoordinatorError> {
-        let mut states = self.dag_states.write().await;
         let now = current_timestamp_ms();
 
-        for state in states.values_mut() {
-            if let Some(info) = state.nodes.get_mut(node_id) {
-                info.last_heartbeat_ms = now;
-                info.lease_expiry_ms = now + (self.fault_config.lease_duration_s * 1000);
-                if info.state == NodeState::Suspect {
-                    info.state = NodeState::Online;
-                    info!(node = %node_id, "Node restored to Online after heartbeat");
+        // Use the reverse index to only touch DAGs the node participates in
+        let dag_ids: Vec<DagId> = {
+            let idx = self.node_to_dags.read().await;
+            idx.get(node_id).cloned().unwrap_or_default()
+        };
+
+        if dag_ids.is_empty() {
+            return Err(DagCoordinatorError::NodeNotFound(node_id.clone()));
+        }
+
+        let mut states = self.dag_states.write().await;
+        for dag_id in &dag_ids {
+            if let Some(state) = states.get_mut(dag_id) {
+                if let Some(info) = state.nodes.get_mut(node_id) {
+                    info.last_heartbeat_ms = now;
+                    info.lease_expiry_ms = now + (self.fault_config.lease_duration_s * 1000);
+                    if info.state == NodeState::Suspect {
+                        info.state = NodeState::Online;
+                        info!(node = %node_id, "Node restored to Online after heartbeat");
+                    }
                 }
             }
         }
@@ -674,53 +841,76 @@ impl DistributedDAGCoordinator {
 
     /// Check for lease expiry and mark suspect/offline nodes.
     pub async fn check_leases(&self) -> Vec<NodeId> {
-        let mut states = self.dag_states.write().await;
         let now = current_timestamp_ms();
         let mut failed_nodes = Vec::new();
 
-        for state in states.values_mut() {
-            let suspect_ids: Vec<NodeId> = state
-                .nodes
-                .iter()
-                .filter(|(_, info)| info.state == NodeState::Online && now > info.lease_expiry_ms)
-                .map(|(id, _)| id.clone())
-                .collect();
+        // Collect all unique nodes from the reverse index, then iterate
+        // only the DAG states each node actually participates in.
+        let node_dag_list: Vec<(NodeId, Vec<DagId>)> = {
+            let idx = self.node_to_dags.read().await;
+            idx.iter()
+                .map(|(n, dags)| (n.clone(), dags.clone()))
+                .collect()
+        };
 
-            for id in &suspect_ids {
-                if let Some(info) = state.nodes.get_mut(id) {
-                    info.state = NodeState::Suspect;
-                    warn!(node = %id, "Node marked as suspect (lease expired)");
-                    self.append_raft_log(RaftCommand::SuspectNode {
-                        node_id: id.clone(),
-                    })
-                    .await;
+        if node_dag_list.is_empty() {
+            return failed_nodes;
+        }
+
+        let mut states = self.dag_states.write().await;
+
+        for (node_id, dag_ids) in &node_dag_list {
+            // Peek at the node's info from the first DAG it belongs to.
+            let mut first_info = None;
+            for dag_id in dag_ids {
+                if let Some(state) = states.get(dag_id) {
+                    if let Some(info) = state.nodes.get(node_id) {
+                        first_info = Some(info.clone());
+                        break;
+                    }
                 }
             }
 
-            // Mark as offline if heartbeat not received for max_missed_heartbeats cycles
-            let offline_ids: Vec<NodeId> = state
-                .nodes
-                .iter()
-                .filter(|(_, info)| {
-                    if info.state != NodeState::Suspect {
-                        return false;
-                    }
-                    let missed_ms = now.saturating_sub(info.last_heartbeat_ms);
-                    let lease_ms = self.fault_config.lease_duration_s * 1000;
-                    missed_ms > lease_ms * self.fault_config.max_missed_heartbeats as u64
-                })
-                .map(|(id, _)| id.clone())
-                .collect();
+            let Some(info) = first_info else {
+                continue;
+            };
 
-            for id in &offline_ids {
-                if let Some(info) = state.nodes.get_mut(id) {
-                    info.state = NodeState::Offline;
-                    error!(node = %id, "Node marked offline (missed heartbeats)");
-                    self.append_raft_log(RaftCommand::MarkOffline {
-                        node_id: id.clone(),
+            // Determine what state transition to apply (same logic as before)
+            let is_suspect = info.state == NodeState::Online && now > info.lease_expiry_ms;
+            let is_offline = info.state == NodeState::Suspect
+                && now.saturating_sub(info.last_heartbeat_ms)
+                    > (self.fault_config.lease_duration_s * 1000)
+                        * self.fault_config.max_missed_heartbeats as u64;
+
+            if is_suspect || is_offline {
+                let new_state = if is_offline {
+                    NodeState::Offline
+                } else {
+                    NodeState::Suspect
+                };
+
+                // Apply the transition to all DAGs the node participates in
+                for dag_id in dag_ids {
+                    if let Some(state) = states.get_mut(dag_id) {
+                        if let Some(ninfo) = state.nodes.get_mut(node_id) {
+                            ninfo.state = new_state.clone();
+                        }
+                    }
+                }
+
+                if is_suspect {
+                    warn!(node = %node_id, "Node marked as suspect (lease expired)");
+                    self.append_raft_log(RaftCommand::SuspectNode {
+                        node_id: node_id.clone(),
                     })
                     .await;
-                    failed_nodes.push(id.clone());
+                } else {
+                    error!(node = %node_id, "Node marked offline (missed heartbeats)");
+                    self.append_raft_log(RaftCommand::MarkOffline {
+                        node_id: node_id.clone(),
+                    })
+                    .await;
+                    failed_nodes.push(node_id.clone());
                 }
             }
         }
@@ -841,7 +1031,6 @@ impl DistributedDAGCoordinator {
 
     /// Serialise the current state machine as a Raft snapshot.
     /// Used by log compaction and for install-snapshot RPCs.
-    #[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
     pub async fn take_snapshot(&self) -> RaftSnapshot {
         let states = self.dag_states.read().await;
         let last_index = *self.last_snapshot_index.read().await;
@@ -855,7 +1044,6 @@ impl DistributedDAGCoordinator {
 
     /// Install a snapshot received from a leader.
     /// Replaces the current state and truncates the log.
-    #[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG
     pub async fn install_snapshot(&self, snapshot: RaftSnapshot) {
         let mut states = self.dag_states.write().await;
         *states = snapshot.state;
@@ -1022,10 +1210,16 @@ mod tests {
             }
         }
 
+        // First check transitions node from Online → Suspect (lease expired).
+        // Second check transitions from Suspect → Offline (heartbeat too old).
+        let _ = coord.check_leases().await;
+        // Small sleep to ensure enough wall-clock time elapses for the
+        // Suspect → Offline threshold check (which uses current_timestamp).
+        tokio::time::sleep(Duration::from_millis(50)).await;
         let failed = coord.check_leases().await;
         assert!(
             failed.contains(&"node-b".to_string().into()),
-            "node-b should be marked as failed"
+            "node-b should be marked as failed after lease expiry"
         );
     }
 

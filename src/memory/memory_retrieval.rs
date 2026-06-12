@@ -363,7 +363,7 @@ impl MemoryRetrievalEngine {
                     }
                     seen.insert(mem_id.clone());
                     // Try to retrieve the full entry.
-                    if let Ok(Some(entry)) = self.persistence.retrieve(mem_id) {
+                    if let Ok(Some(entry)) = self.persistence.retrieve(None, mem_id) {
                         results.push(entry);
                     }
                 }
@@ -509,7 +509,7 @@ impl MemoryRetrievalEngine {
             .filter_map(|(id, sim, _content)| {
                 // Try to hydrate the full MemoryEntry from persistence.
                 self.persistence
-                    .retrieve(&id)
+                    .retrieve(None, &id)
                     .ok()
                     .flatten()
                     .map(|mut entry| {
@@ -748,7 +748,7 @@ mod tests {
         // (auto_migrate only evicts expired entries, but this entry is fresh)
         let stored = engine
             .persistence()
-            .retrieve("vec-1")
+            .retrieve(None, "vec-1")
             .expect("retrieve should succeed")
             .expect("retrieved entry should be present");
         engine

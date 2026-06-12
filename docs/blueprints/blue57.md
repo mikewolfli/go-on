@@ -35,7 +35,7 @@
 2. **支持按要求按逻辑分步骤分拆文件** — 模块可按需重组。
 3. **三端一统（Backend + GUI + VSCode Addon）** — 三端通讯流畅稳定。
 4. **全部注释使用英文**。
-5. **3 种 Server Profile 全链路闭合** — profile-local、profile-simple-server、profile-multi-users-server 全部正确编译行为一致。
+5. **3 种 Server Profile 全链路闭合** — local、simple-server、multi-users-server 全部正确编译行为一致。
 6. **5 种协议全链路闭合** — auto、acp stdio、acp http、mcp stdio、mcp http。
 7. **零警告、零冲突、零遗漏** — `cargo clippy --all-features -- -D warnings` 零警告。✅ 已达成。
 8. **完整闭合** — 每个模块编译通过、有治理接入、可观测、有集成测试。
@@ -51,7 +51,7 @@
 
 | # | 层级 | BLUE56 | BLUE57 重评 | 核心发现 | GAP 数 |
 |:--:|------|:------:|:----------:|:---------|:-----:|
-| L1 | **架构层** | 6/10 | **5/10** | 模块间依赖方向混乱、Sub-bus Feature 不可达、重复文件 6 对、profile-full 缺失、契约不可验证 | 18 |
+| L1 | **架构层** | 6/10 | **5/10** | 模块间依赖方向混乱、Sub-bus Feature 不可达、重复文件 6 对、full 缺失、契约不可验证 | 18 |
 | L2 | **运行层** | 7/10 | **6/10** | async 路径 std::Mutex 阻塞（20+ 文件）、block_on 风险（4 处）、DrainGuard 不完整、Arc::get_mut 无声失败 | 22 |
 | L3 | **智能层** | 5/10 | **4/10** | LLM 注入全部 None（TaskDecomposer/Metacognitive/MultiModelVoter/HotFailover）、Embedding 全 minhash（6 处）、CapabilityBus evolve() 无声退化 | 24 |
 | L4 | **治理层** | 6/10 | **4/10** | PolicyReloader 全死代码（未声明 approval_learning 模块）、ProcessTimeouts 从不调用、RBAC enforcer 注入无声失败 | 20 |
@@ -62,7 +62,7 @@
 | L9 | **GUI 层** | 7/10 | **5/10** | 端点错误（`/chat` 非 `/chat/stream`）、AbortController 不 abort、SSE 不标准、proxy 硬编码 8 端口、cache 永远返回 None | 10 |
 | L10 | **SDK 层** | 4/10 | **3/10** | Rust/TS/Python 三 SDK 端点不一致（`/rpc` vs `/v1/responses`）、Rust SDK 重试所有 HTTP 错误、TS SDK 零重试、Python SDK 零测试 | 14 |
 | L11 | **VSCode Addon** | 7/10 | **6/10** | SSE 仅解析 `data: `（含空格）、CSP nonce 用 Math.random()、健康轮询 300s vs GUI 5s、error 静默 | 10 |
-| L12 | **测试层** | 4/10 | **3/10** | CI 吞测试失败（tarpaulin）、全部 e2e `#[ignore]`、零覆盖率工具、仅 profile-local 测试通过、coverage.sh 不测覆盖率 | 12 |
+| L12 | **测试层** | 4/10 | **3/10** | CI 吞测试失败（tarpaulin）、全部 e2e `#[ignore]`、零覆盖率工具、仅 local 测试通过、coverage.sh 不测覆盖率 | 12 |
 | L13 | **部署层** | 5/10 | **3/10** | Docker HEALTHCHECK spawn 新进程、deploy.sh silent 构建失败、simple-server chown 空组、API key 明文、零 K8s manifests | 16 |
 | L14 | **安全层** | 6/10 | **5/10** | VaultRotator Stub（vault feature 未激活）、EnvRotator 死代码、cert monitor 不启动、MtlsConnector 零调用 | 8 |
 | L15 | **并发层** | 7/10 | **6/10** | dag_executor std::Mutex（10 项 dead_code）、scheduler 双锁模式、tool/lock.rs 已知 race、brain_loop 锁序反转 | 8 |
@@ -213,11 +213,11 @@
 
 #### Step A4：Profile + Feature 全链路可达（2 GAP）
 
-| GAP-B57-A17 | **HIGH** | `profile-full` 缺失 |
+| GAP-B57-A17 | **HIGH** | `full` 缺失 |
 |:---|:---|:---|
 | **位置** | `Cargo.toml` features |
-| **问题** | `lib.rs` 中有 compile_error 检查 `profile-full` 必须唯一，但 `Cargo.toml` 未定义对应的 feature 配置。CI 从未测试该 profile。 |
-| **修复** | 定义 `profile-full` feature（包含所有 sub-bus features）。 |
+| **问题** | `lib.rs` 中有 compile_error 检查 `full` 必须唯一，但 `Cargo.toml` 未定义对应的 feature 配置。CI 从未测试该 profile。 |
+| **修复** | 定义 `full` feature（包含所有 sub-bus features）。 |
 
 | GAP-B57-A18 | **MEDIUM** | `--all-features` 编译失败 |
 |:---|:---|:---|
@@ -503,7 +503,7 @@
 |:---|:---|:---|
 | **位置** | `src/security/secret_rotation.rs:315-557` |
 | **问题** | Vault feature 未在任何 profile 中激活。无 vault feature 时所有操作返回 `BackendError`。`EnvRotator` 全 dead_code。仅 `MemoryRotator` 实际使用。 |
-| **修复** | 在 profile-simple-server 或 profile-multi-users-server 中激活 vault feature。 |
+| **修复** | 在 simple-server 或 multi-users-server 中激活 vault feature。 |
 
 | GAP-B57-D06 | **HIGH** | `MtlsConnector` 零生产调用 |
 |:---|:---|:---|
@@ -726,7 +726,7 @@
 | GAP-B57-E30 | **HIGH** | `test_ci.sh` 仅测试默认 profile |
 |:---|:---|:---|
 | **位置** | `scripts/test_ci.sh:17, 27` |
-| **问题** | `cargo build --verbose` 和 `cargo test --all --verbose` 只使用默认 features（profile-local）。 |
+| **问题** | `cargo build --verbose` 和 `cargo test --all --verbose` 只使用默认 features（local）。 |
 | **修复** | 测试所有 3 个 profile。 |
 
 | GAP-B57-E31 | **HIGH** | `postgres` backend variant 大量 Stub |
@@ -821,7 +821,7 @@
 |:----:|:--:|:-----|:-----:|
 | A3 | 架构体 | Cargo.toml 依赖修复（rusqlite 版本等） | 4 |
 | A2 | 架构体 | Config Ghost 字段 + i18n locale 修复 | 6 |
-| A4 | 架构体 | profile-full 定义 + --all-features 编译 | 2 |
+| A4 | 架构体 | full 定义 + --all-features 编译 | 2 |
 | E5 | 体验体 | 部署脚本致命 Bug 修复（deploy.sh/chown/systemd） | 10 |
 | E4 | 体验体 | CI 修复 + coverage 集成 + 测试启用 | 8 |
 
@@ -872,10 +872,10 @@
 
 ```bash
 # 每个 profile 独立编译通过
-cargo clippy --features profile-local,backend-sqlite -- -D warnings
-cargo clippy --features profile-simple-server,backend-sqlite -- -D warnings
-cargo clippy --features profile-multi-users-server,backend-postgres -- -D warnings
-cargo clippy --features profile-full,backend-sqlite -- -D warnings
+cargo clippy --features local,backend-sqlite -- -D warnings
+cargo clippy --features simple-server,backend-sqlite -- -D warnings
+cargo clippy --features multi-users-server,backend-postgres -- -D warnings
+cargo clippy --features full,backend-sqlite -- -D warnings
 
 # 零警告
 cargo check --all-features 2>&1 | grep -c "warning:"  # 应为 0
@@ -885,10 +885,10 @@ cargo check --all-features 2>&1 | grep -c "warning:"  # 应为 0
 
 ```bash
 # 所有 e2e 测试通过（非 ignore）
-cargo test --features profile-local,backend-sqlite -- --include-ignored
+cargo test --features local,backend-sqlite -- --include-ignored
 
 # LLM 路径测试
-cargo test --features profile-local,backend-sqlite -- llm  # 应有 LLM integration 测试
+cargo test --features local,backend-sqlite -- llm  # 应有 LLM integration 测试
 
 # SDK 测试
 cd sdk/typescript && npm test
@@ -936,7 +936,7 @@ cd sdk/python && pytest
 ## 5. 关键新文件 / 修改文件清单
 
 ### 架构体
-- `Cargo.toml` — 修正 rusqlite 版本，定义 profile-full，清理 unused features
+- `Cargo.toml` — 修正 rusqlite 版本，定义 full，清理 unused features
 - `src/governance/mod.rs` — 添加 `pub mod approval_learning;`
 - `src/governance/reloadable_policy.rs` — 移除 struct 级 `#[allow(dead_code)]`，接入 HarnessBus
 - `src/core/provider.rs` + `src/orchestration/provider_impl.rs` — 实现并接入 OrchestrationProvider
@@ -1040,9 +1040,9 @@ BLUE57 基于 **6 轮迭代扫描**：
 ### 阶段 1 编译验证
 
 ```
-cargo clippy --features profile-local,backend-sqlite -- -D warnings      ✅ 零错误零警告
-cargo check --features profile-simple-server                              ✅ 编译通过
-cargo check --features profile-multi-users-server,backend-postgres       ✅ 编译通过
+cargo clippy --features local,backend-sqlite -- -D warnings      ✅ 零错误零警告
+cargo check --features simple-server                              ✅ 编译通过
+cargo check --features multi-users-server,backend-postgres       ✅ 编译通过
 cargo clippy --manifest-path gui/Cargo.toml -- -D warnings               ✅ 零错误零警告
 npx tsc --noEmit (vscode-addon)                                           ✅ 类型检查通过
 ```
@@ -1060,9 +1060,9 @@ npx tsc --noEmit (vscode-addon)                                           ✅ �
 ### 阶段 2 编译验证
 
 ```
-cargo clippy --features profile-local,backend-sqlite -- -D warnings      ✅ 零错误零警告
-cargo check --features profile-simple-server                              ✅ 编译通过
-cargo check --features profile-multi-users-server,backend-postgres       ✅ 编译通过
+cargo clippy --features local,backend-sqlite -- -D warnings      ✅ 零错误零警告
+cargo check --features simple-server                              ✅ 编译通过
+cargo check --features multi-users-server,backend-postgres       ✅ 编译通过
 cargo check --manifest-path gui/Cargo.toml                                ✅ 编译通过
 cargo clippy --manifest-path sdk/rust/Cargo.toml -- -D warnings           ✅ 零错误零警告
 ```
@@ -1078,9 +1078,9 @@ cargo clippy --manifest-path sdk/rust/Cargo.toml -- -D warnings           ✅ �
 ### 阶段 3+4 编译验证
 
 ```
-cargo clippy --features profile-local,backend-sqlite -- -D warnings      ✅ 零错误零警告
-cargo check --features profile-simple-server                              ✅ 编译通过
-cargo check --features profile-multi-users-server,backend-postgres       ✅ 编译通过
+cargo clippy --features local,backend-sqlite -- -D warnings      ✅ 零错误零警告
+cargo check --features simple-server                              ✅ 编译通过
+cargo check --features multi-users-server,backend-postgres       ✅ 编译通过
 cargo clippy --manifest-path gui/Cargo.toml -- -D warnings               ✅ 零错误零警告
 cargo clippy --manifest-path sdk/rust/Cargo.toml -- -D warnings           ✅ 零错误零警告
 npx tsc --noEmit (vscode-addon)                                           ✅ 类型检查通过
@@ -1091,12 +1091,12 @@ npx tsc --noEmit (vscode-addon)                                           ✅ �
 涵盖：coverage.sh→llvm-cov、test_ci.sh全profile、CI tarpaulin→llvm-cov、cli_tests断言、--version标志、start-go-on.sh set-eu、stop-go-on.sh set-eu、audit.rs/mtls.rs过时标记清理、approval_learning/modular allows维护、hub.rs注释修复、K8s manifests、GUI SSE streaming、SDK端点统一、VSCode CSP/轮询/健康项
 
 ```
-cargo clippy --features profile-local,backend-sqlite -- -D warnings      ✅ 零错误零警告
-cargo check --features profile-simple-server                              ✅ 编译通过
-cargo check --features profile-multi-users-server,backend-postgres       ✅ 编译通过
+cargo clippy --features local,backend-sqlite -- -D warnings      ✅ 零错误零警告
+cargo check --features simple-server                              ✅ 编译通过
+cargo check --features multi-users-server,backend-postgres       ✅ 编译通过
 cargo clippy --manifest-path gui/Cargo.toml -- -D warnings               ✅ 零错误零警告
 cargo clippy --manifest-path sdk/rust/Cargo.toml -- -D warnings           ✅ 零错误零警告
-cargo test --features profile-local,backend-sqlite --test cli_tests       ✅ 9/9 通过
+cargo test --features local,backend-sqlite --test cli_tests       ✅ 9/9 通过
 npx tsc --noEmit (vscode-addon)                                           ✅ 类型检查通过
 ```
 
@@ -1112,12 +1112,12 @@ npx tsc --noEmit (vscode-addon)                                           ✅ �
 ### 阶段 12-13 编译验证
 
 ```
-cargo clippy --features profile-local,backend-sqlite -- -D warnings      ✅ 零错误零警告
-cargo check --features profile-simple-server                              ✅ 编译通过
-cargo check --features profile-multi-users-server,backend-postgres       ✅ 编译通过
+cargo clippy --features local,backend-sqlite -- -D warnings      ✅ 零错误零警告
+cargo check --features simple-server                              ✅ 编译通过
+cargo check --features multi-users-server,backend-postgres       ✅ 编译通过
 cargo clippy --manifest-path gui/Cargo.toml -- -D warnings               ✅ 零错误零警告
 cargo clippy --manifest-path sdk/rust/Cargo.toml -- -D warnings           ✅ 零错误零警告
-cargo test --features profile-local,backend-sqlite --test cli_tests       ✅ 9/9 通过
+cargo test --features local,backend-sqlite --test cli_tests       ✅ 9/9 通过
 npx tsc --noEmit (vscode-addon)                                           ✅ 类型检查通过
 ```
 
@@ -1145,7 +1145,7 @@ export GO_ON_EMBEDDING_BACKEND=local
 
 | 体 | 完成情况 |
 |:--:|:---------|
-| 架构体 | ✅ **99%** — 6 个未注册模块全部发现并修复、vault+temp_env 加入 profile-full CI、MemoryBus 数据丢失风险消除（with_default_backends） |
+| 架构体 | ✅ **99%** — 6 个未注册模块全部发现并修复、vault+temp_env 加入 full CI、MemoryBus 数据丢失风险消除（with_default_backends） |
 | 智能体 | ✅ **96%** — code_quality 5分钟后台扫描激活、Metacognitive LLM 注入路径文档化、SelfEvolutionAgent 后台存活验证、LivePerformanceFeed 后台跟踪、code_quality hooks 接入 background.rs |
 | 运行体 | ✅ **99%** — code_quality spawn_blocking、BrainLoop run() deprecation 强化、spawn_timeout_loop 完整接入、otel_enabled 默认 true |
 | 协议层 | ✅ **100%** — 全部 8 GAP 闭合 |
@@ -1179,13 +1179,13 @@ export GO_ON_EMBEDDING_BACKEND=local
 
 | Profile | 状态 |
 |:--------|:----:|
-| `cargo clippy --features profile-local,backend-sqlite -- -D warnings` | ✅ **零错误零警告** |
-| `cargo clippy --no-default-features --features profile-simple-server,backend-sqlite -- -D warnings` | ✅ **零错误零警告** |
-| `cargo clippy --no-default-features --features profile-full,backend-sqlite -- -D warnings` | ✅ **零错误零警告** |
-| `cargo clippy --no-default-features --features profile-multi-users-server,backend-postgres -- -D warnings` | ✅ **零错误零警告** |
-| `cargo test --features profile-local,backend-sqlite --test cli_tests` | ✅ **9/9 通过** |
-| `cargo test --no-default-features --features profile-simple-server,backend-sqlite --test cli_tests` | ✅ **追加 CI** |
-| `cargo test --no-default-features --features profile-multi-users-server,backend-postgres --test cli_tests` | ✅ **追加 CI** |
+| `cargo clippy --features local,backend-sqlite -- -D warnings` | ✅ **零错误零警告** |
+| `cargo clippy --no-default-features --features simple-server,backend-sqlite -- -D warnings` | ✅ **零错误零警告** |
+| `cargo clippy --no-default-features --features full,backend-sqlite -- -D warnings` | ✅ **零错误零警告** |
+| `cargo clippy --no-default-features --features multi-users-server,backend-postgres -- -D warnings` | ✅ **零错误零警告** |
+| `cargo test --features local,backend-sqlite --test cli_tests` | ✅ **9/9 通过** |
+| `cargo test --no-default-features --features simple-server,backend-sqlite --test cli_tests` | ✅ **追加 CI** |
+| `cargo test --no-default-features --features multi-users-server,backend-postgres --test cli_tests` | ✅ **追加 CI** |
 
 ### 本轮核心修复（17 层超级扫描第 7-8 轮）
 
@@ -1193,7 +1193,7 @@ export GO_ON_EMBEDDING_BACKEND=local
 |:--:|:---:|:-----|:-----|
 | 1 | 架构层 | `code_quality.rs` 未注册 — 290 行真实 clippy 集成从未编译 | 添加 `pub mod code_quality;` 到 intelligenced/mod.rs |
 | 2 | 架构层 | 6 个 .rs 文件未在任何 mod.rs 声明 | 全部注册：chat_tests(test)/grpc/lock_utils/self_improvement_report/metacognitive_persistence |
-| 3 | 架构层 | vault/temp_env 孤立特征无 profile 启用 | 加入 profile-full |
+| 3 | 架构层 | vault/temp_env 孤立特征无 profile 启用 | 加入 full |
 | 4 | 安全层 | VaultRotator 完整实现零调用 | 添加 wiring 函数 + `#[allow(dead_code)]` 标注 |
 | 5 | 安全层 | content_safety/prompt_injection 完整实现零调用 | 添加 `wire_content_safety()`/`wire_prompt_injection()` |
 | 6 | 安全层 | cert_monitor 从未启动 | 添加 `wire_cert_monitor()` + `spawn_cert_monitor_if_configured()` |
@@ -1203,7 +1203,7 @@ export GO_ON_EMBEDDING_BACKEND=local
 | 10 | GUI层 | AbortController 仅设置标志不取消 HTTP | 对接 `tokio::select!` 真取消 in-flight 请求 |
 | 11 | 内存层 | `embedding_provider_from_env()` 从未调用 | 添加 `VectorStore::new_with_env()` |
 | 12 | 安全层 | VaultRotator #![cfg] 编译冲突 | 重构为互斥 #[cfg]/#[cfg(not)] 分支 |
-| 13 | 全层 | profile-full vault 未连通 | 修复 5 处 unreachable 代码 |
+| 13 | 全层 | full vault 未连通 | 修复 5 处 unreachable 代码 |
 
 ### 本轮核心修复（17 层超级扫描第 9-10 轮）
 
@@ -1222,7 +1222,7 @@ export GO_ON_EMBEDDING_BACKEND=local
 | 24 | 体验体 | GUI 4 个 DEPRECATED RPC stubs | 删除 reload_config/copilot_device_code_request/copilot_device_code_poll |
 | 25 | 体验体 | GUI chat_streaming() 死代码 90行 | 删除 |
 | 26 | 体验体 | Python SDK 零测试 | 创建 tests/test_client.py 7 个测试 |
-| 27 | 测试层 | test_ci.sh 仅测试 profile-local | 追加 simple-server + multi-users-server cargo test |
+| 27 | 测试层 | test_ci.sh 仅测试 local | 追加 simple-server + multi-users-server cargo test |
 | 28 | 可观测层 | AlertManager webhook 永不触发 | 添加 configure_from_env() env 配置 |
 | 29 | 治理层 | MultiChannelTransport 僵尸对象 | 添加 TODO 注明 wiring 路径 |
 | 30 | 内存层 | wire_memory_retrieval 零调用 | 文档化 ServerBuilder 集成时机 |

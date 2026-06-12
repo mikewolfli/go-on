@@ -16,6 +16,10 @@ use tracing::{debug, error, info, warn};
 pub trait EmbeddingProvider: Send + Sync {
     /// Embed `text` into a vector of `dimensions`.
     fn embed(&self, text: &str) -> Vec<f32>;
+
+    /// Return the expected dimensionality of this provider's output vectors.
+    #[allow(dead_code)]
+    fn expected_dimension(&self) -> usize;
 }
 
 // ---------------------------------------------------------------------------
@@ -108,6 +112,10 @@ impl EmbeddingProvider for LocalEmbeddingProvider {
     fn embed(&self, text: &str) -> Vec<f32> {
         local_hash_embed(text, self.dimensions)
     }
+
+    fn expected_dimension(&self) -> usize {
+        self.dimensions
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -159,6 +167,10 @@ impl OpenAiEmbeddingProvider {
 }
 
 impl EmbeddingProvider for OpenAiEmbeddingProvider {
+    fn expected_dimension(&self) -> usize {
+        self.config.dimensions
+    }
+
     fn embed(&self, text: &str) -> Vec<f32> {
         // If no real API key is configured, use local hash fallback silently
         if !self.has_api_key() {
@@ -243,6 +255,9 @@ pub struct OllamaEmbeddingConfig {
     pub model: String,
     /// Dimensionality of the output vectors.
     pub dimensions: usize,
+    /// If true (default), return a local hash embedding on failure.
+    /// If false, return a zero vector to signal the failure.
+    pub fallback_to_hash: bool,
 }
 
 impl Default for OllamaEmbeddingConfig {
@@ -256,6 +271,7 @@ impl Default for OllamaEmbeddingConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(768),
+            fallback_to_hash: true,
         }
     }
 }
@@ -277,6 +293,10 @@ impl OllamaEmbeddingProvider {
 }
 
 impl EmbeddingProvider for OllamaEmbeddingProvider {
+    fn expected_dimension(&self) -> usize {
+        self.config.dimensions
+    }
+
     fn embed(&self, text: &str) -> Vec<f32> {
         let url = format!("{}/api/embed", self.config.base_url.trim_end_matches('/'));
         let body = serde_json::json!({
@@ -291,7 +311,7 @@ impl EmbeddingProvider for OllamaEmbeddingProvider {
                         "OllamaEmbeddingProvider: server returned {} — is ollama running?",
                         resp.status()
                     );
-                    return local_hash_embed(text, self.config.dimensions);
+                    return self.fallback_or_zero(text);
                 }
                 match resp.json::<serde_json::Value>() {
                     Ok(json) => {
@@ -321,7 +341,21 @@ impl EmbeddingProvider for OllamaEmbeddingProvider {
                 );
             }
         }
-        local_hash_embed(text, self.config.dimensions)
+        self.fallback_or_zero(text)
+    }
+}
+
+impl OllamaEmbeddingProvider {
+    /// Fallback helper: returns hash embedding if `fallback_to_hash` is true,
+    /// otherwise returns a zero vector to signal the embedding failure to callers.
+    fn fallback_or_zero(&self, text: &str) -> Vec<f32> {
+        if self.config.fallback_to_hash {
+            warn!("OllamaEmbeddingProvider: falling back to local hash embedding");
+            local_hash_embed(text, self.config.dimensions)
+        } else {
+            warn!("OllamaEmbeddingProvider: returning zero vector (fallback disabled)");
+            vec![0.0f32; self.config.dimensions]
+        }
     }
 }
 
@@ -337,6 +371,9 @@ pub struct Qwen3EmbeddingConfig {
     pub model: String,
     /// Dimensionality of the output vectors (v3 supports 768, 1024, 1536).
     pub dimensions: usize,
+    /// If true (default), return a local hash embedding on failure.
+    /// If false, return a zero vector to signal the failure.
+    pub fallback_to_hash: bool,
 }
 
 impl Default for Qwen3EmbeddingConfig {
@@ -345,6 +382,7 @@ impl Default for Qwen3EmbeddingConfig {
             api_key: std::env::var("DASHSCOPE_API_KEY").unwrap_or_default(),
             model: "text-embedding-v3".to_string(),
             dimensions: 1024,
+            fallback_to_hash: true,
         }
     }
 }
@@ -371,10 +409,14 @@ impl Qwen3EmbeddingProvider {
 }
 
 impl EmbeddingProvider for Qwen3EmbeddingProvider {
+    fn expected_dimension(&self) -> usize {
+        self.config.dimensions
+    }
+
     fn embed(&self, text: &str) -> Vec<f32> {
         if !self.has_api_key() {
-            debug!("Qwen3EmbeddingProvider: no DASHSCOPE_API_KEY configured, using local hash");
-            return local_hash_embed(text, self.config.dimensions);
+            debug!("Qwen3EmbeddingProvider: no DASHSCOPE_API_KEY configured");
+            return self.fallback_or_zero(text);
         }
 
         let url = "https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding";
@@ -398,10 +440,10 @@ impl EmbeddingProvider for Qwen3EmbeddingProvider {
             Ok(resp) => {
                 if !resp.status().is_success() {
                     warn!(
-                        "Qwen3EmbeddingProvider: DashScope API returned {} — using local hash fallback",
+                        "Qwen3EmbeddingProvider: DashScope API returned {} — using fallback",
                         resp.status()
                     );
-                    return local_hash_embed(text, self.config.dimensions);
+                    return self.fallback_or_zero(text);
                 }
                 match resp.json::<serde_json::Value>() {
                     Ok(json) => {
@@ -432,14 +474,24 @@ impl EmbeddingProvider for Qwen3EmbeddingProvider {
                 }
             }
             Err(e) => {
-                warn!(
-                    "Qwen3EmbeddingProvider: HTTP error: {} — using local hash fallback",
-                    e
-                );
+                warn!("Qwen3EmbeddingProvider: HTTP error: {} — using fallback", e);
             }
         }
-        warn!("Qwen3EmbeddingProvider: returning local hash embedding as fallback");
-        local_hash_embed(text, self.config.dimensions)
+        self.fallback_or_zero(text)
+    }
+}
+
+impl Qwen3EmbeddingProvider {
+    /// Fallback helper: returns hash embedding if `fallback_to_hash` is true,
+    /// otherwise returns a zero vector to signal the embedding failure to callers.
+    fn fallback_or_zero(&self, text: &str) -> Vec<f32> {
+        if self.config.fallback_to_hash {
+            warn!("Qwen3EmbeddingProvider: falling back to local hash embedding");
+            local_hash_embed(text, self.config.dimensions)
+        } else {
+            warn!("Qwen3EmbeddingProvider: returning zero vector (fallback disabled)");
+            vec![0.0f32; self.config.dimensions]
+        }
     }
 }
 
@@ -570,7 +622,20 @@ impl ConfigurableEmbeddingProvider {
 
 impl EmbeddingProvider for ConfigurableEmbeddingProvider {
     fn embed(&self, text: &str) -> Vec<f32> {
-        self.inner.embed(text)
+        let vec = self.inner.embed(text);
+        if vec.len() != self.dimensions {
+            warn!(
+                "Embedding dimension mismatch: got {} but expected {} (backend={:?})",
+                vec.len(),
+                self.dimensions,
+                self.backend,
+            );
+        }
+        vec
+    }
+
+    fn expected_dimension(&self) -> usize {
+        self.dimensions
     }
 }
 
@@ -639,6 +704,7 @@ pub fn embedding_provider_from_env() -> ConfigurableEmbeddingProvider {
                 api_key,
                 model,
                 dimensions: dims,
+                fallback_to_hash: true,
             };
             ConfigurableEmbeddingProvider::new(EmbeddingBackend::Qwen3, None, Some(config), None)
         }

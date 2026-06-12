@@ -11,8 +11,8 @@ pub mod context;
 pub mod core_dag; // DAG-UNIFY: Unified generic DAG — prefer over dag_executor, task_graph, execution_graph
 #[cfg(any(
     feature = "sub-bus-tool",
-    feature = "profile-simple-server",
-    feature = "profile-multi-users-server"
+    feature = "simple-server",
+    feature = "multi-users-server"
 ))]
 pub mod council; // F-GAP-15
                  // DAG modules — all deprecated in favor of `core_dag`.
@@ -76,30 +76,3 @@ pub use tool::recommender as tool_recommender;
 pub use tool::transaction as tool_transaction;
 pub mod workflow_optimizer;
 pub mod workflow_registry;
-
-// Suppress dead-code warnings for not-yet-integrated modules.
-// These modules are publicly exported and will be fully wired in upcoming integrations.
-#[cfg(test)]
-mod integration_gate {
-    // These imports ensure the module-level types are reachable by the test harness
-    // and prevent spurious dead_code warnings.
-    use super::*;
-    fn _gate_session_context() {
-        let _ = session_context::ContextWindowBudget::default();
-    }
-    fn _gate_cache_warming() {
-        let _ = cache_warming::PreWarmConfig::default();
-    }
-    fn _gate_complexity_estimator() {
-        let _ = complexity_estimator::ComplexityEstimator::default();
-    }
-    fn _gate_plugin_system() {
-        let _ = plugin_system::PluginRegistry::default();
-    }
-    fn _gate_diagnostic_feedback() {
-        let _ = diagnostic_feedback::DiagnosticFeedbackEngine::default();
-    }
-    fn _gate_sse_optimizer() {
-        let _ = crate::agents::sse_optimizer::SseBufferPool::new(4, 1024);
-    }
-}

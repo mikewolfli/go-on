@@ -61,18 +61,18 @@ pub async fn initialize_cache(
         .await
         .map_err(|e| anyhow::anyhow!("cache init: {e}"))?;
         #[cfg(any(
-            feature = "profile-simple-server",
-            feature = "profile-multi-users-server",
-            feature = "profile-full",
+            feature = "simple-server",
+            feature = "multi-users-server",
+            feature = "full",
         ))]
         {
             r
         }
         #[cfg(all(
-            feature = "profile-local",
-            not(feature = "profile-simple-server"),
-            not(feature = "profile-multi-users-server"),
-            not(feature = "profile-full"),
+            feature = "local",
+            not(feature = "simple-server"),
+            not(feature = "multi-users-server"),
+            not(feature = "full"),
         ))]
         {
             match r {
@@ -132,10 +132,10 @@ pub async fn initialize_vector_store(
         .await
         .map_err(|e| anyhow::anyhow!("vector init: {e}"))?;
         #[cfg(all(
-            feature = "profile-local",
-            not(feature = "profile-simple-server"),
-            not(feature = "profile-multi-users-server"),
-            not(feature = "profile-full"),
+            feature = "local",
+            not(feature = "simple-server"),
+            not(feature = "multi-users-server"),
+            not(feature = "full"),
         ))]
         {
             match r {
@@ -147,9 +147,9 @@ pub async fn initialize_vector_store(
             }
         }
         #[cfg(any(
-            feature = "profile-simple-server",
-            feature = "profile-multi-users-server",
-            feature = "profile-full",
+            feature = "simple-server",
+            feature = "multi-users-server",
+            feature = "full",
         ))]
         {
             r

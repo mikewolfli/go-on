@@ -686,9 +686,9 @@ go-on 是一个**架构设计卓越、理论框架行业领先**的多Agent编�
 ### 9.5 验证结果
 
 ```
-✅ cargo check --features profile-local                  → 0 errors, 0 warnings
-✅ cargo check --no-default-features --features profile-simple-server   → 0 errors, 0 warnings
-✅ cargo check --no-default-features --features profile-multi-users-server → 0 errors, 0 warnings
+✅ cargo check --features local                  → 0 errors, 0 warnings
+✅ cargo check --no-default-features --features simple-server   → 0 errors, 0 warnings
+✅ cargo check --no-default-features --features multi-users-server → 0 errors, 0 warnings
 ✅ cargo test --bin go-on (58 new tests)                 → 58 passed, 0 failed
 ✅ No #[allow(dead_code)] in production code
 ✅ i18n keys added across all 3 languages
@@ -855,7 +855,7 @@ graph TD
 ### 10.4 验证结果（本轮）
 
 ```text
-✅ cargo check --features profile-local  -> EXIT:0
+✅ cargo check --features local  -> EXIT:0
 ✅ provider 定向测试新增 4 项          -> 全部通过
 ⚠️ 仍有历史 dead_code warnings（非本轮引入）
 ```

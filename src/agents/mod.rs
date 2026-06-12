@@ -13,8 +13,8 @@ pub mod deepseek;
 pub mod facewall;
 #[cfg(any(
     feature = "sub-bus-tool",
-    feature = "profile-simple-server",
-    feature = "profile-multi-users-server"
+    feature = "simple-server",
+    feature = "multi-users-server"
 ))]
 pub mod factory;
 pub mod fireworks;
@@ -49,32 +49,6 @@ pub mod wenxin;
 pub mod xai;
 pub mod xihu;
 pub mod yi;
-
-// These modules are publicly exported and will be fully wired in upcoming integrations.
-#[cfg(test)]
-mod integration_gate {
-    fn _gate_sse_optimizer() {
-        let _ = super::sse_optimizer::SseBufferPool::new(4, 1024);
-    }
-
-    fn _gate_siliconflow() {
-        let _ = super::siliconflow::SiliconFlowAgent::new(
-            "KEY".to_string(),
-            "https://api.siliconflow.cn".to_string(),
-            "test-model".to_string(),
-            reqwest::Client::new(),
-        );
-    }
-
-    fn _gate_xai() {
-        let _ = super::xai::XaiAgent::new(
-            "KEY".to_string(),
-            "https://api.x.ai".to_string(),
-            "grok-3".to_string(),
-            reqwest::Client::new(),
-        );
-    }
-}
 
 use std::collections::HashMap;
 

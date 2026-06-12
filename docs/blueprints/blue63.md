@@ -13,7 +13,7 @@
 2. 支持按要求按逻辑分步骤分拆文件 — 可按模块目录拆分重组。
 3. 三端一统（backend / GUI / vscode-addon） — 考虑三端配合、通讯流畅稳定性。
 4. 注释英文 — 所有新增模块的代码注释必须使用英文。
-5. ✅ 3 种服务器 Profile 全链路闭合 — profile-local、profile-simple-server、profile-multi-users-server 全部正确编译和行为一致（零警告）。
+5. ✅ 3 种服务器 Profile 全链路闭合 — local、simple-server、multi-users-server 全部正确编译和行为一致（零警告）。
 6. ✅ 5 种协议全链路闭合 — auto、acp stdio、acp http、mcp stdio、mcp http。
 7. ✅ 零警告、零冲突、零遗漏 — cargo clippy -- -D warnings 在全部4个profile下零警告通过。
 8. ✅ 完整闭合 — 每个模块达到：编译通过、零警告、接入 governance.status、可通过 health 端点观测、有集成测试覆盖。
@@ -307,7 +307,7 @@
 | S2 | **CRITICAL** | 全局 | 无全局 rate limiting——单客户端可耗尽资源 |
 | S3 | **HIGH** | `src/security/content_safety.rs:150-253` | `SafetyChecker` 从未实例化——`wire_content_safety()` 是 `#[allow(dead_code)]` |
 | S4 | **HIGH** | `src/security/prompt_injection.rs:186-263` | `InjectionDetector` 从未实例化——`wire_prompt_injection()` 是 `#[allow(dead_code)]` |
-| S5 | **HIGH** | `src/security/mtls.rs:225-406` | `MtlsAcceptor` 仅在 `profile-multi-users-server` 且 optional——生产可无 mTLS |
+| S5 | **HIGH** | `src/security/mtls.rs:225-406` | `MtlsAcceptor` 仅在 `multi-users-server` 且 optional——生产可无 mTLS |
 | S6 | **HIGH** | `src/security/secret_rotation.rs:622-849` | `SecretManager` 未在 main.rs 启动——`start_secret_rotation_if_configured()` 是 `#[allow(dead_code)]` |
 | S7 | **HIGH** | `src/security/vulnerability_scan.rs:330-445` | `DependencyVulnerabilityScanner` 无 production caller |
 | S8 | **HIGH** | `src/security/secret_rotation.rs:320-602` | `VaultRotator` 需要 `vault` feature——`Cargo.toml` 中未定义此 feature |
@@ -563,7 +563,7 @@
 | **修复 Round 2 (P1)** | ✅ **100%** — 25项P1全部完成 |
 | **修复 Round 3 (P2)** | ✅ **100%** — 全部44项完成 |
 | **修复 Round 4 (P3)** | ✅ **95%** — 全部完成，仅clippy建议级别项待后续优化 |
-| **最终诊断** | ✅ **workspace/profile-local/tests 三端均0 errors** |c
+| **最终诊断** | ✅ **workspace/local/tests 三端均0 errors** |c
 
 ---
 

@@ -33,7 +33,7 @@ pub mod shared;
 pub use crate::agents::agent;
 pub use crate::core::config;
 pub use crate::core::config_validation;
-pub use crate::core::context;
+
 pub use crate::core::error;
 pub use crate::core::provider::OrchestrationProvider;
 pub use crate::core::setup;
@@ -92,29 +92,29 @@ compile_error!(
 
 // Fail if no profile is selected (e.g. `cargo build --no-default-features`).
 #[cfg(not(any(
-    feature = "profile-local",
-    feature = "profile-simple-server",
-    feature = "profile-multi-users-server",
-    feature = "profile-full",
+    feature = "local",
+    feature = "simple-server",
+    feature = "multi-users-server",
+    feature = "full",
 )))]
 compile_error!(
     "No profile feature is enabled. Exactly one must be selected: \
-     profile-local, profile-simple-server, profile-multi-users-server, or profile-full"
+     local, simple-server, multi-users-server, or full"
 );
 
 // Fail if more than one profile is selected simultaneously.
 #[cfg(any(
-    all(feature = "profile-local", feature = "profile-simple-server"),
-    all(feature = "profile-local", feature = "profile-multi-users-server"),
-    all(feature = "profile-local", feature = "profile-full"),
+    all(feature = "local", feature = "simple-server"),
+    all(feature = "local", feature = "multi-users-server"),
+    all(feature = "local", feature = "full"),
     all(
-        feature = "profile-simple-server",
-        feature = "profile-multi-users-server"
+        feature = "simple-server",
+        feature = "multi-users-server"
     ),
-    all(feature = "profile-simple-server", feature = "profile-full"),
-    all(feature = "profile-multi-users-server", feature = "profile-full"),
+    all(feature = "simple-server", feature = "full"),
+    all(feature = "multi-users-server", feature = "full"),
 ))]
 compile_error!(
     "Exactly one profile feature must be enabled. \
-     Choose one of: profile-local, profile-simple-server, profile-multi-users-server, or profile-full"
+     Choose one of: local, simple-server, multi-users-server, or full"
 );

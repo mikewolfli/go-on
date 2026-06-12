@@ -11,7 +11,6 @@ use crate::memory::embedding_provider::local_hash_embed;
 use crate::memory::memory_persistence::{MemoryEntry, MemoryTier};
 
 /// Configuration for memory summarization.
-#[allow(dead_code)] // F-GAP reserved
 #[derive(Debug, Clone)]
 pub struct SummarizationConfig {
     /// Maximum number of entries before summarization is triggered.
@@ -35,7 +34,6 @@ impl Default for SummarizationConfig {
 /// A progressive memory summarizer that compresses groups of entries
 /// into a compact summary when the group size exceeds the configured
 /// threshold.
-#[allow(dead_code)] // F-GAP reserved
 pub struct MemorySummarizer {
     config: SummarizationConfig,
     /// Optional LLM agent for actual LLM-based summarization.
@@ -43,9 +41,17 @@ pub struct MemorySummarizer {
     llm_agent: Option<Arc<dyn Agent>>,
 }
 
+impl std::fmt::Debug for MemorySummarizer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemorySummarizer")
+            .field("config", &self.config)
+            .field("llm_agent", &self.llm_agent.as_ref().map(|_| "<Agent>"))
+            .finish()
+    }
+}
+
 impl MemorySummarizer {
     /// Create a new summarizer with the given configuration.
-    #[allow(dead_code)] // F-GAP reserved
     pub fn new(config: SummarizationConfig) -> Self {
         Self {
             config,
@@ -54,7 +60,6 @@ impl MemorySummarizer {
     }
 
     /// Attach an LLM agent for actual summarization.
-    #[allow(dead_code)] // F-GAP reserved
     pub fn with_llm_agent(mut self, agent: Arc<dyn Agent>) -> Self {
         self.llm_agent = Some(agent);
         self
@@ -64,9 +69,8 @@ impl MemorySummarizer {
     ///
     /// When the entry count is at or below the threshold, the entries are
     /// returned as-is (`SummarizedMemory::Full`).  Above the threshold, the
-    /// most useful / most recently accessed entries are retained and a synthetic
+    /// the most useful / most recently accessed entries are retained and a synthetic
     /// summary entry is appended (`SummarizedMemory::Compressed`).
-    #[allow(dead_code)] // F-GAP reserved
     pub async fn summarize(&self, entries: &[MemoryEntry]) -> SummarizedMemory {
         if entries.len() <= self.config.max_entries_before_summary {
             return SummarizedMemory::Full(entries.to_vec());
@@ -95,6 +99,12 @@ impl MemorySummarizer {
             }]);
         }
 
+        self.build_summary_entry(entries)
+    }
+
+    /// Shared helper that builds a compressed summary entry from a set of
+    /// memory entries. Used by both `summarize()` and `summarize_sync()`.
+    fn build_summary_entry(&self, entries: &[MemoryEntry]) -> SummarizedMemory {
         // Sort by usefulness (descending), then by accessed_at (descending, most recent first).
         let mut sorted = entries.to_vec();
         sorted.sort_by(|a, b| {
@@ -146,9 +156,20 @@ impl MemorySummarizer {
 
     /// Convenience: return `true` when the entry count exceeds the threshold
     /// and summarization would actually reduce the set.
-    #[allow(dead_code)] // F-GAP reserved
     pub fn should_summarize(&self, entry_count: usize) -> bool {
         entry_count > self.config.max_entries_before_summary
+    }
+
+    /// Sync-only summarization that works without an async runtime.
+    /// Uses the non-LLM path (sorting + concatenation) regardless of
+    /// `use_llm_summarization`, making it suitable for synchronous use
+    /// in tier-migration or other non-async contexts.
+    pub fn summarize_sync(&self, entries: &[MemoryEntry]) -> SummarizedMemory {
+        if entries.len() <= self.config.max_entries_before_summary {
+            return SummarizedMemory::Full(entries.to_vec());
+        }
+
+        self.build_summary_entry(entries)
     }
 }
 
@@ -241,7 +262,6 @@ pub async fn llm_summarize(entries: &[MemoryEntry], agent: Option<&Arc<dyn Agent
 }
 
 /// The result of a summarization operation.
-#[allow(dead_code)] // F-GAP reserved
 #[derive(Debug, Clone)]
 pub enum SummarizedMemory {
     /// The original set of entries was small enough to keep as-is.

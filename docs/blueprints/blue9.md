@@ -299,9 +299,9 @@ All BLUE9 items re-verified against current codebase. Zero regressions.
 
 | Check | 2026-05-29 Result |
 |-------|-------------------|
-| `cargo clippy --no-default-features --features profile-local -D warnings` | ✅ Zero warnings |
-| `cargo clippy --no-default-features --features profile-simple-server -D warnings` | ✅ Zero warnings |
-| `cargo clippy --no-default-features --features profile-multi-users-server -D warnings` | ✅ Zero warnings |
+| `cargo clippy --no-default-features --features local -D warnings` | ✅ Zero warnings |
+| `cargo clippy --no-default-features --features simple-server -D warnings` | ✅ Zero warnings |
+| `cargo clippy --no-default-features --features multi-users-server -D warnings` | ✅ Zero warnings |
 | GUI `cargo clippy -- -D warnings` | ✅ Zero warnings |
 | VSCode `npx tsc --noEmit` | ✅ Zero errors |
 | `cargo test --lib --no-run` | ✅ Compiles |

@@ -52,7 +52,7 @@ sudo -u postgres psql -d goon -c "GRANT ALL ON SCHEMA public TO goon;"
 ```bash
 git clone <repo-url> /opt/go-on
 cd /opt/go-on
-cargo build --release --no-default-features -F profile-multi-users-server
+cargo build --release --no-default-features -F multi-users-server
 ```
 
 Artifact:
@@ -323,7 +323,7 @@ Horizontal scale-out requires a shared-nothing approach:
 ```bash
 cd /opt/go-on
 git pull
-cargo build --release --no-default-features -F profile-multi-users-server
+cargo build --release --no-default-features -F multi-users-server
 
 pg_dump -U goon goon | gzip > /backup/goon/pre-upgrade-$(date +%Y%m%d).sql.gz
 

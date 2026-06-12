@@ -180,6 +180,7 @@ impl ChaosEngine {
     ///
     /// Returns `true` when the engine is enabled and the random roll passes.
     /// Uses `fastrand` for lightweight, non-cryptographic randomness.
+    #[allow(dead_code)] // Used behind chaos-testing feature gate in hyper_resilience.rs
     pub fn should_inject_fault(&self, _fault_type: FaultType) -> bool {
         if !self.is_enabled() {
             return false;

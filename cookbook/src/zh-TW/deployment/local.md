@@ -2,7 +2,7 @@
 
 ## 概述
 
-本地模式（`profile-local`）是 go-on 的默認部署配置，專為單用戶開發環境設計。它提供了一個輕量級、自包含的運行時，具有基於 SQLite 的存儲和自適應向量能力。
+本地模式（`local`）是 go-on 的默認部署配置，專為單用戶開發環境設計。它提供了一個輕量級、自包含的運行時，具有基於 SQLite 的存儲和自適應向量能力。
 
 ## 特性
 
@@ -27,7 +27,7 @@
 本地模式使用 `config/config.toml` 作為默認配置：
 
 ```toml
-# config/config.toml（profile-local 默認配置）
+# config/config.toml（local 默認配置）
 schema_version = "1.0.0"
 default_phase = "think"
 model_selection_mode = "adaptive"
@@ -85,11 +85,11 @@ otel_endpoint = "http://localhost:4317"
 
 ### 從源碼構建
 ```bash
-# 默認構建（profile-local）
+# 默認構建（local）
 cargo build
 
 # 顯式本地模式構建
-cargo build --no-default-features -F profile-local
+cargo build --no-default-features -F local
 
 # 包含所有特性
 cargo build --features "backend-sqlite"

@@ -96,15 +96,19 @@ impl ReputationStore {
     }
 
     fn record(&mut self, agent: &str) -> &mut ReputationRecord {
-        // Evict the oldest entry when at capacity (agent not already tracked).
+        // Evict the lowest-scored entry when at capacity (agent not already tracked).
         if !self.records.contains_key(agent) && self.records.len() >= self.max_records {
-            if let Some(oldest_key) = self
+            if let Some(lowest_key) = self
                 .records
                 .iter()
-                .min_by_key(|(_, r)| r.last_updated_ms)
+                .min_by(|(_, a), (_, b)| {
+                    a.score
+                        .partial_cmp(&b.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
                 .map(|(k, _)| k.clone())
             {
-                self.records.remove(&oldest_key);
+                self.records.remove(&lowest_key);
             }
         }
 
@@ -137,14 +141,13 @@ impl ReputationStore {
         let outcome = if success { 1.0f64 } else { 0.0f64 };
         r.score = alpha * outcome + (1.0 - alpha) * r.score;
 
-        // Apply time-based decay: reduce weight of old scores toward baseline (0.5)
+        // Apply gradual time-based decay toward baseline (0.5)
         let now_ms_val = r.last_updated_ms;
         let elapsed_ms = now_ms_val.saturating_sub(prev_updated_ms);
-        if prev_updated_ms > 0 && elapsed_ms > 86_400_000 {
-            // Apply decay factor for entries older than 24 hours since last update
+        if prev_updated_ms > 0 {
             let elapsed_hours = elapsed_ms as f64 / 3_600_000.0;
-            let decay = (-0.01 * (elapsed_hours - 24.0)).exp(); // exponential decay
-                                                                // Decay score toward baseline 0.5 instead of 1.0
+            // Decay starts immediately and saturates at 7 days (168 hours)
+            let decay = (-0.005 * (elapsed_hours.min(168.0))).exp();
             r.score = 0.5 + (r.score - 0.5) * decay;
         }
     }

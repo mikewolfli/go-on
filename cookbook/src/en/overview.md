@@ -29,23 +29,23 @@ Key features:
 
 ## Build Profiles
 
-Three build profiles support different deployment scenarios, plus a `profile-full` for CI:
+Three build profiles support different deployment scenarios, plus a `full` for CI:
 
 | Profile | Backend | Use Case | Build Command |
 |:--------|:--------|:---------|:--------------|
-| `profile-local` | SQLite + sqlite-vec | Single-user local tool | `cargo build` (default) |
-| `profile-simple-server` | SQLite + sqlite-vec | Single-server deployment | `cargo build --no-default-features -F profile-simple-server` |
-| `profile-multi-users-server` | PostgreSQL + pgvector | Multi-user production | `cargo build --no-default-features -F profile-multi-users-server` |
-| `profile-full` | SQLite (all features) | CI / development | `cargo build --no-default-features -F profile-full` |
+| `local` | SQLite + sqlite-vec | Single-user local tool | `cargo build` (default) |
+| `simple-server` | SQLite + sqlite-vec | Single-server deployment | `cargo build --no-default-features -F simple-server` |
+| `multi-users-server` | PostgreSQL + pgvector | Multi-user production | `cargo build --no-default-features -F multi-users-server` |
+| `full` | SQLite (all features) | CI / development | `cargo build --no-default-features -F full` |
 
 ## Verification Status
 
 | Profile | `cargo clippy -D warnings` | Tests |
 |:--------|:--------------------------:|:-----:|
-| **profile-local** | ✅ **Zero warnings** | **2252** |
-| **profile-simple-server** | ✅ **Zero warnings** | **all pass** |
-| **profile-full** | ✅ **Zero warnings** | **all pass** |
-| **profile-multi-users-server** | ✅ **Zero warnings** | **all pass** |
+| **local** | ✅ **Zero warnings** | **2252** |
+| **simple-server** | ✅ **Zero warnings** | **all pass** |
+| **full** | ✅ **Zero warnings** | **all pass** |
+| **multi-users-server** | ✅ **Zero warnings** | **all pass** |
 
 All 2252 unit tests pass with zero failures and zero ignored tests. E2e tests (requiring infrastructure) are marked `#[ignore]` for local runs.
 

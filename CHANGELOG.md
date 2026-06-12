@@ -45,7 +45,7 @@
 ### Added
 - 43 smoke tests for 6 ACP helper modules + 3 orchestration modules
 - Full F-GAP label coverage for all 90+ #[allow(dead_code)] annotations
-- profile-local now includes sub-bus-memory and sub-bus-protocol for 14-bus completeness
+- local now includes sub-bus-memory and sub-bus-protocol for 14-bus completeness
 ## [1.0.0] - 2026-05-25
 
 ### Added

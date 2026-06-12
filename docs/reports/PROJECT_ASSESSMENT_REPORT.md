@@ -14,7 +14,7 @@ go-on 是一个基于 **Rust** 的 **ACP/MCP** 代理编排运行时，支持多
 | 维度 | 数据 |
 |:-----|:-----|
 | **源代码规模** | ✅ **105,670 行** Rust（191 个文件）、8,669 行 GUI（Vue/TS）、8,450 行 VS Code 扩展（TS） |
-| **编译状态（3 个 Profile）** | ✅ **profile-local / profile-simple-server / profile-multi-users-server** 全部零错误零警告 |
+| **编译状态（3 个 Profile）** | ✅ **local / simple-server / multi-users-server** 全部零错误零警告 |
 | **Lint 状态** | ✅ `cargo clippy -- -D warnings` 零警告通过 |
 | **单元测试** | ✅ **793 个**库测试全部通过 |
 | **集成测试** | ✅ **161 个**（86 ACP RPC + 6 OpenAI matrix + 17 protocol consistency + 20 PUA smoke + 18 three-endpoint + 14 transport parity） |

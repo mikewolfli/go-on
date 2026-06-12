@@ -23,7 +23,7 @@
 
 ### 所有Profile统一错误
 
-**影响**: 默认profile + profile-simple-server + profile-multi-users-server  
+**影响**: 默认profile + simple-server + multi-users-server  
 **错误类型**: `useless_conversion` (Clippy Level: Error due to `-D warnings`)
 
 ```
@@ -176,17 +176,17 @@ src/acp/server.rs
 
 ```
 src/protocol/multi_channel_transport.rs
-  Line 21:   #[allow(dead_code)]  // F-GAP-29 — used by profile-multi-users-server
-  Line 52:   #[allow(dead_code)]  // F-GAP-29 — used by profile-multi-users-server
-  Line 65:   #[allow(dead_code)]  // F-GAP-29 — used by profile-multi-users-server
-  Line 79:   #[allow(dead_code)]  // F-GAP-29 — used by profile-multi-users-server
-  Line 94:   #[allow(dead_code)]  // F-GAP-29 — used by profile-multi-users-server
-  Line 112:  #[allow(dead_code)]  // F-GAP-29 — used by profile-multi-users-server
-  Line 126:  #[allow(dead_code)]  // F-GAP-29 — used by profile-multi-users-server
-  Line 153:  #[allow(dead_code)]  // F-GAP-29 — used by profile-multi-users-server
-  Line 171:  #[allow(dead_code)]  // F-GAP-29 — used by profile-multi-users-server
-  Line 193:  #[allow(dead_code)]  // F-GAP-29 — used by profile-multi-users-server
-  Line 199:  #[allow(dead_code)]  // F-GAP-29 — used by profile-multi-users-server
+  Line 21:   #[allow(dead_code)]  // F-GAP-29 — used by multi-users-server
+  Line 52:   #[allow(dead_code)]  // F-GAP-29 — used by multi-users-server
+  Line 65:   #[allow(dead_code)]  // F-GAP-29 — used by multi-users-server
+  Line 79:   #[allow(dead_code)]  // F-GAP-29 — used by multi-users-server
+  Line 94:   #[allow(dead_code)]  // F-GAP-29 — used by multi-users-server
+  Line 112:  #[allow(dead_code)]  // F-GAP-29 — used by multi-users-server
+  Line 126:  #[allow(dead_code)]  // F-GAP-29 — used by multi-users-server
+  Line 153:  #[allow(dead_code)]  // F-GAP-29 — used by multi-users-server
+  Line 171:  #[allow(dead_code)]  // F-GAP-29 — used by multi-users-server
+  Line 193:  #[allow(dead_code)]  // F-GAP-29 — used by multi-users-server
+  Line 199:  #[allow(dead_code)]  // F-GAP-29 — used by multi-users-server
 
 src/protocol/transport.rs
   Line 217:  #[allow(dead_code)]  // F-GAP-10 — reserved for future multi-channel transport wiring

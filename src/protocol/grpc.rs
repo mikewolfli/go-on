@@ -23,11 +23,21 @@ static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 /// wraps around to 1 (skipping 0 which is reserved for notifications).
 #[allow(dead_code)] // F-GAP reserved
 fn next_request_id() -> u64 {
-    let id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-    if id == u64::MAX {
-        tracing::warn!(target: "grpc", "NEXT_REQUEST_ID wrapping around");
+    loop {
+        let prev = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+        if prev == u64::MAX {
+            // Counter wrapped: next value would be 0, which is reserved for
+            // JSON-RPC notifications per spec (§3.1). Reset to 1 to skip it.
+            tracing::warn!(target: "grpc", "NEXT_REQUEST_ID wrapping around, resetting to 1");
+            NEXT_REQUEST_ID.store(1, Ordering::Relaxed);
+            return u64::MAX;
+        }
+        if prev != 0 {
+            return prev;
+        }
+        // prev was 0 (reserved for notifications). fetch_add already
+        // bumped it to 1, so the next iteration returns 1 immediately.
     }
-    id
 }
 
 /// Shared reqwest client reused across all gRPC calls to avoid creating

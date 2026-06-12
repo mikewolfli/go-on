@@ -5,7 +5,7 @@
 //!
 //! Uses in-memory stubs for nodes, coordinator, and privacy budget tracking.
 //! Real integration would require multiple running go-on FL nodes with a shared
-//! rendezvous endpoint and the `profile-simple-server` / `profile-multi-users-server`
+//! rendezvous endpoint and the `simple-server` / `multi-users-server`
 //! features enabled.
 //!
 //! # integration-test
@@ -52,7 +52,7 @@ struct FederatedRound {
 /// # Real-infra
 /// This test uses in-memory type construction. Real integration requires multiple
 /// running go-on FL nodes with a shared rendezvous endpoint and the
-/// `profile-simple-server` / `profile-multi-users-server` features enabled.
+/// `simple-server` / `multi-users-server` features enabled.
 /// Ignored by default; run with `cargo test -- --ignored` when real infrastructure
 /// is available.
 #[ignore = "requires real go-on FL nodes with shared rendezvous endpoint"]

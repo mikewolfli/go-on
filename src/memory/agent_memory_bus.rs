@@ -40,7 +40,7 @@ pub struct AgentMemoryBus {
 
 impl AgentMemoryBus {
     /// Create a new agent memory bus wrapping the given store.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for multi-user memory bus enhancement
     pub fn new(store: Arc<Mutex<MemoryStore>>) -> Self {
         Self {
             store,
@@ -64,28 +64,28 @@ impl AgentMemoryBus {
     /// Set the user_id for multi-user isolation.
     /// When set, stored memories are tagged with this user_id and retrieval
     /// filters by it.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for multi-user memory bus enhancement
     pub fn with_user_id(mut self, user_id: String) -> Self {
         self.user_id = Some(user_id);
         self
     }
 
     /// Set the maximum number of insights stored per task completion.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for multi-user memory bus enhancement
     pub fn with_max_insights_per_task(mut self, n: usize) -> Self {
         self.max_insights_per_task = n;
         self
     }
 
     /// Return a reference to the underlying store.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for multi-user memory bus enhancement
     pub fn store(&self) -> &Arc<Mutex<MemoryStore>> {
         &self.store
     }
 
     /// Attach a VectorStore for similarity-based memory retrieval.
     /// Wired via runtime.rs init_agent_memory_bus_with_vector_store.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for multi-user memory bus enhancement
     pub fn with_vector_store(mut self, vs: Arc<VectorStore>) -> Self {
         self.vector_store = Some(vs);
         self
@@ -97,7 +97,14 @@ impl AgentMemoryBus {
     ///
     /// The entry is placed in the `Semantic` class by default so it is
     /// eligible for cross-agent retrieval.
-    pub fn store_memory(&self, entry: MemoryEntry) {
+    ///
+    /// When `user_id` is provided, it tags the entry with that user_id
+    /// to support multi-user isolation. Falls back to `self.user_id` when
+    /// the parameter is `None`.
+    pub fn store_memory(&self, entry: MemoryEntry, user_id: Option<&str>) {
+        let uid = user_id.or(self.user_id.as_deref()).map(|s| s.to_string());
+        let mut entry = entry;
+        entry.user_id = uid;
         let mut store = match self.store.lock() {
             Ok(s) => s,
             Err(poisoned) => {
@@ -122,6 +129,7 @@ impl AgentMemoryBus {
         insight: &str,
         tags: &[String],
         importance: f32,
+        user_id: Option<&str>,
     ) {
         let content = format!(
             "agent={} task={} tags={} insight={}",
@@ -150,9 +158,9 @@ impl AgentMemoryBus {
             ),
             usefulness: importance,
             staleness: 0,
-            user_id: self.user_id.clone(),
+            user_id: None, // will be set by store_memory below
         };
-        self.store_memory(entry);
+        self.store_memory(entry, user_id);
     }
 
     /// Automatically store key insights after an agent completes a task.
@@ -167,6 +175,7 @@ impl AgentMemoryBus {
         task_description: &str,
         response_text: &str,
         success: bool,
+        user_id: Option<&str>,
     ) {
         if response_text.trim().is_empty() {
             return;
@@ -197,6 +206,7 @@ impl AgentMemoryBus {
                 snippet,
                 &entry_tags,
                 importance,
+                user_id,
             );
         }
 
@@ -217,7 +227,14 @@ impl AgentMemoryBus {
     /// uses vector similarity search via [`VectorStore::search`] with the
     /// `"agent_memory"` phase.  Otherwise falls back to the original linear
     /// substring/tag scan of the in-memory `Semantic` class.
-    pub fn retrieve_memories(&self, query: &str, limit: usize) -> Vec<MemoryEntry> {
+    pub fn retrieve_memories(
+        &self,
+        query: &str,
+        limit: usize,
+        user_id: Option<&str>,
+    ) -> Vec<MemoryEntry> {
+        let effective_user_id = user_id.or(self.user_id.as_deref());
+
         // Fast path: vector similarity search via VectorStore
         if let Some(ref vs) = self.vector_store {
             match vs.search("agent_memory", query, limit, 0.0, 512) {
@@ -241,7 +258,7 @@ impl AgentMemoryBus {
                             timestamp: now.to_string(),
                             usefulness: hit.similarity.clamp(0.0, 1.0),
                             staleness: 0,
-                            user_id: None,
+                            user_id: effective_user_id.map(|s| s.to_string()),
                         })
                         .collect();
                 }
@@ -253,7 +270,7 @@ impl AgentMemoryBus {
         }
 
         // Fallback: linear substring/tag scan with recency/importance weighting.
-        // When user_id is set, filter entries to only those belonging to this user.
+        // When effective_user_id is set, filter entries to only those belonging to this user.
         let store = match self.store.lock() {
             Ok(s) => s,
             Err(poisoned) => {
@@ -265,9 +282,9 @@ impl AgentMemoryBus {
         let all: Vec<MemoryEntry> = store.retrieve(MemoryClass::Semantic, usize::MAX);
         drop(store);
 
-        // Multi-user isolation: filter by user_id when set.
-        let all: Vec<MemoryEntry> = match self.user_id {
-            Some(ref uid) => all
+        // Multi-user isolation: filter by effective_user_id when set.
+        let all: Vec<MemoryEntry> = match effective_user_id {
+            Some(uid) => all
                 .into_iter()
                 .filter(|e| e.user_id.as_deref() == Some(uid))
                 .collect(),
@@ -337,9 +354,10 @@ impl AgentMemoryBus {
         phase: &str,
         task_description: &str,
         max_memories: usize,
+        user_id: Option<&str>,
     ) -> Option<String> {
         let query = format!("{} {} {}", agent_name, phase, task_description);
-        let memories = self.retrieve_memories(&query, max_memories);
+        let memories = self.retrieve_memories(&query, max_memories, user_id);
 
         if memories.is_empty() {
             return None;
@@ -409,14 +427,17 @@ pub fn clear_agent_memory_bus() {
 /// This should be called during server startup (e.g. from `new_acp_server()`) so
 /// that `retrieve_memories()` uses vector similarity instead of linear scans.
 /// Idempotent — does nothing if the bus was already initialised.
-pub fn init_agent_memory_bus_with_vector_store(vs: Arc<VectorStore>) {
+///
+/// `user_id` is the default user identifier for multi-user isolation; it can be
+/// overridden at call time via the `user_id` parameter on individual methods.
+pub fn init_agent_memory_bus_with_vector_store(vs: Arc<VectorStore>, user_id: Option<String>) {
     AGENT_MEMORY_BUS.get_or_init(|| {
         let store = Arc::new(Mutex::new(MemoryStore::new(Default::default())));
         AgentMemoryBus {
             store,
             max_insights_per_task: 5,
             vector_store: Some(vs),
-            user_id: None,
+            user_id,
         }
     });
     info!("AgentMemoryBus: pre-initialised with VectorStore for similarity search");
@@ -440,16 +461,17 @@ mod tests {
             "use connection pooling",
             &["sql".to_string()],
             0.8,
+            None,
         );
 
-        let results = bus.retrieve_memories("sql", 10);
+        let results = bus.retrieve_memories("sql", 10, None);
         assert_eq!(results.len(), 1, "should find the stored memory by tag");
     }
 
     #[test]
     fn test_empty_retrieve() {
         let bus = AgentMemoryBus::new_default();
-        let results = bus.retrieve_memories("anything", 10);
+        let results = bus.retrieve_memories("anything", 10, None);
         assert!(results.is_empty(), "no memories should be found");
     }
 
@@ -462,8 +484,9 @@ mod tests {
             "implement feature X",
             "First, I refactored the cache layer. Then I added connection pooling. Finally, I verified the throughput improved by 2x.",
             true,
+            None,
         );
-        let results = bus.retrieve_memories("cache", 10);
+        let results = bus.retrieve_memories("cache", 10, None);
         assert!(!results.is_empty(), "should find memories about cache");
     }
 
@@ -477,9 +500,10 @@ mod tests {
             "use lookahead to handle nested expressions",
             &["parser".to_string(), "nested".to_string()],
             0.9,
+            None,
         );
 
-        let ctx = bus.retrieve_context_for_agent("agent_a", "coding", "fix parser bug", 5);
+        let ctx = bus.retrieve_context_for_agent("agent_a", "coding", "fix parser bug", 5, None);
         assert!(ctx.is_some(), "should return context");
         let ctx_str = ctx.unwrap();
         assert!(

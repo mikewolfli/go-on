@@ -6,6 +6,13 @@
 
 pub mod action_check;
 pub mod federated;
+// Standalone P2P discovery module. Implements full peer discovery and heartbeat
+// logic but has zero CapabilityBus integration. To wire it in, add CapabilityBus
+// calls (e.g. registering discovered peers as capability route targets).
+//
+// NOTE: federated_transport is NOT gated here — it provides the foundational
+// transport abstraction (PeerInfo, FederatedTransport trait) used by federated.rs.
+#[cfg(feature = "sub-bus-distributed-memory")]
 pub mod federated_discovery;
 pub mod federated_privacy;
 pub mod federated_transport;

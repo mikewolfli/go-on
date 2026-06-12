@@ -2,7 +2,7 @@
 
 ## Overview
 
-Local mode (`profile-local`) is the default build profile for go-on, designed for single-user development environments. It provides a lightweight, self-contained runtime with SQLite-based storage and adaptive vector capabilities.
+Local mode (`local`) is the default build profile for go-on, designed for single-user development environments. It provides a lightweight, self-contained runtime with SQLite-based storage and adaptive vector capabilities.
 
 ## Features
 
@@ -28,7 +28,7 @@ Local Mode Storage:
 The local mode uses `config/config.toml` as the default configuration:
 
 ```toml
-# config/config.toml (profile-local default)
+# config/config.toml (local default)
 schema_version = "1.0.0"
 default_phase = "think"
 model_selection_mode = "adaptive"
@@ -77,7 +77,7 @@ otel_endpoint = "http://localhost:4317"
 ```
 
 ### Feature Flags
-Local mode (`profile-local`) enables the following Cargo features:
+Local mode (`local`) enables the following Cargo features:
 - `backend-sqlite`: SQLite database support
 - `rusqlite`: SQLite bindings with bundled SQLite
 - `sqlite-vec`: Vector extension for SQLite (optional)
@@ -86,11 +86,11 @@ Local mode (`profile-local`) enables the following Cargo features:
 
 ### Building from Source
 ```bash
-# Default build (profile-local)
+# Default build (local)
 cargo build
 
 # Explicit local mode build
-cargo build --no-default-features -F profile-local
+cargo build --no-default-features -F local
 ```
 
 ### Binary Distribution

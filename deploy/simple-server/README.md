@@ -18,7 +18,7 @@ Suitable for small to medium teams (≤50 concurrent users).
 git clone <repo-url> /opt/go-on
 cd /opt/go-on
 
-cargo build --release --no-default-features -F profile-simple-server
+cargo build --release --no-default-features -F simple-server
 
 # Optional: Build the GUI
 cargo build --release --manifest-path gui/Cargo.toml
@@ -204,7 +204,7 @@ Key fields from `config/config.simple-server.toml`:
 ```bash
 cd /opt/go-on
 git pull
-cargo build --release --no-default-features -F profile-simple-server
+cargo build --release --no-default-features -F simple-server
 
 cp backend/acp_cache.sqlite3 /backup/go-on/
 cp backend/acp_vector.sqlite3 /backup/go-on/

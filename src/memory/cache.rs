@@ -1,8 +1,8 @@
 //! Cache implementation
 //!
 //! Conditionally compiled:
-//! - `backend-sqlite` (profile-local, profile-simple-server): rusqlite-backed, sync API
-//! - `backend-postgres` (profile-multi-users-server): postgres-backed sync API
+//! - `backend-sqlite` (local, simple-server): rusqlite-backed, sync API
+//! - `backend-postgres` (multi-users-server): postgres-backed sync API
 
 // Ensure exactly one backend feature is enabled.
 #[cfg(all(feature = "backend-sqlite", feature = "backend-postgres"))]
@@ -39,7 +39,7 @@ pub struct ResponseCacheStats {
     pub avg_hits_per_entry: f64,
 }
 
-// ─── SQLite backend (profile-local / profile-simple-server) ──────────────────
+// ─── SQLite backend (local / simple-server) ──────────────────
 #[cfg(feature = "backend-sqlite")]
 use rusqlite::{params, Connection, OptionalExtension};
 #[cfg(feature = "backend-sqlite")]
@@ -360,7 +360,7 @@ mod tests {
     }
 }
 
-// ─── PostgreSQL backend (profile-multi-users-server) ─────────────────────────
+// ─── PostgreSQL backend (multi-users-server) ─────────────────────────
 //
 // Methods share the same sync signature as the SQLite backend so all callers
 // (spawn_blocking wrappers in storage.rs / background.rs) work without changes.

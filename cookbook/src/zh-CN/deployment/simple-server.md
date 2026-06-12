@@ -2,7 +2,7 @@
 
 ## 概述
 
-简单服务器模式（`profile-simple-server`）专为单服务器部署设计，提供比本地模式更好的性能和可靠性，同时保持简单性。它使用带有必需向量扩展的 SQLite，适用于小团队或类似生产环境。
+简单服务器模式（`simple-server`）专为单服务器部署设计，提供比本地模式更好的性能和可靠性，同时保持简单性。它使用带有必需向量扩展的 SQLite，适用于小团队或类似生产环境。
 
 ## 特性
 
@@ -13,7 +13,7 @@
 - **更好的可靠性**：增强的错误处理和恢复
 - **生产就绪**：适用于小规模生产使用
 - **完整 Phase 4 架构**：所有 14 条总线和 21 个 F-GAP 模块，包括 AgentFactory 和 OrchestrationCouncil
-- **条件编译模块**：AgentFactory 和 Council 使用 `#[cfg(feature = "profile-simple-server")]` 门控
+- **条件编译模块**：AgentFactory 和 Council 使用 `#[cfg(feature = "simple-server")]` 门控
 
 ### 架构
 ```
@@ -77,7 +77,7 @@ metrics_port = 9090
 ### 为服务器部署构建
 ```bash
 # 使用 simple-server 配置文件构建
-cargo build --no-default-features -F profile-simple-server
+cargo build --no-default-features -F simple-server
 
 # 或显式启用特性
 cargo build --features "backend-sqlite sqlite-vec"

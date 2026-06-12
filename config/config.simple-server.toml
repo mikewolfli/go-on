@@ -1,6 +1,6 @@
 # ============================================================
-# go-on Simple Server Profile (profile-simple-server)
-#   Build:   cargo build --no-default-features -F profile-simple-server
+# go-on Simple Server Profile (simple-server)
+#   Build:   cargo build --no-default-features -F simple-server
 #   Backend: SQLite + sqlite-vec, single-server deployment
 #   Phase 4: 14 buses, 21 F-GAP modules, i18n ~95%
 #   Tests:   905+ (805 unit + 86 RPC + 14 transport)

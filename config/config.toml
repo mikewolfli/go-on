@@ -1,7 +1,7 @@
 ﻿# ============================================================
-# go-on Universal Workflow Config (profile-local)
+# go-on Universal Workflow Config (local)
 #   Default: SQLite + sqlite-vec, single-user development
-#   Build:   cargo build (default feature = profile-local)
+#   Build:   cargo build (default feature = local)
 #   Phase 4: 14 buses, 21 F-GAP modules, i18n ~95%
 #   Tests:   866+ (766 unit + 86 RPC + 14 transport)
 #   Usage:   go-on --config config.toml

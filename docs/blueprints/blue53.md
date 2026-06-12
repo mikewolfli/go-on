@@ -13,7 +13,7 @@
 2. **排除分拆文件** — 不将现有文件拆分为更小文件（但允许重组为子模块目录）。
 3. **三端一统（backend / GUI / vscode-addon）** — 考虑三端配合、通讯流畅稳定性。
 4. **注释英文** — 所有新增模块的代码注释必须使用英文。
-5. **3 种服务器 Profile 全链路闭合** — profile-local、profile-simple-server、profile-multi-users-server 必须正确编译和行为一致。
+5. **3 种服务器 Profile 全链路闭合** — local、simple-server、multi-users-server 必须正确编译和行为一致。
 6. **5 种协议全链路闭合** — auto、acp stdio、acp http、mcp stdio、mcp http。
 7. **零警告、零冲突、零遗漏** — 最终验证 `cargo clippy --all-features -- -D warnings` 零警告。
 8. **完整闭合** — 每个模块最终必须达到：编译通过、零警告、接入 governance.status、可通过 health 端点观测、有集成测试覆盖。
@@ -434,13 +434,13 @@
   4. 考虑 `mold` 链接器（Linux）或 `lld`（macOS）
 - **验证**: 增量构建 < 10s
 
-#### GAP-B53-38（MEDIUM）：profile-local 启动时间
-- **问题**: profile-local 启动 > 2s，影响开发者体验
+#### GAP-B53-38（MEDIUM）：local 启动时间
+- **问题**: local 启动 > 2s，影响开发者体验
 - **子步骤**:
   1. 懒加载 provider 初始化（`OnceCell`）
   2. 并行化向量存储初始化
   3. 延迟非关键组件（遥测、审计）到首次访问
-- **验证**: profile-local 启动 < 500ms
+- **验证**: local 启动 < 500ms
 
 #### GAP-B53-39（MEDIUM）：死代码清理
 - **文件**: 整个代码库

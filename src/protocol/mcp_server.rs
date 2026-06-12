@@ -517,6 +517,18 @@ async fn handle_http_connection(
     rate_limiter: Option<Arc<crate::protocol::rate_limit::RateLimitMiddleware>>,
     sse_broadcaster: Arc<SseBroadcaster>,
 ) -> Result<()> {
+    // ── Connection: keep-alive — compliance only, no multiplexing ──────
+    // Responses include `Connection: keep-alive` (set in
+    // write_http_json_response) for HTTP/1.1 spec compliance.  However,
+    // this handler currently processes exactly **one** request per TCP
+    // connection and then returns, so the keep-alive header is
+    // metadata-only — no multiplexing occurs.
+    //
+    // Future enhancement: wrap the handler body in a loop that reads
+    // subsequent requests on the same connection while `Connection:
+    // keep-alive` is present, and breaks when `Connection: close` is
+    // received.
+    //
     // ── Header buffer: start small, grow dynamically ────────────────────
     // Allocate only INITIAL_HEADER_BUFFER_SIZE bytes up front, then grow
     // as needed when reading the HTTP header, up to MAX_HEADER_BUFFER_SIZE.

@@ -12,7 +12,7 @@
 2. **排除分拆文件** — 不将现有文件拆分为更小文件。
 3. **三端一统（backend / GUI / vscode-addon）** — 考虑三端配合、通讯流畅稳定性。
 4. **注释英文** — 所有新增模块的代码注释必须使用英文。
-5. **3 种服务器 Profile 全链路闭合** — profile-local、profile-simple-server、profile-multi-users-server 必须正确编译和行为一致。
+5. **3 种服务器 Profile 全链路闭合** — local、simple-server、multi-users-server 必须正确编译和行为一致。
 6. **5 种协议全链路闭合** — auto、acp stdio、acp http、mcp stdio、mcp http。
 7. **零警告、零冲突、零遗漏** — 最终验证 `cargo clippy --all-features -- -D warnings` 零警告。
 8. **完整闭合** — 每个模块最终必须达到：编译通过、零警告、接入 governance.status、可通过 health 端点观测、有集成测试覆盖。
@@ -141,7 +141,7 @@
   2. 实现 `DistributedMemoryBus::push_to_peers(entry)` — 序列化 + 广播（复用 GAP-B52-06 的 `FederatedTransport`）
   3. 实现 `DistributedMemoryBus::query_distributed(query, limit)` — 向所有 peer 发送检索请求
   4. 实现冲突检测：基于 `vector_clock` 的 LWW（Last-Write-Wins）合并
-  5. 保留现有 `#[cfg(not(feature = "profile-multi-users-server"))]` 本地模式作为回退
+  5. 保留现有 `#[cfg(not(feature = "multi-users-server"))]` 本地模式作为回退
 - **验证**: 2 节点部署→节点A写入记忆→节点B查询到同步记忆
 
 #### GAP-B52-08（HIGH）：联邦节点发现与注册
@@ -355,7 +355,7 @@
   4. 在 HTTP 服务器启动时配置 mTLS：`axum` 或 `hyper` 的 `TlsAcceptor` 层
   5. 在 gRPC fedetated transport 中配置 mTLS（复用 `tonic` 的 `TlsClientConfig`/`TlsServerConfig`）
   6. 接入 `acp/impl/runtime.rs`：当 `[security.mtls]` 启用时自动包装 listener
-  7. 为 `profile-multi-users-server` 添加默认自签名证书生成脚本（`scripts/gen_certs.sh`）
+  7. 为 `multi-users-server` 添加默认自签名证书生成脚本（`scripts/gen_certs.sh`）
   8. 证书到期监控：提前 30 天发出告警
 - **验证**: 启用 mTLS→只接受可信CA签发的客户端证书→不可信客户端连接被拒绝
 

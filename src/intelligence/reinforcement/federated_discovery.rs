@@ -3,6 +3,13 @@
 //! Provides a trait-based abstraction for discovering peers in the federated
 //! learning network, along with a static configuration-based discovery and
 //! a heartbeat-based health tracker.
+//!
+//! # CapabilityBus integration
+//!
+//! This module is **standalone** — it implements full P2P discovery logic but
+//! never calls the `CapabilityBus`. To wire it in, register discovered peers
+//! as capability route targets in the bus, and use bus reputation scores to
+//! influence peer selection or heartbeat timeout thresholds.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -1,6 +1,6 @@
 # ============================================================
-# go-on Multi-Users Server Profile (profile-multi-users-server)
-#   Build:   cargo build --no-default-features -F profile-multi-users-server
+# go-on Multi-Users Server Profile (multi-users-server)
+#   Build:   cargo build --no-default-features -F multi-users-server
 #   Backend: PostgreSQL + pgvector, multi-user production
 #   Full multi-user features: CORS, JWT-like auth, RBAC, tenant quotas
 #   NOTE:    Set DB_USER, DB_PASS, DB_HOST env vars before startup.
@@ -17,7 +17,7 @@ model_selection_mode = "adaptive"
 mode = "acp_http"
 
 # ── Cache (PostgreSQL in production, SQLite fallback for dev) ──────────
-# In production with profile-multi-users-server, set:
+# In production with multi-users-server, set:
 #   cache.connection_string = "postgres://${DB_USER}:${DB_PASS}@${DB_HOST}/goon_cache"
 [cache]
 enabled = true
@@ -26,7 +26,7 @@ default_ttl_seconds = 3600
 max_entries = 50000
 
 # ── Vector Store (pgvector in production, sqlite-vec fallback for dev) ─
-# In production with profile-multi-users-server, set:
+# In production with multi-users-server, set:
 #   vector.connection_string = "postgres://${DB_USER}:${DB_PASS}@${DB_HOST}/goon_vector"
 [vector]
 enabled = true

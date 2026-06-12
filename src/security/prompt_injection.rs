@@ -5,6 +5,7 @@
 //! LLM-assisted analysis and context contamination detection.
 
 use serde::{Deserialize, Serialize};
+use regex::Regex;
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -59,13 +60,33 @@ impl InjectionCategory {
 // InjectionPattern
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct InjectionPattern {
     pub id: String,
     pub category: InjectionCategory,
-    pub pattern: String, // Regex pattern
+    pub pattern: Regex,
     pub severity: InjectionSeverity,
     pub description: String,
+}
+
+impl InjectionPattern {
+    /// Create a new injection pattern with a compiled regex.
+    pub fn new(
+        id: impl Into<String>,
+        category: InjectionCategory,
+        pattern_str: &str,
+        severity: InjectionSeverity,
+        description: impl Into<String>,
+    ) -> Result<Self, regex::Error> {
+        let pattern = Regex::new(pattern_str)?;
+        Ok(Self {
+            id: id.into(),
+            category,
+            pattern,
+            severity,
+            description: description.into(),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -213,26 +234,24 @@ impl InjectionDetector {
         let mut violations = Vec::new();
         // 1. Static pattern matching (always runs)
         for pattern in &self.patterns {
-            if let Ok(re) = regex::Regex::new(&pattern.pattern) {
-                for cap in re.find_iter(text) {
-                    let severity_score = match pattern.severity {
-                        InjectionSeverity::Low => 0.3,
-                        InjectionSeverity::Medium => 0.5,
-                        InjectionSeverity::High => 0.7,
-                        InjectionSeverity::Critical => 0.9,
-                    };
+            for cap in pattern.pattern.find_iter(text) {
+                let severity_score = match pattern.severity {
+                    InjectionSeverity::Low => 0.3,
+                    InjectionSeverity::Medium => 0.5,
+                    InjectionSeverity::High => 0.7,
+                    InjectionSeverity::Critical => 0.9,
+                };
 
-                    if severity_score >= self.config.threshold {
-                        violations.push(SafetyViolation {
-                            category: pattern.category.clone(),
-                            pattern_id: Some(pattern.id.clone()),
-                            severity: pattern.severity.clone(),
-                            match_text: cap.as_str().to_string(),
-                            start_pos: cap.start(),
-                            end_pos: cap.end(),
-                            description: pattern.description.clone(),
-                        });
-                    }
+                if severity_score >= self.config.threshold {
+                    violations.push(SafetyViolation {
+                        category: pattern.category.clone(),
+                        pattern_id: Some(pattern.id.clone()),
+                        severity: pattern.severity.clone(),
+                        match_text: cap.as_str().to_string(),
+                        start_pos: cap.start(),
+                        end_pos: cap.end(),
+                        description: pattern.description.clone(),
+                    });
                 }
             }
         }
@@ -322,87 +341,98 @@ impl InjectionDetector {
     pub fn default_patterns() -> Vec<InjectionPattern> {
         vec![
             // RolePlay patterns
-            InjectionPattern {
-                id: "RP-001".into(),
-                category: InjectionCategory::RolePlay,
-                pattern: r"(?i)(?:you\s+are\s+(?:now\s+)?(?:an?\s+)?(?:admin|sudo|root|superuser|god|omniscient))".into(),
-                severity: InjectionSeverity::High,
-                description: "Attempt to elevate model role".into(),
-            },
-            InjectionPattern {
-                id: "RP-002".into(),
-                category: InjectionCategory::RolePlay,
-                pattern: r"(?i)(?:act\s+as\s+(?:if\s+)?(?:you\s+are\s+)?(?:an?\s+)?(?:unrestricted|unlimited|free|uncensored))".into(),
-                severity: InjectionSeverity::High,
-                description: "Attempt to bypass restrictions via role-play".into(),
-            },
+            InjectionPattern::new(
+                "RP-001",
+                InjectionCategory::RolePlay,
+                r"(?i)(?:you\s+are\s+(?:now\s+)?(?:an?\s+)?(?:admin|sudo|root|superuser|god|omniscient))",
+                InjectionSeverity::High,
+                "Attempt to elevate model role",
+            )
+            .expect("RP-001 pattern is valid"),
+            InjectionPattern::new(
+                "RP-002",
+                InjectionCategory::RolePlay,
+                r"(?i)(?:act\s+as\s+(?:if\s+)?(?:you\s+are\s+)?(?:an?\s+)?(?:unrestricted|unlimited|free|uncensored))",
+                InjectionSeverity::High,
+                "Attempt to bypass restrictions via role-play",
+            )
+            .expect("RP-002 pattern is valid"),
             // Jailbreak patterns
-            InjectionPattern {
-                id: "JB-001".into(),
-                category: InjectionCategory::Jailbreak,
-                pattern: r"(?i)(?:ignore\s+(?:all\s+)?(?:previous|prior|above)\s+(?:instructions|directions|commands|directives))".into(),
-                severity: InjectionSeverity::Critical,
-                description: "Classic jailbreak: ignore prior instructions".into(),
-            },
-            InjectionPattern {
-                id: "JB-002".into(),
-                category: InjectionCategory::Jailbreak,
-                pattern: r"(?i)(?:DAN|do\s+anything\s+now|jail\s*break|jailbroken)".into(),
-                severity: InjectionSeverity::Critical,
-                description: "Known jailbreak keyword".into(),
-            },
-            InjectionPattern {
-                id: "JB-003".into(),
-                category: InjectionCategory::Jailbreak,
-                pattern: r"(?i)(?:output\s+(?:in\s+)?(?:an?\s+)?(?:un|in)filtered|without\s+(?:any\s+)?(?:restrictions|filters|censorship))".into(),
-                severity: InjectionSeverity::High,
-                description: "Attempt to disable content filters".into(),
-            },
+            InjectionPattern::new(
+                "JB-001",
+                InjectionCategory::Jailbreak,
+                r"(?i)(?:ignore\s+(?:all\s+)?(?:previous|prior|above)\s+(?:instructions|directions|commands|directives))",
+                InjectionSeverity::Critical,
+                "Classic jailbreak: ignore prior instructions",
+            )
+            .expect("JB-001 pattern is valid"),
+            InjectionPattern::new(
+                "JB-002",
+                InjectionCategory::Jailbreak,
+                r"(?i)(?:DAN|do\s+anything\s+now|jail\s*break|jailbroken)",
+                InjectionSeverity::Critical,
+                "Known jailbreak keyword",
+            )
+            .expect("JB-002 pattern is valid"),
+            InjectionPattern::new(
+                "JB-003",
+                InjectionCategory::Jailbreak,
+                r"(?i)(?:output\s+(?:in\s+)?(?:an?\s+)?(?:un|in)filtered|without\s+(?:any\s+)?(?:restrictions|filters|censorship))",
+                InjectionSeverity::High,
+                "Attempt to disable content filters",
+            )
+            .expect("JB-003 pattern is valid"),
             // PromptLeak patterns
-            InjectionPattern {
-                id: "PL-001".into(),
-                category: InjectionCategory::PromptLeak,
-                pattern: r"(?i)(?:repeat\s+(?:the\s+)?(?:above|previous|initial|system)\s+(?:prompt|instructions|text|message|words))".into(),
-                severity: InjectionSeverity::High,
-                description: "Attempt to leak system prompt".into(),
-            },
-            InjectionPattern {
-                id: "PL-002".into(),
-                category: InjectionCategory::PromptLeak,
-                pattern: r"(?i)(?:what\s+(?:is|was|were)\s+(?:your|the)\s+(?:system|initial|first)\s+(?:prompt|instruction|message))".into(),
-                severity: InjectionSeverity::Medium,
-                description: "Query for system prompt".into(),
-            },
-            InjectionPattern {
-                id: "PL-003".into(),
-                category: InjectionCategory::PromptLeak,
-                pattern: r"(?i)(?:print|show|display|reveal|output)\s+(?:the\s+)?(?:full|entire|complete)\s+(?:prompt|instruction|system\s+message)".into(),
-                severity: InjectionSeverity::High,
-                description: "Request to reveal full prompt".into(),
-            },
+            InjectionPattern::new(
+                "PL-001",
+                InjectionCategory::PromptLeak,
+                r"(?i)(?:repeat\s+(?:the\s+)?(?:above|previous|initial|system)\s+(?:prompt|instructions|text|message|words))",
+                InjectionSeverity::High,
+                "Attempt to leak system prompt",
+            )
+            .expect("PL-001 pattern is valid"),
+            InjectionPattern::new(
+                "PL-002",
+                InjectionCategory::PromptLeak,
+                r"(?i)(?:what\s+(?:is|was|were)\s+(?:your|the)\s+(?:system|initial|first)\s+(?:prompt|instruction|message))",
+                InjectionSeverity::Medium,
+                "Query for system prompt",
+            )
+            .expect("PL-002 pattern is valid"),
+            InjectionPattern::new(
+                "PL-003",
+                InjectionCategory::PromptLeak,
+                r"(?i)(?:print|show|display|reveal|output)\s+(?:the\s+)?(?:full|entire|complete)\s+(?:prompt|instruction|system\s+message)",
+                InjectionSeverity::High,
+                "Request to reveal full prompt",
+            )
+            .expect("PL-003 pattern is valid"),
             // IndirectInjection patterns
-            InjectionPattern {
-                id: "II-001".into(),
-                category: InjectionCategory::IndirectInjection,
-                pattern: r"(?i)(?:this\s+(?:document|page|text|content)\s+(?:says|instructs|commands|requires))".into(),
-                severity: InjectionSeverity::Medium,
-                description: "Indirect injection via document content".into(),
-            },
-            InjectionPattern {
-                id: "II-002".into(),
-                category: InjectionCategory::IndirectInjection,
-                pattern: r"(?i)(?:according\s+to\s+(?:the\s+)?(?:above|attached|retrieved|linked)\s+(?:content|document|file|text))".into(),
-                severity: InjectionSeverity::Low,
-                description: "Potential indirect injection reference".into(),
-            },
+            InjectionPattern::new(
+                "II-001",
+                InjectionCategory::IndirectInjection,
+                r"(?i)(?:this\s+(?:document|page|text|content)\s+(?:says|instructs|commands|requires))",
+                InjectionSeverity::Medium,
+                "Indirect injection via document content",
+            )
+            .expect("II-001 pattern is valid"),
+            InjectionPattern::new(
+                "II-002",
+                InjectionCategory::IndirectInjection,
+                r"(?i)(?:according\s+to\s+(?:the\s+)?(?:above|attached|retrieved|linked)\s+(?:content|document|file|text))",
+                InjectionSeverity::Low,
+                "Potential indirect injection reference",
+            )
+            .expect("II-002 pattern is valid"),
             // Generic patterns
-            InjectionPattern {
-                id: "GN-001".into(),
-                category: InjectionCategory::Generic,
-                pattern: r"(?i)(?:you\s+must\s+(?:now|immediately|absolutely)\s+(?:ignore|forget|disregard))".into(),
-                severity: InjectionSeverity::High,
-                description: "Generic override attempt".into(),
-            },
+            InjectionPattern::new(
+                "GN-001",
+                InjectionCategory::Generic,
+                r"(?i)(?:you\s+must\s+(?:now|immediately|absolutely)\s+(?:ignore|forget|disregard))",
+                InjectionSeverity::High,
+                "Generic override attempt",
+            )
+            .expect("GN-001 pattern is valid"),
         ]
     }
 }
@@ -482,13 +512,16 @@ mod tests {
     #[test]
     fn test_add_custom_pattern() {
         let mut detector = InjectionDetector::new(DetectionConfig::default());
-        detector.add_pattern(InjectionPattern {
-            id: "CUSTOM-001".into(),
-            category: InjectionCategory::Generic,
-            pattern: r"(?i)custom\s+malicious\s+pattern".into(),
-            severity: InjectionSeverity::High,
-            description: "Custom test pattern".into(),
-        });
+        detector.add_pattern(
+            InjectionPattern::new(
+                "CUSTOM-001",
+                InjectionCategory::Generic,
+                r"(?i)custom\s+malicious\s+pattern",
+                InjectionSeverity::High,
+                "Custom test pattern",
+            )
+            .expect("CUSTOM-001 pattern is valid")
+        );
         let result = detector.detect("This is a custom malicious pattern test");
         assert!(result.detected);
     }

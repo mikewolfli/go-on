@@ -782,14 +782,219 @@ impl SelfEvolutionAgent {
     }
 
     /// Synthesize patch lines from content and instruction.
-    /// Uses content-aware heuristic: compute line-level diff between current
-    /// content and instruction-derived expected changes.
+    ///
+    /// Tries, in order:
+    /// 1. Unified diff format (`@@ -line,count +line,count @@` hunks)
+    /// 2. Markdown fenced code blocks with inline file references
+    /// 3. Inline `path:line:content` patterns
+    /// 4. Content-aware keyword heuristic (the original fallback)
     fn synthesize_patch_lines(&self, content: &str, instruction: &str) -> Vec<(usize, String)> {
+        // ── Phase 1: Try unified diff format ───────────────────────────
+        // If the instruction contains `@@ -line,count +line,count @@` hunks,
+        // extract the new ("+") lines as patches.
+        if instruction.contains("@@ -") && instruction.contains(" @@") {
+            if let Some(patched) = self.parse_unified_diff_patch(content, instruction) {
+                return patched;
+            }
+        }
+
+        // ── Phase 2: Try markdown code blocks with file references ─────
+        // Look for a code fence whose language hint (e.g. "rust:src/lib.rs")
+        // or preceding text mentions a file path.
+        if let Some(patched) = self.parse_fenced_code_patch(content, instruction) {
+            return patched;
+        }
+
+        // ── Phase 3: Try inline path:line:content patterns ─────────────
+        // Look for lines like `filename.rs:42:+ new code` or `path/to/file:15: content`.
+        if let Some(patched) = self.parse_inline_path_patch(content, instruction) {
+            return patched;
+        }
+
+        // ── Phase 4: Keyword-based heuristic (original fallback) ───────
+        self.synthesize_keyword_heuristic(content, instruction)
+    }
+
+    /// Parse a unified diff embedded in the instruction.
+    /// Returns `None` if the instruction does not contain a valid diff.
+    fn parse_unified_diff_patch(
+        &self,
+        _content: &str,
+        instruction: &str,
+    ) -> Option<Vec<(usize, String)>> {
+        let lines: Vec<&str> = instruction.lines().collect();
+        let mut patched: Vec<(usize, String)> = Vec::new();
+        let mut base_line: Option<usize> = None;
+
+        for line in &lines {
+            let trimmed = line.trim();
+            // Unified diff hunk header: @@ -old_line,old_count +new_line,new_count @@
+            if trimmed.starts_with("@@ -") && trimmed.contains(" @@") {
+                // Parse the target line number from the "+new_line,new_count" part
+                let hunk_parts: Vec<&str> = trimmed.split_whitespace().collect();
+                if hunk_parts.len() >= 2 {
+                    // hunk_parts[1] is "-old_line,old_count", hunk_parts[2] is "+new_line,new_count"
+                    let target = hunk_parts
+                        .iter()
+                        .find(|p| p.starts_with('+'))
+                        .unwrap_or(&"+0");
+                    let target = target
+                        .trim_start_matches('+')
+                        .split(',')
+                        .next()
+                        .unwrap_or("0");
+                    base_line = target.parse::<usize>().ok();
+                }
+                continue;
+            }
+
+            // Only process addition lines ("+") and context lines (" ") from the new file.
+            if trimmed.starts_with('+') {
+                let content_line = trimmed[1..].trim_end().to_string();
+                if let Some(bl) = base_line.as_mut() {
+                    patched.push((*bl, content_line));
+                    *bl += 1;
+                }
+            } else if trimmed.starts_with(' ') || trimmed.starts_with('-') {
+                // Context lines advance the base line counter
+                if let Some(bl) = base_line.as_mut() {
+                    *bl += 1;
+                }
+            }
+            // Remove lines, index lines, and blank lines are ignored by the counter progression
+            // but we still need to track context lines so line numbers stay accurate.
+            if trimmed.starts_with('-') {
+                // Removal lines don't advance the new-file line number
+            }
+        }
+
+        if patched.is_empty() {
+            None
+        } else {
+            Some(patched)
+        }
+    }
+
+    /// Parse a markdown fenced code block preceded by a file-path reference.
+    /// Looks for lines like `path/to/file.rs:`, `--- path/to/file.rs ---`,
+    /// or `file.rs` immediately before a code fence.
+    fn parse_fenced_code_patch(
+        &self,
+        _content: &str,
+        instruction: &str,
+    ) -> Option<Vec<(usize, String)>> {
+        // Collect the content of every fenced code block in the instruction
+        let mut in_fence = false;
+        let mut fence_lines: Vec<String> = Vec::new();
+
+        for line in instruction.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("```") {
+                if in_fence {
+                    // End of fence: produce patch lines from fence_lines.
+                    // If we found useful content, return it — otherwise clear and keep looking.
+                    let patched: Vec<(usize, String)> = fence_lines
+                        .iter()
+                        .enumerate()
+                        .map(|(i, l)| (i + 1, l.clone()))
+                        .collect();
+                    if !patched.is_empty() {
+                        return Some(patched);
+                    }
+                    fence_lines.clear();
+                    in_fence = false;
+                } else {
+                    // Start of fence — reset
+                    in_fence = true;
+                    fence_lines.clear();
+                }
+            } else if in_fence {
+                fence_lines.push(line.to_string());
+            }
+        }
+
+        // Handle unclosed fence (common in truncated output)
+        if !fence_lines.is_empty() {
+            let patched: Vec<(usize, String)> = fence_lines
+                .iter()
+                .enumerate()
+                .map(|(i, l)| (i + 1, l.clone()))
+                .collect();
+            if !patched.is_empty() {
+                return Some(patched);
+            }
+        }
+
+        None
+    }
+
+    /// Parse inline `path:line:content` or `path line: content` patterns
+    /// where a filename and line number precede a change.
+    ///
+    /// Matches patterns like:
+    /// - `src/main.rs:42:+ println!("hello");`
+    /// - `src/lib.rs:15:  let x = 1;`
+    /// - `file.rs:32:- old_line`
+    fn parse_inline_path_patch(
+        &self,
+        _content: &str,
+        instruction: &str,
+    ) -> Option<Vec<(usize, String)>> {
+        let mut patched: Vec<(usize, String)> = Vec::new();
+
+        // Look for lines matching: filepath:line_number:+ content or filepath:line_number: content
+        for line in instruction.lines() {
+            let trimmed = line.trim();
+            // Match pattern: path/to/file.ext:12345:+rest or path/to/file.ext:12345:rest
+            if let Some(colon_pos) = trimmed.rfind(':') {
+                // Check if the character before the colon is a digit (end of line number)
+                if colon_pos > 0 {
+                    let before_colon = &trimmed[..colon_pos];
+                    let after_colon = &trimmed[colon_pos + 1..];
+                    // Find the colon that separates path from line number
+                    if let Some(path_colon) = before_colon.rfind(':') {
+                        let line_num_str = &before_colon[path_colon + 1..];
+                        if let Ok(ln) = line_num_str.parse::<usize>() {
+                            // Check that the path-like part before the line number looks like a file
+                            let path_part = &before_colon[..path_colon];
+                            if path_part.contains('.')
+                                || path_part.contains('/')
+                                || path_part.contains('\\')
+                            {
+                                let content_part = if after_colon.starts_with('+')
+                                    || after_colon.starts_with('-')
+                                {
+                                    after_colon[1..].trim().to_string()
+                                } else {
+                                    after_colon.to_string()
+                                };
+                                if !content_part.is_empty() {
+                                    patched.push((ln, content_part));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if patched.is_empty() {
+            None
+        } else {
+            Some(patched)
+        }
+    }
+
+    /// Content-aware keyword heuristic: find functional lines (non-comment, non-empty)
+    /// that semantically match the instruction's intent.
+    fn synthesize_keyword_heuristic(
+        &self,
+        content: &str,
+        instruction: &str,
+    ) -> Vec<(usize, String)> {
         let ins_lower = instruction.to_lowercase();
         let mut patched = Vec::new();
 
-        // Content-aware heuristic: find functional lines (non-comment, non-empty)
-        // that semantically match the instruction's intent.
         let keywords: Vec<&str> = ins_lower
             .split_whitespace()
             .filter(|w| w.len() > 3)

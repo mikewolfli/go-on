@@ -148,7 +148,8 @@ impl TripleFusionBridge {
     ///
     /// Records the evolution outcome as a corrective result so the metacognitive
     /// system can learn from past evolution attempts.
-    #[allow(dead_code)] // F-GAP-49: reserved for evolution outcome feedback loop
+    ///
+    /// Wired into EvolutionLoop::run() after each evolution cycle completes.
     pub fn record_evolution_outcome(
         &self,
         metacognitive: &MetacognitiveController,

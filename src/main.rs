@@ -29,7 +29,7 @@ mod main_module;
 pub use crate::agents::agent;
 pub use crate::core::config;
 pub use crate::core::config_validation;
-pub use crate::core::context;
+
 pub use crate::core::error;
 pub use crate::core::setup;
 pub use crate::governance::audit;

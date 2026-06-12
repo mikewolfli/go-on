@@ -237,8 +237,11 @@ impl Default for VoteConfig {
 ///
 /// Returns the REAL consensus verdict (approve/reject) and confidence.
 /// Non-blocking — returns (approve, 0.3) as degraded fallback on any failure.
-// F-GAP-48: intentionally not wired into the hot path; rationalize_decision is primary
-#[allow(dead_code)] // F-GAP-49 — reserved intelligence hub feature
+// F-GAP-48: intentionally not wired into the hot path; rationalize_decision is primary.
+// F-GAP-49: reserved for when consensus_vote_with_reputation (weighted/DelphiDebate)
+// needs a lightweight synchronous fallback, or when CapabilityBus integration adds
+// external voter nodes that require a simpler sync API. Currently unused because
+// the async consensus_vote_with_reputation (below) is the primary path.
 pub fn consensus_vote_on(
     proposal_id: &str,
     proposal: serde_json::Value,

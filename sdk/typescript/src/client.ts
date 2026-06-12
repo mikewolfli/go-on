@@ -93,10 +93,12 @@ export class GoOnClient {
           (err as Error).message ?? "Unknown fetch error",
         );
         if (attempt < maxRetries) {
-          // Exponential backoff with jitter to prevent thundering herd
-          const baseDelay = 100 * 2 ** attempt;
-          const jitter = Math.random() * baseDelay * 0.3; // up to 30% jitter
-          await new Promise((r) => setTimeout(r, baseDelay + jitter));
+          // Exponential backoff with full jitter (AWS strategy)
+          // delay = random(0, min(30000, base * 2^attempt))
+          const baseMs = 1000;
+          const cap = Math.min(30000, baseMs * 2 ** attempt);
+          const delay = Math.floor(Math.random() * cap);
+          await new Promise((r) => setTimeout(r, delay));
         }
         continue;
       }
@@ -108,10 +110,12 @@ export class GoOnClient {
           `HTTP ${response.status}: ${response.statusText}`,
         );
         if (attempt < maxRetries) {
-          // Exponential backoff with jitter to prevent thundering herd
-          const baseDelay = 100 * 2 ** attempt;
-          const jitter = Math.random() * baseDelay * 0.3; // up to 30% jitter
-          await new Promise((r) => setTimeout(r, baseDelay + jitter));
+          // Exponential backoff with full jitter (AWS strategy)
+          // delay = random(0, min(30000, base * 2^attempt))
+          const baseMs = 1000;
+          const cap = Math.min(30000, baseMs * 2 ** attempt);
+          const delay = Math.floor(Math.random() * cap);
+          await new Promise((r) => setTimeout(r, delay));
         }
         continue;
       }

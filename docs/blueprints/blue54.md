@@ -21,7 +21,7 @@
 2. **排除分拆文件** — 不将现有文件拆分为更小文件（但允许重组为子模块目录）。
 3. **三端一统（backend / GUI / vscode-addon）** — 考虑三端配合、通讯流畅稳定性。
 4. **注释英文** — 所有新增模块的代码注释必须使用英文。
-5. **3 种服务器 Profile 全链路闭合** — profile-local、profile-simple-server、profile-multi-users-server 必须正确编译和行为一致。
+5. **3 种服务器 Profile 全链路闭合** — local、simple-server、multi-users-server 必须正确编译和行为一致。
 6. **5 种协议全链路闭合** — auto、acp stdio、acp http、mcp stdio、mcp http。
 7. **零警告、零冲突、零遗漏** — 最终验证 `cargo clippy --all-features -- -D warnings` 零警告。
 8. **完整闭合** — 每个模块最终必须达到：编译通过、零警告、接入 governance.status、可通过 health 端点观测、有集成测试覆盖。
@@ -45,7 +45,7 @@
 | L9 | GUI 层 | 9/10 | **5/10** | SSE 解析死代码+重复实现、审批面板是空 Stub、取消响应延迟高 | **9/10** |
 | L10 | SDK 层 | 8/10 | **3/10** | 无 TypeScript SDK、ACP 协议类型 30+缺失、Chat 端点三端不一致 | **8/10** |
 | L11 | VSCode 层 | 9/10 | **5/10** | SSE 事件类型与后端不匹配、无 Agent 协作 UI、会话元数据丢失 | **9/10** |
-| L12 | 测试层 | 10/10 | **4/10** | CI 吞掉集成测试失败、仅 profile-local 有测试、7 个 E2E 全 #[ignore] | **9/10** |
+| L12 | 测试层 | 10/10 | **4/10** | CI 吞掉集成测试失败、仅 local 有测试、7 个 E2E 全 #[ignore] | **9/10** |
 | L13 | 部署层 | 10/10 | **5/10** | Docker 缺 languages/ 目录、systemd 用户名不匹配、多用户配置无代码 | **9/10** |
 | L14 | i18n 层 | 9/10 | **6/10** | 后端/GUI 双命名空间无共享、Docker 缺文件、无复数/ICU 格式化 | **9/10** |
 | L15 | 安全层 | 10/10 | **7/10** | VaultRotator 全 Stub、SecurityGovernor Default 姿态不一致 | **10/10** |
@@ -592,11 +592,11 @@ GUI、VSCode 扩展和 SDK 各自使用不同的 URL、解析器和事件格式�
 - **现状**：两个 Dockerfile 都执行 `COPY config/ config/` 但 `languages/`、`prompts/`、`RULES/` 位于项目根目录（不在 `config/` 内）。容器启动时 i18n 将失败，提示文件不存在。
 - **修复**：添加 `COPY languages/ languages/`、`COPY prompts/ prompts/`、`COPY RULES/ RULES/` 到两个 Dockerfile。或在 Dockerfile 中合并到 config 目录。
 
-#### GAP-B54-077（MEDIUM）：profile-local 和 profile-simple-server 编译时完全相同
+#### GAP-B54-077（MEDIUM）：local 和 simple-server 编译时完全相同
 
 - **文件**：`Cargo.toml`
-- **现状**：两个 profile 启用**完全相同**的特征标志集。仅在 config TOML 文件上不同。编译时产生相同二进制。`profile-simple-server` 特征作为编译门控是冗余的。
-- **修复**：选项 (a) 向 `profile-simple-server` 添加 `sub-bus-distributed-memory` 用于单节点内存共享；(b) 合并 profile 并仅通过 config 区分；(c) 添加部署特定特征如 `server-http`。
+- **现状**：两个 profile 启用**完全相同**的特征标志集。仅在 config TOML 文件上不同。编译时产生相同二进制。`simple-server` 特征作为编译门控是冗余的。
+- **修复**：选项 (a) 向 `simple-server` 添加 `sub-bus-distributed-memory` 用于单节点内存共享；(b) 合并 profile 并仅通过 config 区分；(c) 添加部署特定特征如 `server-http`。
 
 #### GAP-B54-078（LOW）：Config 模式版本化缺失
 
@@ -626,11 +626,11 @@ GUI、VSCode 扩展和 SDK 各自使用不同的 URL、解析器和事件格式�
 - **现状**：`cargo test ... --test e2e_integration ... || echo "WARNING: e2e_integration tests had failures"`——`|| echo` 模式吞掉退出码。**CI gate 即使在集成测试失败时也通过绿色。**
 - **修复**：删除 `|| echo` 回退，让失败传播。如果测试不稳定，修复不稳定或使用 `continue-on-error: true` 并显式报告。
 
-#### GAP-B54-082（HIGH）：仅 profile-local 获得测试覆盖 —— 其他 Profile 零测试
+#### GAP-B54-082（HIGH）：仅 local 获得测试覆盖 —— 其他 Profile 零测试
 
 - **文件**：`.github/workflows/build.yml:37-48`
-- **现状**：`profile-simple-server` 仅获得 clippy（无测试）。`profile-multi-users-server` 仅获得 clippy（无测试）。特征门控代码路径（`backend-postgres`、`sub-bus-distributed-memory`、mTLS）从不测试。
-- **修复**：(a) 添加 `cargo test --no-default-features -F profile-simple-server --lib`；(b) 使用 PostgreSQL 服务容器添加 `cargo test --no-default-features -F profile-multi-users-server --lib`。
+- **现状**：`simple-server` 仅获得 clippy（无测试）。`multi-users-server` 仅获得 clippy（无测试）。特征门控代码路径（`backend-postgres`、`sub-bus-distributed-memory`、mTLS）从不测试。
+- **修复**：(a) 添加 `cargo test --no-default-features -F simple-server --lib`；(b) 使用 PostgreSQL 服务容器添加 `cargo test --no-default-features -F multi-users-server --lib`。
 
 #### GAP-B54-083（HIGH）：全部 7 个 E2E 测试为 #[ignore] —— 从不运行
 

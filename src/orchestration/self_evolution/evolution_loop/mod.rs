@@ -38,6 +38,8 @@ use tracing::{debug, error, info, warn};
 
 use crate::agents::self_evolution_agent::SelfEvolutionAgent;
 use crate::intelligence::evolution_graph::{EvolutionGraph, EvolutionStage};
+use crate::intelligence::metacognitive::global_metacognitive_controller;
+use crate::intelligence::triple_fusion::global_triple_fusion_bridge;
 use crate::observability::alert_manager::AlertManager;
 use crate::orchestration::self_evolution::evolution_history::EvolutionHistory;
 
@@ -368,6 +370,10 @@ impl EvolutionLoop {
                     }
                 }
 
+                // Capture values before they are moved below.
+                let evolution_success = verified.is_success();
+                let trigger_captured = trigger.clone();
+
                 // Phase 7: Record in history
                 if let Some(ref history) = self.history {
                     let _ = history
@@ -381,6 +387,17 @@ impl EvolutionLoop {
                         )
                         .await;
                 }
+
+                // Phase 3 (TripleFusion evolution outcome): feed evolution
+                // outcomes back into metacognitive corrective learning.
+                global_triple_fusion_bridge()
+                    .lock()
+                    .await
+                    .record_evolution_outcome(
+                        global_metacognitive_controller(),
+                        &trigger_captured,
+                        evolution_success,
+                    );
 
                 info!(cycle_id = self.cycle_id, "evolution cycle completed");
             }

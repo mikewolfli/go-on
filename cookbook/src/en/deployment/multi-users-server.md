@@ -2,7 +2,7 @@
 
 ## Overview
 
-Multi-Users Server mode (`profile-multi-users-server`) is the enterprise-grade build profile for go-on, designed for production environments with multiple concurrent users. It uses PostgreSQL with pgvector for scalable storage and provides advanced features for security, monitoring, and high availability.
+Multi-Users Server mode (`multi-users-server`) is the enterprise-grade build profile for go-on, designed for production environments with multiple concurrent users. It uses PostgreSQL with pgvector for scalable storage and provides advanced features for security, monitoring, and high availability.
 
 ## Features
 
@@ -148,7 +148,7 @@ The following runtime configuration fields are specific to multi-user mode:
 ### Building for Enterprise Deployment
 ```bash
 # Build with multi-users-server profile
-cargo build --no-default-features -F profile-multi-users-server
+cargo build --no-default-features -F multi-users-server
 
 # Or explicitly enable features
 cargo build --features "backend-postgres postgres pgvector"

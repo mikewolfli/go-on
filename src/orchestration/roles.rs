@@ -40,24 +40,11 @@ impl AgentRole {
 // S1: RoleDefinition + RoleRegistry
 // ───────────────────────────────────────────────
 
-/// Full definition for a custom agent role
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RoleDefinition {
-    pub name: String,
-    pub description: String,
-    #[serde(default)]
-    pub industry: String,
-    /// Keywords used by rank_execution_agents; mirrors the built-in role keyword lists
-    pub keywords: Vec<String>,
-    /// Allowed tool names for this role
-    pub allowed_tools: Vec<String>,
-    /// Max tool calls per turn
-    pub max_tool_calls: usize,
-    /// Token budget per turn
-    pub token_budget: usize,
-    /// Timeout in seconds
-    pub timeout_seconds: u64,
-}
+/// Re-exported from [`crate::shared::role_types::RoleDefinition`].
+///
+/// This type was moved to `shared::role_types` to break the circular
+/// dependency between `core::config::types` and `orchestration::roles`.
+pub use crate::shared::role_types::RoleDefinition;
 
 /// Runtime registry of custom role definitions.
 /// Populated from `[[agents.custom_roles]]` config at startup.

@@ -39,7 +39,7 @@
 ### 0.2 硬性执行规则
 
 1. **5 种协议全链路闭合** — `auto` (adaptive)、`acp stdio`、`acp http`、`mcp stdio`、`mcp http`。每个推荐能力必须接入全部 5 种协议模式，不允许静默缺失。
-2. **3 种服务器 Profile 全链路闭合** — `profile-local`、`profile-simple-server`、`profile-multi-users-server`。每个推荐能力必须在全部 3 种 profile 特性集下正确编译和行为一致。不允许 `#[cfg]` 不匹配。
+2. **3 种服务器 Profile 全链路闭合** — `local`、`simple-server`、`multi-users-server`。每个推荐能力必须在全部 3 种 profile 特性集下正确编译和行为一致。不允许 `#[cfg]` 不匹配。
 3. **注释英文** — 所有新增模块的代码注释必须使用英文。不允许中英文混合。
 4. **国际化（i18n）全覆盖** — 所有面向用户的字符串（GUI、addon、后端日志）必须经过 locale 键转译。不允许任何语言的硬编码展示字符串。
 5. **完整闭合** — 本文列出的每个模块最终必须达到：编译通过 → 零警告 → 接入 governance.status → 可通过 health 端点观测 → 有集成测试覆盖。
@@ -1250,7 +1250,7 @@ pua_governance_profile: {
 
 **Profile 选择性接入**：
 
-| profile-local | profile-simple-server | profile-multi-users-server |
+| local | simple-server | multi-users-server |
 |:-------------:|:--------------------:|:--------------------------:|
 | ✅ 接入（ToolRegistry 已直连 MCP，只需接入 CapabilityBus 调度） | ✅ 接入（同 local + SkillRegistry 团队技能共享） | ✅ 接入（全量 + SkillImport 远程导入 + HarnessBus 全链路校验） |
 
@@ -1261,7 +1261,7 @@ pua_governance_profile: {
 pub struct ToolBus { ... }
 
 // Skill 远程导入：仅 multi-users-server 需要
-#[cfg(feature = "profile-multi-users-server")]
+#[cfg(feature = "multi-users-server")]
 pub struct SkillImportEngine { ... }
 ```
 
@@ -1272,14 +1272,14 @@ pub struct SkillImportEngine { ... }
 
 ### 阶段一：核心双总线（所有 Profile 必选，P0）
 
-| 优先级 | 模块 | profile-local | profile-simple-server | profile-multi-users-server |
+| 优先级 | 模块 | local | simple-server | multi-users-server |
 |:------:|------|:-------------:|:--------------------:|:--------------------------:|
 | P0 | **HarnessBus 策略引擎** | ✅ 完整策略引擎（DispatchPolicy + ExecutionPolicy + GovernancePolicy + PolicyEvaluator + 安全护栏 + 动作校验 + 审计） | ✅ 同 local | ✅ 同 local + 租户配额策略 |
 | P0 | **CapabilityBus 能力总线** | ✅ 核心调度 + 6 子总线（工作流学习/信誉/能力图谱/强化学习/可观测/内存） | ✅ 同 local + 编排总线 | ✅ 全量 12 子总线 |
 
 ### 阶段二：按 Profile 选择性接入（P1-P2）
 
-| 子总线 | 优先级 | profile-local | profile-simple-server | profile-multi-users-server |
+| 子总线 | 优先级 | local | simple-server | multi-users-server |
 |:------:|:------:|:-------------:|:--------------------:|:--------------------------:|
 | **工具调用 / Skill 总线** ToolBus | P0 | ✅ 接入（ToolRegistry 调度到 CapabilityBus） | ✅ 接入（同 local + SkillRegistry） | ✅ 接入（全量 + SkillImport + HarnessBus 全链路校验） |
 | **可观测性总线** ObservabilityBus | P1 | ❌ 不接入（stdout 日志足够） | ⚠️ 可选（仅 Performance 指标） | ✅ 全量（OTLP + 指标 + 日志 + 审计追溯） |
@@ -1296,7 +1296,7 @@ pub struct SkillImportEngine { ... }
 
 ### 阶段三：ARCH 扩展点接入（按 Profile 过滤）
 
-| 模块 | profile-local | profile-simple-server | profile-multi-users-server |
+| 模块 | local | simple-server | multi-users-server |
 |------|:-------------:|:--------------------:|:--------------------------:|
 | ToolBus（ARCH-13 子总线 13） | ✅ 接入（核心） | ✅ 接入（核心） | ✅ 接入（全量） |
 | PromptLayers（ARCH-03） | ❌ 不接入 | ⚠️ 可选 | ✅ 接入 |
@@ -1391,10 +1391,10 @@ pub struct SkillImportEngine { ... }
 
 | 验证项 | 结果 |
 |------|:----:|
-| `cargo clippy -F profile-local -- -D warnings` | ✅ 0 errors |
-| `cargo clippy -F profile-simple-server -- -D warnings` | ✅ 0 errors |
-| `cargo clippy -F profile-multi-users-server -- -D warnings` | ✅ 0 errors |
-| `cargo test --bin go-on`（profile-local） | ✅ **290/290 passed** |
+| `cargo clippy -F local -- -D warnings` | ✅ 0 errors |
+| `cargo clippy -F simple-server -- -D warnings` | ✅ 0 errors |
+| `cargo clippy -F multi-users-server -- -D warnings` | ✅ 0 errors |
+| `cargo test --bin go-on`（local） | ✅ **290/290 passed** |
 | 全量集成测试 | ✅ **84 passed, 2 flaky**（预存 flaky） |
 | 3 profile cargo check | ✅ 全部零 error |
 
@@ -1625,10 +1625,10 @@ BLUE35 从 FUTURE 文档中提取了 16 个可执行步骤。但以下 FUTURE �
 | 死代码模块删除 | ✅ **12 个文件**（约 4000 行） |
 | P0/P1/P2 修复项 | ✅ **全部完成**（见 §7 优先级表 ✅ 标记） |
 | 已实现不在本文记录 | ✅ Token Cache / 背景任务 / 可观测性 / 响应缓存 / 向量存储 / Autotune / Graceful Shutdown / DeterministicVerifier / StartupContext / WorkflowRegistry |
-| `cargo clippy -F profile-local -- -D warnings` | ✅ **0 errors** |
-| `cargo clippy -F profile-simple-server -- -D warnings` | ✅ **0 errors** |
-| `cargo clippy -F profile-multi-users-server -- -D warnings` | ✅ **0 errors** |
-| `cargo test --bin go-on`（profile-local） | ✅ **238/238 passed** |
+| `cargo clippy -F local -- -D warnings` | ✅ **0 errors** |
+| `cargo clippy -F simple-server -- -D warnings` | ✅ **0 errors** |
+| `cargo clippy -F multi-users-server -- -D warnings` | ✅ **0 errors** |
+| `cargo test --bin go-on`（local） | ✅ **238/238 passed** |
 | GUI `npm run build` | ✅ **0 errors, 0 warnings** |
 | VS Code addon `npm run check` | ✅ **0 errors, 0 warnings** |
 | 三端一致性 | ✅ backend / GUI / addon 全部通过 |
@@ -1708,19 +1708,19 @@ pub struct HarnessBus { ... }  // 无条件启用
 pub struct CapabilityBus { ... }  // 无条件启用
 
 // ObservabilityBus：仅在 multi-users-server 编译
-#[cfg(feature = "profile-multi-users-server")]
+#[cfg(feature = "multi-users-server")]
 pub struct ObservabilityBus { ... }
 
 // OptimizationBus：仅在 multi-users-server 编译
-#[cfg(feature = "profile-multi-users-server")]
+#[cfg(feature = "multi-users-server")]
 pub struct OptimizationBus { ... }
 
 // OrchestrationBus：simple-server 可选，multi-users-server 全量
-#[cfg(any(feature = "profile-simple-server", feature = "profile-multi-users-server"))]
+#[cfg(any(feature = "simple-server", feature = "multi-users-server"))]
 pub struct OrchestrationBus { ... }
 
 // DistributedMemoryBus：仅 multi-users-server 且多节点
-#[cfg(feature = "profile-multi-users-server")]
+#[cfg(feature = "multi-users-server")]
 pub struct DistributedMemoryBus { ... }
 ```
 
@@ -1766,11 +1766,11 @@ HarnessBus 在前，CapabilityBus 在后：先确保合规，再开放能力。
 
 | 验证项 | 结果 |
 |--------|:----:|
-| `cargo test --bin go-on`（profile-local） | ✅ **320/320 passed**（从 262→290→307→320） |
+| `cargo test --bin go-on`（local） | ✅ **320/320 passed**（从 262→290→307→320） |
 | 集成测试 | ✅ **84 passed, 2 flaky**（预存 flaky，非本轮引入） |
-| `cargo check -F profile-local` | ✅ **0 errors** |
-| `cargo check -F profile-simple-server` | ✅ **0 errors** |
-| `cargo check -F profile-multi-users-server` | ✅ **0 errors** |
+| `cargo check -F local` | ✅ **0 errors** |
+| `cargo check -F simple-server` | ✅ **0 errors** |
+| `cargo check -F multi-users-server` | ✅ **0 errors** |
 
 ### 按 Phase 完成率
 
@@ -1833,7 +1833,7 @@ HarnessBus 在前，CapabilityBus 在后：先确保合规，再开放能力。
 | 指标 | 值 |
 |------|:---:|
 | cargo check（3 profiles） | ✅ **0 errors** |
-| cargo test --bin go-on（profile-local） | ✅ **~437/437 passed**（115 新增测试用例） |
+| cargo test --bin go-on（local） | ✅ **~437/437 passed**（115 新增测试用例） |
 | 集成测试 | ✅ **84 passed, 2 flaky** |
 | 全量测试覆盖 | ~437 unit + 84 integration = **~521 测试** |
 | 新创建模块（本轮） | **12 个**（tool_bus/observability_bus/optimization_bus/memory_bus/protocol_bus/orchestration_bus/distributed_memory_bus + omnipotent/artifact/discovery/matcher + RemoteSkill） |
@@ -1909,9 +1909,9 @@ Overall:                       ████████████████�
 
 | 指标 | 值 |
 |------|:---:|
-| cargo check（profile-local） | ✅ **0 errors, 79 warnings**（主要为预存 unused struct/function） |
-| cargo check（profile-simple-server） | ✅ **0 errors, 79 warnings** |
-| cargo check（profile-multi-users-server） | ✅ **0 errors, 81 warnings** |
+| cargo check（local） | ✅ **0 errors, 79 warnings**（主要为预存 unused struct/function） |
+| cargo check（simple-server） | ✅ **0 errors, 79 warnings** |
+| cargo check（multi-users-server） | ✅ **0 errors, 81 warnings** |
 | 新模块测试用例 | ✅ **~117 passed**（12 模块 × 平均 9.75 测试） |
 | 预存模块测试（前轮） | ✅ 全部通过 |
 | BLUE38 §7 完成率 | **26/26 ✅ 全部完成** |
@@ -1971,8 +1971,8 @@ Overall:                       ████████████████�
 
 | 指标 | 上一轮 | 本轮 |
 |------|:-----:|:----:|
-| cargo check（profile-local） | ✅ 0 errors, 0 warnings | ✅ 0 errors, 0 warnings |
-| cargo test --bin go-on（profile-local） | ✅ **253/253 passed** | ✅ **267/267 passed**（+14 新增测试） |
+| cargo check（local） | ✅ 0 errors, 0 warnings | ✅ 0 errors, 0 warnings |
+| cargo test --bin go-on（local） | ✅ **253/253 passed** | ✅ **267/267 passed**（+14 新增测试） |
 | src/ 文件数 | 145 | **147**（+2: `task_graph_store.rs`, `scheduler.rs`） |
 | 文件级 `#![allow(dead_code)]` | **0** | **0** |
 | 模块级 `#[allow(dead_code)]` | **0** | **0** |
@@ -2074,9 +2074,9 @@ Phase 4 从 40% → 67% 的详细计算：
 
 | 指标 | 值 |
 |------|:---:|
-| cargo check（profile-local） | ✅ **0 errors** |
-| cargo check（profile-simple-server） | ✅ **0 errors** |
-| cargo check（profile-multi-users-server） | ✅ 0 errors（已有 feature 冲突，非本轮引入） |
+| cargo check（local） | ✅ **0 errors** |
+| cargo check（simple-server） | ✅ **0 errors** |
+| cargo check（multi-users-server） | ✅ 0 errors（已有 feature 冲突，非本轮引入） |
 | 新模块测试（过滤） | ✅ **143 passed**, 0 failed |
 | 已修复 council 测试 | ✅ **22 passed**, 0 failed（修复死锁 + 断言） |
 | 已启用 consensus 测试 | ✅ **20 passed**, 0 failed |
@@ -2112,7 +2112,7 @@ Phase 4 → **100%**（完成最后 3 项 Low 优先级模块）:
 
 | F-GAP | 模块 | 位置 | 测试数 | 说明 |
 |:-----:|------|------|:------:|------|
-| **F-GAP-20** | **分布式记忆传输层（Transport Layer）** | `src/intelligence/capability_bus/distributed_memory_bus.rs`（增强） | **+10** | MemoryTransportConfig/SyncStatus/TransportStats；start_transport/stop_transport/sync_now/ingest_shared；`#[cfg(feature="profile-multi-users-server")]` 门控；10 个新增传输层测试 |
+| **F-GAP-20** | **分布式记忆传输层（Transport Layer）** | `src/intelligence/capability_bus/distributed_memory_bus.rs`（增强） | **+10** | MemoryTransportConfig/SyncStatus/TransportStats；start_transport/stop_transport/sync_now/ingest_shared；`#[cfg(feature="multi-users-server")]` 门控；10 个新增传输层测试 |
 | **F-GAP-23** | **世界模型流水线（World Model）** | `src/intelligence/world_model.rs` | **12** | WorldEntity/Relationship/WorldEvent/StateSnapshot；EntityType 7 种/RelationshipType 6 种；query_entities/query_relationships/query_events；snapshot/cleanup_stale |
 | **F-GAP-24** | **持续学习中心（Continuous Learning）** | `src/intelligence/continuous_learning.rs` | **14** | LearningTask/LearningTaskType/ConsolidatedMemory/ForgettingCurve/CurriculumStage；指数遗忘曲线；consolidate/reinforce/detect_forgetting/apply_curriculum/replay_important |
 | **F-GAP-27** | **超弹性（Hyper-resilience）** | `src/resilience/hyper_resilience.rs` | **12** | CircuitBreaker 三态（Closed/Open/HalfOpen）+ FailoverGroup + DegradationLevel 四阶段；SelfHealingAction 5 种；system_health 按开闸比例自动判定 Emergency/Constrained/Degraded/Normal |
@@ -2158,8 +2158,8 @@ Phase 4 从 67% → 86% 的详细计算：
 
 | 指标 | 值 |
 |------|:---:|
-| cargo check（profile-local） | ✅ **0 errors** |
-| cargo check（profile-simple-server） | ✅ **0 errors** |
+| cargo check（local） | ✅ **0 errors** |
+| cargo check（simple-server） | ✅ **0 errors** |
 | 新模块测试（过滤） | ✅ **172 passed**, 0 failed |
 | 模块级 `#[allow(dead_code)]` | **0** |
 | F-GAP 模块完成数 | **18/21**（86%） |
@@ -2190,8 +2190,8 @@ Phase 4 ✅ **100%** — 所有 21 项 F-GAP 模块全部完成。
 ```
 所有 Phase 4 模块测试:  ✅ 227 passed (累计, 0 failed)
 Phase 0-3 预存测试:     ✅ 全部通过
-profile-local:           ✅ 0 errors
-profile-simple-server:   ✅ 0 errors
+local:           ✅ 0 errors
+simple-server:   ✅ 0 errors
 ```
 
 ### 最终完成率
@@ -2238,8 +2238,8 @@ Overall:                       ████████████████�
 
 | 指标 | 值 |
 |------|:---:|
-| cargo check（profile-local） | ✅ **0 errors** |
-| cargo check（profile-simple-server） | ✅ **0 errors** |
+| cargo check（local） | ✅ **0 errors** |
+| cargo check（simple-server） | ✅ **0 errors** |
 | Phase 4 全模块测试 | ✅ **227 passed**, 0 failed |
 | 模块级 `#[allow(dead_code)]` | **0** |
 | F-GAP 模块完成数 | **21/21（100%）** |
@@ -2274,9 +2274,9 @@ Overall:                       ████████████████�
 
 | 验证项 | 值 |
 |:-------|:---:|
-| cargo check（profile-local） | ✅ **0 errors, 1 warning**（预存 `QueuedMessage.status`）|
-| cargo check（profile-simple-server） | ✅ **0 errors, 1 warning**（同上）|
-| cargo check（profile-multi-users-server） | ✅ **0 errors, 2 warnings**（同上 + 预存 `import_remote_skill`）|
+| cargo check（local） | ✅ **0 errors, 1 warning**（预存 `QueuedMessage.status`）|
+| cargo check（simple-server） | ✅ **0 errors, 1 warning**（同上）|
+| cargo check（multi-users-server） | ✅ **0 errors, 2 warnings**（同上 + 预存 `import_remote_skill`）|
 | Phase 4 模块双总线接入率 | **27/27 = 100% ✅** |
 | 新增模块接入数（本轮） | **7 个** |
 | 未接入模块数 | **0 🎉** |
@@ -2322,17 +2322,17 @@ Overall:                       ████████████████�
 | MemoryBus | 无条件（全 profile）| ✅ BLUE38: multi 全量 — 当前简化全接入 |
 | ProtocolBus | 无条件（全 profile）| ✅ BLUE38: multi 可选 — 当前简化全接入 |
 | OrchestrationBus | 无条件（全 profile）| ✅ BLUE38: simple 可选/multi 全量 — 当前简化全接入 |
-| DistributedMemoryBus | unconditional + `#[cfg(feature = "profile-multi-users-server")]` 内部逻辑 | ✅ BLUE38: multi 可选 |
-| AgentFactory | `cfg(feature = "profile-simple-server" or "profile-multi-users-server")` | ✅ 仅多 agent 场景需要 |
-| Council | `cfg(feature = "profile-simple-server" or "profile-multi-users-server")` | ✅ 仅多 agent 场景需要 |
+| DistributedMemoryBus | unconditional + `#[cfg(feature = "multi-users-server")]` 内部逻辑 | ✅ BLUE38: multi 可选 |
+| AgentFactory | `cfg(feature = "simple-server" or "multi-users-server")` | ✅ 仅多 agent 场景需要 |
+| Council | `cfg(feature = "simple-server" or "multi-users-server")` | ✅ 仅多 agent 场景需要 |
 
 #### 核查 4：测试运行状态
 
 | Profile | 单元测试 | 集成测试 | 结论 |
 |:--------|:--------:|:--------:|:----:|
-| profile-local (default) | ✅ 85 passed, 0 failed | ⚠️ 1 flaky（`rpc_conversation_checkpoint_and_rollback` — 已知 RPC 时序测试）| ✅ 正常 |
-| profile-simple-server | ✅ 84 passed, 0 failed | 同上 | ✅ 正常 |
-| profile-multi-users-server | ✅ 编译通过（2 dead_code warnings）| 同上 | ✅ 正常 |
+| local (default) | ✅ 85 passed, 0 failed | ⚠️ 1 flaky（`rpc_conversation_checkpoint_and_rollback` — 已知 RPC 时序测试）| ✅ 正常 |
+| simple-server | ✅ 84 passed, 0 failed | 同上 | ✅ 正常 |
+| multi-users-server | ✅ 编译通过（2 dead_code warnings）| 同上 | ✅ 正常 |
 
 #### 核查 5：27 个子模块 vs BLUE38 全量功能覆盖
 
@@ -2425,7 +2425,7 @@ Overall:                       ████████████████�
 
 | 验证项 | 结果 |
 |:-------|:----:|
-| cargo check（profile-local） | ✅ **0 errors, 4 warnings**（预存 dead_code，非本次引入）|
+| cargo check（local） | ✅ **0 errors, 4 warnings**（预存 dead_code，非本次引入）|
 | 增强模块测试（discovery + metacognitive + world_model + skill + tool + provenance + reputation + qlearning + drift + capability_graph） | ✅ **125/125 passed** |
 | 全部单元测试 | ✅ **722/722 passed** |
 | 集成测试 | ✅ **8/8 passed**（仅 1 个已知不稳定的 RPC 时序测试除外）|
@@ -2563,9 +2563,9 @@ Overall:                       ████████████████�
 
 | 指标 | 值 |
 |:----|:----|
-| cargo check（profile-local） | ✅ **0 errors, 5 warnings**（预存 unused struct/function）|
-| cargo check（profile-simple-server） | ✅ **0 errors, 5 warnings** |
-| cargo check（profile-multi-users-server） | ✅ **0 errors, 6 warnings** |
+| cargo check（local） | ✅ **0 errors, 5 warnings**（预存 unused struct/function）|
+| cargo check（simple-server） | ✅ **0 errors, 5 warnings** |
+| cargo check（multi-users-server） | ✅ **0 errors, 6 warnings** |
 | fault_tolerance 测试 | ✅ **20 passed**（+6 新增：恢复计划/执行/完成/失败/升级/集群健康）|
 | transport 测试 | ✅ **37 passed**（+5 新增：QoS/Dedup/Peek/便利方法/全通道统计）|
 | 全量单元测试 | ✅ **735 passed**（+13，原 722）|
@@ -2656,16 +2656,16 @@ let _ = consensus.cast_vote("capability-bus", ConsensusVote { voter: "capability
 | `#![allow(dead_code)]` 文件 | **2** (hyper_resilience, evolution_graph) | **0** |
 | 零测试模块 | **1** (WorkflowRegistry) | **0** |
 | 创建的未使用模块 | **2** (transport, consensus) | **0** |
-| 全量测试通过（profile-local） | **722 → 747** ⬆ | **766 单测 + 86 集成 + 14 transport = 866 总通过** ✅ |
-| 全量测试通过（profile-simple-server） | — | **805 单测 + 86 集成 + 14 transport = 905 总通过** ✅ |
-| 全量测试通过（profile-multi-users-server） | — | **798 单测 + 86 集成 + 14 transport = 898 总通过** ✅ |
+| 全量测试通过（local） | **722 → 747** ⬆ | **766 单测 + 86 集成 + 14 transport = 866 总通过** ✅ |
+| 全量测试通过（simple-server） | — | **805 单测 + 86 集成 + 14 transport = 905 总通过** ✅ |
+| 全量测试通过（multi-users-server） | — | **798 单测 + 86 集成 + 14 transport = 898 总通过** ✅ |
 | cargo check 3 profiles | ✅ 0 errors | ✅ 0 errors |
 | cargo check 3 profiles 零 warning | ✅ | ✅ |
 | 模块级 `#![allow(dead_code)]` | **2** | **0** |
 | `#![allow(dead_code)]` 文件级 | **2** | **0** ✅ |
-| cargo clippy -D warnings（profile-local） | ✅ | ✅ |
-| cargo clippy -D warnings（profile-simple-server） | ✅ | ✅ |
-| cargo clippy -D warnings（profile-multi-users-server） | ✅ | ✅ |
+| cargo clippy -D warnings（local） | ✅ | ✅ |
+| cargo clippy -D warnings（simple-server） | ✅ | ✅ |
+| cargo clippy -D warnings（multi-users-server） | ✅ | ✅ |
 | 零测试集成测试失败 | ❌ **4 个 transport_parity 失败** | ✅ **0 失败 — 全部修复** |
 
 ### 本轮修复总清单
@@ -2734,9 +2734,9 @@ let _ = consensus.cast_vote("capability-bus", ConsensusVote { voter: "capability
 
 | Profile | cargo check | cargo clippy -D warnings | cargo test |
 |---------|:-----------:|:------------------------:|:----------:|
-| profile-local | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **866 全部通过**（766 unit + 86 rpc + 14 transport） |
-| profile-simple-server | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **905 全部通过** |
-| profile-multi-users-server | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **898 全部通过** |
+| local | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **866 全部通过**（766 unit + 86 rpc + 14 transport） |
+| simple-server | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **905 全部通过** |
+| multi-users-server | ✅ 0 errors, 0 warnings | ✅ 0 errors | ✅ **898 全部通过** |
 
 ### 最终星级全表
 

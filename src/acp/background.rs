@@ -843,14 +843,6 @@ pub async fn start_background_tasks(
         );
     }
 
-    // ── LivePerformanceFeed for model observability ────────────────────
-    // Lives for the full function scope so it is not immediately dropped (GAP-B58-C03/C05).
-    let _perf_feed = crate::observability::live_performance::LivePerformanceFeed::new(0.3);
-    tracing::info!(
-        target: "observability",
-        "LivePerformanceFeed initialized"
-    );
-
     // ── BLUE56-GAP-C04: Hyper-resilience health checks ─────────────────
     // Start background health checks for circuit breaker self-healing.
     // The health check interval is configured in ResilienceConfig.

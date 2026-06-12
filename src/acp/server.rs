@@ -564,7 +564,7 @@ impl AcpServer {
                 self.resilience.circuit_breakers.as_ref(),
                 |guard| guard.open_count(),
             ),
-            memory_usage_bytes: 0,
+            memory_usage_bytes: crate::observability::performance::get_memory_usage(),
             cpu_usage_percent: 0.0,
             ..MetricsSnapshot::default()
         };

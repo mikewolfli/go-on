@@ -377,6 +377,8 @@ pub struct RecoveryOrchestrator {
     total_auto_attempts: u32,
     /// Total number of escalation events.
     total_escalations: u32,
+    /// Total number of degradation events.
+    total_degradations: u32,
     /// Hyper-resilience engine for circuit breaker checks and failure recording.
     /// Skipped in serialization since `Arc` is not `Serialize`.
     #[serde(skip)]
@@ -407,6 +409,7 @@ impl RecoveryOrchestrator {
             consecutive_auto_failures: 0,
             total_auto_attempts: 0,
             total_escalations: 0,
+            total_degradations: 0,
             engine: None,
         }
     }
@@ -487,6 +490,22 @@ impl RecoveryOrchestrator {
                     attempt: *attempt,
                     max_attempts: *max_attempts,
                     backoff_ms: actual_backoff,
+                }
+            }
+            RecoveryAction::Degrade {
+                fallback_tool,
+                rationale,
+            } => {
+                tracing::info!(
+                    target: "recovery",
+                    "[RECOVERY] Degrading — using fallback '{}': {}",
+                    fallback_tool,
+                    rationale,
+                );
+                self.total_degradations += 1;
+                RecoveryAction::Degrade {
+                    fallback_tool: fallback_tool.clone(),
+                    rationale: rationale.clone(),
                 }
             }
             other => other.clone(),

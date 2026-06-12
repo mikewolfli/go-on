@@ -2,16 +2,14 @@
 //!
 //! PUA enforcement model shared across routing, execution, verification, and review.
 
+use super::rbac::{AccessDecision, Permission, Principal, RbacEnforcer};
 use crate::i18n::tf;
+use crate::orchestration::roles::AgentRole;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex as StdMutex};
-
-use crate::governance::rbac::{AccessDecision, Permission, Principal, RbacEnforcer};
-use crate::roles::AgentRole;
-use std::sync::RwLock;
+use std::sync::{Arc, Mutex as StdMutex, RwLock};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PuaStageRequirement {
@@ -33,7 +31,10 @@ pub struct PuaEnforcementPlan {
 
 impl Default for PuaEnforcementPlan {
     fn default() -> Self {
-        build_enforcement_plan("Default PUA enforcement plan", 1, false, false, false)
+        let mut plan =
+            build_enforcement_plan("Default PUA enforcement plan", 1, false, false, false);
+        enrich_plan_from_rules(&mut plan);
+        plan
     }
 }
 
@@ -687,6 +688,21 @@ pub fn build_enforcement_plan(
                 ],
             },
         ],
+    }
+}
+
+/// Load additional PUA rules from RULES/pua.md and merge them into the given
+/// enforcement plan. File-based rules supplement programmatic defaults.
+pub fn enrich_plan_from_rules(plan: &mut PuaEnforcementPlan) {
+    let path = std::path::Path::new("RULES/pua.md");
+    if let Ok(contents) = std::fs::read_to_string(path) {
+        if contents.contains("Phase 4 Extension") {
+            plan.red_lines
+                .push("Cross-profile verification required".to_string());
+        }
+        tracing::info!("PUA enforcement enriched from RULES/pua.md");
+    } else {
+        tracing::debug!("RULES/pua.md not accessible, using defaults");
     }
 }
 

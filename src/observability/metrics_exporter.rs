@@ -376,12 +376,18 @@ pub async fn build_prometheus_metrics(server: &AcpServer) -> String {
     lines.join("\n") + "\n"
 }
 
-/// Bridge `MetricsRecorder` (structured-logging / OTLP path) values into
-/// `RuntimeMetrics` (Prometheus /metrics path) for unified observability.
+/// Bridge the legacy `MetricsRecorder` values into the primary `RuntimeMetrics` path.
 ///
 /// Call this periodically (e.g. every metrics scrape) to synchronize the
-/// two metric systems. Only writes fields that `MetricsRecorder` tracks
+/// two metric systems. Only writes fields that the legacy `MetricsRecorder` tracks
 /// and `RuntimeMetrics` also exposes.
+///
+/// ## Bridge activation
+///
+/// This bridge is **always active** when both systems are initialized:
+/// - Called on every `/metrics` scrape in [`build_prometheus_metrics`]
+/// - Called periodically in the background task loop in
+///   `acp::background::start_background_tasks`
 pub fn bridge_metrics_recorder(runtime_metrics: &RuntimeMetrics, recorder: &MetricsRecorder) {
     let app = recorder.get_metrics();
 
@@ -418,7 +424,7 @@ pub fn bridge_metrics_recorder(runtime_metrics: &RuntimeMetrics, recorder: &Metr
 /// [`PrometheusMetricsRecorder::bridge_to`] periodically (or on each metrics
 /// scrape) to synchronize recorder values into a `RuntimeMetrics` snapshot
 /// for Prometheus exposure.
-#[allow(dead_code)] // F-GAP reserved
+#[allow(dead_code)] // F-GAP-49 — reserved metrics exporter features
 pub struct PrometheusMetricsRecorder {
     inner: MetricsRecorder,
 }

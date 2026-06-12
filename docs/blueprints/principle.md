@@ -1,0 +1,45 @@
+## 0. 执行规则
+
+1. gui-排除i18n 字段硬编码 — 不涉及 locale 文本本身的结构调整。
+2. 支持按要求按逻辑分步骤分拆文件 — 可按模块目录拆分重组。
+3. 三端一统（backend / GUI / vscode-addon） — 考虑三端配合、通讯流畅稳定性。
+4. 注释英文 — 所有新增模块的代码注释必须使用英文。
+5. ✅ 4 种服务器 Profile 全链路闭合 — local、simple-server、multi-users-server、full 全部正确编译（零警告）。
+6. ✅ 5 种协议全链路闭合 — auto、acp stdio、acp http、mcp stdio、mcp http。
+7. ✅ 零警告、零冲突 — `cargo clippy --all-targets -- -D warnings` 零警告通过。
+8. ✅ 完整闭合 — 每个模块达到：编译通过、零警告、接入 governance.status、可通过 health 端点观测。
+9. ✅ 不允许占位、空函数、逻辑错误 — 所有功能必须完整实现。
+10. ✅ 回写完成率 — 每轮完成后回写完成率至 blue69.md。
+11. ✅ 多轮反复扫描 — 5代理 × 独立验证全部收敛。
+12. ✅ 最后一趟扫描 — 本文为收敛终版，不留任何瑕疵和问题。
+13. ✅ 所有test fail, 不要ignore, 跳过，简化，全部修复。
+14. **🚫 绝对禁止假修复** — 修复必须产生可观测、可验证的行为变化。禁止以下反模式：
+    - 函数实现返回 Ok(()) 但内部无任何操作（perpetual no-op）
+    - stub 绕过：创建完整实现但在调用点用 if false 或 feature flag 绕过
+    - 仅在 #[cfg(test)] 中创建类型以消除 dead_code 警告（integration_gate 反模式）
+    - 添加 #[allow(dead_code)] 替代真正的接线或删除
+15. **🚫 绝对禁止不完整修复** — 每条修复必须完整闭环：
+    - 功能修复：实现 → 接线 → 调用路径可追踪 → 端到端行为可验证
+    - 性能修复：修改 → benchmark 对比 → 确认指标改善
+    - 删除死代码：删除 → 所有引用点更新 → cargo build 通过
+16. **🚫 绝对禁止空修复** — 禁止以下占位行为：
+    - 创建空函数体并声称"已实现"
+    - 添加注释"TODO: implement later"作为修复
+    - 将问题标记为 deprecated 但保留全部代码
+17. **🚫 绝对禁止跳过测试** — 测试修复的硬性要求：
+    - 失败的测试必须修复测试代码本身或修复被测代码，不得 #[ignore] 或注释掉
+    - 新增功能的测试必须是真实行为验证，不是 "assert!(true)" 或空测试体
+    - 集成测试必须实际启动子系统并验证行为，不得仅做 in-memory 类型构造
+18. **🔍 每条修复必须附带验证证据** — 修复完成后必须提供以下之一：
+    - cargo test 特定测试通过的输出
+    - cargo clippy 零警告（针对删除 dead_code）
+    - 运行时日志/指标证明行为变化
+    - 代码 diff 展示调用链路从入口到修复点的完整路径
+
+19. **test fail必须修复** — 失败的测试必须修复测试代码本身或修复被测代码，不得 #[ignore] 或注释掉
+20. **test ignored 必须修复** — 忽略的测试必须修复测试代码本身或修复被测代码，不得 #[ignore] 或注释掉
+21. **🚫 绝对禁止"迁移幻觉"** — 创建子模块并将旧代码标记 `#[allow(dead_code)]` ，但旧代码仍通过 `include!()` 在被实际使用 —— 这是"拆分幻觉"反模式。真正的拆分要求：子模块代码被实际调用，旧代码被删除，而不是共存。
+22. **🚫 绝对禁止"文档欺骗"** — 文档/注释声明某行为（如 "logs a warning and returns a default profile"）但代码执行相反行为（实际调用 `block_on`）。文档与代码必须一致。
+23. **🔥 所有 block_in_place + block_on 必须清零** — 在任何 production 热路径（chat、vote、debate、request）中，任何形式的 `block_in_place(|| handle.block_on(...))` 都是不允许的。唯一例外：一次性启动/初始化代码且已文档化原因。
+24. **🔥 所有 `Handle::current().block_on()` 必须清零** — 必须使用 `try_current()` + fallback 模式，绝不可直接调用 `Handle::current()` 然后 panic。
+25. **🔬 BLUE69 自检规则：每条 BLUE68 声称的修复必须独立验证** — 本蓝图通过5并行代理深度代码阅读 + 直接文件搜索 + build验证 BLUE68 的69项修复声明，而非信任其自我报告。

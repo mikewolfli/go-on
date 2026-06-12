@@ -218,7 +218,7 @@ impl ProvenanceLedger {
     }
 }
 
-#[allow(dead_code)] // F-GAP reserved
+#[allow(dead_code)] // F-GAP-49 — reserved provenance wiring
 fn now_ms() -> u64 {
     crate::shared::timestamps::now_ts_ms() as u64
 }

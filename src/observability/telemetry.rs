@@ -1,6 +1,6 @@
 //! OpenTelemetry runtime bridge for ACP tracing (Phase 2).
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use anyhow::Result;
@@ -15,6 +15,11 @@ use crate::config::RuntimeConfig;
 /// so it can be reset via `reset_otel()` for re-initialization support
 /// (e.g. after config reload or testing).
 static OTEL_INIT: Mutex<Option<Result<(), String>>> = Mutex::new(None);
+
+/// Guard against double-initialization of the global tracer provider.
+/// Mirrors `telemetry_enhanced::TRACER_INITIALIZED` to prevent this function
+/// from overwriting a provider already set by the enhanced module.
+pub(crate) static TRACER_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Reset the OpenTelemetry initialization state and replace the global
 /// tracer provider with a fresh one, allowing `TelemetryRuntime::new()`
@@ -31,6 +36,9 @@ pub fn reset_otel() {
         }
     };
     *guard = None;
+    // Also reset the tracer-initialized guard so re-initialization
+    // is allowed on the next call to `init_otel_provider`.
+    TRACER_INITIALIZED.store(false, Ordering::Release);
     // Replace the global provider with a fresh instance so that any
     // previous state is discarded. `global::shutdown_tracer_provider`
     // is not available in opentelemetry 0.31, so we achieve the same
@@ -53,6 +61,7 @@ impl TelemetryRuntime {
             return Self::default();
         }
 
+        #[allow(deprecated)]
         {
             let mut guard = match OTEL_INIT.lock() {
                 Ok(g) => g,
@@ -201,9 +210,24 @@ impl TelemetryRuntime {
     }
 }
 
+#[deprecated(
+    note = "Use `telemetry_enhanced::init_telemetry` / `init_tracing` instead. \
+    This legacy OTLP initializer may conflict with the enhanced module's tracer provider."
+)]
 fn init_otel_provider(_exporter: &str, endpoint: Option<String>, service_name: &str) -> Result<()> {
     use opentelemetry_sdk::trace::SdkTracerProvider;
     use opentelemetry_sdk::Resource;
+
+    // ── Guard: avoid re-initializing the global tracer provider ───────
+    // `telemetry_enhanced::init_tracing` may have already called
+    // `global::set_tracer_provider()`. Check before setting again to
+    // prevent the second call from silently replacing the first.
+    if TRACER_INITIALIZED.load(Ordering::Relaxed) {
+        tracing::info!(
+            "OpenTelemetry tracer provider already initialized; skipping re-initialization"
+        );
+        return Ok(());
+    }
 
     let resource = Resource::builder_empty()
         .with_attribute(KeyValue::new("service.name", service_name.to_string()))
@@ -229,6 +253,7 @@ fn init_otel_provider(_exporter: &str, endpoint: Option<String>, service_name: &
     };
 
     global::set_tracer_provider(provider);
+    TRACER_INITIALIZED.store(true, Ordering::Release);
     tracing::info!(
         service = service_name,
         "OpenTelemetry tracing provider initialized"

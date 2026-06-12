@@ -75,7 +75,15 @@ impl PolicyEvaluator {
         idempotency: Arc<Mutex<IdempotencyCache>>,
         runtime_control: Arc<Mutex<OnlineControllerState>>,
         guard: Arc<Mutex<SelfRationalizationGuard>>,
+        policy_reloader: Option<Arc<Mutex<PolicyReloader>>>,
     ) -> Self {
+        // Use default policies only when no policy_reloader is provided.
+        let default_policies = if policy_reloader.is_some() {
+            vec![]
+        } else {
+            Self::default_security_policies()
+        };
+
         Self {
             dispatch: DispatchPolicy::default(),
             execution: ExecutionPolicy::default(),
@@ -90,75 +98,76 @@ impl PolicyEvaluator {
             approval_engine: None,
             drift_protection: None,
             approval_learner: None,
-            policy_reloader: None,
+            policy_reloader,
             policies: Arc::new(RwLock::new(HashMap::new())),
-            security_governor: Arc::new({
-                let gov = SecurityGovernor::new(SecurityGovernorConfig {
-                    default_action: PolicyAction::Deny,
-                    ..Default::default()
-                });
-
-                // 1. read_allow — allow low-risk, read-only tasks
-                gov.register_policy(SecurityPolicy {
-                    id: "read_allow".into(),
-                    name: "Allow read/search operations".into(),
-                    description:
-                        "Permits read and search operations for zero-risk tasks with no file writes"
-                            .into(),
-                    severity: PolicySeverity::Low,
-                    action: PolicyAction::Allow,
-                    conditions: vec![
-                        PolicyCondition {
-                            field: "risk_score".into(),
-                            operator: ConditionOperator::Equals,
-                            value: "0".into(),
-                        },
-                        PolicyCondition {
-                            field: "file_count".into(),
-                            operator: ConditionOperator::Equals,
-                            value: "0".into(),
-                        },
-                    ],
-                    composition: PolicyComposition::And,
-                    escalation_level: None,
-                });
-
-                // 2. write_require_approval — require review for tasks that write files
-                gov.register_policy(SecurityPolicy {
-                    id: "write_require_approval".into(),
-                    name: "Write operations require approval".into(),
-                    description: "Tasks that modify files require manual review approval".into(),
-                    severity: PolicySeverity::Medium,
-                    action: PolicyAction::RequireReview,
-                    conditions: vec![PolicyCondition {
-                        field: "file_count".into(),
-                        operator: ConditionOperator::NotEquals,
-                        value: "0".into(),
-                    }],
-                    composition: PolicyComposition::And,
-                    escalation_level: None,
-                });
-
-                // 3. shell_require_code_exec — require review for high-risk task operations
-                gov.register_policy(SecurityPolicy {
-                    id: "shell_require_code_exec".into(),
-                    name: "Shell operations require code execution review".into(),
-                    description: "Shell and terminal operations require additional review approval"
-                        .into(),
-                    severity: PolicySeverity::High,
-                    action: PolicyAction::RequireReview,
-                    conditions: vec![PolicyCondition {
-                        field: "risk_score".into(),
-                        operator: ConditionOperator::NotEquals,
-                        value: "0".into(),
-                    }],
-                    composition: PolicyComposition::And,
-                    escalation_level: None,
-                });
-
-                gov
-            }),
+            security_governor: Arc::new(SecurityGovernor::new(SecurityGovernorConfig {
+                default_action: PolicyAction::Deny,
+                default_policies,
+                ..Default::default()
+            })),
         }
+    }
+
+    /// Return the built-in default security policies used when no
+    /// [`PolicyReloader`] is configured.
+    pub fn default_security_policies() -> Vec<SecurityPolicy> {
+        vec![
+            // 1. read_allow — allow low-risk, read-only tasks
+            SecurityPolicy {
+                id: "read_allow".into(),
+                name: "Allow read/search operations".into(),
+                description:
+                    "Permits read and search operations for zero-risk tasks with no file writes"
+                        .into(),
+                severity: PolicySeverity::Low,
+                action: PolicyAction::Allow,
+                conditions: vec![
+                    PolicyCondition {
+                        field: "risk_score".into(),
+                        operator: ConditionOperator::Equals,
+                        value: "0".into(),
+                    },
+                    PolicyCondition {
+                        field: "file_count".into(),
+                        operator: ConditionOperator::Equals,
+                        value: "0".into(),
+                    },
+                ],
+                composition: PolicyComposition::And,
+                escalation_level: None,
+            },
+            // 2. write_require_approval — require review for tasks that write files
+            SecurityPolicy {
+                id: "write_require_approval".into(),
+                name: "Write operations require approval".into(),
+                description: "Tasks that modify files require manual review approval".into(),
+                severity: PolicySeverity::Medium,
+                action: PolicyAction::RequireReview,
+                conditions: vec![PolicyCondition {
+                    field: "file_count".into(),
+                    operator: ConditionOperator::NotEquals,
+                    value: "0".into(),
+                }],
+                composition: PolicyComposition::And,
+                escalation_level: None,
+            },
+            // 3. shell_require_code_exec — require review for high-risk task operations
+            SecurityPolicy {
+                id: "shell_require_code_exec".into(),
+                name: "Shell operations require code execution review".into(),
+                description: "Shell and terminal operations require additional review approval"
+                    .into(),
+                severity: PolicySeverity::High,
+                action: PolicyAction::RequireReview,
+                conditions: vec![PolicyCondition {
+                    field: "risk_score".into(),
+                    operator: ConditionOperator::NotEquals,
+                    value: "0".into(),
+                }],
+                composition: PolicyComposition::And,
+                escalation_level: None,
+            },
+        ]
     }
 
     /// Register a runtime policy. The closure is invoked during evaluate();
@@ -198,15 +207,31 @@ impl PolicyEvaluator {
             if let Ok(mut guard) = reloader.lock() {
                 guard.reload_all();
                 // Merge reloaded policies into the runtime policy map
+                // Each reloadable policy provides its own evaluator closure via
+                // as_evaluator_fn(), so the TOML configuration actually participates
+                // in the evaluation pipeline.
                 if let Ok(mut policies) = self.policies.write() {
                     let count = guard.policies().len();
-                    for (i, _) in guard.policies().iter().enumerate() {
+                    for (i, policy) in guard.policies().iter().enumerate() {
                         let key = format!("reloadable_{}", i);
-                        policies.entry(key).or_insert_with(|| {
-                            let policy_fn: PolicyFn =
-                                Box::new(|_: &TaskContext| -> Option<PolicyVerdict> { None });
-                            policy_fn
-                        });
+                        if !policies.contains_key(&key) {
+                            if let Some(evaluator) = policy.as_evaluator_fn() {
+                                tracing::debug!(
+                                    "Registered reloadable policy '{}' with evaluator",
+                                    key
+                                );
+                                policies.insert(key, evaluator);
+                            } else {
+                                policies.insert(
+                                    key.clone(),
+                                    Box::new(|_: &TaskContext| -> Option<PolicyVerdict> { None }),
+                                );
+                                tracing::debug!(
+                                    "Registered reloadable policy '{}' (no evaluator — tracking only)",
+                                    key
+                                );
+                            }
+                        }
                     }
                     if count > 0 {
                         tracing::debug!(

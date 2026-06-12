@@ -1,8 +1,8 @@
 //! Vector storage and search
 //!
 //! Conditionally compiled:
-//! - `backend-sqlite` (profile-local, profile-simple-server): rusqlite-backed, sync API
-//! - `backend-postgres` (profile-multi-users-server): postgres + pgvector-backed sync API
+//! - `backend-sqlite` (local, simple-server): rusqlite-backed, sync API
+//! - `backend-postgres` (multi-users-server): postgres + pgvector-backed sync API
 
 // Ensure features are mutually exclusive
 #[cfg(all(feature = "backend-sqlite", feature = "backend-postgres"))]
@@ -32,7 +32,7 @@ use sha2::{Digest, Sha256};
 #[cfg(not(feature = "backend-postgres"))]
 use sqlite_vec::sqlite3_vec_init;
 
-#[cfg(all(not(feature = "backend-postgres"), feature = "profile-local"))]
+#[cfg(not(feature = "backend-postgres"))]
 use tracing::warn;
 
 /// Vector search hit
@@ -539,7 +539,15 @@ impl VectorStore {
             return Ok(());
         }
         let embedding = if let Some(ref provider) = self.embedding_provider {
-            provider.embed(query)
+            let vec = provider.embed(query);
+            if vec.len() != self.dimensions {
+                anyhow::bail!(
+                    "Embedding dimension mismatch in upsert: got {} but store expects {} dimensions",
+                    vec.len(),
+                    self.dimensions,
+                );
+            }
+            vec
         } else {
             embed_text(query, self.dimensions)
         };
@@ -582,6 +590,8 @@ impl VectorStore {
             params![memory_key, phase, query, response, json_value, blob_value, now,],
         )?;
 
+        const SENTINEL_LIMIT: i64 = i64::MAX; // portable replacement for SQLite's LIMIT -1
+
         // Collect evicted memory keys before deleting from SQLite.
         let evicted_keys: Vec<String> = {
             let conn = self.conn.lock().unwrap_or_else(|poisoned| {
@@ -589,9 +599,9 @@ impl VectorStore {
                 poisoned.into_inner()
             });
             let mut stmt = conn.prepare(
-                "SELECT memory_key FROM vector_memory ORDER BY updated_at DESC LIMIT -1 OFFSET ?1",
+                "SELECT memory_key FROM vector_memory ORDER BY updated_at DESC LIMIT ?2 OFFSET ?1",
             )?;
-            let rows = stmt.query_map(params![self.max_entries as i64], |row| {
+            let rows = stmt.query_map(params![self.max_entries as i64, SENTINEL_LIMIT], |row| {
                 row.get::<_, String>(0)
             })?;
             rows.filter_map(|r| r.ok()).collect()
@@ -604,10 +614,10 @@ impl VectorStore {
                 SELECT memory_key
                 FROM vector_memory
                 ORDER BY updated_at DESC
-                LIMIT -1 OFFSET ?1
+                LIMIT ?2 OFFSET ?1
             )
             ",
-            params![self.max_entries as i64],
+            params![self.max_entries as i64, SENTINEL_LIMIT],
         )?;
 
         // Also remove evicted entries from HNSW index if it exists
@@ -665,7 +675,15 @@ impl VectorStore {
         }
 
         let query_embedding = if let Some(ref provider) = self.embedding_provider {
-            provider.embed(query)
+            let vec = provider.embed(query);
+            if vec.len() != self.dimensions {
+                anyhow::bail!(
+                    "Embedding dimension mismatch in search: got {} but store expects {} dimensions",
+                    vec.len(),
+                    self.dimensions,
+                );
+            }
+            vec
         } else {
             embed_text(query, self.dimensions)
         };
@@ -1145,22 +1163,22 @@ fn resolve_sqlite_vector_mode(conn: &Connection) -> Result<SqliteVectorMode> {
         Ok(_) => Ok(SqliteVectorMode::SqliteVec),
         Err(err) => {
             #[cfg(all(
-                feature = "profile-local",
-                not(feature = "profile-simple-server"),
-                not(feature = "profile-multi-users-server")
+                feature = "local",
+                not(feature = "simple-server"),
+                not(feature = "multi-users-server")
             ))]
             {
                 warn!(
-                    "sqlite-vec unavailable, falling back to JSON embedding table for profile-local: {}",
+                    "sqlite-vec unavailable, falling back to JSON embedding table for local: {}",
                     err
                 );
                 Ok(SqliteVectorMode::JsonFallback)
             }
 
             #[cfg(not(all(
-                feature = "profile-local",
-                not(feature = "profile-simple-server"),
-                not(feature = "profile-multi-users-server")
+                feature = "local",
+                not(feature = "simple-server"),
+                not(feature = "multi-users-server")
             )))]
             {
                 // Keep variant reachable across profile combinations so dead_code
@@ -1384,6 +1402,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "10K-vector benchmark — run explicitly with -- --ignored"]
     fn hnsw_benchmark_10k_vectors() {
         let dir = tempfile::tempdir().expect("temp dir should be created");
         let db_path = dir.path().join("hnsw_10k.sqlite3");
@@ -1443,7 +1462,7 @@ mod tests {
     }
 }
 
-// ─── PostgreSQL backend (profile-multi-users-server) ─────────────────────────
+// ─── PostgreSQL backend (multi-users-server) ─────────────────────────
 //
 // Embeddings are computed in Rust (sha2-based projection, same as SQLite backend)
 // and stored in a native `pgvector` column through the synchronous `postgres`
@@ -1554,7 +1573,15 @@ impl VectorStore {
             return Ok(());
         }
         let embedding_vec = if let Some(ref provider) = self.embedding_provider {
-            provider.embed(query)
+            let vec = provider.embed(query);
+            if vec.len() != self.dimensions {
+                anyhow::bail!(
+                    "Embedding dimension mismatch in upsert: got {} but store expects {} dimensions",
+                    vec.len(),
+                    self.dimensions,
+                );
+            }
+            vec
         } else {
             embed_text(query, self.dimensions)
         };
@@ -1614,7 +1641,15 @@ impl VectorStore {
         }
 
         let query_vec = if let Some(ref provider) = self.embedding_provider {
-            provider.embed(query)
+            let vec = provider.embed(query);
+            if vec.len() != self.dimensions {
+                anyhow::bail!(
+                    "Embedding dimension mismatch in search: got {} but store expects {} dimensions",
+                    vec.len(),
+                    self.dimensions,
+                );
+            }
+            vec
         } else {
             embed_text(query, self.dimensions)
         };

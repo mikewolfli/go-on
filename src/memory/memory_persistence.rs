@@ -28,6 +28,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::memory::summarization::{MemorySummarizer, SummarizedMemory};
+
 /// The memory tier an entry resides in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MemoryTier {
@@ -269,6 +271,11 @@ impl HotCache {
         self.entries.is_empty()
     }
 
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.lru_order.clear();
+    }
+
     #[allow(dead_code)] // F-GAP-49 — planned memory persistence feature
     fn iter_entries(&self) -> impl Iterator<Item = &MemoryEntry> {
         self.entries.values().map(|he| &he.entry)
@@ -317,26 +324,26 @@ impl ColdStorageIndex {
     }
 
     /// Returns the number of indexed entries.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved persistence features
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
     /// Returns true if the index is empty.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved persistence features
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
     /// Remove an entry from the index.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved persistence features
     pub fn remove(&mut self, user_id: Option<&str>, memory_id: &str) {
         let uid = user_id.unwrap_or("").to_string();
         self.entries.remove(&(uid, memory_id.to_string()));
     }
 
     /// Clear all entries.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved persistence features
     pub fn clear(&mut self) {
         self.entries.clear();
     }
@@ -522,10 +529,13 @@ impl ColdStorage {
 
     /// Look up an entry by ID using the sidecar index for O(1) shard resolution.
     /// Falls back to full scan when the ID is not in the index.
-    fn retrieve_by_id(&self, id: &str) -> Result<Option<MemoryEntry>> {
+    ///
+    /// `user_id` is required for correct index lookup since entries are keyed
+    /// by `(user_id, memory_id)` in the sidecar index.
+    fn retrieve_by_id(&self, user_id: Option<&str>, id: &str) -> Result<Option<MemoryEntry>> {
         // Fast path: check index to find which shard contains this entry.
         if let Ok(idx) = self.index.lock() {
-            if let Some((year_month, shard_name, _line_offset)) = idx.retrieve(None, id) {
+            if let Some((year_month, shard_name, _line_offset)) = idx.retrieve(user_id, id) {
                 let path = self
                     .base_path
                     .join(year_month)
@@ -849,10 +859,19 @@ impl WarmStore {
 /// Uses `postgres::Client` with a `warm_memory` table that mirrors
 /// the SQLite schema, including pgvector support for future use.
 #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
-#[derive(Debug)]
 pub struct WarmStore {
     conn: Mutex<PgClient>,
     max_entries: usize,
+}
+
+#[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
+impl std::fmt::Debug for WarmStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WarmStore")
+            .field("max_entries", &self.max_entries)
+            .field("conn", &"<Mutex<PgClient>>")
+            .finish()
+    }
 }
 
 #[cfg(all(not(feature = "backend-sqlite"), feature = "backend-postgres"))]
@@ -945,7 +964,7 @@ impl WarmStore {
     }
 
     fn get(&self, id: &str) -> Result<Option<MemoryEntry>> {
-        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+        let mut conn = self.conn.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("warm store mutex poisoned, recovering");
             poisoned.into_inner()
         });
@@ -982,7 +1001,7 @@ impl WarmStore {
         min_usefulness: f32,
         limit: usize,
     ) -> Result<Vec<MemoryEntry>> {
-        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+        let mut conn = self.conn.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("warm store mutex poisoned, recovering");
             poisoned.into_inner()
         });
@@ -1013,7 +1032,7 @@ impl WarmStore {
     }
 
     fn remove(&self, id: &str) -> Result<bool> {
-        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+        let mut conn = self.conn.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("warm store mutex poisoned, recovering");
             poisoned.into_inner()
         });
@@ -1022,7 +1041,7 @@ impl WarmStore {
     }
 
     fn iterate_all(&self) -> Result<Vec<MemoryEntry>> {
-        let conn = self
+        let mut conn = self
             .conn
             .lock()
             .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
@@ -1052,8 +1071,8 @@ impl WarmStore {
         Ok(results)
     }
 
-    fn search_by_session(&self, session_id: &str, limit: usize) -> Result<Vec<MemoryEntry>> {
-        let conn = self
+    pub fn search_by_session(&self, session_id: &str, limit: usize) -> Result<Vec<MemoryEntry>> {
+        let mut conn = self
             .conn
             .lock()
             .map_err(|e| anyhow::anyhow!("warm store mutex poisoned: {}", e))?;
@@ -1084,7 +1103,7 @@ impl WarmStore {
     }
 
     fn count(&self) -> Result<usize> {
-        let conn = self.conn.lock().unwrap_or_else(|poisoned| {
+        let mut conn = self.conn.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("warm store mutex poisoned, recovering");
             poisoned.into_inner()
         });
@@ -1158,6 +1177,9 @@ pub struct MemoryPersistence {
     policy: MemoryTieringPolicy,
     /// Monotonic sequence for ordering
     sequence: AtomicU64,
+    /// Optional memory summarizer for compressing excess hot entries
+    /// during tier migration. Wired via `with_summarizer`.
+    summarizer: Option<MemorySummarizer>,
 }
 
 impl MemoryPersistence {
@@ -1186,6 +1208,7 @@ impl MemoryPersistence {
             cold: ColdStorage::new(cold_base_path),
             policy,
             sequence: AtomicU64::new(0),
+            summarizer: None,
         })
     }
 
@@ -1222,7 +1245,11 @@ impl MemoryPersistence {
     }
 
     /// Retrieve an entry by ID, checking hot → warm → cold in order.
-    pub fn retrieve(&self, id: &str) -> Result<Option<MemoryEntry>> {
+    ///
+    /// `user_id` is required for correct cold-storage index lookup; pass `None`
+    /// only when the caller has no user context (entries stored without a user_id
+    /// will still be found).
+    pub fn retrieve(&self, user_id: Option<&str>, id: &str) -> Result<Option<MemoryEntry>> {
         // Check hot first.
         {
             let mut hot = self.hot.lock().unwrap_or_else(|poisoned| {
@@ -1247,7 +1274,7 @@ impl MemoryPersistence {
         // Check cold.
         // Uses the ColdStorageIndex sidecar for O(1) shard lookup instead of
         // scanning all shards. Falls back to full scan on index miss.
-        if let Some(mut entry) = self.cold.retrieve_by_id(id)? {
+        if let Some(mut entry) = self.cold.retrieve_by_id(user_id, id)? {
             entry.touch();
             entry.tier = MemoryTier::Warm;
             // Promote back to warm on access.
@@ -1325,6 +1352,9 @@ impl MemoryPersistence {
     /// 2. Check warm entries approaching TTL → promote useful ones to cold.
     pub fn auto_migrate(&self) -> Result<MigrationReport> {
         let mut report = MigrationReport::default();
+
+        // ── Step 0: Summarize hot entries if summarizer is configured ──
+        self.summarize_hot_entries()?;
 
         // ── Step 1: Process hot cache evictions ──
         let evicted: Vec<MemoryEntry> = {
@@ -1419,6 +1449,58 @@ impl MemoryPersistence {
                 Ok(None)
             }
         }
+    }
+
+    /// Attach an optional `MemorySummarizer` that compresses excess hot
+    /// entries during automatic tier migration.
+    pub fn with_summarizer(mut self, summarizer: MemorySummarizer) -> Self {
+        self.summarizer = Some(summarizer);
+        self
+    }
+
+    /// Summarize hot cache entries if the summarizer is configured and
+    /// the entry count exceeds the threshold.
+    ///
+    /// Uses the sync-only path (`summarizer.summarize_sync`) so this
+    /// can be called from `auto_migrate` without requiring an async
+    /// runtime.  When the LLM path is needed, call `summarize` directly
+    /// in an async context.
+    pub fn summarize_hot_entries(&self) -> Result<()> {
+        let Some(ref summarizer) = self.summarizer else {
+            return Ok(());
+        };
+
+        let entries = self.hot_entries();
+        if !summarizer.should_summarize(entries.len()) {
+            return Ok(());
+        }
+
+        let result = summarizer.summarize_sync(&entries);
+        match result {
+            SummarizedMemory::Full(_) => {
+                // Entry count is still manageable; nothing to do.
+            }
+            SummarizedMemory::Compressed(compressed) => {
+                // Replace hot entries with the compressed set.
+                let mut hot = self.hot.lock().unwrap_or_else(|poisoned| {
+                    tracing::warn!(
+                        "hot cache mutex poisoned in 'summarize_hot_entries', recovering"
+                    );
+                    poisoned.into_inner()
+                });
+                hot.clear();
+                for entry in compressed {
+                    hot.insert(entry);
+                }
+                tracing::info!(
+                    target: "memory_persistence",
+                    "summarized hot cache: {} entries compressed",
+                    entries.len()
+                );
+            }
+        }
+
+        Ok(())
     }
 
     /// Returns the count of entries in each tier.
@@ -1640,7 +1722,7 @@ mod tests {
         persistence.store(entry).expect("store should succeed");
 
         let retrieved = persistence
-            .retrieve("p1")
+            .retrieve(None, "p1")
             .expect("retrieve should succeed for previously stored entry");
         assert!(retrieved.is_some());
         assert_eq!(
@@ -1667,7 +1749,7 @@ mod tests {
 
         // Should no longer be in hot (but still retrievable from warm).
         let retrieved = persistence
-            .retrieve("promo1")
+            .retrieve(None, "promo1")
             .expect("retrieve should succeed for previously stored entry");
         assert!(retrieved.is_some());
         // Access brings it back to hot

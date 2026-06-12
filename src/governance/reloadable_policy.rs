@@ -29,6 +29,18 @@ pub trait ReloadablePolicy: Send + Sync {
 
     /// Returns the last known good version timestamp (milliseconds since epoch).
     fn last_reload_ms(&self) -> u64;
+
+    /// Return an optional evaluator closure that can be registered into the
+    /// runtime policy map.  The closure is invoked during evaluate(); if it
+    /// returns Some(verdict) the evaluation short-circuits.
+    ///
+    /// The default implementation returns None, meaning the reloadable policy
+    /// is tracked (checksum, reload cycle) but does not participate in
+    /// runtime evaluation.  Concrete policy types override this to wire their
+    /// configuration into the evaluation pipeline.
+    fn as_evaluator_fn(&self) -> Option<crate::governance::harness_bus::evaluator::PolicyFn> {
+        None
+    }
 }
 
 // ─── PolicyReloader ────────────────────────────────────────────────────────
@@ -343,6 +355,32 @@ impl ReloadablePolicy for RedLinePolicy {
     fn last_reload_ms(&self) -> u64 {
         self.last_reload
     }
+
+    fn as_evaluator_fn(&self) -> Option<crate::governance::harness_bus::evaluator::PolicyFn> {
+        let config = self.config.clone()?;
+        let action = config.get("action").and_then(|v| v.as_str()).unwrap_or("deny").to_string();
+        let field = config.get("field").and_then(|v| v.as_str()).unwrap_or("risk_score").to_string();
+        let threshold = config.get("threshold").and_then(|v| v.as_f64()).unwrap_or(0.5);
+        Some(Box::new(move |ctx: &crate::governance::pua::TaskContext| {
+            let value = match field.as_str() {
+                "risk_score" => Some(ctx.risk_score),
+                "file_count" => Some(ctx.file_count as f64),
+                _ => None,
+            };
+            if let Some(v) = value {
+                if v >= threshold {
+                    return if action == "allow" {
+                        Some(crate::governance::harness_bus::types::PolicyVerdict::Allow)
+                    } else {
+                        Some(crate::governance::harness_bus::types::PolicyVerdict::Deny(crate::governance::harness_bus::types::PolicyViolation { kind: "reloadable".to_string(), detail: 
+                            format!("RedLine policy '{}' triggered: {} >= {}", field, v, threshold)
+                        }))
+                    };
+                }
+            }
+            None
+        }))
+    }
 }
 
 /// A reloadable policy that reads a TOML-based quality-compass configuration file.
@@ -414,6 +452,26 @@ impl ReloadablePolicy for QualityCompassPolicy {
     fn last_reload_ms(&self) -> u64 {
         self.last_reload
     }
+
+    fn as_evaluator_fn(&self) -> Option<crate::governance::harness_bus::evaluator::PolicyFn> {
+        let config = self.config.clone()?;
+        let required_quality = config.get("minimum_quality").and_then(|v| v.as_f64()).unwrap_or(0.7);
+        let require_review = config.get("require_review").and_then(|v| v.as_bool()).unwrap_or(false);
+        Some(Box::new(move |ctx: &crate::governance::pua::TaskContext| {
+            let effective_quality = 1.0 - ctx.risk_score.min(1.0).max(0.0);
+            if effective_quality < required_quality {
+                return Some(crate::governance::harness_bus::types::PolicyVerdict::Review(crate::governance::harness_bus::types::ReviewReason { reason: 
+                    format!("QualityCompass: risk_score {} below quality threshold {}", ctx.risk_score, required_quality)
+                }));
+            }
+            if require_review && ctx.file_count > 5 {
+                return Some(crate::governance::harness_bus::types::PolicyVerdict::Review(crate::governance::harness_bus::types::ReviewReason { reason: 
+                    "QualityCompass: multi-file task requires review".to_string()
+                }));
+            }
+            None
+        }))
+    }
 }
 
 /// A reloadable policy that reads a TOML-based sandbox configuration file.
@@ -475,6 +533,26 @@ impl ReloadablePolicy for SandboxPolicyReloadable {
 
     fn last_reload_ms(&self) -> u64 {
         self.last_reload
+    }
+
+    fn as_evaluator_fn(&self) -> Option<crate::governance::harness_bus::evaluator::PolicyFn> {
+        let config = self.config.clone()?;
+        let max_file_writes = config.get("max_file_writes").and_then(|v| v.as_u64()).unwrap_or(10);
+        let block_commands = config.get("block_commands").and_then(|v| v.as_bool()).unwrap_or(true);
+        Some(Box::new(move |ctx: &crate::governance::pua::TaskContext| {
+            if block_commands && ctx.risk_score > 0.8 {
+                return Some(crate::governance::harness_bus::types::PolicyVerdict::Deny(crate::governance::harness_bus::types::PolicyViolation { kind: "reloadable".to_string(), detail: 
+                    format!("Sandbox: command execution blocked in high-risk context (risk={})", ctx.risk_score)
+                }));
+            }
+            let required_review = max_file_writes < 5 && ctx.file_count >= max_file_writes as usize;
+            if required_review {
+                return Some(crate::governance::harness_bus::types::PolicyVerdict::Review(crate::governance::harness_bus::types::ReviewReason { reason: 
+                    format!("Sandbox: file writes {} exceed threshold {}", ctx.file_count, max_file_writes)
+                }));
+            }
+            None
+        }))
     }
 }
 

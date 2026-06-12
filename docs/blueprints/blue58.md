@@ -33,10 +33,10 @@
 >   🔴 **HotCache TTL clamp** — `hot_ttl_secs=0` 被 `.max(1)` 变成1秒
 >
 > **最终编译验证（零警告零错误）：**
->   ✅ profile-local clippy (lib) — -D warnings
->   ✅ profile-local clippy (tests) — **42 errors → 0**
->   ✅ profile-simple-server clippy
->   ✅ profile-multi-users-server clippy
+>   ✅ local clippy (lib) — -D warnings
+>   ✅ local clippy (tests) — **42 errors → 0**
+>   ✅ simple-server clippy
+>   ✅ multi-users-server clippy
 >   ✅ GUI cargo check
 >   ✅ SDK Rust cargo check
 >
@@ -56,7 +56,7 @@
 2. **支持按要求按逻辑分步骤分拆文件** — 模块可按需重组。
 3. **三端一统（Backend + GUI + VSCode Addon）** — 三端通讯流畅稳定。
 4. **全部注释使用英文**。
-5. **3 种 Server Profile 全链路闭合** — profile-local、profile-simple-server、profile-multi-users-server 全部正确编译行为一致。
+5. **3 种 Server Profile 全链路闭合** — local、simple-server、multi-users-server 全部正确编译行为一致。
 6. **5 种协议全链路闭合** — auto、acp stdio、acp http、mcp stdio、mcp http。
 7. **零警告、零冲突、零遗漏** — `cargo clippy --all-features -- -D warnings` 零警告。✅ 已达成。
 8. **完整闭合** — 每个模块编译通过、有治理接入、可观测、有集成测试。
@@ -88,7 +88,7 @@
 
 | # | 层级 | BLUE57 自称 | BLUE58 重评 | 核心新发现 | 新增 GAP |
 |:--:|------|:----------:|:----------:|:---------|:-----:|
-| L1 | **架构层** | ✅ 99% | **7/10** | context.rs 全文件死代码(~160行)、comrak 0.28/0.30 版本冲突、vault/temp_env 空 features、profile-simple-server phases.done agents 不一致 | 8 |
+| L1 | **架构层** | ✅ 99% | **7/10** | context.rs 全文件死代码(~160行)、comrak 0.28/0.30 版本冲突、vault/temp_env 空 features、simple-server phases.done agents 不一致 | 8 |
 | L2 | **运行层** | ✅ 99% | **6/10** | background.rs 11 个 std::sync::Mutex 在 async 中、SafetyChecker::new expect panic、wire_server Handle::current 无运行时 panic、Arc::get_mut 无声失败、SelfEvolutionAgent 立即丢弃、LivePerformanceFeed 立即丢弃、skill_market_registry 从未赋值 | 16 |
 | L3 | **智能层** | ✅ 96% | **5/10** | CapabilityBus 9 个认知模块 None 初始化、MetacognitiveController llm_agent 永为 None、MemoryBus L2/L3 全 None、evo 15+ 硬编码 100ms timeout、minhash 嵌入 6 处、VideoProcessor/AudioProcessor 全 Stub、安全评估仅关键词 | 18 |
 | L4 | **治理层** | ✅ 98% | **5/10** | PolicyReloader 仍 dead_code（background.rs 中仅 reloadable_policy.rs 的测试用）、ApprovalPreferenceLearner 零外部调用者、VaultRotator 从未实例化、MemoryRetrievalEngine 零生产调用者、drift_monitor 永不起动、RBAC 双实例不同步 | 10 |
@@ -159,7 +159,7 @@
 | **问题** | 同一 workspace 内两个不同 major 版本共存，Cargo 需解析两份，增加编译时间且有链接风险。 |
 | **修复** | 统一为 `comrak = "0.30"`。 |
 
-| GAP-B58-A03 | **HIGH** | `profile-simple-server` `phases.done` agents 不一致 |
+| GAP-B58-A03 | **HIGH** | `simple-server` `phases.done` agents 不一致 |
 |:---|:---|:---|
 | **位置** | `config/config.simple-server.toml:119` |
 | **问题** | `phases.done` 设置 `agents = ["deepseek"]`，而所有其他 profile 的 done 阶段 `agents = []`。done 阶段用于最终化/总结，不应调用 agent。 |
@@ -595,16 +595,16 @@
 | **问题** | `cargo llvm-cov ... 2>/dev/null || echo "[warn]"` — stderr 丢弃，测试失败不可见。 |
 | **修复** | 移除 `2>/dev/null`，分离 "工具缺失" 和 "测试失败" 的处理。 |
 
-| GAP-B58-E24 | **HIGH** | CI 仅测试 `profile-local`，其他 profile 零测试 |
+| GAP-B58-E24 | **HIGH** | CI 仅测试 `local`，其他 profile 零测试 |
 |:---|:---|:---|
 | **位置** | `.github/workflows/build.yml:49-55` |
-| **问题** | `profile-simple-server` 和 `profile-multi-users-server` 仅 clippy，无测试运行。 |
-| **修复** | 添加 `cargo test --no-default-features -F profile-simple-server --lib` 和 `--features profile-multi-users-server`。 |
+| **问题** | `simple-server` 和 `multi-users-server` 仅 clippy，无测试运行。 |
+| **修复** | 添加 `cargo test --no-default-features -F simple-server --lib` 和 `--features multi-users-server`。 |
 
-| GAP-B58-E25 | **HIGH** | Release workflow 仅构建 `profile-local` |
+| GAP-B58-E25 | **HIGH** | Release workflow 仅构建 `local` |
 |:---|:---|:---|
 | **位置** | `.github/workflows/release-full.yml:78-81` |
-| **问题** | 发行版仅含 profile-local 二进制。用户无法获得 simple-server 或 multi-users-server 构建。 |
+| **问题** | 发行版仅含 local 二进制。用户无法获得 simple-server 或 multi-users-server 构建。 |
 | **修复** | 添加所有 profile 的并行 release 构建。 |
 
 | GAP-B58-E26 | **MEDIUM** | `stop-go-on.sh` kill -9 在 10s 但 shutdown_drain_seconds=30s |
@@ -701,10 +701,10 @@
 
 ```bash
 # 所有 profile 独立编译零警告零错误
-cargo clippy --features profile-local,backend-sqlite -- -D warnings
-cargo clippy --no-default-features --features profile-simple-server,backend-sqlite -- -D warnings
-cargo clippy --no-default-features --features profile-multi-users-server,backend-postgres -- -D warnings
-cargo clippy --no-default-features --features profile-full,backend-sqlite -- -D warnings
+cargo clippy --features local,backend-sqlite -- -D warnings
+cargo clippy --no-default-features --features simple-server,backend-sqlite -- -D warnings
+cargo clippy --no-default-features --features multi-users-server,backend-postgres -- -D warnings
+cargo clippy --no-default-features --features full,backend-sqlite -- -D warnings
 cargo clippy --manifest-path gui/Cargo.toml -- -D warnings
 cargo clippy --manifest-path sdk/rust/Cargo.toml -- -D warnings
 npx tsc --noEmit  # vscode-addon
@@ -714,9 +714,9 @@ npx tsc --noEmit  # vscode-addon
 
 ```bash
 # 三 profile 均通过测试
-cargo test --features profile-local,backend-sqlite
-cargo test --no-default-features --features profile-simple-server,backend-sqlite --lib
-cargo test --no-default-features --features profile-multi-users-server,backend-postgres --lib
+cargo test --features local,backend-sqlite
+cargo test --no-default-features --features simple-server,backend-sqlite --lib
+cargo test --no-default-features --features multi-users-server,backend-postgres --lib
 
 # SDK 测试
 cd sdk/typescript && npm test

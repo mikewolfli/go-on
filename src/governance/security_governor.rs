@@ -375,6 +375,9 @@ pub struct SecurityGovernorConfig {
     /// Policy mode: "enforce", "advisory", or empty (default).
     /// Controls how governance policies are applied during request processing.
     pub policy_mode: String,
+    /// Baseline security policies to register at construction time.
+    /// If empty, [`SecurityGovernor::register_default_policies`] is called instead.
+    pub default_policies: Vec<SecurityPolicy>,
 }
 
 impl Default for SecurityGovernorConfig {
@@ -383,6 +386,7 @@ impl Default for SecurityGovernorConfig {
             enabled: true,
             default_action: PolicyAction::Allow,
             policy_mode: String::new(),
+            default_policies: vec![],
         }
     }
 }
@@ -441,18 +445,37 @@ impl SecurityGovernor {
     /// Create a new [`SecurityGovernor`] with the given configuration.
     pub fn new(config: SecurityGovernorConfig) -> Self {
         let inner = Inner {
-            config,
             policies: IndexMap::new(),
             audit_log: Vec::new(),
             total_evaluations: 0,
             total_denials: 0,
             total_reviews: 0,
             active_escalations: 0,
+            config,
         };
         let governor = Self {
             inner: Arc::new(Mutex::new(inner)),
         };
-        governor.register_default_policies();
+
+        // Register policies from config if provided, otherwise use built-in defaults.
+        {
+            let inner = governor.inner.lock().unwrap_or_else(|poisoned| {
+                tracing::warn!("SecurityGovernor lock poisoned in new, recovering");
+                poisoned.into_inner()
+            });
+            if inner.config.default_policies.is_empty() {
+                // Drop the lock before calling register_default_policies which re-locks.
+                drop(inner);
+                governor.register_default_policies();
+            } else {
+                let policies = inner.config.default_policies.clone();
+                drop(inner);
+                for policy in policies {
+                    governor.register_policy(policy);
+                }
+            }
+        }
+
         governor
     }
 

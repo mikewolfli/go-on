@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::autotune::AutoTuneConfig;
-use crate::orchestration::roles::RoleDefinition;
+use crate::shared::role_types::RoleDefinition;
 
 /// Default schema version string for deserialization fallback.
 fn default_schema_version() -> String {
@@ -556,7 +556,7 @@ pub struct CacheConfig {
     pub default_ttl_seconds: u64,
     #[serde(default = "super::defaults::default_cache_max_entries")]
     pub max_entries: usize,
-    /// PostgreSQL connection URL (used when compiled with profile-multi-users-server).
+    /// PostgreSQL connection URL (used when compiled with multi-users-server).
     /// Example: "postgres://user:pass@localhost/go_on"
     #[serde(default)]
     pub connection_string: Option<String>,
@@ -570,7 +570,7 @@ pub struct VectorConfig {
     pub auto_mode: bool,
     #[serde(default = "super::defaults::default_vector_path")]
     pub path: String,
-    /// PostgreSQL connection URL (used when compiled with profile-multi-users-server).
+    /// PostgreSQL connection URL (used when compiled with multi-users-server).
     /// Example: "postgres://user:pass@localhost/go_on"
     #[serde(default)]
     pub connection_string: Option<String>,

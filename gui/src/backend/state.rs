@@ -149,7 +149,7 @@ impl StreamProcessor {
     /// Drain any remaining partial segment from the buffer.
     /// Returns `None` if the buffer is empty.
     /// F-GAP-56: Reserved for future stream tail handling
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-56 — reserved backend state features
     pub fn drain_remaining(&mut self) -> Option<String> {
         if self.buffer.is_empty() {
             None

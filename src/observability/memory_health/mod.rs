@@ -53,15 +53,15 @@ pub struct SystemMemoryInfo {
     /// Approximate free (available) memory in bytes.
     pub free_bytes: u64,
     /// Active memory in bytes.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved health metrics fields
     // populated by query_system_memory; reserved for future pressure analysis
     pub active_bytes: u64,
     /// Wired (unpageable) memory in bytes.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved health metrics fields
     // populated by query_system_memory; reserved for future pressure analysis
     pub wired_bytes: u64,
     /// Swap usage in bytes (0 if swap is disabled).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved health metrics fields
     // populated by query_system_memory; reserved for future pressure analysis
     pub swap_used_bytes: u64,
     /// Swap total capacity in bytes.
@@ -402,7 +402,7 @@ fn query_windows_memory() -> SystemMemoryInfo {
 
 /// Result of a pre-startup memory health check.
 // F-GAP-11 — reserved for future startup health-check integration
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved memory health features
 // F-GAP-49 — reserved memory health monitor; wire when memory pressure detection is enabled
 // F-GAP-49 — reserved for future use
 #[derive(Debug, Clone, PartialEq)]
@@ -501,9 +501,6 @@ pub fn check_startup_memory() -> MemoryHealth {
 }
 
 /// Print a formatted memory health report to stderr.
-// F-GAP-11 — reserved for future startup health-check integration
-#[allow(dead_code)] // F-GAP-49 — reserved memory health monitor; wire when memory pressure detection is enabled
-                    // F-GAP-49 — reserved for future use
 pub fn print_memory_health(health: &MemoryHealth) {
     match health {
         MemoryHealth::Healthy => {

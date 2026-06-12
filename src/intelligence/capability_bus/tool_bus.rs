@@ -463,8 +463,8 @@ impl ToolBus {
 
 /// Register a remote skill from a remote MCP endpoint.
 ///
-/// Only available under the `profile-multi-users-server` feature flag.
-#[cfg(feature = "profile-multi-users-server")]
+/// Only available under the `multi-users-server` feature flag.
+#[cfg(feature = "multi-users-server")]
 #[allow(dead_code)] // F-GAP-49 — planned wiring: capability bus / orchestration
 pub fn import_remote_skill(
     tool_bus: &Arc<Mutex<ToolBus>>,

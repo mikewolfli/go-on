@@ -2,7 +2,7 @@
 
 ## 概述
 
-多用户服务器模式（`profile-multi-users-server`）是 go-on 的企业级部署配置，专为具有多个并发用户的生产环境设计。它使用 PostgreSQL 和 pgvector 进行可扩展存储，并提供安全、监控和高可用性的高级功能。
+多用户服务器模式（`multi-users-server`）是 go-on 的企业级部署配置，专为具有多个并发用户的生产环境设计。它使用 PostgreSQL 和 pgvector 进行可扩展存储，并提供安全、监控和高可用性的高级功能。
 
 ## 特性
 
@@ -148,7 +148,7 @@ tracing_sampling_rate = 0.1
 ### 为企业部署构建
 ```bash
 # 使用 multi-users-server 配置文件构建
-cargo build --no-default-features -F profile-multi-users-server
+cargo build --no-default-features -F multi-users-server
 
 # 或显式启用特性
 cargo build --features "backend-postgres postgres pgvector"

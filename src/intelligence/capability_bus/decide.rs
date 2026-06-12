@@ -470,8 +470,8 @@ impl CapabilityBus {
         // In profiles with tool bus, merge runtime-created sub-agent templates from AgentFactory.
         #[cfg(any(
             feature = "sub-bus-tool",
-            feature = "profile-simple-server",
-            feature = "profile-multi-users-server"
+            feature = "simple-server",
+            feature = "multi-users-server"
         ))]
         let candidate_agents = {
             let mut agents = candidate_agents;

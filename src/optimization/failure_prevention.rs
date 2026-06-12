@@ -59,15 +59,8 @@ pub enum AnomalyType {
     Performance,
 }
 
-/// Degradation level
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum DegradationLevel {
-    None = 0,
-    Minimal = 1,
-    Moderate = 2,
-    Significant = 3,
-    Critical = 4,
-}
+/// Re-export the unified degradation level from the hyper-resilience module.
+pub use crate::resilience::hyper_resilience::DegradationLevel;
 
 /// Service health metrics
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -353,30 +346,24 @@ impl FailurePrevention {
     pub fn get_degradation_strategy(&self, service_name: &str) -> DegradationLevel {
         match self.health_monitors.get(service_name) {
             Some(health) => match health.status {
-                HealthStatus::Healthy => DegradationLevel::None,
-                HealthStatus::Degraded => {
-                    if health.success_rate < 0.9 {
-                        DegradationLevel::Moderate
-                    } else {
-                        DegradationLevel::Minimal
-                    }
-                }
+                HealthStatus::Healthy => DegradationLevel::Normal,
+                HealthStatus::Degraded => DegradationLevel::Degraded,
                 HealthStatus::Unhealthy => {
                     if health.success_rate < 0.5 {
-                        DegradationLevel::Critical
+                        DegradationLevel::Emergency
                     } else {
-                        DegradationLevel::Significant
+                        DegradationLevel::Constrained
                     }
                 }
             },
-            None => DegradationLevel::None,
+            None => DegradationLevel::Normal,
         }
     }
 
     /// Check if should fallback to local LLM or simpler solution
     pub fn should_degrade(&self, service_name: &str) -> bool {
         let degradation = self.get_degradation_strategy(service_name);
-        degradation >= DegradationLevel::Significant
+        degradation >= DegradationLevel::Constrained
     }
 
     /// Get all health statuses
@@ -540,7 +527,7 @@ mod tests {
         prevention.update_service_health("api", 0.4, 0.6, 100.0);
 
         let degradation = prevention.get_degradation_strategy("api");
-        assert!(degradation >= DegradationLevel::Significant);
+        assert!(degradation >= DegradationLevel::Constrained);
     }
 
     #[test]

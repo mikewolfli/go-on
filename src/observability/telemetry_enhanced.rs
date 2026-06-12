@@ -3,6 +3,18 @@
 //! This module provides structured logging, metrics collection, and distributed tracing
 //! for comprehensive observability.
 //!
+//! ## Metrics: Legacy vs Primary
+//!
+//! - **`MetricsRecorder` / `AppMetrics`** (this file) — **Legacy** in-memory metrics
+//!   collector with atomic counters. Kept for backward compatibility.
+//! - **`metrics_exporter::PrometheusMetricsRecorder` / `build_prometheus_metrics`** —
+//!   **Primary** Prometheus-format metrics path via `RuntimeMetrics`. New code should
+//!   use this system.
+//!
+//! The [`bridge_metrics_recorder`] function in `metrics_exporter` synchronizes the legacy
+//! recorder values into the primary `RuntimeMetrics` path so that manual recordings made
+//! through the legacy API are still visible on the `/metrics` endpoint.
+//!
 //! # Features
 //!
 //! - **Structured Logging**: JSON-formatted logs with context and metadata
@@ -234,12 +246,12 @@ fn init_metrics(config: &TelemetryConfig) -> anyhow::Result<()> {
 /// Requires an OTLP-compatible endpoint (e.g., Jaeger, Grafana Tempo, Datadog Agent).
 /// If the endpoint is not configured via `OTEL_EXPORTER_OTLP_ENDPOINT` environment
 /// variable, tracing is initialized but logs a warning.
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 
-/// Tracks whether the global tracer provider has been initialized by this
-/// module to prevent double-initialization when `telemetry.rs` has already
-/// called `global::set_tracer_provider()`.
-static TRACER_INITIALIZED: AtomicBool = AtomicBool::new(false);
+/// Shared guard against double-initialization of the global tracer provider.
+/// Uses the same `TRACER_INITIALIZED` static defined in `telemetry.rs` to
+/// prevent both modules from racing to set the global tracer provider.
+use crate::observability::telemetry::TRACER_INITIALIZED;
 
 fn init_tracing(config: &TelemetryConfig) -> anyhow::Result<()> {
     use opentelemetry::global;
@@ -339,7 +351,11 @@ impl Default for AppMetrics {
     }
 }
 
-/// Metrics recorder
+/// Legacy in-memory metrics collector.
+///
+/// Deprecated: Use `metrics_exporter::PrometheusMetricsRecorder` / `build_prometheus_metrics`
+/// (the primary Prometheus-format metrics path) instead. This recorder is kept for backward
+/// compatibility and is bridged into the primary path via `bridge_metrics_recorder`.
 pub struct MetricsRecorder {
     metrics: std::sync::RwLock<AppMetrics>,
 }
@@ -453,7 +469,11 @@ impl Default for MetricsRecorder {
 static GLOBAL_METRICS_RECORDER: std::sync::LazyLock<MetricsRecorder> =
     std::sync::LazyLock::new(MetricsRecorder::new);
 
-/// Return a reference to the global `MetricsRecorder` singleton.
+/// Return a reference to the legacy global `MetricsRecorder` singleton.
+///
+/// Deprecated: Use `metrics_exporter`'s Prometheus-based metrics path for new code.
+/// This global recorder is bridged into `RuntimeMetrics` automatically via
+/// `bridge_metrics_recorder` on each metrics scrape.
 ///
 /// The recorder is lazily initialized on first access and can be safely
 /// shared across threads for recording requests, cache operations, and

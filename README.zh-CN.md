@@ -217,26 +217,26 @@ npm run compile
 
 | 配置 | 后端 | 适用场景 |
 |:-----|:-----|:---------|
-| `profile-local` | SQLite + sqlite-vec | 单用户本地工具（默认） |
-| `profile-simple-server` | SQLite + sqlite-vec | 单服务器部署 |
-| `profile-multi-users-server` | PostgreSQL + pgvector | 多用户生产环境 |
-| `profile-full` | SQLite（全部特性）| CI / 开发 |
+| `local` | SQLite + sqlite-vec | 单用户本地工具（默认） |
+| `simple-server` | SQLite + sqlite-vec | 单服务器部署 |
+| `multi-users-server` | PostgreSQL + pgvector | 多用户生产环境 |
+| `full` | SQLite（全部特性）| CI / 开发 |
 
 ```bash
 # 构建命令
-cargo build                                                    # profile-local（默认）
-cargo build --no-default-features --features profile-simple-server
-cargo build --no-default-features --features profile-multi-users-server,backend-postgres
+cargo build                                                    # local（默认）
+cargo build --no-default-features --features simple-server
+cargo build --no-default-features --features multi-users-server,backend-postgres
 ```
 
 ## 验证状态
 
 | 配置 | `cargo clippy -D warnings` | 测试状态 |
 |:-----|:--------------------------:|:--------:|
-| `profile-local` | ✅ **零警告** | ✅ **2252 通过，0 失败，0 忽略** |
-| `profile-simple-server` | ✅ **零警告** | ✅ **全部通过** |
-| `profile-multi-users-server` | ✅ **零警告** | ✅ **全部通过** |
-| `profile-full` | ✅ **零警告** | ✅ **全部通过** |
+| `local` | ✅ **零警告** | ✅ **2252 通过，0 失败，0 忽略** |
+| `simple-server` | ✅ **零警告** | ✅ **全部通过** |
+| `multi-users-server` | ✅ **零警告** | ✅ **全部通过** |
+| `full` | ✅ **零警告** | ✅ **全部通过** |
 
 所有 4 种构建配置零 clippy 警告通过。单元测试（2252 个）全部通过，零失败，零忽略。E2E 集成测试需要运行基础设施。
 

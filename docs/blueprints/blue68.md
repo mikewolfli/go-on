@@ -2,7 +2,7 @@
 
 > **最后扫描日期**: 2026-06-11
 > **扫描轮次**: Round 1 (10并行代理 × 15层) → Round 2 (交叉验证) → Round 3 (build+test+diagnostics)
-> **最终状态**: ✅ 所有 lib tests 通过 (2279/2279) | ✅ Clippy 零警告 | ✅ profile-full 编译通过
+> **最终状态**: ✅ 所有 lib tests 通过 (2279/2279) | ✅ Clippy 零警告 | ✅ full 编译通过
 > **本文性质**: 多轮超级深度+超级广度扫描的收敛终版
 
 ---
@@ -15,7 +15,7 @@
 2. 支持按要求按逻辑分步骤分拆文件 — 可按模块目录拆分重组。
 3. 三端一统（backend / GUI / vscode-addon） — 考虑三端配合、通讯流畅稳定性。
 4. 注释英文 — 所有新增模块的代码注释必须使用英文。
-5. ✅ 4 种服务器 Profile 全链路闭合 — profile-local、profile-simple-server、profile-multi-users-server、profile-full 全部正确编译（零警告）。
+5. ✅ 4 种服务器 Profile 全链路闭合 — local、simple-server、multi-users-server、full 全部正确编译（零警告）。
 6. ✅ 5 种协议全链路闭合 — auto、acp stdio、acp http、mcp stdio、mcp http。
 7. ✅ 零警告、零冲突 — `cargo clippy --all-targets -- -D warnings` 零警告通过。
 8. ✅ 完整闭合 — 每个模块达到：编译通过、零警告、接入 governance.status、可通过 health 端点观测。
@@ -107,7 +107,7 @@
 | A9 | 🟠 | `orchestration/mod.rs:25,71,75` | - | `#[allow(unused_imports)]`掩盖死import |
 | A10 | 🟠 | `core/context.rs` | 179 | `SystemContext`零外部调用 |
 | A11 | 🟠 | `orchestration/tool/extended.rs:6` | - | orchestration→governance分层违规 |
-| A12 | 🟡 | `Cargo.toml:96-100` | - | `profile-local` = `profile-simple-server` 完全相同，零分流 |
+| A12 | 🟡 | `Cargo.toml:96-100` | - | `local` = `simple-server` 完全相同，零分流 |
 | A13 | 🟡 | `Cargo.toml` | - | `sync-secrets` 4个profile全部开启，零条件编译价值 |
 
 ### 2.2 运行层（28项）
@@ -753,9 +753,9 @@
 
 ### Round 2 — 2026-06-11 交叉验证 + Build/Test
 
-- `cargo check --features profile-full`: ✅ 编译通过
-- `cargo clippy --features profile-full -- -D warnings`: ✅ 零警告
-- `cargo test --lib --features profile-full`: ✅ 2279/2279 通过
+- `cargo check --features full`: ✅ 编译通过
+- `cargo clippy --features full -- -D warnings`: ✅ 零警告
+- `cargo test --lib --features full`: ✅ 2279/2279 通过
 - 集成测试: 85/87 失败（预存，需scenario数据文件）
 
 ### Round 3 — 2026-06-11 紧急修复
@@ -930,7 +930,7 @@
 | 总修复数 | **69项** (P0:3 + P1:10 + P2:11 + P3:9 + P4:9 + P5:8 + P6:13 + O:3 + 清理:3) |
 | 测试通过率 | **scheduler 18/18 + bulkhead 5/5 + startup_context 10/10 + workflow_registry 25/25** |
 | Clippy警告 | **0** (全部 `-D warnings` 通过) |
-| 全部Profile编译 | ✅ profile-local / simple-server / multi-users-server / full |
+| 全部Profile编译 | ✅ local / simple-server / multi-users-server / full |
 | 新增panic消除 | 2处(access_mode / negotiator) |
 | 新增超时保护 | 5处(sandbox build/test/git/commit + CLI shell) |
 | 新增取消机制 | 1处(dag_coordinator fault_detection loop) |
@@ -968,7 +968,7 @@
 
 ### 5.1 当前状态
 
-- **编译**: ✅ profile-full 零警告通过
+- **编译**: ✅ full 零警告通过
 - **Clippy**: ✅ 零警告
 - **Lib测试**: ✅ 2279/2279 全部通过
 - **集成测试**: ⚠️ 85/87 失败（需要scenario数据文件，预存问题）
@@ -994,7 +994,7 @@ go-on系统的**架构设计堪称完备**——15个关键层都有完整的模
 
 ## 🏆 最终完成状态
 
-- ✅ **编译**: profile-full **零警告通过** (`cargo check`)
+- ✅ **编译**: full **零警告通过** (`cargo check`)
 - ✅ **Clippy**: **零警告** (`cargo clippy -- -D warnings`)
 - ✅ **Lib测试**: scheduler 18/18 + bulkhead 5/5 + startup_context 10/10 + workflow_registry 25/25
 - ✅ **阶段一(P0紧急)**: 3项全部完成

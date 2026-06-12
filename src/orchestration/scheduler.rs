@@ -2,7 +2,6 @@ use crate::i18n::runtime::tf;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-#[cfg(feature = "backend-sqlite")]
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;

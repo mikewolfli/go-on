@@ -35,8 +35,8 @@
 
 #[cfg(any(
     feature = "sub-bus-tool",
-    feature = "profile-simple-server",
-    feature = "profile-multi-users-server"
+    feature = "simple-server",
+    feature = "multi-users-server"
 ))]
 use crate::agents::factory::{AgentFactory, AgentFactoryConfig};
 use crate::governance::hardening::TenantBudgetEnforcer;
@@ -82,8 +82,8 @@ use crate::intelligence::{lock_guard, read_guard, write_guard};
 use crate::observability::provenance::ProvenanceLedger;
 #[cfg(any(
     feature = "sub-bus-tool",
-    feature = "profile-simple-server",
-    feature = "profile-multi-users-server"
+    feature = "simple-server",
+    feature = "multi-users-server"
 ))]
 use crate::orchestration::council::{CouncilConfig, OrchestrationCouncil};
 use crate::orchestration::task_schema::SchemaRegistry;
@@ -485,15 +485,15 @@ pub struct CapabilityBus {
     /// Agent factory — dynamic sub-agent creation (F-GAP-13)
     #[cfg(any(
         feature = "sub-bus-tool",
-        feature = "profile-simple-server",
-        feature = "profile-multi-users-server"
+        feature = "simple-server",
+        feature = "multi-users-server"
     ))]
     pub agent_factory: Arc<Mutex<AgentFactory>>,
     /// Orchestration council — multi-agent voting governance (F-GAP-15)
     #[cfg(any(
         feature = "sub-bus-tool",
-        feature = "profile-simple-server",
-        feature = "profile-multi-users-server"
+        feature = "simple-server",
+        feature = "multi-users-server"
     ))]
     pub council: Arc<Mutex<OrchestrationCouncil>>,
     /// Evolution graph — capability lifecycle tracking (F-GAP-18)
@@ -622,18 +622,22 @@ impl CapabilityBus {
             consensus: ConsensusEngine::new(Default::default()),
             #[cfg(any(
                 feature = "sub-bus-tool",
-                feature = "profile-simple-server",
-                feature = "profile-multi-users-server"
+                feature = "simple-server",
+                feature = "multi-users-server"
             ))]
             agent_factory: Arc::new(Mutex::new(AgentFactory::new(AgentFactoryConfig::default()))),
             #[cfg(any(
                 feature = "sub-bus-tool",
-                feature = "profile-simple-server",
-                feature = "profile-multi-users-server"
+                feature = "simple-server",
+                feature = "multi-users-server"
             ))]
-            council: Arc::new(Mutex::new(OrchestrationCouncil::new(
-                CouncilConfig::default(),
-            ))),
+            council: {
+                let council = Arc::new(Mutex::new(OrchestrationCouncil::new(
+                    CouncilConfig::default(),
+                )));
+                OrchestrationCouncil::start_auto_ejection(council.clone());
+                council
+            },
             evolution_graph: Arc::new(Mutex::new(EvolutionGraph::new())),
             continuous_learning: Arc::new(Mutex::new(ContinuousLearningCenter::new(
                 Default::default(),
@@ -958,8 +962,8 @@ impl CapabilityBus {
 
         #[cfg(any(
             feature = "sub-bus-tool",
-            feature = "profile-simple-server",
-            feature = "profile-multi-users-server"
+            feature = "simple-server",
+            feature = "multi-users-server"
         ))]
         {
             let fp = lock_guard(&self.agent_factory).profile();

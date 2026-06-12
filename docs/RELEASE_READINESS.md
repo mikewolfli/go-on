@@ -40,7 +40,7 @@ Keep the following artifacts per release candidate:
 | Lint | `cargo clippy -- -D warnings` | ✅ Zero warnings |
 | Unit Tests | `cargo test --lib` | ✅ All passing |
 | Integration Tests | `cargo test --test '*'` | ✅ All passing |
-| Profile Check | `cargo check --no-default-features -F profile-multi-users-server` | ✅ Zero errors |
+| Profile Check | `cargo check --no-default-features -F multi-users-server` | ✅ Zero errors |
 | Contract Smoke | `cargo test --test step2_three_endpoint_contract` | ✅ All passing |
 | Performance Baseline | `scripts/run-performance-baseline.sh` | 📊 Report generated |
 | Release Gate | `scripts/run-release-readiness-gate.sh` | ✅ All gates pass |

@@ -39,7 +39,7 @@ pub enum StateSyncEvent {
 
 impl StateSyncEvent {
     /// Human-readable summary for display in the UI.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved state sync features
     pub fn summary(&self) -> String {
         match self {
             StateSyncEvent::ModelsChanged { models } => {

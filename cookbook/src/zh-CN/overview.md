@@ -29,23 +29,23 @@ cargo run --manifest-path gui/Cargo.toml
 
 ## 构建配置文件
 
-三种构建配置文件适用于不同的部署场景，外加 `profile-full` 用于 CI：
+三种构建配置文件适用于不同的部署场景，外加 `full` 用于 CI：
 
 | 配置文件 | 后端 | 使用场景 | 构建命令 |
 |:--------|:------|:---------|:--------|
-| `profile-local` | SQLite + sqlite-vec | 单用户本地工具 | `cargo build`（默认） |
-| `profile-simple-server` | SQLite + sqlite-vec | 单服务器部署 | `cargo build --no-default-features -F profile-simple-server` |
-| `profile-multi-users-server` | PostgreSQL + pgvector | 多用户生产 | `cargo build --no-default-features -F profile-multi-users-server` |
-| `profile-full` | SQLite（全部特性） | CI / 开发 | `cargo build --no-default-features -F profile-full` |
+| `local` | SQLite + sqlite-vec | 单用户本地工具 | `cargo build`（默认） |
+| `simple-server` | SQLite + sqlite-vec | 单服务器部署 | `cargo build --no-default-features -F simple-server` |
+| `multi-users-server` | PostgreSQL + pgvector | 多用户生产 | `cargo build --no-default-features -F multi-users-server` |
+| `full` | SQLite（全部特性） | CI / 开发 | `cargo build --no-default-features -F full` |
 
 ## 验证状态
 
 | 配置文件 | `cargo clippy -D warnings` | 测试数 |
 |:--------|:--------------------------:|:------:|
-| **profile-local** | ✅ **零警告** | **2252** |
-| **profile-simple-server** | ✅ **零警告** | **全部通过** |
-| **profile-full** | ✅ **零警告** | **全部通过** |
-| **profile-multi-users-server** | ✅ **零警告** | **全部通过** |
+| **local** | ✅ **零警告** | **2252** |
+| **simple-server** | ✅ **零警告** | **全部通过** |
+| **full** | ✅ **零警告** | **全部通过** |
+| **multi-users-server** | ✅ **零警告** | **全部通过** |
 
 全部 2252 个单元测试零失败、零忽略通过。E2E 测试（需要基础设施）标记为 `#[ignore]`。
 

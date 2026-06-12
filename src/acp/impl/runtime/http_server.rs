@@ -57,7 +57,7 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
             && !server.runtime_config.mtls_server_cert_path.is_empty()
             && !server.runtime_config.mtls_server_key_path.is_empty()
         {
-            #[cfg(feature = "profile-multi-users-server")]
+            #[cfg(feature = "multi-users-server")]
             {
                 use crate::security::mtls::MtlsConfig;
                 let mut mtls_config = MtlsConfig::new(
@@ -96,10 +96,10 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
                     }
                 }
             }
-            #[cfg(not(feature = "profile-multi-users-server"))]
+            #[cfg(not(feature = "multi-users-server"))]
             {
                 tracing::warn!(
-                    "mTLS is configured but requires profile-multi-users-server feature"
+                    "mTLS is configured but requires multi-users-server feature"
                 );
                 None
             }

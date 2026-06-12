@@ -8,7 +8,7 @@
 ### 核心规则
 
 1. 5 种协议全链路闭合 — auto、acp stdio、acp http、mcp stdio、mcp http。每个推荐能力必须接入全部 5 种协议模式，不允许静默缺失。
-2. 3 种服务器 Profile 全链路闭合 — profile-local、profile-simple-server、profile-multi-users-server。每个推荐能力必须在全部 3 种 profile 特性集下正确编译和行为一致。不允许 cfg 不匹配。
+2. 3 种服务器 Profile 全链路闭合 — local、simple-server、multi-users-server。每个推荐能力必须在全部 3 种 profile 特性集下正确编译和行为一致。不允许 cfg 不匹配。
 3. 注释英文 — 所有新增模块的代码注释必须使用英文。不允许中英文混合。
 4. 国际化（i18n）全覆盖 — 所有面向用户的字符串（GUI、addon、后端日志）必须经过 locale 键转译。不允许任何语言的硬编码展示字符串。
 5. 完整闭合 — 本文列出的每个模块最终必须达到：编译通过、零警告、接入 governance.status、可通过 health 端点观测、有集成测试覆盖。
@@ -356,12 +356,12 @@ DOC中虚假功能声明（WebSocket/OAuth/OpenAPI/SDK）已移除。CHANGELOG.m
 ### 6.1 编译与静态检查
 
 ```text
-✅ cargo check --features profile-local                        → 0 errors
-✅ cargo check --no-default-features --features profile-simple-server   → 0 errors
-✅ cargo check --no-default-features --features profile-multi-users-server → 0 errors
-✅ cargo clippy --no-default-features --features profile-local -- -D warnings    → 0 warnings
-✅ cargo clippy --no-default-features --features profile-simple-server -- -D warnings → 0 warnings
-✅ cargo clippy --no-default-features --features profile-multi-users-server -- -D warnings → 0 warnings
+✅ cargo check --features local                        → 0 errors
+✅ cargo check --no-default-features --features simple-server   → 0 errors
+✅ cargo check --no-default-features --features multi-users-server → 0 errors
+✅ cargo clippy --no-default-features --features local -- -D warnings    → 0 warnings
+✅ cargo clippy --no-default-features --features simple-server -- -D warnings → 0 warnings
+✅ cargo clippy --no-default-features --features multi-users-server -- -D warnings → 0 warnings
 ```
 
 ### 6.2 核心模块测试
@@ -544,12 +544,12 @@ DOC中虚假功能声明（WebSocket/OAuth/OpenAPI/SDK）已移除。CHANGELOG.m
 
 ```text
 ✅ cargo check --bin go-on                              → 0 warnings
-✅ cargo check --no-default-features --features profile-local          → 0 warnings
-✅ cargo check --no-default-features --features profile-simple-server   → 0 warnings
-✅ cargo check --no-default-features --features profile-multi-users-server → 0 warnings
-✅ cargo clippy --no-default-features --features profile-local -- -D warnings    → 0 warnings
-✅ cargo clippy --no-default-features --features profile-simple-server -- -D warnings → 0 warnings
-✅ cargo clippy --no-default-features --features profile-multi-users-server -- -D warnings → 0 warnings
+✅ cargo check --no-default-features --features local          → 0 warnings
+✅ cargo check --no-default-features --features simple-server   → 0 warnings
+✅ cargo check --no-default-features --features multi-users-server → 0 warnings
+✅ cargo clippy --no-default-features --features local -- -D warnings    → 0 warnings
+✅ cargo clippy --no-default-features --features simple-server -- -D warnings → 0 warnings
+✅ cargo clippy --no-default-features --features multi-users-server -- -D warnings → 0 warnings
 ✅ cargo test --bin go-on -- fast_path_cache           → 15 passed
 ✅ cargo test --bin go-on -- full_auto                 → 27 passed
 ✅ cargo test --bin go-on -- dag_driver                → 6 passed
@@ -622,9 +622,9 @@ DOC中虚假功能声明（WebSocket/OAuth/OpenAPI/SDK）已移除。CHANGELOG.m
 |:---------|:--------:|
 | `cargo check --bin go-on` 零警告 | **✅ 0 warnings** |
 | `cargo check --bin go-on --tests` 零警告 | **✅ 0 warnings** |
-| `cargo clippy profile-local -D warnings` 零警告 | **✅ 0 warnings** |
-| `cargo clippy profile-simple-server -D warnings` 零警告 | **✅ 0 warnings** |
-| `cargo clippy profile-multi-users-server -D warnings` 零警告 | **✅ 0 warnings** |
+| `cargo clippy local -D warnings` 零警告 | **✅ 0 warnings** |
+| `cargo clippy simple-server -D warnings` 零警告 | **✅ 0 warnings** |
+| `cargo clippy multi-users-server -D warnings` 零警告 | **✅ 0 warnings** |
 | ToolRecommender -> 执行计划 | **✅ 完成** |
 | SkillMarketRegistry -> 发现阶段 | **✅ 完成** |
 | MultiModelVoter 条件门控 | **✅ 完成** |
@@ -722,9 +722,9 @@ DOC中虚假功能声明（WebSocket/OAuth/OpenAPI/SDK）已移除。CHANGELOG.m
 |:---------|:--------:|
 | `cargo check --bin go-on` 零警告 | **✅ 0 warnings** |
 | `cargo check --bin go-on --tests` 零警告 | **✅ 0 warnings** |
-| `cargo clippy profile-local -D warnings` 零警告 | **✅ 0 warnings** |
-| `cargo clippy profile-simple-server -D warnings` 零警告 | **✅ 0 warnings** |
-| `cargo clippy profile-multi-users-server -D warnings` 零警告 | **✅ 0 warnings** |
+| `cargo clippy local -D warnings` 零警告 | **✅ 0 warnings** |
+| `cargo clippy simple-server -D warnings` 零警告 | **✅ 0 warnings** |
+| `cargo clippy multi-users-server -D warnings` 零警告 | **✅ 0 warnings** |
 | 模块级 `#![allow(dead_code)]` 在 `src/` 中 | **✅ 0 remaining** |
 | 模块级 `#![allow(unused_imports)]` 在 `src/` 中 | **✅ 0 remaining** |
 | CacheWarmingEngine → main.rs 初始化 | **✅ 完成** |
@@ -830,7 +830,7 @@ DOC中虚假功能声明（WebSocket/OAuth/OpenAPI/SDK）已移除。CHANGELOG.m
 
 ## 十四、BLUE46 第十轮全量 F-GAP 标签标准化与架构闭合（2026-05-26）
 
-> 目标：完成全部 `#[allow(dead_code)]`/`#[allow(unused_imports)]` 的 F-GAP 标准化标签、修复 SystemIntegration/SessionCompressor 架构缺口、补齐 profile-local 缺失总线、实现全局零未标签死代码。
+> 目标：完成全部 `#[allow(dead_code)]`/`#[allow(unused_imports)]` 的 F-GAP 标准化标签、修复 SystemIntegration/SessionCompressor 架构缺口、补齐 local 缺失总线、实现全局零未标签死代码。
 
 ### 14.1 本轮改进项
 
@@ -844,7 +844,7 @@ DOC中虚假功能声明（WebSocket/OAuth/OpenAPI/SDK）已移除。CHANGELOG.m
 | R10-P6 | **F-GAP 标签（sse_optimizer）** — SseBufferPool 添加 `// F-GAP-10` 标签 | `sse_optimizer.rs` | ✅ |
 | R10-P7 | **F-GAP 标签（全项目 90+ 处）** — 批量补齐全部 `#[allow(dead_code)]` F-GAP 标签 | 30+ 文件 | ✅ |
 | R10-P8 | **`#[allow(unused_imports)]` 备注标准化** — 每处添加明确注释 | `schema/mod.rs`, `acp/mod.rs`, `acp/impl/mod.rs`, `governance/drift/mod.rs` | ✅ |
-| R10-P9 | **`profile-local` 补齐缺失总线** — 添加 `sub-bus-memory`、`sub-bus-protocol` | `Cargo.toml` | ✅ |
+| R10-P9 | **`local` 补齐缺失总线** — 添加 `sub-bus-memory`、`sub-bus-protocol` | `Cargo.toml` | ✅ |
 | R10-P10 | **修复 chat.rs borrow-after-move** — 预复制 `original_count`/`summary` 防止移动后使用 | `chat.rs` | ✅ |
 | R10-P11 | **`integration.rs` 虚假注释修正** — 删除错误声称的 "Called from main.rs" | `integration.rs` | ✅ |
 
@@ -854,10 +854,10 @@ DOC中虚假功能声明（WebSocket/OAuth/OpenAPI/SDK）已移除。CHANGELOG.m
 |:---------|:--------:|
 | `cargo check --bin go-on` 零警告 | **✅ 0 warnings** |
 | `cargo check --bin go-on --tests` 零警告 | **✅ 0 warnings** |
-| `cargo clippy profile-local -D warnings` 零警告 | **✅ 0 warnings** |
-| `cargo clippy profile-simple-server -D warnings` 零警告 | **✅ 0 warnings** |
-| `cargo clippy profile-multi-users-server -D warnings` 零警告 | **✅ 0 warnings** |
-| `sub-bus-memory` + `sub-bus-protocol` 在 `profile-local` | **✅ 已添加** |
+| `cargo clippy local -D warnings` 零警告 | **✅ 0 warnings** |
+| `cargo clippy simple-server -D warnings` 零警告 | **✅ 0 warnings** |
+| `cargo clippy multi-users-server -D warnings` 零警告 | **✅ 0 warnings** |
+| `sub-bus-memory` + `sub-bus-protocol` 在 `local` | **✅ 已添加** |
 | F-GAP 标签覆盖率（`#[allow(dead_code)]`） | **✅ 100%** |
 | `#[allow(unused_imports)]` 注释覆盖率 | **✅ 100%** |
 | 综合 benchmark weighted_total | **✅ 100.00** |
@@ -869,8 +869,8 @@ DOC中虚假功能声明（WebSocket/OAuth/OpenAPI/SDK）已移除。CHANGELOG.m
 |:-----|:----:|:--------:|:------:|
 | **代码质量** | 99 | +1 全部 90+ 处 `#[allow(dead_code)]` 标准化 F-GAP 标签 | **100** |
 | **集成完整性** | 99 | +1 SessionCompressor→SessionContextManager 闭环、SystemIntegration 条件门控 | **100** |
-| **废弃模块遗留** | 98 | +2 `profile-local` 补齐总线、F-GAP 标准化 | **100** |
-| **架构层完整性** | 98 | +1 profile-local 14 总线功能完整 | **99** |
+| **废弃模块遗留** | 98 | +2 `local` 补齐总线、F-GAP 标准化 | **100** |
+| **架构层完整性** | 98 | +1 local 14 总线功能完整 | **99** |
 
 **更新后加权总分: 99.5/100 ★★★★★**
 
@@ -909,7 +909,7 @@ DOC中虚假功能声明（WebSocket/OAuth/OpenAPI/SDK）已移除。CHANGELOG.m
 2. **全局零警告** — cargo check（bin + tests）+ 3 profile clippy `-D warnings` 全零
 3. **零模块级死代码压制** — 所有 `#![allow(dead_code)]`/`#![allow(unused_imports)]` 已移除或替换为条件门控
 4. **全量 F-GAP 标准化** — 90+ 条 `#[allow(dead_code)]` 全部附带 F-GAP-NN 标准化标签
-5. **profile-local 总线完整** — 默认模式下 14-Bus 架构全部激活（含 `sub-bus-memory`、`sub-bus-protocol`）
+5. **local 总线完整** — 默认模式下 14-Bus 架构全部激活（含 `sub-bus-memory`、`sub-bus-protocol`）
 6. **SessionCompressor → SessionContextManager 闭环** — 超出预算 50% 时自动启用语义压缩
 7. **SystemIntegration 条件门控** — 未来模块集成点清晰标记
 8. **综合基准持续满分** — weighted_total = 100.00
@@ -954,7 +954,7 @@ DOC中虚假功能声明（WebSocket/OAuth/OpenAPI/SDK）已移除。CHANGELOG.m
 | 统计范围 | 完成状态 |
 |:---------|:--------:|
 | `cargo check --bin go-on` 零警告 | **✅ 0 warnings** |
-| `cargo clippy profile-local -D warnings` 零警告 | **✅ 0 warnings** |
+| `cargo clippy local -D warnings` 零警告 | **✅ 0 warnings** |
 | 新增烟雾测试 | **✅ 43/43 passed** |
 | `planner_embedding` 测试 | **✅ 4/4 passed** |
 | `prelude.rs` panic 消除 | **✅ 0 remaining unreachable!()** |
@@ -1009,7 +1009,7 @@ DOC中虚假功能声明（WebSocket/OAuth/OpenAPI/SDK）已移除。CHANGELOG.m
 2. **全局零警告** — cargo check（bin + tests）+ 3 profile clippy `-D warnings`
 3. **零模块级死代码压制** — 全部替换为条件门控
 4. **全量 F-GAP 标准化** — 100% 项目 `#[allow(dead_code)]` 附带 F-GAP 标签
-5. **profile-local 14 总线全激活**
+5. **local 14 总线全激活**
 6. **`unreachable!()` 生产 panic 风险消除** — 降级为 `warn!()` + 静态回退
 7. **`planner_embedding` 分类器集成** — EmbeddingTaskClassifier 接入 Planner::plan() 主路径
 8. **43 个新烟雾测试** — 覆盖 6 个 ACP helper + 3 个编排模块
@@ -1056,9 +1056,9 @@ DOC中虚假功能声明（WebSocket/OAuth/OpenAPI/SDK）已移除。CHANGELOG.m
 
 ```text
 ✅ cargo check --bin go-on（含 CapabilityBus 集成） → 0 warnings
-✅ cargo clippy profile-local -D warnings → 0 warnings
-✅ cargo check profile-simple-server → 0 warnings
-✅ cargo check profile-multi-users-server → 0 warnings
+✅ cargo clippy local -D warnings → 0 warnings
+✅ cargo check simple-server → 0 warnings
+✅ cargo check multi-users-server → 0 warnings
 ✅ cargo test fast_path_cache → 15/15 passed
 ✅ main.rs → 1810 行 (< 5000)
 ```
@@ -1129,13 +1129,13 @@ DOC中虚假功能声明（WebSocket/OAuth/OpenAPI/SDK）已移除。CHANGELOG.m
 
 ```text
 ✅ cargo clippy --all-targets -- -D warnings → 0 warnings, 0 errors
-✅ cargo clippy --no-default-features --features profile-local -- -D warnings → 0 warnings
-✅ cargo clippy --no-default-features --features profile-simple-server -- -D warnings → 0 warnings
-✅ cargo clippy --no-default-features --features profile-multi-users-server -- -D warnings → 0 warnings
+✅ cargo clippy --no-default-features --features local -- -D warnings → 0 warnings
+✅ cargo clippy --no-default-features --features simple-server -- -D warnings → 0 warnings
+✅ cargo clippy --no-default-features --features multi-users-server -- -D warnings → 0 warnings
 ✅ cargo test --test comprehensive_feature_benchmark → 5/5 passed, weighted_total=100.00
 ✅ cargo test --test external_benchmark → 7/7 passed
 ✅ cargo test --test autonomy_benchmark → 14/14 passed
-✅ cargo test --bin go-on (profile-local, 1413 tests) → 0 FAILED
+✅ cargo test --bin go-on (local, 1413 tests) → 0 FAILED
 ```
 
 ### 17.4 评分更新
@@ -1220,12 +1220,12 @@ DOC中虚假功能声明（WebSocket/OAuth/OpenAPI/SDK）已移除。CHANGELOG.m
 ### 17.4 验证证据
 
 ```text
-✅ cargo clippy --features profile-local -D warnings → 0 warnings
-✅ cargo clippy --no-default-features --features profile-simple-server -D warnings → 0 warnings
-✅ cargo clippy --no-default-features --features profile-multi-users-server -D warnings → 0 warnings
-✅ cargo check --features profile-local → 0 errors
-✅ cargo check --no-default-features --features profile-simple-server → 0 errors
-✅ cargo check --no-default-features --features profile-multi-users-server → 0 errors
+✅ cargo clippy --features local -D warnings → 0 warnings
+✅ cargo clippy --no-default-features --features simple-server -D warnings → 0 warnings
+✅ cargo clippy --no-default-features --features multi-users-server -D warnings → 0 warnings
+✅ cargo check --features local → 0 errors
+✅ cargo check --no-default-features --features simple-server → 0 errors
+✅ cargo check --no-default-features --features multi-users-server → 0 errors
 ✅ governance::rbac 全部 15 测试通过（串行执行）
 ✅ governance::pua/governance::audit/governance::drift 全部测试通过
 ✅ orchestration::scheduler 全部 18 测试通过（含 backpressure 修复）
@@ -1285,9 +1285,9 @@ DOC中虚假功能声明（WebSocket/OAuth/OpenAPI/SDK）已移除。CHANGELOG.m
 ### 18.5 验证证据（本轮）
 
 ```text
-✅ RUSTFLAGS="-D warnings" cargo clippy --features profile-local → 0 warnings
-✅ RUSTFLAGS="-D warnings" cargo clippy --features profile-simple-server → 0 warnings
-✅ RUSTFLAGS="-D warnings" cargo clippy --features profile-multi-users-server → 0 warnings
+✅ RUSTFLAGS="-D warnings" cargo clippy --features local → 0 warnings
+✅ RUSTFLAGS="-D warnings" cargo clippy --features simple-server → 0 warnings
+✅ RUSTFLAGS="-D warnings" cargo clippy --features multi-users-server → 0 warnings
 ✅ cargo test governance::{90 passed} resilience::{22} protocol::{63} capability_bus::{65}
 ✅ cargo test discovery::{12} drift::{12} consensus::{22} council::{23} rbac::{22}
 ✅ cargo test optimization::{21} memory::{14} i18n::{8}
@@ -1336,17 +1336,17 @@ DOC中虚假功能声明（WebSocket/OAuth/OpenAPI/SDK）已移除。CHANGELOG.m
 
 ```text
 ✅ backend
-   cargo test --features profile-local --test protocol_parity_integration -- --nocapture
+   cargo test --features local --test protocol_parity_integration -- --nocapture
    -> 5 passed, 0 failed
 
 ✅ backend
-   cargo test --features profile-local --test step2_three_endpoint_contract -- --nocapture
+   cargo test --features local --test step2_three_endpoint_contract -- --nocapture
    -> 18 passed, 0 failed
 
 ✅ backend
-   cargo clippy --no-default-features --features profile-local -- -D warnings
-   cargo clippy --no-default-features --features profile-simple-server -- -D warnings
-   cargo clippy --no-default-features --features profile-multi-users-server -- -D warnings
+   cargo clippy --no-default-features --features local -- -D warnings
+   cargo clippy --no-default-features --features simple-server -- -D warnings
+   cargo clippy --no-default-features --features multi-users-server -- -D warnings
    -> 3 profile 全部 0 warnings
 
 ✅ GUI
@@ -1394,30 +1394,30 @@ DOC中虚假功能声明（WebSocket/OAuth/OpenAPI/SDK）已移除。CHANGELOG.m
 ### 20.3 本轮验证证据（真实执行）
 
 ```text
-✅ cargo test --features profile-local --test comprehensive_feature_benchmark -- --nocapture
+✅ cargo test --features local --test comprehensive_feature_benchmark -- --nocapture
    -> 5 passed, weighted_total = 100.00
 
-✅ cargo test --features profile-local --test external_benchmark -- --nocapture
+✅ cargo test --features local --test external_benchmark -- --nocapture
    -> 7 passed
 
-✅ cargo test --features profile-local --test autonomy_benchmark -- --nocapture
+✅ cargo test --features local --test autonomy_benchmark -- --nocapture
    -> 14 passed
 
-✅ cargo test --features profile-local --test protocol_consistency_integration -- --nocapture
+✅ cargo test --features local --test protocol_consistency_integration -- --nocapture
    -> 26 passed
 
-✅ cargo test --features profile-local --test transport_parity_integration -- --nocapture
+✅ cargo test --features local --test transport_parity_integration -- --nocapture
    -> 18 passed（修复后全绿）
 
-✅ cargo test --features profile-local --test protocol_parity_integration -- --nocapture
+✅ cargo test --features local --test protocol_parity_integration -- --nocapture
    -> 5 passed
 
-✅ cargo test --features profile-local --test step2_three_endpoint_contract -- --nocapture
+✅ cargo test --features local --test step2_three_endpoint_contract -- --nocapture
    -> 18 passed
 
-✅ cargo clippy --no-default-features --features profile-local -- -D warnings
-✅ cargo clippy --no-default-features --features profile-simple-server -- -D warnings
-✅ cargo clippy --no-default-features --features profile-multi-users-server -- -D warnings
+✅ cargo clippy --no-default-features --features local -- -D warnings
+✅ cargo clippy --no-default-features --features simple-server -- -D warnings
+✅ cargo clippy --no-default-features --features multi-users-server -- -D warnings
    -> 3 profile 全部 0 warnings
 
 ✅ cd vscode-addon && npm run test
@@ -1459,28 +1459,28 @@ DOC中虚假功能声明（WebSocket/OAuth/OpenAPI/SDK）已移除。CHANGELOG.m
 ### 21.2 本轮验证证据（真实执行）
 
 ```text
-✅ cargo test --features profile-local --test acp_runtime_rpc_integration managed_service_target_infers_multi_user_mode_on_main_chain -- --nocapture
+✅ cargo test --features local --test acp_runtime_rpc_integration managed_service_target_infers_multi_user_mode_on_main_chain -- --nocapture
    -> 1 passed
 
-✅ cargo test --features profile-local --test acp_runtime_rpc_integration adversarial_governance_and_readiness_return_valid_structure_with_empty_params -- --nocapture
+✅ cargo test --features local --test acp_runtime_rpc_integration adversarial_governance_and_readiness_return_valid_structure_with_empty_params -- --nocapture
    -> 1 passed
 
-✅ cargo test --features profile-local --test acp_runtime_rpc_integration adversarial_invalid_method_returns_jsonrpc_error_does_not_crash_process -- --nocapture
+✅ cargo test --features local --test acp_runtime_rpc_integration adversarial_invalid_method_returns_jsonrpc_error_does_not_crash_process -- --nocapture
    -> 1 passed
 
-✅ cargo test --features profile-local --test acp_runtime_rpc_integration adversarial_unknown_deployment_target_defaults_to_single_user_mode -- --nocapture
+✅ cargo test --features local --test acp_runtime_rpc_integration adversarial_unknown_deployment_target_defaults_to_single_user_mode -- --nocapture
    -> 1 passed
 
-✅ cargo test --features profile-local --test acp_runtime_rpc_integration adversarial_explicit_single_user_param_overrides_managed_service_inference -- --nocapture
+✅ cargo test --features local --test acp_runtime_rpc_integration adversarial_explicit_single_user_param_overrides_managed_service_inference -- --nocapture
    -> 1 passed
 
-✅ cargo test --features profile-local --test acp_runtime_rpc_integration blue35_governance_profiles_present_for_s1_s16 -- --nocapture
+✅ cargo test --features local --test acp_runtime_rpc_integration blue35_governance_profiles_present_for_s1_s16 -- --nocapture
    -> 1 passed
 
-✅ cargo test --features profile-local --test acp_runtime_rpc_integration blue35_readiness_profiles_present_for_s1_s17 -- --nocapture
+✅ cargo test --features local --test acp_runtime_rpc_integration blue35_readiness_profiles_present_for_s1_s17 -- --nocapture
    -> 1 passed
 
-✅ cargo clippy --no-default-features --features profile-local -- -D warnings
+✅ cargo clippy --no-default-features --features local -- -D warnings
    -> 0 warnings
 ```
 
@@ -1519,13 +1519,13 @@ DOC中虚假功能声明（WebSocket/OAuth/OpenAPI/SDK）已移除。CHANGELOG.m
 ### 22.3 本轮验证证据（真实执行）
 
 ```text
-✅ cargo test --features profile-local --test acp_runtime_rpc_integration run_scenario_file_executes_observability_alerts_benchmark_requests -- --nocapture
+✅ cargo test --features local --test acp_runtime_rpc_integration run_scenario_file_executes_observability_alerts_benchmark_requests -- --nocapture
    -> 1 passed
 
-✅ cargo test --features profile-local --test acp_runtime_rpc_integration advanced::run_scenario_file_executes_release_readiness_drill_requests -- --nocapture
+✅ cargo test --features local --test acp_runtime_rpc_integration advanced::run_scenario_file_executes_release_readiness_drill_requests -- --nocapture
    -> 1 passed
 
-✅ cargo clippy --no-default-features --features profile-local -- -D warnings
+✅ cargo clippy --no-default-features --features local -- -D warnings
    -> 0 warnings
 ```
 
@@ -1540,7 +1540,7 @@ DOC中虚假功能声明（WebSocket/OAuth/OpenAPI/SDK）已移除。CHANGELOG.m
 
 1. 本轮以最小改动修复了场景契约不一致，`observability.alerts` 结构与集成测试期望重新对齐。
 2. 先前阻塞的 `release-readiness-drill` 已由失败恢复为通过，场景簇继续收敛。
-3. 在完成修复的同时保持 `profile-local` clippy `-D warnings` 全绿，未引入质量回退。
+3. 在完成修复的同时保持 `local` clippy `-D warnings` 全绿，未引入质量回退。
 
 ---
 
@@ -1551,32 +1551,32 @@ DOC中虚假功能声明（WebSocket/OAuth/OpenAPI/SDK）已移除。CHANGELOG.m
 ### 23.1 本轮一次性执行结果（真实执行）
 
 ```text
-✅ cargo clippy --no-default-features --features profile-local -- -D warnings
-✅ cargo clippy --no-default-features --features profile-simple-server -- -D warnings
-✅ cargo clippy --no-default-features --features profile-multi-users-server -- -D warnings
+✅ cargo clippy --no-default-features --features local -- -D warnings
+✅ cargo clippy --no-default-features --features simple-server -- -D warnings
+✅ cargo clippy --no-default-features --features multi-users-server -- -D warnings
 
-❌ cargo test --features profile-local --test acp_runtime_rpc_integration -- --nocapture
+❌ cargo test --features local --test acp_runtime_rpc_integration -- --nocapture
    -> 57 passed; 30 failed
 
-✅ cargo test --features profile-local --test protocol_parity_integration -- --nocapture
+✅ cargo test --features local --test protocol_parity_integration -- --nocapture
    -> 5 passed
 
-✅ cargo test --features profile-local --test transport_parity_integration -- --nocapture
+✅ cargo test --features local --test transport_parity_integration -- --nocapture
    -> 18 passed
 
-✅ cargo test --features profile-local --test protocol_consistency_integration -- --nocapture
+✅ cargo test --features local --test protocol_consistency_integration -- --nocapture
    -> 26 passed
 
-✅ cargo test --features profile-local --test step2_three_endpoint_contract -- --nocapture
+✅ cargo test --features local --test step2_three_endpoint_contract -- --nocapture
    -> 18 passed
 
-✅ cargo test --features profile-local --test comprehensive_feature_benchmark -- --nocapture
+✅ cargo test --features local --test comprehensive_feature_benchmark -- --nocapture
    -> 5 passed
 
-✅ cargo test --features profile-local --test external_benchmark -- --nocapture
+✅ cargo test --features local --test external_benchmark -- --nocapture
    -> 7 passed
 
-✅ cargo test --features profile-local --test autonomy_benchmark -- --nocapture
+✅ cargo test --features local --test autonomy_benchmark -- --nocapture
    -> 14 passed
 
 ✅ cargo test --manifest-path gui/Cargo.toml -- --nocapture
@@ -1640,42 +1640,42 @@ DOC中虚假功能声明（WebSocket/OAuth/OpenAPI/SDK）已移除。CHANGELOG.m
 ### 24.2 本轮验证证据（全量真实执行）
 
 ```text
-✅ cargo clippy --no-default-features --features profile-local -- -D warnings
-✅ cargo clippy --no-default-features --features profile-simple-server -- -D warnings
-✅ cargo clippy --no-default-features --features profile-multi-users-server -- -D warnings
+✅ cargo clippy --no-default-features --features local -- -D warnings
+✅ cargo clippy --no-default-features --features simple-server -- -D warnings
+✅ cargo clippy --no-default-features --features multi-users-server -- -D warnings
    -> 3 profile 全部 0 warnings
 
-✅ cargo test --features profile-local --test acp_runtime_rpc_integration -- --nocapture
+✅ cargo test --features local --test acp_runtime_rpc_integration -- --nocapture
    -> 87 passed; 0 failed（原 30 项失败全域修复，6 个失败簇全部收敛）
 
-✅ cargo test --features profile-local --test protocol_parity_integration -- --nocapture
+✅ cargo test --features local --test protocol_parity_integration -- --nocapture
    -> 5 passed
 
-✅ cargo test --features profile-local --test transport_parity_integration -- --nocapture
+✅ cargo test --features local --test transport_parity_integration -- --nocapture
    -> 18 passed
 
-✅ cargo test --features profile-local --test protocol_consistency_integration -- --nocapture
+✅ cargo test --features local --test protocol_consistency_integration -- --nocapture
    -> 26 passed
 
-✅ cargo test --features profile-local --test step2_three_endpoint_contract -- --nocapture
+✅ cargo test --features local --test step2_three_endpoint_contract -- --nocapture
    -> 18 passed
 
-✅ cargo test --features profile-local --test comprehensive_feature_benchmark -- --nocapture
+✅ cargo test --features local --test comprehensive_feature_benchmark -- --nocapture
    -> 5 passed, weighted_total = 100.00
 
-✅ cargo test --features profile-local --test external_benchmark -- --nocapture
+✅ cargo test --features local --test external_benchmark -- --nocapture
    -> 7 passed
 
-✅ cargo test --features profile-local --test autonomy_benchmark -- --nocapture
+✅ cargo test --features local --test autonomy_benchmark -- --nocapture
    -> 14 passed
 
-✅ cargo test --features profile-local --test openai_compat_matrix_integration -- --nocapture
+✅ cargo test --features local --test openai_compat_matrix_integration -- --nocapture
    -> 37 passed
 
-✅ cargo test --features profile-local --test chaos_drill -- --nocapture
+✅ cargo test --features local --test chaos_drill -- --nocapture
    -> 6 passed
 
-✅ cargo test --features profile-local --test e2e_integration -- --nocapture
+✅ cargo test --features local --test e2e_integration -- --nocapture
    -> 17 passed
 
 ✅ cargo test --manifest-path gui/Cargo.toml -- --nocapture
@@ -1765,9 +1765,9 @@ DOC中虚假功能声明（WebSocket/OAuth/OpenAPI/SDK）已移除。CHANGELOG.m
 | 验证项 | 结果 |
 |:------|:----:|
 | `cargo check` | **0 errors, 0 warnings** ✅ |
-| profile-local | **0 warnings** ✅ |
-| profile-simple-server | **0 warnings** ✅ |
-| profile-multi-users-server | **0 warnings** ✅ |
+| local | **0 warnings** ✅ |
+| simple-server | **0 warnings** ✅ |
+| multi-users-server | **0 warnings** ✅ |
 | `cargo test` 全量 (1573) | **all passed** ✅ |
 | skill.rs (8 tests) | **all passed** ✅ |
 | skill_discovery.rs (10 tests) | **all passed** ✅ |
@@ -1829,12 +1829,12 @@ BLUE46 第二十五轮全面深度扫掠了 Skills 模块，完成以下核心�
 ### 29.3 验证证据（本轮）
 
 ```text
-✅ cargo check (profile-local): 0 errors, 0 warnings
-✅ cargo check (profile-simple-server): 0 errors, 0 warnings
-✅ cargo check (profile-multi-users-server): 0 errors, 0 warnings
+✅ cargo check (local): 0 errors, 0 warnings
+✅ cargo check (simple-server): 0 errors, 0 warnings
+✅ cargo check (multi-users-server): 0 errors, 0 warnings
 ✅ cargo clippy -- -D warnings: 0 errors, 0 warnings
 ✅ cargo test --lib: 37 passed, 0 failed
-✅ cargo test --features profile-local --test comprehensive_feature_benchmark: 5 passed, weighted_total = 100.00
+✅ cargo test --features local --test comprehensive_feature_benchmark: 5 passed, weighted_total = 100.00
 ✅ gui cargo check: 0 errors
 ```
 
@@ -1878,12 +1878,12 @@ BLUE46 第二十五轮全面深度扫掠了 Skills 模块，完成以下核心�
 ### 30.2 本轮验证证据
 
 ```text
-✅ cargo check (profile-local): 0 errors, 0 warnings
-✅ cargo check (profile-simple-server): 0 errors, 0 warnings
-✅ cargo check (profile-multi-users-server): 0 errors, 0 warnings
+✅ cargo check (local): 0 errors, 0 warnings
+✅ cargo check (simple-server): 0 errors, 0 warnings
+✅ cargo check (multi-users-server): 0 errors, 0 warnings
 ✅ cargo test --lib: 37 passed, 0 failed
-✅ cargo test --features profile-local: 1695 tests passed, 0 failed
-✅ cargo test --features profile-local --test comprehensive_feature_benchmark: 5 passed, weighted_total = 100.00
+✅ cargo test --features local: 1695 tests passed, 0 failed
+✅ cargo test --features local --test comprehensive_feature_benchmark: 5 passed, weighted_total = 100.00
 ```
 
 ### 30.3 完成率回写
@@ -1943,10 +1943,10 @@ BLUE46 第二十五轮全面深度扫掠了 Skills 模块，完成以下核心�
 ### 31.2 本轮验证证据
 
 ```text
-✅ cargo check (profile-local): 0 errors, 0 warnings
-✅ cargo check (profile-simple-server): 0 errors, 0 warnings
-✅ cargo check (profile-multi-users-server): 0 errors, 0 warnings
-✅ cargo test --features profile-local: 1716 tests passed, 0 failed
+✅ cargo check (local): 0 errors, 0 warnings
+✅ cargo check (simple-server): 0 errors, 0 warnings
+✅ cargo check (multi-users-server): 0 errors, 0 warnings
+✅ cargo test --features local: 1716 tests passed, 0 failed
 ✅ cargo test --test comprehensive_feature_benchmark: 5 passed, weighted_total = 100.00
 ```
 
@@ -1998,9 +1998,9 @@ BLUE46 第二十五轮全面深度扫掠了 Skills 模块，完成以下核心�
 ### 32.2 本轮验证证据
 
 ```text
-✅ cargo check (profile-local): 0 errors, 0 warnings
-✅ cargo check (profile-simple-server): 0 errors, 0 warnings
-✅ cargo check (profile-multi-users-server): 0 errors, 0 warnings
+✅ cargo check (local): 0 errors, 0 warnings
+✅ cargo check (simple-server): 0 errors, 0 warnings
+✅ cargo check (multi-users-server): 0 errors, 0 warnings
 ✅ cargo test --lib: 37 passed, 0 failed
 ✅ cargo test --bin go-on (unit tests): 1436 passed, 0 failed
 ✅ cargo test --test comprehensive_feature_benchmark: 5 passed, weighted_total = 100.00
@@ -2066,9 +2066,9 @@ BLUE46 第二十五轮全面深度扫掠了 Skills 模块，完成以下核心�
 ### 33.3 本轮验证证据
 
 ```text
-✅ cargo check (profile-local): 0 errors, 0 warnings
-✅ cargo check (profile-simple-server): 0 errors, 0 warnings
-✅ cargo check (profile-multi-users-server): 0 errors, 0 warnings
+✅ cargo check (local): 0 errors, 0 warnings
+✅ cargo check (simple-server): 0 errors, 0 warnings
+✅ cargo check (multi-users-server): 0 errors, 0 warnings
 ✅ cargo test --lib: 37 passed, 0 failed
 ✅ cargo test --bin go-on (unit tests): 1436 passed, 0 failed
 ✅ cargo test (integration): 87 passed, 0 failed（比上轮 +1）
@@ -2154,9 +2154,9 @@ BLUE46 第二十五轮全面深度扫掠了 Skills 模块，完成以下核心�
 ### 34.2 本轮验证证据
 
 ```text
-✅ cargo check (profile-local): 0 errors, 0 warnings
-✅ cargo check (profile-simple-server): 0 errors, 0 warnings
-✅ cargo check (profile-multi-users-server): 0 errors, 0 warnings
+✅ cargo check (local): 0 errors, 0 warnings
+✅ cargo check (simple-server): 0 errors, 0 warnings
+✅ cargo check (multi-users-server): 0 errors, 0 warnings
 ✅ cargo test --lib: 37 passed, 0 failed
 ✅ cargo test --bin go-on (unit tests): 1436 passed, 0 failed
 ✅ cargo test (integration): 87 passed, 0 failed
@@ -2302,11 +2302,11 @@ BLUE46 第二十五轮全面深度扫掠了 Skills 模块，完成以下核心�
 ### 35.3 本轮验证证据
 
 ```text
-✅ cargo check (profile-local): 0 errors, 1 expected deprecation warning only
+✅ cargo check (local): 0 errors, 1 expected deprecation warning only
 ✅ cargo check (gui): 0 errors, 0 warnings
 ✅ npx tsc --noEmit (vscode-addon): 0 errors
 ✅ cargo test --lib: 37 passed, 0 failed
-✅ cargo test --features profile-local: 1435 passed, 0 failed (2 test fixes verified)
+✅ cargo test --features local: 1435 passed, 0 failed (2 test fixes verified)
 ```
 
 ### 35.4 完成率回写
@@ -2374,10 +2374,10 @@ BLUE46 第二十五轮全面深度扫掠了 Skills 模块，完成以下核心�
 
 | 验证项 | 结果 |
 |:-------|:----:|
-| `cargo clippy --no-default-features --features profile-local -- -D warnings` | ✅ 0 errors, 0 warnings |
-| `cargo clippy --no-default-features --features profile-simple-server -- -D warnings` | ✅ 0 errors, 0 warnings |
-| `cargo clippy --no-default-features --features profile-multi-users-server -- -D warnings` | ✅ 0 errors, 0 warnings |
-| `cargo clippy --no-default-features --features profile-local --tests -- -D warnings` | ✅ 0 errors, 0 warnings |
+| `cargo clippy --no-default-features --features local -- -D warnings` | ✅ 0 errors, 0 warnings |
+| `cargo clippy --no-default-features --features simple-server -- -D warnings` | ✅ 0 errors, 0 warnings |
+| `cargo clippy --no-default-features --features multi-users-server -- -D warnings` | ✅ 0 errors, 0 warnings |
+| `cargo clippy --no-default-features --features local --tests -- -D warnings` | ✅ 0 errors, 0 warnings |
 | `gui cargo check` | ✅ 0 errors, 0 warnings |
 | `cargo test --test protocol_consistency_integration` | ✅ 26/26 passed |
 | `cargo test --test protocol_parity_integration` | ✅ 5/5 passed |
@@ -2474,15 +2474,15 @@ BLUE46 第二十五轮全面深度扫掠了 Skills 模块，完成以下核心�
 ### 36.2 本轮验证证据
 
 ```text
-✅ cargo check --bin go-on (profile-local): 0 errors, 1 expected deprecation warning
+✅ cargo check --bin go-on (local): 0 errors, 1 expected deprecation warning
 ✅ cargo check (gui): 0 errors, 0 warnings
 ✅ npx tsc --noEmit (vscode-addon): 0 errors
 ✅ cargo test --lib: 37 passed, 0 failed
-✅ cargo test --features profile-local --lib: 37 passed, 0 failed
-✅ cargo test --test comprehensive_feature_benchmark (profile-local): 5 passed, 0 failed (weighted_total=100.00)
-✅ cargo test --test external_benchmark (profile-local): 7 passed, 0 failed (overall_pass=true)
-✅ cargo test --test autonomy_benchmark (profile-local): 14 passed, 0 failed
-✅ cargo clippy --bin go-on --features profile-local -- -D warnings: 0 warnings
+✅ cargo test --features local --lib: 37 passed, 0 failed
+✅ cargo test --test comprehensive_feature_benchmark (local): 5 passed, 0 failed (weighted_total=100.00)
+✅ cargo test --test external_benchmark (local): 7 passed, 0 failed (overall_pass=true)
+✅ cargo test --test autonomy_benchmark (local): 14 passed, 0 failed
+✅ cargo clippy --bin go-on --features local -- -D warnings: 0 warnings
 ```
 
 ### 36.3 完成率回写

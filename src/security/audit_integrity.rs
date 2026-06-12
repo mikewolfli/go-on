@@ -189,6 +189,9 @@ impl AuditEntry {
 ///
 /// Each appended entry is cryptographically linked to the previous one,
 /// making any retroactive modification detectable.
+///
+/// Optionally configured with a signing key to automatically sign every
+/// entry for non-repudiation.
 #[derive(Debug)]
 pub struct HashChainAuditor {
     /// Path to the chain file (newline-delimited JSON).
@@ -197,6 +200,9 @@ pub struct HashChainAuditor {
     current_hash: String,
     /// ID of the last entry written.
     last_entry_id: Option<String>,
+    /// Optional signing key (key_id, private key bytes) used to sign every
+    /// entry appended via [`append()`].
+    signing_key: Option<(String, Vec<u8>)>,
 }
 
 impl HashChainAuditor {
@@ -220,7 +226,33 @@ impl HashChainAuditor {
             chain_file,
             current_hash,
             last_entry_id,
+            signing_key: None,
         })
+    }
+
+    /// Create a new auditor that automatically signs each entry with the
+    /// provided Ed25519 key.
+    ///
+    /// `key_id` is a human-readable identifier for the key (e.g., "ed25519-key-1").
+    /// `private_key` must be the 32-byte seed or 64-byte keypair as expected by
+    /// [`AuditEntry::sign`].
+    pub fn new_signed(
+        chain_file: PathBuf,
+        key_id: &str,
+        private_key: &[u8],
+    ) -> Result<Self, AuditError> {
+        let mut auditor = Self::new(chain_file)?;
+        auditor.signing_key = Some((key_id.to_string(), private_key.to_vec()));
+        Ok(auditor)
+    }
+
+    /// Configure the auditor to sign every appended entry with the given key.
+    ///
+    /// Returns `self` so calls can be chained:
+    /// `HashChainAuditor::new(path)?.with_signing_key("key-1", &keypair)`
+    pub fn with_signing_key(mut self, key_id: &str, private_key: &[u8]) -> Self {
+        self.signing_key = Some((key_id.to_string(), private_key.to_vec()));
+        self
     }
 
     /// Append a new audit entry to the chain.
@@ -228,7 +260,12 @@ impl HashChainAuditor {
         let entry_id = uuid::Uuid::new_v4().to_string();
         let timestamp_ms = current_timestamp_ms();
 
-        let entry = AuditEntry::new(entry_id, self.current_hash.clone(), payload, timestamp_ms);
+        let mut entry = AuditEntry::new(entry_id, self.current_hash.clone(), payload, timestamp_ms);
+
+        // Sign the entry if a signing key is configured
+        if let Some((key_id, private_key)) = &self.signing_key {
+            entry.sign(key_id, private_key)?;
+        }
 
         // Serialize and write
         let line = serde_json::to_string(&entry)

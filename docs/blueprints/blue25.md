@@ -251,8 +251,8 @@ Findings closed in this round:
 
 - Fixed a cross-profile integration instability in `startup_fails_when_cache_vector_paths_are_unavailable`:
   - The assertion is now profile-aware.
-  - `profile-local` expects graceful degradation (continue without cache/vector) instead of hard fail.
-  - non-`profile-local` profiles keep strict startup-fail expectation.
+  - `local` expects graceful degradation (continue without cache/vector) instead of hard fail.
+  - non-`local` profiles keep strict startup-fail expectation.
 - Improved Miri compatibility of `skill_import` tests:
   - replaced `#[tokio::test]` with explicit current-thread runtime usage in filesystem import tests to avoid unnecessary Tokio I/O runtime coupling.
   - removed `tempfile` hard dependency path in those tests and switched to deterministic workspace under `target/skill_import_test_ws/*`.

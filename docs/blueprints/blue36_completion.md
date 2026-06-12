@@ -90,9 +90,9 @@
 
 | 模式 | 目标业务 | 必要功能 | 实现状态 | 链路闭合 |
 |------|----------|----------|----------|----------|
-| **profile-local** | 单用户本地开发 | SQLite缓存 + 自适应向量存储 | ✅ 完整实现 | ✅ 完整闭合 |
-| **profile-simple-server** | 单服务器部署 | SQLite缓存 + 必需sqlite-vec | ✅ 完整实现 | ✅ 完整闭合 |
-| **profile-multi-users-server** | 多用户生产环境 | PostgreSQL缓存 + pgvector | ✅ 完整实现 | ✅ 完整闭合 |
+| **local** | 单用户本地开发 | SQLite缓存 + 自适应向量存储 | ✅ 完整实现 | ✅ 完整闭合 |
+| **simple-server** | 单服务器部署 | SQLite缓存 + 必需sqlite-vec | ✅ 完整实现 | ✅ 完整闭合 |
+| **multi-users-server** | 多用户生产环境 | PostgreSQL缓存 + pgvector | ✅ 完整实现 | ✅ 完整闭合 |
 
 **功能差异说明**：
 1. **local模式**：专注于开发者体验，支持快速迭代和本地缓存

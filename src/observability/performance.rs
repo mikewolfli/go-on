@@ -433,7 +433,7 @@ pub struct CacheStats {
 /// `[target.'cfg(target_os = "windows")'.dependencies]` so it is only
 /// compiled on Windows targets.
 #[cfg(target_os = "windows")]
-fn get_memory_usage() -> u64 {
+pub(crate) fn get_memory_usage() -> u64 {
     use std::mem::{size_of, zeroed};
 
     use windows_sys::Win32::System::ProcessStatus::{
@@ -482,7 +482,7 @@ fn get_memory_usage() -> u64 {
 }
 
 #[cfg(target_os = "linux")]
-fn get_memory_usage() -> u64 {
+pub(crate) fn get_memory_usage() -> u64 {
     // Read VmRSS from /proc for stable process-resident memory on Linux.
     let Ok(status) = fs::read_to_string("/proc/self/status") else {
         return 0;
@@ -502,7 +502,7 @@ fn get_memory_usage() -> u64 {
 }
 
 #[cfg(target_os = "macos")]
-fn get_memory_usage() -> u64 {
+pub(crate) fn get_memory_usage() -> u64 {
     // Read RSS from `ps -o rss=` which works on macOS without extra dependencies.
     // The output is in KB, so multiply by 1024 to get bytes.
     if let Ok(output) = std::process::Command::new("ps")
@@ -519,7 +519,7 @@ fn get_memory_usage() -> u64 {
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
-fn get_memory_usage() -> u64 {
+pub(crate) fn get_memory_usage() -> u64 {
     0
 }
 

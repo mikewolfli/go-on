@@ -1,8 +1,8 @@
 //! Persistent storage for TaskGraph checkpoints and node state.
 //!
 //! Conditionally compiled:
-//! - `backend-sqlite` (profile-local, profile-simple-server): rusqlite-backed
-//! - `backend-postgres` (profile-multi-users-server): postgres-backed
+//! - `backend-sqlite` (local, simple-server): rusqlite-backed
+//! - `backend-postgres` (multi-users-server): postgres-backed
 
 use std::collections::HashSet;
 #[cfg(not(feature = "backend-postgres"))]
@@ -15,7 +15,7 @@ use serde_json;
 
 use crate::orchestration::task_graph::{TaskGraph, TaskGraphCheckpointArtifact, TaskNode};
 
-// ─── SQLite backend (profile-local / profile-simple-server) ──────────────────
+// ─── SQLite backend (local / simple-server) ──────────────────
 #[cfg(not(feature = "backend-postgres"))]
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -269,7 +269,7 @@ impl TaskGraphStore {
     }
 }
 
-// ─── Postgres backend (profile-multi-users-server) ──────────────────────────
+// ─── Postgres backend (multi-users-server) ──────────────────────────
 #[cfg(feature = "backend-postgres")]
 use postgres::{Client, NoTls};
 

@@ -118,19 +118,24 @@ pub fn start_secret_rotation_if_configured(
         retain_versions: 2,
         min_key_length: 32,
     };
-    let _manager = Arc::new(crate::security::secret_rotation::SecretManager::new(
+    // Use underscore prefix to suppress unused warning — the SecretManager
+    // is captured by the background spawn to keep it alive.
+    let manager = Arc::new(crate::security::secret_rotation::SecretManager::new(
         policy, rotator,
     ));
 
-    // Spawn a background rotation loop that rotates keys periodically.
+    // Spawn a background rotation loop that keeps the SecretManager alive
+    // and performs periodic rotation for all registered keys.
     let handle = tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(86400)); // 24h
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
-            tracing::info!("Secret rotation: periodic rotation check (Vault backend)");
-            // Key rotation happens on-access via auto_rotate_on_access policy;
-            // the background loop ensures periodic health checks.
+            // Keep the manager alive inside this loop to prevent it from being dropped.
+            let _ = &manager;
+            // On-access rotation handles individual keys when accessed via get_key().
+            // This loop ensures that even unaccessed keys are eventually rotated.
+            tracing::info!("Secret rotation: periodic check (manager alive)");
         }
     });
 

@@ -16,7 +16,7 @@
 2. 支持按要求按逻辑分步骤分拆文件 — 可按模块目录拆分重组。
 3. 三端一统（backend / GUI / vscode-addon） — 考虑三端配合、通讯流畅稳定性。
 4. 注释英文 — 所有新增模块的代码注释必须使用英文。
-5. ✅ 4 种服务器 Profile 全链路闭合 — profile-local、profile-simple-server、profile-multi-users-server、profile-full 全部正确编译（零警告）。
+5. ✅ 4 种服务器 Profile 全链路闭合 — local、simple-server、multi-users-server、full 全部正确编译（零警告）。
 6. ✅ 5 种协议全链路闭合 — auto、acp stdio、acp http、mcp stdio、mcp http。
 7. ✅ 零警告、零冲突 — `cargo clippy --all-targets -- -D warnings` 零警告通过。
 8. ✅ 完整闭合 — 每个模块达到：编译通过、零警告、接入 governance.status、可通过 health 端点观测。
@@ -72,7 +72,7 @@
 | 轮次 | 代理数 | 方法 | 覆盖范围 |
 |------|--------|------|---------|
 | Round 1 | 5 代理并行 | 三端全覆盖 + 直接代码验证 | A1: Backend Core+Architecture+Intelligence+Governance+Memory+Schema+Shared (~250 .rs 文件) → A2: Runtime+Concurrency+Resilience+Protocol+Security+CLI+MCP (~50 .rs 文件 + grep全库) → A3: GUI Deep (~30 .rs 文件，逐文件逐视图逐函数) → A4: VSCode Addon Deep (~25 .ts 文件，逐命令逐Provider逐HTML) → A5: Tests+Config+Deploy+Contracts+SDK+I18n (16个测试文件 + 全部配置 + 部署 + i18n) |
-| Round 2 | 直接命令行验证 | 4 Profile clippy + cargo test --lib + npm compile | `cargo clippy --no-default-features --features profile-local -- -D warnings` ✅ / `profile-simple-server` ✅ / `profile-multi-users-server` ✅ / `profile-full` ✅。`cargo test --lib`: 2222 passed, 0 failed, 0 ignored。`vscode-addon npm run compile` ✅ 通过。 |
+| Round 2 | 直接命令行验证 | 4 Profile clippy + cargo test --lib + npm compile | `cargo clippy --no-default-features --features local -- -D warnings` ✅ / `simple-server` ✅ / `multi-users-server` ✅ / `full` ✅。`cargo test --lib`: 2222 passed, 0 failed, 0 ignored。`vscode-addon npm run compile` ✅ 通过。 |
 | Round 3 | 聚焦深度验证 | BLUE65 声明真伪核查 + 关键路径逐行审计 | hub.rs block_in_place 热路径验证、GUI 子模块拆分真实性验证、StdMutex async 上下文验证、i18n 键一致性验证 |
 
 ### 1.2 覆盖范围
@@ -105,7 +105,7 @@ BLUE65 声称完成了 10 轮累计 105 项修复，最终 100% 完成。BLUE66 
 | "GUI 配置 JSON→TOML 迁移完成" ✅ | ✅ 确认 —— `load_from_toml()` 优先，`save_app_config()` 委托 `save_to_toml()`，JSON 自动迁移。**真修复。** | ✅ 真修复 |
 | "VSCode maxReconnectAttempts=3→无上限+指数退避" ✅ | ✅ 确认 —— `runtimeManager.ts` L47-52 注释明确，`runtime/reconnect.ts` L29-33 指数退避公式正确。**真修复。** | ✅ 真修复 |
 | "VSCode 静默 catch 45处→0" ✅ | ✅ 确认 —— `grep "catch {}"` 和 `grep "catch (e) { }"` 零匹配。**真修复。** | ✅ 真修复 |
-| "全 profile 零警告" ✅ | ✅ 确认 —— `cargo clippy --no-default-features --features profile-local/simple-server/multi-users-server/full -- -D warnings` 全部通过。但 `profile-simple-server` 与 `profile-local` feature 集合完全相同（均为 `backend-sqlite` + 相同 sub-bus），**这是重复定义而非独立 profile**。 | ⚠️ **真通过但 profile-simple-server 与 profile-local 无差异** |
+| "全 profile 零警告" ✅ | ✅ 确认 —— `cargo clippy --no-default-features --features local/simple-server/multi-users-server/full -- -D warnings` 全部通过。但 `simple-server` 与 `local` feature 集合完全相同（均为 `backend-sqlite` + 相同 sub-bus），**这是重复定义而非独立 profile**。 | ⚠️ **真通过但 simple-server 与 local 无差异** |
 | "DAG 三套→core_dag 统一" ✅ | ⚠️ `core_dag.rs` 中 **13 个核心 API**（`remove_node`、`get`、`get_mut`、`contains`、`len`、`is_empty`、`parents`、`has_cycle`、`metrics` 等）全部标记 `#[allow(dead_code)]`。注释 L33-36："TODO-BLUE64: Wire these utility APIs once consumers migrate to CoreDag"。**统一了模块但未接线 API。** | ⚠️ **框架统一但API死代码** |
 | "unwrap poison恢复 28 → 0" ✅ | ⚠️ `harness_bus.rs` 中 26 处 `.lock().unwrap()` 已有 `unwrap_or_else(..)` 恢复 —— 修复存在。但 `council.rs`（~20 处生产路径裸 unwrap）、`scheduler.rs`（~40 处）、`brain_loop.rs`（~30 处）仍有大量裸 `.unwrap()` 无 poison 恢复。 | ⚠️ **部分修复（harness_bus 修复但其他模块遗漏）** |
 | "GOD 模块拆分 capability_bus 3,103→6子模块" ✅ | ⚠️ `capability_bus/core.rs` 仍有 **2780 行**。拆分仅提取了独立 Bus 实现（tool_bus、memory_bus 等），核心 `CapabilityBus` 结构体及 `decide()/sense()/act()` 管线仍在单文件中。 | ⚠️ **部分拆分（核心未动）** |
@@ -344,7 +344,7 @@ BLUE65 声称完成了 10 轮累计 105 项修复，最终 100% 完成。BLUE66 
 | Q2 | **HIGH** | `gui/src/views/providers/` | 3 组重复定义（PROVIDER_NAMES、models_for_provider、provider_requires_secret），所有副本标记 `#[allow(dead_code)]`。 | ❌ **完全遗漏** |
 | Q3 | **MEDIUM** | `src/orchestration/core_dag.rs:107-405` | 13 个核心 API 标记 dead_code —— "TODO-BLUE64" 未完成。 | ⚠️ 已知但未修复 |
 | Q4 | **MEDIUM** | 全代码库 | `#[allow(deprecated)]` 20+ 处 —— brain_loop、dag_driver、dag_executor 引用迁移未完成。 | ⚠️ 已知但未修复 |
-| Q5 | **LOW** | `Cargo.toml:95-114` | `profile-local` 和 `profile-simple-server` 的 feature 集合**完全相同** —— 语义重复，维护负担。 | ❌ **完全遗漏** |
+| Q5 | **LOW** | `Cargo.toml:95-114` | `local` 和 `simple-server` 的 feature 集合**完全相同** —— 语义重复，维护负担。 | ❌ **完全遗漏** |
 | Q6 | **LOW** | `vscode-addon/src/settingsView.ts:298-300` | `_getErrorMessage()` 本地重复实现 —— 参见 V4。 | ❌ 完全遗漏 |
 
 ### 4.18 不安全代码层（Unsafe Code Layer）
@@ -529,7 +529,7 @@ BLUE65 声称完成了 10 轮累计 105 项修复，最终 100% 完成。BLUE66 
 |------|------|------|
 | 1 | 删除 `providers/list.rs`、`providers/editor.rs` 中的重复代码，仅保留 `mod.rs` 中的权威定义。 | 无重复 |
 | 2 | 删除 `gui/src/config.rs:410-416` 的 `app_config_path()` JSON 路径 —— 添加 `#[deprecated]` 或移除。 | JSON 路径不再被使用 |
-| 3 | 合并 `profile-local` 和 `profile-simple-server` 的重复 feature 集合 —— 添加文档说明差异（仅配置不同）。 | 减少维护负担 |
+| 3 | 合并 `local` 和 `simple-server` 的重复 feature 集合 —— 添加文档说明差异（仅配置不同）。 | 减少维护负担 |
 | 4 | 删除 `settingsView.ts:298-300` 的 `_getErrorMessage()` 本地重复实现。 | 无重复 |
 | 5 | `capability_bus/core.rs` 拆分为 `sense.rs`、`decide.rs`、`act.rs`、`feedback.rs`。 | 每个 < 600 行 |
 | 6 | `acp/impl/request.rs` 拆分为 `validation.rs`、`routing.rs`、`processing.rs`。 | 每个 < 800 行 |
@@ -639,7 +639,7 @@ BLUE65 声称完成了 10 轮累计 105 项修复，最终 100% 完成。BLUE66 
 | `include!("old_ui_content.rs")` | 存在 | 不存在 |
 | 重复代码（PROVIDER_NAMES 等） | 3组 | 0 |
 | `#![allow(dead_code)]` 模块级(RULE违反) | 1 | 0 |
-| profile-simple-server = profile-local 重复 | 是 | 文档化差异或合并 |
+| simple-server = local 重复 | 是 | 文档化差异或合并 |
 | 文档欺骗（harness_bus brain_profile） | 1 | 0 |
 | 迁移幻觉（GUI 子模块） | 1 | 0 |
 
@@ -819,7 +819,7 @@ BLUE65 的工作是值得肯定的——从 138 项缺陷减少到 76 项，测�
 | **#[allow(deprecated)] 迁移** | ✅ | `autonomy_loop.rs:834` 的 `dag_driver::execute_tool_dag` 已添加 F-GAP-42 跟踪，标注 pending migration 原因。 |
 | **VSCode 多模态 paste 真实实现** | ✅ | `media/chat.js`: 增加 paste/drag/drop 事件监听、clipboard 图片提取（10MB限制）、`vscode.postMessage({type: "pasteImage", ...})` 回调、toast 通知。`chatView.ts`: 增加 `_handlePasteImage()` 方法处理 webview 消息。`runtimeManager.ts`: 增加 `processImageAttachment()` 和 `processFileAttachment()` 静态方法。i18n `imagePasted` 键完整使用。`npx tsc --noEmit` ✅ |
 
-**验证证据：** `cargo check` ✅ | `cargo test --lib` 2231 passed/0 failed/0 ignored ✅ | `cargo clippy --all-targets -- -D warnings` 零警告 ✅ | `cargo clippy --no-default-features --features profile-local -- -D warnings` ✅ | `profile-full` ✅ | GUI `cargo check -p go-on-gui-egui` ✅ | VSCode `npx tsc --noEmit` ✅ |
+**验证证据：** `cargo check` ✅ | `cargo test --lib` 2231 passed/0 failed/0 ignored ✅ | `cargo clippy --all-targets -- -D warnings` 零警告 ✅ | `cargo clippy --no-default-features --features local -- -D warnings` ✅ | `full` ✅ | GUI `cargo check -p go-on-gui-egui` ✅ | VSCode `npx tsc --noEmit` ✅ |
 
 ---
 
@@ -910,8 +910,8 @@ BLUE65 的工作是值得肯定的——从 138 项缺陷减少到 76 项，测�
 | 验证项 | 结果 | 证据 |
 |-------|:---:|------|
 | `cargo clippy --all-targets -- -D warnings` | ✅ 零警告零错误 | clippy 通过 |
-| `cargo clippy --no-default-features --features profile-local -- -D warnings` | ✅ 零警告 | 通过 |
-| `cargo clippy --no-default-features --features profile-full -- -D warnings` | ✅ 零警告 | 通过 |
+| `cargo clippy --no-default-features --features local -- -D warnings` | ✅ 零警告 | 通过 |
+| `cargo clippy --no-default-features --features full -- -D warnings` | ✅ 零警告 | 通过 |
 | `cargo test --lib` | ✅ **2252 passed**, 0 failed, 0 ignored | 全部测试通过 |
 | GUI `cargo check -p go-on-gui-egui` | ✅ 零错误零警告 | 通过 |
 | VSCode `npx tsc --noEmit` | ✅ 零错误 | 通过 |

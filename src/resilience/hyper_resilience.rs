@@ -16,6 +16,7 @@ use tokio::sync::watch;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 
+#[cfg(feature = "chaos-testing")]
 use super::chaos::{ChaosEngine, FaultType};
 
 /// Lock a Mutex, recovering from poison with a log.
@@ -69,59 +70,17 @@ pub enum FailureMode {
 pub use crate::optimization::failure_prevention::CircuitBreakerState as CircuitState;
 
 // ---------------------------------------------------------------------------
-// DegradationLevel — two enums exist: this one and
-// `crate::optimization::failure_prevention::DegradationLevel`. The From impls
-// below bridge them so either can be used where the other is expected.
+// DegradationLevel — unified system-wide degradation level.
+// failure_prevention re-exports this type via `pub use`.
 // ---------------------------------------------------------------------------
 
 /// System-wide degradation level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum DegradationLevel {
     Normal,
     Degraded,
     Constrained,
     Emergency,
-}
-
-/// Convert from the failure_prevention::DegradationLevel to the hyper_resilience one.
-impl From<crate::optimization::failure_prevention::DegradationLevel> for DegradationLevel {
-    fn from(other: crate::optimization::failure_prevention::DegradationLevel) -> Self {
-        match other {
-            crate::optimization::failure_prevention::DegradationLevel::None => {
-                DegradationLevel::Normal
-            }
-            crate::optimization::failure_prevention::DegradationLevel::Minimal
-            | crate::optimization::failure_prevention::DegradationLevel::Moderate => {
-                DegradationLevel::Degraded
-            }
-            crate::optimization::failure_prevention::DegradationLevel::Significant => {
-                DegradationLevel::Constrained
-            }
-            crate::optimization::failure_prevention::DegradationLevel::Critical => {
-                DegradationLevel::Emergency
-            }
-        }
-    }
-}
-
-/// Convert from the hyper_resilience DegradationLevel to the failure_prevention one.
-impl From<DegradationLevel> for crate::optimization::failure_prevention::DegradationLevel {
-    fn from(other: DegradationLevel) -> Self {
-        match other {
-            DegradationLevel::Normal => {
-                crate::optimization::failure_prevention::DegradationLevel::None
-            }
-            DegradationLevel::Degraded => {
-                crate::optimization::failure_prevention::DegradationLevel::Moderate
-            }
-            DegradationLevel::Constrained => {
-                crate::optimization::failure_prevention::DegradationLevel::Significant
-            }
-            DegradationLevel::Emergency => {
-                crate::optimization::failure_prevention::DegradationLevel::Critical
-            }
-        }
-    }
 }
 
 /// Self-healing action that can be executed by the engine.
@@ -286,11 +245,12 @@ pub struct HyperResilienceEngine {
     /// Handle for the background health check task, used to detect panics.
     health_check_handle: Mutex<Option<JoinHandle<()>>>,
     /// Optional ChaosEngine for fault injection testing.
+    #[cfg(feature = "chaos-testing")]
     chaos_engine: Option<Arc<ChaosEngine>>,
     /// Optional path for persisting circuit breaker state.
     persist_path: Option<String>,
     /// Optional fault consensus for distributed fault detection.
-    fault_consensus: Option<FaultConsensus>,
+    fault_consensus: Option<tokio::sync::Mutex<FaultConsensus>>,
     /// Optional recovery plan store for persisting recovery plans.
     plan_store: Option<RecoveryPlanStore>,
 }
@@ -850,12 +810,28 @@ impl HyperResilienceEngine {
                 }
             }
             SelfHealingAction::RestartNode => {
-                // Real implementation: log restart and record simulated restart
                 tracing::info!(
                     target: "resilience",
-                    "[HEALING] Restarting node '{}' — simulating restart with cooldown",
+                    "[HEALING] Restarting node '{}' — resetting circuit breaker and health score",
                     target
                 );
+                // Reset circuit breaker state for the node's service
+                {
+                    let mut cbs = lock_mutex(&self.circuit_breakers).await;
+                    if let Some(cb) = cbs.get_mut(target) {
+                        cb.state = CircuitState::Closed;
+                        cb.failure_count = 0;
+                        cb.last_failure_ms = 0;
+                        cb.half_open_attempts = 0;
+                    }
+                }
+                // Reset health_score back to max
+                {
+                    let mut fgs = lock_mutex(&self.failover_groups).await;
+                    if let Some(group) = fgs.get_mut(target) {
+                        group.health_score = 100.0;
+                    }
+                }
                 (
                     true,
                     tf(
@@ -865,12 +841,17 @@ impl HyperResilienceEngine {
                 )
             }
             SelfHealingAction::ScaleResources => {
-                // Real implementation: log scale event and record scale
                 tracing::info!(
                     target: "resilience",
-                    "[HEALING] Scaling resources for '{}' — increasing capacity",
+                    "[HEALING] Scaling resources for '{}' — increasing capacity by 20%",
                     target
                 );
+                {
+                    let mut fgs = lock_mutex(&self.failover_groups).await;
+                    if let Some(group) = fgs.get_mut(target) {
+                        group.health_score = (group.health_score * 1.2).min(100.0);
+                    }
+                }
                 (
                     true,
                     tf(
@@ -880,12 +861,20 @@ impl HyperResilienceEngine {
                 )
             }
             SelfHealingAction::ReinitializeComponent => {
-                // Real implementation: log and mark component for reinit
                 tracing::info!(
                     target: "resilience",
-                    "[HEALING] Reinitializing component '{}' — resetting to known-good state",
+                    "[HEALING] Reinitializing component '{}' — resetting circuit breaker to known-good state",
                     target
                 );
+                {
+                    let mut cbs = lock_mutex(&self.circuit_breakers).await;
+                    if let Some(cb) = cbs.get_mut(target) {
+                        cb.state = CircuitState::Closed;
+                        cb.failure_count = 0;
+                        cb.last_failure_ms = 0;
+                        cb.half_open_attempts = 0;
+                    }
+                }
                 (
                     true,
                     tf(
@@ -1052,9 +1041,27 @@ impl HyperResilienceEngine {
             self.probe(name).await;
         }
 
-        // ── Phase 2: Fault consensus evaluation for active failover groups (P3-7) ─
+        // Record fault votes based on breaker states after probing (P3-7)
         if let Some(ref consensus_mutex) = self.fault_consensus {
             let mut consensus = consensus_mutex.lock().await;
+            let cbs = lock_mutex(&self.circuit_breakers).await;
+            for (name, cb) in cbs.iter() {
+                let healthy = matches!(cb.state, CircuitState::Closed);
+                consensus.record_vote(FaultVote {
+                    voter_id: "local-engine".to_string(),
+                    target_id: name.clone(),
+                    healthy: healthy || matches!(cb.state, CircuitState::HalfOpen),
+                    timestamp_ms: now_millis(),
+                    evidence: if healthy {
+                        None
+                    } else {
+                        Some(format!("state={:?}", cb.state))
+                    },
+                });
+            }
+            drop(cbs);
+
+            // ── Phase 2: Fault consensus evaluation for active failover groups ─
             consensus.evict_stale();
             let fg_ids: Vec<String> = {
                 let fgs = lock_mutex(&self.failover_groups).await;
@@ -1141,6 +1148,11 @@ impl HyperResilienceEngine {
                     }
                 }
             }
+        }
+
+        // Persist state after self-healing actions (P3-2)
+        if let Some(ref path) = self.persist_path {
+            let _ = self.persist_to_db(path).await;
         }
     }
 
@@ -1299,6 +1311,11 @@ impl HyperResilienceEngine {
                 }
             }
         }
+
+        // Persist state after transition (P3-2)
+        if let Some(ref path) = self.persist_path {
+            let _ = self.persist_to_db(path).await;
+        }
     }
 }
 
@@ -1439,7 +1456,6 @@ impl FaultConsensus {
 // ---------------------------------------------------------------------------
 
 /// A recovery plan step.
-#[allow(dead_code)] // F-GAP-49 — reserved for recovery step types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecoveryStep {
     /// Step description.
@@ -1455,7 +1471,6 @@ pub struct RecoveryStep {
 }
 
 /// A persisted recovery plan.
-#[allow(dead_code)] // F-GAP-49 — reserved for recovery plan types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecoveryPlan {
     /// Unique plan identifier.
@@ -1470,7 +1485,6 @@ pub struct RecoveryPlan {
     pub source: String,
 }
 
-#[allow(dead_code)] // F-GAP-49 — reserved for recovery plan impl
 impl RecoveryPlan {
     /// Create a new recovery plan.
     pub fn new(
@@ -1493,14 +1507,12 @@ impl RecoveryPlan {
 ///
 /// Saves plans to a configurable directory in NDJSON format so they
 /// survive process restarts and can be audited.
-#[allow(dead_code)] // F-GAP-49 — reserved for recovery plan store
 #[derive(Debug, Clone)]
 pub struct RecoveryPlanStore {
     /// Directory where plans are persisted.
     store_dir: std::path::PathBuf,
 }
 
-#[allow(dead_code)] // F-GAP-49 — reserved for recovery plan store impl
 impl RecoveryPlanStore {
     /// Create a new store rooted at the given directory.
     /// Creates the directory if it does not exist.

@@ -39,17 +39,17 @@ path = "src/lib.rs"
 
 [features]
 # ── Build profiles (MUTUALLY EXCLUSIVE) ──────────────────────────────────────
-# Exactly ONE profile must be selected. Default is profile-local.
+# Exactly ONE profile must be selected. Default is local.
 #
-# profile-local: single-user local tool; SQLite cache + adaptive vector store
+# local: single-user local tool; SQLite cache + adaptive vector store
 #                Core sub-buses: tool, orchestration, observability, optimization
 #                Fast startup, minimal external dependencies
 #
-# profile-simple-server: single-server deployment; SQLite cache + required sqlite-vec
+# simple-server: single-server deployment; SQLite cache + required sqlite-vec
 #                        All sub-buses except distributed-memory
 #                        Full capability bus for production readiness
 #
-# profile-multi-users-server: multi-user production; PostgreSQL cache + pgvector
+# multi-users-server: multi-user production; PostgreSQL cache + pgvector
 #                             All sub-buses, including distributed-memory
 #
 # Compile-time validation in src/lib.rs via compile_error!() assertions.
@@ -58,11 +58,11 @@ path = "src/lib.rs"
 #   2. backend-sqlite and backend-postgres cannot both be enabled.
 #
 # Build examples:
-#   cargo build                                                    # uses default profile-local
-#   cargo build --no-default-features --features profile-local
-#   cargo build --no-default-features --features profile-simple-server
-#   cargo build --no-default-features --features profile-multi-users-server
-default = ["profile-local"]
+#   cargo build                                                    # uses default local
+#   cargo build --no-default-features --features local
+#   cargo build --no-default-features --features simple-server
+#   cargo build --no-default-features --features multi-users-server
+default = ["local"]
 
 # Sub-bus feature gates (profile-conditional compilation)
 sub-bus-tool = []
@@ -72,7 +72,11 @@ sub-bus-memory = []
 sub-bus-protocol = []
 sub-bus-orchestration = []
 sub-bus-distributed-memory = []
-sub-bus-tool-future = []
+# Note: sub-bus-tool-future was removed because no code ever used it.
+# It was defined as a placeholder for future tool capabilities but
+# no #[cfg(feature = "sub-bus-tool-future")] guard existed anywhere
+# in the codebase. If future tool features are needed, re-add the
+# feature flag and add proper #[cfg] gating to the corresponding code.
 sub-bus-voter-future = []
 
 # Multimodal document-parsing backends (optional, feature-gated)
@@ -93,13 +97,13 @@ audio-vosk = []
 
 # Profile definitions (mutually exclusive via compile-time assertions)
 #
-# NOTE (Q5): profile-local and profile-simple-server currently have IDENTICAL
-# feature sets. They are kept distinct for semantic clarity:
-#   - profile-local:       single-user local tool (default for `cargo build`)
-#   - profile-simple-server: single-server deployment (explicit --features)
-# Their feature lists are expected to diverge as deployment-specific
-# capabilities (telemetry exporters, cluster-aware caches, etc.) are added.
-profile-local = [
+# local:       single-user local tool (default for `cargo build`)
+#                      Core sub-buses for local operation.
+# simple-server: single-server deployment (explicit --features)
+#                        Adds telemetry-export, sub-bus-distributed-memory,
+#                        vault, and temp_env on top of local to
+#                        support production server needs.
+local = [
     "backend-sqlite",
     "sub-bus-tool",
     "sub-bus-orchestration",
@@ -107,21 +111,24 @@ profile-local = [
     "sub-bus-optimization",
     "sub-bus-memory",
     "sub-bus-protocol",
+    "temp_env",
 ]
-profile-simple-server = [
+simple-server = [
     "backend-sqlite",
     "sub-bus-tool",
     "sub-bus-orchestration",
     "sub-bus-observability",
     "sub-bus-optimization",
     "sub-bus-memory",
+    "sub-bus-distributed-memory",
     "sub-bus-protocol",
     "telemetry-export",
+    "vault",
+    "temp_env",
 ]
-profile-multi-users-server = [
+multi-users-server = [
     "backend-postgres",
     "sub-bus-tool",
-    "sub-bus-tool-future",
     "sub-bus-voter-future",
     "sub-bus-observability",
     "sub-bus-optimization",
@@ -129,14 +136,15 @@ profile-multi-users-server = [
     "sub-bus-protocol",
     "sub-bus-orchestration",
     "sub-bus-distributed-memory",
+    "vault",
+    "temp_env",
 ]
 
 # Full-feature profile for local development and CI testing
 # Includes EVERY feature for maximum coverage
-profile-full = [
+full = [
     "backend-sqlite",
     "sub-bus-tool",
-    "sub-bus-tool-future",
     "sub-bus-voter-future",
     "sub-bus-observability",
     "sub-bus-optimization",
@@ -155,12 +163,14 @@ backend-sqlite = ["dep:rusqlite", "dep:sqlite-vec"]
 backend-postgres = ["dep:postgres", "dep:pgvector"]
 
 # Legacy aliases (kept for backward compatibility)
-local-acp-sqlite = ["profile-local"]
-server-mcp-postgres = ["profile-multi-users-server"]
+local-acp-sqlite = ["local"]
+server-mcp-postgres = ["multi-users-server"]
 
 # Feature gates for conditional compilation (used by source code)
 vault = []
 temp_env = []
+# Chaos engineering fault injection (opt-in, not in any profile by default)
+chaos-testing = []
 
 # Sync boundary: keyring secrets I/O runs synchronously.  Future callers from
 # async contexts should wrap `run_secret_command()` in `spawn_blocking`.

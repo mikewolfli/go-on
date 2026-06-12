@@ -18,7 +18,7 @@
 
 | 体 | GAP | 状态 | 修改内容 |
 |:--:|:---:|:----:|:---------|
-| 架构体 | A01-A09 | ✅ | 重复文件清理、profile-full、死代码删除、Provider trait、AcpMethodNames 迁移 |
+| 架构体 | A01-A09 | ✅ | 重复文件清理、full、死代码删除、Provider trait、AcpMethodNames 迁移 |
 | 智能体 | B01-B02 | ✅ | LLM Agent 注入 TaskDecomposer + MetacognitiveController |
 | 智能体 | B03 | ✅ | SelfEvolutionAgent 添加 `llm_agent` 字段 + `with_llm()` 构造器 + LLM 调用路径 |
 | 智能体 | B04 | ✅ | MultiModelVoter 投票接入 process_chat_request 多 agent 路径 |
@@ -55,7 +55,7 @@
 2. **支持按要求按逻辑分步骤分拆文件** — 模块可按需重组。
 3. **三端一统（Backend + GUI + VSCode Addon）** — 三端通讯流畅稳定。
 4. **全部注释使用英文**。
-5. **3 种 Server Profile 全链路闭合** — profile-local、profile-simple-server、profile-multi-users-server 全部正确编译行为一致。
+5. **3 种 Server Profile 全链路闭合** — local、simple-server、multi-users-server 全部正确编译行为一致。
 6. **5 种协议全链路闭合** — auto、acp stdio、acp http、mcp stdio、mcp http。
 7. **零警告、零冲突、零遗漏** — `cargo clippy --all-features -- -D warnings` 零警告。
 8. **完整闭合** — 每个模块编译通过、有治理接入、可观测、有集成测试。
@@ -74,7 +74,7 @@
 | L3 | **智能层** | **5/10** | LLM 注入全部 None、Consciousness 未接入、SelfModel 未连接执行路径、TripleFusion Stub | **15** |
 | L4 | **治理层** | **6/10** | PolicyReloader Stub、ProcessTimeouts 从不调用、RBAC 生效但不完整、TraceTree 不传播 | **9** |
 | L5 | **协议层** | **7/10** | sent_ids 无界增长、gRPC 每次新建 Client、MCP 无 SSE、RPC 发现死代码、WebSocket 克隆昂贵 | **8** |
-| L5a | **Feature 层** | **5/10** | `--all-features` 因 temp_env/docx-rs 失败、sub-bus 不可达、profile-full 缺失 | **4** |
+| L5a | **Feature 层** | **5/10** | `--all-features` 因 temp_env/docx-rs 失败、sub-bus 不可达、full 缺失 | **4** |
 | L6 | **韧性层** | **6/10** | HyperResilience 不接入执行路径、ChaosEngine 无触发器、Recovery 不自动、FaultTolerance 不持久化 | **8** |
 | L7 | **可观测层** | **6/10** | OTel Trace 不传播下游、LivePerformanceFeed 代码级抑制、双 Prometheus 导出器、AlertManager 无集成 | **8** |
 | L8 | **内存层** | **5/10** | Embassy 全部 minhash、embedding_provider 未注入、MemoryBridge 死代码、重复 minhash、无持久化 | **8** |
@@ -120,8 +120,8 @@
 
 - **位置**: `Cargo.toml` L73-74、`dag_executor.rs`、`distributed_tx.rs` 等文件
 - **问题**: 这两个 Feature 不属于任何 Profile。`dag_executor` 的 `execute_speculative` 方法、`MultiModelVoter` 永远被 `#[cfg(not(feature = "sub-bus-voter-future"))]` 编译，导致多模型投票死代码。
-- **修复**: 将 `sub-bus-tool-future` 加入 `profile-multi-users-server` feature 集。添加 `profile-full` 全功能 profile 包含所有 sub-bus。
-- **验证**: `cargo build --features profile-full` 编译并通过所有测试。
+- **修复**: 将 `sub-bus-tool-future` 加入 `multi-users-server` feature 集。添加 `full` 全功能 profile 包含所有 sub-bus。
+- **验证**: `cargo build --features full` 编译并通过所有测试。
 
 **GAP-56-A03a（MEDIUM）`--all-features` 因 `temp_env` 和 `docx-rs` API 不匹配而失败**
 
@@ -149,22 +149,22 @@
 **GAP-56-A04（CRITICAL）Profile 间功能差异无编译期验证**
 
 - **位置**: `Cargo.toml` features、`src/lib.rs` compile_error 断言
-- **问题**: 当前只在 lib.rs 做互斥检查，但 `profile-local` 和 `profile-simple-server` 功能集完全相同。无编译期检查确保 multi-users-server 独有的功能不在 local 中使用。
+- **问题**: 当前只在 lib.rs 做互斥检查，但 `local` 和 `simple-server` 功能集完全相同。无编译期检查确保 multi-users-server 独有的功能不在 local 中使用。
 - **修复**: 
   1. 添加 `compile_error!()` 断言：multi-users-server 独有的 import 不应在 local 中访问
-  2. 使用 `#[cfg(not(feature = "profile-multi-users-server"))]` 标注仅在 multi-users 可用的代码路径
+  2. 使用 `#[cfg(not(feature = "multi-users-server"))]` 标注仅在 multi-users 可用的代码路径
   
-**GAP-56-A05（HIGH）`profile-full` 全功能 profile 缺失**
+**GAP-56-A05（HIGH）`full` 全功能 profile 缺失**
 
 - **位置**: `Cargo.toml`
 - **问题**: 没有一个 profile 包含所有功能。本地开发时需要切换 profile 测试不同功能。
-- **修复**: 添加 `profile-full` 包含 `profile-multi-users-server + sub-bus-tool-future + sub-bus-voter-future + document-* + audio-* + vault`。
+- **修复**: 添加 `full` 包含 `multi-users-server + sub-bus-tool-future + sub-bus-voter-future + document-* + audio-* + vault`。
 
 **GAP-56-A06（MEDIUM）`audio-whisper-openai` 和 `audio-vosk` 不可达**
 
 - **位置**: `Cargo.toml` L82-83、`src/multimodal/audio_processor.rs`
 - **问题**: 这两个音频后端 Feature 不属于任何 profile。`audio_processor` 的 Whisper/Vosk 路径永远被编译为 fallback。
-- **修复**: 加入 `sub-bus-multimodal` feature 集，并在 profile-full 中包含。
+- **修复**: 加入 `sub-bus-multimodal` feature 集，并在 full 中包含。
 
 #### Step A3：架构依赖方向治理（3 GAP）
 
@@ -731,10 +731,10 @@
 
 ```bash
 # 所有 Profile 编译通过
-cargo build --no-default-features --features profile-local
-cargo build --no-default-features --features profile-simple-server
-cargo build --no-default-features --features profile-multi-users-server
-cargo build --no-default-features --features profile-full
+cargo build --no-default-features --features local
+cargo build --no-default-features --features simple-server
+cargo build --no-default-features --features multi-users-server
+cargo build --no-default-features --features full
 
 # 零警告
 cargo clippy --all-features -- -D warnings
@@ -771,7 +771,7 @@ cd sdk/rust && cargo test
 |:-------|:----:|
 | `cargo clippy --all-features -- -D warnings` | 零警告 |
 | `cargo test --all-features` | 100% 通过 |
-| `cargo build --no-default-features --features profile-full` | 编译通过 |
+| `cargo build --no-default-features --features full` | 编译通过 |
 | GUI 编译启动 | 零错误 |
 | 5 种协议全链路测试 | 全部通过 |
 | 三端 SDK 连通性 | Python/TS/Rust SDK 全部连通 |

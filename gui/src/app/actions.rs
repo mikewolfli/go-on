@@ -423,25 +423,25 @@ impl GoOnApp {
     /// keyring is unavailable — see `load_secret_value()` in the backend code.
     pub(crate) fn generate_backend_config(path: &std::path::Path, config: &AppConfig) {
         /// Clamp a temperature value to the valid range [0.0, 2.0].
-        #[allow(dead_code)]
+        #[allow(dead_code)] // F-GAP-48 — reserved action features
         fn clamp_temperature(v: f32) -> f32 {
             v.clamp(0.0, 2.0)
         }
 
         /// Clamp top_p to the valid range [0.0, 1.0].
-        #[allow(dead_code)]
+        #[allow(dead_code)] // F-GAP-48 — reserved action features
         fn clamp_top_p(v: f32) -> f32 {
             v.clamp(0.0, 1.0)
         }
 
         /// Clamp max_tokens to the valid range [1, 1_048_576].
-        #[allow(dead_code)]
+        #[allow(dead_code)] // F-GAP-48 — reserved action features
         fn clamp_max_tokens(v: u32) -> u32 {
             v.clamp(1, 1_048_576)
         }
 
         /// Clamp a u64 value to the range [min, max].
-        #[allow(dead_code)]
+        #[allow(dead_code)] // F-GAP-48 — reserved action features
         fn clamp_u64(v: u64, min: u64, max: u64) -> u64 {
             v.clamp(min, max)
         }

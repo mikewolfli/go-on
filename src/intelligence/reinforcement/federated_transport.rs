@@ -4,6 +4,14 @@
 //! between nodes, a gRPC implementation using tonic, and a gRPC server for
 //! receiving weight submissions.
 //!
+//! # CapabilityBus integration
+//!
+//! This module is **standalone** — it implements full message transport logic
+//! (gRPC, HTTP, in-process) but never calls the `CapabilityBus`. To wire it in,
+//! route incoming weight submissions and model pull requests through the bus for
+//! capability-based dispatch, or record transport metrics (latency, throughput)
+//! as capability bus events.
+//!
 //! # gRPC Setup
 //!
 //! This module uses tonic for gRPC. To compile the proto definitions, add to

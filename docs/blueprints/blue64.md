@@ -13,7 +13,7 @@
 2. 支持按要求按逻辑分步骤分拆文件 — 可按模块目录拆分重组。
 3. 三端一统（backend / GUI / vscode-addon） — 考虑三端配合、通讯流畅稳定性。
 4. 注释英文 — 所有新增模块的代码注释必须使用英文。
-5. ✅ 3 种服务器 Profile 全链路闭合 — profile-local、profile-simple-server、profile-multi-users-server 全部正确编译和行为一致（零警告）。
+5. ✅ 3 种服务器 Profile 全链路闭合 — local、simple-server、multi-users-server 全部正确编译和行为一致（零警告）。
 6. ✅ 5 种协议全链路闭合 — auto、acp stdio、acp http、mcp stdio、mcp http。
 7. ✅ 零警告、零冲突、零遗漏 — cargo clippy -- -D warnings 在全部4个profile下零警告通过。
 8. ✅ 完整闭合 — 每个模块达到：编译通过、零警告、接入 governance.status、可通过 health 端点观测、有集成测试覆盖。
@@ -346,7 +346,7 @@ BLUE64不再接受"假修复"——每个步骤必须有**可验证的代码证�
 | 11.1 | TE2 — GUI用JSON vs TOML | `gui/src/config.rs` | GUI 配置改为 TOML 格式，与后端/VSCode统一 | 4h |
 | 11.2 | P1 — 协议协商 AcpHttp 偏见 | `protocol/negotiator.rs:71` | 使用服务器实际配置的 mode 作为默认值，而非硬编码 AcpHttp | 2h |
 | 11.3 | P2 — 未知模式静默默认 | `protocol/access_mode.rs:143` | 未知模式快速失败 | 1h |
-| 11.4 | D1 — profile 无法区分 | `Cargo.toml:74-78` | 为 profile-local 和 profile-simple-server 添加不同 feature | 1h |
+| 11.4 | D1 — profile 无法区分 | `Cargo.toml:74-78` | 为 local 和 simple-server 添加不同 feature | 1h |
 
 ### 6.3 阶段三："认知能力增强"（P2 MEDIUM — 53项，80h）
 

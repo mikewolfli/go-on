@@ -120,6 +120,9 @@ pub struct CouncilConfig {
     pub ejection_window: Option<usize>,
     /// Warmup rounds before a new member can be ejected (default: 10)
     pub ejection_warmup_rounds: Option<usize>,
+    /// Interval in seconds between auto-ejection background checks (default: 300).
+    /// Set to 0 or None to use the default of 300 seconds (5 minutes).
+    pub ejection_check_interval_s: Option<u64>,
 
     /// Minimum number of active members to trigger multi-round deliberation.
     /// When active members >= this threshold, proposals automatically use
@@ -153,6 +156,7 @@ impl Default for CouncilConfig {
             ejection_threshold: None,
             ejection_window: None,
             ejection_warmup_rounds: None,
+            ejection_check_interval_s: None,
             deliberation_member_threshold: default_deliberation_member_threshold(),
         }
     }

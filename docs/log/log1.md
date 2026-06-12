@@ -255,8 +255,8 @@ Focus on: i18n hardcoded strings in vscode-addon, cross-end consistency, dead_co
 ### Additional verification
 - Backend strict lint (all required profiles)
 	- `cargo clippy -- -D warnings` ✅
-	- `cargo clippy --no-default-features --features profile-simple-server -- -D warnings` ✅
-	- `cargo clippy --no-default-features --features profile-multi-users-server -- -D warnings` ✅
+	- `cargo clippy --no-default-features --features simple-server -- -D warnings` ✅
+	- `cargo clippy --no-default-features --features multi-users-server -- -D warnings` ✅
 - Backend integration
 	- `cargo test -q --test protocol_consistency_integration --test transport_parity_integration --test openai_compat_matrix_integration` ✅ (6 + 17 + 14 all pass)
 - GUI
@@ -355,8 +355,8 @@ Each file got a `lock_guard<T>(mtx: &Mutex<T>)` helper with `tracing::error!` + 
 
 ### Verification
 - `cargo clippy -- -D warnings` ✅
-- `cargo clippy --no-default-features --features profile-simple-server -- -D warnings` ✅
-- `cargo clippy --no-default-features --features profile-multi-users-server -- -D warnings` ✅
+- `cargo clippy --no-default-features --features simple-server -- -D warnings` ✅
+- `cargo clippy --no-default-features --features multi-users-server -- -D warnings` ✅
 - `cargo test --test protocol_consistency_integration --test transport_parity_integration --test openai_compat_matrix_integration` ✅
 - `cd GUI && npm run test` (contract smoke) ✅
 - `cd GUI && npm run build` ✅

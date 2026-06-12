@@ -1,4 +1,5 @@
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use tracing::Instrument;
 
 use super::config_handlers::build_trace_payload;
 use super::prompts_pack::{build_prompts_get_tool, build_prompts_list_tool};
@@ -289,6 +290,13 @@ pub(crate) async fn execute_mcp_tool_call(
     name: &str,
     arguments: &Value,
 ) -> Result<Value> {
+    // OTel span: captures tool name, execution duration, and outcome.
+    // Instrument the body so the span is Send-safe across await points.
+    let span = tracing::info_span!("tool_execute", tool = %name);
+    let start = std::time::Instant::now();
+    let tool_name = name.to_string();
+
+    let result = async {
     if let Some(harness_bus) = server.governance_deps.harness_bus.as_ref() {
         let verdict = harness_bus.evaluator.check_tool_call(name, arguments);
         if !verdict.allowed {
@@ -702,6 +710,20 @@ pub(crate) async fn execute_mcp_tool_call(
             }
         }
     }
+    }.instrument(span).await;
+
+    // Record tool execution metrics.
+    let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
+    crate::observability::performance::record_global_operation(result.is_ok(), latency_ms);
+    if result.is_err() {
+        tracing::warn!(
+            tool = %tool_name,
+            latency_ms = %latency_ms,
+            error = %result.as_ref().unwrap_err(),
+            "tool execution failed"
+        );
+    }
+    result
 }
 
 pub(super) fn find_enabled_imported_skill(

@@ -14,7 +14,7 @@
 2. **排除分拆文件** — 不将现有文件拆分为更小文件。
 3. **三端一统（backend / GUI / vscode-addon）** — 考虑三端配合、通讯流畅稳定性。
 4. **注释英文** — 所有新增模块的代码注释必须使用英文。
-5. **3 种服务器 Profile 全链路闭合** — profile-local、profile-simple-server、profile-multi-users-server 必须正确编译和行为一致。
+5. **3 种服务器 Profile 全链路闭合** — local、simple-server、multi-users-server 必须正确编译和行为一致。
 6. **5 种协议全链路闭合** — auto、acp stdio、acp http、mcp stdio、mcp http。
 7. **零警告、零冲突、零遗漏** — 最终验证 `cargo clippy --all-features -- -D warnings` 零警告。
 8. **完整闭合** — 每个模块最终必须达到：编译通过、零警告、接入 governance.status、可通过 health 端点观测、有集成测试覆盖。
@@ -635,9 +635,9 @@
 
 ```bash
 # 全部 Profile + 全部特性
-cargo check --features profile-local --all-features
-cargo check --features profile-simple-server --all-features
-cargo check --features profile-multi-users-server --all-features
+cargo check --features local --all-features
+cargo check --features simple-server --all-features
+cargo check --features multi-users-server --all-features
 
 # GUI 独立编译
 cd gui && cargo check
@@ -665,7 +665,7 @@ cargo clippy --all-features -- -D warnings
 | 验证项 | 方法 | 预期 |
 |--------|------|------|
 | 5协议全链路 | auto/acp_stdio/acp_http/mcp_stdio/mcp_http 各发请求 | 全部正常响应 |
-| 3Profile全链路 | profile-local/simple-server/multi-users-server 启动 | 全部编译+运行正常 |
+| 3Profile全链路 | local/simple-server/multi-users-server 启动 | 全部编译+运行正常 |
 | 三端通信 | GUI↔Backend↔VSCode 三角通信 | 消息正确传递，无丢帧 |
 | Council多轮审议 | 高风险多agent请求 | amendment + position_change 逻辑生效 |
 | Metacognitive反馈 | 连续执行任务后观察Q-learning参数 | reward_multiplier 被 metacognitive 调整 |

@@ -22,6 +22,7 @@ use crate::flow::FlowManager;
 use crate::flow_with_models::FlowModelSelector;
 use crate::memory_module::{MemoryPolicy, MemoryStore};
 use crate::memory_response_cache::MemoryResponseCache;
+use crate::observability::live_performance::LivePerformanceFeed;
 use crate::observability::telemetry::TelemetryRuntime;
 use crate::orchestration::skill::SkillRegistry;
 use crate::reinforcement::ArtifactLedger;
@@ -145,11 +146,14 @@ pub async fn new_acp_server(
         });
 
     // Build capability bus and optionally inject an LLM agent
+    // Wire LivePerformanceFeed so model observability is available to decide() (P2-6).
+    let perf_feed = Arc::new(LivePerformanceFeed::new(0.3));
     let cb_builder = crate::intelligence::capability_bus::core::CapabilityBus::new_default(
         Arc::clone(&harness_bus),
         Some(workflow_registry),
     )
-    .with_provenance_ledger(Arc::clone(&provenance_ledger));
+    .with_provenance_ledger(Arc::clone(&provenance_ledger))
+    .with_live_performance(Arc::clone(&perf_feed));
     let cb_builder = if let Some(agent) = first_agent {
         cb_builder.with_metacognitive_llm(agent)
     } else {
@@ -258,6 +262,7 @@ pub async fn new_acp_server(
     {
         use crate::memory::memory_bridge::memory_base_path;
         use crate::memory::memory_persistence::MemoryPersistence;
+        use crate::memory::summarization::{MemorySummarizer, SummarizationConfig};
         use crate::memory::wire_memory_retrieval;
         let base = memory_base_path();
         let db_path = base.join("warm.db");
@@ -268,7 +273,22 @@ pub async fn new_acp_server(
             let retrieval_engine = MemoryPersistence::new(&db_path, &cold_path, None)
                 .ok()
                 .map(|retrieval_mp| Arc::new(wire_memory_retrieval(retrieval_mp)));
-            let mp = Arc::new(mp);
+            // Attach a MemorySummarizer with an LLM agent from the registry if available.
+            let summarizer = {
+                let llm_agent = registry
+                    .get("summarizer")
+                    .or_else(|| registry.get("assistant"))
+                    .or_else(|| {
+                        let names = registry.names();
+                        names.first().and_then(|n| registry.get(n))
+                    });
+                let mut s = MemorySummarizer::new(SummarizationConfig::default());
+                if let Some(agent) = llm_agent {
+                    s = s.with_llm_agent(agent);
+                }
+                s
+            };
+            let mp = Arc::new(mp.with_summarizer(summarizer));
             builder = builder.with_memory_persistence(mp);
             if let Some(engine) = retrieval_engine {
                 builder = builder.with_memory_retrieval_engine(engine);
@@ -335,12 +355,12 @@ pub async fn new_acp_server(
 
     // Wire multimodal processor for document, audio, video, and repo analysis (GAP-B55-110)
     // MM-FIX1: Activate all sub-processors when multimodal features are available.
-    #[cfg(any(feature = "sub-bus-multimodal", feature = "profile-full"))]
+    #[cfg(any(feature = "sub-bus-multimodal", feature = "full"))]
     {
         use crate::multimodal::MultimodalProcessor;
         builder = builder.with_multimodal_processor(MultimodalProcessor::new_with_all_processors());
     }
-    #[cfg(not(any(feature = "sub-bus-multimodal", feature = "profile-full")))]
+    #[cfg(not(any(feature = "sub-bus-multimodal", feature = "full")))]
     {
         use crate::multimodal::MultimodalProcessor;
         builder = builder.with_multimodal_processor(MultimodalProcessor::default());
@@ -458,6 +478,7 @@ pub async fn new_acp_server(
                 // so retrieve_memories() uses vector similarity instead of linear scan.
                 crate::memory::agent_memory_bus::init_agent_memory_bus_with_vector_store(
                     Arc::clone(vs),
+                    None,
                 );
             }
 
@@ -618,6 +639,9 @@ pub async fn new_acp_server(
                     hyper_resilience: Arc::new(
                         crate::resilience::hyper_resilience::HyperResilienceEngine::new(
                             crate::resilience::hyper_resilience::ResilienceConfig::default(),
+                        )
+                        .with_fault_consensus(
+                            crate::resilience::hyper_resilience::FaultConsensus::new(2, 10_000),
                         ),
                     ),
                     maintenance_tracker: Arc::new(StdMutex::new(MaintenanceTracker::new())),
@@ -864,4 +888,13 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
     crate::security::wire_prompt_injection(&server.runtime_config);
     crate::security::wire_cert_monitor(&server.runtime_config);
     crate::security::start_secret_rotation_if_configured(&server.runtime_config);
+
+    // ── TokenCache background cleanup ──────────────────────────
+    // Start periodic cleanup of expired token cache entries (L1 TTL eviction).
+    // Without this, only lazy lookup-time eviction runs.
+    let token_cache = Arc::clone(&server.cache_deps.cache.token_cache);
+    tokio::spawn(async move {
+        token_cache.start_background_cleanup(60_000).await;
+    });
+    info!("token_cache background cleanup started (interval: 60s)");
 }

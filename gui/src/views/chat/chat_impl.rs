@@ -135,7 +135,7 @@ pub struct ChatView {
     expand_full_text: std::collections::HashSet<usize>,
     /// SSE JSON parse error counter for the current stream.
     /// F-GAP-58: Reserved for future stream quality monitoring
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-58 — reserved chat implementation features
     sse_parse_errors: u32,
     /// Shared abort controller for cancelling in-progress streaming generations.
     abort_controller: Option<AbortController>,

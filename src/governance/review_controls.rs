@@ -91,19 +91,25 @@ pub(crate) fn review_verdict(response: &str, min_response_chars: usize) -> Revie
 
     let first_line = response.lines().find(|line| !line.trim().is_empty());
     match first_line.map(|line| line.trim().to_ascii_uppercase()) {
-        Some(value)
-            if value == "APPROVE"
-                || value.starts_with("APPROVE ")
-                || value.starts_with("APPROVE:") =>
-        {
-            ReviewVerdict::Approve
+        Some(value) if value == "APPROVE" => ReviewVerdict::Approve,
+        Some(value) if value == "REJECT" => ReviewVerdict::Reject,
+        // Allow optional colon separator: "APPROVE:" or "REJECT:"
+        Some(value) if value.starts_with("APPROVE:") => {
+            // Require at least one valid reason character after the colon
+            let rest = &value["APPROVE:".len()..];
+            if rest.trim().len() > 0 {
+                ReviewVerdict::Approve
+            } else {
+                ReviewVerdict::Invalid
+            }
         }
-        Some(value)
-            if value == "REJECT"
-                || value.starts_with("REJECT ")
-                || value.starts_with("REJECT:") =>
-        {
-            ReviewVerdict::Reject
+        Some(value) if value.starts_with("REJECT:") => {
+            let rest = &value["REJECT:".len()..];
+            if rest.trim().len() > 0 {
+                ReviewVerdict::Reject
+            } else {
+                ReviewVerdict::Invalid
+            }
         }
         _ => ReviewVerdict::Invalid,
     }

@@ -5538,14 +5538,14 @@ fn startup_fails_when_cache_vector_paths_are_unavailable() {
         .expect("failed to run go-on for startup failure scenario");
 
     #[cfg(all(
-        feature = "profile-local",
-        not(feature = "profile-simple-server"),
-        not(feature = "profile-multi-users-server")
+        feature = "local",
+        not(feature = "simple-server"),
+        not(feature = "multi-users-server")
     ))]
     {
         assert!(
             output.status.success(),
-            "profile-local should degrade gracefully when sqlite paths are unavailable"
+            "local should degrade gracefully when sqlite paths are unavailable"
         );
         let stderr_text = String::from_utf8_lossy(&output.stderr);
         assert!(
@@ -5556,9 +5556,9 @@ fn startup_fails_when_cache_vector_paths_are_unavailable() {
     }
 
     #[cfg(not(all(
-        feature = "profile-local",
-        not(feature = "profile-simple-server"),
-        not(feature = "profile-multi-users-server")
+        feature = "local",
+        not(feature = "simple-server"),
+        not(feature = "multi-users-server")
     )))]
     {
         assert!(

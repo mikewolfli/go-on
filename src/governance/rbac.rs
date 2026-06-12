@@ -54,6 +54,7 @@ impl BuiltinRole {
                 Permission::Admin,
                 Permission::ManageUsers,
                 Permission::ManageConfig,
+                Permission::ManageTenants,
                 Permission::Audit,
             ],
             BuiltinRole::User => vec![Permission::Read, Permission::Write],
@@ -103,6 +104,7 @@ pub enum Permission {
     Admin,
     ManageUsers,
     ManageConfig,
+    ManageTenants,
     Audit,
     Monitor,
 }
@@ -119,6 +121,7 @@ impl Permission {
             Permission::Admin => "admin",
             Permission::ManageUsers => "manage_users",
             Permission::ManageConfig => "manage_config",
+            Permission::ManageTenants => "manage_tenants",
             Permission::Audit => "audit",
             Permission::Monitor => "monitor",
         }
@@ -135,6 +138,7 @@ impl Permission {
             "admin" => Some(Permission::Admin),
             "manage_users" => Some(Permission::ManageUsers),
             "manage_config" => Some(Permission::ManageConfig),
+            "manage_tenants" => Some(Permission::ManageTenants),
             "audit" => Some(Permission::Audit),
             "monitor" => Some(Permission::Monitor),
             _ => None,
@@ -831,7 +835,7 @@ mod tests {
 
         assert!(user.has_permission(&Permission::Read));
         assert!(user.has_permission(&Permission::Write));
-        assert!(user.has_permission(&Permission::Execute));
+        assert!(!user.has_permission(&Permission::Execute)); // BLUE69: Execute is Admin-only
         assert!(!user.has_permission(&Permission::Admin));
     }
 

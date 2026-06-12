@@ -57,6 +57,7 @@ use crate::governance::hardening::{
 use crate::governance::pua::{PuaFeedbackCollector, PuaRuleEngine, TaskContext};
 use crate::governance::rationalization::SelfRationalizationGuard;
 use crate::governance::rbac::RbacEnforcer;
+use crate::governance::reloadable_policy::PolicyReloader;
 use crate::governance::runtime_controls::OnlineControllerState;
 use crate::i18n::runtime::tf;
 use crate::orchestration::artifact::{ArtifactLayer, ArtifactProfile};
@@ -120,6 +121,7 @@ impl HarnessBus {
         storage_path: Option<PathBuf>,
         audit_log: Arc<ThreadSafeAuditLog>,
         external_resilience_engine: Option<Arc<HyperResilienceEngine>>,
+        policy_reloader: Option<Arc<Mutex<PolicyReloader>>>,
     ) -> Self {
         let feedback_collector = storage_path.map(PuaFeedbackCollector::new);
         let bus = HarnessBus {
@@ -130,6 +132,7 @@ impl HarnessBus {
                 idempotency,
                 runtime_control,
                 guard,
+                policy_reloader,
             ),
             audit_trail: Arc::new(Mutex::new(HarnessAuditTrail::default())),
             feedback_collector,
@@ -781,6 +784,7 @@ pub fn default_harness_bus(storage_path: Option<PathBuf>) -> HarnessBus {
         storage_path,
         audit_log,
         None,
+        None,
     )
 }
 
@@ -849,6 +853,7 @@ pub fn config_aware_harness_bus(
         guard,
         storage_path,
         audit_log,
+        None,
         None,
     )
 }

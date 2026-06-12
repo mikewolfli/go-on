@@ -218,13 +218,13 @@ fn measure_profile_matrix_3() -> DimensionScore {
     // At compile time the feature flags exist; we verify at least one is active.
     let active_count = {
         let mut count = 0u64;
-        if cfg!(feature = "profile-local") {
+        if cfg!(feature = "local") {
             count += 1;
         }
-        if cfg!(feature = "profile-simple-server") {
+        if cfg!(feature = "simple-server") {
             count += 1;
         }
-        if cfg!(feature = "profile-multi-users-server") {
+        if cfg!(feature = "multi-users-server") {
             count += 1;
         }
         count
@@ -233,7 +233,7 @@ fn measure_profile_matrix_3() -> DimensionScore {
     DimensionScore {
         score,
         evidence:
-            "profile-local/profile-simple-server/profile-multi-users-server feature flags present",
+            "local/simple-server/multi-users-server feature flags present",
         measurability: Measurability::Measured,
     }
 }

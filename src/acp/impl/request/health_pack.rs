@@ -94,11 +94,10 @@ fn circuit_state_label(state: crate::failure_prevention::CircuitBreakerState) ->
 
 fn degradation_level_label(level: crate::failure_prevention::DegradationLevel) -> &'static str {
     match level {
-        crate::failure_prevention::DegradationLevel::None => "none",
-        crate::failure_prevention::DegradationLevel::Minimal => "minimal",
-        crate::failure_prevention::DegradationLevel::Moderate => "moderate",
-        crate::failure_prevention::DegradationLevel::Significant => "significant",
-        crate::failure_prevention::DegradationLevel::Critical => "critical",
+        crate::failure_prevention::DegradationLevel::Normal => "normal",
+        crate::failure_prevention::DegradationLevel::Degraded => "degraded",
+        crate::failure_prevention::DegradationLevel::Constrained => "constrained",
+        crate::failure_prevention::DegradationLevel::Emergency => "emergency",
     }
 }
 
@@ -107,13 +106,16 @@ fn recovery_action(
     level: crate::failure_prevention::DegradationLevel,
 ) -> &'static str {
     if matches!(status, crate::failure_prevention::HealthStatus::Unhealthy)
-        || matches!(level, crate::failure_prevention::DegradationLevel::Critical)
+        || matches!(
+            level,
+            crate::failure_prevention::DegradationLevel::Emergency
+        )
     {
         "reset_breaker_and_fallback"
     } else if matches!(status, crate::failure_prevention::HealthStatus::Degraded)
         || matches!(
             level,
-            crate::failure_prevention::DegradationLevel::Significant
+            crate::failure_prevention::DegradationLevel::Constrained
         )
     {
         "degrade_to_secondary_agent"
@@ -380,22 +382,18 @@ mod tests {
     #[test]
     fn degradation_level_label_all_variants() {
         use crate::failure_prevention::DegradationLevel;
-        assert_eq!(degradation_level_label(DegradationLevel::None), "none");
+        assert_eq!(degradation_level_label(DegradationLevel::Normal), "normal");
         assert_eq!(
-            degradation_level_label(DegradationLevel::Minimal),
-            "minimal"
+            degradation_level_label(DegradationLevel::Degraded),
+            "degraded"
         );
         assert_eq!(
-            degradation_level_label(DegradationLevel::Moderate),
-            "moderate"
+            degradation_level_label(DegradationLevel::Constrained),
+            "constrained"
         );
         assert_eq!(
-            degradation_level_label(DegradationLevel::Significant),
-            "significant"
-        );
-        assert_eq!(
-            degradation_level_label(DegradationLevel::Critical),
-            "critical"
+            degradation_level_label(DegradationLevel::Emergency),
+            "emergency"
         );
     }
 
@@ -405,7 +403,7 @@ mod tests {
     fn recovery_action_unhealthy_returns_reset() {
         use crate::failure_prevention::{DegradationLevel, HealthStatus};
         assert_eq!(
-            recovery_action(HealthStatus::Unhealthy, DegradationLevel::Minimal),
+            recovery_action(HealthStatus::Unhealthy, DegradationLevel::Normal),
             "reset_breaker_and_fallback"
         );
     }
@@ -414,7 +412,7 @@ mod tests {
     fn recovery_action_critical_level_returns_reset() {
         use crate::failure_prevention::{DegradationLevel, HealthStatus};
         assert_eq!(
-            recovery_action(HealthStatus::Degraded, DegradationLevel::Critical),
+            recovery_action(HealthStatus::Degraded, DegradationLevel::Emergency),
             "reset_breaker_and_fallback"
         );
     }
@@ -423,7 +421,7 @@ mod tests {
     fn recovery_action_degraded_significant() {
         use crate::failure_prevention::{DegradationLevel, HealthStatus};
         assert_eq!(
-            recovery_action(HealthStatus::Degraded, DegradationLevel::Significant),
+            recovery_action(HealthStatus::Degraded, DegradationLevel::Constrained),
             "degrade_to_secondary_agent"
         );
     }
@@ -432,7 +430,7 @@ mod tests {
     fn recovery_action_healthy_none_observes() {
         use crate::failure_prevention::{DegradationLevel, HealthStatus};
         assert_eq!(
-            recovery_action(HealthStatus::Healthy, DegradationLevel::None),
+            recovery_action(HealthStatus::Healthy, DegradationLevel::Normal),
             "observe"
         );
     }

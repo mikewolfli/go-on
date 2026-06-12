@@ -13,7 +13,7 @@
 BLUE42 的全部约束继续作为 BLUE43 的硬门槛：
 
 1. 5 种协议全链路闭合 — auto、acp stdio、acp http、mcp stdio、mcp http。每个推荐能力必须接入全部 5 种协议模式，不允许静默缺失。
-2. 3 种服务器 Profile 全链路闭合 — profile-local、profile-simple-server、profile-multi-users-server。每个推荐能力必须在全部 3 种 profile 特性集下正确编译和行为一致。不允许 cfg 不匹配。
+2. 3 种服务器 Profile 全链路闭合 — local、simple-server、multi-users-server。每个推荐能力必须在全部 3 种 profile 特性集下正确编译和行为一致。不允许 cfg 不匹配。
 3. 注释英文 — 所有新增模块的代码注释必须使用英文。不允许中英文混合。
 4. 国际化（i18n）全覆盖 — 所有面向用户的字符串（GUI、addon、后端日志）必须经过 locale 键转译。不允许任何语言的硬编码展示字符串。
 5. 完整闭合 — 本文列出的每个模块最终必须达到：编译通过、零警告、接入 governance.status、可通过 health 端点观测、有集成测试覆盖。
@@ -719,9 +719,9 @@ MCP 门禁指标：
 37. 验证命令：`cargo test --bin go-on -- tool_transaction` 9 个工具事务化测试全部通过（Step 15 闭环）。
 38. 验证命令：`cargo test --bin go-on -- recovery` 17 个自动恢复测试全部通过（Step 16 闭环）。
 39. 验证命令：`cargo test --test external_benchmark` 7 个外部对标测试全部通过（Step 21 闭环）。
-40. 验证命令：`cargo check --bin go-on && cargo check --no-default-features --features profile-local && cargo check --no-default-features --features profile-simple-server && cargo check --no-default-features --features profile-multi-users-server` 全部零警告。
-41. 验证命令：`cargo clippy --no-default-features --features profile-local 2>&1 | grep -E "^warning|^error"; echo $?` 输出为空且退出码 0（零 clippy 警告，profile-local）。
-42. 验证命令：同上适用于 profile-simple-server 和 profile-multi-users-server，全部零 clippy 警告。
+40. 验证命令：`cargo check --bin go-on && cargo check --no-default-features --features local && cargo check --no-default-features --features simple-server && cargo check --no-default-features --features multi-users-server` 全部零警告。
+41. 验证命令：`cargo clippy --no-default-features --features local 2>&1 | grep -E "^warning|^error"; echo $?` 输出为空且退出码 0（零 clippy 警告，local）。
+42. 验证命令：同上适用于 simple-server 和 multi-users-server，全部零 clippy 警告。
 43. 验证命令：`cargo test --test autonomy_benchmark` 10 个测试全部通过，含 2 个 `#[should_panic]` 回归门禁阻断测试（Step 7 闭环）。
 44. 验证命令：`cargo test --bin go-on -- corrective_action_effectiveness` 2 个有效性比例测试全部通过（Step 8 闭环）。
 45. 验证命令：`cargo test --bin go-on -- tool_transaction` 9 个工具事务化测试全部通过。
@@ -744,12 +744,12 @@ MCP 门禁指标：
 62. 验证命令：governance 端点的 `dag_metrics` 字段（dag_width/dag_depth/dag_parallel_group_count/dag_total_steps）从 `LATEST_DAG_METRICS` static 实时读取，非硬编码 0（Step 1 治理可观测闭环）。
 63. 验证命令：`cargo fmt --check` 全部文件格式化正确（零 diff）。
 64. 验证命令：`cargo check --bin go-on && cargo check --tests` 零警告。
-65. 验证命令：`cargo clippy --no-default-features --features profile-multi-users-server` 零警告。
+65. 验证命令：`cargo clippy --no-default-features --features multi-users-server` 零警告。
 66. 最终状态：BLUE43 全部 21 个 Step 100% 闭环，3 个 profile 分别验证 clippy 零警告，cargo check 零警告，cargo fmt --check 零 diff。
 67. 验证命令：`cargo test --bin go-on -- fast_path_cache` 15 个缓存测试全部通过（Step 11-14 快路径缓存闭环）。
 68. 验证命令：`cargo test --bin go-on -- full_auto` 23 个 full-auto 流程测试（含缓存集成）全部通过。
 69. 验证命令：`cargo check --bin go-on` 零警告（`new_with`/`with_cache` 已 `#[cfg(test)]` 隔离）。
-70. 验证命令：`cargo clippy --no-default-features --features profile-local` 零警告。
+70. 验证命令：`cargo clippy --no-default-features --features local` 零警告。
 
 ### 8.6 MCP 专项完成率追踪（新增）
 
@@ -778,12 +778,12 @@ MCP 门禁指标：
 1. `cargo test --test protocol_parity_integration -- --nocapture` 通过（5 passed, 0 failed）。
 2. `cargo test --test transport_parity_integration -- --nocapture` 通过（18 passed, 0 failed）。
 3. `cargo test --test autonomy_benchmark -- --nocapture` 通过（10 passed, 0 failed）。
-4. `cargo check --no-default-features --features profile-local` 通过。
-5. `cargo check --no-default-features --features profile-simple-server` 通过。
-6. `cargo check --no-default-features --features profile-multi-users-server` 通过。
-7. `cargo clippy --no-default-features --features profile-local -- -D warnings` 通过。
-8. `cargo clippy --no-default-features --features profile-simple-server -- -D warnings` 通过。
-9. `cargo clippy --no-default-features --features profile-multi-users-server -- -D warnings` 通过。
+4. `cargo check --no-default-features --features local` 通过。
+5. `cargo check --no-default-features --features simple-server` 通过。
+6. `cargo check --no-default-features --features multi-users-server` 通过。
+7. `cargo clippy --no-default-features --features local -- -D warnings` 通过。
+8. `cargo clippy --no-default-features --features simple-server -- -D warnings` 通过。
+9. `cargo clippy --no-default-features --features multi-users-server -- -D warnings` 通过。
 
 ### 8.8 本轮回写（2026-05-25，BLUE44 扩展轮）
 

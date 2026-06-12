@@ -9,7 +9,7 @@ pub mod agent_factory;
 
 #[cfg(any(
     feature = "sub-bus-tool",
-    feature = "profile-simple-server",
-    feature = "profile-multi-users-server",
+    feature = "simple-server",
+    feature = "multi-users-server",
 ))]
 pub use agent_factory::{AgentFactory, AgentFactoryConfig};

@@ -23,7 +23,7 @@
 2. **支持按要求按逻辑分步骤分拆文件** — 可按模块目录拆分重组。
 3. **三端一统（backend / GUI / vscode-addon）** — 考虑三端配合、通讯流畅稳定性。
 4. **注释英文** — 所有新增模块的代码注释必须使用英文。
-5. **3 种服务器 Profile 全链路闭合** — profile-local、profile-simple-server、profile-multi-users-server 必须正确编译和行为一致。
+5. **3 种服务器 Profile 全链路闭合** — local、simple-server、multi-users-server 必须正确编译和行为一致。
 6. **5 种协议全链路闭合** — auto、acp stdio、acp http、mcp stdio、mcp http。
 7. **零警告、零冲突、零遗漏** — 最终验证 `cargo clippy --all-features -- -D warnings` 零警告。
 8. **完整闭合** — 每个模块最终必须达到：编译通过、零警告、接入 governance.status、可通过 health 端点观测、有集成测试覆盖。
@@ -49,7 +49,7 @@
 | L9 | GUI 层 | 9/10 | **7/10** | AbortController abort 从不调用 + SSE 非标准单行分隔 + dead_code 模块级抑制 + cache 禁用 | **10/10** |
 | L10 | SDK 层 | 8/10 | **4/10** | 端点全部错误 + 缺 ToolCall/Multimodal 等类型 + TS SDK 零测试 + Rust SDK 零重试 | **10/10** |
 | L11 | VSCode 层 | 9/10 | **8/10** | SSE 仅解析 `data: ` (含空格) + approvalPanel 错误静默 | **10/10** |
-| L12 | 测试层 | 9/10 | **4/10** | CI 吞失败 + actions@v6 不存在 + 全部 e2e #[ignore] + 仅 profile-local 有测试 + 零覆盖率 | **10/10** |
+| L12 | 测试层 | 9/10 | **4/10** | CI 吞失败 + actions@v6 不存在 + 全部 e2e #[ignore] + 仅 local 有测试 + 零覆盖率 | **10/10** |
 | L13 | 部署层 | 9/10 | **5/10** | Docker HEALTHCHECK 缺 curl + systemd 用户不匹配 + OTel debug-only + i18n_enabled Ghost | **10/10** |
 | L14 | i18n 层 | 9/10 | **8/10** | 双命名空间正常 + `i18n_enabled` 字段是 Ghost 字段（忽略） | **9/10** |
 | L15 | 安全层 | 10/10 | **6/10** | mTLS 完全未实现 + VaultRotator Stub + record_audit 空操作 + CN 检查在 CA 而非客户端证书 | **10/10** |
@@ -174,7 +174,7 @@ HEALTHCHECK CMD curl -f http://localhost:8090/health || exit 1
 
 **问题**：这两个 Feature Flag 不属于任何 Profile，不可通过正常构建启用。但 `dag_executor.rs`、`distributed_tx.rs`、`integration.rs`、`loop/brain_loop.rs`、`multi_model_voter.rs` 的代码依赖它们。
 
-**修复**：将 `sub-bus-tool-future` 和 `sub-bus-voter-future` 加入 `profile-multi-users-server` 特征集。同时添加 `audio-whisper-openai` 和 `audio-vosk` 到 `sub-bus-multimodal` 或单独激活路径。
+**修复**：将 `sub-bus-tool-future` 和 `sub-bus-voter-future` 加入 `multi-users-server` 特征集。同时添加 `audio-whisper-openai` 和 `audio-vosk` 到 `sub-bus-multimodal` 或单独激活路径。
 
 ---
 
@@ -1158,11 +1158,11 @@ ApprovalMode::RequireHuman => {
 
 ---
 
-#### GAP-B55-092（HIGH）：`profile-simple-server` 和 `profile-multi-users-server` 零测试
+#### GAP-B55-092（HIGH）：`simple-server` 和 `multi-users-server` 零测试
 
 **文件**: `.github/workflows/build.yml` (L50-56)
 
-**问题**：仅 profile-local 有 `cargo test`。两个服务器 profile 只有 clippy 检查。
+**问题**：仅 local 有 `cargo test`。两个服务器 profile 只有 clippy 检查。
 
 **修复**：为所有三个 profile 添加 `cargo test --lib` 和 `cargo test --bin go-on`。
 
@@ -1405,13 +1405,13 @@ let shared_outputs: Arc<Mutex<HashMap<String, Value>>> = Arc::new(Mutex::new(Has
 > 此 Step 是**验证步骤** — 不新增 GAP，而是执行最终验证确保 113 个 GAP 全部修复正确。
 
 **验证清单**：
-1. `cargo build --no-default-features -F profile-local` ✅
-2. `cargo build --no-default-features -F profile-simple-server` ✅
-3. `cargo build --no-default-features -F profile-multi-users-server` ✅
+1. `cargo build --no-default-features -F local` ✅
+2. `cargo build --no-default-features -F simple-server` ✅
+3. `cargo build --no-default-features -F multi-users-server` ✅
 4. `cargo clippy --all-features -- -D warnings` — **零警告**
-5. `cargo test --no-default-features -F profile-local --lib`
-6. `cargo test --no-default-features -F profile-simple-server --lib`
-7. `cargo test --no-default-features -F profile-multi-users-server --lib`
+5. `cargo test --no-default-features -F local --lib`
+6. `cargo test --no-default-features -F simple-server --lib`
+7. `cargo test --no-default-features -F multi-users-server --lib`
 8. Docker build 成功 + HEALTHCHECK 通过
 9. CI 全绿（所有 16 个 jobs）
 10. E2E 测试实际运行通过（至少 50% 的 `#[ignore]` 移除）

@@ -217,26 +217,26 @@ npm run compile
 
 | Profile | Backend | Use Case |
 |:--------|:--------|:---------|
-| `profile-local` | SQLite + sqlite-vec | Single-user local tool (default) |
-| `profile-simple-server` | SQLite + sqlite-vec | Single-server deployment |
-| `profile-multi-users-server` | PostgreSQL + pgvector | Multi-user production |
-| `profile-full` | SQLite (all features) | CI / development |
+| `local` | SQLite + sqlite-vec | Single-user local tool (default) |
+| `simple-server` | SQLite + sqlite-vec | Single-server deployment |
+| `multi-users-server` | PostgreSQL + pgvector | Multi-user production |
+| `full` | SQLite (all features) | CI / development |
 
 ```bash
 # Build commands
-cargo build                                                    # profile-local (default)
-cargo build --no-default-features --features profile-simple-server
-cargo build --no-default-features --features profile-multi-users-server,backend-postgres
+cargo build                                                    # local (default)
+cargo build --no-default-features --features simple-server
+cargo build --no-default-features --features multi-users-server,backend-postgres
 ```
 
 ## Verification
 
 | Profile | `cargo clippy -D warnings` | Test Status |
 |:--------|:--------------------------:|:-----------:|
-| `profile-local` | ✅ **Zero warnings** | ✅ **2252 pass, 0 fail, 0 ignored** |
-| `profile-simple-server` | ✅ **Zero warnings** | ✅ **all pass** |
-| `profile-multi-users-server` | ✅ **Zero warnings** | ✅ **all pass** |
-| `profile-full` | ✅ **Zero warnings** | ✅ **all pass** |
+| `local` | ✅ **Zero warnings** | ✅ **2252 pass, 0 fail, 0 ignored** |
+| `simple-server` | ✅ **Zero warnings** | ✅ **all pass** |
+| `multi-users-server` | ✅ **Zero warnings** | ✅ **all pass** |
+| `full` | ✅ **Zero warnings** | ✅ **all pass** |
 
 All 4 build profiles compile with zero clippy warnings. Unit tests (2252) all pass with zero failures and zero ignored tests. E2e integration tests require running infrastructure.
 

@@ -14,7 +14,7 @@
 ### 0.1 硬性执行规则（同 BLUE39）
 
 1. 5 种协议全链路闭合 — auto、acp stdio、acp http、mcp stdio、mcp http。每个推荐能力必须接入全部 5 种协议模式，不允许静默缺失。
-2. 3 种服务器 Profile 全链路闭合 — profile-local、profile-simple-server、profile-multi-users-server。每个推荐能力必须在全部 3 种 profile 特性集下正确编译和行为一致。不允许 cfg 不匹配。
+2. 3 种服务器 Profile 全链路闭合 — local、simple-server、multi-users-server。每个推荐能力必须在全部 3 种 profile 特性集下正确编译和行为一致。不允许 cfg 不匹配。
 3. 注释英文 — 所有新增模块的代码注释必须使用英文。不允许中英文混合。
 4. 国际化（i18n）全覆盖 — 所有面向用户的字符串（GUI、addon、后端日志）必须经过 locale 键转译。不允许任何语言的硬编码展示字符串。
 5. 完整闭合 — 本文列出的每个模块最终必须达到：编译通过、零警告、接入 governance.status、可通过 health 端点观测、有集成测试覆盖。
@@ -481,19 +481,19 @@
 
 编译验证：
 
-1. `cargo check -q --no-default-features --features profile-local`
-2. `cargo check -q --no-default-features --features profile-simple-server`
-3. `cargo check -q --no-default-features --features profile-multi-users-server`
+1. `cargo check -q --no-default-features --features local`
+2. `cargo check -q --no-default-features --features simple-server`
+3. `cargo check -q --no-default-features --features multi-users-server`
 
 结论：
 
 1. 三种官方 profile 当前均可编译通过，不存在“某一官方 profile 直接编译阻塞”的问题。
 2. 但三种 profile 下自治能力并不等价，存在“可编译但行为退化”的差异。
-3. `profile-local` 会对 cache/vector 初始化失败采取 adaptive continue 策略，这意味着它更容易进入“少一条腿也先跑起来”的降级模式。
-4. `profile-simple-server` 与 `profile-multi-users-server` 对 cache/vector 初始化更严格，行为更接近“缺依赖即报错”。
+3. `local` 会对 cache/vector 初始化失败采取 adaptive continue 策略，这意味着它更容易进入“少一条腿也先跑起来”的降级模式。
+4. `simple-server` 与 `multi-users-server` 对 cache/vector 初始化更严格，行为更接近“缺依赖即报错”。
 5. `sub-bus-tool`、`sub-bus-orchestration`、`sub-bus-observability` 等是自治主能力的重要编译开关，当前官方 profile 都会带上，但代码本身仍保留 `not(feature = ...)` 退化分支。
 6. `CapabilityBus::execute_tool` 在没有 `sub-bus-tool` 时会直接返回 `ToolBus not available in this profile`，说明自治执行层对 feature 仍有硬依赖，只是当前三种官方 profile 恰好覆盖了它。
-7. `distributed_memory`、remote skill import、部分 protocol/memory 扩展只在 `profile-multi-users-server` 下成立，因此多-agent 的跨节点形态本身就不是三 profile 等价能力。
+7. `distributed_memory`、remote skill import、部分 protocol/memory 扩展只在 `multi-users-server` 下成立，因此多-agent 的跨节点形态本身就不是三 profile 等价能力。
 
 本轮新增判断：
 
@@ -503,7 +503,7 @@
 
 ### 3.6 编译差异矩阵（自治视角）
 
-| 维度 | profile-local | profile-simple-server | profile-multi-users-server |
+| 维度 | local | simple-server | multi-users-server |
 |------|---------------|-----------------------|----------------------------|
 | 官方编译状态 | 通过 | 通过 | 通过 |
 | `sub-bus-tool` | 有 | 有 | 有 |
@@ -519,17 +519,17 @@
 
 矩阵解读：
 
-1. `profile-local` 最容易出现“能跑，但少组件、少记忆、少持久化”的软退化。
-2. `profile-simple-server` 是当前最接近“单机完整自治运行时”的 profile。
-3. `profile-multi-users-server` 提供最多总线和分布式能力，但这不等于主链路已经把这些能力真正穿起来。
+1. `local` 最容易出现“能跑，但少组件、少记忆、少持久化”的软退化。
+2. `simple-server` 是当前最接近“单机完整自治运行时”的 profile。
+3. `multi-users-server` 提供最多总线和分布式能力，但这不等于主链路已经把这些能力真正穿起来。
 4. 因此“所有官方 profile 均可编译”不代表“所有官方 profile 均无自治阻塞”。
 
 ### 3.7 编译选项相关新增修复原则
 
 1. 官方支持矩阵只允许三种 profile，禁止出现未声明 feature 组合下的自治承诺。
 2. 对自治关键路径，官方 profile 内不允许存在 `ToolBus not available`、空工具集、空 orchestrator、占位 planner 这类软阻塞。
-3. `profile-local` 的 adaptive fallback 必须可观测，并且不能把主链路悄悄降成“简单跑跑”。
-4. `profile-simple-server` 与 `profile-multi-users-server` 应作为自治闭环验证硬门，保证完整执行行为一致。
+3. `local` 的 adaptive fallback 必须可观测，并且不能把主链路悄悄降成“简单跑跑”。
+4. `simple-server` 与 `multi-users-server` 应作为自治闭环验证硬门，保证完整执行行为一致。
 5. `governance.status` 必须区分“feature present”和“behavior active”，避免编译特性存在但行为没接线。
 
 ---
@@ -575,7 +575,7 @@
 2. 但这些实现没有统一成 ACP/chat/task/workflow 的唯一自治主引擎。
 3. 多-agent 组件丰富，但大量仍停留在架构储备、观测聚合、profile enrich 或独立容器层。
 4. 真正导致用户感知“阻塞”或“简单跑跑就完”的，不只是单点 bug，而是执行面分裂、门禁阻断、缓存短路和假闭环指标叠加。
-5. 编译 profile 虽然都能过，但 profile-local 的 adaptive 降级、feature-gated 的退化分支、以及多 profile 行为差异，都会放大这种问题。
+5. 编译 profile 虽然都能过，但 local 的 adaptive 降级、feature-gated 的退化分支、以及多 profile 行为差异，都会放大这种问题。
 6. 如果直接在现状上继续补 bus、补 gate、补 profile，只会让系统更重、更像包袱，而不是钢铁侠战衣。
 
 ### 4.2 收口原则
@@ -649,7 +649,7 @@
 14. `src/orchestration/council/council.rs`：proposal/vote/tally 多-agent 容器
 15. `src/acp/impl/request/runtime_pack.rs`、`src/acp/impl/request/ops_pack.rs`：ready/gate 布尔链
 16. `Cargo.toml`、`src/lib.rs`：profile 与 sub-bus feature 矩阵
-17. `src/main.rs`：profile-local adaptive fallback 与 server profile 严格初始化差异
+17. `src/main.rs`：local adaptive fallback 与 server profile 严格初始化差异
 
 ---
 

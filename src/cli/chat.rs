@@ -382,8 +382,9 @@ async fn execute_simple_tool(name: &str, args: &Value) -> Result<String> {
                 .or_else(|| args["file_path"].as_str())
                 .ok_or_else(|| anyhow::anyhow!("missing path argument"))?;
             let resolved = resolve_safe_path(path, false)?;
-            let metadata = tokio::fs::metadata(&resolved)
+            let metadata = timeout(Duration::from_secs(30), tokio::fs::metadata(&resolved))
                 .await
+                .map_err(|_| anyhow::anyhow!("file metadata timed out after 30s: {path}"))?
                 .with_context(|| format!("failed to read metadata for {path}"))?;
             if metadata.len() > MAX_FILE_READ_BYTES {
                 anyhow::bail!(
@@ -392,9 +393,13 @@ async fn execute_simple_tool(name: &str, args: &Value) -> Result<String> {
                     MAX_FILE_READ_BYTES
                 );
             }
-            let content = tokio::fs::read_to_string(&resolved)
-                .await
-                .with_context(|| format!("failed to read {path}"))?;
+            let content = timeout(
+                Duration::from_secs(60),
+                tokio::fs::read_to_string(&resolved),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("file read timed out after 60s: {path}"))?
+            .with_context(|| format!("failed to read {path}"))?;
             Ok(content)
         }
         "write_file" | "write" | "create" => {
@@ -407,13 +412,20 @@ async fn execute_simple_tool(name: &str, args: &Value) -> Result<String> {
                 .ok_or_else(|| anyhow::anyhow!("missing content argument"))?;
             let resolved = resolve_safe_path(path, true)?;
             if let Some(parent) = resolved.parent() {
-                tokio::fs::create_dir_all(parent).await.with_context(|| {
-                    format!("failed to create directory for {}", parent.display())
-                })?;
+                timeout(Duration::from_secs(30), tokio::fs::create_dir_all(parent))
+                    .await
+                    .map_err(|_| anyhow::anyhow!("directory creation timed out after 30s"))?
+                    .with_context(|| {
+                        format!("failed to create directory for {}", parent.display())
+                    })?;
             }
-            tokio::fs::write(&resolved, content)
-                .await
-                .with_context(|| format!("failed to write {}", resolved.display()))?;
+            timeout(
+                Duration::from_secs(60),
+                tokio::fs::write(&resolved, content),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("file write timed out after 60s"))?
+            .with_context(|| format!("failed to write {}", resolved.display()))?;
             Ok(format!(
                 "wrote {} bytes to {}",
                 content.len(),
@@ -432,10 +444,14 @@ async fn execute_simple_tool(name: &str, args: &Value) -> Result<String> {
             let max_results = args["max_results"].as_u64().unwrap_or(20) as usize;
 
             let mut results = Vec::new();
-            let mut dir = tokio::fs::read_dir(path)
+            let mut dir = timeout(Duration::from_secs(30), tokio::fs::read_dir(path))
                 .await
+                .map_err(|_| anyhow::anyhow!("read_dir timed out after 30s: {path}"))?
                 .with_context(|| format!("failed to read directory {path}"))?;
-            while let Some(entry) = dir.next_entry().await? {
+            while let Ok(Some(entry)) = timeout(Duration::from_secs(10), dir.next_entry())
+                .await
+                .map_err(|_| anyhow::anyhow!("directory iteration timed out after 10s"))?
+            {
                 if results.len() >= max_results {
                     break;
                 }
@@ -456,12 +472,21 @@ async fn execute_simple_tool(name: &str, args: &Value) -> Result<String> {
                 .or_else(|| args["directory"].as_str())
                 .unwrap_or(".");
             let mut entries = Vec::new();
-            let mut dir = tokio::fs::read_dir(path)
+            let mut dir = timeout(Duration::from_secs(30), tokio::fs::read_dir(path))
                 .await
+                .map_err(|_| anyhow::anyhow!("read_dir timed out after 30s: {path}"))?
                 .with_context(|| format!("failed to read directory {path}"))?;
-            while let Some(entry) = dir.next_entry().await? {
+            while let Ok(Some(entry)) = timeout(Duration::from_secs(10), dir.next_entry())
+                .await
+                .map_err(|_| anyhow::anyhow!("directory iteration timed out after 10s"))?
+            {
                 let fname = entry.file_name().to_string_lossy().to_string();
-                let ftype = if entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
+                let ftype = if timeout(Duration::from_secs(10), entry.file_type())
+                    .await
+                    .map_err(|_| anyhow::anyhow!("file type query timed out after 10s"))?
+                    .map(|t| t.is_dir())
+                    .unwrap_or(false)
+                {
                     "dir"
                 } else {
                     "file"

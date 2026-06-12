@@ -386,7 +386,7 @@ fallback = true
 
 go-on has three build profiles that enable different feature sets:
 
-| Feature | `profile-local` (default) | `profile-simple-server` | `profile-multi-users-server` |
+| Feature | `local` (default) | `simple-server` | `multi-users-server` |
 |---------|--------------------------|------------------------|------------------------------|
 | SQLite backend | ✅ | ✅ | ❌ |
 | PostgreSQL backend | ❌ | ❌ | ✅ |
@@ -401,14 +401,14 @@ go-on has three build profiles that enable different feature sets:
 To build with a specific profile:
 
 ```bash
-# Default (profile-local)
+# Default (local)
 cargo build
 
 # Simple server
-cargo build --no-default-features --features profile-simple-server
+cargo build --no-default-features --features simple-server
 
 # Multi-user server
-cargo build --no-default-features --features profile-multi-users-server
+cargo build --no-default-features --features multi-users-server
 ```
 
 ---

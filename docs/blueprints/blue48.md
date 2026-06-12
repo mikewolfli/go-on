@@ -13,7 +13,7 @@
 ## 0. 核心规则（沿用 blue47.md）
 
 1. 5 种协议全链路闭合 — auto、acp stdio、acp http、mcp stdio、mcp http。每个推荐能力必须接入全部 5 种协议模式，不允许静默缺失。
-2. 3 种服务器 Profile 全链路闭合 — profile-local、profile-simple-server、profile-multi-users-server。每个推荐能力必须在全部 3 种 profile 特性集下正确编译和行为一致。不允许 cfg 不匹配。
+2. 3 种服务器 Profile 全链路闭合 — local、simple-server、multi-users-server。每个推荐能力必须在全部 3 种 profile 特性集下正确编译和行为一致。不允许 cfg 不匹配。
 3. 注释英文 — 所有新增模块的代码注释必须使用英文。不允许中英文混合。
 4. 国际化（i18n）全覆盖 — 所有面向用户的字符串（GUI、addon、后端日志）必须经过 locale 键转译。不允许任何语言的硬编码展示字符串。
 5. 完整闭合 — 本文列出的每个模块最终必须达到：编译通过、零警告、接入 governance.status、可通过 health 端点观测、有集成测试覆盖。
@@ -561,9 +561,9 @@
 **第13轮 — 2026-05-29 超级广度扫描：全层零警告验证**
 
 **验证结果**:
-- profile-local: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- local: `cargo clippy -- -D warnings` → ✅ 零警告
+- simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
 - Production panic!()`: 仅i18n/runtime.rs启动时3处（可接受），其余全部在#[cfg(test)]中 ✅
 - Production unwrap(): 全部在#[cfg(test)]中 ✅
 - test --lib: 运行中（1477个测试，部分集成测试耗时较长） ✅
@@ -593,9 +593,9 @@
 - `discovery.rs`: `extract_patterns()` 已验证使用tag→entry索引O(N*T) ✅
 
 **第16轮 — 2026-05-29 全层零警告验证（第2次）**
-- profile-local: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- local: `cargo clippy -- -D warnings` → ✅ 零警告
+- simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
 - `hub.rs` 零 clippy 错误 ✅
 - `discovery.rs` 零 clippy 错误 ✅
 - 全系统零 clippy 错误 ✅
@@ -632,9 +632,9 @@
 - `test_record_vote_accuracy_updates_reputation` ✅
 
 **第18轮 — 2026-05-29 全层零警告验证（第3次）**
-- profile-local: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- local: `cargo clippy -- -D warnings` → ✅ 零警告
+- simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
 - council 27个测试全部通过 ✅
 
 #### BLUE48 多轮超级深度+超级广度扫描执行记录（续 2026-05-29 — 第4次深度扫描）
@@ -658,9 +658,9 @@
 - N=20, concurrency=5: 速度提升约 5x
 
 **第20轮 — 2026-05-29 全层零警告验证（第4次）**
-- profile-local: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- local: `cargo clippy -- -D warnings` → ✅ 零警告
+- simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
 - 新增 dead_code F-GAP标注: tool_lock.rs (LockMode::Write, try_acquire), diagnostic_feedback.rs (模块级), full_auto.rs (2字段) ✅
 
 #### BLUE48 多轮超级深度+超级广度扫描执行记录（续 2026-05-29 — 第5次深度扫描）
@@ -681,9 +681,9 @@
 - 之后: 服务器启动时初始化 → 每个chat请求调用理性分析 → 全链路闭环
 
 **第22轮 — 2026-05-29 全层零警告验证（第5次）**
-- profile-local: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- local: `cargo clippy -- -D warnings` → ✅ 零警告
+- simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
 - 全系统 `cargo check` 零错误 ✅
 
 #### BLUE48 多轮超级深度+超级广度扫描执行记录（续 2026-05-29 — 第6次深度扫描）
@@ -720,9 +720,9 @@
 `deploy/simple-server/deploy.sh`: `chown "$USER:$USER"` → `chown "$USER:"` 兼容组名≠用户名的系统 ✅
 
 **全层零警告验证（第6次）**:
-- profile-local: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- local: `cargo clippy -- -D warnings` → ✅ 零警告
+- simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
 
 #### BLUE48 多轮超级深度+超级广度扫描执行记录（续 2026-05-29 — 第7次深度扫描）
 
@@ -747,9 +747,9 @@
 `zed-config.toml`: Copilot `api_key_env` 从 `"GITHUB_COPILOT_TOKEN"` → `"keyring://go-on/copilot_api_key"` ✅
 
 **全层零警告验证（第7次）**:
-- profile-local: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- local: `cargo clippy -- -D warnings` → ✅ 零警告
+- simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
 
 #### BLUE48 多轮超级深度+超级广度扫描执行记录（续 2026-05-29 — 第8次深度扫描）
 
@@ -779,9 +779,9 @@
 `runtimeManager.ts`: `detail`字段不再暴露 `keyring://` URI，显示友好标签"keyring" ✅
 
 **全层零警告验证（第8次）**:
-- profile-local: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- local: `cargo clippy -- -D warnings` → ✅ 零警告
+- simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
 
 #### BLUE48 多轮超级深度+超级广度扫描执行记录（续 2026-05-29 — 第9次深度扫描）
 
@@ -800,17 +800,17 @@
 `memory_bus.rs`: 5处 `if let Ok`（lookup L1/store L1/profile x2/clear_expired）→ 全部恢复 ✅
 
 **全层零警告验证（第9次）**:
-- profile-local: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- local: `cargo clippy -- -D warnings` → ✅ 零警告
+- simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
 
 ## 最终验证状态
 
 | 验证项目 | 状态 |
 |:---------|:----:|
-| `cargo clippy --profile-local -- -D warnings` | ✅ 零警告（第27轮验证） |
-| `cargo clippy --profile-simple-server -- -D warnings` | ✅ 零警告（第27轮验证） |
-| `cargo clippy --profile-multi-users-server -- -D warnings` | ✅ 零警告（第27轮验证） |
+| `cargo clippy --local -- -D warnings` | ✅ 零警告（第27轮验证） |
+| `cargo clippy --simple-server -- -D warnings` | ✅ 零警告（第27轮验证） |
+| `cargo clippy --multi-users-server -- -D warnings` | ✅ 零警告（第27轮验证） |
 | hub.rs 真实共识投票（3节点加权） | ✅ 第14轮修复 |
 | hub.rs 动态多因子风险分析 | ✅ 第14轮修复 |
 | Council声誉学习系统（5个新测试） | ✅ 第17轮新增 |
@@ -888,9 +888,9 @@
 `src/orchestration/startup_context.rs`: `load()` 3处 + `reset_cache()` 1处 = 4处锁中毒恢复 ✅
 
 **全层零警告验证（第10次）**:
-- profile-local: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- local: `cargo clippy -- -D warnings` → ✅ 零警告
+- simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
 - GUI: `cargo clippy -- -D warnings` → ✅ 零警告
 - VSCode: `npx tsc --noEmit` → ✅ 零错误
 - test --lib --no-run: ✅ 编译通过
@@ -918,9 +918,9 @@
   - 之后: 仅写入keyring，backend通过keyring:// URI自行解析（与GUI行为完全一致）
 
 **全层零警告验证（第11次）**:
-- profile-local: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- local: `cargo clippy -- -D warnings` → ✅ 零警告
+- simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
 - GUI: `cargo clippy -- -D warnings` → ✅ 零警告
 - VSCode: `npx tsc --noEmit` → ✅ 零错误
 - test --lib --no-run: ✅ 编译通过
@@ -950,9 +950,9 @@
   - 与GUI行为完全一致 ✅
 
 **全层零警告验证（第12次）**:
-- profile-local: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- local: `cargo clippy -- -D warnings` → ✅ 零警告
+- simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
 - GUI: `cargo clippy -- -D warnings` → ✅ 零警告
 - VSCode: `npx tsc --noEmit` → ✅ 零错误
 - test --lib --no-run: ✅ 编译通过
@@ -986,9 +986,9 @@
 #### 编译状态（最终）
 - `cargo check` 全部3个profile通过 ✅
 - `cargo clippy --all-features -- -D warnings` 零警告 ✅（注意: --all-features 会启用互斥backend特性）
-- `cargo clippy --no-default-features --features profile-local,backend-sqlite -- -D warnings` ✅ **零错误零警告**
-- `cargo clippy --no-default-features --features profile-simple-server,backend-sqlite -- -D warnings` ✅ **零错误零警告**
-- `cargo clippy --no-default-features --features profile-multi-users-server,backend-postgres -- -D warnings` ✅ **零错误零警告**
+- `cargo clippy --no-default-features --features local,backend-sqlite -- -D warnings` ✅ **零错误零警告**
+- `cargo clippy --no-default-features --features simple-server,backend-sqlite -- -D warnings` ✅ **零错误零警告**
+- `cargo clippy --no-default-features --features multi-users-server,backend-postgres -- -D warnings` ✅ **零错误零警告**
 - GUI: `cargo clippy -- -D warnings` ✅ **零错误零警告**
 - VSCode: `npx tsc --noEmit` ✅ **零错误**
 - test --lib --no-run: ✅ **编译通过**
@@ -1073,9 +1073,9 @@
 - init_intel_hub dead_code移除已确认 ✅
 
 **全层零警告验证（第35轮 — 6项全部通过）**:
-- profile-local: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
-- profile-multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- local: `cargo clippy -- -D warnings` → ✅ 零警告
+- simple-server: `cargo clippy -- -D warnings` → ✅ 零警告
+- multi-users-server: `cargo clippy -- -D warnings` → ✅ 零警告
 - GUI: `cargo clippy -- -D warnings` → ✅ 零警告
 - VSCode: `npx tsc --noEmit` → ✅ 零错误
 - cargo test --lib --no-run: ✅ 编译通过
@@ -1083,9 +1083,9 @@
 #### 验证状态（最终 — 第35轮全面验证）
 - `cargo check` 全部3个profile通过 ✅
 - `cargo clippy --all-features -- -D warnings` 零错误零警告 ✅
-- `cargo clippy --no-default-features --features profile-local,backend-sqlite -- -D warnings` ✅
-- `cargo clippy --no-default-features --features profile-simple-server,backend-sqlite -- -D warnings` ✅
-- `cargo clippy --no-default-features --features profile-multi-users-server,backend-postgres -- -D warnings` ✅
+- `cargo clippy --no-default-features --features local,backend-sqlite -- -D warnings` ✅
+- `cargo clippy --no-default-features --features simple-server,backend-sqlite -- -D warnings` ✅
+- `cargo clippy --no-default-features --features multi-users-server,backend-postgres -- -D warnings` ✅
 - GUI `cargo clippy -- -D warnings` ✅ **零错误零警告**
 - VSCode `npx tsc --noEmit` ✅ **零错误**
 - `cargo test --lib` 全部通过 ✅
@@ -1177,7 +1177,7 @@
 | 并行Fallback执行器 | ✅ **Semaphore+超时+最佳选择** |
 | Python SDK指数退避+jitter | ✅ **速度提升2-4x** |
 | Python SDK流式端点修复 | ✅ **/chat/stream** |
-| 全部3个profile零警告 | ✅ **profile-local/simple-server/multi-users-server** |
+| 全部3个profile零警告 | ✅ **local/simple-server/multi-users-server** |
 | agent selector 7测试通过 | ✅ |
 | fallback executor 2测试通过 | ✅ |
 
@@ -1224,9 +1224,9 @@
 
 | 验证项目 | 状态 |
 |:---------|:----:|
-| `cargo clippy --profile-local -- -D warnings` | ✅ **零错误零警告** |
-| `cargo clippy --profile-simple-server -- -D warnings` | ✅ **零错误零警告** |
-| `cargo clippy --profile-multi-users-server -- -D warnings` | ✅ **零错误零警告** |
+| `cargo clippy --local -- -D warnings` | ✅ **零错误零警告** |
+| `cargo clippy --simple-server -- -D warnings` | ✅ **零错误零警告** |
+| `cargo clippy --multi-users-server -- -D warnings` | ✅ **零错误零警告** |
 | GUI `cargo clippy -- -D warnings` | ✅ **零错误零警告** |
 | VSCode `npx tsc --noEmit` | ✅ **零错误** |
 | `cargo test --lib --no-run` | ✅ **编译通过** |

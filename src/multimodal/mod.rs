@@ -310,7 +310,7 @@ impl MultimodalProcessor {
     /// their default configuration.
     ///
     /// This is the recommended constructor when the multimodal feature set is
-    /// active (feature `sub-bus-multimodal` or `profile-full`).
+    /// active (feature `sub-bus-multimodal` or `full`).
     pub fn new_with_all_processors() -> Self {
         Self {
             document_parser: Some(DocumentParser::default()),

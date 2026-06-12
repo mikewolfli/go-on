@@ -15,10 +15,10 @@
 //!
 //! # Feature gates
 //!
-//! - `#[cfg(not(feature = "profile-multi-users-server"))]` — single‑node;
+//! - `#[cfg(not(feature = "multi-users-server"))]` — single‑node;
 //!   the bus still compiles but remote‑peer operations are no‑ops (or
 //!   strictly local).
-//! - `#[cfg(feature = "profile-multi-users-server")]` — multi‑node; the
+//! - `#[cfg(feature = "multi-users-server")]` — multi‑node; the
 //!   full peer set and shared‑entry machinery is active.
 
 use crate::i18n::runtime::tf;
@@ -27,16 +27,16 @@ use serde::{Deserialize, Serialize};
 use tracing;
 
 use std::collections::{HashMap, VecDeque};
-#[cfg(feature = "profile-multi-users-server")]
+#[cfg(feature = "multi-users-server")]
 use std::sync::atomic::AtomicBool;
-#[cfg(feature = "profile-multi-users-server")]
+#[cfg(feature = "multi-users-server")]
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, RwLock};
-#[cfg(feature = "profile-multi-users-server")]
+#[cfg(feature = "multi-users-server")]
 use std::thread;
-#[cfg(feature = "profile-multi-users-server")]
+#[cfg(feature = "multi-users-server")]
 use std::thread::JoinHandle;
-#[cfg(feature = "profile-multi-users-server")]
+#[cfg(feature = "multi-users-server")]
 use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
@@ -204,15 +204,15 @@ pub struct DistributedMemoryBus {
     /// Profile / metrics snapshot.
     profile: Arc<Mutex<DistributedMemoryBusProfile>>,
     /// Transport running flag.
-    #[cfg(feature = "profile-multi-users-server")]
+    #[cfg(feature = "multi-users-server")]
     transport_running: Arc<AtomicBool>,
     /// Transport configuration.
-    #[cfg(feature = "profile-multi-users-server")]
+    #[cfg(feature = "multi-users-server")]
     transport_config: Arc<Mutex<Option<MemoryTransportConfig>>>,
     /// Transport statistics.
     transport_stats: Arc<Mutex<TransportStats>>,
     /// Handle for the background sync thread.
-    #[cfg(feature = "profile-multi-users-server")]
+    #[cfg(feature = "multi-users-server")]
     sync_thread: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
@@ -233,12 +233,12 @@ impl DistributedMemoryBus {
             shared_entries: Arc::new(Mutex::new(VecDeque::with_capacity(max))),
             max_entries: max,
             profile: Arc::new(Mutex::new(DistributedMemoryBusProfile::default())),
-            #[cfg(feature = "profile-multi-users-server")]
+            #[cfg(feature = "multi-users-server")]
             transport_running: Arc::new(AtomicBool::new(false)),
-            #[cfg(feature = "profile-multi-users-server")]
+            #[cfg(feature = "multi-users-server")]
             transport_config: Arc::new(Mutex::new(None)),
             transport_stats: Arc::new(Mutex::new(TransportStats::default())),
-            #[cfg(feature = "profile-multi-users-server")]
+            #[cfg(feature = "multi-users-server")]
             sync_thread: Arc::new(Mutex::new(None)),
         }
     }
@@ -360,7 +360,7 @@ impl DistributedMemoryBus {
     // ------------------------------------------------------------------
 
     /// Register (or update) a remote peer.
-    #[cfg(feature = "profile-multi-users-server")]
+    #[cfg(feature = "multi-users-server")]
     pub fn register_peer(&self, node_id: &str, address: &str) {
         let mut peers = self.remote_peers.write().unwrap_or_else(|poisoned| {
             tracing::warn!("lock poisoned");
@@ -375,13 +375,13 @@ impl DistributedMemoryBus {
     }
 
     /// No‑op on single‑node builds.
-    #[cfg(not(feature = "profile-multi-users-server"))]
+    #[cfg(not(feature = "multi-users-server"))]
     pub fn register_peer(&self, _node_id: &str, _address: &str) {
         // Single‑node mode — nothing to register.
     }
 
     /// Remove a remote peer.
-    #[cfg(feature = "profile-multi-users-server")]
+    #[cfg(feature = "multi-users-server")]
     pub fn unregister_peer(&self, node_id: &str) {
         let mut peers = self.remote_peers.write().unwrap_or_else(|poisoned| {
             tracing::warn!("lock poisoned");
@@ -396,7 +396,7 @@ impl DistributedMemoryBus {
     }
 
     /// No‑op on single‑node builds.
-    #[cfg(not(feature = "profile-multi-users-server"))]
+    #[cfg(not(feature = "multi-users-server"))]
     pub fn unregister_peer(&self, _node_id: &str) {
         // Single‑node mode — nothing to unregister.
     }
@@ -467,7 +467,7 @@ impl DistributedMemoryBus {
         }
 
         // 4. Update profile
-        #[cfg(feature = "profile-multi-users-server")]
+        #[cfg(feature = "multi-users-server")]
         {
             let mut p = self.profile.lock().unwrap_or_else(|poisoned| {
                 tracing::warn!("lock poisoned");
@@ -600,7 +600,7 @@ impl DistributedMemoryBus {
     ///
     /// This spawns a thread that periodically serialises local entries and
     /// pushes them to all known peers via the HTTP transport.
-    #[cfg(feature = "profile-multi-users-server")]
+    #[cfg(feature = "multi-users-server")]
     pub fn start_transport(&self, config: MemoryTransportConfig) -> anyhow::Result<()> {
         if self.transport_running.load(Ordering::SeqCst) {
             anyhow::bail!("{}", tf("error.transport_already_running", &[]));
@@ -684,13 +684,13 @@ impl DistributedMemoryBus {
     }
 
     /// Single‑node fallback (multi‑user feature not enabled)
-    #[cfg(not(feature = "profile-multi-users-server"))]
+    #[cfg(not(feature = "multi-users-server"))]
     pub fn start_transport(&self, _config: MemoryTransportConfig) -> anyhow::Result<()> {
         anyhow::bail!("{}", tf("error.transport_single_node", &[]));
     }
 
     /// Stop the background transport sync thread.
-    #[cfg(feature = "profile-multi-users-server")]
+    #[cfg(feature = "multi-users-server")]
     pub fn stop_transport(&self) -> anyhow::Result<()> {
         if !self.transport_running.load(Ordering::SeqCst) {
             anyhow::bail!("{}", tf("error.transport_not_running", &[]));
@@ -719,7 +719,7 @@ impl DistributedMemoryBus {
     }
 
     /// Single‑node fallback (multi‑user feature not enabled)
-    #[cfg(not(feature = "profile-multi-users-server"))]
+    #[cfg(not(feature = "multi-users-server"))]
     pub fn stop_transport(&self) -> anyhow::Result<()> {
         anyhow::bail!("{}", tf("error.transport_single_node", &[]));
     }
@@ -727,7 +727,7 @@ impl DistributedMemoryBus {
     /// Trigger an immediate sync operation.
     ///
     /// Returns the [`SyncStatus`] of the operation.
-    #[cfg(feature = "profile-multi-users-server")]
+    #[cfg(feature = "multi-users-server")]
     pub fn sync_now(&self) -> anyhow::Result<SyncStatus> {
         Self::do_sync(
             &self.local_entries,
@@ -747,7 +747,7 @@ impl DistributedMemoryBus {
     }
 
     /// Single‑node fallback (multi‑user feature not enabled)
-    #[cfg(not(feature = "profile-multi-users-server"))]
+    #[cfg(not(feature = "multi-users-server"))]
     pub fn sync_now(&self) -> anyhow::Result<SyncStatus> {
         anyhow::bail!("Transport is not available in single-node mode");
     }
@@ -764,7 +764,7 @@ impl DistributedMemoryBus {
     ///
     /// Deserialises the JSON payload and stores the entries as shared entries
     /// on this node.
-    #[cfg(feature = "profile-multi-users-server")]
+    #[cfg(feature = "multi-users-server")]
     pub fn ingest_shared(&self, entries_json: &str) -> anyhow::Result<usize> {
         let entries: Vec<MemoryBusEntry> = serde_json::from_str(entries_json)?;
 
@@ -813,7 +813,7 @@ impl DistributedMemoryBus {
     }
 
     /// Single‑node fallback (multi‑user feature not enabled)
-    #[cfg(not(feature = "profile-multi-users-server"))]
+    #[cfg(not(feature = "multi-users-server"))]
     pub fn ingest_shared(&self, _entries_json: &str) -> anyhow::Result<usize> {
         anyhow::bail!("ingest_shared is not available in single-node mode");
     }
@@ -824,7 +824,7 @@ impl DistributedMemoryBus {
 
     /// Perform a single sync cycle: collect local entries and push them
     /// to all known peers via the transport.
-    #[cfg(feature = "profile-multi-users-server")]
+    #[cfg(feature = "multi-users-server")]
     fn do_sync(
         local_entries: &Arc<Mutex<VecDeque<MemoryBusEntry>>>,
         remote_peers: &Arc<RwLock<HashMap<String, String>>>,
@@ -962,10 +962,10 @@ fn uuid_v4() -> String {
 
 /// Return the local node identifier.
 ///
-/// Under `profile-multi-users-server` this uses `hostname`, otherwise a fixed
+/// Under `multi-users-server` this uses `hostname`, otherwise a fixed
 /// default is returned.
 fn local_node_id() -> String {
-    #[cfg(feature = "profile-multi-users-server")]
+    #[cfg(feature = "multi-users-server")]
     {
         std::env::var("HOSTNAME")
             .or_else(|_| std::env::var("HOST"))
@@ -973,7 +973,7 @@ fn local_node_id() -> String {
             .unwrap_or_else(|_| "local-node".to_string())
     }
 
-    #[cfg(not(feature = "profile-multi-users-server"))]
+    #[cfg(not(feature = "multi-users-server"))]
     {
         "local-single-node".to_string()
     }
@@ -1044,8 +1044,8 @@ mod tests {
     fn register_and_unregister_peer() {
         let bus = make_bus(100);
         bus.register_peer("node-alpha", "10.0.0.1:9000");
-        // Under profile-local, register_peer is a no-op, so peers may be empty.
-        // Under profile-multi-users-server, the peer should be registered.
+        // Under local, register_peer is a no-op, so peers may be empty.
+        // Under multi-users-server, the peer should be registered.
         let count = bus.peers().len();
         assert!(count == 0 || count == 1, "unexpected peer count: {}", count);
 
@@ -1121,7 +1121,7 @@ mod tests {
         let p = bus.profile();
         assert_eq!(p.local_entries, 2);
         assert!(p.enabled);
-        // remote_peers may be 0 (profile-local no-op) or 1 (multi-users-server)
+        // remote_peers may be 0 (local no-op) or 1 (multi-users-server)
         assert!(p.remote_peers == 0 || p.remote_peers == 1);
     }
 
@@ -1145,7 +1145,7 @@ mod tests {
     // Transport tests
     // ------------------------------------------------------------------
 
-    #[cfg(feature = "profile-multi-users-server")]
+    #[cfg(feature = "multi-users-server")]
     fn make_bus_with_peers(max: usize) -> DistributedMemoryBus {
         let bus = DistributedMemoryBus::new(max);
         bus.register_peer("peer-alpha", "10.0.0.1:9001");
@@ -1154,7 +1154,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "profile-multi-users-server")]
+    #[cfg(feature = "multi-users-server")]
     fn test_transport_start_stop() {
         let bus = make_bus(100);
         let config = MemoryTransportConfig::default();
@@ -1171,7 +1171,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "profile-multi-users-server")]
+    #[cfg(feature = "multi-users-server")]
     fn test_sync_now_returns_status() {
         let bus = make_bus_with_peers(100);
         bus.store_local("alpha", "value-1", vec![], 0.9, 0);
@@ -1189,7 +1189,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "profile-multi-users-server")]
+    #[cfg(feature = "multi-users-server")]
     fn test_ingest_shared_entries() {
         let bus = make_bus(100);
 
@@ -1216,7 +1216,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "profile-multi-users-server")]
+    #[cfg(feature = "multi-users-server")]
     fn test_ingest_shared_invalid_json() {
         let bus = make_bus(100);
         let result = bus.ingest_shared("this is not valid json");
@@ -1233,7 +1233,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "profile-multi-users-server")]
+    #[cfg(feature = "multi-users-server")]
     fn test_transport_stats() {
         let bus = make_bus_with_peers(100);
         bus.store_local("stats-key", "stats-val", vec![], 0.7, 0);
@@ -1251,7 +1251,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "profile-multi-users-server")]
+    #[cfg(feature = "multi-users-server")]
     fn test_ingested_entries_are_findable() {
         let bus = make_bus(100);
 
@@ -1282,7 +1282,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "profile-multi-users-server")]
+    #[cfg(feature = "multi-users-server")]
     fn test_transport_profile_includes_transport() {
         let bus = make_bus(100);
         let config = MemoryTransportConfig::default();
@@ -1302,7 +1302,7 @@ mod tests {
 
     /// Test that sync_now with no entries returns Idle status.
     #[test]
-    #[cfg(feature = "profile-multi-users-server")]
+    #[cfg(feature = "multi-users-server")]
     fn test_sync_now_empty_entries() {
         let bus = make_bus_with_peers(100);
         // No entries stored
@@ -1315,7 +1315,7 @@ mod tests {
 
     /// Test that sync_now with no peers returns Completed with zero entries.
     #[test]
-    #[cfg(feature = "profile-multi-users-server")]
+    #[cfg(feature = "multi-users-server")]
     fn test_sync_now_no_peers() {
         let bus = make_bus(100); // no peers registered
         bus.store_local("orphan", "alone", vec![], 0.5, 0);
