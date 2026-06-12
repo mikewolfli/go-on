@@ -247,12 +247,29 @@ pub async fn dispatch_server(
             .await
         }
         "mcp_stdio" => {
+            let acp = crate::acp::r#impl::runtime::new_acp_server(
+                Arc::clone(&runtime_flow),
+                Arc::clone(&registry),
+                cache,
+                vector_store,
+                None,
+                autotune_state,
+                autotune_config,
+                autotune_state_path,
+                Some(config_path.to_string_lossy().to_string()),
+                runtime_config,
+                Some(client),
+                false,
+                None,
+            )
+            .await;
             let tr = crate::orchestration::tool::ToolRegistry::new();
             let s = crate::protocol::mcp_server::McpStdioServer::new(
                 registry,
                 Arc::new(tr),
                 "go-on".into(),
                 "1.1.0".into(),
+                Some(Arc::new(acp)),
             );
             s.run().await
         }

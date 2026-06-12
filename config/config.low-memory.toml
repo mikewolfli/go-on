@@ -17,9 +17,6 @@ schema_version = "1.0.0"
 default_phase = "think"
 model_selection_mode = "adaptive"
 
-[protocol]
-mode = "acp_http"
-
 [cache]
 enabled = true
 path = "acp_cache.sqlite3"
@@ -44,6 +41,7 @@ summary_max_chars = 600
 enabled = false                    # Disable autotune (saves background CPU/memory)
 
 [runtime]
+protocol_mode = "acp"
 acp_http_bind_addr = "127.0.0.1:8090"
 maintenance_interval_seconds = 120 # Less frequent maintenance
 health_interval_seconds = 300
@@ -66,7 +64,6 @@ skills_allow_floating_ref = false
 skills_cache_dir = "skills_cache"
 governance_enabled = true
 governance_policy_mode = "advisory"
-i18n_enabled = true
 i18n_default_language = "en-US"
 
 [agents]

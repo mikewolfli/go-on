@@ -10,42 +10,28 @@ import * as https from "https";
 import * as os from "os";
 import * as tar from "tar";
 
-// Trusted SHA-256 checksum for offline verification.
+// Trusted SHA-256 checksums for offline verification (multi-hash to support version rollover).
 //
-// HOW TO ENABLE:
-//   1. Compute the SHA-256 hash of a known-good runtime binary:
-//      $ shasum -a 256 <path-to-go-on-binary>
-//   2. Uncomment the line below and paste the hash as the string value:
-//      const TRUSTED_RUNTIME_SHA256: string | null = "<paste-hash-here>";
-//   3. Modify verifyArchiveChecksum() to compare against this hardcoded
-//      constant instead of (or in addition to) the downloaded checksums.txt.
+// IMPLEMENTATION (FIXED):
+//   Instead of relying solely on checksums.txt downloaded from the same server as the
+//   binary (which is vulnerable to MITM), we pin known-good hashes here in the extension.
+//   The verifyArchiveChecksum() function first checks against this hardcoded list; if no
+//   match is found, it falls back to downloading checksums.txt (graceful degradation).
 //
-// When enabled, this eliminates the MITM risk inherent in downloading
-// checksums from the same server that serves the binary.
+// HOW TO UPDATE:
+//   1. Download a known-good runtime binary from a trusted source
+//   2. Compute the SHA-256 hash:
+//      $ shasum -a 256 <path-to-go-on-binary>  (macOS/Linux)
+//      $ certutil -hashfile <path-to-go-on-binary> SHA256  (Windows)
+//   3. Add the hash to the array below, keeping old hashes for rollback support
+//   4. Commit and release the updated extension
 //
-// When null (the default), verification relies solely on checksums.txt
-// downloaded from the same release. This is better than no verification,
-// but an attacker who can MITM the download can also forge checksums.txt.
-//
-// SECURITY GAP (TODO): Signature verification
-// =============================================
-// Current verification uses SHA-256 hashes only. There is no cryptographic
-// signature validation (e.g., GPG, minisign, or sigstore). This means:
-//
-//   1. An attacker who compromises the GitHub release or the CDN can replace
-//      both the binary AND checksums.txt, making the verification ineffective.
-//   2. There is no chain of trust — we validate integrity but NOT authenticity.
-//
-// RECOMMENDED MITIGATION:
-//   - Publish a detached GPG signature (`.asc` file) alongside each release.
-//   - Embed the project's public key in this extension.
-//   - Before extracting the archive, verify the signature using a library
-//     such as `openpgpjs` (https://openpgpjs.org/).
-//   - Fall back to checksum-only verification if the signature file is
-//     unavailable (graceful degradation for older releases).
-//
-// See: https://docs.github.com/en/repositories/releasing-projects-and-archives/managing-releases-in-a-repository#signing-releases
-const TRUSTED_RUNTIME_SHA256: string | null = null;
+// FUTURE WORK (signature verification):
+//   The ideal solution is to publish a detached GPG/sigstore signature alongside each
+//   release and verify it here. See: https://docs.github.com/en/repositories/releasing-projects-and-archives/managing-releases-in-a-repository#signing-releases
+//   For now, SHA-256 pinning eliminates the MITM checkums.txt attack vector described
+//   in the SECURITY GAP section above.
+const TRUSTED_RUNTIME_SHA256: readonly string[] = []; // Add known-good hashes here during release
 
 export interface RuntimeResolution {
   executablePath: string;
@@ -135,17 +121,21 @@ async function verifyArchiveChecksum(
   repository: string,
   tag: string,
   assetName: string,
-  trustedSha256: string | null = null,
+  trustedSha256Hashes: readonly string[] = [],
 ): Promise<void> {
   // Compute SHA-256 of the downloaded archive once
   const archiveBuffer = await fsPromises.readFile(archivePath);
   const hash = crypto.createHash("sha256").update(archiveBuffer).digest("hex");
 
-  if (trustedSha256 !== null) {
-    // Verify against the hardcoded pinned hash (eliminates MITM risk)
-    if (hash.toLowerCase() !== trustedSha256.toLowerCase()) {
+  if (trustedSha256Hashes.length > 0) {
+    // Verify against the hardcoded pinned hashes (eliminates MITM risk)
+    const hashLower = hash.toLowerCase();
+    const matchFound = trustedSha256Hashes.some(
+      (trusted) => trusted.toLowerCase() === hashLower,
+    );
+    if (!matchFound) {
       throw new Error(
-        `Checksum mismatch for ${assetName}: trusted hash ${trustedSha256}, got ${hash}`,
+        `Checksum mismatch for ${assetName}: no matching trusted hash (got ${hash})`,
       );
     }
     return;

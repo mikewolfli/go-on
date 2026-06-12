@@ -17,6 +17,7 @@ use tokio::sync::RwLock;
 // Internal state
 // ---------------------------------------------------------------------------
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct Inner {
     pub(crate) config: FaultToleranceConfig,
     /// node_id -> HeartbeatRecord
@@ -240,7 +241,8 @@ impl FaultToleranceEngine {
         }
     }
 
-    /// Try to persist fault tolerance state to the default SQLite cache path.
+    /// Try to persist fault tolerance state. Uses SQLite when the
+    /// `backend-sqlite` feature is enabled, otherwise falls back to a JSON file.
     fn try_persist_state(&self) {
         #[cfg(feature = "backend-sqlite")]
         {
@@ -262,7 +264,13 @@ impl FaultToleranceEngine {
         }
         #[cfg(not(feature = "backend-sqlite"))]
         {
-            let _ = self.save_to_db(&());
+            if let Err(e) = self.save_to_db(&()) {
+                tracing::warn!(
+                    target: "fault_tolerance",
+                    error = %e,
+                    "failed to persist fault tolerance state"
+                );
+            }
         }
     }
 
@@ -388,10 +396,27 @@ impl FaultToleranceEngine {
         Ok(())
     }
 
-    /// Non-SQLite fallback: no-op
+    /// Non-SQLite fallback: persist to a JSON file so that fault tolerance
+    /// state is not silently lost on restart (e.g. with `backend-postgres`).
     #[cfg(not(feature = "backend-sqlite"))]
     pub fn save_to_db(&self, _conn: &()) -> anyhow::Result<()> {
-        tracing::warn!("FaultToleranceEngine: save_to_db requires backend-sqlite feature");
+        let cache_path = std::path::PathBuf::from("target")
+            .join("go-on")
+            .join("fault_tolerance.json");
+        if let Some(parent) = cache_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let inner = read_guard(&self.inner);
+        let json = serde_json::to_string_pretty(&*inner)?;
+        std::fs::write(&cache_path, json)?;
+        tracing::info!(
+            target: "fault_tolerance",
+            faults = inner.faults.len(),
+            plans = inner.recovery_plans.len(),
+            groups = inner.isolation_groups.len(),
+            heartbeats = inner.heartbeats.len(),
+            "persisted fault tolerance state to JSON file"
+        );
         Ok(())
     }
 
@@ -602,11 +627,35 @@ impl FaultToleranceEngine {
         Ok((faults_count, plans_count, groups_count, hb_count))
     }
 
-    /// Non-SQLite fallback: no-op
+    /// Non-SQLite fallback: load state from the JSON file written by
+    /// `save_to_db` (used with `backend-postgres`).
     #[cfg(not(feature = "backend-sqlite"))]
     pub fn load_from_db(&self, _conn: &()) -> anyhow::Result<(usize, usize, usize, usize)> {
-        tracing::warn!("FaultToleranceEngine: load_from_db requires backend-sqlite feature");
-        Ok((0, 0, 0, 0))
+        let cache_path = std::path::PathBuf::from("target")
+            .join("go-on")
+            .join("fault_tolerance.json");
+        let json = std::fs::read_to_string(&cache_path).map_err(|e| {
+            anyhow::anyhow!(
+                "failed to read fault_tolerance.json ({}); fault state will not be restored",
+                e
+            )
+        })?;
+        let loaded: Inner = serde_json::from_str(&json)?;
+        let mut inner = write_guard(&self.inner);
+        let faults_count = loaded.faults.len();
+        let plans_count = loaded.recovery_plans.len();
+        let groups_count = loaded.isolation_groups.len();
+        let hb_count = loaded.heartbeats.len();
+        *inner = loaded;
+        tracing::info!(
+            target: "fault_tolerance",
+            faults = faults_count,
+            plans = plans_count,
+            groups = groups_count,
+            heartbeats = hb_count,
+            "loaded fault tolerance state from JSON file"
+        );
+        Ok((faults_count, plans_count, groups_count, hb_count))
     }
 }
 

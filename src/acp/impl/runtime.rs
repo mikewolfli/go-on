@@ -35,7 +35,6 @@ use crate::vector::VectorStore;
 // Sub-module declarations
 // ---------------------------------------------------------------------------
 
-pub mod auth;
 pub(crate) mod http_server;
 pub(crate) mod server_builder;
 pub(crate) mod tls;

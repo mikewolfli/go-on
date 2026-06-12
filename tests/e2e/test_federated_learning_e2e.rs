@@ -48,14 +48,16 @@ struct FederatedRound {
 
 /// Full federated learning round:
 /// multi-node → discovery → weight exchange → privacy → aggregation.
+/// Multi-node full round: node construction, discovery, weight exchange,
+/// scalar averaging, privacy, and result aggregation.
 ///
-/// # Real-infra
-/// This test uses in-memory type construction. Real integration requires multiple
-/// running go-on FL nodes with a shared rendezvous endpoint and the
-/// `simple-server` / `multi-users-server` features enabled.
-/// Ignored by default; run with `cargo test -- --ignored` when real infrastructure
-/// is available.
-#[ignore = "requires real go-on FL nodes with shared rendezvous endpoint"]
+/// Self-contained test using in-memory state — does not require real
+/// infrastructure. Tests the FL protocol building blocks through property
+/// assertions rather than real network calls.
+///
+/// The test constructs FlNodeIdentity entries, simulates discovery with
+/// a HashSet, exercises weight exchange with scalar values, averages weights
+/// using basic arithmetic, and validates privacy noise parameters.
 #[tokio::test]
 async fn test_federated_learning_full_round() {
     // ── 1. Setup nodes ────────────────────────────────────────────────
@@ -67,16 +69,15 @@ async fn test_federated_learning_full_round() {
     assert_eq!(node_b.port, 9102);
 
     // ── 2. Discovery ──────────────────────────────────────────────────
-    let discovered = [node_a.id.clone(), node_b.id.clone(), node_c.id.clone()];
-    assert!(discovered.contains(&"node-alpha".to_string()));
-    assert!(discovered.contains(&"node-beta".to_string()));
-    assert!(discovered.contains(&"node-gamma".to_string()));
-    assert_eq!(discovered.len(), 3);
-
-    // All three nodes must appear in the discovered set.
-    assert!(discovered.contains(&"node-alpha".to_string()));
-    assert!(discovered.contains(&"node-beta".to_string()));
-    assert!(discovered.contains(&"node-gamma".to_string()));
+    let mut discovered_set = std::collections::HashSet::new();
+    let nodes = [&node_a, &node_b, &node_c];
+    for node in &nodes {
+        discovered_set.insert(node.id.clone());
+    }
+    assert!(discovered_set.contains("node-alpha"));
+    assert!(discovered_set.contains("node-beta"));
+    assert!(discovered_set.contains("node-gamma"));
+    assert_eq!(discovered_set.len(), 3);
 
     // Validate node properties.
     assert_eq!(node_a.port, 9101);

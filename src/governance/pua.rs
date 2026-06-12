@@ -790,7 +790,16 @@ pub fn tool_execution_report(tool_name: &str, verification: Option<&str>) -> Pua
 
 // Review-gate system prompt used by dual-review execution path.
 pub fn review_gate_prompt() -> String {
-    "Act as a strict execution approval gate. Reply with APPROVE or REJECT on the first line only. After the first line, evaluate the request against the PUA red lines and quality compass: build/test/runtime proof, fact-based reasoning, exhaustive attempts, pattern scan, root cause clarity, and quality improvement. Reject if any required proof is missing.".to_string()
+    let escalation = std::env::var("GO_ON_ESCALATION_LEVEL").unwrap_or_else(|_| "L1".to_string());
+    let es = match escalation.as_str() {
+        "L3" => "CRITICAL: manual approval required for every action. All writes and shell commands require explicit APPROVAL.",
+        "L2" => "ELEVATED: write operations and shell commands require explicit APPROVAL. Read operations are allowed.",
+        _ => "STANDARD: reject if any PUA red line is crossed. Allow safe operations.",
+    };
+    format!(
+        "Act as a strict execution approval gate (escalation level: {}). {}\n\nReply with APPROVE or REJECT on the first line only. After the first line, evaluate the request against the PUA red lines and quality compass: build/test/runtime proof, fact-based reasoning, exhaustive attempts, pattern scan, root cause clarity, and quality improvement. Reject if any required proof is missing.",
+        escalation, es
+    )
 }
 
 fn dedupe_strings(values: &mut Vec<String>) {

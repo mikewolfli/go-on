@@ -100,7 +100,7 @@ audio-vosk = []
 # local:       single-user local tool (default for `cargo build`)
 #                      Core sub-buses for local operation.
 # simple-server: single-server deployment (explicit --features)
-#                        Adds telemetry-export, sub-bus-distributed-memory,
+#                        Adds sub-bus-distributed-memory,
 #                        vault, and temp_env on top of local to
 #                        support production server needs.
 local = [
@@ -122,7 +122,6 @@ simple-server = [
     "sub-bus-memory",
     "sub-bus-distributed-memory",
     "sub-bus-protocol",
-    "telemetry-export",
     "vault",
     "temp_env",
 ]
@@ -151,6 +150,7 @@ full = [
     "sub-bus-memory",
     "sub-bus-protocol",
     "sub-bus-orchestration",
+    "sub-bus-distributed-memory",
     "sub-bus-multimodal",
     "audio-whisper-openai",
     "audio-vosk",
@@ -174,8 +174,7 @@ chaos-testing = []
 
 # Sync boundary: keyring secrets I/O runs synchronously.  Future callers from
 # async contexts should wrap `run_secret_command()` in `spawn_blocking`.
-# Telemetry export for server deployments (OTLP, stdout exporters)
-telemetry-export = []
+
 
 [dependencies]
 tokio.workspace = true

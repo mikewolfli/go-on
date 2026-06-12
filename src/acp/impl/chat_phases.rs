@@ -445,7 +445,7 @@ fn inject_agent_memory_bus(
     agent_messages: &mut Vec<Message>,
 ) {
     use crate::memory::agent_memory_bus::{AgentMemoryBus, AGENT_MEMORY_BUS};
-    // TODO: wire actual user_id from session context for multi-user isolation
+    // TODO-BLUE64: wire actual user_id from session context for multi-user isolation
     if let Some(memory_ctx) = AGENT_MEMORY_BUS
         .get_or_init(AgentMemoryBus::new_default)
         .retrieve_context_for_agent(
@@ -1711,7 +1711,7 @@ fn store_agent_memory_bus_completion(
     use crate::memory::agent_memory_bus::AGENT_MEMORY_BUS;
     if let Some(bus) = AGENT_MEMORY_BUS.get() {
         let success = !response_text.is_empty() && last_err.is_none();
-        // TODO: wire actual user_id from session context for multi-user isolation
+        // TODO-BLUE64: wire actual user_id from session context for multi-user isolation
         bus.store_agent_completion(
             selected_agent,
             phase_name,

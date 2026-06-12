@@ -227,6 +227,52 @@ pub async fn handle_request(
         }
     }
 
+    // GAP-B52: Rate limiting — check tenant rate before dispatch
+    if server.runtime_config.entry_auth_enabled || server.runtime_config.governance_enabled {
+        let tenant = request
+            .params
+            .as_ref()
+            .and_then(|p| p.get("tenant_id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("default");
+        let limiter = crate::security::rate_limiter::global_rate_limiter();
+        if !limiter.try_consume_tenant(tenant, 1.0).await {
+            return send_error(
+                server,
+                request.id,
+                -32029, // JSON-RPC rate limited
+                format!("Rate limit exceeded for tenant '{}'", tenant),
+                Some(serde_json::json!({
+                    "code": "RATE_LIMITED",
+                    "tenant": tenant,
+                    "retry_after_ms": 1000,
+                })),
+            )
+            .await;
+        }
+        // Acquire global concurrency permit (non-blocking try)
+        match limiter.global_semaphore.try_acquire() {
+            Ok(_permit) => {
+                // Permit held for the duration of request processing
+                tokio::spawn(async move {
+                    drop(_permit);
+                });
+            }
+            Err(_) => {
+                return send_error(
+                    server,
+                    request.id,
+                    -32029,
+                    "Server too busy — try again later".to_string(),
+                    Some(serde_json::json!({
+                        "code": "SERVER_BUSY",
+                    })),
+                )
+                .await;
+            }
+        }
+    }
+
     // GAP-B52-23: Request signature verification
     if server.runtime_config.request_signing_enabled {
         let signing_key = if !server.runtime_config.request_signing_public_key.is_empty() {

@@ -35,13 +35,13 @@ pub struct CodeQualityReport {
 
 impl CodeQualityReport {
     /// Returns true if no issues were found.
-    #[allow(dead_code)] // F-GAP reserved
     pub fn is_clean(&self) -> bool {
         self.issues.is_empty()
     }
 
     /// Returns only dead code issues.
-    #[allow(dead_code)] // F-GAP reserved
+    /// Public API for consumers of `CodeQualityReport`.
+    #[allow(dead_code)]
     pub fn dead_code_issues(&self) -> Vec<&CodeQualityIssue> {
         self.issues
             .iter()
@@ -50,7 +50,8 @@ impl CodeQualityReport {
     }
 
     /// Converts the report into evolution triggers for self-improvement.
-    #[allow(dead_code)] // F-GAP reserved
+    /// Public API for consumers of `CodeQualityReport`.
+    #[allow(dead_code)]
     pub fn to_evolution_triggers(&self) -> Vec<EvolutionTrigger> {
         let mut triggers = Vec::new();
 
@@ -196,14 +197,16 @@ pub fn run_code_quality_scan() -> CodeQualityReport {
 
 /// Hook: call this after a BrainLoop plan completes to check for
 /// code quality regressions introduced during the plan.
-#[allow(dead_code)] // F-GAP reserved
+///
+/// Wired via pre_patch_quality_gate() in sandbox.apply_patch();
+/// post_plan variant is public API for external plan-completion hooks.
+#[allow(dead_code)]
 pub fn post_plan_quality_hook() -> CodeQualityReport {
     run_code_quality_scan()
 }
 
 /// Hook: call this before an EvolutionLoop patch is applied to ensure
 /// the change does not degrade code quality.
-#[allow(dead_code)] // F-GAP reserved
 pub fn pre_patch_quality_gate() -> CodeQualityReport {
     run_code_quality_scan()
 }

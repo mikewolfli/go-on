@@ -715,11 +715,11 @@ pub(crate) async fn execute_mcp_tool_call(
     // Record tool execution metrics.
     let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
     crate::observability::performance::record_global_operation(result.is_ok(), latency_ms);
-    if result.is_err() {
+    if let Err(e) = &result {
         tracing::warn!(
             tool = %tool_name,
             latency_ms = %latency_ms,
-            error = %result.as_ref().unwrap_err(),
+            error = %e,
             "tool execution failed"
         );
     }

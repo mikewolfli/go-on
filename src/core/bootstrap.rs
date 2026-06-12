@@ -57,6 +57,25 @@ pub async fn perform_bootstrap(config: &BootstrapConfig) -> Result<()> {
         info!("I18n initialized");
     }
 
+    // 3. Initialize orchestration provider (for architecture boundary verification)
+    let _provider = crate::core::provider::DefaultOrchestrationProvider;
+    tracing::debug!(
+        target: "go_on::core::bootstrap",
+        skills = crate::core::provider::OrchestrationProvider::skill_count(&_provider),
+        "OrchestrationProvider initialized"
+    );
+
+    // 4. Initialize observability stack (standalone decoupled path)
+    let obs_config = crate::observability::ObservabilityConfig::default();
+    match crate::observability::ObservabilityStack::init_independent(&obs_config) {
+        Ok(_stack) => {
+            tracing::debug!(target: "go_on::core::bootstrap", "ObservabilityStack initialized");
+        }
+        Err(e) => {
+            tracing::warn!(target: "go_on::core::bootstrap", "ObservabilityStack init skipped: {e}");
+        }
+    }
+
     info!("System bootstrap completed");
     Ok(())
 }

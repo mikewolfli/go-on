@@ -1,5 +1,4 @@
 import * as vscode from "vscode";
-import { spawn } from "child_process";
 import * as fs from "fs/promises";
 import * as path from "path";
 import { Logger } from "./logger";
@@ -9,7 +8,7 @@ const log = Logger.forModule("settingsView");
 import { configManager } from "./configManager";
 import { RuntimeManagerLike } from "./managerTypes";
 import { normalizeProtocolMode } from "./protocolContract";
-import { ensureGoOnBinary } from "./runtimeBinaryService";
+import { runSecretCommand } from "./secretCommand";
 import { asRecord, getErrorMessage } from "./utils";
 import { getSettingsHtml, getConfigWizardHtml } from "./settingsHtmlTemplate";
 import { secretNameForEnvVar } from "./runtime/jsonRpc";
@@ -470,96 +469,14 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       : path.resolve(root, configured);
   }
 
-  /**
-   * Run a go-on secret command with secure stdin piping and timeout handling.
-   *
-   * SECURITY: Secret values are written to stdin instead of passing as
-   * --secret-value CLI argument, so they are not visible in /proc/PID/cmdline
-   * or ps aux. A 10-second timeout with two-stage kill (SIGTERM -> SIGKILL)
-   * prevents hanging processes.
-   *
-   * NOTE: This shares the same security posture as the duplicate in extension.ts.
-   * Both should be consolidated into a shared utility in a future refactor.
-   */
-  private async _runSecretCommand(
-    action: "set" | "get" | "delete",
-    secretName: string,
-    secretValue?: string,
-  ): Promise<string> {
-    const config = vscode.workspace.getConfiguration("go-on");
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    const runtime = await ensureGoOnBinary(workspaceRoot, config, this.context);
-
-    const args: string[] = ["--secret", action, "--secret-name", secretName];
-    // SECURITY: Do NOT pass secretValue as --secret-value CLI arg.
-    // Pipe it through stdin instead so it doesn't leak in process listings.
-    const hasSecretValue = secretValue !== undefined;
-
-    return new Promise<string>((resolve, reject) => {
-      const proc = spawn(runtime.executablePath, args, {
-        cwd: workspaceRoot || runtime.runtimeDir,
-        stdio: [hasSecretValue ? "pipe" : "ignore", "pipe", "pipe"],
-      });
-
-      // Pipe secret through stdin to avoid CLI arg exposure
-      if (hasSecretValue && proc.stdin) {
-        proc.stdin.write(secretValue!);
-        proc.stdin.end();
-      } else if (proc.stdin) {
-        proc.stdin.end();
-      }
-
-      let stdout = "";
-      let stderr = "";
-      let timedOut = false;
-
-      // 10-second timeout with two-stage kill
-      const timeoutHandle = setTimeout(() => {
-        timedOut = true;
-        proc.kill("SIGTERM");
-        setTimeout(() => {
-          try {
-            if (!proc.killed) {
-              proc.kill("SIGKILL");
-            }
-          } catch (err) {
-            log.warn("forceKill failed:", err);
-          }
-        }, 1000);
-      }, 10000);
-
-      proc.stdout?.on("data", (chunk: Buffer) => {
-        stdout += chunk.toString();
-      });
-
-      proc.stderr?.on("data", (chunk: Buffer) => {
-        stderr += chunk.toString();
-      });
-
-      proc.on("error", (err) => {
-        clearTimeout(timeoutHandle);
-        reject(err);
-      });
-      proc.on("close", (code) => {
-        clearTimeout(timeoutHandle);
-        if (timedOut) {
-          const details = (stderr || stdout || "process timed out").trim();
-          reject(new Error(`go-on secret command timed out: ${details}`));
-          return;
-        }
-        if (code === 0) {
-          resolve(stdout.trim());
-          return;
-        }
-        const details = (stderr || stdout || `exit code ${code}`).trim();
-        reject(new Error(`go-on secret command failed: ${details}`));
-      });
-    });
-  }
-
   private async _readCopilotToken(): Promise<string | undefined> {
     try {
-      const token = await this._runSecretCommand("get", COPILOT_SECRET_NAME);
+      const token = await runSecretCommand({
+        context: this.context,
+        action: "get",
+        secretName: COPILOT_SECRET_NAME,
+        warnLogger: (msg) => log.warn(msg),
+      });
       return token.trim() || undefined;
     } catch (err) {
       log.warn("_readCopilotToken failed:", err);
@@ -568,7 +485,13 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async _writeCopilotToken(token: string): Promise<void> {
-    await this._runSecretCommand("set", COPILOT_SECRET_NAME, token);
+    await runSecretCommand({
+      context: this.context,
+      action: "set",
+      secretName: COPILOT_SECRET_NAME,
+      secretValue: token,
+      warnLogger: (msg) => log.warn(msg),
+    });
     this.manager.setRuntimeEnvOverrides?.({
       [COPILOT_ENV_VAR]: token,
     });
@@ -1024,7 +947,12 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
 
   private async _deleteCopilotAuthorization(): Promise<void> {
     try {
-      await this._runSecretCommand("delete", COPILOT_SECRET_NAME);
+      await runSecretCommand({
+        context: this.context,
+        action: "delete",
+        secretName: COPILOT_SECRET_NAME,
+        warnLogger: (msg) => log.warn(msg),
+      });
     } catch (err) {
       log.warn("_deleteCopilotAuthorization failed:", err);
     }
@@ -1916,5 +1844,4 @@ export class GoOnSettingsViewProvider implements vscode.WebviewViewProvider {
       protocolMode,
     });
   }
-
 }

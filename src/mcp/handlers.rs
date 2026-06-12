@@ -340,7 +340,7 @@ impl McpServer {
                 Ok(json!({"meta": {}}))
             }
             "prompts/list" => Ok(self.handle_list_prompts(&request).await),
-            "prompts/get" => Ok(self.handle_get_prompt(&request).await),
+            "prompts/get" => self.handle_get_prompt(&request).await,
             "agents/list" => Ok(self.handle_list_agents(&request).await),
             "notifications/initialized" => {
                 // MCP notification — no response expected per JSON-RPC spec.
@@ -384,13 +384,61 @@ impl McpServer {
                         poisoned.into_inner()
                     });
                     *guard = Some(lvl.clone());
-                    info!("MCP: logging level set to {}", lvl);
+
+                    // Map MCP log levels to RUST_LOG-compatible directives.
+                    // MCP: debug info notice warning error critical alert emergency
+                    // RUST_LOG: trace debug info  warn  error
+                    let directive = match lvl.as_str() {
+                        "debug" => "debug",
+                        "info" => "info",
+                        "notice" => "info",
+                        "warning" => "warn",
+                        "error" => "error",
+                        "critical" => "error",
+                        "alert" => "error",
+                        "emergency" => "error",
+                        _ => "info",
+                    };
+
+                    // Update RUST_LOG so any future subscribers pick it up.
+                    std::env::set_var("RUST_LOG", directive);
+
+                    // Try to reload the active tracing filter immediately.
+                    match crate::observability::telemetry_enhanced::reload_log_filter(directive) {
+                        Ok(()) => {
+                            info!(
+                                "MCP: logging level set to \"{}\" (RUST_LOG={})",
+                                lvl, directive
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                "MCP: logging level stored as \"{}\" but filter not reloaded: {}; RUST_LOG set for future subscribers",
+                                lvl, e
+                            );
+                        }
+                    }
                 }
-                // F-GAP-10 — planned wiring: propagate level to subsystem log filters.
                 Ok(json!({}))
             }
             "completion/complete" => {
                 // F-GAP-10 — argument name completion for prompts, tools, and resources.
+                let ref_obj = request
+                    .params
+                    .as_ref()
+                    .and_then(|p| p.get("ref"))
+                    .and_then(|v| v.as_object());
+
+                let ref_type = ref_obj
+                    .and_then(|r| r.get("type"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                let ref_name = ref_obj
+                    .and_then(|r| r.get("name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
                 let argument_name = request
                     .params
                     .as_ref()
@@ -400,60 +448,80 @@ impl McpServer {
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
 
-                let ref_value = request
-                    .params
-                    .as_ref()
-                    .and_then(|p| p.get("ref"))
-                    .and_then(|v| v.as_object())
-                    .and_then(|r| r.get("name"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-
-                let values: Vec<String> = if ref_value.is_empty() {
-                    // No specific reference — return available top-level completions
-                    vec![
-                        "template://".to_string(),
-                        "agent://".to_string(),
-                        "skill://".to_string(),
-                    ]
-                } else if argument_name == "name" || argument_name.is_empty() {
-                    // Provide name completions based on the ref type
-                    if ref_value.starts_with("agent://") {
-                        self.agent_registry
-                            .names()
-                            .iter()
-                            .map(|n| format!("agent://{}", n))
-                            .collect()
-                    } else if ref_value.starts_with("template://") {
-                        // List available templates from the ACP prompt manager
-                        if let Some(acp) = &self.acp_server {
-                            let lang = self.resolve_prompt_lang(&request);
-                            if let Ok(collection) = acp.prompt_manager.get_all_templates(&lang) {
-                                collection
-                                    .categories
+                let values: Vec<String> = match ref_type {
+                    "ref/prompt" => {
+                        if ref_name.is_empty() {
+                            // No specific prompt ref — return available top-level completions.
+                            // Filter by argument_name if provided.
+                            let all: Vec<String> = vec![
+                                "template://".to_string(),
+                                "agent://".to_string(),
+                                "skill://".to_string(),
+                            ];
+                            if argument_name.is_empty() || argument_name == "name" {
+                                all
+                            } else {
+                                vec![]
+                            }
+                        } else if argument_name.is_empty() || argument_name == "name" {
+                            // Provide name completions based on the ref value.
+                            if ref_name.starts_with("agent://") {
+                                self.agent_registry
+                                    .names()
                                     .iter()
-                                    .flat_map(|cat| {
-                                        cat.templates
-                                            .iter()
-                                            .map(|t| format!("template://{}.{}", cat.id, t.id))
-                                    })
+                                    .map(|n| format!("agent://{}", n))
                                     .collect()
+                            } else if ref_name.starts_with("template://") {
+                                // List available templates from the ACP prompt manager
+                                if let Some(acp) = &self.acp_server {
+                                    let lang = self.resolve_prompt_lang(&request);
+                                    if let Ok(collection) =
+                                        acp.prompt_manager.get_all_templates(&lang)
+                                    {
+                                        collection
+                                            .categories
+                                            .iter()
+                                            .flat_map(|cat| {
+                                                cat.templates.iter().map(|t| {
+                                                    format!("template://{}.{}", cat.id, t.id)
+                                                })
+                                            })
+                                            .collect()
+                                    } else {
+                                        vec![]
+                                    }
+                                } else {
+                                    vec![]
+                                }
                             } else {
                                 vec![]
                             }
                         } else {
                             vec![]
                         }
-                    } else {
+                    }
+                    "ref/resource" => {
+                        // Resource template argument completions — at minimum return
+                        // an empty list; this avoids silent failures for supported types.
                         vec![]
                     }
-                } else {
-                    vec![]
+                    other => {
+                        return Err(coded_error(
+                            super::error_codes::INVALID_REQUEST,
+                            format!(
+                                "Unknown reference type '{}': only ref/prompt and ref/resource are supported",
+                                other
+                            ),
+                        ));
+                    }
                 };
 
                 info!(
                     count = values.len(),
-                    "MCP: completion/complete for '{}'", ref_value
+                    ref_type = ref_type,
+                    ref_name = ref_name,
+                    arg_name = argument_name,
+                    "MCP: completion/complete"
                 );
                 Ok(json!({
                     "completion": {
@@ -1050,7 +1118,7 @@ impl McpServer {
     ///
     /// Returns a resolved prompt template by name.  Supports agent system prompts
     /// (prefixed with `agent://`) and built-in skill prompts (prefixed with `skill://`).
-    async fn handle_get_prompt(&self, request: &JsonRpcRequest) -> Value {
+    async fn handle_get_prompt(&self, request: &JsonRpcRequest) -> Result<Value> {
         let name = request
             .params
             .as_ref()
@@ -1061,28 +1129,21 @@ impl McpServer {
         let lang = self.resolve_prompt_lang(request);
 
         if let Some(resolved) = self.resolve_template_prompt(name, &lang, request.params.as_ref()) {
-            return resolved;
+            return Ok(resolved);
         }
 
         // Try to resolve as an agent system prompt
         if let Some(messages) = self.resolve_agent_prompt(name) {
-            return json!({
+            return Ok(json!({
                 "description": format!("Agent system prompt for '{}'", name),
                 "messages": messages
-            });
+            }));
         }
 
-        // Fallback: return a minimal placeholder prompt message so the client
-        // can still function (rather than an error).
-        json!({
-            "description": format!("Prompt '{}' not found; returning default", name),
-            "messages": [
-                {
-                    "role": "system",
-                    "content": format!("You are a helpful assistant.  Context: {}", name)
-                }
-            ]
-        })
+        Err(coded_error(
+            super::error_codes::INVALID_REQUEST,
+            format!("Prompt '{}' not found", name),
+        ))
     }
 
     /// Build a list of discoverable prompt templates from agent configurations

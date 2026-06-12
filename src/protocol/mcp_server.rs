@@ -26,7 +26,8 @@ use crate::acp::server::AcpServer;
 use crate::agent::AgentRegistry;
 use crate::governance::rbac::{AccessDecision, Permission, Principal};
 use crate::i18n::runtime::{t, tf};
-use crate::mcp::{JsonRpcRequest, JsonRpcResponse, McpServer};
+use crate::mcp::error_codes;
+use crate::mcp::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpServer};
 use crate::security::mtls::{MtlsAcceptor, MtlsConfig};
 use crate::tool::ToolRegistry;
 
@@ -36,14 +37,25 @@ pub struct McpStdioServer {
 }
 
 impl McpStdioServer {
-    /// Create a new MCP stdio server
+    /// Create a new MCP stdio server.
+    ///
+    /// Pass `Some(acp_server)` to enable workflow tools (`workflow_execute`,
+    /// `workflow_ask`, `workflow_generate`), prompt templates, and completion
+    /// support. Pass `None` for a minimal server without ACP features.
     pub fn new(
         agent_registry: Arc<AgentRegistry>,
         tool_registry: Arc<ToolRegistry>,
         server_name: String,
         server_version: String,
+        acp_server: Option<Arc<AcpServer>>,
     ) -> Self {
-        let mcp_server = McpServer::new(agent_registry, tool_registry, server_name, server_version);
+        let mcp_server = McpServer::new_with_acp(
+            agent_registry,
+            tool_registry,
+            server_name,
+            server_version,
+            acp_server,
+        );
         Self {
             mcp_server: Arc::new(mcp_server),
         }
@@ -99,6 +111,7 @@ impl McpStdioServer {
                 match serde_json::from_str::<Vec<JsonRpcRequest>>(&line) {
                     Ok(requests) => {
                         for req in requests {
+                            let req_id = req.id.clone();
                             match self.mcp_server.handle_request(req).await {
                                 Ok(resp) => {
                                     // Notifications (id=null) don't produce a response.
@@ -112,13 +125,13 @@ impl McpStdioServer {
                                     stdout.flush().await?;
                                 }
                                 Err(e) => {
+                                    let err_msg = format!("{}", e);
                                     warn!(
                                         "{}",
-                                        tf(
-                                            "error.handling_request",
-                                            &[("error", &format!("{}", e))]
-                                        )
+                                        tf("error.handling_request", &[("error", &err_msg)])
                                     );
+                                    let mut stdout = stdout.lock().await;
+                                    send_handler_error(&mut *stdout, req_id, &err_msg).await?;
                                 }
                             }
                         }
@@ -138,6 +151,7 @@ impl McpStdioServer {
             } else {
                 match serde_json::from_str::<JsonRpcRequest>(&line) {
                     Ok(request) => {
+                        let request_id = request.id.clone();
                         let response = self.mcp_server.handle_request(request).await;
                         match response {
                             Ok(resp) => {
@@ -153,10 +167,10 @@ impl McpStdioServer {
                                 stdout.flush().await?;
                             }
                             Err(e) => {
-                                warn!(
-                                    "{}",
-                                    tf("error.handling_request", &[("error", &format!("{}", e))])
-                                );
+                                let err_msg = format!("{}", e);
+                                warn!("{}", tf("error.handling_request", &[("error", &err_msg)]));
+                                let mut stdout = stdout.lock().await;
+                                send_handler_error(&mut *stdout, request_id, &err_msg).await?;
                             }
                         }
                     }
@@ -885,7 +899,26 @@ async fn handle_http_connection(
         // Process each request in the batch and collect responses.
         let mut responses: Vec<JsonRpcResponse> = Vec::with_capacity(requests.len());
         for req in requests {
-            let resp = mcp_server.handle_request(req).await?;
+            let req_id = req.id.clone();
+            let resp = match mcp_server.handle_request(req).await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    warn!(
+                        "MCP HTTP: error handling batch request from {} {}: {}",
+                        method, path, e
+                    );
+                    JsonRpcResponse {
+                        jsonrpc: "2.0".to_string(),
+                        result: None,
+                        error: Some(JsonRpcError {
+                            code: error_codes::INTERNAL_ERROR,
+                            message: format!("{}", e),
+                            data: None,
+                        }),
+                        id: req_id,
+                    }
+                }
+            };
             // Per JSON-RPC 2.0, notifications (id=null) in a batch do not
             // produce a response entry.
             if resp.id.is_some() {
@@ -1243,6 +1276,31 @@ async fn send_parse_error(
     Ok(())
 }
 
+/// Send a JSON-RPC Internal error response (-32603) to the client.
+///
+/// Used when `handle_request` returns an `Err` after successfully parsing
+/// the JSON-RPC request.  If the original request `id` is unavailable, a
+/// `null` id is sent per the JSON-RPC 2.0 spec.
+async fn send_handler_error(
+    writer: &mut (impl tokio::io::AsyncWrite + Unpin),
+    id: Option<serde_json::Value>,
+    error_message: &str,
+) -> std::io::Result<()> {
+    let error = json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {
+            "code": -32603,
+            "message": error_message
+        }
+    });
+    let line = serde_json::to_string(&error).map_err(std::io::Error::other)?;
+    writer.write_all(line.as_bytes()).await?;
+    writer.write_all(b"\n").await?;
+    writer.flush().await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1256,6 +1314,7 @@ mod tests {
             tool_registry,
             "go-on".to_string(),
             "1.0.0".to_string(),
+            None,
         );
 
         // Server was created successfully

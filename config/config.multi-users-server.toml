@@ -13,9 +13,6 @@ schema_version = "1.0.0"
 default_phase = "think"
 model_selection_mode = "adaptive"
 
-[protocol]
-mode = "acp_http"
-
 # ── Cache (PostgreSQL in production, SQLite fallback for dev) ──────────
 # In production with multi-users-server, set:
 #   cache.connection_string = "postgres://${DB_USER}:${DB_PASS}@${DB_HOST}/goon_cache"
@@ -44,6 +41,7 @@ summary_max_chars = 1200
 
 # ── Runtime Configuration ─────────────────────────────────────────────
 [runtime]
+protocol_mode = "acp"
 maintenance_interval_seconds = 120
 health_interval_seconds = 60
 shutdown_drain_seconds = 60
@@ -96,7 +94,6 @@ governance_enabled = true
 governance_policy_mode = "enforce"
 
 # ── i18n ───────────────────────────────────────────────────────────────
-i18n_enabled = true
 i18n_default_language = "en-US"
 
 # ── Agents ────────────────────────────────────────────────────────────

@@ -117,49 +117,13 @@ impl LanguageWatcher {
     }
 
     /// Check if any language file has been modified
-    #[allow(dead_code)] // F-GAP-49 — reserved for i18n file change detection
+    /// Used by tests to verify file change detection.
+    #[cfg(test)]
     fn check_for_changes(&self) -> bool {
-        if let Ok(entries) = std::fs::read_dir(&self.watch_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                    continue;
-                }
-
-                match std::fs::metadata(&path) {
-                    Ok(metadata) => {
-                        match metadata.modified() {
-                            Ok(modified) => {
-                                // Check if file is new or has been modified
-                                if !self.file_times.contains_key(&path) {
-                                    return true; // New file
-                                }
-                                if let Some(&old_time) = self.file_times.get(&path) {
-                                    if modified > old_time {
-                                        return true; // File modified
-                                    }
-                                }
-                            }
-                            Err(_) => continue,
-                        }
-                    }
-                    Err(_) => {
-                        // File was deleted
-                        if self.file_times.contains_key(&path) {
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-
-        false
+        check_for_changes_in_dir(&self.watch_dir, &self.file_times)
     }
 
     /// Start watching for file changes (runs in background thread).
-    ///
-    /// Moves ownership of the file-times map into the background thread so that
-    /// the thread operates on the same state that was initialised on `self`.
     pub fn start_watching(&mut self, check_interval: Duration) -> Result<()> {
         let i18n = self.i18n_manager.clone();
         let watch_dir = self.watch_dir.clone();

@@ -19,7 +19,7 @@ COPY languages/ languages/
 COPY prompts/ prompts/
 COPY src/ src/
 
-RUN cargo build --release --no-default-features -F profile-simple-server && \
+RUN cargo build --release --no-default-features -F simple-server && \
     cp target/release/go-on /go-on
 
 # ---- Runtime ----

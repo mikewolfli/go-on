@@ -1,5 +1,4 @@
 import * as vscode from "vscode";
-import { spawn } from "child_process";
 import * as path from "path";
 import * as fsPromises from "fs/promises";
 import { GoOnChatViewProvider } from "./chatView";
@@ -24,6 +23,7 @@ import {
   pathExists,
   resolveConfigPath,
 } from "./runtimeBinaryService";
+import { runSecretCommand } from "./secretCommand";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import {
   buildPlaceholderEnvValues,
@@ -31,94 +31,6 @@ import {
   prepareRuntimeAndStartFromChat,
   RuntimeBootstrapDeps,
 } from "./runtimeBootstrap";
-
-/**
- * DUPLICATE: This function is duplicated (with variations) as
- * `_runSecretCommand` in settingsView.ts (line ~1001).
- * The extension.ts version pipes secrets via stdin (secure) and has
- * timeout handling; the settingsView.ts version passes secrets as CLI args
- * without timeout. Consider consolidating into a shared utility.
- */
-async function runGoOnSecretCommand(
-  context: vscode.ExtensionContext,
-  action: "set" | "get" | "delete" | "list",
-  secretName?: string,
-  secretValue?: string,
-): Promise<string> {
-  const config = vscode.workspace.getConfiguration("go-on");
-  const workspaceRoot = getPrimaryWorkspaceRoot()?.fsPath;
-  const runtime = await ensureGoOnBinary(workspaceRoot, config, context);
-
-  const args: string[] = ["--secret", action];
-  if (secretName) {
-    args.push("--secret-name", secretName);
-  }
-  // Secret value is written to stdin instead of passing as --secret-value CLI
-  // argument, so it's not visible in /proc/PID/cmdline or ps aux.
-  const hasSecretValue = secretValue !== undefined;
-
-  return new Promise<string>((resolve, reject) => {
-    const proc = spawn(runtime.executablePath, args, {
-      cwd: workspaceRoot || runtime.runtimeDir,
-      stdio: [hasSecretValue ? "pipe" : "ignore", "pipe", "pipe"],
-    });
-
-    // Pipe secret through stdin so it doesn't leak in process listings
-    if (hasSecretValue && proc.stdin) {
-      proc.stdin.write(secretValue!);
-      proc.stdin.end();
-    } else if (proc.stdin) {
-      proc.stdin.end();
-    }
-
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
-
-    const timeoutHandle = setTimeout(() => {
-      timedOut = true;
-      proc.kill("SIGTERM");
-      // Give it a moment to terminate, then force kill
-      setTimeout(() => {
-        try {
-          if (!proc.killed) {
-            proc.kill("SIGKILL");
-          }
-        } catch (err) {
-          // eslint-disable-next-line no-console
-          console.warn("[extension] forceKill failed:", err);
-        }
-      }, 1000);
-    }, 10000);
-
-    proc.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString();
-    });
-
-    proc.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-
-    proc.on("error", (err) => {
-      clearTimeout(timeoutHandle);
-      reject(err);
-    });
-    proc.on("close", (code) => {
-      clearTimeout(timeoutHandle);
-      if (timedOut) {
-        const details = (stderr || stdout || "process timed out").trim();
-        reject(new Error(`go-on secret command timed out: ${details}`));
-        return;
-      }
-      if (code === 0) {
-        resolve(stdout.trim());
-        return;
-      }
-      const details = (stderr || stdout || `exit code ${code}`).trim();
-      reject(new Error(`go-on secret command failed: ${details}`));
-    });
-  });
-}
 
 /**
  * Maximum TOML file size to process (1MB).
@@ -646,7 +558,12 @@ function registerCommands(
         if (!name || value === undefined) {
           throw new Error("keyring set requires name and value");
         }
-        await runGoOnSecretCommand(context, "set", name, value);
+        await runSecretCommand({
+          context,
+          action: "set",
+          secretName: name,
+          secretValue: value,
+        });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
         vscode.window.showErrorMessage(
@@ -664,7 +581,11 @@ function registerCommands(
         if (!name) {
           throw new Error("keyring get requires name");
         }
-        return await runGoOnSecretCommand(context, "get", name);
+        return await runSecretCommand({
+          context,
+          action: "get",
+          secretName: name,
+        });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
         vscode.window.showErrorMessage(
@@ -683,7 +604,7 @@ function registerCommands(
         if (!name) {
           throw new Error("keyring delete requires name");
         }
-        await runGoOnSecretCommand(context, "delete", name);
+        await runSecretCommand({ context, action: "delete", secretName: name });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
         vscode.window.showErrorMessage(
@@ -697,7 +618,7 @@ function registerCommands(
     "go-on.keyringList",
     async () => {
       try {
-        return await runGoOnSecretCommand(context, "list");
+        return await runSecretCommand({ context, action: "list" });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
         vscode.window.showErrorMessage(

@@ -10,15 +10,13 @@
 #     3. Run: go-on --config config.toml
 # ============================================================
 
+schema_version = "1.0.0"
+
 # ── General workflow starts in the "gathering" phase.
 #     The capability bus routes each subtask to the best-suited
 #     agent registered below.
 default_phase = "gathering"
 model_selection_mode = "adaptive"
-
-[protocol]
-# "acp_http" for HTTP API, "acp_stdio" for stdin/stdout (IDE integration)
-mode = "acp_http"
 
 # ── Cache ─────────────────────────────────────────────────────────────
 [cache]
@@ -44,6 +42,7 @@ summary_max_chars = 1200
 
 # ── Runtime ───────────────────────────────────────────────────────────
 [runtime]
+protocol_mode = "acp"
 acp_http_bind_addr = "127.0.0.1:8090"
 maintenance_interval_seconds = 60
 health_interval_seconds = 120
@@ -52,9 +51,12 @@ sqlite_vacuum_interval_cycles = 60
 production_strict = false
 entry_auth_enabled = false
 entry_auth_api_key_env = "GO_ON_ENTRY_API_KEY"
-i18n_enabled = true
+entry_rate_limit_rpm = 240
+entry_rate_limit_burst = 60
 i18n_default_language = "en-US"
 skills_enabled = true
+skills_import_enabled = false
+skills_allowed_sources = ["local:*"]
 skills_require_sha256 = true
 skills_allow_floating_ref = false
 skills_cache_dir = "skills_cache"

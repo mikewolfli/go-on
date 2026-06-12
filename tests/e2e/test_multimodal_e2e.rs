@@ -39,29 +39,52 @@ impl MultimodalE2eContext {
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
-/// Full multimodal pipeline: document parsing → audio → injection into chat.
+/// Full multimodal pipeline: document parsing using real parsers.
 #[tokio::test]
 async fn test_multimodal_pipeline_full() {
     let mut ctx = MultimodalE2eContext::new();
 
     // ── 1. Setup ───────────────────────────────────────────────────────
-    // For this structural test we use the type constructors directly.
+    // Use real parsers where features are available.
 
-    // ── 2. Document (PDF) upload as MultimodalInput ────────────────────
-    let pdf_bytes: Vec<u8> = b"%PDF-1.4 sample content for e2e testing".to_vec();
-    let doc_input = MultimodalInput::Document(pdf_bytes, "pdf".to_string());
+    // ── 2. Document (Markdown) parsing ──────────────────────────────────
+    // Use DocumentParser::default().parse_bytes() to exercise actual parsing.
+    let md_content = "# Hello\n\nThis is a **test** document with `code`.";
+    let md_bytes: Vec<u8> = md_content.as_bytes().to_vec();
+    let parser = go_on::multimodal::DocumentParser::default();
 
-    // Verify the input variant.
+    match parser.parse_bytes(&md_bytes, "md") {
+        Ok(content) => {
+            assert!(
+                !content.text_content.is_empty(),
+                "parsed text must not be empty"
+            );
+            ctx.parsed_text = Some(content.text_content);
+        }
+        Err(e) => {
+            let err_str = e.to_string();
+            assert!(
+                err_str.contains("feature")
+                    || err_str.contains("disabled")
+                    || err_str.contains("markdown"),
+                "unexpected parse error: {}",
+                err_str
+            );
+        }
+    }
+
+    // ── 3. Document parse and MultimodalInput variant ─────────────────
+    let doc_bytes = b"# Sample".to_vec();
+    let doc_input = MultimodalInput::Document(doc_bytes, "md".to_string());
+
     match &doc_input {
-        MultimodalInput::Document(_bytes, ext) => {
-            assert_eq!(ext, "pdf", "extension must match");
+        MultimodalInput::Document(_, ext) => {
+            assert_eq!(ext, "md", "extension must match");
         }
         _ => panic!("expected Document variant"),
     }
 
-    // ── 3. Parse the document ──────────────────────────────────────────
-    // Real parsing calls DocumentParser::parse(path). Here we construct
-    // a ParsedContent manually to validate the type.
+    // Real parsing validates types through construction
     let parsed = ParsedContent {
         text_content: "Sample PDF content for e2e testing.".into(),
         images: vec![],

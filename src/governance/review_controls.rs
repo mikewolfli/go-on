@@ -97,7 +97,7 @@ pub(crate) fn review_verdict(response: &str, min_response_chars: usize) -> Revie
         Some(value) if value.starts_with("APPROVE:") => {
             // Require at least one valid reason character after the colon
             let rest = &value["APPROVE:".len()..];
-            if rest.trim().len() > 0 {
+            if !rest.trim().is_empty() {
                 ReviewVerdict::Approve
             } else {
                 ReviewVerdict::Invalid
@@ -105,7 +105,7 @@ pub(crate) fn review_verdict(response: &str, min_response_chars: usize) -> Revie
         }
         Some(value) if value.starts_with("REJECT:") => {
             let rest = &value["REJECT:".len()..];
-            if rest.trim().len() > 0 {
+            if !rest.trim().is_empty() {
                 ReviewVerdict::Reject
             } else {
                 ReviewVerdict::Invalid

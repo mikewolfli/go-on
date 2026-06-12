@@ -362,6 +362,7 @@ impl SandboxExecutor {
     /// Returns the number of lines changed. Performs safety checks:
     /// - Iteration budget check
     /// - Allowed-targets whitelist
+    /// - Code quality pre-gate (clippy scan before applying)
     pub async fn apply_patch(&self, patch: &CodePatch) -> Result<u64, SandboxError> {
         // Check iteration budget
         let remaining = self.iteration_budget.fetch_sub(1, Ordering::Relaxed);
@@ -379,6 +380,15 @@ impl SandboxExecutor {
         if !self.is_target_allowed(&patch.target_file) {
             return Err(SandboxError::ForbiddenTarget(patch.target_file.clone()));
         }
+
+        // Pre-patch code quality gate: run clippy before applying to establish baseline
+        let pre_quality = crate::intelligence::code_quality::pre_patch_quality_gate();
+        tracing::info!(
+            sandbox = %self.instance_id,
+            health_score = pre_quality.health_score,
+            issues = pre_quality.issues.len(),
+            "pre-patch quality gate completed"
+        );
 
         // Apply the patch to the file
         let changed = patch.apply_to_file(&self.workdir).await?;

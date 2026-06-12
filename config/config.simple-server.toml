@@ -2,16 +2,11 @@
 # go-on Simple Server Profile (simple-server)
 #   Build:   cargo build --no-default-features -F simple-server
 #   Backend: SQLite + sqlite-vec, single-server deployment
-#   Phase 4: 14 buses, 21 F-GAP modules, i18n ~95%
-#   Tests:   905+ (805 unit + 86 RPC + 14 transport)
 # ============================================================
 
 schema_version = "1.0.0"
 default_phase = "think"
 model_selection_mode = "adaptive"
-
-[protocol]
-mode = "acp_http"
 
 [cache]
 enabled = true
@@ -34,6 +29,7 @@ summary_trigger_messages = 8
 summary_max_chars = 1200
 
 [runtime]
+protocol_mode = "acp"
 maintenance_interval_seconds = 60
 health_interval_seconds = 120
 shutdown_drain_seconds = 45
@@ -50,7 +46,6 @@ otel_endpoint = "http://localhost:4317"
 otel_service_name = "go-on-server"
 otel_sample_ratio = 1.0
 trace_slow_top_n = 20
-i18n_enabled = true
 i18n_default_language = "en-US"
 skills_enabled = false
 skills_import_enabled = false

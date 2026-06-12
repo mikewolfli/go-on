@@ -32,9 +32,6 @@ use sha2::{Digest, Sha256};
 #[cfg(not(feature = "backend-postgres"))]
 use sqlite_vec::sqlite3_vec_init;
 
-#[cfg(not(feature = "backend-postgres"))]
-use tracing::warn;
-
 /// Vector search hit
 #[derive(Debug, Clone)]
 pub struct VectorHit {
@@ -1168,7 +1165,7 @@ fn resolve_sqlite_vector_mode(conn: &Connection) -> Result<SqliteVectorMode> {
                 not(feature = "multi-users-server")
             ))]
             {
-                warn!(
+                tracing::warn!(
                     "sqlite-vec unavailable, falling back to JSON embedding table for local: {}",
                     err
                 );

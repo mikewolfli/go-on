@@ -161,49 +161,102 @@ impl ProtocolNegotiator {
     }
 }
 
-/// Unified error code translation across protocols
+/// Protocol-level errors with semantic variants for cross-protocol error mapping.
+///
+/// Each variant carries the contextual detail needed to produce a meaningful
+/// error message in the target protocol.
 #[allow(dead_code)] // F-GAP-49 — reserved for cross-protocol error mapping
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProtocolError {
-    /// JSON-RPC error code
-    pub code: i32,
-    /// Human-readable message
-    pub message: String,
-    /// Protocol-specific error data
-    pub data: Option<serde_json::Value>,
+pub enum ProtocolError {
+    /// Protocol version mismatch between client and server
+    VersionMismatch {
+        /// The version the server expected
+        expected: String,
+        /// The version the client provided
+        got: String,
+    },
+    /// Protocol negotiation failed (e.g. incompatible modes)
+    NegotiationFailed {
+        /// Human-readable reason for the failure
+        reason: String,
+    },
+    /// Transport-level I/O or connection error
+    TransportError {
+        /// Details about the transport failure
+        detail: String,
+    },
+    /// Client requested a method the server does not recognise
+    UnsupportedMethod {
+        /// Name of the unsupported method
+        method: String,
+    },
+    /// A required capability is missing from the peer
+    CapabilityMissing {
+        /// Name of the missing capability
+        capability: String,
+    },
 }
 
 impl ProtocolError {
-    /// Translate a JSON-RPC error to MCP-compatible error
+    /// Translate a [`ProtocolError`] variant into an MCP-compatible
+    /// [`crate::mcp::JsonRpcError`].
+    ///
+    /// Mapping:
+    /// - [`VersionMismatch`](ProtocolError::VersionMismatch) → `METHOD_NOT_FOUND` (-32601)
+    /// - [`NegotiationFailed`](ProtocolError::NegotiationFailed) → `INTERNAL_ERROR` (-32603)
+    /// - [`TransportError`](ProtocolError::TransportError) → `INTERNAL_ERROR` (-32603)
+    /// - [`UnsupportedMethod`](ProtocolError::UnsupportedMethod) → `METHOD_NOT_FOUND` (-32601)
+    /// - [`CapabilityMissing`](ProtocolError::CapabilityMissing) → `INVALID_REQUEST` (-32600)
     #[allow(dead_code)] // F-GAP-49 — reserved for cross-protocol error mapping
-    pub fn to_mcp(&self) -> Self {
-        // MCP uses the same JSON-RPC error codes
-        self.clone()
+    pub fn to_mcp(&self) -> crate::mcp::JsonRpcError {
+        use crate::mcp::error_codes;
+        match self {
+            ProtocolError::VersionMismatch { expected, got } => crate::mcp::JsonRpcError {
+                code: error_codes::METHOD_NOT_FOUND,
+                message: format!("version mismatch: expected {}, got {}", expected, got),
+                data: Some(serde_json::json!({
+                    "expected": expected,
+                    "got": got,
+                })),
+            },
+            ProtocolError::NegotiationFailed { reason } => crate::mcp::JsonRpcError {
+                code: error_codes::INTERNAL_ERROR,
+                message: format!("protocol negotiation failed: {}", reason),
+                data: Some(serde_json::json!({
+                    "reason": reason,
+                })),
+            },
+            ProtocolError::TransportError { detail } => crate::mcp::JsonRpcError {
+                code: error_codes::INTERNAL_ERROR,
+                message: format!("transport error: {}", detail),
+                data: Some(serde_json::json!({
+                    "detail": detail,
+                })),
+            },
+            ProtocolError::UnsupportedMethod { method } => crate::mcp::JsonRpcError {
+                code: error_codes::METHOD_NOT_FOUND,
+                message: format!("unsupported method: {}", method),
+                data: Some(serde_json::json!({
+                    "method": method,
+                })),
+            },
+            ProtocolError::CapabilityMissing { capability } => crate::mcp::JsonRpcError {
+                code: error_codes::INVALID_REQUEST,
+                message: format!("missing required capability: {}", capability),
+                data: Some(serde_json::json!({
+                    "capability": capability,
+                })),
+            },
+        }
     }
 
-    /// Translate an MCP error to ACP-compatible error
+    /// Translate a [`ProtocolError`] to its ACP-compatible representation.
+    ///
+    /// ACP uses the same JSON-RPC error semantics as MCP for the standard
+    /// set of codes, so the variant is preserved as-is.
     #[allow(dead_code)] // F-GAP-49 — reserved for cross-protocol error mapping
     pub fn to_acp(&self) -> Self {
-        // ACP uses extended error codes
-        let code = match self.code {
-            -32700 => -32700, // Parse error
-            -32600 => -32600, // Invalid request
-            -32601 => -32601, // Method not found
-            -32602 => -32602, // Invalid params
-            -32603 => -32603, // Internal error
-            _ => {
-                if self.code <= -32000 && self.code > -32100 {
-                    -32603 // Map MCP server errors to ACP internal error
-                } else {
-                    self.code
-                }
-            }
-        };
-        ProtocolError {
-            code,
-            message: self.message.clone(),
-            data: self.data.clone(),
-        }
+        self.clone()
     }
 }
 
@@ -347,14 +400,80 @@ mod tests {
     }
 
     #[test]
-    fn test_protocol_error_translation() {
-        let mcp_err = ProtocolError {
-            code: -32000,
-            message: "MCP server error".into(),
-            data: None,
+    fn test_protocol_error_to_mcp_version_mismatch() {
+        let err = ProtocolError::VersionMismatch {
+            expected: "2024-11-05".into(),
+            got: "2024-10-01".into(),
         };
-        let acp_err = mcp_err.to_acp();
-        assert_eq!(acp_err.code, -32603); // Mapped to ACP internal error
+        let mcp_err = err.to_mcp();
+        assert_eq!(mcp_err.code, crate::mcp::error_codes::METHOD_NOT_FOUND);
+        assert!(mcp_err.message.contains("version mismatch"));
+        assert!(mcp_err.message.contains("2024-11-05"));
+        assert!(mcp_err.message.contains("2024-10-01"));
+        assert!(mcp_err.data.is_some());
+    }
+
+    #[test]
+    fn test_protocol_error_to_mcp_negotiation_failed() {
+        let err = ProtocolError::NegotiationFailed {
+            reason: "no common protocol version".into(),
+        };
+        let mcp_err = err.to_mcp();
+        assert_eq!(mcp_err.code, crate::mcp::error_codes::INTERNAL_ERROR);
+        assert!(mcp_err.message.contains("protocol negotiation failed"));
+        assert!(mcp_err.message.contains("no common protocol version"));
+        assert!(mcp_err.data.is_some());
+    }
+
+    #[test]
+    fn test_protocol_error_to_mcp_transport_error() {
+        let err = ProtocolError::TransportError {
+            detail: "connection reset by peer".into(),
+        };
+        let mcp_err = err.to_mcp();
+        assert_eq!(mcp_err.code, crate::mcp::error_codes::INTERNAL_ERROR);
+        assert!(mcp_err.message.contains("transport error"));
+        assert!(mcp_err.message.contains("connection reset by peer"));
+        assert!(mcp_err.data.is_some());
+    }
+
+    #[test]
+    fn test_protocol_error_to_mcp_unsupported_method() {
+        let err = ProtocolError::UnsupportedMethod {
+            method: "tools/invoke".into(),
+        };
+        let mcp_err = err.to_mcp();
+        assert_eq!(mcp_err.code, crate::mcp::error_codes::METHOD_NOT_FOUND);
+        assert!(mcp_err.message.contains("unsupported method"));
+        assert!(mcp_err.message.contains("tools/invoke"));
+        assert!(mcp_err.data.is_some());
+    }
+
+    #[test]
+    fn test_protocol_error_to_mcp_capability_missing() {
+        let err = ProtocolError::CapabilityMissing {
+            capability: "streamable_http".into(),
+        };
+        let mcp_err = err.to_mcp();
+        assert_eq!(mcp_err.code, crate::mcp::error_codes::INVALID_REQUEST);
+        assert!(mcp_err.message.contains("missing required capability"));
+        assert!(mcp_err.message.contains("streamable_http"));
+        assert!(mcp_err.data.is_some());
+    }
+
+    #[test]
+    fn test_protocol_error_to_acp_preserves_variant() {
+        let err = ProtocolError::NegotiationFailed {
+            reason: "timeout".into(),
+        };
+        let acp_err = err.to_acp();
+        // to_acp preserves the variant; verify the clone worked
+        match acp_err {
+            ProtocolError::NegotiationFailed { reason } => {
+                assert_eq!(reason, "timeout");
+            }
+            _ => panic!("expected NegotiationFailed variant"),
+        }
     }
 
     #[test]

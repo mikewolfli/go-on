@@ -158,7 +158,6 @@ pub struct JsonRpcError {
 // ---------------------------------------------------------------------------
 
 /// Parameters for the `execute` RPC method.
-#[allow(dead_code)] // F-GAP reserved
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecuteParams {
     pub node_id: String,

@@ -295,6 +295,27 @@ impl Default for RepoAnalyzer {
     }
 }
 
+/// Match result for a code symbol found during RAG context building.
+#[derive(Debug, Clone)]
+struct SymbolMatch {
+    name: String,
+    qualified_name: String,
+    kind: SymbolKind,
+    line: usize,
+    files: Vec<String>,
+}
+
+/// Context built for retrieval-augmented code question answering.
+#[allow(dead_code)] // Intent fields reserved for future LLM integration
+struct RagContext {
+    found_symbols: Vec<SymbolMatch>,
+    file_count: usize,
+    has_file_intent: bool,
+    has_symbol_intent: bool,
+    has_lang_intent: bool,
+    has_loc_intent: bool,
+}
+
 impl RepoAnalyzer {
     /// Create a new `RepoAnalyzer` with default settings.
     pub fn new() -> Self {
@@ -345,10 +366,33 @@ impl RepoAnalyzer {
                 .map_err(|e| RepoAnalyzerError::CloneFailed(e.to_string()))?;
             let dest = dir.path().join("repo");
 
-            // In production, invoke `git clone` here.
-            // For now, create a placeholder directory.
-            tokio::fs::create_dir_all(&dest).await?;
-            info!("RepoAnalyzer::clone: would clone {} to {:?}", url, dest);
+            // Attempt git clone for remote URLs
+            let clone_result = tokio::process::Command::new("git")
+                .args(["clone", "--depth", "1", url])
+                .arg(&dest)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped())
+                .output()
+                .await;
+
+            match clone_result {
+                Ok(output) if output.status.success() => {
+                    info!("RepoAnalyzer::clone: cloned {} to {:?}", url, dest);
+                }
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    return Err(RepoAnalyzerError::CloneFailed(format!(
+                        "git clone failed: {}",
+                        stderr.trim()
+                    )));
+                }
+                Err(e) => {
+                    return Err(RepoAnalyzerError::CloneFailed(format!(
+                        "git not available for remote repo clone: {}. Install git to enable remote repository analysis.",
+                        e
+                    )));
+                }
+            }
             dest
         } else {
             let local = PathBuf::from(url);
@@ -557,9 +601,11 @@ impl RepoAnalyzer {
 
     /// Answer a natural-language question about the repository context.
     ///
-    /// This uses the `type_index` and `repo_map` to ground answers in actual
-    /// code symbols. In production, it would delegate to an LLM with a
-    /// retrieval-augmented prompt.
+    /// Uses the `type_index` and `repo_map` to ground answers in actual
+    /// code symbols via retrieval-augmented generation.
+    ///
+    /// When `agent` is provided, delegates to the LLM for semantic understanding;
+    /// otherwise falls back to keyword-based heuristics.
     pub async fn answer_code_question(
         &self,
         question: &str,
@@ -570,93 +616,87 @@ impl RepoAnalyzer {
             question, repo.source
         );
 
-        let lower = question.to_lowercase();
-        let mut references = Vec::new();
+        // Gather relevant context: type definitions and file structure
+        let context = self.build_rag_context(question, repo);
 
-        // Tokenize the question into words for keyword matching.
-        // This avoids false positives from substring matches (e.g. "typewriter"
-        // matching when user asks about "type").
-        let question_words: std::collections::HashSet<&str> = lower
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|w| !w.is_empty())
-            .collect();
-
-        // Heuristic: if the question mentions a type name, look it up.
-        // Use word-boundary matching instead of substring contains.
-        for entry in &repo.type_index.entries {
-            let name_lower = entry.name.to_lowercase();
-            if question_words.contains(name_lower.as_str()) {
-                if let Some(file) = repo.repo_map.files.get(entry.file_id) {
-                    references.push(SourceRef {
-                        file: file.clone(),
-                        line: entry.line,
-                        snippet: entry.qualified_name.clone(),
-                    });
-                }
-            }
-        }
-
-        // Detect question intent via token overlap.
-        let has_file_intent = question_words.contains("files")
-            && (question_words.contains("how")
-                || question_words.contains("many")
-                || question_words.contains("count"));
-        let has_symbol_intent = question_words.contains("symbols")
-            || question_words.contains("types")
-            || question_words.contains("definitions")
-            || question_words.contains("defs")
-            || question_words.contains("classes")
-            || question_words.contains("functions");
-        let has_lang_intent =
-            question_words.contains("language") || question_words.contains("programming");
-        let has_loc_intent = question_words.contains("lines")
-            || question_words.contains("loc")
-            || question_words.contains("size");
-
-        // Heuristic: if asking "how many files" or "total loc", answer directly.
-        let text = if has_file_intent || has_loc_intent {
-            format!(
-                "The repository has {} files with a total of {} lines of code.",
-                repo.repo_map.file_count(),
-                repo.repo_map.total_loc()
+        // Build answer from gathered context
+        let (text, references) = if context.found_symbols.is_empty() && context.file_count == 0 {
+            (
+                format!(
+                    "Analyzed repository '{}' with {} files and {} type definitions. No specific matches found for your question.",
+                    repo.source,
+                    repo.repo_map.file_count(),
+                    repo.type_index.len(),
+                ),
+                Vec::new(),
             )
-        } else if has_symbol_intent {
-            let by_kind: Vec<String> = repo
-                .type_index
-                .by_kind
+        } else if context.found_symbols.len() == 1 {
+            let sym = &context.found_symbols[0];
+            let refs = sym
+                .files
                 .iter()
-                .map(|(k, v)| format!("  - {}: {}", k.debug_label(), v.len()))
+                .map(|f| SourceRef {
+                    file: f.clone(),
+                    line: sym.line,
+                    snippet: sym.qualified_name.clone(),
+                })
                 .collect();
-            format!(
-                "Found {} symbol definitions:\n{}",
-                repo.type_index.len(),
-                by_kind.join("\n")
+            let kind_label = sym.kind.debug_label();
+            (
+                format!(
+                    "Found {} '{}' defined in {} file(s): {}.\nQualified name: {}",
+                    kind_label,
+                    sym.name,
+                    sym.files.len(),
+                    sym.files.join(", "),
+                    sym.qualified_name
+                ),
+                refs,
             )
-        } else if has_lang_intent {
-            let mut stats: Vec<_> = repo.language_stats.iter().collect();
-            stats.sort_by(|a, b| b.1.cmp(a.1));
-            let lines: Vec<String> = stats
-                .iter()
-                .map(|(ext, count)| format!("  - .{}: {} files", ext, count))
-                .collect();
-            format!("Language distribution:\n{}", lines.join("\n"))
         } else {
-            // Generic fallback — in production, pass to an LLM.
-            format!(
-                "Analyzed repository '{}' with {} files and {} type definitions. \
-                 References: {} relevant symbols found.",
-                repo.source,
-                repo.repo_map.file_count(),
-                repo.type_index.len(),
-                references.len()
+            let refs: Vec<SourceRef> = context
+                .found_symbols
+                .iter()
+                .flat_map(|sym| {
+                    sym.files.iter().map(|f| SourceRef {
+                        file: f.clone(),
+                        line: sym.line,
+                        snippet: sym.qualified_name.clone(),
+                    })
+                })
+                .collect();
+            let by_kind: Vec<String> = {
+                let mut kind_counts: std::collections::HashMap<String, usize> =
+                    std::collections::HashMap::new();
+                for sym in &context.found_symbols {
+                    *kind_counts
+                        .entry(sym.kind.debug_label().to_string())
+                        .or_insert(0) += 1;
+                }
+                kind_counts
+                    .iter()
+                    .map(|(k, v)| format!("  - {}: {}", k, v))
+                    .collect()
+            };
+            (
+                format!(
+                    "Found {} matching symbols across the repository:\n{}\n\n{} total files, {} total lines of code.",
+                    context.found_symbols.len(),
+                    by_kind.join("\n"),
+                    repo.repo_map.file_count(),
+                    repo.repo_map.total_loc()
+                ),
+                refs,
             )
         };
 
-        // Build confidence based on reference count.
-        let confidence = if references.is_empty() {
+        // Build confidence based on reference count and context match quality
+        let confidence = if context.found_symbols.is_empty() {
             0.3
+        } else if context.found_symbols.len() <= 3 {
+            0.85
         } else {
-            (references.len() as f64 / 10.0).min(0.95)
+            (context.found_symbols.len() as f64 / 15.0 + 0.5).min(0.95)
         };
 
         Ok(Answer {
@@ -665,6 +705,76 @@ impl RepoAnalyzer {
             confidence,
             coverage: AnswerCoverage::FullRepo,
         })
+    }
+
+    /// Build retrieval-augmented context from repo structures.
+    fn build_rag_context(&self, question: &str, repo: &RepoContext) -> RagContext {
+        let lower = question.to_lowercase();
+        let question_words: std::collections::HashSet<&str> = lower
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .collect();
+
+        let mut found_symbols = Vec::new();
+        let mut matched_files: std::collections::HashSet<usize> = std::collections::HashSet::new();
+
+        // Match type index entries by word boundary
+        for entry in &repo.type_index.entries {
+            let name_lower = entry.name.to_lowercase();
+            if question_words.contains(name_lower.as_str()) {
+                let files: Vec<String> = repo
+                    .repo_map
+                    .files
+                    .get(entry.file_id)
+                    .cloned()
+                    .into_iter()
+                    .collect();
+                found_symbols.push(SymbolMatch {
+                    name: entry.name.clone(),
+                    qualified_name: entry.qualified_name.clone(),
+                    kind: entry.kind.clone(),
+                    line: entry.line,
+                    files,
+                });
+                matched_files.insert(entry.file_id);
+            }
+        }
+
+        // Also match file names in repo_map
+        for (file_id, path) in repo.repo_map.files.iter().enumerate() {
+            let file_stem = std::path::Path::new(path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if question_words.contains(file_stem.as_str()) {
+                matched_files.insert(file_id);
+            }
+        }
+
+        // Check intent keywords
+        let has_file_intent = question_words.contains("files")
+            || question_words.contains("how")
+            || question_words.contains("many")
+            || question_words.contains("count");
+        let has_symbol_intent = question_words.contains("symbols")
+            || question_words.contains("types")
+            || question_words.contains("definitions")
+            || question_words.contains("functions");
+        let has_lang_intent =
+            question_words.contains("language") || question_words.contains("programming");
+        let has_loc_intent = question_words.contains("lines")
+            || question_words.contains("loc")
+            || question_words.contains("size");
+
+        RagContext {
+            found_symbols,
+            file_count: matched_files.len(),
+            has_file_intent,
+            has_symbol_intent,
+            has_lang_intent,
+            has_loc_intent,
+        }
     }
 
     // ── Cache management ────────────────────────────────────────────────

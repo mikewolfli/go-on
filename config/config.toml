@@ -2,17 +2,12 @@
 # go-on Universal Workflow Config (local)
 #   Default: SQLite + sqlite-vec, single-user development
 #   Build:   cargo build (default feature = local)
-#   Phase 4: 14 buses, 21 F-GAP modules, i18n ~95%
-#   Tests:   866+ (766 unit + 86 RPC + 14 transport)
 #   Usage:   go-on --config config.toml
 # ============================================================
 
 schema_version = "1.0.0"
 default_phase = "think"
 model_selection_mode = "adaptive"
-
-[protocol]
-mode = "acp_http"
 
 [cache]
 enabled = true
@@ -38,6 +33,8 @@ summary_trigger_messages = 4
 summary_max_chars = 800
 
 [runtime]
+protocol_mode = "acp"
+platform_mode = "universal"
 acp_http_bind_addr = "127.0.0.1:8090"
 maintenance_interval_seconds = 60
 health_interval_seconds = 120
@@ -48,7 +45,6 @@ entry_auth_api_key_env = "GO_ON_ENTRY_API_KEY"
 entry_rate_limit_rpm = 240
 entry_rate_limit_burst = 60
 production_strict = false
-i18n_enabled = true
 i18n_default_language = "en-US"
 skills_enabled = true
 skills_import_enabled = false

@@ -81,8 +81,10 @@
 //! - **New Relic**: Metrics and traces can be sent to New Relic
 
 use std::sync::Once;
+use std::sync::OnceLock;
 use tracing::{debug, error, info, trace, warn};
 use tracing_subscriber::fmt::format::FmtSpan;
+use tracing_subscriber::reload;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 
 /// Telemetry configuration
@@ -124,6 +126,26 @@ impl Default for TelemetryConfig {
 /// already set by `telemetry.rs::init_otel_provider`).
 static INIT_TELEMETRY: Once = Once::new();
 
+/// Reload handle for the active EnvFilter, allowing dynamic log-level
+/// changes at runtime (e.g. via MCP `logging/setLevel`).
+static FILTER_HANDLE: OnceLock<reload::Handle<EnvFilter, tracing_subscriber::Registry>> =
+    OnceLock::new();
+
+/// Reload the globally-active log filter with a new RUST_LOG-style directive.
+///
+/// Returns `Ok(())` if the filter was successfully swapped, or an error
+/// string if the handle has not been initialised (telemetry not started)
+/// or the reload fails.
+pub fn reload_log_filter(directive: &str) -> Result<(), String> {
+    let filter = EnvFilter::new(directive);
+    match FILTER_HANDLE.get() {
+        Some(handle) => handle
+            .reload(filter)
+            .map_err(|e| format!("failed to reload filter: {}", e)),
+        None => Err("filter handle not initialised (telemetry not started)".to_string()),
+    }
+}
+
 /// Initialize telemetry system
 ///
 /// # Arguments
@@ -153,8 +175,11 @@ pub fn init_telemetry(config: &TelemetryConfig) -> anyhow::Result<()> {
                 .with_span_events(FmtSpan::CLOSE)
                 .compact();
 
-            let filter_layer = EnvFilter::try_from_default_env()
+            let filter = EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| EnvFilter::new(&config.log_level));
+
+            let (filter_layer, handle) = reload::Layer::new(filter);
+            let _ = FILTER_HANDLE.set(handle);
 
             layers.push(fmt_layer.with_filter(filter_layer).boxed());
         }

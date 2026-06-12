@@ -232,8 +232,7 @@ fn measure_profile_matrix_3() -> DimensionScore {
     let score = ratio_score(active_count, 3);
     DimensionScore {
         score,
-        evidence:
-            "local/simple-server/multi-users-server feature flags present",
+        evidence: "local/simple-server/multi-users-server feature flags present",
         measurability: Measurability::Measured,
     }
 }
@@ -570,6 +569,7 @@ fn measure_three_entry_parity() -> DimensionScore {
         std::sync::Arc::new(go_on::orchestration::tool::ToolRegistry::new_empty()),
         "go-on".into(),
         "1.1.0".into(),
+        None,
     );
 
     let _mcp_http = go_on::protocol::mcp_server::McpHttpServer::new(

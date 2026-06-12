@@ -878,6 +878,46 @@ impl SecretManager {
     pub fn set_rotation_policy(&mut self, policy: RotationPolicy) {
         self.rotation_policy = policy;
     }
+
+    /// Rotate all registered keys that have exceeded their max age.
+    /// Returns the number of keys that were rotated.
+    pub async fn rotate_all_expired(&self) -> usize {
+        let mut count = 0;
+        // Collect expired keys first to avoid holding the read lock during rotation
+        let expired: Vec<(String, String)> = {
+            let secrets = self.secrets.read().await;
+            secrets
+                .iter()
+                .flat_map(|(tenant, tenant_secrets)| {
+                    tenant_secrets
+                        .iter()
+                        .filter(|(_, entry)| self.needs_rotation(entry))
+                        .map(move |(key_id, _)| (tenant.clone(), key_id.clone()))
+                })
+                .collect()
+        };
+        for (tenant, key_id) in expired {
+            match self.rotate_key(&key_id, Some(&tenant)).await {
+                Ok(_) => {
+                    count += 1;
+                    tracing::info!(
+                        key = %key_id,
+                        tenant = %tenant,
+                        "Background rotation: key rotated"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        key = %key_id,
+                        tenant = %tenant,
+                        error = %e,
+                        "Background rotation: failed to rotate key"
+                    );
+                }
+            }
+        }
+        count
+    }
 }
 
 /// Securely remove a key from the store by zeroing its bytes before dropping (S-FIX10).

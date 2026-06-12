@@ -235,6 +235,12 @@ async fn run() -> Result<()> {
         return Ok(());
     }
 
+    // Handle diagnose mode: run system diagnostics and exit
+    if cli.diagnose {
+        diagnose_and_exit(&config_path).await;
+        return Ok(());
+    }
+
     // Load, validate configuration, and handle validation-only modes
     let config = match server::handle_validation_mode(&cli, &config_path)? {
         Some(config) => config,
@@ -347,4 +353,123 @@ async fn run() -> Result<()> {
     crate::orchestration::orchestrator::warm_cache_after_success(&cache_engine);
 
     Ok(())
+}
+
+/// Run system diagnostics and print a detailed report, then exit.
+///
+/// Diagnoses configuration, connectivity, agents, and system health
+/// without starting the full server. Useful for pre-flight checks.
+async fn diagnose_and_exit(config_path: &std::path::Path) {
+    use crate::config::AppConfig;
+    use crate::core::config_validation::ConfigValidator;
+
+    println!("═══════════════════════════════════");
+    println!("  go-on System Diagnostics");
+    println!("═══════════════════════════════════");
+    println!();
+
+    // 1. Config file check
+    println!("[1/5] Configuration");
+    match config_path.try_exists() {
+        Ok(true) => println!("  ✅ Config file found: {}", config_path.display()),
+        Ok(false) => {
+            println!("  ❌ Config file not found: {}", config_path.display());
+            return;
+        }
+        Err(e) => {
+            println!("  ❌ Cannot access config: {e}");
+            return;
+        }
+    }
+
+    // 2. Config parsing and validation
+    println!("[2/5] Config Validation");
+    match AppConfig::load(config_path) {
+        Ok(config) => {
+            println!("  ✅ Config parsed successfully");
+            let agent_count = config.agents().len();
+            println!("  ℹ️  Agents configured: {agent_count}");
+            println!("  ℹ️  Workflow type: {:?}", config.flow.workflow_type);
+            let validator = ConfigValidator::new(config_path, config);
+            let report = validator.validate();
+            if report.errors.is_empty() && report.warnings.is_empty() {
+                println!("  ✅ Config validation: no issues");
+            } else {
+                for err in &report.errors {
+                    println!("  ❌ Validation error: {err:?}");
+                }
+                for warn in &report.warnings {
+                    println!("  ⚠️  Validation warning: {warn:?}");
+                }
+            }
+        }
+        Err(e) => {
+            println!("  ❌ Config parse error: {e}");
+        }
+    }
+
+    // 3. Memory health
+    println!("[3/5] System Health");
+    let mem = crate::observability::memory_health::check_startup_memory();
+    match &mem {
+        crate::observability::memory_health::MemoryHealth::Healthy => {
+            println!("  ✅ Memory: healthy");
+        }
+        crate::observability::memory_health::MemoryHealth::Low { free_mb, .. } => {
+            println!("  ⚠️  Memory: low ({free_mb} MB free)");
+        }
+        crate::observability::memory_health::MemoryHealth::Critical { free_mb, message } => {
+            println!("  ❌ Memory: critical ({free_mb} MB free) — {message}");
+        }
+        crate::observability::memory_health::MemoryHealth::Unknown => {
+            println!("  ⚠️  Memory: unknown");
+        }
+    }
+    crate::observability::memory_health::print_memory_health(&mem);
+
+    // 4. i18n readiness
+    println!("[4/5] Internationalization");
+    let i18n_dir = config_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("languages");
+    match std::fs::read_dir(&i18n_dir) {
+        Ok(entries) => {
+            let count = entries.filter_map(|e| e.ok()).count();
+            println!("  ✅ i18n directory exists: {} entries", count);
+        }
+        Err(_) => {
+            println!("  ⚠️  i18n directory not found: {}", i18n_dir.display());
+        }
+    }
+
+    // 5. Governance status gate
+    println!("[5/5] Governance Readiness");
+    let known_tools = crate::governance::status::known_tool_names();
+    println!("  ✅ Governance gate: {} known tools", known_tools.len());
+    println!("  ℹ️  Tools: {:?}", known_tools.iter().collect::<Vec<_>>());
+
+    // Test governance gate with safe and dangerous inputs
+    let safe_check = crate::governance::status::quick_check_tool(
+        "read_file",
+        &serde_json::json!({"path": "src/main.rs"}),
+    );
+    println!(
+        "  {} Governance gate: safe read test passed",
+        if safe_check.is_ok() { "✅" } else { "❌" }
+    );
+
+    let block_check = crate::governance::status::quick_check_tool(
+        "write_file",
+        &serde_json::json!({"path": "/etc/hosts", "content": "evil"}),
+    );
+    println!(
+        "  {} Governance gate: write protection active",
+        if block_check.is_err() { "✅" } else { "❌" }
+    );
+
+    println!();
+    println!("═══════════════════════════════════");
+    println!("  Diagnostics complete.");
+    println!("═══════════════════════════════════");
 }

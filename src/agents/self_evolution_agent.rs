@@ -849,8 +849,8 @@ impl SelfEvolutionAgent {
             }
 
             // Only process addition lines ("+") and context lines (" ") from the new file.
-            if trimmed.starts_with('+') {
-                let content_line = trimmed[1..].trim_end().to_string();
+            if let Some(rest) = trimmed.strip_prefix('+') {
+                let content_line = rest.trim_end().to_string();
                 if let Some(bl) = base_line.as_mut() {
                     patched.push((*bl, content_line));
                     *bl += 1;

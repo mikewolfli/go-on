@@ -45,7 +45,7 @@ spec:
           envFrom:
             - secretRef:
                 name: go-on-secrets
-                optional: true
+                optional: false
           volumeMounts:
             - name: config
               mountPath: /etc/go-on

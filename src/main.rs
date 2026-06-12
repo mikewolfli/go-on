@@ -42,6 +42,7 @@ pub use crate::governance::rbac;
 pub use crate::governance::review_controls;
 pub use crate::governance::runtime_controls;
 pub use crate::governance::security_governor;
+pub use crate::governance::status;
 pub use crate::i18n::runtime;
 pub use crate::i18n::watcher as i18n_watcher;
 pub use crate::intelligence::adaptive_selector;

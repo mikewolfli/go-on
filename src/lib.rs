@@ -47,6 +47,7 @@ pub use crate::governance::rbac;
 pub use crate::governance::review_controls;
 pub use crate::governance::runtime_controls;
 pub use crate::governance::security_governor;
+pub use crate::governance::status;
 pub use crate::i18n::runtime;
 // Public re-export for external consumers (SDK / GUI integrations).
 // Internal modules should use `crate::i18n::watcher` directly.
@@ -107,10 +108,7 @@ compile_error!(
     all(feature = "local", feature = "simple-server"),
     all(feature = "local", feature = "multi-users-server"),
     all(feature = "local", feature = "full"),
-    all(
-        feature = "simple-server",
-        feature = "multi-users-server"
-    ),
+    all(feature = "simple-server", feature = "multi-users-server"),
     all(feature = "simple-server", feature = "full"),
     all(feature = "multi-users-server", feature = "full"),
 ))]

@@ -19,7 +19,7 @@ COPY languages/ languages/
 COPY prompts/ prompts/
 COPY src/ src/
 
-RUN cargo build --release --no-default-features -F profile-multi-users-server && \
+RUN cargo build --release --no-default-features -F multi-users-server && \
     cp target/release/go-on /go-on
 
 # ---- Runtime ----

@@ -105,6 +105,48 @@ pub struct PuaGovernanceProfile {
     pub last_evaluation_ms: u64,
 }
 
+impl PuaGovernanceProfile {
+    /// Record a rationalization block.
+    pub fn record_rationalization_block(&mut self) {
+        self.rationalization_blocks += 1;
+    }
+
+    /// Record an RBAC denial.
+    pub fn record_rbac_denial(&mut self) {
+        self.rbac_denials += 1;
+    }
+
+    /// Record a security block.
+    pub fn record_security_block(&mut self) {
+        self.security_blocks += 1;
+    }
+
+    /// Record a drift detection.
+    pub fn record_drift_detection(&mut self) {
+        self.drift_detections += 1;
+    }
+
+    /// Record an approval request.
+    pub fn record_approval_request(&mut self) {
+        self.approval_requests += 1;
+    }
+
+    /// Record a learning update.
+    pub fn record_learning_update(&mut self) {
+        self.learning_updates += 1;
+    }
+
+    /// Record a hardening event.
+    pub fn record_hardening_event(&mut self) {
+        self.hardening_events += 1;
+    }
+
+    /// Record a review override.
+    pub fn record_review_override(&mut self) {
+        self.review_overrides += 1;
+    }
+}
+
 impl Default for PuaGovernanceProfile {
     fn default() -> Self {
         Self {

@@ -83,10 +83,10 @@ use std::sync::Mutex;
 /// of the ACP server.
 ///
 /// This is the minimal config needed to bootstrap all observability
-/// subsystems. Additional ACP-specific fields (e.g. `RuntimeMetrics`)
+/// Minimal configuration to bootstrap all observability subsystems.
+/// Additional ACP-specific fields (e.g. `RuntimeMetrics`)
 /// are wired separately in `crate::acp::server::ObservabilityLayer`.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // F-GAP-49 — reserved for standalone init path (sidecars, headless agents)
 pub struct ObservabilityConfig {
     /// Service name for telemetry resource attributes.
     pub service_name: String,

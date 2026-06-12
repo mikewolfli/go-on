@@ -25,6 +25,7 @@ use crate::acp::helpers::autonomy::terminal_chat_contract_snapshot;
 use crate::agents::agent::{Agent, AgentRegistry, Message, StreamingSender};
 use crate::config::AppConfig;
 use crate::flow::FlowManager;
+use crate::governance::status::quick_check_tool as governance_gate;
 use crate::intelligence::capability_graph::CapabilityGraph;
 use crate::orchestration::autonomy_runtime::{
     build_tool_execution_followup_message, build_tool_result_block, parse_tool_call_token,
@@ -368,13 +369,18 @@ async fn run_agent_with_tools(agent: &Arc<dyn Agent>, messages: &mut Vec<Message
 
 /// Execute a tool by name and arguments, returning the result as a string.
 ///
-/// # Governance bypass
+/// # Governance
 ///
-/// This function intentionally bypasses the governance layer for simple
-/// read/write/file operations in the terminal chat context.  In a more
-/// restrictive deployment (e.g. a managed service) these operations should
-/// be routed through `enforce_action` to apply sandbox and policy checks.
+/// Before executing, a lightweight governance gate (`governance::status::quick_check_tool`)
+/// validates the tool name and arguments against minimal safety policies.
+/// In a stricter deployment (e.g. a managed service), operations should additionally
+/// be routed through the full `SecurityGovernor` / `HarnessBus` pipeline.
 async fn execute_simple_tool(name: &str, args: &Value) -> Result<String> {
+    // ── Governance gate: validate tool + arguments before execution ──
+    if let Err(reason) = governance_gate(name, args) {
+        return Err(anyhow::anyhow!("governance denied: {reason}"));
+    }
+
     match name {
         "read_file" | "read" => {
             let path = args["path"]

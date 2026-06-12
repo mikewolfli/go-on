@@ -1274,6 +1274,10 @@ pub(crate) async fn handle_governance_status(
     });
 
     // ── Governance module initialized-status tracking (G2 fix) ────
+    let known_tools: Vec<String> = crate::governance::status::known_tool_names()
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
     let governance_modules = json!({
         "approval_engine": server.governance_deps.approval_engine.is_some(),
         "approval_learning": server.governance_deps.approval_engine.is_some(),
@@ -1288,7 +1292,30 @@ pub(crate) async fn handle_governance_status(
         "review_controls": false,
         "runtime_controls": server.governance_deps.approval_engine.is_some(),
         "security_governor": false,
+        "status": true,
+        "known_tool_names": known_tools,
     });
+
+    // Cross-module governance tracking profile (G-8 fix)
+    let governance_tracking = json!({
+        "quality_compass_count": pua_plan.quality_compass.len(),
+        "mandatory_evidence_count": pua_plan.mandatory_evidence.len(),
+        "escalation_level": pua_plan.escalation_level,
+        "safeguards_count": pua_plan.mandatory_safeguards.len(),
+    });
+
+    // Hot-failover status snapshot (I15 fix)
+    let hot_failover_profile = {
+        let guard = crate::intelligence::hot_failover::HOT_FAILOVER_INSTANCE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let metrics = guard.metrics();
+        json!({
+            "failover_count": metrics.failover_count,
+            "cooldown_skips": metrics.cooldown_skips,
+            "total_failover_latency_ms": metrics.total_failover_latency_ms,
+        })
+    };
 
     let mut recommendations = Vec::new();
     if !reconciliation_ok {
@@ -1737,6 +1764,8 @@ pub(crate) async fn handle_governance_status(
                 "recent_failed_learning_records": recent_failed,
                 "recent_audit_events": governance_audit.len(),
                 "governance_modules": governance_modules,
+                "governance_tracking": governance_tracking,
+                "hot_failover": hot_failover_profile,
                 "entry_sources_tracked": entry_sources_tracked,
                 "breaker_open_count": breaker_open_count,
                 "tool_total": tool_total,

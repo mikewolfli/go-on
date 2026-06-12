@@ -449,6 +449,13 @@ pub(crate) fn handle_validation_mode(
         return Ok(None);
     }
 
+    if cli.status {
+        let report = build_runtime_healthcheck_report(Some(config_path), None, None)?;
+        print_runtime_status(config_path, &report);
+        print_completeness_report(&config, &report);
+        return Ok(None);
+    }
+
     if cli.diagnose {
         let report = build_runtime_healthcheck_report(Some(config_path), None, None)?;
         let error_count = report

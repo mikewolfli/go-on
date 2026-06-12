@@ -19,7 +19,8 @@ pub mod rate_limit;
 pub mod transport;
 pub mod websocket;
 
-// Re-exports
+// Re-exports — public API surface; #[allow(unused_imports)] is necessary for
+// wildcard re-exports that are used by external consumers but not within this module.
 #[allow(unused_imports)]
 pub use session_sync::*;
 #[allow(unused_imports)]

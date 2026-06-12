@@ -13,10 +13,9 @@
 /// ACP method name constants.
 ///
 /// Provides compile-time checked method name strings for ACP protocol methods.
-#[allow(dead_code)] // F-GAP-49 — reserved ACP methods feature
+/// Used by request dispatch, governance risk scoring, and method validation.
 pub struct AcpMethodNames;
 
-#[allow(dead_code)] // F-GAP-49 — reserved ACP methods feature
 impl AcpMethodNames {
     pub const INITIALIZE: &'static str = "initialize";
     pub const AUTHENTICATE: &'static str = "authenticate";
@@ -37,4 +36,58 @@ impl AcpMethodNames {
     pub const TERMINAL_RELEASE: &'static str = "terminal/release";
     pub const TERMINAL_KILL: &'static str = "terminal/kill";
     pub const TERMINAL_WAIT_FOR_EXIT: &'static str = "terminal/wait_for_exit";
+
+    /// All known ACP method names, for validation and introspection.
+    pub const ALL: &[&str] = &[
+        Self::INITIALIZE,
+        Self::AUTHENTICATE,
+        Self::LOGOUT,
+        Self::SESSION_NEW,
+        Self::SESSION_LOAD,
+        Self::SESSION_PROMPT,
+        Self::SESSION_CANCEL,
+        Self::SESSION_LIST,
+        Self::SESSION_RESUME,
+        Self::SESSION_CLOSE,
+        Self::SESSION_SET_MODE,
+        Self::SESSION_SET_CONFIG_OPTION,
+        Self::SESSION_UPDATE,
+        Self::SESSION_REQUEST_PERMISSION,
+        Self::TERMINAL_CREATE,
+        Self::TERMINAL_OUTPUT,
+        Self::TERMINAL_RELEASE,
+        Self::TERMINAL_KILL,
+        Self::TERMINAL_WAIT_FOR_EXIT,
+    ];
+
+    /// Return true if the given method name is a known ACP method.
+    pub fn is_known(method: &str) -> bool {
+        Self::ALL.contains(&method)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_all_methods_are_unique() {
+        let mut seen = std::collections::BTreeSet::new();
+        for m in AcpMethodNames::ALL {
+            assert!(seen.insert(m), "duplicate method name: {m}");
+        }
+    }
+
+    #[test]
+    fn test_is_known() {
+        assert!(AcpMethodNames::is_known("session/new"));
+        assert!(AcpMethodNames::is_known("terminal/create"));
+        assert!(!AcpMethodNames::is_known("unknown/method"));
+    }
+
+    #[test]
+    fn test_all_methods_non_empty() {
+        assert!(!AcpMethodNames::ALL.is_empty());
+        assert!(AcpMethodNames::ALL.len() >= 19);
+    }
 }

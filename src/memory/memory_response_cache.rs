@@ -8,6 +8,9 @@ use crate::acp::prelude::now_ts;
 pub(crate) struct MemoryCachedResponse {
     pub(crate) response_text: String,
     expires_at: i64,
+    /// Agent name tracked for observability (stored but not yet queried)
+    #[allow(dead_code)]
+    pub(crate) agent_name: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -63,7 +66,7 @@ impl MemoryResponseCache {
         &self,
         key: String,
         response_text: String,
-        _agent_name: Option<String>,
+        agent_name: Option<String>,
         ttl_seconds: u64,
     ) {
         if ttl_seconds == 0 {
@@ -80,6 +83,7 @@ impl MemoryResponseCache {
             MemoryCachedResponse {
                 response_text,
                 expires_at,
+                agent_name,
             },
         );
 
