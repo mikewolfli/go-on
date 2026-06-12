@@ -9,7 +9,6 @@ use regex::Regex;
 use std::fs;
 use std::path::Path;
 
-
 // ── GrepTool ────────────────────────────────────────────────────────────────
 
 pub struct GrepTool;

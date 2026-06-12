@@ -9,7 +9,9 @@ use serde_json::Value;
 
 use crate::i18n::runtime::tf;
 
-use super::execution::{normalize_name, extract_intent_tokens, name_similarity, semantic_similarity, PromptBasedSkill};
+use super::execution::{
+    extract_intent_tokens, name_similarity, normalize_name, semantic_similarity, PromptBasedSkill,
+};
 
 /// Records a version change in a skill's evolution.
 #[derive(Debug, Clone, Serialize, Deserialize)]

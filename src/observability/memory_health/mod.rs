@@ -402,7 +402,8 @@ fn query_windows_memory() -> SystemMemoryInfo {
 
 /// Result of a pre-startup memory health check.
 // F-GAP-11 — reserved for future startup health-check integration
-#[allow(dead_code)] // F-GAP-49 — reserved memory health features
+#[allow(dead_code)]
+// F-GAP-49 — reserved memory health features
 // F-GAP-49 — reserved memory health monitor; wire when memory pressure detection is enabled
 // F-GAP-49 — reserved for future use
 #[derive(Debug, Clone, PartialEq)]

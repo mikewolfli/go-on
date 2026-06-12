@@ -98,9 +98,7 @@ pub async fn run_acp_http_server(server: Arc<AcpServer>, bind_addr: String) -> R
             }
             #[cfg(not(feature = "multi-users-server"))]
             {
-                tracing::warn!(
-                    "mTLS is configured but requires multi-users-server feature"
-                );
+                tracing::warn!("mTLS is configured but requires multi-users-server feature");
                 None
             }
         } else {

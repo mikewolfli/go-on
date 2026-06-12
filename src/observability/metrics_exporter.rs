@@ -94,7 +94,6 @@ impl SlidingWindowBuckets {
         }
         total
     }
-
 }
 
 /// Thread-safe wrapper around `SlidingWindowBuckets` for use in Prometheus

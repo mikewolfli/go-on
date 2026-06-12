@@ -397,7 +397,6 @@ impl MtlsAcceptor {
 
         Ok((tokio_rustls::TlsStream::Server(tls_stream), cn))
     }
-
 }
 
 // ---------------------------------------------------------------------------

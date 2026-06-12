@@ -2,7 +2,9 @@
 
 use crate::governance::pua::tool_execution_report;
 use crate::i18n::runtime::{t, tf};
-use crate::orchestration::tool::{sanitize_path, sanitize_path_for_write, Tool, ToolInput, ToolOutput};
+use crate::orchestration::tool::{
+    sanitize_path, sanitize_path_for_write, Tool, ToolInput, ToolOutput,
+};
 use anyhow::{Context, Result};
 use std::fs;
 use tracing::{info, warn};
