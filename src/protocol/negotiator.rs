@@ -10,7 +10,7 @@
 // F-GAP-49: Module wired into production protocol pipeline.
 
 use serde::{Deserialize, Serialize};
-use tracing::warn;
+use tracing::{info, warn};
 
 pub use crate::schema::ProtocolVersion;
 pub use crate::shared::protocol_mode::ProtocolMode;
@@ -59,9 +59,11 @@ impl ProtocolNegotiator {
 
     /// Negotiate protocol with a client hint and optional client-supported versions.
     ///
-    /// Uses the server's configured mode (`self.active`) as the default,
-    /// or falls back to adaptive comparison when auto-detect is enabled.
-    /// Fails fast with a clear error if the client hint is unrecognized.
+    /// Uses the server's configured mode (`self.active`) as the default.
+    /// When an unrecognized hint is received and no fallback is available,
+    /// the error is logged and the server's active mode is returned unchanged
+    /// with `auto_detected = false`. Callers should check `auto_detected` to
+    /// distinguish server-default from negotiated outcomes.
     ///
     /// # Version negotiation
     ///
@@ -156,8 +158,10 @@ impl ProtocolNegotiator {
     /// protocol versions directly.
     ///
     /// Delegates to [`Self::negotiate`] with `client_versions: Some(client_versions)`.
+    #[allow(dead_code)]
+    // F-GAP — reserved for version-aware client negotiation
     pub fn negotiate_with_versions(
-        &self,
+        &mut self,
         client_hint: Option<&str>,
         client_versions: &[ProtocolVersion],
     ) -> NegotiatedProtocol {
@@ -173,6 +177,8 @@ impl ProtocolNegotiator {
     }
 
     /// Get current active protocol
+    #[allow(dead_code)]
+    // F-GAP — reserved for client introspection; negotiated.mode used in production logging
     pub fn active(&self) -> ProtocolMode {
         self.active
     }
@@ -182,6 +188,28 @@ impl ProtocolNegotiator {
 ///
 /// Each variant carries the contextual detail needed to produce a meaningful
 /// error message in the target protocol.
+impl std::fmt::Display for ProtocolError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProtocolError::VersionMismatch { expected, got } => {
+                write!(f, "version mismatch: expected {}, got {}", expected, got)
+            }
+            ProtocolError::NegotiationFailed { reason } => {
+                write!(f, "negotiation failed: {}", reason)
+            }
+            ProtocolError::TransportError { detail } => {
+                write!(f, "transport error: {}", detail)
+            }
+            ProtocolError::UnsupportedMethod { method } => {
+                write!(f, "unsupported method: {}", method)
+            }
+            ProtocolError::CapabilityMissing { capability } => {
+                write!(f, "capability missing: {}", capability)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ProtocolError {
     /// Protocol version mismatch between client and server
@@ -223,6 +251,8 @@ impl ProtocolError {
     /// - [`TransportError`](ProtocolError::TransportError) → `INTERNAL_ERROR` (-32603)
     /// - [`UnsupportedMethod`](ProtocolError::UnsupportedMethod) → `METHOD_NOT_FOUND` (-32601)
     /// - [`CapabilityMissing`](ProtocolError::CapabilityMissing) → `INVALID_REQUEST` (-32600)
+    #[allow(dead_code)]
+    // F-GAP — reserved for JSON-RPC error responses in production error paths
     pub fn to_mcp(&self) -> crate::mcp::JsonRpcError {
         use crate::mcp::error_codes;
         match self {
@@ -263,14 +293,6 @@ impl ProtocolError {
                 })),
             },
         }
-    }
-
-    /// Translate a [`ProtocolError`] to its ACP-compatible representation.
-    ///
-    /// ACP uses the same JSON-RPC error semantics as MCP for the standard
-    /// set of codes, so the variant is preserved as-is.
-    pub fn to_acp(&self) -> Self {
-        self.clone()
     }
 }
 
@@ -473,21 +495,6 @@ mod tests {
         assert!(mcp_err.message.contains("missing required capability"));
         assert!(mcp_err.message.contains("streamable_http"));
         assert!(mcp_err.data.is_some());
-    }
-
-    #[test]
-    fn test_protocol_error_to_acp_preserves_variant() {
-        let err = ProtocolError::NegotiationFailed {
-            reason: "timeout".into(),
-        };
-        let acp_err = err.to_acp();
-        // to_acp preserves the variant; verify the clone worked
-        match acp_err {
-            ProtocolError::NegotiationFailed { reason } => {
-                assert_eq!(reason, "timeout");
-            }
-            _ => panic!("expected NegotiationFailed variant"),
-        }
     }
 
     #[test]

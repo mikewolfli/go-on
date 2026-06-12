@@ -48,6 +48,7 @@ GUI/src-tauri/gen/
 # Stale build artifacts in project root
 scheduler_queue.db
 libchat_tests.rlib
+go-on_check*.txt
 
 *.tmp
 *.temp

@@ -413,7 +413,8 @@ pub static AGENT_MEMORY_BUS: OnceLock<AgentMemoryBus> = OnceLock::new();
 
 /// Clear all stored memories from the global agent memory bus.
 /// Used in test teardown to prevent cross-test contamination.
-#[cfg(test)]
+/// Only available in non-Postgres profiles because the caller is gated.
+#[cfg(all(test, not(feature = "backend-postgres")))]
 pub fn clear_agent_memory_bus() {
     if let Some(bus) = AGENT_MEMORY_BUS.get() {
         if let Ok(mut store) = bus.store.lock() {

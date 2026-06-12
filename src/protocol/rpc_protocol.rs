@@ -36,7 +36,7 @@ pub struct JsonRpcResponse {
 }
 
 /// JSON-RPC 2.0 standard error codes.
-#[cfg_attr(not(feature = "sub-bus-protocol"), allow(dead_code))]
+/// Note: sub-bus-protocol is mandatory in all profiles, so this module is always live.
 pub mod error_codes {
     /// Invalid JSON was received by the server.
     pub const PARSE_ERROR: i32 = -32700;

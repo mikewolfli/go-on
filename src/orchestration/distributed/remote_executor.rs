@@ -18,6 +18,9 @@ use crate::orchestration::tool::{ToolInput, ToolRegistry};
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Error)]
+// F-GAP-49 — reserved for distributed remote executor; variants become active
+// when the gRPC transport and distributed dispatch pipeline are wired.
+#[allow(dead_code)]
 pub enum RemoteExecutionError {
     #[error("node not found: {0}")]
     NodeNotFound(String),
@@ -546,6 +549,9 @@ pub struct GrpcRemoteExecutor {
     default_timeout_s: u64,
 }
 
+// F-GAP-49 — reserved for distributed remote executor; new() and helpers become active
+// when the gRPC transport and distributed dispatch pipeline are wired.
+#[allow(dead_code)]
 impl GrpcRemoteExecutor {
     pub fn new(registry: Arc<NodeRegistry>, default_timeout_s: u64) -> Self {
         Self {

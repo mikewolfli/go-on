@@ -6,9 +6,10 @@
 //!
 //! BLUE56-GAP-A07: Architecture dependency inversion boundary.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use crate::core::provider::OrchestrationProvider;
+use crate::core::provider::{CapabilityExecutionStats, OrchestrationProvider};
 use crate::orchestration::skill::{Skill, SkillRegistry};
 use crate::orchestration::tool::ToolRegistry;
 
@@ -18,16 +19,22 @@ use crate::orchestration::tool::ToolRegistry;
 /// to ACP. ACP receives `Arc<dyn OrchestrationProvider>` and never needs to
 /// import orchestration concrete types.
 ///
-#[allow(dead_code)] // activated, formerly BLUE56-GAP-A07 — public API surface
+/// Implements OrchestrationProvider — used via trait dispatch.
+/// Truly dead until wired into ServerBuilder (E-GAP-12); keeps the architectural
+/// boundary ready for injection. Struct field and impl code are #[allow(dead_code)].
+#[allow(dead_code)]
 pub struct OrchestrationProviderImpl {
     skill_registry: Arc<Mutex<SkillRegistry>>,
-    #[allow(dead_code)] // Reserved for future full-auto flow creation (E-GAP-12)
+    #[allow(dead_code)]
+    // Reserved for future full-auto flow creation (E-GAP-12)
     tool_registry: Arc<ToolRegistry>,
+    capability_stats: Mutex<HashMap<String, CapabilityExecutionStats>>,
 }
 
 impl OrchestrationProviderImpl {
-    /// activated, formerly BLUE56-GAP-A07
-    #[allow(dead_code)] // activated — public API surface
+    /// Create a new provider impl (reserved for ACP wiring, E-GAP-12).
+    /// Truly dead until wired into ServerBuilder; kept for the architectural boundary.
+    #[allow(dead_code)]
     pub fn new(
         skill_registry: Arc<Mutex<SkillRegistry>>,
         tool_registry: Arc<ToolRegistry>,
@@ -35,6 +42,7 @@ impl OrchestrationProviderImpl {
         Self {
             skill_registry,
             tool_registry,
+            capability_stats: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -64,18 +72,43 @@ impl OrchestrationProvider for OrchestrationProviderImpl {
         }
     }
 
-    fn record_capability_execution(&self, _capability_id: &str, _duration_ms: u64, _success: bool) {
-        // BLUE56-GAP-B07: wired to SelfModelCore in later step
+    fn record_capability_execution(&self, capability_id: &str, duration_ms: u64, success: bool) {
+        if let Ok(mut stats) = self.capability_stats.lock() {
+            let entry =
+                stats
+                    .entry(capability_id.to_string())
+                    .or_insert(CapabilityExecutionStats {
+                        total_executions: 0,
+                        success_count: 0,
+                        total_duration_ms: 0,
+                        last_execution_ms: 0,
+                    });
+            entry.total_executions += 1;
+            if success {
+                entry.success_count += 1;
+            }
+            entry.total_duration_ms += duration_ms;
+            entry.last_execution_ms = duration_ms;
+        }
+    }
+
+    fn capability_stats(&self, capability_id: &str) -> Option<CapabilityExecutionStats> {
+        self.capability_stats
+            .lock()
+            .ok()
+            .and_then(|stats| stats.get(capability_id).cloned())
     }
 }
 
 /// A minimal generic Skill wrapper for the provider layer.
-#[allow(dead_code)] // activated, formerly BLUE56-GAP-A07 — public API surface
+/// Used via trait dispatch in OrchestrationProviderImpl::register_skill.
+/// Truly dead until OrchestrationProviderImpl is wired.
+#[allow(dead_code)]
 struct GenericSkill {
     name: String,
 }
 
-#[allow(dead_code)] // activated, formerly BLUE56-GAP-A07 — public API surface
+#[allow(dead_code)]
 impl GenericSkill {
     fn new(name: String) -> Self {
         Self { name }

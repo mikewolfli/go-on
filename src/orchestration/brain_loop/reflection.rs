@@ -32,7 +32,7 @@ pub struct DeepReasoningEngine {
     /// Maximum tokens for a single reasoning chain.
     pub max_reasoning_tokens: usize,
     /// Optional model name override for deep-reasoning calls.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for deep-reasoning model override
     pub model: Option<String>,
     /// Agent registry for LLM calls (B51-08).
     /// When `Some`, `plan_with_reasoning` and `reflect_with_reasoning` call
@@ -387,7 +387,7 @@ impl DeepReasoningEngine {
 
 /// Summary report produced by a full Plan → Execute → Reflect → Replan cycle.
 // Reserved for future BrainLoop integration.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for BrainLoop report integration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrainLoopReport {
     /// Number of iterations executed.
@@ -406,7 +406,7 @@ pub struct BrainLoopReport {
 
 /// A reflection produced after analysing a plan + result pair.
 // Reserved for future BrainLoop integration.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for BrainLoop reflection integration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Reflection {
     pub score: f64,

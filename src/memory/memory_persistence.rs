@@ -1470,7 +1470,14 @@ impl MemoryPersistence {
             return Ok(());
         };
 
-        let entries = self.hot_entries();
+        // Acquire the lock once for the entire read-check-summarize-replace
+        // operation to eliminate the TOCTOU race between hot_entries() and clear().
+        let mut hot = self.hot.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("hot cache mutex poisoned in 'summarize_hot_entries', recovering");
+            poisoned.into_inner()
+        });
+
+        let entries: Vec<MemoryEntry> = hot.entries.values().map(|he| he.entry.clone()).collect();
         if !summarizer.should_summarize(entries.len()) {
             return Ok(());
         }
@@ -1481,20 +1488,15 @@ impl MemoryPersistence {
                 // Entry count is still manageable; nothing to do.
             }
             SummarizedMemory::Compressed(compressed) => {
-                // Replace hot entries with the compressed set.
-                let mut hot = self.hot.lock().unwrap_or_else(|poisoned| {
-                    tracing::warn!(
-                        "hot cache mutex poisoned in 'summarize_hot_entries', recovering"
-                    );
-                    poisoned.into_inner()
-                });
+                let compressed_len = compressed.len();
                 hot.clear();
                 for entry in compressed {
                     hot.insert(entry);
                 }
                 tracing::info!(
                     target: "memory_persistence",
-                    "summarized hot cache: {} entries compressed",
+                    "summarized hot cache: {} entries compressed from {} total",
+                    compressed_len,
                     entries.len()
                 );
             }

@@ -104,12 +104,18 @@ pub fn start_secret_rotation_if_configured(
     let endpoint_for_log = vault_endpoint.clone();
     let mount_for_log = vault_mount_path.clone();
 
-    let rotator = Arc::new(crate::security::secret_rotation::VaultRotator::new(
+    let rotator = match crate::security::secret_rotation::VaultRotator::new(
         vault_endpoint,
         #[cfg(feature = "vault")]
         vault_token,
         vault_mount_path,
-    ));
+    ) {
+        Ok(r) => Arc::new(r),
+        Err(e) => {
+            tracing::warn!("Secret rotation: failed to create VaultRotator: {e}");
+            return None;
+        }
+    };
 
     let policy = crate::security::secret_rotation::RotationPolicy {
         max_age_secs: 86400 * 30, // 30 days

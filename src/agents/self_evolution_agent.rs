@@ -28,10 +28,6 @@ const MAX_FIX_ITERATIONS: usize = 5;
 /// Path to the RULES directory relative to project root.
 const RULES_DIR: &str = "RULES";
 
-/// Supported source file extensions for analysis.
-#[allow(dead_code)] // Reserved
-const SUPPORTED_EXTENSIONS: &[&str] = &["rs", "toml", "md", "json", "yaml", "yml"];
-
 // ---------------------------------------------------------------------------
 // RiskLevel
 // ---------------------------------------------------------------------------

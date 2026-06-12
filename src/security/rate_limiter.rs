@@ -90,21 +90,10 @@ impl GlobalRateLimiter {
         });
         bucket.try_consume(tokens)
     }
-
-    /// Expose the rate limiter configuration for observability.
-    pub fn config(&self) -> &RateLimitConfig {
-        &self.config
-    }
 }
 
 static GLOBAL_RATE_LIMITER: OnceLock<GlobalRateLimiter> = OnceLock::new();
 
 pub fn global_rate_limiter() -> &'static GlobalRateLimiter {
     GLOBAL_RATE_LIMITER.get_or_init(|| GlobalRateLimiter::new(RateLimitConfig::default()))
-}
-
-/// Initialize the global rate limiter with the given configuration.
-/// Called during server startup to override default rate limit settings.
-pub fn init_rate_limiter(config: RateLimitConfig) {
-    let _ = GLOBAL_RATE_LIMITER.set(GlobalRateLimiter::new(config));
 }

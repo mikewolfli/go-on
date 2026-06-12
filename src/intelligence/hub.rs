@@ -260,13 +260,10 @@ pub fn consensus_vote_on(
     proposal: serde_json::Value,
     approve: bool,
 ) -> (bool, f64) {
-    let consensus = match GLOBAL_CONSENSUS.lock() {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!("intel_hub: consensus lock failed: {e}");
-            return (approve, 0.3);
-        }
-    };
+    let consensus = GLOBAL_CONSENSUS.lock().unwrap_or_else(|poisoned| {
+        tracing::warn!("intel_hub: consensus mutex poisoned, recovering");
+        poisoned.into_inner()
+    });
 
     let now = crate::intelligence::now_ms();
     // Extract a confidence score from the proposal to drive real voting
@@ -775,7 +772,6 @@ pub struct AuditEntryBuilder {
     correlation_id: Option<String>,
 }
 
-#[allow(dead_code)] // F-GAP: builder pattern reserved for comprehensive audit entries
 impl AuditEntryBuilder {
     /// Start building an audit entry with the minimum required fields.
     pub fn new(task_id: &str, phase: &str, decision: &str) -> Self {
@@ -803,6 +799,7 @@ impl AuditEntryBuilder {
     }
 
     /// Set the tool name.
+    #[allow(dead_code)] // Builder pattern — reserved for future audit enrichment
     pub fn tool(mut self, tool: &str) -> Self {
         self.tool = Some(tool.to_string());
         self
@@ -815,6 +812,7 @@ impl AuditEntryBuilder {
     }
 
     /// Set the output payload.
+    #[allow(dead_code)] // Builder pattern — reserved for future audit enrichment
     pub fn outputs(mut self, outputs: serde_json::Value) -> Self {
         self.outputs = Some(outputs);
         self
@@ -833,24 +831,28 @@ impl AuditEntryBuilder {
     }
 
     /// Set the data classification label.
+    #[allow(dead_code)] // Builder pattern — reserved for future audit enrichment
     pub fn data_classification(mut self, dc: &str) -> Self {
         self.data_classification = Some(dc.to_string());
         self
     }
 
     /// Add a compliance tag.
+    #[allow(dead_code)] // Builder pattern — reserved for future audit enrichment
     pub fn compliance_tag(mut self, tag: &str) -> Self {
         self.compliance_tags.push(tag.to_string());
         self
     }
 
     /// Set the retention policy.
+    #[allow(dead_code)] // Builder pattern — reserved for future audit enrichment
     pub fn retention_policy(mut self, rp: &str) -> Self {
         self.retention_policy = Some(rp.to_string());
         self
     }
 
     /// Set the correlation ID.
+    #[allow(dead_code)] // Builder pattern — reserved for future audit enrichment
     pub fn correlation_id(mut self, cid: &str) -> Self {
         self.correlation_id = Some(cid.to_string());
         self
@@ -882,48 +884,6 @@ impl AuditEntryBuilder {
             retention_policy: self.retention_policy,
             correlation_id: self.correlation_id,
         }
-    }
-}
-
-/// Build an audit entry for agent decision.
-///
-/// Prefer [`AuditEntryBuilder`] for new code — it avoids the long parameter
-/// list and makes call sites self-documenting.
-// F-GAP-48: intentionally not wired into the hot path; rationalize_decision is primary
-#[allow(dead_code)] // F-GAP-49
-#[allow(clippy::too_many_arguments)]
-pub fn build_audit_entry(
-    task_id: &str,
-    phase: &str,
-    agent: Option<&str>,
-    tool: Option<&str>,
-    decision: &str,
-    inputs: serde_json::Value,
-    outputs: Option<serde_json::Value>,
-    error: Option<String>,
-    confidence: Option<f32>,
-) -> AuditLogEntry {
-    AuditLogEntry {
-        timestamp: format!(
-            "{:?}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-        ),
-        task_id: task_id.to_string(),
-        phase: phase.to_string(),
-        agent: agent.map(String::from),
-        tool: tool.map(String::from),
-        decision: decision.to_string(),
-        inputs: serde_json::to_value(inputs).unwrap_or_default(),
-        outputs: outputs.map(|o| serde_json::to_value(o).unwrap_or_default()),
-        error,
-        confidence,
-        data_classification: None,
-        compliance_tags: vec![],
-        retention_policy: None,
-        correlation_id: None,
     }
 }
 
@@ -976,17 +936,12 @@ mod tests {
 
     #[test]
     fn test_audit_entry() {
-        let entry = build_audit_entry(
-            "task-001",
-            "chat",
-            Some("agent-a"),
-            Some("read_file"),
-            "allow",
-            serde_json::json!({"input": "test"}),
-            None,
-            None,
-            Some(0.95),
-        );
+        let entry = AuditEntryBuilder::new("task-001", "chat", "allow")
+            .agent("agent-a")
+            .tool("read_file")
+            .inputs(serde_json::json!({"input": "test"}))
+            .confidence(0.95)
+            .build();
         record_audit_entry(entry);
         assert!(AUDIT_ENTRY_COUNT.load(Ordering::Relaxed) > 0);
     }

@@ -56,7 +56,7 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// A single skill fetched from a remote URL.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(not(test), allow(dead_code))] // F-GAP-51 — consumed via OnceLock
+#[allow(dead_code)] // F-GAP-51 — consumed via OnceLock
 pub struct RemoteSkill {
     pub name: String,
     pub description: String,
@@ -90,7 +90,7 @@ struct CachedSource {
 /// Index of all skills fetched from URLs listed in the `skills/` folder.
 ///
 /// Consumed via global OnceLock static in tools_pack.rs.
-#[cfg_attr(not(test), allow(dead_code))] // F-GAP-51 — consumed via OnceLock
+#[allow(dead_code)] // F-GAP-51 — consumed via OnceLock
 pub struct SkillsFolderIndex {
     skills: HashMap<String, RemoteSkill>,
     /// Known source URLs (keyed by URL string).
@@ -132,7 +132,7 @@ async fn fetch_skills_from_url(url: &str) -> Result<serde_json::Value, String> {
     Ok(body)
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // F-GAP-51 — consumed via OnceLock
+#[allow(dead_code)] // F-GAP-51 — consumed via OnceLock
 impl SkillsFolderIndex {
     /// Create a new index targeting `{config_dir}/skills/`.
     pub fn new(config_dir: Option<&Path>) -> Self {
@@ -403,7 +403,7 @@ impl SkillsFolderIndex {
         self.skills.len()
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.skills.is_empty()
     }

@@ -897,4 +897,12 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
         token_cache.start_background_cleanup(60_000).await;
     });
     info!("token_cache background cleanup started (interval: 60s)");
+
+    // ── SemanticResponseCache background cleanup ───────────────
+    // Start periodic eviction of expired semantic cache entries.
+    // Without this, expired entries accumulate until lazy get()-time eviction.
+    if let Ok(mut guard) = server.cache_deps.cache.semantic_cache.lock() {
+        guard.start_background_cleanup();
+    }
+    info!("semantic_cache background cleanup started");
 }

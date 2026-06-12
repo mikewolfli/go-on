@@ -85,7 +85,8 @@ pub(crate) fn agent_switch_state() -> &'static StdMutex<AgentSwitchState> {
 
 /// Reset agent switch state to default. Used in tests to clear global state
 /// that may accumulate across test cases.
-#[cfg(test)]
+/// Only available in non-Postgres profiles because the caller is gated.
+#[cfg(all(test, not(feature = "backend-postgres")))]
 pub(crate) fn reset_agent_switch_state() {
     if let Some(state) = AGENT_SWITCH_STATE.get() {
         if let Ok(mut guard) = state.lock() {

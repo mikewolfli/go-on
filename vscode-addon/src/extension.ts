@@ -702,145 +702,111 @@ function registerCommands(
   );
 }
 
-export function activate(context: vscode.ExtensionContext) {
-  const output = vscode.window.createOutputChannel("Go-On");
-  context.subscriptions.push(output);
-  output.appendLine("Go-On extension activated");
+/**
+ * Core initialization sequence for the Go-On extension.
+ * Extracted to a single function to avoid duplicating ~90 lines of activation
+ * logic between the primary path and the retry-on-failure path.
+ */
+async function initializeGoOn(
+  context: vscode.ExtensionContext,
+  output: vscode.OutputChannel,
+  configPath: string,
+  isRetry: boolean,
+): Promise<void> {
+  const tag = isRetry ? " (retry)" : "";
+  output.appendLine(`initializing Go-On${tag}...`);
 
-  // Initialize extension state with output channel (other fields filled below)
-  extensionState = {
-    manager: undefined as unknown as GoOnManager,
-    statusProvider: undefined as unknown as GoOnStatusProvider,
-    output,
-    approvalPanel: undefined as unknown as ApprovalPanelProvider,
-    chat: undefined as unknown as GoOnChatViewProvider,
-    settings: undefined as unknown as GoOnSettingsViewProvider,
-    runtimeBootstrap: undefined as unknown as RuntimeBootstrapDeps,
-  };
-
-  // Initialize i18n system
-  initI18n();
-
-  // Initialize config manager
-  const config = vscode.workspace.getConfiguration("go-on");
-  const configPath = config.get<string>("configPath", "./config.toml");
-
-  /**
-   * Re-evaluate the config file path based on the current workspace roots
-   * and re-initialize the config manager. Called when workspace folders change.
-   */
-  async function updateConfigPath(): Promise<void> {
-    const cfg = vscode.workspace.getConfiguration("go-on");
-    const newPath = cfg.get<string>("configPath", "./config.toml");
-    output.appendLine(`Config path updated: ${newPath}`);
-    try {
-      await configManager.initialize(newPath);
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      output.appendLine(`warn: config manager re-init failed: ${errMsg}`);
-    }
-  }
-
-  // Initialize config manager and GoOnManager
-  (async () => {
-    try {
-      await configManager.initialize(configPath);
-      output.appendLine("config manager initialized");
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      output.appendLine(`warn: config manager init failed: ${errMsg}`);
+  try {
+    await configManager.initialize(configPath);
+    output.appendLine(`config manager initialized${tag}`);
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    output.appendLine(`warn: config manager init failed${tag}: ${errMsg}`);
+    if (!isRetry) {
       void vscode.window.showWarningMessage(
         i18n.getMessage(MessageKeys.runtimeInitFailed, [errMsg]),
       );
     }
+  }
 
-    const manager = new GoOnManager();
-    manager.setOutputChannel(output);
+  const manager = new GoOnManager();
+  manager.setOutputChannel(output);
 
-    // status monitor and view providers must be created after manager is initialized
-    const statusMonitor = new StatusMonitor(manager);
-    context.subscriptions.push(statusMonitor);
+  const statusMonitor = new StatusMonitor(manager);
+  context.subscriptions.push(statusMonitor);
 
-    const statusProv = new GoOnStatusProvider(manager);
+  const statusProv = new GoOnStatusProvider(manager);
 
-    const runtimeBootstrap: RuntimeBootstrapDeps = {
-      ensureBinary: ensureGoOnBinary,
-      isRunning: () => manager.isRunning(),
-      startCommandId: "go-on.start",
-    };
+  const runtimeBootstrap: RuntimeBootstrapDeps = {
+    ensureBinary: ensureGoOnBinary,
+    isRunning: () => manager.isRunning(),
+    startCommandId: "go-on.start",
+  };
 
-    // Initialize extension state with manager and runtime deps
-    extensionState = {
-      ...extensionState!,
-      manager,
-      statusProvider: statusProv,
-      runtimeBootstrap,
-    };
+  extensionState = {
+    ...extensionState!,
+    manager,
+    statusProvider: statusProv,
+    runtimeBootstrap,
+  };
 
-    // Initialize advanced edit provider
-    new GoOnAdvancedEditProvider(manager, context);
+  new GoOnAdvancedEditProvider(manager, context);
+  registerViewProviders(context);
+  registerCommands(context, statusMonitor);
 
-    // Register webview providers
-    registerViewProviders(context);
-
-    // Register all commands
-    registerCommands(context, statusMonitor);
-
-    // Delayed check for provider readiness (warn user if API key is missing)
-    // ── Start cross-client state sync SSE listener ─────────────────
-    // BLUE67-E1: Wire SSE state sync listener to VSCode UI actions
-    const baseUrl = protocolContract.runtime.baseUrl;
-    const stopStateSync = startStateSyncListener(
-      baseUrl,
-      {
-        onConfigReloaded(changedKeys) {
-          const summary =
-            changedKeys.length > 0 ? changedKeys.join(", ") : "configuration";
-          output.appendLine(`[state-sync] Config reloaded: ${summary}`);
-          vscode.window.setStatusBarMessage(
-            `Go-On: config reloaded (${summary})`,
-            4000,
-          );
-        },
-        onModelsChanged(models) {
-          output.appendLine(
-            `[state-sync] Models changed: ${models.length} models`,
-          );
-          vscode.window.setStatusBarMessage(
-            `Go-On: models updated (${models.length} models)`,
-            3000,
-          );
-        },
-        onAgentsChanged(added, removed) {
-          if (added.length > 0) {
-            output.appendLine(`[state-sync] Agents added: ${added.join(", ")}`);
-          }
-          if (removed.length > 0) {
-            output.appendLine(
-              `[state-sync] Agents removed: ${removed.join(", ")}`,
-            );
-          }
-          vscode.window.setStatusBarMessage(
-            `Go-On: agents changed (+${added.length}/-${removed.length})`,
-            3000,
-          );
-        },
-        onBackendRestarting(reason, _restartInMs) {
-          output.appendLine(`[state-sync] Backend restarting: ${reason}`);
-          vscode.window.showWarningMessage(
-            `Go-On backend restarting: ${reason}`,
-          );
-        },
-        onHeartbeat(_timestamp) {
-          // Heartbeat is informational only
-        },
+  // ── Start cross-client state sync SSE listener ─────────────────
+  const baseUrl = protocolContract.runtime.baseUrl;
+  const stopStateSync = startStateSyncListener(
+    baseUrl,
+    {
+      onConfigReloaded(changedKeys) {
+        const summary =
+          changedKeys.length > 0 ? changedKeys.join(", ") : "configuration";
+        output.appendLine(`[state-sync] Config reloaded${tag}: ${summary}`);
+        vscode.window.setStatusBarMessage(
+          `Go-On: config reloaded (${summary})`,
+          4000,
+        );
       },
-      output,
-    );
-    context.subscriptions.push({
-      dispose: stopStateSync,
-    });
+      onModelsChanged(models) {
+        output.appendLine(
+          `[state-sync] Models changed${tag}: ${models.length} models`,
+        );
+        vscode.window.setStatusBarMessage(
+          `Go-On: models updated (${models.length} models)`,
+          3000,
+        );
+      },
+      onAgentsChanged(added, removed) {
+        if (added.length > 0) {
+          output.appendLine(
+            `[state-sync] Agents added${tag}: ${added.join(", ")}`,
+          );
+        }
+        if (removed.length > 0) {
+          output.appendLine(
+            `[state-sync] Agents removed${tag}: ${removed.join(", ")}`,
+          );
+        }
+        vscode.window.setStatusBarMessage(
+          `Go-On: agents changed (+${added.length}/-${removed.length})`,
+          3000,
+        );
+      },
+      onBackendRestarting(reason, _restartInMs) {
+        output.appendLine(`[state-sync] Backend restarting${tag}: ${reason}`);
+        vscode.window.showWarningMessage(`Go-On backend restarting: ${reason}`);
+      },
+      onHeartbeat(_timestamp) {
+        // Heartbeat is informational only
+      },
+    },
+    output,
+  );
+  context.subscriptions.push({ dispose: stopStateSync });
 
+  // Only run provider readiness check and auto-open chat on the primary path
+  if (!isRetry) {
     const providerReadyTimer = setTimeout(async () => {
       try {
         const { manager: m } = getState();
@@ -867,7 +833,7 @@ export function activate(context: vscode.ExtensionContext) {
       new vscode.Disposable(() => clearTimeout(providerReadyTimer)),
     );
 
-    // Open chat automatically only once (controlled by go-on.autoOpenChat config).
+    // Open chat automatically only once
     const autoOpenChat = vscode.workspace
       .getConfiguration("go-on")
       .get<boolean>("autoOpenChat", true);
@@ -890,16 +856,51 @@ export function activate(context: vscode.ExtensionContext) {
       );
     }
 
-    // Listen for workspace folder changes and re-evaluate config path
+    // Listen for workspace folder changes
     context.subscriptions.push(
       vscode.workspace.onDidChangeWorkspaceFolders((event) => {
         output.appendLine(
           `Workspace folders changed: ${event.added.length} added, ${event.removed.length} removed`,
         );
-        // Re-evaluate the config file path based on new workspace roots
-        updateConfigPath();
+        // Re-evaluate config path on folder change
+        const cfg = vscode.workspace.getConfiguration("go-on");
+        const newPath = cfg.get<string>("configPath", "./config.toml");
+        configManager.initialize(newPath).catch((err) => {
+          output.appendLine(`warn: config manager re-init failed: ${err}`);
+        });
       }),
     );
+  }
+
+  output.appendLine(`Activation completed${tag}.`);
+}
+
+export function activate(context: vscode.ExtensionContext) {
+  const output = vscode.window.createOutputChannel("Go-On");
+  context.subscriptions.push(output);
+  output.appendLine("Go-On extension activated");
+
+  // Initialize extension state with output channel (other fields filled below)
+  extensionState = {
+    manager: undefined as unknown as GoOnManager,
+    statusProvider: undefined as unknown as GoOnStatusProvider,
+    output,
+    approvalPanel: undefined as unknown as ApprovalPanelProvider,
+    chat: undefined as unknown as GoOnChatViewProvider,
+    settings: undefined as unknown as GoOnSettingsViewProvider,
+    runtimeBootstrap: undefined as unknown as RuntimeBootstrapDeps,
+  };
+
+  // Initialize i18n system
+  initI18n();
+
+  // Initialize config manager
+  const config = vscode.workspace.getConfiguration("go-on");
+  const configPath = config.get<string>("configPath", "./config.toml");
+
+  // Primary initialization path
+  (async () => {
+    await initializeGoOn(context, output, configPath, false);
   })().catch(async (err) => {
     const diagnosticData = {
       error: String(err),
@@ -922,96 +923,7 @@ export function activate(context: vscode.ExtensionContext) {
     await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
 
     try {
-      await (async () => {
-        // Re-run the inline activation block from above.
-        // The closure captures `context`, `output`, `configPath`, and `updateConfigPath`
-        // from the outer scope. We re-execute the init sequence inline.
-        const cfg = vscode.workspace.getConfiguration("go-on");
-        const retryConfigPath = cfg.get<string>("configPath", "./config.toml");
-        output.appendLine("Retrying activation...");
-
-        try {
-          await configManager.initialize(retryConfigPath);
-          output.appendLine("config manager initialized (retry)");
-        } catch (initErr) {
-          const initErrMsg =
-            initErr instanceof Error ? initErr.message : String(initErr);
-          output.appendLine(
-            `warn: config manager init failed (retry): ${initErrMsg}`,
-          );
-        }
-
-        const retryManager = new GoOnManager();
-        retryManager.setOutputChannel(output);
-
-        const retryStatusMonitor = new StatusMonitor(retryManager);
-        context.subscriptions.push(retryStatusMonitor);
-
-        const retryStatusProv = new GoOnStatusProvider(retryManager);
-
-        const retryRuntimeBootstrap: RuntimeBootstrapDeps = {
-          ensureBinary: ensureGoOnBinary,
-          isRunning: () => retryManager.isRunning(),
-          startCommandId: "go-on.start",
-        };
-
-        extensionState = {
-          ...extensionState!,
-          manager: retryManager,
-          statusProvider: retryStatusProv,
-          runtimeBootstrap: retryRuntimeBootstrap,
-        };
-
-        // ── Start cross-client state sync SSE listener (retry) ─
-        const retryBaseUrl = protocolContract.runtime.baseUrl;
-        const retryStopStateSync = startStateSyncListener(
-          retryBaseUrl,
-          {
-            onConfigReloaded(changedKeys) {
-              const summary =
-                changedKeys.length > 0
-                  ? changedKeys.join(", ")
-                  : "configuration";
-              output.appendLine(
-                `[state-sync] Config reloaded (retry): ${summary}`,
-              );
-              vscode.window.setStatusBarMessage(
-                `Go-On: config reloaded (${summary})`,
-                4000,
-              );
-            },
-            onModelsChanged(models) {
-              output.appendLine(
-                `[state-sync] Models changed (retry): ${models.length} models`,
-              );
-              vscode.window.setStatusBarMessage(
-                `Go-On: models updated (${models.length} models)`,
-                3000,
-              );
-            },
-            onAgentsChanged(added, removed) {
-              vscode.window.setStatusBarMessage(
-                `Go-On: agents changed (+${added.length}/-${removed.length})`,
-                3000,
-              );
-            },
-            onBackendRestarting(reason) {
-              vscode.window.showWarningMessage(
-                `Go-On backend restarting: ${reason}`,
-              );
-            },
-            onHeartbeat() {},
-          },
-          output,
-        );
-        context.subscriptions.push({ dispose: retryStopStateSync });
-
-        new GoOnAdvancedEditProvider(retryManager, context);
-        registerViewProviders(context);
-        registerCommands(context, retryStatusMonitor);
-
-        output.appendLine("Activation completed on retry.");
-      })();
+      await initializeGoOn(context, output, configPath, true);
     } catch (retryErr) {
       output.appendLine(`Activation retry also failed: ${retryErr}`);
       vscode.window.showErrorMessage(

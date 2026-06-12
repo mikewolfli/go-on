@@ -73,7 +73,6 @@ pub struct MemoryLink {
 
 impl MemoryLink {
     /// Create a new memory link.
-    #[allow(dead_code)] // F-GAP-49 — reserved memory retrieval feature
     pub fn new(
         m1: impl Into<String>,
         m2: impl Into<String>,

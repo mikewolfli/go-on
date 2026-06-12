@@ -1524,7 +1524,11 @@ fn ensure_keyring_item_accessible(_account: &str) {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn ensure_keyring_item_accessible(_account: &str) {}
+fn ensure_keyring_item_accessible(_account: &str) {
+    // Keychain ACL partitioning is macOS-specific (security set-key-partition-list).
+    // On Linux/Windows, the keyring crate handles access control natively.
+    tracing::debug!("ensure_keyring_item_accessible: no-op on non-macOS platform");
+}
 
 /// Handle provider configuration request from GUI or other clients.
 /// Stores the provider config to system keyring.

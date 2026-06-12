@@ -316,7 +316,7 @@ impl RedLinePolicy {
     }
 
     /// Returns a reference to the parsed config, if any.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for policy config inspection
     pub fn config(&self) -> Option<&serde_json::Value> {
         self.config.as_ref()
     }
@@ -423,7 +423,7 @@ impl QualityCompassPolicy {
     }
 
     /// Returns a reference to the parsed config, if any.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for policy config inspection
     pub fn config(&self) -> Option<&serde_json::Value> {
         self.config.as_ref()
     }
@@ -534,7 +534,7 @@ impl SandboxPolicyReloadable {
     }
 
     /// Returns a reference to the parsed config, if any.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for policy config inspection
     pub fn config(&self) -> Option<&serde_json::Value> {
         self.config.as_ref()
     }

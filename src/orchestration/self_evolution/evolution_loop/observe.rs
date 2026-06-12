@@ -484,8 +484,8 @@ impl DiagnosticTriggerSource {
     ///
     /// Record an observed error pattern so that repeated errors
     /// automatically trigger evolution cycles.
-    pub fn record_error(&self, pattern: String) {
-        let mut counts = tokio::task::block_in_place(|| self.error_counts.blocking_lock());
+    pub async fn record_error(&self, pattern: String) {
+        let mut counts = self.error_counts.lock().await;
         *counts.entry(pattern).or_insert(0) += 1;
     }
 }
@@ -729,12 +729,12 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_diagnostic_trigger_source() {
+    #[tokio::test]
+    async fn test_diagnostic_trigger_source() {
         let source = DiagnosticTriggerSource::new("test".to_string(), 3);
-        source.record_error("E0308".to_string());
-        source.record_error("E0308".to_string());
-        source.record_error("E0308".to_string());
+        source.record_error("E0308".to_string()).await;
+        source.record_error("E0308".to_string()).await;
+        source.record_error("E0308".to_string()).await;
         // After 3 recordings, the next poll should return a trigger
     }
 

@@ -287,7 +287,6 @@ pub struct GrpcFederatedTransport {
 #[derive(Debug)]
 enum GrpcTransportInner {
     Connected {
-        /// The tonic channel used to issue RPCs.
         // When tonic is added as a dependency, replace with:
         //   channel: Channel,
         // and use the channel for actual gRPC calls.

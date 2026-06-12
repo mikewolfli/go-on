@@ -294,7 +294,7 @@ impl DagExecutionPlan {
     /// execution) against the **output_schema** of its contract.
     ///
     /// If a node has no contract (`None`), it is skipped.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for distributed DAG contract validation
     pub fn validate_all_contracts(&self) -> Result<(), String> {
         for assign in &self.assignments {
             let Some(ref contract) = assign.contract else {

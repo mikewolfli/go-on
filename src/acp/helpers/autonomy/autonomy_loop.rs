@@ -1108,16 +1108,19 @@ pub async fn run_autonomy_loop(
                 } else {
                     tf("status.autonomy.failure_tool", &[])
                 };
-                match revo.attempt_recovery(
-                    &failure_type,
-                    serde_json::json!({
-                        "iteration": iteration,
-                        "round": iteration + 1,
-                        "tools": round_tools.len(),
-                        "consecutive_failures": consecutive_failures,
-                        "corrective_actions": round_corrective_actions,
-                    }),
-                ) {
+                match revo
+                    .attempt_recovery(
+                        &failure_type,
+                        serde_json::json!({
+                            "iteration": iteration,
+                            "round": iteration + 1,
+                            "tools": round_tools.len(),
+                            "consecutive_failures": consecutive_failures,
+                            "corrective_actions": round_corrective_actions,
+                        }),
+                    )
+                    .await
+                {
                     Ok(action) => {
                         let action_label = action.label().to_string();
                         // Record the recovery attempt ID for outcome tracking.

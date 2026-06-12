@@ -226,7 +226,7 @@ impl DriftProtectionEngine {
         let metric = DriftMetric {
             name: name.to_string(),
             current_value,
-            baseline_value,
+            baseline_value: effective_baseline,
             deviation,
             drift_type,
             measured_ms: now_ms,

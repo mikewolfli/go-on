@@ -60,18 +60,6 @@ pub struct JsonRpcRequest<T: Serialize> {
     pub id: u64,
 }
 
-impl<T: Serialize> JsonRpcRequest<T> {
-    /// Create a new JSON-RPC 2.0 request with the JSON-RPC version set to "2.0".
-    pub fn new(method: impl Into<String>, params: T, id: u64) -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            method: method.into(),
-            params,
-            id,
-        }
-    }
-}
-
 /// A JSON-RPC 2.0 response envelope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcResponse<T> {
@@ -81,18 +69,6 @@ pub struct JsonRpcResponse<T> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<JsonRpcError>,
     pub id: u64,
-}
-
-impl<T> JsonRpcResponse<T> {
-    /// Create a new JSON-RPC 2.0 response.
-    pub fn new(id: u64) -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            result: None,
-            error: None,
-            id,
-        }
-    }
 }
 
 /// A JSON-RPC error object.
@@ -155,7 +131,7 @@ pub struct HealthCheckResult {
 pub async fn call_execute_remote(
     base_url: &str,
     params: &ExecuteParams,
-    _timeout_s: u64,
+    timeout_s: u64,
 ) -> Result<ExecuteResult, String> {
     let request = JsonRpcRequest {
         jsonrpc: "2.0".to_string(),
@@ -166,38 +142,44 @@ pub async fn call_execute_remote(
 
     let url = format!("{}/jsonrpc", base_url.trim_end_matches('/'));
 
-    // Use module-level shared client with per-request timeout via tokio::time::timeout
-    let response = CLIENT
-        .post(&url)
-        .json(&request)
-        .send()
+    // Wrap the HTTP call in tokio::time::timeout for per-request deadline enforcement.
+    let future = async {
+        let response = CLIENT
+            .post(&url)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| format!("HTTP POST to {url} failed: {e}"))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            return Err(format!("HTTP {} from {url}", status.as_u16()));
+        }
+
+        let response_body: JsonRpcResponse<ExecuteResult> = response
+            .json()
+            .await
+            .map_err(|e| format!("failed to decode JSON-RPC response: {e}"))?;
+
+        if let Some(err) = response_body.error {
+            return Err(format!("JSON-RPC error ({}): {}", err.code, err.message));
+        }
+
+        response_body
+            .result
+            .ok_or_else(|| "JSON-RPC response has neither result nor error".to_string())
+    };
+
+    tokio::time::timeout(std::time::Duration::from_secs(timeout_s), future)
         .await
-        .map_err(|e| format!("HTTP POST to {url} failed: {e}"))?;
-
-    let status = response.status();
-    if !status.is_success() {
-        return Err(format!("HTTP {} from {url}", status.as_u16()));
-    }
-
-    let response_body: JsonRpcResponse<ExecuteResult> = response
-        .json()
-        .await
-        .map_err(|e| format!("failed to decode JSON-RPC response: {e}"))?;
-
-    if let Some(err) = response_body.error {
-        return Err(format!("JSON-RPC error ({}): {}", err.code, err.message));
-    }
-
-    response_body
-        .result
-        .ok_or_else(|| "JSON-RPC response has neither result nor error".to_string())
+        .map_err(|_| format!("remote execute timed out after {timeout_s}s"))?
 }
 
 /// Perform a health check against a remote node via HTTP JSON-RPC.
 pub async fn call_health_check(
     base_url: &str,
     node_id: &str,
-    _timeout_s: u64,
+    timeout_s: u64,
 ) -> Result<bool, String> {
     let request = JsonRpcRequest {
         jsonrpc: "2.0".to_string(),
@@ -210,27 +192,30 @@ pub async fn call_health_check(
 
     let url = format!("{}/jsonrpc", base_url.trim_end_matches('/'));
 
-    // Use module-level shared client with per-request timeout via tokio::time::timeout
-    let response = CLIENT
-        .post(&url)
-        .json(&request)
-        .send()
+    // Wrap in tokio::time::timeout for per-request deadline enforcement.
+    let future = async {
+        let response = CLIENT
+            .post(&url)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| format!("health check HTTP POST failed: {e}"))?;
+
+        let response_body: JsonRpcResponse<HealthCheckResult> = response
+            .json()
+            .await
+            .map_err(|e| format!("failed to decode health check response: {e}"))?;
+
+        if let Some(err) = response_body.error {
+            return Err(format!("JSON-RPC error ({}): {}", err.code, err.message));
+        }
+
+        Ok(response_body.result.map(|r| r.alive).unwrap_or(false))
+    };
+
+    tokio::time::timeout(std::time::Duration::from_secs(timeout_s), future)
         .await
-        .map_err(|e| format!("health check HTTP POST failed: {e}"))?;
-
-    let response_body: JsonRpcResponse<HealthCheckResult> = response
-        .json()
-        .await
-        .map_err(|e| format!("failed to decode health check response: {e}"))?;
-
-    if let Some(err) = response_body.error {
-        return Err(format!(
-            "health check JSON-RPC error ({}): {}",
-            err.code, err.message
-        ));
-    }
-
-    Ok(response_body.result.map(|r| r.alive).unwrap_or(false))
+        .map_err(|_| format!("health check timed out after {timeout_s}s"))?
 }
 
 // ---------------------------------------------------------------------------

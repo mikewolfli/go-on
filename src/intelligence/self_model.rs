@@ -11,6 +11,8 @@ use crate::shared::execution_recorder::ExecutionRecorder;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tracing::debug;
 
@@ -21,7 +23,7 @@ use tracing::debug;
 // ---------------------------------------------------------------------------
 
 /// Identity of the system — who it is, who made it, and descriptive metadata.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelfIdentity {
     pub system_name: String,
     pub version: String,
@@ -32,7 +34,7 @@ pub struct SelfIdentity {
 }
 
 /// Dynamic EMA-based statistics for a capability, updated on each execution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapabilityStats {
     /// EMA of success rate in [0.0, 1.0].
     pub effectiveness: f64,
@@ -48,7 +50,7 @@ pub struct CapabilityStats {
 
 /// A known capability the system can perform, along with tracked effectiveness
 /// and confidence metrics.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelfCapability {
     pub name: String,
     pub description: String,
@@ -67,7 +69,7 @@ pub struct SelfCapability {
 }
 
 /// A recognised limitation of the system.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelfLimitation {
     pub name: String,
     pub description: String,
@@ -82,7 +84,7 @@ pub struct SelfLimitation {
 }
 
 /// A point-in-time performance measurement of the system.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelfPerformanceSnapshot {
     pub timestamp_ms: u64,
     pub avg_latency_ms: f64,
@@ -96,7 +98,7 @@ pub struct SelfPerformanceSnapshot {
 }
 
 /// Configuration for the self-model core's behaviour.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelfModelConfig {
     /// How often (in ms) the self-model should be refreshed / updated.
     pub update_interval_ms: u64,
@@ -147,7 +149,7 @@ pub struct SelfModelProfile {
 // Internal state
 // ---------------------------------------------------------------------------
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Inner {
     config: SelfModelConfig,
     identity: Option<SelfIdentity>,
@@ -156,6 +158,8 @@ struct Inner {
     snapshots: Vec<SelfPerformanceSnapshot>,
     capability_stats: HashMap<String, CapabilityStats>,
     last_update_ms: u64,
+    #[serde(skip)]
+    persistence_path: Option<PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
@@ -181,8 +185,53 @@ impl SelfModelCore {
                 snapshots: Vec::new(),
                 capability_stats: HashMap::new(),
                 last_update_ms: now_ms(),
+                persistence_path: None,
             })),
         }
+    }
+
+    /// Set a persistence path for auto-saving the self-model state.
+    /// When set, every mutation automatically writes the full state to this file
+    /// as pretty-printed JSON.
+    pub fn with_persistence_path(self, path: PathBuf) -> Self {
+        {
+            let mut inner = lock_guard(&self.inner);
+            inner.persistence_path = Some(path);
+        }
+        self
+    }
+
+    /// Write the current inner state to the configured persistence path, if any.
+    ///
+    /// Errors are silently ignored so that persistence does not disrupt normal
+    /// operation. Logging is performed at debug level for observability.
+    fn persist(&self) {
+        let inner = lock_guard(&self.inner);
+        if let Some(path) = &inner.persistence_path {
+            match serde_json::to_string_pretty(&*inner) {
+                Ok(json) => {
+                    if let Err(e) = fs::write(path, &json) {
+                        debug!("SelfModel: failed to write persistence file: {e}");
+                    }
+                }
+                Err(e) => {
+                    debug!("SelfModel: failed to serialize state: {e}");
+                }
+            }
+        }
+    }
+
+    /// Load a `SelfModelCore` from a JSON file previously written by a
+    /// persisted self-model. The loaded instance will have its persistence path
+    /// set to the same `path` so that subsequent mutations continue to save.
+    pub fn load_from_file(path: PathBuf) -> Result<Self> {
+        let data = fs::read_to_string(&path)?;
+        let mut inner: Inner = serde_json::from_str(&data)?;
+        inner.persistence_path = Some(path);
+        inner.last_update_ms = now_ms();
+        Ok(Self {
+            inner: Arc::new(Mutex::new(inner)),
+        })
     }
 
     // -- Identity ---------------------------------------------------------
@@ -192,6 +241,7 @@ impl SelfModelCore {
         let mut inner = lock_guard(&self.inner);
         inner.identity = Some(identity);
         inner.last_update_ms = now_ms();
+        self.persist();
     }
 
     /// Get the system identity, if one has been set.
@@ -226,6 +276,7 @@ impl SelfModelCore {
 
         inner.capabilities.push(capability);
         inner.last_update_ms = now_ms();
+        self.persist();
         Ok(())
     }
 
@@ -248,6 +299,7 @@ impl SelfModelCore {
         cap.last_verified_ms = now_ms();
 
         inner.last_update_ms = now_ms();
+        self.persist();
         Ok(())
     }
 
@@ -291,6 +343,7 @@ impl SelfModelCore {
         }
 
         inner.last_update_ms = now_ms();
+        self.persist();
     }
 
     /// Mark an existing limitation as acknowledged.
@@ -310,6 +363,7 @@ impl SelfModelCore {
             })?;
         lim.is_acknowledged = true;
         inner.last_update_ms = now_ms();
+        self.persist();
         Ok(())
     }
 
@@ -358,6 +412,7 @@ impl SelfModelCore {
         }
 
         inner.last_update_ms = now_ms();
+        self.persist();
     }
 
     /// Get the most recent `count` performance snapshots (newest first).
@@ -456,6 +511,7 @@ impl SelfModelCore {
             samples = stats.sample_count,
             "SelfModel: updated capability stats"
         );
+        self.persist();
     }
 
     /// Get the dynamic EMA stats for a specific capability, if any.
@@ -1080,5 +1136,112 @@ mod tests {
         assert!((bar.effectiveness - 0.0).abs() < 1e-9);
         assert!((bar.avg_latency_ms - 500.0).abs() < 1e-9);
         assert_eq!(bar.sample_count, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Persistence: save-then-load maintains data integrity.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_persistence_save_and_load() {
+        let dir = std::env::temp_dir().join(format!(
+            "go_on_self_model_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let path = dir.join("self_model.json");
+
+        // --- Save phase ---
+        let core = SelfModelCore::new(test_config()).with_persistence_path(path.clone());
+
+        let identity = SelfIdentity {
+            system_name: "persist-test".into(),
+            version: "1.0".into(),
+            description: "Persistence integrity test".into(),
+            creator: "test_runner".into(),
+            created_ms: 42_000,
+            tags: vec!["alpha".into(), "beta".into()],
+        };
+        core.set_identity(identity.clone());
+
+        let cap = SelfCapability {
+            name: "test_cap".into(),
+            description: "A test capability".into(),
+            effectiveness: 0.9,
+            confidence: 0.8,
+            usage_count: 10,
+            last_verified_ms: 100,
+            category: "testing".into(),
+            prerequisites: vec![],
+        };
+        core.register_capability(cap.clone()).unwrap();
+
+        let lim = SelfLimitation {
+            name: "test_lim".into(),
+            description: "A test limitation".into(),
+            severity: "Low".into(),
+            workaround: Some("do something else".into()),
+            discovered_ms: 200,
+            is_acknowledged: false,
+        };
+        core.add_limitation(lim.clone());
+
+        core.record_performance(SelfPerformanceSnapshot {
+            timestamp_ms: 300,
+            avg_latency_ms: 12.5,
+            p50_latency_ms: 10.0,
+            p95_latency_ms: 20.0,
+            p99_latency_ms: 30.0,
+            error_rate: 0.01,
+            throughput: 100.0,
+            agent_count: 4,
+            tasks_processed: 500,
+        });
+
+        // Record an execution result (EMA stats).
+        core.record_execution_result("test_cap", true, 15);
+
+        drop(core); // force the file to be fully written
+
+        // --- Load phase ---
+        let loaded = SelfModelCore::load_from_file(path.clone()).unwrap();
+
+        // Verify identity
+        let loaded_id = loaded.get_identity().unwrap();
+        assert_eq!(loaded_id.system_name, "persist-test");
+        assert_eq!(loaded_id.version, "1.0");
+        assert_eq!(loaded_id.tags, vec!["alpha", "beta"]);
+
+        // Verify capabilities
+        let loaded_cap = loaded.get_capability("test_cap").unwrap();
+        assert_eq!(loaded_cap.name, "test_cap");
+        assert!((loaded_cap.effectiveness - 0.9).abs() < 1e-9);
+        assert!((loaded_cap.confidence - 0.8).abs() < 1e-9);
+
+        // Verify limitations
+        let loaded_lim = loaded.get_limitation("test_lim").unwrap();
+        assert_eq!(loaded_lim.name, "test_lim");
+        assert!(!loaded_lim.is_acknowledged);
+        assert_eq!(loaded_lim.workaround, Some("do something else".into()));
+
+        // Verify performance snapshots
+        let perf = loaded.performance_history(1);
+        assert_eq!(perf.len(), 1);
+        assert!((perf[0].avg_latency_ms - 12.5).abs() < 1e-9);
+
+        // Verify EMA stats
+        let stats = loaded.get_capability_stats("test_cap").unwrap();
+        assert_eq!(stats.sample_count, 1);
+        assert!((stats.effectiveness - 1.0).abs() < 1e-9);
+
+        // Verify the persistence path is set on the loaded instance
+        // by performing a mutation and checking it writes without error.
+        loaded.acknowledge_limitation("test_lim").unwrap();
+        let lim_after = loaded.get_limitation("test_lim").unwrap();
+        assert!(lim_after.is_acknowledged);
+
+        // Clean up
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

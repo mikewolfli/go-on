@@ -348,7 +348,7 @@ pub struct DagMetrics {
 /// All four DAG types (CoreDag, DagDriver, ExecutionGraph, TaskGraph)
 /// implement this trait, enabling polymorphic DAG operations across the
 /// orchestration layer.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for DAG consumer migration
 pub trait Dag<NodeId: ?Sized = str> {
     type NodeData;
 

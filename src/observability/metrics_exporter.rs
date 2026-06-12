@@ -95,22 +95,6 @@ impl SlidingWindowBuckets {
         total
     }
 
-    /// Reset the sliding window, clearing all stored snapshots.
-    pub fn reset(&mut self) {
-        self.windows.clear();
-        self.write_index = 0;
-        self.last_cumulative = None;
-    }
-
-    /// Return the number of snapshots currently in the window.
-    pub fn len(&self) -> usize {
-        self.windows.len()
-    }
-
-    /// Return whether the window is empty (no snapshots recorded).
-    pub fn is_empty(&self) -> bool {
-        self.windows.is_empty()
-    }
 }
 
 /// Thread-safe wrapper around `SlidingWindowBuckets` for use in Prometheus
@@ -138,13 +122,6 @@ impl MetricsSlidingWindow {
         }
     }
 
-    /// Reset the sliding window.
-    pub fn reset(&self) {
-        if let Ok(mut inner) = self.inner.lock() {
-            inner.reset();
-        }
-    }
-
     /// Get the sum of all bucket deltas in the window.
     pub fn window_sum(&self) -> [u64; 10] {
         if let Ok(inner) = self.inner.lock() {
@@ -159,17 +136,6 @@ impl MetricsSlidingWindow {
 /// Records histogram bucket snapshots on each `/metrics` scrape.
 static P95_SLIDING_WINDOW: LazyLock<MetricsSlidingWindow> =
     LazyLock::new(|| MetricsSlidingWindow::new(12));
-
-/// Reset the per-process cumulative latency bucket counts so that P95
-/// reflects recent behavior rather than lifetime totals.
-///
-/// This is an alternative to the sliding window — call it periodically
-/// (e.g. every 5 minutes) to clear the underlying bucket counters.
-pub fn reset_buckets(buckets: &mut [u64; 10]) {
-    for b in buckets.iter_mut() {
-        *b = 0;
-    }
-}
 
 /// Compute approximate P95 latency from histogram bucket counts.
 ///

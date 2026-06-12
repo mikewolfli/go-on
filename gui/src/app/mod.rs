@@ -196,16 +196,14 @@ impl eframe::App for GoOnApp {
         if self.show_setup {
             let done = {
                 let mut cfg = self.config_store.write();
-                let result = self.views.setup_view.show(
-                    ctx,
-                    &self.i18n,
-                    &mut *cfg,
-                    &self.connection.backend,
-                );
+                let result =
+                    self.views
+                        .setup_view
+                        .show(ctx, &self.i18n, &mut cfg, &self.connection.backend);
                 if result {
                     self.show_setup = false;
-                    self.has_providers = has_valid_providers(&*cfg);
-                    save_app_config(&*cfg);
+                    self.has_providers = has_valid_providers(&cfg);
+                    save_app_config(&cfg);
                 }
                 result
             };
@@ -578,7 +576,7 @@ impl eframe::App for GoOnApp {
                             }
                             "settings" => {
                                 let mut cfg = self.config_store.write();
-                                SettingsView::show(ui, &self.i18n, &mut *cfg);
+                                SettingsView::show(ui, &self.i18n, &mut cfg);
                                 if cfg.backend_url != self.connection.backend_url_original {
                                     ui.add_space(8.0);
                                     ui.separator();
@@ -641,7 +639,7 @@ impl eframe::App for GoOnApp {
                                 self.views.config_editor_view.show(
                                     ui,
                                     &self.i18n,
-                                    &mut *cfg,
+                                    &mut cfg,
                                     config_safe_mode,
                                 );
                                 if self.views.config_editor_view.applied {
@@ -657,13 +655,13 @@ impl eframe::App for GoOnApp {
                                 let changed = self.views.providers_view.show(
                                     ui,
                                     &self.i18n,
-                                    &mut *cfg,
+                                    &mut cfg,
                                     &self.connection.backend,
                                     ctx,
                                     providers_ops,
                                 );
                                 if changed {
-                                    save_app_config(&*cfg);
+                                    save_app_config(&cfg);
                                     drop(cfg);
                                     self.config_store.sync_shared_if_needed();
                                     self.restart_backend(ctx);

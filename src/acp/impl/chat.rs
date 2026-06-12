@@ -65,7 +65,7 @@ pub(crate) use tool_extraction::{detect_repeated_task_pattern, extract_tool_call
 
 // Re-export streaming items that are part of the chat module's public API
 pub(crate) use self::params::agent_switch_state;
-#[cfg(test)]
+#[cfg(all(test, not(feature = "backend-postgres")))]
 pub(crate) use self::params::reset_agent_switch_state;
 pub use self::params::ChatParams;
 pub use self::params::ChatRequestContext;

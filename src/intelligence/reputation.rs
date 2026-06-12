@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
 
 use crate::intelligence::now_ms;
 
@@ -78,12 +80,21 @@ impl Default for ReputationConfig {
 /// Default maximum records to retain before evicting the oldest.
 const DEFAULT_MAX_RECORDS: usize = 10_000;
 
+/// Serializable state persisted to disk.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoreData {
+    config: ReputationConfig,
+    records: HashMap<String, ReputationRecord>,
+    max_records: usize,
+}
+
 /// Central reputation store
 #[derive(Debug)]
 pub struct ReputationStore {
     config: ReputationConfig,
     records: HashMap<String, ReputationRecord>,
     max_records: usize,
+    persistence_path: Option<PathBuf>,
 }
 
 impl ReputationStore {
@@ -92,7 +103,45 @@ impl ReputationStore {
             config,
             records: HashMap::new(),
             max_records: DEFAULT_MAX_RECORDS,
+            persistence_path: None,
         }
+    }
+
+    /// Set a file path for automatic persistence.
+    /// When set, every call to `record_outcome()` will save state to this file.
+    pub fn with_persistence_path(mut self, path: PathBuf) -> Self {
+        self.persistence_path = Some(path);
+        self
+    }
+
+    /// Save the current store state to a JSON file.
+    pub fn save_to_file(&self) -> std::io::Result<()> {
+        let path = self.persistence_path.as_ref().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "persistence path not set")
+        })?;
+        let data = StoreData {
+            config: self.config.clone(),
+            records: self.records.clone(),
+            max_records: self.max_records,
+        };
+        let json = serde_json::to_string_pretty(&data)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        fs::write(path, json)
+    }
+
+    /// Load a `ReputationStore` from a JSON file on disk.
+    /// The loaded store will **not** have a persistence path set — call
+    /// `with_persistence_path()` if you want auto-save on the restored instance.
+    pub fn load_from_file(path: PathBuf) -> std::io::Result<Self> {
+        let json = fs::read_to_string(&path)?;
+        let data: StoreData = serde_json::from_str(&json)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        Ok(Self {
+            config: data.config,
+            records: data.records,
+            max_records: data.max_records,
+            persistence_path: None,
+        })
     }
 
     fn record(&mut self, agent: &str) -> &mut ReputationRecord {
@@ -149,6 +198,13 @@ impl ReputationStore {
             // Decay starts immediately and saturates at 7 days (168 hours)
             let decay = (-0.005 * (elapsed_hours.min(168.0))).exp();
             r.score = 0.5 + (r.score - 0.5) * decay;
+        }
+
+        // Auto-save if a persistence path is configured
+        if self.persistence_path.is_some() {
+            if let Err(e) = self.save_to_file() {
+                tracing::warn!("failed to persist reputation store: {e}");
+            }
         }
     }
 
@@ -252,5 +308,86 @@ mod tests {
     fn test_unknown_agent_not_degraded() {
         let store = ReputationStore::new(ReputationConfig::default());
         assert!(!store.is_degraded("unknown"));
+    }
+
+    #[test]
+    fn test_save_then_load_round_trip() {
+        // Use a temporary directory so the file is cleaned up automatically.
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("reputation.json");
+
+        // Build a store with persistence, record some outcomes.
+        let mut store =
+            ReputationStore::new(ReputationConfig::default()).with_persistence_path(path.clone());
+        store.record_outcome("alice", true);
+        store.record_outcome("alice", true);
+        store.record_outcome("bob", false);
+        store.record_outcome("bob", false);
+        store.record_outcome("bob", true);
+
+        let alice_score_before = store.score("alice");
+        let bob_score_before = store.score("bob");
+        let snapshot_before = store.snapshot();
+        let count_before = store.tracked_agent_count();
+
+        // Load from file into a fresh store.
+        let restored = ReputationStore::load_from_file(path.clone()).expect("load");
+
+        assert_eq!(restored.tracked_agent_count(), count_before);
+        assert_eq!(restored.score("alice"), alice_score_before);
+        assert_eq!(restored.score("bob"), bob_score_before);
+
+        let snap_restored = restored.snapshot();
+        assert_eq!(snap_restored.len(), snapshot_before.len());
+
+        // Verify individual record fields match.
+        for rec in &snap_restored {
+            let original = snapshot_before
+                .iter()
+                .find(|r| r.agent == rec.agent)
+                .unwrap();
+            assert_eq!(rec.score, original.score);
+            assert_eq!(rec.total_tasks, original.total_tasks);
+            assert_eq!(rec.success_count, original.success_count);
+            assert_eq!(rec.failure_count, original.failure_count);
+        }
+    }
+
+    #[test]
+    fn test_save_then_load_with_config() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("reputation_config.json");
+
+        let config = ReputationConfig {
+            enabled: true,
+            ema_alpha: 0.5,
+            degraded_threshold: 0.8,
+            exclusion_threshold: 0.5,
+        };
+        let mut store = ReputationStore::new(config.clone()).with_persistence_path(path.clone());
+        store.record_outcome("agent_x", false);
+
+        let restored = ReputationStore::load_from_file(path).expect("load");
+        // Restored store should use the persisted config
+        assert!((restored.config.ema_alpha - 0.5).abs() < f64::EPSILON);
+        assert!((restored.config.degraded_threshold - 0.8).abs() < f64::EPSILON);
+        assert!((restored.config.exclusion_threshold - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_loaded_store_persistence_path_is_none() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let path = dir.path().join("reputation_none.json");
+
+        {
+            let mut store = ReputationStore::new(ReputationConfig::default())
+                .with_persistence_path(path.clone());
+            store.record_outcome("a", true);
+        } // Drop the original store.
+
+        let restored = ReputationStore::load_from_file(path).expect("load");
+        // A freshly loaded store has no persistence path (caller must opt in).
+        // We verify by checking that `save_to_file` returns an error (no path set).
+        assert!(restored.save_to_file().is_err());
     }
 }

@@ -398,13 +398,6 @@ impl MtlsAcceptor {
         Ok((tokio_rustls::TlsStream::Server(tls_stream), cn))
     }
 
-    /// Reload certificates from disk (for hot-reload scenarios).
-    pub async fn reload_certs(&self) -> Result<(), MtlsError> {
-        let cfg = self.build_server_config()?;
-        *self.server_config.write().await = Some(cfg);
-        info!("mTLS certificates reloaded");
-        Ok(())
-    }
 }
 
 // ---------------------------------------------------------------------------

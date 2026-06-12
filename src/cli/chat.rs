@@ -14,7 +14,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use anyhow::{Context, Result};
+#[cfg(test)]
+use anyhow::Context;
+use anyhow::Result;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
@@ -30,9 +32,7 @@ use crate::intelligence::capability_graph::CapabilityGraph;
 use crate::orchestration::autonomy_runtime::{
     build_tool_execution_followup_message, build_tool_result_block, parse_tool_call_token,
 };
-
-/// Maximum file size we'll read in a single tool call (10 MB).
-const MAX_FILE_READ_BYTES: u64 = 10 * 1024 * 1024;
+use crate::orchestration::tool::{ToolInput, ToolRegistry};
 
 /// Maximum number of characters from a tool result sent to the LLM.
 const MAX_TOOL_RESULT_CHARS: usize = 100_000;
@@ -56,6 +56,7 @@ macro_rules! ansi {
 ///
 /// TOCTOU-safe: returns the canonicalized path that should be used for all subsequent
 /// file operations to prevent symlink race conditions.
+#[cfg(test)]
 fn resolve_safe_path(path_str: &str, allow_new_file: bool) -> Result<std::path::PathBuf> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let cwd = cwd.canonicalize().context("failed to canonicalize cwd")?;
@@ -381,170 +382,161 @@ async fn execute_simple_tool(name: &str, args: &Value) -> Result<String> {
         return Err(anyhow::anyhow!("governance denied: {reason}"));
     }
 
-    match name {
-        "read_file" | "read" => {
-            let path = args["path"]
-                .as_str()
-                .or_else(|| args["file_path"].as_str())
-                .ok_or_else(|| anyhow::anyhow!("missing path argument"))?;
-            let resolved = resolve_safe_path(path, false)?;
-            let metadata = timeout(Duration::from_secs(30), tokio::fs::metadata(&resolved))
-                .await
-                .map_err(|_| anyhow::anyhow!("file metadata timed out after 30s: {path}"))?
-                .with_context(|| format!("failed to read metadata for {path}"))?;
-            if metadata.len() > MAX_FILE_READ_BYTES {
-                anyhow::bail!(
-                    "file too large: {} (max {} bytes)",
-                    metadata.len(),
-                    MAX_FILE_READ_BYTES
-                );
-            }
-            let content = timeout(
-                Duration::from_secs(60),
-                tokio::fs::read_to_string(&resolved),
-            )
-            .await
-            .map_err(|_| anyhow::anyhow!("file read timed out after 60s: {path}"))?
-            .with_context(|| format!("failed to read {path}"))?;
-            Ok(content)
-        }
-        "write_file" | "write" | "create" => {
-            let path = args["path"]
-                .as_str()
-                .or_else(|| args["file_path"].as_str())
-                .ok_or_else(|| anyhow::anyhow!("missing path argument"))?;
-            let content = args["content"]
-                .as_str()
-                .ok_or_else(|| anyhow::anyhow!("missing content argument"))?;
-            let resolved = resolve_safe_path(path, true)?;
-            if let Some(parent) = resolved.parent() {
-                timeout(Duration::from_secs(30), tokio::fs::create_dir_all(parent))
-                    .await
-                    .map_err(|_| anyhow::anyhow!("directory creation timed out after 30s"))?
-                    .with_context(|| {
-                        format!("failed to create directory for {}", parent.display())
-                    })?;
-            }
-            timeout(
-                Duration::from_secs(60),
-                tokio::fs::write(&resolved, content),
-            )
-            .await
-            .map_err(|_| anyhow::anyhow!("file write timed out after 60s"))?
-            .with_context(|| format!("failed to write {}", resolved.display()))?;
-            Ok(format!(
-                "wrote {} bytes to {}",
-                content.len(),
-                resolved.display()
-            ))
-        }
-        "search_files" | "grep" | "search" => {
-            let pattern = args["pattern"]
-                .as_str()
-                .or_else(|| args["query"].as_str())
-                .ok_or_else(|| anyhow::anyhow!("missing pattern argument"))?;
-            let path = args["path"]
-                .as_str()
-                .or_else(|| args["directory"].as_str())
-                .unwrap_or(".");
-            let max_results = args["max_results"].as_u64().unwrap_or(20) as usize;
+    // ── Map aliases to canonical ToolRegistry names ──
+    let canonical_name = match name {
+        "read" => "read_file",
+        "write" | "create" => "write_file",
+        "search" | "grep" => "search_files",
+        "ls" => "list_directory",
+        "bash" | "execute_command" | "run" => "shell_exec",
+        other => other,
+    };
 
-            let mut results = Vec::new();
-            let mut dir = timeout(Duration::from_secs(30), tokio::fs::read_dir(path))
-                .await
-                .map_err(|_| anyhow::anyhow!("read_dir timed out after 30s: {path}"))?
-                .with_context(|| format!("failed to read directory {path}"))?;
-            while let Ok(Some(entry)) = timeout(Duration::from_secs(10), dir.next_entry())
-                .await
-                .map_err(|_| anyhow::anyhow!("directory iteration timed out after 10s"))?
-            {
-                if results.len() >= max_results {
-                    break;
-                }
-                let fname = entry.file_name().to_string_lossy().to_string();
-                if fname.contains(pattern) {
-                    results.push(entry.path().display().to_string());
-                }
-            }
-            Ok(if results.is_empty() {
-                format!("No files matching '{pattern}' in {path}")
-            } else {
-                results.join("\n")
-            })
+    // ── Normalize payload field names to what the canonical tools expect ──
+    // The old code accepted multiple field-name variants (path/file_path,
+    // pattern/query, command/cmd).  We normalise them here before routing
+    // through the registry so callers continue to work unchanged.
+    let mut payload = args.clone();
+    if let Some(v) = payload.get("file_path").and_then(|v| v.as_str()) {
+        payload["path"] = json!(v);
+    }
+    if let Some(v) = payload.get("query").and_then(|v| v.as_str()) {
+        payload["pattern"] = json!(v);
+    }
+    if let Some(v) = payload.get("directory").and_then(|v| v.as_str()) {
+        // list_directory uses "path" rather than "directory"
+        if canonical_name == "list_directory" {
+            payload["path"] = json!(v);
+        } else {
+            payload["directory"] = json!(v);
         }
-        "list_files" | "ls" => {
-            let path = args["path"]
-                .as_str()
-                .or_else(|| args["directory"].as_str())
-                .unwrap_or(".");
-            let mut entries = Vec::new();
-            let mut dir = timeout(Duration::from_secs(30), tokio::fs::read_dir(path))
-                .await
-                .map_err(|_| anyhow::anyhow!("read_dir timed out after 30s: {path}"))?
-                .with_context(|| format!("failed to read directory {path}"))?;
-            while let Ok(Some(entry)) = timeout(Duration::from_secs(10), dir.next_entry())
-                .await
-                .map_err(|_| anyhow::anyhow!("directory iteration timed out after 10s"))?
-            {
-                let fname = entry.file_name().to_string_lossy().to_string();
-                let ftype = if timeout(Duration::from_secs(10), entry.file_type())
-                    .await
-                    .map_err(|_| anyhow::anyhow!("file type query timed out after 10s"))?
-                    .map(|t| t.is_dir())
-                    .unwrap_or(false)
-                {
-                    "dir"
-                } else {
-                    "file"
-                };
-                entries.push(format!(" [{ftype}] {fname}"));
+    }
+    if let Some(v) = payload.get("cmd").and_then(|v| v.as_str()) {
+        payload["command"] = json!(v);
+    }
+
+    // ── Build ToolInput envelope and execute via ToolRegistry ──
+    let input = ToolInput {
+        task_id: "execute_simple_tool".to_string(),
+        phase: "act".to_string(),
+        agent_role: "coder".to_string(),
+        objective: format!("Execute tool: {canonical_name}"),
+        constraints: None,
+        evidence: None,
+        payload,
+        allowed_base_dir: None,
+    };
+
+    let canonical_owned = canonical_name.to_string();
+
+    // Use the profile's timeout budget when available, otherwise default to
+    // 300 seconds (matching the most generous old bash timeout).
+    let registry = ToolRegistry::default();
+    let timeout_ms = registry
+        .profile(&canonical_owned)
+        .map(|p| p.timeout_budget_ms)
+        .unwrap_or(300_000);
+    let timeout_dur = Duration::from_millis(timeout_ms.max(5_000));
+
+    // Run the blocking tool logic on a dedicated blocking thread so we don't
+    // starve the async runtime.  The ToolRegistry is created inside the closure
+    // so everything is owned and Send.
+    let output = timeout(timeout_dur, async {
+        tokio::task::spawn_blocking(move || {
+            let registry = ToolRegistry::default();
+            registry.run_with_fallback(&canonical_owned, &input)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("tool blocking task failed: {e}"))?
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("tool '{name}' timed out after {}ms", timeout_ms))??;
+
+    if !output.success {
+        return Err(anyhow::anyhow!(
+            "{}",
+            output
+                .error
+                .unwrap_or_else(|| "tool execution failed".to_string())
+        ));
+    }
+
+    // ── Format ToolOutput back into the simple string every caller expects ──
+    match canonical_name {
+        "read_file" => Ok(output
+            .result
+            .as_ref()
+            .and_then(|r| r["content"].as_str())
+            .unwrap_or("")
+            .to_string()),
+        "write_file" => {
+            let path = output
+                .result
+                .as_ref()
+                .and_then(|r| r["path"].as_str())
+                .unwrap_or("unknown");
+            Ok(format!("wrote file: {path}"))
+        }
+        "search_files" => {
+            let files: Vec<String> = output
+                .result
+                .as_ref()
+                .and_then(|r| r["files"].as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if files.is_empty() {
+                Ok("No files matching pattern".to_string())
+            } else {
+                Ok(files.join("\n"))
             }
+        }
+        "list_directory" => {
+            let mut entries: Vec<String> = output
+                .result
+                .as_ref()
+                .and_then(|r| r["entries"].as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .map(|e| {
+                            let name = e["name"].as_str().unwrap_or("unknown");
+                            let is_dir = e["is_directory"].as_bool().unwrap_or(false);
+                            format!(" [{}] {name}", if is_dir { "dir" } else { "file" })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             entries.sort();
             Ok(entries.join("\n"))
         }
-        "bash" | "execute_command" | "run" => {
-            let command = args["command"]
-                .as_str()
-                .or_else(|| args["cmd"].as_str())
-                .ok_or_else(|| anyhow::anyhow!("missing command argument"))?;
-            let output = if cfg!(target_os = "windows") {
-                timeout(
-                    Duration::from_secs(300),
-                    tokio::process::Command::new("cmd")
-                        .args(["/c", command])
-                        .output(),
-                )
-                .await
-                .map_err(|_| anyhow::anyhow!("command timed out after 300s: {command}"))?
-            } else {
-                timeout(
-                    Duration::from_secs(300),
-                    tokio::process::Command::new("sh")
-                        .args(["-c", command])
-                        .output(),
-                )
-                .await
-                .map_err(|_| anyhow::anyhow!("command timed out after 300s: {command}"))?
-            }
-            .with_context(|| format!("failed to execute: {command}"))?;
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let mut result = String::new();
+        "shell_exec" => {
+            let r = output.result.as_ref();
+            let stdout = r.and_then(|r| r["stdout"].as_str()).unwrap_or("");
+            let stderr = r.and_then(|r| r["stderr"].as_str()).unwrap_or("");
+            let exit_code = r.and_then(|r| r["exit_code"].as_i64());
+            let mut buf = String::new();
             if !stdout.is_empty() {
-                result.push_str(&stdout);
+                buf.push_str(stdout);
             }
             if !stderr.is_empty() {
-                if !result.is_empty() {
-                    result.push('\n');
+                if !buf.is_empty() {
+                    buf.push('\n');
                 }
-                result.push_str(&stderr);
+                buf.push_str(stderr);
             }
-            if !output.status.success() {
-                result.push_str(&format!("\nexit code: {:?}", output.status.code()));
+            if let Some(code) = exit_code {
+                buf.push_str(&format!("\nexit code: {code}"));
             }
-            Ok(result)
+            Ok(buf)
         }
-        _ => Err(anyhow::anyhow!("Unknown tool: {name}")),
+        // Generic fallback for any other tool registered in the future
+        _ => Ok(output
+            .result
+            .map(|r| serde_json::to_string_pretty(&r).unwrap_or_default())
+            .unwrap_or_default()),
     }
 }
 
@@ -626,8 +618,8 @@ mod tests {
         );
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("outside the workspace") || err.contains("does not exist"),
-            "error should mention security, got: {}",
+            err.contains("canonicalization failed"),
+            "error should mention canonicalization failure, got: {}",
             err
         );
     }
@@ -636,24 +628,22 @@ mod tests {
     /// a descriptive error.
     #[tokio::test]
     async fn test_execute_simple_tool_missing_arguments() {
-        let result = execute_simple_tool("read_file", &json!({})).await;
-        assert!(result.is_err(), "read_file without path should fail");
+        let err = execute_simple_tool("read_file", &json!({}))
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("missing path argument"),
-            "error should mention missing path"
+            err.contains("missing_path"),
+            "error should mention missing_path, got: {err}"
         );
 
-        let result = execute_simple_tool("write_file", &json!({"path": "test.txt"})).await;
-        assert!(result.is_err(), "write_file without content should fail");
+        let err = execute_simple_tool("write_file", &json!({"path": "test.txt"}))
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("missing content argument"),
-            "error should mention missing content"
+            err.contains("missing_content"),
+            "error should mention missing_content, got: {err}"
         );
     }
 
@@ -662,7 +652,13 @@ mod tests {
     async fn test_execute_simple_tool_unknown_tool() {
         let result = execute_simple_tool("nonexistent_tool", &json!({})).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Unknown tool"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("not registered in governance gate"),
+            "error should indicate unknown tool was rejected by governance"
+        );
     }
 
     // ── Safety edge cases ────────────────────────────────────────────

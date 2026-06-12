@@ -290,7 +290,7 @@ pub(crate) struct BrainLoopInner {
     pub(crate) progress_reporter: Option<ProgressReporter>,
     /// Running async tasks spawned by the brain loop, keyed by plan id.
     /// Reserved for GAP-B50-06 deep-reasoning integration.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for deep-reasoning task tracking
     pub(crate) brain_loop_tasks: HashMap<String, JoinHandle<()>>,
     /// Optional metacognitive controller for self-correction feedback.
     pub(crate) metacognitive: Option<MetacognitiveController>,

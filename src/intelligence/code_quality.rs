@@ -41,7 +41,7 @@ impl CodeQualityReport {
 
     /// Returns only dead code issues.
     /// Public API for consumers of `CodeQualityReport`.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for self-evolution API integration
     pub fn dead_code_issues(&self) -> Vec<&CodeQualityIssue> {
         self.issues
             .iter()
@@ -51,7 +51,7 @@ impl CodeQualityReport {
 
     /// Converts the report into evolution triggers for self-improvement.
     /// Public API for consumers of `CodeQualityReport`.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for self-evolution API integration
     pub fn to_evolution_triggers(&self) -> Vec<EvolutionTrigger> {
         let mut triggers = Vec::new();
 
@@ -200,7 +200,7 @@ pub fn run_code_quality_scan() -> CodeQualityReport {
 ///
 /// Wired via pre_patch_quality_gate() in sandbox.apply_patch();
 /// post_plan variant is public API for external plan-completion hooks.
-#[allow(dead_code)]
+#[allow(dead_code)] // F-GAP-49 — reserved for post-plan quality gate integration
 pub fn post_plan_quality_hook() -> CodeQualityReport {
     run_code_quality_scan()
 }

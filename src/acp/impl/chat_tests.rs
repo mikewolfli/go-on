@@ -29,15 +29,18 @@ mod unit_tests {
 
     #[cfg(not(feature = "backend-postgres"))]
     use crate::acp::helpers::agent_preference::reset_agent_switch_state_for_test;
+    #[cfg(not(feature = "backend-postgres"))]
     use crate::acp::r#impl::chat::{
         extract_tool_calls_from_response, process_chat_request, reset_agent_switch_state,
         ChatParams,
     };
+    #[cfg(not(feature = "backend-postgres"))]
     use crate::memory::agent_memory_bus::clear_agent_memory_bus;
 
     /// Global mutex to serialize chat tests that share global state.
     /// Prevents flaky failures when tests run in parallel and interfere
     /// with shared globals like AGENT_SWITCH_STATE and AGENT_MEMORY_BUS.
+    #[cfg(not(feature = "backend-postgres"))]
     static CHAT_TEST_SERIAL: std::sync::LazyLock<std::sync::Mutex<()>> =
         std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
 

@@ -431,7 +431,7 @@ impl RecoveryOrchestrator {
     ///
     /// Returns the chosen `RecoveryAction` on success, or an escalate action
     /// when all auto recovery options are exhausted.
-    pub fn attempt_recovery(
+    pub async fn attempt_recovery(
         &mut self,
         failure_type: &str,
         context: Value,
@@ -440,16 +440,13 @@ impl RecoveryOrchestrator {
 
         // Check circuit breaker availability before attempting recovery.
         if let Some(ref engine) = self.engine {
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                let available =
-                    handle.block_on(async { engine.is_available("tool_execution").await });
-                if !available {
-                    self.total_escalations += 1;
-                    return Ok(RecoveryAction::Escalate {
-                        reason: "circuit breaker open: tool_execution is unavailable until recovery timeout elapses".to_string(),
-                        context,
-                    });
-                }
+            let available = engine.is_available("tool_execution").await;
+            if !available {
+                self.total_escalations += 1;
+                return Ok(RecoveryAction::Escalate {
+                    reason: "circuit breaker open: tool_execution is unavailable until recovery timeout elapses".to_string(),
+                    context,
+                });
             }
         }
 
@@ -514,10 +511,7 @@ impl RecoveryOrchestrator {
         // Record the failure with the resilience engine before retrying.
         if let Some(ref engine) = self.engine {
             if matches!(action, RecoveryAction::Retry { .. }) {
-                if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                    let _ =
-                        handle.block_on(async { engine.record_failure("tool_execution").await });
-                }
+                let _ = engine.record_failure("tool_execution").await;
             }
         }
 
@@ -665,11 +659,12 @@ mod tests {
         RecoveryOrchestrator::with_thresholds(5, 3)
     }
 
-    #[test]
-    fn recovery_strategy_tree_selects_retry_for_timeout() {
+    #[tokio::test]
+    async fn recovery_strategy_tree_selects_retry_for_timeout() {
         let mut orch = test_orchestrator();
         let action = orch
             .attempt_recovery("timeout", json!({"tool": "test_tool"}))
+            .await
             .expect("should select a recovery action");
 
         assert!(
@@ -686,11 +681,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn recovery_strategy_tree_selects_retry_for_empty_response() {
+    #[tokio::test]
+    async fn recovery_strategy_tree_selects_retry_for_empty_response() {
         let mut orch = test_orchestrator();
         let action = orch
             .attempt_recovery("empty response from agent", json!({"tool": "chat"}))
+            .await
             .expect("should select a recovery action");
 
         assert!(
@@ -700,14 +696,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn recovery_orchestrator_tracks_success_rate() {
+    #[tokio::test]
+    async fn recovery_orchestrator_tracks_success_rate() {
         let mut orch = test_orchestrator();
 
         // Make 4 attempts, 3 successful.
         for i in 0..4 {
             let _action = orch
                 .attempt_recovery("timeout", json!({"attempt": i}))
+                .await
                 .expect("should produce action");
             let attempt_id = orch
                 .recovery_attempts
@@ -725,14 +722,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn escalation_threshold_triggers_after_max_auto_attempts() {
+    #[tokio::test]
+    async fn escalation_threshold_triggers_after_max_auto_attempts() {
         let mut orch = RecoveryOrchestrator::with_thresholds(2, 5);
 
         // First two attempts succeed.
         for _ in 0..2 {
             let action = orch
                 .attempt_recovery("timeout", json!({}))
+                .await
                 .expect("should produce action");
             assert!(
                 !matches!(action, RecoveryAction::Escalate { .. }),
@@ -745,6 +743,7 @@ mod tests {
         // Third attempt should escalate because max_auto_recovery_attempts (2) is reached.
         let action = orch
             .attempt_recovery("timeout", json!({}))
+            .await
             .expect("should produce action");
         assert!(
             matches!(action, RecoveryAction::Escalate { .. }),
@@ -753,14 +752,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn escalation_threshold_triggers_after_consecutive_failures() {
+    #[tokio::test]
+    async fn escalation_threshold_triggers_after_consecutive_failures() {
         let mut orch = RecoveryOrchestrator::with_thresholds(10, 3);
 
         // Three consecutive failures should trigger escalation from threshold.
         for i in 0..3 {
             let _action = orch
                 .attempt_recovery("timeout", json!({"attempt": i}))
+                .await
                 .expect("should produce action");
             let attempt_id = orch.recovery_attempts.last().unwrap().attempt_id.clone();
             // Record as failure.
@@ -770,6 +770,7 @@ mod tests {
         // Next attempt should escalate due to consecutive_failures >= threshold.
         let action = orch
             .attempt_recovery("timeout", json!({"attempt": 3}))
+            .await
             .expect("should produce action");
         assert!(
             matches!(action, RecoveryAction::Escalate { .. }),
@@ -778,16 +779,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn evidence_chain_preserves_recovery_attempts() {
+    #[tokio::test]
+    async fn evidence_chain_preserves_recovery_attempts() {
         let mut orch = test_orchestrator();
 
         orch.attempt_recovery("timeout", json!({"tool": "search"}))
+            .await
             .expect("should produce action");
         let id1 = orch.recovery_attempts.last().unwrap().attempt_id.clone();
         orch.record_outcome(&id1, true);
 
         orch.attempt_recovery("permission denied", json!({"tool": "write"}))
+            .await
             .expect("should produce action");
         let id2 = orch.recovery_attempts.last().unwrap().attempt_id.clone();
         orch.record_outcome(&id2, false);
@@ -810,14 +813,15 @@ mod tests {
         assert_eq!(chain[1]["success"], false);
     }
 
-    #[test]
-    fn human_intervention_ratio_calculation() {
+    #[tokio::test]
+    async fn human_intervention_ratio_calculation() {
         let mut orch = test_orchestrator();
 
         // Make 2 regular attempts and succeed (no escalation).
         for i in 0..2 {
             let action = orch
                 .attempt_recovery("timeout", json!({"attempt": i}))
+                .await
                 .expect("should produce action");
             let id = orch.recovery_attempts.last().unwrap().attempt_id.clone();
             orch.record_outcome(&id, true);
@@ -841,6 +845,7 @@ mod tests {
         for i in 0..2 {
             let _action = orch2
                 .attempt_recovery("timeout", json!({"attempt": i}))
+                .await
                 .expect("should produce action");
             let id = orch2.recovery_attempts.last().unwrap().attempt_id.clone();
             orch2.record_outcome(&id, false);
@@ -849,6 +854,7 @@ mod tests {
         // Third attempt: consecutive failures = 2 >= threshold (2) -> escalate.
         let action2 = orch2
             .attempt_recovery("timeout", json!({"attempt": 2}))
+            .await
             .expect("should produce action");
         assert!(
             matches!(action2, RecoveryAction::Escalate { .. }),

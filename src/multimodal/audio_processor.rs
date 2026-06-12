@@ -518,7 +518,7 @@ impl AudioProcessor {
     #[cfg(feature = "audio-vosk")]
     fn transcribe_vosk(
         &self,
-        audio: &[u8],
+        _audio: &[u8],
         _format: AudioFormat,
     ) -> Result<Transcription, AudioProcessorError> {
         let model_path = self.config.vosk_model_path.as_ref().ok_or_else(|| {
@@ -544,9 +544,9 @@ impl AudioProcessor {
             )));
         }
 
-        return Err(AudioProcessorError::Other(
+        Err(AudioProcessorError::Other(
             "Vosk transcription requires model loading. The `audio-vosk` feature was compiled, but no real Vosk model was loaded during initialization. Set `vosk_model_path` in the audio configuration and ensure the model directory exists at the specified path.".to_string(),
-        ));
+        ))
     }
 
     #[cfg(not(feature = "audio-vosk"))]

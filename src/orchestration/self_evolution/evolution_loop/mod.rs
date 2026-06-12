@@ -119,9 +119,8 @@ impl EvolutionLoop {
     /// Register **all** built-in trigger sources (Tick, Metacognitive,
     /// AlertManager, Diagnostic, Manual) for a fully wired evolution loop.
     pub fn with_default_trigger_sources(self) -> Self {
-        let _ = &self; // borrow so we can chain
-                       // Create a shared error-counts map so the evolution loop can
-                       // inject pipeline failures into the DiagnosticTriggerSource.
+        // Create a shared error-counts map so the evolution loop can
+        // inject pipeline failures into the DiagnosticTriggerSource.
         let shared_counts: Arc<tokio::sync::Mutex<HashMap<String, u64>>> =
             Arc::new(tokio::sync::Mutex::new(HashMap::new()));
         let diagnostic = DiagnosticTriggerSource::with_shared_counts(
@@ -301,7 +300,7 @@ impl EvolutionLoop {
                         );
                         // Record the error pattern for repeated-failure detection.
                         if let Some(ref counts) = self.diagnostic_error_counts {
-                            let mut guard = tokio::task::block_in_place(|| counts.blocking_lock());
+                            let mut guard = counts.lock().await;
                             *guard
                                 .entry(format!("apply_failure::{}::{}", trigger.label(), e))
                                 .or_insert(0) += 1;

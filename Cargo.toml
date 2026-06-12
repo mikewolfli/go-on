@@ -73,10 +73,6 @@ sub-bus-protocol = []
 sub-bus-orchestration = []
 sub-bus-distributed-memory = []
 # Note: sub-bus-tool-future was removed because no code ever used it.
-# It was defined as a placeholder for future tool capabilities but
-# no #[cfg(feature = "sub-bus-tool-future")] guard existed anywhere
-# in the codebase. If future tool features are needed, re-add the
-# feature flag and add proper #[cfg] gating to the corresponding code.
 sub-bus-voter-future = []
 
 # Multimodal document-parsing backends (optional, feature-gated)
@@ -100,9 +96,8 @@ audio-vosk = []
 # local:       single-user local tool (default for `cargo build`)
 #                      Core sub-buses for local operation.
 # simple-server: single-server deployment (explicit --features)
-#                        Adds sub-bus-distributed-memory,
-#                        vault, and temp_env on top of local to
-#                        support production server needs.
+#                        Adds sub-bus-distributed-memory and vault
+#                        on top of local to support production server needs.
 local = [
     "backend-sqlite",
     "sub-bus-tool",
@@ -111,7 +106,6 @@ local = [
     "sub-bus-optimization",
     "sub-bus-memory",
     "sub-bus-protocol",
-    "temp_env",
 ]
 simple-server = [
     "backend-sqlite",
@@ -123,7 +117,6 @@ simple-server = [
     "sub-bus-distributed-memory",
     "sub-bus-protocol",
     "vault",
-    "temp_env",
 ]
 multi-users-server = [
     "backend-postgres",
@@ -136,7 +129,6 @@ multi-users-server = [
     "sub-bus-orchestration",
     "sub-bus-distributed-memory",
     "vault",
-    "temp_env",
 ]
 
 # Full-feature profile for local development and CI testing
@@ -155,7 +147,6 @@ full = [
     "audio-whisper-openai",
     "audio-vosk",
     "vault",
-    "temp_env",
 ]
 
 # Backend implementations

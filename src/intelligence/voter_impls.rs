@@ -379,11 +379,18 @@ impl AgentVoter for DeepSeekVoter {
                     }
                 }
             }
-            Err(e) => Vote {
-                approves: true,
-                reasoning: format!("DeepSeekVoter: API error — {}", e),
-                confidence: 0.2,
-            },
+            Err(e) => {
+                tracing::error!(
+                    target: "go_on::intelligence::voter",
+                    error = %e,
+                    "DeepSeekVoter: API unreachable — conservative reject"
+                );
+                Vote {
+                    approves: false,
+                    reasoning: format!("DeepSeekVoter: API error — {}", e),
+                    confidence: 0.0,
+                }
+            }
         }
     }
 }
@@ -407,14 +414,6 @@ impl LocalVoter {
         Self {
             name: name.into(),
             config,
-        }
-    }
-
-    /// Create a voter with default configuration and a given name.
-    pub fn new_default(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            config: AgentConfig::default(),
         }
     }
 }

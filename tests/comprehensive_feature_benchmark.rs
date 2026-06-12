@@ -448,7 +448,9 @@ fn measure_auto_recovery() -> DimensionScore {
     let mut orchestrator = RecoveryOrchestrator::new();
 
     // Attempt recovery for a timeout failure
-    let action = orchestrator.attempt_recovery("timeout", serde_json::json!({}));
+    let action = tokio::runtime::Runtime::new()
+        .expect("create tokio runtime")
+        .block_on(orchestrator.attempt_recovery("timeout", serde_json::json!({})));
     let has_action = action.is_ok();
     let action_label_ok = !action.as_ref().map(|a| a.label()).unwrap_or("").is_empty();
 

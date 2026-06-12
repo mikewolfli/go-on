@@ -1274,7 +1274,7 @@ impl McpServer {
     ///
     /// This is a public API surface reserved for external callers who
     /// need to notify subscribers of resource changes.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for external resource change notification
     pub fn notify_resource_changed(&self, resource_uri: &str) {
         let has_subscribers = {
             let subs = self

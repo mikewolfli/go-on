@@ -58,7 +58,7 @@ pub async fn perform_bootstrap(config: &BootstrapConfig) -> Result<()> {
     }
 
     // 3. Initialize orchestration provider (for architecture boundary verification)
-    let _provider = crate::core::provider::DefaultOrchestrationProvider;
+    let _provider = crate::core::provider::DefaultOrchestrationProvider::default();
     tracing::debug!(
         target: "go_on::core::bootstrap",
         skills = crate::core::provider::OrchestrationProvider::skill_count(&_provider),

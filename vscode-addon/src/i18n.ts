@@ -647,135 +647,15 @@ class I18nManager {
   }
 
   /**
-   * Minimal hardcoded fallback messages when locale files can't be loaded
+   * Minimal fallback messages when locale files can't be loaded.
+   * These are intentionally minimal to avoid duplicating locale file data (D6).
+   * The primary i18n data lives in vscode-addon/src/locales/*.json.
+   * If a key is not found here, getFallbackValue() falls back to the
+   * en-US.json locale file on disk, then to the raw key string.
    */
-  private getFallbackMessages(language: Language): I18nMessages {
-    const general: I18nMessages = {
-      goOn: "Go-On",
-      settings:
-        language === "zh_CN"
-          ? "设置"
-          : language === "zh_TW"
-            ? "設定"
-            : "Settings",
-      start:
-        language === "zh_CN" ? "启动" : language === "zh_TW" ? "啟動" : "Start",
-      stop:
-        language === "zh_CN" ? "停止" : language === "zh_TW" ? "停止" : "Stop",
-      status: "Status",
-      running:
-        language === "zh_CN"
-          ? "运行中"
-          : language === "zh_TW"
-            ? "執行中"
-            : "Running",
-      stopped:
-        language === "zh_CN"
-          ? "已停止"
-          : language === "zh_TW"
-            ? "已停止"
-            : "Stopped",
-      save: "Save",
-      cancel: "Cancel",
-      delete: "Delete",
-      edit: "Edit",
-      add: "Add",
-      ok: "OK",
-      close: "Close",
-      error: "Error",
-      warning: "Warning",
-      loading: "Loading...",
-      success: "Success",
-      enabled: "Enabled",
-      disabled: "Disabled",
-      yes: "Yes",
-      no: "No",
-      refresh: "Refresh",
-      reload: "Reload",
-      retry: "Retry",
-      back: "Back",
-      next: "Next",
-      previous: "Previous",
-      search: "Search",
-      filter: "Filter",
-      clear: "Clear",
-      select: "Select",
-      confirm: "Confirm",
-      apply: "Apply",
-      reset: "Reset",
-      export: "Export",
-      import: "Import",
-      more: "More",
-      less: "Less",
-      default: "Default",
-      custom: "Custom",
-      advanced: "Advanced",
-      basic: "Basic",
-    };
-
-    const commands: I18nMessages = {
-      start: { title: "Start Go-On Proxy", category: "Go-On" },
-      stop: { title: "Stop Go-On Proxy", category: "Go-On" },
-      openChat: { title: "Open Go-On Chat", category: "Go-On" },
-      openSettings: { title: "Open Go-On Settings", category: "Go-On" },
-      healthCheck: { title: "Check Go-On Health", category: "Go-On" },
-      diagnose: { title: "Diagnose Go-On Runtime", category: "Go-On" },
-      cacheClear: { title: "Clear Cache", category: "Go-On" },
-      vectorClear: { title: "Clear Vector Memory", category: "Go-On" },
-      configReload: { title: "Reload Configuration", category: "Go-On" },
-      shutdown: { title: "Shutdown Go-On", category: "Go-On" },
-      clearChat: { title: "Clear Chat History", category: "Go-On" },
-      exportChat: { title: "Export Chat History", category: "Go-On" },
-      newSession: { title: "New Chat Session", category: "Go-On" },
-      editCode: { title: "Advanced Code Edit", category: "Go-On" },
-      refactorCode: { title: "Refactor Code", category: "Go-On" },
-    };
-
-    const messages: I18nMessages = {
-      successfullySaved: "Successfully saved",
-      errorSaving: "Error saving configuration",
-      unsavedChanges: "You have unsaved changes",
-      goOnStarted: "Go-On proxy started.",
-      goOnStopped: "Go-On proxy stopped.",
-      goOnNotRunning: "Go-On is not running. Start it first.",
-      goOnShutdown: "Shutdown initiated.",
-      cacheCleared: "Cache cleared.",
-      vectorCleared: "Vector memory cleared.",
-      configReloaded: "Configuration reloaded.",
-      diagnosisCompleted: "Go-On diagnosis completed.",
-    };
-
-    return {
-      general,
-      commands,
-      messages,
-      runtime: {},
-      execution: {},
-      workflow: {
-        createNewWorkflow: "Create New Workflow",
-      },
-      configuration: {},
-      chat: {},
-      configWizard: {},
-      diagnosis: {},
-      statusBar: {},
-      rpc: {},
-      credentials: {},
-      help: {},
-      language: {},
-      editing: {},
-      processFlow: {
-        noProcessSelected: "No Process Selected",
-        createProcess: "Create",
-        runProcess: "Run",
-        exportProcessJson: "Export JSON",
-        importProcessJson: "Import JSON",
-      },
-      advanced: {},
-      views: {},
-      viewContainers: {},
-      config: {},
-    };
+  private getFallbackMessages(_language: Language): I18nMessages {
+    // Return empty object — rely on en-US.json on disk or raw key fallback
+    return {};
   }
 
   /**

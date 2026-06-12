@@ -141,7 +141,7 @@ pub fn pipeline_gate_violation(
 }
 
 /// Touch conversation order (move to most recent)
-#[cfg_attr(not(test), allow(dead_code))] // F-GAP-49
+#[allow(dead_code)] // F-GAP-49
 pub fn touch_conversation_order(order: &StdMutex<Vec<String>>, conversation_id: &str) {
     let mut guard = order.lock().unwrap_or_else(|poisoned| {
         tracing::warn!("lock poisoned in conversation.rs: recovering");

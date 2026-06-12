@@ -18,7 +18,7 @@ pub trait EmbeddingProvider: Send + Sync {
     fn embed(&self, text: &str) -> Vec<f32>;
 
     /// Return the expected dimensionality of this provider's output vectors.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // F-GAP-49 — reserved for embedding dimension validation
     fn expected_dimension(&self) -> usize;
 }
 

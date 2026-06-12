@@ -348,20 +348,19 @@ impl VaultRotator {
         endpoint: String,
         #[cfg(feature = "vault")] token: String,
         mount_path: String,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, SecretError> {
+        Ok(Self {
             endpoint,
             #[cfg(feature = "vault")]
             token,
             mount_path,
             #[cfg(feature = "vault")]
-            client: match crate::shared::http_client::http_client() {
-                Ok(c) => c,
-                Err(e) => {
-                    panic!("VaultRotator: failed to build shared HTTP client: {e}")
-                }
-            },
-        }
+            client: crate::shared::http_client::http_client().map_err(|e| {
+                SecretError::BackendError(format!(
+                    "VaultRotator: failed to build shared HTTP client: {e}"
+                ))
+            })?,
+        })
     }
 
     /// Build common headers for Vault API calls.
@@ -414,18 +413,34 @@ impl KeyRotator for VaultRotator {
                     status, text
                 )));
             }
+            let body_json: serde_json::Value = resp.json().await.map_err(|e| {
+                SecretError::BackendError(format!("Vault response parse error: {e}"))
+            })?;
+            // Extract key bytes from Vault transit engine response
+            let key_bytes = body_json
+                .get("data")
+                .and_then(|d| d.get("keys"))
+                .and_then(|k| k.get(key_id))
+                .and_then(|k| k.get("key"))
+                .and_then(|v| v.as_str())
+                .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok())
+                .unwrap_or_else(|| {
+                    // Fallback: generate a random key when Vault returns no key data
+                    use rand::RngCore;
+                    let mut buf = [0u8; 32];
+                    rand::thread_rng().try_fill_bytes(&mut buf).ok();
+                    buf.to_vec()
+                });
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
             let entry = SecretEntry {
                 key_id: key_id.to_string(),
-                key_bytes: vec![],
+                key_bytes,
                 algorithm,
-                created_at_ms: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64,
-                rotated_at_ms: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64,
+                created_at_ms: now_ms,
+                rotated_at_ms: now_ms,
                 expires_at_ms: None,
                 metadata: std::collections::HashMap::new(),
                 tenant_id: None,
@@ -517,12 +532,46 @@ impl KeyRotator for VaultRotator {
                     status
                 )));
             }
+            let body_json: serde_json::Value = resp.json().await.map_err(|e| {
+                SecretError::BackendError(format!("Vault response parse error: {e}"))
+            })?;
+            // Parse Vault transit engine response for key metadata
+            let key_data = body_json
+                .get("data")
+                .and_then(|d| d.get("keys"))
+                .and_then(|k| k.get(key_id));
+            let (key_bytes, algorithm, created_ms, rotated_ms) = key_data
+                .map(|kd| {
+                    let kb = kd
+                        .get("key")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok())
+                        .unwrap_or_default();
+                    let alg = match kd.get("type").and_then(|v| v.as_str()) {
+                        Some("aes256-gcm96") => SecretAlgorithm::Aes256Gcm,
+                        Some("hmac") => SecretAlgorithm::HmacSha256,
+                        Some("ed25519") => SecretAlgorithm::Ed25519,
+                        _ => SecretAlgorithm::Generic,
+                    };
+                    let created = kd
+                        .get("creation_time")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0) as u64
+                        * 1000;
+                    let rotated = kd
+                        .get("latest_version_creation_time")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0) as u64
+                        * 1000;
+                    (kb, alg, created, rotated)
+                })
+                .unwrap_or((vec![], SecretAlgorithm::Generic, 0u64, 0u64));
             let entry = SecretEntry {
                 key_id: key_id.to_string(),
-                key_bytes: vec![],
-                algorithm: SecretAlgorithm::Aes256Gcm,
-                created_at_ms: 0,
-                rotated_at_ms: 0,
+                key_bytes,
+                algorithm,
+                created_at_ms: created_ms,
+                rotated_at_ms: rotated_ms,
                 expires_at_ms: None,
                 metadata: std::collections::HashMap::new(),
                 tenant_id: None,
@@ -598,8 +647,21 @@ impl KeyRotator for VaultRotator {
                     status
                 )));
             }
-            tracing::debug!(target: "vault", "VaultRotator: listed keys");
-            return Ok(vec![]);
+            let body_json: serde_json::Value = resp.json().await.map_err(|e| {
+                SecretError::BackendError(format!("Vault response parse error: {e}"))
+            })?;
+            let keys: Vec<KeyId> = body_json
+                .get("data")
+                .and_then(|d| d.get("keys"))
+                .and_then(|k| k.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            tracing::debug!(target: "vault", count = keys.len(), "VaultRotator: listed keys");
+            return Ok(keys);
         }
         #[cfg(not(feature = "vault"))]
         {

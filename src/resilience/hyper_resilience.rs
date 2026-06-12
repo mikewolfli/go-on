@@ -1424,7 +1424,10 @@ impl FaultConsensus {
 
         // Declare fault when a quorum of voters report unhealthy AND
         // at least half of all voters agree.
-        let declared = unhealthy >= self.quorum_size && unhealthy > total / 2;
+        // Cap effective quorum to the number of active voters to avoid
+        // deadlock when fewer voters exist than the configured quorum_size.
+        let effective_quorum = self.quorum_size.min(total.max(1));
+        let declared = unhealthy >= effective_quorum && unhealthy > total / 2;
 
         (declared, unhealthy, total)
     }

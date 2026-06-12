@@ -259,12 +259,7 @@ impl MemoryBus {
                     tracing::warn!("memory_response_cache lock poisoned in store L1 – recovered");
                     poisoned.into_inner()
                 });
-                guard.put(
-                    key.to_string(),
-                    value_str.clone(),
-                    None, // no agent context at this level
-                    strategy.ttl_seconds,
-                );
+                guard.put(key.to_string(), value_str.clone(), strategy.ttl_seconds);
             }
         }
 

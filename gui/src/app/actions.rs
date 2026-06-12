@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Find the go-on backend binary path relative to the GUI executable.
-fn find_backend_binary() -> Option<std::path::PathBuf> {
+pub(crate) fn find_backend_binary() -> Option<std::path::PathBuf> {
     let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
     let exe_name = if cfg!(target_os = "windows") {
         "go-on.exe"
