@@ -1769,13 +1769,19 @@ impl VectorStore {
         Ok((memory_deleted, summaries_deleted))
     }
 
-    /// No-op on PostgreSQL — VACUUM is managed by autovacuum.
+    /// Reclaim PostgreSQL storage after retention cleanup.
     ///
-    /// TODO(F-GAP-93): Implement explicit vacuum triggering for postgres.
-    ///   Current implementation is a no-op relying on autovacuum. For
-    ///   consistency with the SQLite backend, consider issuing a manual
-    ///   `VACUUM` or reindexing call after large deletions.
+    /// Issues `VACUUM ANALYZE` to reclaim free pages and update query planner
+    /// statistics, matching the SQLite backend's `vacuum()` behaviour. While
+    /// PostgreSQL autovacuum handles routine maintenance automatically, issuing
+    /// an explicit `VACUUM ANALYZE` after large deletions ensures immediate
+    /// space reclamation and consistent test/benchmark behaviour.
     pub fn vacuum(&self) -> Result<()> {
+        let mut client = self.client.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("vector mutex poisoned in 'vacuum', recovering");
+            poisoned.into_inner()
+        });
+        client.batch_execute("VACUUM ANALYZE")?;
         Ok(())
     }
 }

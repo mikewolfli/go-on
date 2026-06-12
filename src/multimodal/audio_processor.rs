@@ -544,47 +544,9 @@ impl AudioProcessor {
             )));
         }
 
-        let language = self
-            .config
-            .language_hint
-            .clone()
-            .unwrap_or_else(|| "en".to_string());
-
-        let duration_sec = audio.len() as f64 / (self.config.sample_rate as f64 * 2.0);
-
-        // Split audio into 30-second chunks and mark each.
-        let chunk_duration = 30.0_f64.min(duration_sec);
-        let num_chunks = (duration_sec / chunk_duration).ceil() as usize;
-        let mut segments = Vec::with_capacity(num_chunks);
-        for i in 0..num_chunks {
-            let start = i as f64 * chunk_duration;
-            let end = ((i + 1) as f64 * chunk_duration).min(duration_sec);
-            segments.push(TranscriptSegment {
-                start_sec: start,
-                end_sec: end,
-                text: String::new(), // placeholder — no real Vosk model loaded
-                confidence: Some(0.0),
-                speaker: None,
-            });
-        }
-
-        let num_segments = segments.len();
-        Ok(Transcription {
-            text: String::new(),
-            segments,
-            language,
-            confidence: Some(0.0),
-            processing_duration: Duration::from_secs_f64(duration_sec.max(1.0)),
-            metadata: {
-                let mut m = HashMap::new();
-                m.insert("feature".to_string(), "audio-vosk".to_string());
-                m.insert("model_path".to_string(), model_path.clone());
-                m.insert("audio_bytes".to_string(), audio.len().to_string());
-                m.insert("num_segments".to_string(), num_segments.to_string());
-                m.insert("duration_sec".to_string(), format!("{:.1}", duration_sec));
-                m
-            },
-        })
+        return Err(AudioProcessorError::Other(
+            "Vosk transcription requires model loading. The `audio-vosk` feature was compiled, but no real Vosk model was loaded during initialization. Set `vosk_model_path` in the audio configuration and ensure the model directory exists at the specified path.".to_string(),
+        ));
     }
 
     #[cfg(not(feature = "audio-vosk"))]

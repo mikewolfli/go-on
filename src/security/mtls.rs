@@ -221,8 +221,6 @@ impl CertificateInfo {
 /// Accepts incoming mTLS connections using rustls.
 ///
 /// Loads CA and server certificates from the paths specified in MtlsConfig.
-/// TODO-BLUE64: Wire into ACP runtime accept path (BLUE56-D03).
-#[allow(dead_code)]
 pub struct MtlsAcceptor {
     config: MtlsConfig,
     /// Cached server config (rebuilt on cert reload).
@@ -231,7 +229,6 @@ pub struct MtlsAcceptor {
 
 impl MtlsAcceptor {
     /// Create a new MtlsAcceptor from configuration.
-    /// TODO-BLUE64: Wire into ACP runtime accept path.
     pub fn new(config: MtlsConfig) -> Self {
         Self {
             config,
@@ -402,107 +399,11 @@ impl MtlsAcceptor {
     }
 
     /// Reload certificates from disk (for hot-reload scenarios).
-    #[allow(dead_code)]
     pub async fn reload_certs(&self) -> Result<(), MtlsError> {
         let cfg = self.build_server_config()?;
         *self.server_config.write().await = Some(cfg);
         info!("mTLS certificates reloaded");
         Ok(())
-    }
-}
-
-// ---------------------------------------------------------------------------
-// MtlsConnector
-// ---------------------------------------------------------------------------
-
-#[allow(dead_code)] // Reserved for future outbound mTLS client connections (GAP-B52-24)
-/// Connects to remote mTLS endpoints using rustls.
-pub struct MtlsConnector {
-    config: MtlsConfig,
-    client_config: RwLock<Option<Arc<rustls::ClientConfig>>>,
-}
-
-#[allow(dead_code)] // Reserved for future outbound mTLS client connections (GAP-B52-24)
-impl MtlsConnector {
-    pub fn new(config: MtlsConfig) -> Self {
-        Self {
-            config,
-            client_config: RwLock::new(None),
-        }
-    }
-
-    /// Build the rustls ClientConfig.
-    fn build_client_config(&self) -> Result<Arc<rustls::ClientConfig>, MtlsError> {
-        // Load CA certs for server verification
-        let ca_cert_bytes = std::fs::read(&self.config.ca_cert_path)?;
-        let mut root_store = rustls::RootCertStore::empty();
-        let ca_certs: Vec<rustls::pki_types::CertificateDer<'static>> =
-            rustls_pemfile::certs(&mut ca_cert_bytes.as_slice())
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| MtlsError::InvalidCert(e.to_string()))?;
-
-        for cert in &ca_certs {
-            root_store
-                .add(cert.clone())
-                .map_err(|e| MtlsError::InvalidCert(e.to_string()))?;
-        }
-
-        // Load client certificate for mTLS
-        let client_cert_bytes = std::fs::read(&self.config.server_cert_path)?;
-        let cert_chain: Vec<rustls::pki_types::CertificateDer<'static>> =
-            rustls_pemfile::certs(&mut client_cert_bytes.as_slice())
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| MtlsError::InvalidCert(e.to_string()))?;
-
-        let key_bytes = std::fs::read(&self.config.server_key_path)?;
-        let private_key = rustls_pemfile::private_key(&mut key_bytes.as_slice())
-            .map_err(|e| MtlsError::InvalidKey(e.to_string()))?
-            .ok_or_else(|| MtlsError::InvalidKey("no client private key found".into()))?;
-
-        let config = rustls::ClientConfig::builder()
-            .with_root_certificates(Arc::new(root_store))
-            .with_client_auth_cert(cert_chain, private_key)
-            .map_err(|e| MtlsError::InvalidCert(e.to_string()))?;
-
-        Ok(Arc::new(config))
-    }
-
-    /// Connect to a remote mTLS endpoint.
-    pub async fn connect(
-        &self,
-        addr: &str,
-        server_name: &str,
-    ) -> Result<tokio_rustls::TlsConnector, MtlsError> {
-        let client_config = {
-            let cached = self.client_config.read().await;
-            match cached.as_ref() {
-                Some(cfg) => cfg.clone(),
-                None => {
-                    drop(cached);
-                    let cfg = self.build_client_config()?;
-                    *self.client_config.write().await = Some(cfg.clone());
-                    cfg
-                }
-            }
-        };
-
-        // BLUE56-D03: Perform actual TCP connection and TLS handshake
-        let stream = tokio::net::TcpStream::connect(addr)
-            .await
-            .map_err(|e| MtlsError::HandshakeFailed(format!("TCP connect: {}", e)))?;
-
-        let connector = tokio_rustls::TlsConnector::from(client_config);
-        let _tls_stream = connector
-            .connect(
-                rustls::pki_types::ServerName::try_from(server_name)
-                    .map_err(|e| MtlsError::HandshakeFailed(format!("invalid server name: {}", e)))?
-                    .to_owned(),
-                stream,
-            )
-            .await
-            .map_err(|e| MtlsError::HandshakeFailed(format!("TLS connect: {}", e)))?;
-
-        Ok(connector)
     }
 }
 

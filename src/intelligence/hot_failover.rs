@@ -135,7 +135,7 @@ impl HotFailover {
     /// Returns the first successful result, or an error if all models fail.
     pub async fn execute_with_failover<F, Fut, T, E>(
         &self,
-        _prompt: &str,
+        prompt: &str,
         attempts: &[(String, F)],
     ) -> Result<T, E>
     where
@@ -144,13 +144,14 @@ impl HotFailover {
         E: std::fmt::Debug + Default,
     {
         if !self.config.enabled {
+            tracing::info!(%prompt, "HotFailover: disabled — using primary only");
             if let Some((model_id, f)) = attempts.first() {
                 return f(model_id.clone()).await;
             }
             return Err(E::default());
         }
         if attempts.is_empty() {
-            tracing::error!("HotFailover: no models provided — cannot execute");
+            tracing::error!(%prompt, "HotFailover: no models provided — cannot execute");
             return Err(E::default());
         }
 
@@ -169,6 +170,7 @@ impl HotFailover {
                 m.cooldown_skips += 1;
                 info!(
                     model = %model_id,
+                    %prompt,
                     "HotFailover: skipping blacklisted model"
                 );
                 continue;
@@ -192,6 +194,7 @@ impl HotFailover {
                     warn!(
                         model = %model_id,
                         attempt = i + 1,
+                        %prompt,
                         ?e,
                         "HotFailover: model returned error"
                     );
@@ -203,6 +206,7 @@ impl HotFailover {
                     warn!(
                         model = %model_id,
                         attempt = i + 1,
+                        %prompt,
                         timeout_ms = self.config.timeout_ms,
                         "HotFailover: model timed out"
                     );
@@ -220,6 +224,7 @@ impl HotFailover {
         // GAP-B58-B16: Log all models that failed before returning the error.
         if !failed_models.is_empty() {
             tracing::error!(
+                %prompt,
                 failed_models = ?failed_models,
                 "HotFailover: all {} model(s) exhausted",
                 failed_models.len(),

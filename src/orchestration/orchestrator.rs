@@ -64,20 +64,15 @@ pub fn record_model_execution(
 /// Creates runtimes with the provided agent registry so they can actually
 /// execute tasks instead of falling through to the no-agent fallback.
 ///
-/// TODO-BLUE64: Replace hardcoded string matching with a structured dispatch
-/// using `ModeKind` enum or a registry-based strategy pattern.
+/// Mode string is resolved via `ModeKind::from(&str)`, which performs
+/// case-insensitive structured dispatch — see `ModeKind` for supported
+/// variants (ask, edit, agent, full_auto, safeguard). Unrecognized
+/// strings fall back to `ModeKind::Ask`.
 pub fn select_mode_runtime_with_registry(
     mode: &str,
     registry: Arc<AgentRegistry>,
 ) -> Box<dyn ModeRuntime> {
-    let kind = match mode {
-        "ask" => ModeKind::Ask,
-        "edit" => ModeKind::Edit,
-        "agent" => ModeKind::Agent,
-        "full_auto" => ModeKind::FullAuto,
-        "safeguard" => ModeKind::SafeGuard,
-        _ => ModeKind::Ask,
-    };
+    let kind = ModeKind::from(mode);
     Box::new(GenericModeRuntime::new(kind, registry, None))
 }
 

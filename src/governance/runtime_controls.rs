@@ -370,16 +370,6 @@ impl OnlineControllerState {
     }
 }
 
-#[allow(dead_code)] // F-GAP reserved
-fn percentile(samples: &[u64], percentile: f64) -> u64 {
-    if samples.is_empty() {
-        return 0;
-    }
-    let clamped = percentile.clamp(0.0, 100.0);
-    let rank = ((clamped / 100.0) * ((samples.len() - 1) as f64)).round() as usize;
-    samples[rank]
-}
-
 /// Periodic timeout check called from background tasks (BLUE56-D02).
 /// Scans for operations that have exceeded their timeout budget and
 /// logs warnings for any detected timeouts.

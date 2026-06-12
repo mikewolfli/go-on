@@ -427,11 +427,13 @@ pub struct CacheStats {
 /// Falls back to `0` when platform-specific APIs are unavailable.
 ///
 /// ## Windows dependency
-/// This function uses the `windows-sys` crate (version 0.59) through the
-/// `Win32_System_ProcessStatus` and `Win32_System_Threading` features.
-/// The dependency is declared in `Cargo.toml` under
-/// `[target.'cfg(target_os = "windows")'.dependencies]` so it is only
-/// compiled on Windows targets.
+/// Get current process resident memory in bytes.
+///
+/// Platform-specific implementations:
+/// - Windows: uses `K32GetProcessMemoryInfo` via `windows-sys`.
+/// - Linux: reads VmRSS from `/proc/self/status`.
+/// - macOS: parses output of `ps -o rss=`.
+/// - Other: returns 0 (unsupported platform).
 #[cfg(target_os = "windows")]
 pub(crate) fn get_memory_usage() -> u64 {
     use std::mem::{size_of, zeroed};

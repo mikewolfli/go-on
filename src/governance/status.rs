@@ -1,9 +1,15 @@
-//! Lightweight governance gate for CLI tool execution.
+//! Governance status aggregation and CLI tool execution gate.
 //!
-//! Provides `quick_check_tool` — a fast, synchronous check that validates
-//! whether a tool invocation is allowed before execution. This gate ensures
-//! that even in terminal chat mode, where the full governance pipeline is not
-//! wired in, we still enforce a minimal set of safety policies.
+//! Provides two concerns:
+//!
+//! 1. **`GovernanceStatus`** — aggregates health state from all governance
+//!    subsystems (rationalization, security, RBAC, runtime controls, audit,
+//!    voting) into a single snapshot for health endpoints and diagnostics.
+//!
+//! 2. **`quick_check_tool`** — a fast, synchronous gate that validates
+//!    whether a tool invocation is allowed before execution. This gate ensures
+//!    that even in terminal chat mode, where the full governance pipeline is not
+//!    wired in, we still enforce a minimal set of safety policies.
 //!
 //! # Design
 //!
@@ -15,6 +21,90 @@
 //! - **Shell execution** (`bash`, `execute_command`, `run`): always requires
 //!   additional checks — dangerous commands are blocked outright.
 //! - **Unknown tools**: denied by default (fail-closed).
+
+/// Aggregated governance subsystem health snapshot.
+///
+/// Collects health state and counters from every governance component:
+/// rationalization guard, security governor, RBAC enforcer, runtime controls,
+/// audit logger, and the voting subsystem.
+///
+/// This struct is the single point of integration for health endpoints.
+/// Each subsystem reports a `subsystem_health` map with per-component status.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct GovernanceStatus {
+    /// Whether all governance subsystems are healthy.
+    pub healthy: bool,
+    /// Per-subsystem health indicators.
+    pub subsystems: GovernanceSubsystems,
+}
+
+/// Per-subsystem governance health indicators.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GovernanceSubsystems {
+    pub rationalization: bool,
+    pub security_governor: bool,
+    pub rbac: bool,
+    pub runtime_controls: bool,
+    pub audit: bool,
+    pub voting: bool,
+}
+
+impl Default for GovernanceSubsystems {
+    fn default() -> Self {
+        Self {
+            rationalization: true,
+            security_governor: true,
+            rbac: true,
+            runtime_controls: true,
+            audit: true,
+            voting: true,
+        }
+    }
+}
+
+impl GovernanceStatus {
+    /// Create a new status with all subsystems marked healthy.
+    pub fn new() -> Self {
+        Self {
+            healthy: true,
+            subsystems: GovernanceSubsystems::default(),
+        }
+    }
+
+    /// Mark a specific subsystem as degraded (unhealthy).
+    pub fn mark_degraded(&mut self, subsystem: &str) {
+        match subsystem {
+            "rationalization" => self.subsystems.rationalization = false,
+            "security_governor" => self.subsystems.security_governor = false,
+            "rbac" => self.subsystems.rbac = false,
+            "runtime_controls" => self.subsystems.runtime_controls = false,
+            "audit" => self.subsystems.audit = false,
+            "voting" => self.subsystems.voting = false,
+            _ => {}
+        }
+        self.healthy = self.subsystems.rationalization
+            && self.subsystems.security_governor
+            && self.subsystems.rbac
+            && self.subsystems.runtime_controls
+            && self.subsystems.audit
+            && self.subsystems.voting;
+    }
+
+    /// Return a JSON summary for health endpoints.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "healthy": self.healthy,
+            "subsystems": {
+                "rationalization": self.subsystems.rationalization,
+                "security_governor": self.subsystems.security_governor,
+                "rbac": self.subsystems.rbac,
+                "runtime_controls": self.subsystems.runtime_controls,
+                "audit": self.subsystems.audit,
+                "voting": self.subsystems.voting,
+            },
+        })
+    }
+}
 
 use std::collections::BTreeSet;
 

@@ -172,10 +172,7 @@ impl ProvenanceLedger {
         success: bool,
         duration_ms: u64,
     ) -> Result<(), anyhow::Error> {
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
+        let now_ms = now_ms();
 
         let entry = ProvenanceEntry {
             id: format!("prov-{}-{}", task_id, now_ms),
@@ -218,7 +215,6 @@ impl ProvenanceLedger {
     }
 }
 
-#[allow(dead_code)] // F-GAP-49 — reserved provenance wiring
 fn now_ms() -> u64 {
     crate::shared::timestamps::now_ts_ms() as u64
 }

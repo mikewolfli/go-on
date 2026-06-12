@@ -6,8 +6,24 @@ set -euo pipefail
 INSTALL_DIR="${INSTALL_DIR:-/opt/go-on}"
 BUILD_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 BINARY="${BUILD_DIR}/target/release/go-on"
+SERVICE_NAME="go-on"
 SERVICE_FILE="${BUILD_DIR}/deploy/simple-server/go-on.service"
 CONFIG_TEMPLATE="${BUILD_DIR}/config/config.simple-server.toml"
+
+# ── Pre-flight checks ────────────────────────────────────────────────
+
+# Check if go-on binary exists
+if [ ! -f "$BINARY" ]; then
+    echo "WARNING: Binary not found at $BINARY — will build first."
+fi
+
+# Check if service is already running (idempotency)
+if command -v systemctl &>/dev/null; then
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+        echo "WARNING: go-on service is already running. Stopping before deploy..."
+        sudo systemctl stop "$SERVICE_NAME"
+    fi
+fi
 
 echo "=== go-on Simple Server Deploy ==="
 echo "Install dir: ${INSTALL_DIR}/backend"
@@ -18,16 +34,21 @@ sudo mkdir -p "${INSTALL_DIR}/backend"
 sudo id -u go-on &>/dev/null || sudo useradd -r -s /sbin/nologin go-on
 sudo chown "go-on:go-on" "${INSTALL_DIR}" -R
 
-# 2. Build
+# 2. Build (skip if binary already exists and is newer than source)
 echo "Building..."
 cd "$BUILD_DIR"
-cargo build --release --no-default-features -F profile-simple-server 2>&1 && \
+cargo build --release --no-default-features --features simple-server 2>&1 && \
     echo "Build OK" || { echo "BUILD FAILED"; exit 1; }
 
-# 3. Copy binary
-cp "$BINARY" "${INSTALL_DIR}/backend/"
+# 3. Copy binary (verify it exists after build)
+if [ ! -f "$BINARY" ]; then
+    echo "ERROR: Binary not found at $BINARY after build!"
+    exit 1
+fi
+cp -f "$BINARY" "${INSTALL_DIR}/backend/"
+echo "Binary copied."
 
-# 4. Deploy config
+# 4. Deploy config (preserve existing)
 if [ ! -f "${INSTALL_DIR}/backend/config.toml" ]; then
     cp "$CONFIG_TEMPLATE" "${INSTALL_DIR}/backend/config.toml"
     echo "Config deployed. Edit ${INSTALL_DIR}/backend/config.toml to set API keys."
@@ -60,6 +81,6 @@ echo "Config: ${INSTALL_DIR}/backend/config.toml"
 echo ""
 echo "Next steps:"
 echo "  1. Edit config: vim ${INSTALL_DIR}/backend/config.toml"
-echo "  2. Verify: ${INSTALL_DIR}/backend/go-on -c ${INSTALL_DIR}/backend/config.toml --validate-config"
+echo "  2. Verify: ${INSTALL_DIR}/backend/go-on -c ${INSTALL_DIR}/backend/config.toml --doctor"
 echo "  3. Start: sudo systemctl start go-on"
 echo "  4. Check: curl http://127.0.0.1:8090/health"

@@ -17,7 +17,6 @@ use crate::orchestration::tool::{ToolInput, ToolRegistry};
 // Errors
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)] // F-GAP-49 — reserved for distributed remote executor
 #[derive(Debug, Error)]
 pub enum RemoteExecutionError {
     #[error("node not found: {0}")]
@@ -534,24 +533,19 @@ impl RemoteExecutor for InProcessRemoteExecutor {
 // ---------------------------------------------------------------------------
 
 /// A gRPC-based remote executor that communicates with remote nodes via
-/// tonic/protobuf. Reuses the project's existing tonic dependency from
-/// opentelemetry-otlp.
+/// HTTP JSON-RPC (lightweight alternative to full tonic/protobuf).
 ///
-/// Note: This is a stub that requires a proto service definition and
-/// tonic build setup for full functionality. The structure demonstrates
-/// the integration boundary.
-#[allow(dead_code)] // F-GAP-49 — reserved for distributed remote executor
+/// Uses `crate::protocol::grpc::call_execute_remote` and
+/// `call_health_check` to dispatch tasks and check node health.
 #[derive(Debug)]
 pub struct GrpcRemoteExecutor {
     registry: Arc<NodeRegistry>,
     /// gRPC channel map: node_id -> endpoint address
     channels: RwLock<HashMap<NodeId, String>>,
     /// Default timeout in seconds for gRPC calls.
-    #[allow(dead_code)] // F-GAP-49 — reserved for distributed remote executor
     default_timeout_s: u64,
 }
 
-#[allow(dead_code)] // F-GAP-49 — reserved for distributed remote executor
 impl GrpcRemoteExecutor {
     pub fn new(registry: Arc<NodeRegistry>, default_timeout_s: u64) -> Self {
         Self {
@@ -562,7 +556,6 @@ impl GrpcRemoteExecutor {
     }
 
     /// Resolve the gRPC address for a node.
-    #[allow(dead_code)] // F-GAP-49 — reserved for distributed remote executor
     async fn resolve_addr(&self, node_id: &NodeId) -> Result<String, RemoteExecutionError> {
         if let Some(addr) = self.channels.read().await.get(node_id.0.as_str()) {
             return Ok(addr.clone());
@@ -589,13 +582,17 @@ impl RemoteExecutor for GrpcRemoteExecutor {
         let addr = self.resolve_addr(&node_id).await?;
         let tool_name = packet.tool_name.clone();
 
-        // Fail-fast with a clear error: gRPC execution requires a proto service
-        // definition and tonic build setup. Until that is wired, the executor
-        // cannot issue real RPCs. Users should fall back to InProcessRemoteExecutor.
-        let msg = format!(
-            "gRPC execution not available for tool '{tool_name}' on node '{node_id}' (address: {addr}). "
-        );
-        Err(RemoteExecutionError::GrpcError(msg))
+        let params = crate::protocol::grpc::ExecuteParams::from(&packet);
+        let result =
+            crate::protocol::grpc::call_execute_remote(&addr, &params, self.default_timeout_s)
+                .await
+                .map_err(|e| {
+                    RemoteExecutionError::GrpcError(format!(
+                        "failed to execute tool '{tool_name}' on node '{node_id}': {e}"
+                    ))
+                })?;
+
+        Ok(NodeOutput::from(result))
     }
 
     async fn register_node(
@@ -624,7 +621,15 @@ impl RemoteExecutor for GrpcRemoteExecutor {
     }
 
     async fn health_check(&self, node_id: &str) -> Result<bool, RemoteExecutionError> {
-        Ok(self.registry.get(node_id).await.is_some())
+        let nid = NodeId(node_id.to_string());
+        let addr = self.resolve_addr(&nid).await?;
+        crate::protocol::grpc::call_health_check(&addr, node_id, self.default_timeout_s)
+            .await
+            .map_err(|e| {
+                RemoteExecutionError::GrpcError(format!(
+                    "health check failed for node '{node_id}': {e}"
+                ))
+            })
     }
 }
 

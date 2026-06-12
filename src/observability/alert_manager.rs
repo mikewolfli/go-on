@@ -366,7 +366,6 @@ impl AlertManager {
 }
 
 /// Statistics for the AlertManager
-#[allow(dead_code)] // F-GAP-49: Reserved for future monitoring dashboard integration
 #[derive(Debug, Clone, Serialize)]
 pub struct AlertManagerStats {
     pub total_rules: u64,
@@ -375,11 +374,9 @@ pub struct AlertManagerStats {
 }
 
 /// Global alert manager instance
-#[allow(dead_code)] // F-GAP-49: Global singleton kept for emergency access; ObservabilityLayer preferred
 static ALERT_MANAGER: std::sync::OnceLock<Mutex<AlertManager>> = std::sync::OnceLock::new();
 
 /// Get or initialize the global AlertManager
-#[allow(dead_code)] // F-GAP-49: Global singleton kept for emergency access; ObservabilityLayer preferred
 pub fn alert_manager() -> &'static Mutex<AlertManager> {
     ALERT_MANAGER.get_or_init(|| Mutex::new(AlertManager::new(default_alert_rules())))
 }

@@ -14,14 +14,12 @@ use std::sync::LazyLock;
 /// Using `Ordering::Relaxed` because the only requirement is that IDs
 /// are non-zero and unique within the current process; there is no need
 /// for strict happens-before ordering between different callers.
-#[allow(dead_code)] // F-GAP reserved
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Generate a monotonically increasing request ID.
 ///
 /// If the counter reaches `u64::MAX`, a warning is logged and the counter
 /// wraps around to 1 (skipping 0 which is reserved for notifications).
-#[allow(dead_code)] // F-GAP reserved
 fn next_request_id() -> u64 {
     loop {
         let prev = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
@@ -42,7 +40,6 @@ fn next_request_id() -> u64 {
 
 /// Shared reqwest client reused across all gRPC calls to avoid creating
 /// a new HTTP client (and TLS session) on every request.
-#[allow(dead_code)] // F-GAP reserved
 static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -54,35 +51,7 @@ static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
 // JSON-RPC envelope types
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// JSON-RPC 2.0 version constant
-// ---------------------------------------------------------------------------
-
-/// The JSON-RPC protocol version string mandated by the 2.0 specification.
-#[allow(dead_code)] // F-GAP reserved
-pub const JSONRPC_VERSION: &str = "2.0";
-
-/// Validate that a JSON-RPC version string is `"2.0"` per the specification.
-///
-/// Returns `Ok(())` if the version is `"2.0"`, or `Err` with an `InvalidRequest`
-/// error code (-32600) otherwise.
-#[allow(dead_code)] // F-GAP reserved
-pub fn validate_jsonrpc_version(version: &str) -> Result<(), JsonRpcError> {
-    if version == JSONRPC_VERSION {
-        Ok(())
-    } else {
-        Err(JsonRpcError {
-            code: -32600, // Invalid Request per JSON-RPC 2.0 spec
-            message: format!(
-                "invalid JSON-RPC version '{}'; expected '{}'",
-                version, JSONRPC_VERSION
-            ),
-        })
-    }
-}
-
 /// A JSON-RPC 2.0 request envelope.
-#[allow(dead_code)] // F-GAP reserved
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest<T: Serialize> {
     pub jsonrpc: String,
@@ -92,30 +61,18 @@ pub struct JsonRpcRequest<T: Serialize> {
 }
 
 impl<T: Serialize> JsonRpcRequest<T> {
-    /// Create a new JSON-RPC 2.0 request with version validation.
-    ///
-    /// # Errors
-    /// Returns `JsonRpcError` if the version is not `"2.0"`.
-    #[allow(dead_code)] // F-GAP reserved
-    pub fn new(method: impl Into<String>, params: T, id: u64) -> Result<Self, JsonRpcError> {
-        let r = Self {
-            jsonrpc: JSONRPC_VERSION.to_string(),
+    /// Create a new JSON-RPC 2.0 request with the JSON-RPC version set to "2.0".
+    pub fn new(method: impl Into<String>, params: T, id: u64) -> Self {
+        Self {
+            jsonrpc: "2.0".to_string(),
             method: method.into(),
             params,
             id,
-        };
-        Ok(r)
-    }
-
-    /// Validate the version field of an existing request.
-    #[allow(dead_code)] // F-GAP reserved
-    pub fn validate(&self) -> Result<(), JsonRpcError> {
-        validate_jsonrpc_version(&self.jsonrpc)
+        }
     }
 }
 
 /// A JSON-RPC 2.0 response envelope.
-#[allow(dead_code)] // F-GAP reserved
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcResponse<T> {
     pub jsonrpc: String,
@@ -128,25 +85,17 @@ pub struct JsonRpcResponse<T> {
 
 impl<T> JsonRpcResponse<T> {
     /// Create a new JSON-RPC 2.0 response.
-    #[allow(dead_code)] // F-GAP reserved
     pub fn new(id: u64) -> Self {
         Self {
-            jsonrpc: JSONRPC_VERSION.to_string(),
+            jsonrpc: "2.0".to_string(),
             result: None,
             error: None,
             id,
         }
     }
-
-    /// Validate the version field of an existing response.
-    #[allow(dead_code)] // F-GAP reserved
-    pub fn validate(&self) -> Result<(), JsonRpcError> {
-        validate_jsonrpc_version(&self.jsonrpc)
-    }
 }
 
 /// A JSON-RPC error object.
-#[allow(dead_code)] // F-GAP reserved
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcError {
     pub code: i32,
@@ -183,14 +132,12 @@ pub struct ExecuteResult {
 }
 
 /// Parameters for the `health_check` RPC method.
-#[allow(dead_code)] // F-GAP reserved
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthCheckParams {
     pub node_id: String,
 }
 
 /// Result of a health check.
-#[allow(dead_code)] // F-GAP reserved
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthCheckResult {
     pub alive: bool,
@@ -205,7 +152,6 @@ pub struct HealthCheckResult {
 ///
 /// This is the core transport used by `GrpcRemoteExecutor` to dispatch
 /// `TaskPacket`s to remote nodes.
-#[allow(dead_code)] // F-GAP reserved
 pub async fn call_execute_remote(
     base_url: &str,
     params: &ExecuteParams,
@@ -248,7 +194,6 @@ pub async fn call_execute_remote(
 }
 
 /// Perform a health check against a remote node via HTTP JSON-RPC.
-#[allow(dead_code)] // F-GAP reserved
 pub async fn call_health_check(
     base_url: &str,
     node_id: &str,

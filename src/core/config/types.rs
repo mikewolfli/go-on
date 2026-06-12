@@ -538,8 +538,6 @@ impl RuntimeConfig {
         };
         crate::security::prompt_injection::DetectionConfig {
             threshold,
-            enable_model_check: self.governance_enabled,
-            model_check_max_len: 4096,
             contamination_threshold: 0.7,
             enable_contamination_check: self.governance_enabled && self.user_auth_enabled,
         }

@@ -256,7 +256,7 @@ pub(crate) async fn start_server(
     // Create negotiator with the resolved mode and log the negotiated result.
     let negotiator_mode = NegProtocolMode::from_str(dispatch_mode)
         .unwrap_or_else(|e| panic!("fatal: invalid dispatch mode '{}': {:?}", dispatch_mode, e));
-    let negotiator = ProtocolNegotiator::new(negotiator_mode);
+    let mut negotiator = ProtocolNegotiator::new(negotiator_mode);
     let negotiated = negotiator.negotiate(None, None);
     info!(
         "protocol negotiated: mode={}, version={}, auto_detected={}",
@@ -295,7 +295,7 @@ pub(crate) async fn handle_chat_mode(
     }
 
     // ── ProtocolNegotiator: chat mode uses ACP stdio ────────────────
-    let negotiator = ProtocolNegotiator::new(NegProtocolMode::AcpStdio);
+    let mut negotiator = ProtocolNegotiator::new(NegProtocolMode::AcpStdio);
     let negotiated = negotiator.negotiate(None, None);
     debug!(
         "chat mode protocol: mode={}, version={}",

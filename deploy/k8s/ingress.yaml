@@ -8,9 +8,11 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts:
+        # FIXME(DEPLOY): Replace with your actual domain before deploying
         - go-on.example.com
       secretName: go-on-tls
   rules:
+    # FIXME(DEPLOY): Replace with your actual domain before deploying
     - host: go-on.example.com
       http:
         paths:

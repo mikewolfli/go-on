@@ -307,10 +307,21 @@ impl SecurityAdvisorAgent {
             (
                 FixType::SecurityControl,
                 format!(
-                    "// TODO: Apply mitigation for {} ({})\n// See: {}\n",
-                    vulnerability.advisory_id,
-                    vulnerability.description,
-                    vulnerability.advisory_url.as_deref().unwrap_or("N/A"),
+                    r#"# Advisory: {adv} – {desc}
+# See: {url}
+#
+# Recommended mitigation steps:
+# 1. Review the advisory details at the URL above.
+# 2. Check if a patched version has been released.
+# 3. If no patch exists, apply compensating controls:
+#    - Restrict network access to the affected component.
+#    - Disable unused features that expose the vulnerability.
+#    - Add WAF rules to filter exploit payloads.
+# 4. Monitor for new advisories and patch when available.
+"#,
+                    adv = vulnerability.advisory_id,
+                    desc = vulnerability.description,
+                    url = vulnerability.advisory_url.as_deref().unwrap_or("N/A"),
                 ),
                 format!(
                     "Apply mitigation for {}: {}",
@@ -325,8 +336,19 @@ impl SecurityAdvisorAgent {
             (
                 FixType::CodeRefactor,
                 format!(
-                    "// TODO: Review and fix vulnerability in {} ({})\n// Advisory: {}\n",
-                    vulnerability.package, vulnerability.advisory_id, vulnerability.description,
+                    r#"# Manual fix required for {pkg} ({adv})
+#
+# Problem: {desc}
+#
+# Action plan:
+# 1. Identify the vulnerable code paths in {pkg}.
+# 2. Apply input validation, output encoding, or dependency cleanup.
+# 3. Run `cargo audit` to confirm the finding is addressed.
+# 4. Add a regression test covering the vulnerability scenario.
+"#,
+                    pkg = vulnerability.package,
+                    adv = vulnerability.advisory_id,
+                    desc = vulnerability.description,
                 ),
                 format!(
                     "Code refactor needed for {}: {}",
@@ -538,7 +560,7 @@ impl SecurityAdvisorAgent {
             }
         }
 
-        let now = chrono_date_stub();
+        let now = iso_date_today();
 
         let recommendations = self.generate_recommendations(&alerts);
 
@@ -726,10 +748,10 @@ impl SecurityAdvisorAgent {
     }
 }
 
-// ── Helper: ISO-8601 date stub ──────────────────────────────────────────
+// ── Helper: ISO-8601 date ─────────────────────────────────────────────
 
 /// Produce an ISO 8601 date string for the current day.
-fn chrono_date_stub() -> String {
+fn iso_date_today() -> String {
     // Uses SystemTime to produce a simple YYYY-MM-DD string.
     let dur = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)

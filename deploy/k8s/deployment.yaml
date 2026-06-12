@@ -29,7 +29,8 @@ spec:
         fsGroup: 1001
       containers:
         - name: go-on
-          image: go-on-server:latest
+          # FIXME(DEPLOY): Replace with your container registry before deploying
+          image: registry.example.com/go-on-server:latest
           imagePullPolicy: IfNotPresent
           args:
             - -c

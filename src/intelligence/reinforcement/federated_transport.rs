@@ -288,12 +288,9 @@ pub struct GrpcFederatedTransport {
 enum GrpcTransportInner {
     Connected {
         /// The tonic channel used to issue RPCs.
-        // We use `Option` so we can build it lazily.
-        // In a production build this would be a `Channel` from tonic.
-
-        /// Placeholder for the tonic channel.
-        /// Replace with `channel: Channel` when tonic is a dependency.
-        _placeholder: (),
+        // When tonic is added as a dependency, replace with:
+        //   channel: Channel,
+        // and use the channel for actual gRPC calls.
     },
     /// No channel available; transport will fail healthily.
     Disconnected,
@@ -318,7 +315,7 @@ impl GrpcFederatedTransport {
     /// ```
     pub fn connected() -> Self {
         Self {
-            inner: GrpcTransportInner::Connected { _placeholder: () },
+            inner: GrpcTransportInner::Connected {},
         }
     }
 }

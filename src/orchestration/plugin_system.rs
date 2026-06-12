@@ -325,12 +325,23 @@ impl Plugin for MetricsPlugin {
 /// A no-operation plugin that implements [`Plugin`] with minimal behavior.
 ///
 /// Two instances are registered at startup (mode, policy) as fallback
-/// placeholders. All instances share the same initialization
-/// and shutdown logic: mark the plugin as Active on init, Unloaded on shutdown,
-/// and log a trace message.
+/// placeholders until the real ModePlugin and PolicyPlugin implementations
+/// are available (planned for Phase 8+). All instances share the same
+/// initialization and shutdown logic: mark the plugin as Active on init,
+/// Unloaded on shutdown, and log a trace message.
 ///
 /// Using a single struct eliminates the 4x boilerplate of separate
 /// `ToolPlugin` / `SkillPlugin` / `ModePlugin` / `PolicyPlugin` types.
+///
+/// # Real plugin availability
+///
+/// - **ModePlugin**: Planned for Phase 8 — will provide mode-specific
+///   lifecycle hooks (e.g. ask-mode vs full-auto-mode orchestration).
+/// - **PolicyPlugin**: Planned for Phase 8 — will allow external policy
+///   enforcers (e.g. Sentry, OpenPolicyAgent) to hook into agent execution
+///   via the `on_tool_execute` / `on_agent_complete` callbacks.
+/// - **ToolPlugin / SkillPlugin**: Available today via `TelemetryPlugin`
+///   (builtin:tool) and `MetricsPlugin` (builtin:skill).
 pub struct NoOpPlugin {
     manifest: PluginManifest,
     state: PluginState,

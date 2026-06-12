@@ -20,7 +20,6 @@ pub struct TripleFusionConfig {
     /// Minimum consciousness awareness threshold before evolution triggers fire.
     pub min_awareness_for_evolution: f64,
     /// How often (in ms) to push metacognitive data into consciousness.
-    #[allow(dead_code)] // F-GAP-49: reserved for metacognitive sync interval configuration
     pub metacognitive_sync_interval_ms: u64,
     /// Whether to auto-generate evolution triggers from consciousness insights.
     pub auto_evolve_from_reflexion: bool,
@@ -41,6 +40,8 @@ pub struct TripleFusionBridge {
     config: TripleFusionConfig,
     /// Running count of fusion cycles executed (atomic for interior mutability).
     fusion_cycles: AtomicU64,
+    /// Timestamp (ms since epoch) of the last metacognitive sync.
+    last_sync_time_ms: AtomicU64,
 }
 
 // ── Global singleton ──────────────────────────────────────────────────────
@@ -64,6 +65,7 @@ impl TripleFusionBridge {
         Self {
             config,
             fusion_cycles: AtomicU64::new(0),
+            last_sync_time_ms: AtomicU64::new(0),
         }
     }
 
@@ -77,11 +79,24 @@ impl TripleFusionBridge {
     ///
     /// Each unresolved observation becomes an EnvironmentalAwareness metric
     /// so the consciousness system can track the system's self-awareness of issues.
+    ///
+    /// The sync is gated by `metacognitive_sync_interval_ms` — consecutive calls
+    /// within the interval are no-ops to avoid overwhelming the consciousness system.
     pub fn sync_metacognitive_to_consciousness(
         &self,
         metacognitive: &MetacognitiveController,
         consciousness: &ConsciousnessMetrics,
     ) {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let last_sync = self.last_sync_time_ms.load(Ordering::Relaxed);
+        if now_ms.saturating_sub(last_sync) < self.config.metacognitive_sync_interval_ms {
+            return;
+        }
+        self.last_sync_time_ms.store(now_ms, Ordering::Relaxed);
+
         let observations = metacognitive.list_observations(false);
         let unresolved_count = observations.iter().filter(|o| !o.is_resolved).count() as f64;
 

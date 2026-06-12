@@ -224,7 +224,6 @@ pub fn format_debate_history(round_votes: &HashMap<String, Vote>) -> String {
 /// * `question` – The proposal or question being voted on.
 /// * `reputations` – Map from agent name to reputation score.
 /// * `config` – [`DelphiConfig`] controlling rounds, threshold, etc.
-#[allow(dead_code)] // F-GAP-49-2: reserved for Delphi debate activation
 pub async fn delphi_debate(
     agents: &[&dyn AgentVoter],
     question: &str,

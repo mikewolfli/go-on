@@ -70,9 +70,8 @@ pub fn wire_prompt_injection(config: &crate::config::types::RuntimeConfig) -> bo
     match PROMPT_INJECTION_DETECTOR.set(detector) {
         Ok(()) => {
             tracing::info!(
-                "Prompt injection: enabled (threshold: {}, model_check: {}, contamination_check: {})",
+                "Prompt injection: enabled (threshold: {}, contamination_check: {})",
                 detection_config.threshold,
-                detection_config.enable_model_check,
                 detection_config.enable_contamination_check,
             );
             true

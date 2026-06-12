@@ -22,10 +22,6 @@ pub enum SigningError {
     #[error("invalid key: {0}")]
     InvalidKey(String),
 
-    #[allow(dead_code)] // F-GAP-49 — reserved request signing feature
-    #[error("signing algorithm mismatch: expected {expected}, got {actual}")]
-    AlgorithmMismatch { expected: String, actual: String },
-
     #[error("replay detected: timestamp {ts} ms has clock skew of {skew_ms} ms")]
     ReplayDetected { ts: u64, skew_ms: i64 },
 
@@ -71,27 +67,6 @@ pub struct RequestSignature {
     pub timestamp_ms: u64,
     /// SHA-256 hash of the request body (base64-encoded).
     pub body_hash: String,
-}
-
-impl RequestSignature {
-    /// Create a new RequestSignature with the current timestamp.
-    /// Deprecated: construct directly with fields instead (timestamp must match signing_payload).
-    #[allow(dead_code)] // F-GAP-49 — reserved request signing feature
-    pub fn new(
-        signature: Vec<u8>,
-        algorithm: SigningAlgorithm,
-        key_id: String,
-        body: &[u8],
-    ) -> Self {
-        let b64_engine = base64::engine::general_purpose::STANDARD;
-        Self {
-            signature: b64_engine.encode(&signature),
-            algorithm,
-            key_id,
-            timestamp_ms: current_timestamp_ms(),
-            body_hash: b64_engine.encode(sha256(body)),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

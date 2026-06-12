@@ -6,8 +6,9 @@
 //! In full_auto mode, blocks and triggers a single re-question cycle (token-budget controlled).
 //!
 //! # Status
-//! Complete implementation ready for CapabilityBus integration (ARCH-13).
-//! Currently zero-call — all items are intentionally public for future wiring.
+//! Fully wired. `SelfRationalizationGuard` is actively called from four locations:
+//! `PolicyEvaluator` (P1-11), `HarnessBus`, `init_intel_voters` in the intelligence hub,
+//! and `RationalizationGuardVoter` in the voting subsystem.
 
 use serde::{Deserialize, Serialize};
 

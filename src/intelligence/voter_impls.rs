@@ -125,7 +125,6 @@ pub struct LocalAgentVoter {
 
 impl LocalAgentVoter {
     /// Create a new local agent voter.
-    /// TODO-BLUE64: Wire into hub.rs Delphi debate path once async AgentVoter is integrated.
     pub fn new(name: impl Into<String>) -> Self {
         Self { name: name.into() }
     }
@@ -202,7 +201,6 @@ pub struct RationalizationGuardVoter {
 
 impl RationalizationGuardVoter {
     /// Create a new guard-based voter.
-    /// TODO-BLUE64: Wire into hub.rs Delphi debate path once async AgentVoter is integrated.
     pub fn new(name: impl Into<String>, guard: Arc<SelfRationalizationGuard>) -> Self {
         Self {
             name: name.into(),
@@ -263,7 +261,6 @@ impl AgentVoter for RationalizationGuardVoter {
 ///
 /// Sends a non-streaming chat completion request to the DeepSeek API and
 /// parses the response to extract an approve/reject decision with reasoning.
-#[allow(dead_code)] // F-GAP: reserved for Delphi debate activation
 pub struct DeepSeekVoter {
     name: String,
     /// Base URL for the DeepSeek API.
@@ -276,7 +273,6 @@ pub struct DeepSeekVoter {
     client: reqwest::Client,
 }
 
-#[allow(dead_code)] // F-GAP: reserved for Delphi debate activation
 impl DeepSeekVoter {
     /// Create a new DeepSeek voter.
     pub fn new(
@@ -399,14 +395,12 @@ impl AgentVoter for DeepSeekVoter {
 /// Evaluates proposals using config-driven thresholds and local agent config.
 /// Unlike `LocalAgentVoter` (keyword heuristic), this voter respects the
 /// `AgentConfig` thresholds for more configurable voting behaviour.
-#[allow(dead_code)] // F-GAP: reserved for Delphi debate activation
 pub struct LocalVoter {
     name: String,
     /// Agent configuration for threshold tuning.
     config: AgentConfig,
 }
 
-#[allow(dead_code)] // F-GAP: reserved for Delphi debate activation
 impl LocalVoter {
     /// Create a new local voter from an agent configuration.
     pub fn new(name: impl Into<String>, config: AgentConfig) -> Self {

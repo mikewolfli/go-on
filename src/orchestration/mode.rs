@@ -27,6 +27,19 @@ pub enum ModeKind {
     SafeGuard,
 }
 
+impl From<&str> for ModeKind {
+    fn from(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "ask" => ModeKind::Ask,
+            "edit" => ModeKind::Edit,
+            "agent" => ModeKind::Agent,
+            "full_auto" | "fullauto" => ModeKind::FullAuto,
+            "safeguard" | "safe_guard" => ModeKind::SafeGuard,
+            _ => ModeKind::Ask,
+        }
+    }
+}
+
 /// Policy for what action to take when a risk threshold is exceeded
 /// during SafeGuard mode execution.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]

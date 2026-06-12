@@ -45,6 +45,10 @@ GUI/src-tauri/target/
 GUI/src-tauri/gen/
 
 # Temporary and output files
+# Stale build artifacts in project root
+scheduler_queue.db
+libchat_tests.rlib
+
 *.tmp
 *.temp
 *.bak

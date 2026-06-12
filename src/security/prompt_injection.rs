@@ -4,8 +4,8 @@
 //! prompt leakage, and indirect injection. Combines static pattern rules with
 //! LLM-assisted analysis and context contamination detection.
 
-use serde::{Deserialize, Serialize};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -106,7 +106,6 @@ pub struct InjectionResult {
     pub detected: bool,
     pub violations: Vec<SafetyViolation>,
     pub contamination_score: f64,
-    pub model_assisted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,10 +161,6 @@ impl Default for ContaminationContext {
 pub struct DetectionConfig {
     /// Threshold (0.0-1.0) above which a pattern match triggers a violation.
     pub threshold: f64,
-    /// Whether to use LLM-assisted detection (more accurate but slower).
-    pub enable_model_check: bool,
-    /// Maximum character length for model-assisted analysis.
-    pub model_check_max_len: usize,
     /// Contamination threshold for context detection.
     pub contamination_threshold: f64,
     /// Whether to enable context contamination tracking.
@@ -176,11 +171,6 @@ impl Default for DetectionConfig {
     fn default() -> Self {
         Self {
             threshold: 0.7,
-            // Enable LLM-assisted detection by default; it is the most
-            // effective defense against novel/zero-day prompt injection.
-            // Set to `false` if latency is a concern.
-            enable_model_check: true,
-            model_check_max_len: 4096,
             contamination_threshold: 0.5,
             enable_contamination_check: true,
         }
@@ -191,13 +181,11 @@ impl Default for DetectionConfig {
 // InjectionDetector
 // ---------------------------------------------------------------------------
 
-/// Detects prompt injection attacks using static patterns and optional
-/// LLM-assisted analysis.
+/// Detects prompt injection attacks using static patterns and
+/// context contamination analysis.
 pub struct InjectionDetector {
     /// Static patterns used for rule-based detection.
     patterns: Vec<InjectionPattern>,
-    /// Whether to use LLM-assisted detection.
-    model_check: bool,
     /// Detection configuration.
     config: DetectionConfig,
     /// Context contamination tracker.
@@ -208,10 +196,8 @@ impl InjectionDetector {
     /// Create a new InjectionDetector with default patterns and configuration.
     pub fn new(config: DetectionConfig) -> Self {
         let patterns = Self::default_patterns();
-        let model_check = config.enable_model_check;
         Self {
             patterns,
-            model_check,
             config,
             contamination: ContaminationContext::new(),
         }
@@ -219,10 +205,8 @@ impl InjectionDetector {
 
     /// Create with custom patterns.
     pub fn with_patterns(patterns: Vec<InjectionPattern>, config: DetectionConfig) -> Self {
-        let model_check = config.enable_model_check;
         Self {
             patterns,
-            model_check,
             config,
             contamination: ContaminationContext::new(),
         }
@@ -256,16 +240,7 @@ impl InjectionDetector {
             }
         }
 
-        // 2. Model-assisted check (when enabled and text is within length limit)
-        let model_assisted = if self.model_check && text.len() <= self.config.model_check_max_len {
-            // In a full implementation, this would call an LLM for classification.
-            // For now, it's a stub that returns no additional violations.
-            true
-        } else {
-            false
-        };
-
-        // 3. Check for context contamination
+        // 2. Check for context contamination
         let contamination_score = if self.config.enable_contamination_check {
             self.calculate_contamination_score(text)
         } else {
@@ -277,7 +252,6 @@ impl InjectionDetector {
                 || contamination_score > self.config.contamination_threshold,
             violations,
             contamination_score,
-            model_assisted,
         }
     }
 
@@ -520,7 +494,7 @@ mod tests {
                 InjectionSeverity::High,
                 "Custom test pattern",
             )
-            .expect("CUSTOM-001 pattern is valid")
+            .expect("CUSTOM-001 pattern is valid"),
         );
         let result = detector.detect("This is a custom malicious pattern test");
         assert!(result.detected);

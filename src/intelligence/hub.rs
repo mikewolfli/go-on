@@ -17,12 +17,13 @@ use std::collections::HashMap;
 
 use std::sync::{Arc, OnceLock};
 
+use crate::config::AgentConfig;
 use crate::governance::audit::{AuditLogEntry, ThreadSafeAuditLog};
 use crate::governance::rationalization::SelfRationalizationGuard;
 use crate::intelligence::capability_bus::core::CapabilityBus;
 use crate::intelligence::consensus::{ConsensusEngine, ConsensusNode, ConsensusVote, NodeRole};
 use crate::intelligence::voter_impls::{
-    CapabilityBusVoter, LocalAgentVoter, RationalizationGuardVoter,
+    CapabilityBusVoter, DeepSeekVoter, LocalAgentVoter, LocalVoter, RationalizationGuardVoter,
 };
 use crate::intelligence::weighted_vote::{
     self, delphi_debate, AgentVoter, DelphiConfig, WeightedVoteConfig,
@@ -183,6 +184,18 @@ pub fn init_intel_voters(capability_bus: Option<Arc<CapabilityBus>>) {
         "rationalization-guard",
         Arc::new(SelfRationalizationGuard::new(0.6)),
     )));
+
+    // DeepSeekVoter — LLM-based voter via DeepSeek API.
+    let deepseek_api_key = std::env::var("DEEPSEEK_API_KEY").unwrap_or_default();
+    voters.push(Box::new(DeepSeekVoter::new(
+        "deepseek",
+        "https://api.deepseek.com",
+        "deepseek-v4-flash",
+        deepseek_api_key,
+    )));
+
+    // LocalVoter — configurable local model voter.
+    voters.push(Box::new(LocalVoter::new("local", AgentConfig::default())));
 
     let _ = GLOBAL_VOTERS.set(voters).map_err(|_| {
         tracing::warn!("intel_hub: GLOBAL_VOTERS already initialised");

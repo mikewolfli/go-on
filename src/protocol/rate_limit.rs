@@ -90,7 +90,6 @@ pub struct RateLimitMiddleware {
     max_tenants: usize,
 }
 
-#[allow(dead_code)] // F-GAP-49 — reserved for generic construction
 impl Default for RateLimitMiddleware {
     fn default() -> Self {
         Self::new(TenantRateLimit::default())
@@ -165,7 +164,6 @@ impl RateLimitMiddleware {
     }
 
     /// Get current rate limit state for a tenant
-    #[allow(dead_code)] // F-GAP-49 — reserved for observability/metrics integration
     pub async fn state(&self, tenant_id: &str) -> RateLimitState {
         let buckets = self.buckets.lock().await;
 
@@ -237,7 +235,6 @@ impl RateLimitMiddleware {
     }
 }
 
-#[allow(dead_code)] // F-GAP-49 — reserved for observability/metrics integration
 #[derive(Debug, Clone)]
 pub struct RateLimitState {
     pub remaining: u64,
@@ -245,14 +242,13 @@ pub struct RateLimitState {
     pub refill_per_second: f64,
 }
 
-/// Global rate limiter instance
-#[allow(dead_code)] // F-GAP-49 — reserved for standalone server usage
-static RATE_LIMITER: std::sync::OnceLock<RateLimitMiddleware> = std::sync::OnceLock::new();
-
-#[allow(dead_code)] // F-GAP-49 — reserved for standalone server usage
-pub fn rate_limiter() -> &'static RateLimitMiddleware {
-    RATE_LIMITER.get_or_init(|| RateLimitMiddleware::new(TenantRateLimit::default()))
-}
+// Global rate limiter instance — available when standalone server mode is needed.
+// Currently unused; uncomment and wire when a standalone server entry point requires
+// a shared global rate limiter.
+// static RATE_LIMITER: std::sync::OnceLock<RateLimitMiddleware> = std::sync::OnceLock::new();
+// pub fn rate_limiter() -> &'static RateLimitMiddleware {
+//     RATE_LIMITER.get_or_init(|| RateLimitMiddleware::new(TenantRateLimit::default()))
+// }
 
 #[cfg(test)]
 mod tests {
