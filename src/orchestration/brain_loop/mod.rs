@@ -1104,23 +1104,6 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // test_run_sync_compat (GAP-B50-03)
-    // -----------------------------------------------------------------------
-
-    /// Note: uses a regular `#[test]` because `run()` creates its own
-    /// temporary tokio runtime internally.
-    #[test]
-    #[allow(deprecated)]
-    fn test_run_sync_compat() {
-        let bl = BrainLoop::new(default_config());
-        let steps = vec![make_step("rs1", "Sync compat step")];
-
-        let profile = bl.run("Sync compat test", steps).unwrap();
-        assert_eq!(profile.total_plans, 1);
-        assert_eq!(profile.completed_plans, 1);
-    }
-
-    // -----------------------------------------------------------------------
     // test_deep_reasoning_engine_noop_when_disabled (GAP-B50-06)
     // -----------------------------------------------------------------------
 

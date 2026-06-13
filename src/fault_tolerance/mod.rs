@@ -45,17 +45,13 @@ pub(crate) struct Inner {
 /// Uses `block_in_place` to safely call `blocking_write()` from any context
 /// (including within a tokio runtime), so callers (CLI + server) can remain
 /// synchronous while the runtime drives background tasks.
-pub(crate) fn write_guard<T>(lock: &RwLock<T>) -> tokio::sync::RwLockWriteGuard<'_, T> {
-    tokio::task::block_in_place(|| lock.blocking_write())
+pub(crate) async fn write_guard<T>(lock: &RwLock<T>) -> tokio::sync::RwLockWriteGuard<'_, T> {
+    lock.write().await
 }
 
 /// Acquire a read lock on the RwLock.
-///
-/// Uses `block_in_place` to safely call `blocking_read()` from any context
-/// (including within a tokio runtime), so callers (CLI + server) can remain
-/// synchronous while the runtime drives background tasks.
-pub(crate) fn read_guard<T>(lock: &RwLock<T>) -> tokio::sync::RwLockReadGuard<'_, T> {
-    tokio::task::block_in_place(|| lock.blocking_read())
+pub(crate) async fn read_guard<T>(lock: &RwLock<T>) -> tokio::sync::RwLockReadGuard<'_, T> {
+    lock.read().await
 }
 
 /// Compute cluster health from raw counts (shared by `profile` and `cluster_health`).
@@ -133,8 +129,8 @@ impl FaultToleranceEngine {
     }
 
     /// Return a snapshot profile of the cluster state.
-    pub fn profile(&self) -> FaultToleranceProfile {
-        let inner = read_guard(&self.inner);
+    pub async fn profile(&self) -> FaultToleranceProfile {
+        let inner = read_guard(&self.inner).await;
         let total_nodes = inner.heartbeats.len();
         let online_nodes = inner
             .heartbeats
@@ -184,8 +180,8 @@ impl FaultToleranceEngine {
 
     /// Run the full recovery cycle: check heartbeats, auto-create recovery plans,
     /// and return the status summary. Also persists state to DB if available.
-    pub fn run_recovery_cycle(&self) -> RecoveryCycleSummary {
-        let offenders = self.check_heartbeats();
+    pub async fn run_recovery_cycle(&self) -> RecoveryCycleSummary {
+        let offenders = self.check_heartbeats().await;
         let mut plans_created = 0u32;
         let mut plans_activated = 0u32;
         let mut consistency_checks = Vec::new();
@@ -193,26 +189,26 @@ impl FaultToleranceEngine {
         for node_id in &offenders {
             // Check if a plan already exists for this node
             let existing = {
-                let inner = read_guard(&self.inner);
+                let inner = read_guard(&self.inner).await;
                 inner
                     .recovery_plans
                     .values()
                     .any(|p| p.node_id == *node_id && p.state != RecoveryState::Completed)
             };
-            if !existing && self.create_recovery_plan(node_id).is_ok() {
+            if !existing && self.create_recovery_plan(node_id).await.is_ok() {
                 plans_created += 1;
             }
         }
 
         // Auto-execute pending plans and run consistency checks on activations
-        let pending_plans = self.active_recovery_plans();
+        let pending_plans = self.active_recovery_plans().await;
         for plan in &pending_plans {
             if plan.state == RecoveryState::Pending
-                && self.execute_recovery_plan(&plan.plan_id).is_ok()
+                && self.execute_recovery_plan(&plan.plan_id).await.is_ok()
             {
                 plans_activated += 1;
                 // Run consistency check after activation
-                let check = self.post_recovery_consistency_check(&plan.plan_id);
+                let check = self.post_recovery_consistency_check(&plan.plan_id).await;
                 if !check.passed {
                     tracing::warn!(
                         "consistency check after activation of plan '{}': {}",
@@ -224,11 +220,11 @@ impl FaultToleranceEngine {
             }
         }
 
-        let health = self.cluster_health();
-        let profile = self.profile();
+        let health = self.cluster_health().await;
+        let profile = self.profile().await;
 
         // BLUE56-C06: Persist recovery cycle state to DB
-        self.try_persist_state();
+        self.try_persist_state().await;
 
         RecoveryCycleSummary {
             offenders,
@@ -243,7 +239,7 @@ impl FaultToleranceEngine {
 
     /// Try to persist fault tolerance state. Uses SQLite when the
     /// `backend-sqlite` feature is enabled, otherwise falls back to a JSON file.
-    fn try_persist_state(&self) {
+    async fn try_persist_state(&self) {
         #[cfg(feature = "backend-sqlite")]
         {
             let cache_path = std::path::PathBuf::from("target")
@@ -252,410 +248,148 @@ impl FaultToleranceEngine {
             if let Some(parent) = cache_path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
+            // Open connection before the await point (rusqlite::Connection is !Sync)
             if let Ok(conn) = rusqlite::Connection::open(&cache_path) {
-                if let Err(e) = self.save_to_db(&conn) {
-                    tracing::warn!(
-                        target: "fault_tolerance",
-                        error = %e,
-                        "failed to persist fault tolerance state"
+                // Create tables before the await point
+                let _ = conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS faults (
+                        id TEXT PRIMARY KEY,
+                        node_id TEXT NOT NULL,
+                        fault_type TEXT NOT NULL,
+                        severity INTEGER NOT NULL,
+                        description TEXT NOT NULL,
+                        detected_ms INTEGER NOT NULL,
+                        resolved_ms INTEGER,
+                        recovered INTEGER NOT NULL DEFAULT 0
+                    );
+                    CREATE TABLE IF NOT EXISTS recovery_plans (
+                        plan_id TEXT PRIMARY KEY,
+                        node_id TEXT NOT NULL,
+                        actions TEXT NOT NULL,
+                        state TEXT NOT NULL,
+                        created_ms INTEGER NOT NULL,
+                        completed_ms INTEGER,
+                        result TEXT
+                    );
+                    CREATE TABLE IF NOT EXISTS isolation_groups (
+                        group_id TEXT PRIMARY KEY,
+                        nodes TEXT NOT NULL,
+                        isolation_level TEXT NOT NULL,
+                        created_ms INTEGER NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS heartbeat_records (
+                        node_id TEXT PRIMARY KEY,
+                        last_heartbeat_ms INTEGER NOT NULL,
+                        missed_beats INTEGER NOT NULL DEFAULT 0,
+                        status TEXT NOT NULL
+                    );",
+                );
+
+                let inner = write_guard(&self.inner).await;
+
+                // Clear existing data for idempotent save
+                let _ = conn.execute("DELETE FROM faults", []);
+                let _ = conn.execute("DELETE FROM recovery_plans", []);
+                let _ = conn.execute("DELETE FROM isolation_groups", []);
+                let _ = conn.execute("DELETE FROM heartbeat_records", []);
+
+                // Insert faults
+                for fault in inner.faults.values() {
+                    let _ = conn.execute(
+                        "INSERT INTO faults (id, node_id, fault_type, severity, description, detected_ms, resolved_ms, recovered)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                        rusqlite::params![
+                            fault.id,
+                            fault.node_id,
+                            format!("{:?}", fault.fault_type),
+                            fault.severity as i64,
+                            fault.description,
+                            fault.detected_ms as i64,
+                            fault.resolved_ms.map(|v| v as i64),
+                            fault.recovered as i64,
+                        ],
                     );
                 }
+
+                // Insert recovery plans
+                for plan in inner.recovery_plans.values() {
+                    if let Ok(actions_json) = serde_json::to_string(&plan.actions) {
+                        let _ = conn.execute(
+                            "INSERT INTO recovery_plans (plan_id, node_id, actions, state, created_ms, completed_ms, result)
+                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                            rusqlite::params![
+                                plan.plan_id,
+                                plan.node_id,
+                                actions_json,
+                                format!("{:?}", plan.state),
+                                plan.created_ms as i64,
+                                plan.completed_ms.map(|v| v as i64),
+                                plan.result,
+                            ],
+                        );
+                    }
+                }
+
+                // Insert isolation groups
+                for group in inner.isolation_groups.values() {
+                    if let Ok(nodes_json) = serde_json::to_string(&group.nodes) {
+                        let _ = conn.execute(
+                            "INSERT INTO isolation_groups (group_id, nodes, isolation_level, created_ms)
+                             VALUES (?1, ?2, ?3, ?4)",
+                            rusqlite::params![
+                                group.group_id,
+                                nodes_json,
+                                format!("{:?}", group.isolation_level),
+                                group.created_ms as i64,
+                            ],
+                        );
+                    }
+                }
+
+                // Insert heartbeat records
+                for hb in inner.heartbeats.values() {
+                    let _ = conn.execute(
+                        "INSERT OR REPLACE INTO heartbeat_records (node_id, last_heartbeat_ms, missed_beats, status)
+                         VALUES (?1, ?2, ?3, ?4)",
+                        rusqlite::params![
+                            hb.node_id,
+                            hb.last_heartbeat_ms as i64,
+                            hb.missed_beats as i64,
+                            format!("{:?}", hb.status),
+                        ],
+                    );
+                }
+
+                tracing::info!(
+                    "FaultToleranceEngine: saved {} faults, {} plans, {} groups, {} heartbeats to DB",
+                    inner.faults.len(),
+                    inner.recovery_plans.len(),
+                    inner.isolation_groups.len(),
+                    inner.heartbeats.len()
+                );
             }
         }
         #[cfg(not(feature = "backend-sqlite"))]
         {
-            if let Err(e) = self.save_to_db(&()) {
-                tracing::warn!(
+            let cache_path = std::path::PathBuf::from("target")
+                .join("go-on")
+                .join("fault_tolerance.json");
+            if let Some(parent) = cache_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let inner = read_guard(&self.inner).await;
+            if let Ok(json) = serde_json::to_string_pretty(&*inner) {
+                let _ = std::fs::write(&cache_path, json);
+                tracing::info!(
                     target: "fault_tolerance",
-                    error = %e,
-                    "failed to persist fault tolerance state"
+                    faults = inner.faults.len(),
+                    plans = inner.recovery_plans.len(),
+                    groups = inner.isolation_groups.len(),
+                    heartbeats = inner.heartbeats.len(),
+                    "persisted fault tolerance state to JSON file"
                 );
             }
         }
-    }
-
-    // GAP-B50-34: Persistence — save state to SQLite
-    /// Save all fault tolerance state to the configured SQLite database.
-    /// Creates the necessary tables if they don't exist.
-    #[cfg(feature = "backend-sqlite")]
-    pub fn save_to_db(&self, conn: &rusqlite::Connection) -> anyhow::Result<()> {
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS faults (
-                id TEXT PRIMARY KEY,
-                node_id TEXT NOT NULL,
-                fault_type TEXT NOT NULL,
-                severity INTEGER NOT NULL,
-                description TEXT NOT NULL,
-                detected_ms INTEGER NOT NULL,
-                resolved_ms INTEGER,
-                recovered INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE TABLE IF NOT EXISTS recovery_plans (
-                plan_id TEXT PRIMARY KEY,
-                node_id TEXT NOT NULL,
-                actions TEXT NOT NULL,
-                state TEXT NOT NULL,
-                created_ms INTEGER NOT NULL,
-                completed_ms INTEGER,
-                result TEXT
-            );
-            CREATE TABLE IF NOT EXISTS isolation_groups (
-                group_id TEXT PRIMARY KEY,
-                nodes TEXT NOT NULL,
-                isolation_level TEXT NOT NULL,
-                created_ms INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS heartbeat_records (
-                node_id TEXT PRIMARY KEY,
-                last_heartbeat_ms INTEGER NOT NULL,
-                missed_beats INTEGER NOT NULL DEFAULT 0,
-                status TEXT NOT NULL
-            );",
-        )?;
-
-        let inner = write_guard(&self.inner);
-
-        // Clear existing data for idempotent save
-        conn.execute("DELETE FROM faults", [])?;
-        conn.execute("DELETE FROM recovery_plans", [])?;
-        conn.execute("DELETE FROM isolation_groups", [])?;
-        conn.execute("DELETE FROM heartbeat_records", [])?;
-
-        // Insert faults
-        for fault in inner.faults.values() {
-            conn.execute(
-                "INSERT INTO faults (id, node_id, fault_type, severity, description, detected_ms, resolved_ms, recovered)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                rusqlite::params![
-                    fault.id,
-                    fault.node_id,
-                    format!("{:?}", fault.fault_type),
-                    fault.severity as i64,
-                    fault.description,
-                    fault.detected_ms as i64,
-                    fault.resolved_ms.map(|v| v as i64),
-                    fault.recovered as i64,
-                ],
-            )?;
-        }
-
-        // Insert recovery plans
-        for plan in inner.recovery_plans.values() {
-            let actions_json = serde_json::to_string(&plan.actions)?;
-            conn.execute(
-                "INSERT INTO recovery_plans (plan_id, node_id, actions, state, created_ms, completed_ms, result)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                rusqlite::params![
-                    plan.plan_id,
-                    plan.node_id,
-                    actions_json,
-                    format!("{:?}", plan.state),
-                    plan.created_ms as i64,
-                    plan.completed_ms.map(|v| v as i64),
-                    plan.result,
-                ],
-            )?;
-        }
-
-        // Insert isolation groups
-        for group in inner.isolation_groups.values() {
-            let nodes_json = serde_json::to_string(&group.nodes)?;
-            conn.execute(
-                "INSERT INTO isolation_groups (group_id, nodes, isolation_level, created_ms)
-                 VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![
-                    group.group_id,
-                    nodes_json,
-                    format!("{:?}", group.isolation_level),
-                    group.created_ms as i64,
-                ],
-            )?;
-        }
-
-        // Insert heartbeat records
-        for hb in inner.heartbeats.values() {
-            conn.execute(
-                "INSERT OR REPLACE INTO heartbeat_records (node_id, last_heartbeat_ms, missed_beats, status)
-                 VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![
-                    hb.node_id,
-                    hb.last_heartbeat_ms as i64,
-                    hb.missed_beats as i64,
-                    format!("{:?}", hb.status),
-                ],
-            )?;
-        }
-
-        tracing::info!(
-            "FaultToleranceEngine: saved {} faults, {} plans, {} groups, {} heartbeats to DB",
-            inner.faults.len(),
-            inner.recovery_plans.len(),
-            inner.isolation_groups.len(),
-            inner.heartbeats.len()
-        );
-        Ok(())
-    }
-
-    /// Non-SQLite fallback: persist to a JSON file so that fault tolerance
-    /// state is not silently lost on restart (e.g. with `backend-postgres`).
-    #[cfg(not(feature = "backend-sqlite"))]
-    pub fn save_to_db(&self, _conn: &()) -> anyhow::Result<()> {
-        let cache_path = std::path::PathBuf::from("target")
-            .join("go-on")
-            .join("fault_tolerance.json");
-        if let Some(parent) = cache_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let inner = read_guard(&self.inner);
-        let json = serde_json::to_string_pretty(&*inner)?;
-        std::fs::write(&cache_path, json)?;
-        tracing::info!(
-            target: "fault_tolerance",
-            faults = inner.faults.len(),
-            plans = inner.recovery_plans.len(),
-            groups = inner.isolation_groups.len(),
-            heartbeats = inner.heartbeats.len(),
-            "persisted fault tolerance state to JSON file"
-        );
-        Ok(())
-    }
-
-    // GAP-B50-34: Persistence — load state from SQLite
-    /// Load all fault tolerance state from the configured SQLite database.
-    /// Returns the number of faults, plans, groups, and heartbeats restored.
-    #[cfg(feature = "backend-sqlite")]
-    pub fn load_from_db(
-        &self,
-        conn: &rusqlite::Connection,
-    ) -> anyhow::Result<(usize, usize, usize, usize)> {
-        let mut inner = write_guard(&self.inner);
-
-        // Load faults
-        let mut stmt = conn.prepare(
-            "SELECT id, node_id, fault_type, severity, description, detected_ms, resolved_ms, recovered FROM faults"
-        )?;
-        let fault_rows = stmt.query_map([], |row| {
-            let id: String = row.get(0)?;
-            let node_id: String = row.get(1)?;
-            let fault_type_str: String = row.get(2)?;
-            let severity: i64 = row.get(3)?;
-            let description: String = row.get(4)?;
-            let detected_ms: i64 = row.get(5)?;
-            let resolved_ms: Option<i64> = row.get(6)?;
-            let recovered: bool = row.get::<_, i64>(7)? != 0;
-            Ok((
-                id,
-                node_id,
-                fault_type_str,
-                severity as u8,
-                description,
-                detected_ms as u64,
-                resolved_ms.map(|v| v as u64),
-                recovered,
-            ))
-        })?;
-
-        // Clear faults and reload
-        inner.faults.clear();
-        for row in fault_rows {
-            let (
-                id,
-                node_id,
-                fault_type_str,
-                severity,
-                description,
-                detected_ms,
-                resolved_ms,
-                recovered,
-            ) = row?;
-            let fault_type = match fault_type_str.as_str() {
-                "Crash" => FaultType::Crash,
-                "Hang" => FaultType::Hang,
-                "Oom" => FaultType::Oom,
-                "NetworkSplit" => FaultType::NetworkSplit,
-                "DataCorruption" => FaultType::DataCorruption,
-                "ResourceExhaustion" => FaultType::ResourceExhaustion,
-                _ => continue,
-            };
-            inner.faults.insert(
-                id.clone(),
-                FaultEvent {
-                    id,
-                    node_id,
-                    fault_type,
-                    severity,
-                    description,
-                    detected_ms,
-                    resolved_ms,
-                    recovered,
-                },
-            );
-        }
-
-        // Load recovery plans
-        let mut stmt = conn.prepare(
-            "SELECT plan_id, node_id, actions, state, created_ms, completed_ms, result FROM recovery_plans"
-        )?;
-        let plan_rows = stmt.query_map([], |row| {
-            let plan_id: String = row.get(0)?;
-            let node_id: String = row.get(1)?;
-            let actions_json: String = row.get(2)?;
-            let state_str: String = row.get(3)?;
-            let created_ms: i64 = row.get(4)?;
-            let completed_ms: Option<i64> = row.get(5)?;
-            let result: Option<String> = row.get(6)?;
-            Ok((
-                plan_id,
-                node_id,
-                actions_json,
-                state_str,
-                created_ms as u64,
-                completed_ms.map(|v| v as u64),
-                result,
-            ))
-        })?;
-
-        inner.recovery_plans.clear();
-        for row in plan_rows {
-            let (plan_id, node_id, actions_json, state_str, created_ms, completed_ms, result) =
-                row?;
-            let actions: Vec<RecoveryAction> = serde_json::from_str(&actions_json)?;
-            let state = match state_str.as_str() {
-                "Pending" => RecoveryState::Pending,
-                "InProgress" => RecoveryState::InProgress,
-                "Completed" => RecoveryState::Completed,
-                "Failed" => RecoveryState::Failed,
-                _ => continue,
-            };
-            inner.recovery_plans.insert(
-                plan_id.clone(),
-                RecoveryPlan {
-                    plan_id,
-                    node_id,
-                    actions,
-                    state,
-                    created_ms,
-                    completed_ms,
-                    result,
-                },
-            );
-        }
-
-        // Load isolation groups
-        let mut stmt = conn
-            .prepare("SELECT group_id, nodes, isolation_level, created_ms FROM isolation_groups")?;
-        let group_rows = stmt.query_map([], |row| {
-            let group_id: String = row.get(0)?;
-            let nodes_json: String = row.get(1)?;
-            let level_str: String = row.get(2)?;
-            let created_ms: i64 = row.get(3)?;
-            Ok((group_id, nodes_json, level_str, created_ms as u64))
-        })?;
-
-        inner.isolation_groups.clear();
-        for row in group_rows {
-            let (group_id, nodes_json, level_str, created_ms) = row?;
-            let nodes: Vec<String> = serde_json::from_str(&nodes_json)?;
-            let isolation_level = match level_str.as_str() {
-                "Monitor" => IsolationLevel::Monitor,
-                "Quarantine" => IsolationLevel::Quarantine,
-                "Shutdown" => IsolationLevel::Shutdown,
-                _ => continue,
-            };
-            inner.isolation_groups.insert(
-                group_id.clone(),
-                IsolationGroup {
-                    group_id,
-                    nodes,
-                    isolation_level,
-                    created_ms,
-                },
-            );
-        }
-
-        // Load heartbeat records
-        let mut stmt = conn.prepare(
-            "SELECT node_id, last_heartbeat_ms, missed_beats, status FROM heartbeat_records",
-        )?;
-        let hb_rows = stmt.query_map([], |row| {
-            let node_id: String = row.get(0)?;
-            let last_heartbeat_ms: i64 = row.get(1)?;
-            let missed_beats: i64 = row.get(2)?;
-            let status_str: String = row.get(3)?;
-            Ok((
-                node_id,
-                last_heartbeat_ms as u64,
-                missed_beats as u32,
-                status_str,
-            ))
-        })?;
-
-        inner.heartbeats.clear();
-        for row in hb_rows {
-            let (node_id, last_heartbeat_ms, missed_beats, status_str) = row?;
-            let status = match status_str.as_str() {
-                "Online" => NodeStatus::Online,
-                "Degraded" => NodeStatus::Degraded,
-                "Offline" => NodeStatus::Offline,
-                "Recovering" => NodeStatus::Recovering,
-                _ => continue,
-            };
-            inner.heartbeats.insert(
-                node_id.clone(),
-                HeartbeatRecord {
-                    node_id,
-                    last_heartbeat_ms,
-                    missed_beats,
-                    status,
-                },
-            );
-        }
-
-        let faults_count = inner.faults.len();
-        let plans_count = inner.recovery_plans.len();
-        let groups_count = inner.isolation_groups.len();
-        let hb_count = inner.heartbeats.len();
-
-        tracing::info!(
-            "FaultToleranceEngine: loaded {} faults, {} plans, {} groups, {} heartbeats from DB",
-            faults_count,
-            plans_count,
-            groups_count,
-            hb_count
-        );
-
-        Ok((faults_count, plans_count, groups_count, hb_count))
-    }
-
-    /// Non-SQLite fallback: load state from the JSON file written by
-    /// `save_to_db` (used with `backend-postgres`).
-    #[cfg(not(feature = "backend-sqlite"))]
-    pub fn load_from_db(&self, _conn: &()) -> anyhow::Result<(usize, usize, usize, usize)> {
-        let cache_path = std::path::PathBuf::from("target")
-            .join("go-on")
-            .join("fault_tolerance.json");
-        let json = std::fs::read_to_string(&cache_path).map_err(|e| {
-            anyhow::anyhow!(
-                "failed to read fault_tolerance.json ({}); fault state will not be restored",
-                e
-            )
-        })?;
-        let loaded: Inner = serde_json::from_str(&json)?;
-        let mut inner = write_guard(&self.inner);
-        let faults_count = loaded.faults.len();
-        let plans_count = loaded.recovery_plans.len();
-        let groups_count = loaded.isolation_groups.len();
-        let hb_count = loaded.heartbeats.len();
-        *inner = loaded;
-        tracing::info!(
-            target: "fault_tolerance",
-            faults = faults_count,
-            plans = plans_count,
-            groups = groups_count,
-            heartbeats = hb_count,
-            "loaded fault tolerance state from JSON file"
-        );
-        Ok((faults_count, plans_count, groups_count, hb_count))
     }
 }
 
@@ -683,11 +417,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_new_engine_empty() {
+    #[tokio::test]
+    async fn test_new_engine_empty() {
         let config = make_config();
         let engine = FaultToleranceEngine::new(config);
-        let profile = engine.profile();
+        let profile = engine.profile().await;
         assert_eq!(profile.total_nodes, 0);
         assert_eq!(profile.online_nodes, 0);
         assert_eq!(profile.degraded_nodes, 0);
@@ -696,24 +430,26 @@ mod tests {
         assert_eq!(profile.isolated_groups, 0);
     }
 
-    #[test]
-    fn test_register_node() {
+    #[tokio::test]
+    async fn test_register_node() {
         let engine = FaultToleranceEngine::new(make_config());
         engine
             .register_node("node-1")
+            .await
             .expect("register node-1 for test");
-        let profile = engine.profile();
+        let profile = engine.profile().await;
         assert_eq!(profile.total_nodes, 1);
         assert_eq!(profile.online_nodes, 1);
     }
 
-    #[test]
-    fn test_register_duplicate_node_fails() {
+    #[tokio::test]
+    async fn test_register_duplicate_node_fails() {
         let engine = FaultToleranceEngine::new(make_config());
         engine
             .register_node("node-1")
+            .await
             .expect("register initial node before duplicate attempt");
-        let result = engine.register_node("node-1");
+        let result = engine.register_node("node-1").await;
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -721,62 +457,67 @@ mod tests {
             .contains("already registered"));
     }
 
-    #[test]
-    fn test_unregister_node() {
+    #[tokio::test]
+    async fn test_unregister_node() {
         let engine = FaultToleranceEngine::new(make_config());
         engine
             .register_node("node-1")
+            .await
             .expect("register node-1 before unregister test");
         engine
             .unregister_node("node-1")
+            .await
             .expect("unregister node-1 should succeed");
-        let profile = engine.profile();
+        let profile = engine.profile().await;
         assert_eq!(profile.total_nodes, 0);
         // unregistering an unknown node should fail
-        let result = engine.unregister_node("node-1");
+        let result = engine.unregister_node("node-1").await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_report_heartbeat() {
+    #[tokio::test]
+    async fn test_report_heartbeat() {
         let engine = FaultToleranceEngine::new(make_config());
         engine
             .register_node("node-1")
+            .await
             .expect("register node-1 for heartbeat test");
         // report a heartbeat (should succeed)
         engine
             .report_heartbeat("node-1")
+            .await
             .expect("report heartbeat for registered node");
         // reporting heartbeat for unknown node should fail
-        let result = engine.report_heartbeat("node-unknown");
+        let result = engine.report_heartbeat("node-unknown").await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_missed_heartbeat_detection() {
+    #[tokio::test]
+    async fn test_missed_heartbeat_detection() {
         let engine = FaultToleranceEngine::new(make_config());
         engine
             .register_node("node-1")
+            .await
             .expect("register node-1 for heartbeat detection test");
         // Immediately after registration, no missed beats
-        let offenders = engine.check_heartbeats();
+        let offenders = engine.check_heartbeats().await;
         assert!(offenders.is_empty());
 
         // Wait longer than the heartbeat timeout (100ms)
-        std::thread::sleep(std::time::Duration::from_millis(150));
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
 
         // First check: one missed -> degraded
-        let offenders = engine.check_heartbeats();
+        let offenders = engine.check_heartbeats().await;
         // missed_beats == 1, < max_missed (3), so not an offender yet
         assert!(offenders.is_empty());
 
         // Wait again and check multiple times to exceed max_missed_beats
         for _ in 0..3 {
-            std::thread::sleep(std::time::Duration::from_millis(110));
-            engine.check_heartbeats();
+            tokio::time::sleep(std::time::Duration::from_millis(110)).await;
+            engine.check_heartbeats().await;
         }
 
-        let offenders = engine.check_heartbeats();
+        let offenders = engine.check_heartbeats().await;
         assert!(
             offenders.contains(&"node-1".to_string()),
             "node-1 should be marked as offender after many missed beats, got: {:?}",
@@ -784,18 +525,20 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_report_fault() {
+    #[tokio::test]
+    async fn test_report_fault() {
         let engine = FaultToleranceEngine::new(make_config());
         engine
             .register_node("node-1")
+            .await
             .expect("register node-1 for fault report test");
         let fault_id = engine
             .report_fault("node-1", FaultType::Crash, 7, "Node crashed unexpectedly")
+            .await
             .expect("report crash fault on node-1 should succeed");
         assert!(fault_id.starts_with("fault-"));
         // Verify fault is active
-        let active = engine.active_faults();
+        let active = engine.active_faults().await;
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].id, fault_id);
         assert_eq!(active[0].node_id, "node-1");
@@ -803,140 +546,163 @@ mod tests {
         assert!(!active[0].recovered);
 
         // Reporting fault on unknown node should fail
-        let result = engine.report_fault("unknown", FaultType::Crash, 5, "test");
+        let result = engine
+            .report_fault("unknown", FaultType::Crash, 5, "test")
+            .await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_resolve_fault() {
+    #[tokio::test]
+    async fn test_resolve_fault() {
         let engine = FaultToleranceEngine::new(make_config());
         engine
             .register_node("node-1")
+            .await
             .expect("register node-1 for fault resolution test");
         let fault_id = engine
             .report_fault("node-1", FaultType::Oom, 9, "Out of memory")
+            .await
             .expect("report OOM fault on node-1");
 
         // Resolve the fault
         engine
             .resolve_fault(&fault_id)
+            .await
             .expect("resolve reported fault should succeed");
-        let active = engine.active_faults();
+        let active = engine.active_faults().await;
         assert_eq!(active.len(), 0);
 
         // Resolving again should fail
-        let result = engine.resolve_fault(&fault_id);
+        let result = engine.resolve_fault(&fault_id).await;
         assert!(result.is_err());
 
         // Resolving unknown fault should fail
-        let result = engine.resolve_fault("does-not-exist");
+        let result = engine.resolve_fault("does-not-exist").await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_isolate_node() {
+    #[tokio::test]
+    async fn test_isolate_node() {
         let engine = FaultToleranceEngine::new(make_config());
         engine
             .register_node("node-1")
+            .await
             .expect("register node-1 for isolate test");
 
         // Isolate at Monitor level
         engine
             .isolate_node("node-1", IsolationLevel::Monitor)
+            .await
             .expect("isolate node-1 at Monitor level");
-        let profile = engine.profile();
+        let profile = engine.profile().await;
         assert_eq!(profile.isolated_groups, 1);
 
         // Isolate again at a different level (should update existing group)
         engine
             .isolate_node("node-1", IsolationLevel::Quarantine)
+            .await
             .expect("isolate node-1 at Quarantine level should succeed");
-        let profile = engine.profile();
+        let profile = engine.profile().await;
         assert_eq!(profile.isolated_groups, 1);
         assert_eq!(profile.degraded_nodes, 1);
 
         // Isolate unknown node
-        let result = engine.isolate_node("unknown", IsolationLevel::Shutdown);
+        let result = engine
+            .isolate_node("unknown", IsolationLevel::Shutdown)
+            .await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_reintegrate_node() {
+    #[tokio::test]
+    async fn test_reintegrate_node() {
         let engine = FaultToleranceEngine::new(make_config());
         engine
             .register_node("node-1")
+            .await
             .expect("register node-1 for reintegrate test");
         engine
             .isolate_node("node-1", IsolationLevel::Quarantine)
+            .await
             .expect("quarantine node-1 before reintegration");
 
         // Reintegrate
         engine
             .reintegrate_node("node-1")
+            .await
             .expect("reintegrate quarantined node-1");
-        let profile = engine.profile();
+        let profile = engine.profile().await;
         assert_eq!(profile.isolated_groups, 0);
         assert_eq!(profile.online_nodes, 1);
 
         // Reintegrate unknown node should fail
-        let result = engine.reintegrate_node("unknown");
+        let result = engine.reintegrate_node("unknown").await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_active_faults() {
+    #[tokio::test]
+    async fn test_active_faults() {
         let engine = FaultToleranceEngine::new(make_config());
         engine
             .register_node("node-1")
+            .await
             .expect("register node-1 for active faults test");
         engine
             .register_node("node-2")
+            .await
             .expect("register node-2 for active faults test");
 
         let id1 = engine
             .report_fault("node-1", FaultType::Crash, 8, "crash")
+            .await
             .expect("report crash fault on node-1");
         let id2 = engine
             .report_fault("node-2", FaultType::Hang, 5, "hang")
+            .await
             .expect("report hang fault on node-2");
 
-        let active = engine.active_faults();
+        let active = engine.active_faults().await;
         assert_eq!(active.len(), 2);
 
         // Resolve one
         engine
             .resolve_fault(&id1)
+            .await
             .expect("resolve fault id1 should succeed");
-        let active = engine.active_faults();
+        let active = engine.active_faults().await;
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].id, id2);
     }
 
-    #[test]
-    fn test_profile_reflects_state() {
+    #[tokio::test]
+    async fn test_profile_reflects_state() {
         let engine = FaultToleranceEngine::new(make_config());
         engine
             .register_node("node-1")
+            .await
             .expect("register node-1 for profile test");
         engine
             .register_node("node-2")
+            .await
             .expect("register node-2 for profile test");
         engine
             .register_node("node-3")
+            .await
             .expect("register node-3 for profile test");
 
         engine
             .report_fault("node-1", FaultType::NetworkSplit, 9, "split")
+            .await
             .expect("report network split fault on node-1");
         engine
             .report_fault("node-2", FaultType::ResourceExhaustion, 5, "exhausted")
+            .await
             .expect("report resource exhaustion fault on node-2");
 
         // node-1 severity 9 -> offline
         // node-2 severity 5 -> degraded
         // node-3 -> online
 
-        let profile = engine.profile();
+        let profile = engine.profile().await;
         assert_eq!(profile.total_nodes, 3);
         assert_eq!(profile.online_nodes, 1);
         assert_eq!(profile.degraded_nodes, 1);
@@ -945,151 +711,189 @@ mod tests {
         assert_eq!(profile.isolated_groups, 0);
     }
 
-    #[test]
-    fn test_create_recovery_plan() {
+    #[tokio::test]
+    async fn test_create_recovery_plan() {
         let engine = FaultToleranceEngine::new(make_config());
         engine
             .register_node("node-1")
+            .await
             .expect("register node-1 for recovery plan test");
         engine
             .report_fault("node-1", FaultType::Crash, 8, "crash")
+            .await
             .expect("report crash fault on node-1 for plan creation");
         let plan_id = engine
             .create_recovery_plan("node-1")
+            .await
             .expect("create recovery plan for node-1");
         assert!(plan_id.starts_with("plan-"));
-        let plans = engine.active_recovery_plans();
+        let plans = engine.active_recovery_plans().await;
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].node_id, "node-1");
         assert!(!plans[0].actions.is_empty());
         // Unknown node should fail
-        assert!(engine.create_recovery_plan("unknown").is_err());
+        assert!(engine.create_recovery_plan("unknown").await.is_err());
     }
 
-    #[test]
-    fn test_execute_and_complete_recovery_plan() {
+    #[tokio::test]
+    async fn test_execute_and_complete_recovery_plan() {
         let engine = FaultToleranceEngine::new(make_config());
         engine
             .register_node("node-1")
+            .await
             .expect("register node-1 for execute/complete test");
         engine
             .report_fault("node-1", FaultType::Hang, 6, "hang")
+            .await
             .expect("report hang fault on node-1");
         let plan_id = engine
             .create_recovery_plan("node-1")
+            .await
             .expect("create recovery plan for node-1");
 
         // Execute plan
         engine
             .execute_recovery_plan(&plan_id)
+            .await
             .expect("execute recovery plan should succeed");
-        let plans = engine.active_recovery_plans();
+        let plans = engine.active_recovery_plans().await;
         assert_eq!(plans[0].state, RecoveryState::InProgress);
 
         // Complete plan
         engine
             .complete_recovery_plan(&plan_id, "restarted successfully")
+            .await
             .expect("complete recovery plan should succeed");
-        let active = engine.active_recovery_plans();
+        let active = engine.active_recovery_plans().await;
         assert!(active.is_empty());
 
         // Double complete should fail
-        assert!(engine.complete_recovery_plan(&plan_id, "again").is_err());
+        assert!(engine
+            .complete_recovery_plan(&plan_id, "again")
+            .await
+            .is_err());
     }
 
-    #[test]
-    fn test_fail_recovery_plan() {
+    #[tokio::test]
+    async fn test_fail_recovery_plan() {
         let engine = FaultToleranceEngine::new(make_config());
         engine
             .register_node("node-1")
+            .await
             .expect("register node-1 for fail plan test");
         engine
             .report_fault("node-1", FaultType::DataCorruption, 7, "corruption")
+            .await
             .expect("report data corruption fault on node-1");
         let plan_id = engine
             .create_recovery_plan("node-1")
+            .await
             .expect("create recovery plan for node-1");
         engine
             .execute_recovery_plan(&plan_id)
+            .await
             .expect("execute recovery plan should succeed");
         engine
             .fail_recovery_plan(&plan_id, "timeout")
+            .await
             .expect("fail recovery plan should succeed");
-        let active = engine.active_recovery_plans();
+        let active = engine.active_recovery_plans().await;
         assert!(active.is_empty());
     }
 
-    #[test]
-    fn test_escalation_level() {
+    #[tokio::test]
+    async fn test_escalation_level() {
         let engine = FaultToleranceEngine::new(make_config());
         engine
             .register_node("node-1")
+            .await
             .expect("register node-1 for escalation test");
 
         // No faults → Auto
-        assert_eq!(engine.escalation_level("node-1"), EscalationLevel::Auto);
+        assert_eq!(
+            engine.escalation_level("node-1").await,
+            EscalationLevel::Auto
+        );
 
         // Low severity fault → Auto
         engine
             .report_fault("node-1", FaultType::Hang, 3, "minor")
+            .await
             .expect("report minor hang fault on node-1");
-        assert_eq!(engine.escalation_level("node-1"), EscalationLevel::Auto);
+        assert_eq!(
+            engine.escalation_level("node-1").await,
+            EscalationLevel::Auto
+        );
 
         // High severity fault → Manual
         engine
             .report_fault("node-1", FaultType::Crash, 9, "severe crash")
+            .await
             .expect("report severe crash fault on node-1");
-        assert_eq!(engine.escalation_level("node-1"), EscalationLevel::Manual);
+        assert_eq!(
+            engine.escalation_level("node-1").await,
+            EscalationLevel::Manual
+        );
 
         // Unknown node → Manual
-        assert_eq!(engine.escalation_level("unknown"), EscalationLevel::Manual);
+        assert_eq!(
+            engine.escalation_level("unknown").await,
+            EscalationLevel::Manual
+        );
     }
 
-    #[test]
-    fn test_cluster_health_healthy() {
+    #[tokio::test]
+    async fn test_cluster_health_healthy() {
         let engine = FaultToleranceEngine::new(make_config());
         engine
             .register_node("node-1")
+            .await
             .expect("register node-1 for healthy cluster test");
         engine
             .register_node("node-2")
+            .await
             .expect("register node-2 for healthy cluster test");
         engine
             .register_node("node-3")
+            .await
             .expect("register node-3 for healthy cluster test");
-        assert_eq!(engine.cluster_health(), ClusterHealth::Healthy);
+        assert_eq!(engine.cluster_health().await, ClusterHealth::Healthy);
     }
 
-    #[test]
-    fn test_cluster_health_degraded() {
+    #[tokio::test]
+    async fn test_cluster_health_degraded() {
         let engine = FaultToleranceEngine::new(make_config());
         engine
             .register_node("node-1")
+            .await
             .expect("register node-1 for degraded cluster test");
         engine
             .register_node("node-2")
+            .await
             .expect("register node-2 for degraded cluster test");
         engine
             .report_fault("node-1", FaultType::Crash, 5, "moderate")
+            .await
             .expect("report crash fault to trigger degraded health");
-        assert_eq!(engine.cluster_health(), ClusterHealth::Degraded);
+        assert_eq!(engine.cluster_health().await, ClusterHealth::Degraded);
     }
 
-    #[test]
-    fn test_run_recovery_cycle() {
+    #[tokio::test]
+    async fn test_run_recovery_cycle() {
         let engine = FaultToleranceEngine::new(make_config());
         engine
             .register_node("node-1")
+            .await
             .expect("register node-1 for recovery cycle test");
 
         // Force a missed heartbeat
-        std::thread::sleep(std::time::Duration::from_millis(150));
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
         for _ in 0..4 {
-            std::thread::sleep(std::time::Duration::from_millis(110));
-            engine.check_heartbeats();
+            tokio::time::sleep(std::time::Duration::from_millis(110)).await;
+            engine.check_heartbeats().await;
         }
 
-        let summary = engine.run_recovery_cycle();
+        let summary = engine.run_recovery_cycle().await;
         assert!(!summary.offenders.is_empty());
         assert!(
             summary.cluster_health == ClusterHealth::Critical
@@ -1099,8 +903,8 @@ mod tests {
 
     // ── E2E: FaultToleranceEngine lifecycle (fault → detect → recover) ──
 
-    #[test]
-    fn test_e2e_fault_detect_recover() {
+    #[tokio::test]
+    async fn test_e2e_fault_detect_recover() {
         let config = FaultToleranceConfig {
             heartbeat_timeout_ms: 60_000,
             max_missed_beats: 5,
@@ -1111,10 +915,11 @@ mod tests {
         for i in 0..10 {
             engine
                 .register_node(&format!("node-{}", i))
+                .await
                 .expect("register node for e2e test");
         }
         assert_eq!(
-            engine.profile().total_nodes,
+            engine.profile().await.total_nodes,
             10,
             "should have 10 total nodes"
         );
@@ -1122,8 +927,9 @@ mod tests {
         // Inject crash on node-5 — severity 9 sets node to Offline
         engine
             .report_fault("node-5", FaultType::Crash, 9, "test crash")
+            .await
             .expect("report crash fault on node-5 for e2e test");
-        let p = engine.profile();
+        let p = engine.profile().await;
         assert_eq!(
             p.offline_nodes, 1,
             "crash fault should set one node offline"
@@ -1132,18 +938,22 @@ mod tests {
         // Create + execute + complete recovery plan
         let plan = engine
             .create_recovery_plan("node-5")
+            .await
             .expect("create recovery plan for node-5");
         engine
             .execute_recovery_plan(&plan)
+            .await
             .expect("execute recovery plan for node-5");
         engine
             .complete_recovery_plan(&plan, "recovered")
+            .await
             .expect("complete recovery plan for node-5");
         engine
             .reintegrate_node("node-5")
+            .await
             .expect("reintegrate node-5 after recovery");
 
-        let p = engine.profile();
+        let p = engine.profile().await;
         assert_eq!(p.total_nodes, 10, "all nodes should be present");
         assert_eq!(
             p.online_nodes, 10,
@@ -1161,8 +971,8 @@ mod tests {
 
     // ── Multi-node stress test (500+ nodes) ────────────────────────────
 
-    #[test]
-    fn test_e2e_multi_node_stress_500() {
+    #[tokio::test]
+    async fn test_e2e_multi_node_stress_500() {
         let config = FaultToleranceConfig {
             heartbeat_timeout_ms: 60_000,
             max_missed_beats: 3,
@@ -1174,10 +984,11 @@ mod tests {
         for i in 0..node_count {
             engine
                 .register_node(&format!("node-{}", i))
+                .await
                 .expect("register node for stress test");
         }
-        assert_eq!(engine.profile().total_nodes, node_count);
-        assert_eq!(engine.profile().online_nodes, node_count);
+        assert_eq!(engine.profile().await.total_nodes, node_count);
+        assert_eq!(engine.profile().await.online_nodes, node_count);
 
         // Inject faults on 20 nodes
         for i in 0..20 {
@@ -1189,6 +1000,7 @@ mod tests {
                     6,
                     "stress fault",
                 )
+                .await
                 .expect("report resource exhaustion fault for stress test");
         }
 
@@ -1196,7 +1008,7 @@ mod tests {
         let mut plans = Vec::new();
         for i in 0..20 {
             let idx = (i * 13 + 7) % node_count;
-            if let Ok(pid) = engine.create_recovery_plan(&format!("node-{}", idx)) {
+            if let Ok(pid) = engine.create_recovery_plan(&format!("node-{}", idx)).await {
                 plans.push(pid);
             }
         }
@@ -1204,19 +1016,19 @@ mod tests {
 
         // Execute and complete all plans
         for pid in &plans {
-            let _ = engine.execute_recovery_plan(pid);
+            let _ = engine.execute_recovery_plan(pid).await;
         }
         for pid in &plans {
-            let _ = engine.complete_recovery_plan(pid, "recovered");
+            let _ = engine.complete_recovery_plan(pid, "recovered").await;
         }
 
         // Reintegrate all recovered nodes
         for i in 0..20 {
             let idx = (i * 13 + 7) % node_count;
-            let _ = engine.reintegrate_node(&format!("node-{}", idx));
+            let _ = engine.reintegrate_node(&format!("node-{}", idx)).await;
         }
 
-        let profile = engine.profile();
+        let profile = engine.profile().await;
         assert_eq!(profile.total_nodes, node_count);
         assert_eq!(profile.online_nodes, node_count);
         assert_eq!(profile.active_faults, 0);
@@ -1224,8 +1036,8 @@ mod tests {
 
     /// E2E: Node fault → recovery plan → execute → complete → reintegrate
     /// with transport-level notification via MultiChannelTransport.
-    #[test]
-    fn test_e2e_fault_recovery_with_transport() {
+    #[tokio::test]
+    async fn test_e2e_fault_recovery_with_transport() {
         use crate::protocol::transport::{MultiChannelTransport, TransportConfig};
 
         let ft_config = FaultToleranceConfig {
@@ -1239,15 +1051,17 @@ mod tests {
         // Register 10 nodes
         for i in 0..10 {
             ft.register_node(&format!("node-{}", i))
+                .await
                 .expect("register node for transport e2e test");
         }
-        assert_eq!(ft.profile().online_nodes, 10);
+        assert_eq!(ft.profile().await.online_nodes, 10);
 
         // Crash node-5 — severity 9 marks node offline
         let crashed = "node-5";
         ft.report_fault(crashed, FaultType::Crash, 9, "test crash")
+            .await
             .expect("report crash fault on node-5 in transport test");
-        let profile = ft.profile();
+        let profile = ft.profile().await;
         assert_eq!(
             profile.offline_nodes, 1,
             "crash should set one node offline"
@@ -1257,12 +1071,16 @@ mod tests {
         // Create + execute + complete recovery plan
         let plan = ft
             .create_recovery_plan(crashed)
+            .await
             .expect("create recovery plan for node-5");
         ft.execute_recovery_plan(&plan)
+            .await
             .expect("execute recovery plan should succeed");
         ft.complete_recovery_plan(&plan, "restarted")
+            .await
             .expect("complete recovery plan should succeed");
         ft.reintegrate_node(crashed)
+            .await
             .expect("reintegrate node-5 after transport recovery");
 
         // Send recovery notification via transport
@@ -1272,23 +1090,26 @@ mod tests {
             &format!("node {} recovered", crashed),
         );
 
-        assert_eq!(ft.profile().online_nodes, 10);
-        assert_eq!(ft.profile().active_faults, 0);
+        assert_eq!(ft.profile().await.online_nodes, 10);
+        assert_eq!(ft.profile().await.active_faults, 0);
     }
 
-    #[test]
-    fn test_profile_includes_recovery() {
+    #[tokio::test]
+    async fn test_profile_includes_recovery() {
         let engine = FaultToleranceEngine::new(make_config());
         engine
             .register_node("node-1")
+            .await
             .expect("register node-1 for profile recovery test");
         engine
             .report_fault("node-1", FaultType::Oom, 9, "OOM")
+            .await
             .expect("report OOM fault on node-1");
         engine
             .create_recovery_plan("node-1")
+            .await
             .expect("create recovery plan for node-1");
-        let profile = engine.profile();
+        let profile = engine.profile().await;
         assert!(profile.total_nodes > 0);
     }
 }

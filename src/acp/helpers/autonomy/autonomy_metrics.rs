@@ -9,7 +9,6 @@ static REQUIREMENT_HUMAN_CONFIRMATION_TOTAL: AtomicU64 = AtomicU64::new(0);
 static ORCHESTRATION_ALIGNMENT_HIGH_TOTAL: AtomicU64 = AtomicU64::new(0);
 static ORCHESTRATION_ALIGNMENT_LOW_TOTAL: AtomicU64 = AtomicU64::new(0);
 static IDEMPOTENCY_HIT_TOTAL: AtomicU64 = AtomicU64::new(0);
-static IDEMPOTENCY_PENDING_CONTINUATION_HIT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static REPAIR_CYCLE_RESOLVED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static REPAIR_CYCLE_IMPROVED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static REPAIR_CYCLE_UNRESOLVED_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -62,14 +61,6 @@ pub(crate) fn record_orchestration_alignment(coverage_ratio: f64) {
         ORCHESTRATION_ALIGNMENT_HIGH_TOTAL.fetch_add(1, Ordering::Relaxed);
     } else {
         ORCHESTRATION_ALIGNMENT_LOW_TOTAL.fetch_add(1, Ordering::Relaxed);
-    }
-}
-
-#[allow(dead_code)] // F-GAP: reserved for idempotency tracking
-pub(crate) fn record_idempotency_hit(pending_continuation: bool) {
-    IDEMPOTENCY_HIT_TOTAL.fetch_add(1, Ordering::Relaxed);
-    if pending_continuation {
-        IDEMPOTENCY_PENDING_CONTINUATION_HIT_TOTAL.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -208,8 +199,6 @@ pub(crate) fn autonomy_metrics_snapshot() -> Value {
     let alignment_high = ORCHESTRATION_ALIGNMENT_HIGH_TOTAL.load(Ordering::Relaxed);
     let alignment_low = ORCHESTRATION_ALIGNMENT_LOW_TOTAL.load(Ordering::Relaxed);
     let idempotency_hits = IDEMPOTENCY_HIT_TOTAL.load(Ordering::Relaxed);
-    let idempotency_pending_hits =
-        IDEMPOTENCY_PENDING_CONTINUATION_HIT_TOTAL.load(Ordering::Relaxed);
     let repair_resolved = REPAIR_CYCLE_RESOLVED_TOTAL.load(Ordering::Relaxed);
     let repair_improved = REPAIR_CYCLE_IMPROVED_TOTAL.load(Ordering::Relaxed);
     let repair_unresolved = REPAIR_CYCLE_UNRESOLVED_TOTAL.load(Ordering::Relaxed);
@@ -264,12 +253,6 @@ pub(crate) fn autonomy_metrics_snapshot() -> Value {
         0.0
     } else {
         alignment_high as f64 / alignment_total as f64
-    };
-
-    let idempotency_pending_ratio = if idempotency_hits == 0 {
-        0.0
-    } else {
-        idempotency_pending_hits as f64 / idempotency_hits as f64
     };
 
     let repair_effective_ratio = if repair_total == 0 {
@@ -337,8 +320,6 @@ pub(crate) fn autonomy_metrics_snapshot() -> Value {
         "orchestration_alignment_low_total": alignment_low,
         "orchestration_alignment_high_ratio": orchestration_alignment_high_ratio,
         "idempotency_hit_total": idempotency_hits,
-        "idempotency_pending_continuation_hit_total": idempotency_pending_hits,
-        "idempotency_pending_continuation_ratio": idempotency_pending_ratio,
         "repair_cycle_resolved_total": repair_resolved,
         "repair_cycle_improved_total": repair_improved,
         "repair_cycle_unresolved_total": repair_unresolved,

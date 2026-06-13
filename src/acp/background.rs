@@ -875,7 +875,7 @@ pub async fn start_background_tasks(
                             break;
                         }
                         _ = interval.tick() => {
-                            let summary = ft.run_recovery_cycle();
+                            let summary = ft.run_recovery_cycle().await;
                             if !summary.offenders.is_empty() || summary.plans_created > 0 {
                                 tracing::info!(
                                     target: "fault_tolerance",
@@ -928,12 +928,6 @@ pub async fn start_background_tasks(
     }
 
     Ok(())
-}
-
-/// Stop all background tasks
-#[allow(dead_code)] // F-GAP-49 — planned wiring: lifecycle/background task orchestration
-pub fn stop_background_tasks(shutdown_notify: Arc<Notify>) {
-    shutdown_notify.notify_waiters();
 }
 
 /// Run a single maintenance cycle on demand

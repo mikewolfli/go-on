@@ -30,22 +30,6 @@ pub static CL_INSIGHTS_APPLIED: AtomicU64 = AtomicU64::new(0);
 static EVOLUTION_GRAPH: LazyLock<Mutex<EvolutionGraph>> =
     LazyLock::new(|| Mutex::new(EvolutionGraph::new()));
 
-/// Initialize or retrieve the global EvolutionGraph instance.
-#[allow(dead_code)] // F-GAP-49 — reserved for evolution graph external access
-pub fn evolution_graph() -> &'static Mutex<EvolutionGraph> {
-    &EVOLUTION_GRAPH
-}
-
-/// Register an agent capability in the evolution graph for tracking.
-#[allow(dead_code)] // F-GAP-49 — reserved for evolution graph external registration
-pub fn register_agent_capability(agent: &str, capability: &str) {
-    let mut graph = EVOLUTION_GRAPH.lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("EVOLUTION_GRAPH lock poisoned during capability registration – recovered");
-        poisoned.into_inner()
-    });
-    let _ = graph.register_capability(agent, capability, EvolutionStage::New);
-}
-
 /// Record a performance data point for an agent capability.
 pub fn record_capability_performance(
     agent: &str,
@@ -139,27 +123,6 @@ pub fn get_agent_recommendations() -> Vec<(String, String, EvolutionStage, Trend
     }
 
     recommendations
-}
-
-/// Check if an agent is recommended for a given task type based on EvolutionGraph data.
-#[allow(dead_code)] // F-GAP-49 — reserved for evolution graph recommendation queries
-pub fn is_agent_recommended_for(agent: &str, task_category: &str) -> bool {
-    let graph = match EVOLUTION_GRAPH.lock() {
-        Ok(g) => g,
-        Err(_) => return false,
-    };
-
-    if let Ok(record) = graph.get_record(agent, task_category) {
-        matches!(
-            record.current_stage,
-            EvolutionStage::Stable | EvolutionStage::Mature
-        ) && matches!(
-            record.trend,
-            TrendDirection::Improving | TrendDirection::Stable
-        )
-    } else {
-        false
-    }
 }
 
 // ── ContinuousLearning bridge ──────────────────────────────────────────────
@@ -320,48 +283,5 @@ mod tests {
         let ctx = IntelligenceContext::default();
         let augmented = build_intelligence_augmented_context(&ctx);
         assert!(augmented.is_none());
-    }
-
-    #[test]
-    fn test_register_and_record_capability() {
-        register_agent_capability("test-agent", "coding");
-        record_capability_performance("test-agent", "coding", 0.95, 100.0);
-
-        let recommendations = get_agent_recommendations();
-        assert!(!recommendations.is_empty());
-    }
-
-    #[test]
-    fn test_register_and_record_capability_advances_stage() {
-        register_agent_capability("evo-agent", "testing");
-        // Record many high-success versions to trigger stage advancement
-        for _ in 0..25 {
-            record_capability_performance("evo-agent", "testing", 0.90, 50.0);
-        }
-
-        let recommendations = get_agent_recommendations();
-        let evo_rec = recommendations
-            .iter()
-            .find(|(a, c, _, _)| a == "evo-agent" && c == "testing");
-        assert!(
-            evo_rec.is_some(),
-            "should have recommendation for evo-agent:testing"
-        );
-        let (_agent, _cap, stage, _trend) =
-            evo_rec.expect("recommendation for evo-agent:testing should exist");
-        assert!(
-            matches!(stage, EvolutionStage::Mature | EvolutionStage::Stable),
-            "stage should have advanced beyond New/Learning, got {stage:?}"
-        );
-    }
-
-    #[test]
-    fn test_is_agent_recommended_for() {
-        register_agent_capability("rec-agent", "refactoring");
-        for _ in 0..25 {
-            record_capability_performance("rec-agent", "refactoring", 0.92, 80.0);
-        }
-        assert!(is_agent_recommended_for("rec-agent", "refactoring"));
-        assert!(!is_agent_recommended_for("unknown-agent", "refactoring"));
     }
 }

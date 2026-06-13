@@ -5,7 +5,7 @@
 //! watches for file changes and triggers reloads automatically.
 
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use anyhow::Result;
 use notify::{Config, Event, EventKind, RecursiveMode, Watcher};
@@ -251,7 +251,7 @@ impl PolicyReloader {
     /// handle.abort();
     /// ```
     pub fn start_background_reload(mut self, interval_secs: u64) -> JoinHandle<()> {
-        let duration = std::time::Duration::from_secs(interval_secs);
+        let duration = Duration::from_secs(interval_secs);
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(duration);
             loop {
@@ -286,10 +286,7 @@ pub fn sha256_digest(data: &[u8]) -> Vec<u8> {
 
 /// Returns the current time in milliseconds since the Unix epoch.
 pub fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+    crate::shared::timestamps::now_ts_ms() as u64
 }
 
 // ─── Concrete reloadable policy wrappers ────────────────────────────────────

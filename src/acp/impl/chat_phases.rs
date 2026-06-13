@@ -74,6 +74,7 @@ pub(crate) struct ObserveOutput {
     pub _flow: Arc<FlowManager>,
     pub _registry: Arc<crate::agent::AgentRegistry>,
     pub tenant_id: String,
+    pub user_id: Option<String>,
     pub phase: ResolvedPhase,
     pub phase_name: String,
     pub phase_origin: String,
@@ -164,6 +165,7 @@ pub(crate) async fn observe_phase(
     clear_task_description_cache();
     let (flow, registry) = routing_handles(server)?;
     let tenant_id = ctx.tenant_id.clone();
+    let user_id = ctx.user_id.clone();
 
     evaluate_pre_route_policies(server, params, trace, &tenant_id).await?;
 
@@ -222,6 +224,7 @@ pub(crate) async fn observe_phase(
         _flow: flow,
         _registry: registry,
         tenant_id,
+        user_id,
         phase: phase_res.phase,
         phase_name: phase_res.phase_name,
         phase_origin: phase_res.phase_origin,
@@ -400,6 +403,7 @@ pub(crate) async fn think_phase(
     // AgentMemoryBus — inject relevant memories into context
     inject_agent_memory_bus(
         server,
+        resolve_out.user_id.as_deref(),
         &resolve_out.phase_name,
         agent_sel.capability_selected_agent.as_deref(),
         &params.messages,
@@ -439,13 +443,13 @@ pub(crate) async fn think_phase(
 
 fn inject_agent_memory_bus(
     _server: &AcpServer,
+    user_id: Option<&str>,
     phase_name: &str,
     agent_name: Option<&str>,
     messages: &[Message],
     agent_messages: &mut Vec<Message>,
 ) {
     use crate::memory::agent_memory_bus::{AgentMemoryBus, AGENT_MEMORY_BUS};
-    // TODO-BLUE64: wire actual user_id from session context for multi-user isolation
     if let Some(memory_ctx) = AGENT_MEMORY_BUS
         .get_or_init(AgentMemoryBus::new_default)
         .retrieve_context_for_agent(
@@ -453,7 +457,7 @@ fn inject_agent_memory_bus(
             phase_name,
             &extract_task_description(messages),
             5,
-            None,
+            user_id,
         )
     {
         agent_messages.insert(
@@ -516,7 +520,7 @@ pub(crate) async fn act_phase(
             cache_bypassed_for_execution,
         );
         match decision {
-            CacheDecision::Hit { response, level: _ } => {
+            CacheDecision::Hit { response } => {
                 cache_hit = true;
                 selected_agent = resolve_out
                     .resolved
@@ -1396,6 +1400,7 @@ pub(crate) async fn reflect_phase(
     // AgentMemoryBus completion
     store_agent_memory_bus_completion(
         &exec_out.selected_agent,
+        resolve_out.user_id.as_deref(),
         &resolve_out.phase_name,
         params,
         &exec_out.response_text,
@@ -1703,6 +1708,7 @@ fn capability_bus_feedback(
 
 fn store_agent_memory_bus_completion(
     selected_agent: &str,
+    user_id: Option<&str>,
     phase_name: &str,
     params: &ChatParams,
     response_text: &str,
@@ -1711,14 +1717,13 @@ fn store_agent_memory_bus_completion(
     use crate::memory::agent_memory_bus::AGENT_MEMORY_BUS;
     if let Some(bus) = AGENT_MEMORY_BUS.get() {
         let success = !response_text.is_empty() && last_err.is_none();
-        // TODO-BLUE64: wire actual user_id from session context for multi-user isolation
         bus.store_agent_completion(
             selected_agent,
             phase_name,
             &extract_task_description(&params.messages),
             response_text,
             success,
-            None,
+            user_id,
         );
     }
 }

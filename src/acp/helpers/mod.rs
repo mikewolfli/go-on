@@ -91,8 +91,6 @@ pub mod response_assembler;
 pub mod response_finalizer;
 
 // ── Diagnosis & repair ─────────────────────────────────────────────────────
-#[path = "diagnosis/auton_gate_diagnosis.rs"]
-pub mod auton_gate_diagnosis;
 #[path = "diagnosis/repair_diagnosis.rs"]
 pub mod repair_diagnosis;
 
@@ -105,9 +103,6 @@ pub mod requirement_continuation;
 // ── General-purpose helpers (root) ─────────────────────────────────────────
 pub mod cache_strategy;
 pub mod conversation;
-pub mod fallback_executor;
-pub mod idempotency_resume;
 pub mod metrics;
-pub mod misc;
 
 // Re-export for convenience

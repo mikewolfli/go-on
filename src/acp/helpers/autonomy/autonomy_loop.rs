@@ -42,18 +42,6 @@ pub fn store_latest_dag_metrics(metrics: DagMetrics) {
     *guard = Some(metrics);
 }
 
-/// Read latest DAG metrics for governance payload.
-#[allow(dead_code)] // F-GAP-49 — reserved for governance DAG metrics integration
-pub fn read_latest_dag_metrics() -> Option<DagMetrics> {
-    LATEST_DAG_METRICS
-        .lock()
-        .unwrap_or_else(|poisoned| {
-            tracing::warn!("lock poisoned, recovering");
-            poisoned.into_inner()
-        })
-        .clone()
-}
-
 /// Predictive reroute scoring result.
 #[derive(Debug, Clone)]
 pub struct PredictiveRerouteScore {
@@ -828,7 +816,8 @@ pub async fn run_autonomy_loop(
 
                 let tool_results: Vec<(String, LoopDecision)> = if config.use_dag_execution {
                     // F-GAP-42: Legacy dag_driver — pending migration to core_dag
-                    #[allow(deprecated)] // F-GAP-42 — pending migration to core_dag
+                    #[cfg_attr(not(test), expect(deprecated))]
+                    // F-GAP-42 — pending migration to core_dag
                     let (nodes, dag_trace_data) =
                         crate::orchestration::dag_driver::execute_tool_dag(
                             Arc::clone(registry),

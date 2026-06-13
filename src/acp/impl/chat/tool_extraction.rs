@@ -219,117 +219,95 @@ fn execute_tool_calls(
         .collect()
 }
 
-/// A detected repeated task pattern in a conversation.
-/// Used by P3 to proactively propose skill creation.
-#[allow(dead_code)] // F-GAP-49
-pub(crate) struct DetectedTaskPattern {
-    /// Suggested skill name
-    pub(crate) name: String,
-    /// Suggested skill description
-    pub(crate) description: String,
-    /// How many times the pattern was observed
-    pub(crate) occurrence_count: usize,
-    /// The keyword cluster that identifies this pattern
-    pub(crate) keywords: Vec<String>,
-}
-
 /// Detect repeated task patterns across user messages.
 ///
 /// Analyzes all user messages for common keyword clusters that indicate
 /// the same type of task is being requested multiple times.
-/// Returns `Some(DetectedTaskPattern)` when a pattern appears 3+ times.
-pub(crate) fn detect_repeated_task_pattern(messages: &[&str]) -> Option<DetectedTaskPattern> {
+/// Returns `true` when a repeated task pattern appears 3+ times.
+pub(crate) fn detect_repeated_task_pattern(messages: &[&str]) -> bool {
     if messages.len() < 3 {
-        return None;
+        return false;
     }
 
-    // Define keyword clusters for common task types as owned strings
-    let task_clusters: Vec<(Vec<&str>, &str, &str)> =
+    // Define keyword clusters for common task types
+    let task_clusters: Vec<Vec<&str>> = vec![
         vec![
-        (
-            vec!["refactor", "restructure", "reorganize", "clean up", "cleanup", "technical debt"],
-            "code-refactoring",
-            "Refactors and restructures code to improve maintainability and reduce technical debt",
-        ),
-        (
-            vec!["test", "unit test", "integration test", "e2e", "test coverage", "assert"],
-            "testing",
-            "Creates and runs tests including unit, integration, and end-to-end tests",
-        ),
-        (
-            vec!["document", "readme", "docstring", "comment", "documentation", "docs"],
+            "refactor",
+            "restructure",
+            "reorganize",
+            "clean up",
+            "cleanup",
+            "technical debt",
+        ],
+        vec![
+            "test",
+            "unit test",
+            "integration test",
+            "e2e",
+            "test coverage",
+            "assert",
+        ],
+        vec![
+            "document",
+            "readme",
+            "docstring",
+            "comment",
             "documentation",
-            "Generates and updates documentation including README, docstrings, and technical docs",
-        ),
-        (
-            vec!["debug", "fix", "bug", "issue", "error", "crash", "failing", "broken"],
-            "bug-fixing",
-            "Diagnoses and fixes bugs, errors, and crashes in the codebase",
-        ),
-        (
-            vec!["optimize", "performance", "slow", "bottleneck", "speed up", "faster"],
-            "performance-optimization",
-            "Optimizes code performance by identifying and fixing bottlenecks",
-        ),
-        (
-            vec!["api", "endpoint", "route", "rest", "graphql", "grpc"],
-            "api-development",
-            "Designs, implements, and documents API endpoints and integrations",
-        ),
-        (
-            vec!["review", "code review", "audit", "inspect", "check quality"],
-            "code-review",
-            "Reviews code for quality, security, and adherence to best practices",
-        ),
-        (
-            vec!["deploy", "ci/cd", "pipeline", "release", "rollout", "rollback"],
-            "deployment",
-            "Manages deployment, CI/CD pipelines, and release processes",
-        ),
-        (
-            vec!["migrate", "migration", "upgrade", "port", "convert", "transpile"],
+            "docs",
+        ],
+        vec![
+            "debug", "fix", "bug", "issue", "error", "crash", "failing", "broken",
+        ],
+        vec![
+            "optimize",
+            "performance",
+            "slow",
+            "bottleneck",
+            "speed up",
+            "faster",
+        ],
+        vec!["api", "endpoint", "route", "rest", "graphql", "grpc"],
+        vec!["review", "code review", "audit", "inspect", "check quality"],
+        vec![
+            "deploy", "ci/cd", "pipeline", "release", "rollout", "rollback",
+        ],
+        vec![
+            "migrate",
             "migration",
-            "Migrates code between frameworks, languages, or versions",
-        ),
-        (
-            vec!["config", "configure", "setup", "install", "initialize", "bootstrap"],
-            "configuration",
-            "Handles configuration, setup, and initialization of projects and tools",
-        ),
+            "upgrade",
+            "port",
+            "convert",
+            "transpile",
+        ],
+        vec![
+            "config",
+            "configure",
+            "setup",
+            "install",
+            "initialize",
+            "bootstrap",
+        ],
     ];
 
     // Count how many messages match each cluster
-    let mut cluster_hits: Vec<(usize, Vec<&str>, &str, &str)> = task_clusters
+    let mut cluster_hits: Vec<usize> = task_clusters
         .into_iter()
-        .map(|(keywords, name, description)| {
-            let count = messages
+        .map(|keywords| {
+            messages
                 .iter()
                 .filter(|msg| {
                     let lower = msg.to_lowercase();
                     keywords.iter().any(|kw| lower.contains(kw))
                 })
-                .count();
-            (count, keywords, name, description)
+                .count()
         })
         .collect();
 
     // Sort by hit count descending
-    cluster_hits.sort_by_key(|b| std::cmp::Reverse(b.0));
+    cluster_hits.sort_by_key(|b| std::cmp::Reverse(*b));
 
-    // Return the best match if it appears 3+ times
-    if !cluster_hits.is_empty() {
-        let (count, keywords, name, description) = cluster_hits.swap_remove(0);
-        if count >= 3 {
-            return Some(DetectedTaskPattern {
-                name: name.to_string(),
-                description: description.to_string(),
-                occurrence_count: count,
-                keywords: keywords.into_iter().map(|s| s.to_string()).collect(),
-            });
-        }
-    }
-
-    None
+    // Return true if the best match appears 3+ times
+    !cluster_hits.is_empty() && cluster_hits[0] >= 3
 }
 
 #[cfg(test)]
@@ -360,7 +338,7 @@ mod tests {
     #[test]
     fn test_detect_no_pattern() {
         let result = detect_repeated_task_pattern(&["hello", "world"]);
-        assert!(result.is_none());
+        assert!(!result);
     }
 
     #[test]
@@ -371,9 +349,6 @@ mod tests {
             "clean up the technical debt",
         ];
         let result = detect_repeated_task_pattern(messages);
-        assert!(result.is_some());
-        let pattern = result.expect("should detect refactor pattern");
-        assert_eq!(pattern.name, "code-refactoring");
-        assert_eq!(pattern.occurrence_count, 3);
+        assert!(result);
     }
 }

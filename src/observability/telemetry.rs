@@ -61,7 +61,7 @@ impl TelemetryRuntime {
             return Self::default();
         }
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         {
             let mut guard = match OTEL_INIT.lock() {
                 Ok(g) => g,

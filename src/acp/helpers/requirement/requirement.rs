@@ -22,7 +22,6 @@ use crate::{
 
 /// Requirement gate decision
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // F-GAP-49 — preserved for legacy gate decision compatibility
 pub struct RequirementGateDecision {
     /// Whether the gate is blocked
     pub blocked: bool,
@@ -113,7 +112,6 @@ impl RequirementGateFacadeDecision {
 
 /// Learning clarification metrics
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)] // F-GAP-49 — reserved for clarification learning feedback loop
 pub struct LearningClarificationMetrics {
     /// Number of clarification rounds
     pub rounds: u32,
@@ -124,7 +122,6 @@ pub struct LearningClarificationMetrics {
 }
 
 /// Parse string list from JSON Value
-#[allow(dead_code)] // F-GAP-49 — reserved for contract parsing utility
 fn parse_string_list(value: Option<&Value>) -> Vec<String> {
     value
         .and_then(|v| v.as_array())
@@ -178,7 +175,6 @@ pub fn parse_requirement_contract_from_params(
 }
 
 /// Create default requirement contract
-#[allow(dead_code)] // F-GAP-49 — reserved for default requirement contract wiring
 pub fn default_requirement_contract(task: &str, source: &str) -> RequirementContractArtifact {
     RequirementContractArtifact {
         generated_at: now_ts(),
@@ -211,21 +207,6 @@ pub fn requirement_missing_fields(contract: &RequirementContractArtifact) -> Vec
         missing.push("constraints".to_string());
     }
     missing
-}
-
-/// Generate clarification questions from missing fields
-#[allow(dead_code)] // F-GAP-49 — reserved for interactive clarification flow
-pub fn requirement_questions_from_missing(missing_fields: &[String]) -> Vec<String> {
-    missing_fields
-        .iter()
-        .map(|field| match field.as_str() {
-            "goal" => "这个任务最终想达成的业务目标是什么？".to_string(),
-            "scope" => "本次改动边界是什么？哪些模块必须包含？".to_string(),
-            "acceptance_criteria" => "验收标准是什么？如何证明完成？".to_string(),
-            "constraints" => "有哪些硬约束（时间、兼容性、性能、安全）？".to_string(),
-            other => format!("请补充字段: {}", other),
-        })
-        .collect::<Vec<_>>()
 }
 
 /// Estimate requirement ambiguity score

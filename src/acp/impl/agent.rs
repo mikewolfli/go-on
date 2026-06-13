@@ -36,7 +36,6 @@ struct DualReviewContext {
 #[derive(Debug, Clone)]
 pub struct ReviewTimeoutPolicy {
     /// Timeout in seconds
-    #[allow(dead_code)] // F-GAP-49 — reserved for review timeout enforcement
     pub timeout_seconds: Option<u64>,
     /// Whether to fail on timeout
     pub fail_on_timeout: bool,

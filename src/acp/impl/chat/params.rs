@@ -45,14 +45,13 @@ pub struct ChatParams {
     pub execution_decision_candidate: Option<ExecutionDecisionCandidate>,
 }
 
-/// Context for a chat request, including authentication and tenant info.
+/// Context for a chat request, including tenant and user info.
 #[derive(Debug, Clone)]
 pub struct ChatRequestContext {
-    /// Authenticated user session, if user auth is enabled.
-    #[allow(dead_code)] // F-GAP-49 — Public API — reserved for audit logging and in-chat RBAC
-    pub user_session: Option<UserSession>,
     /// Resolved tenant ID (from user session, or conversation_id, or default).
     pub tenant_id: String,
+    /// Resolved user ID for multi-user isolation (from user session when auth is enabled).
+    pub user_id: Option<String>,
 }
 
 impl ChatRequestContext {
@@ -62,10 +61,8 @@ impl ChatRequestContext {
             .as_ref()
             .and_then(|s| s.tenant_id.clone())
             .unwrap_or_else(|| "default-tenant".to_string());
-        Self {
-            user_session,
-            tenant_id,
-        }
+        let user_id = user_session.map(|s| s.user_id);
+        Self { tenant_id, user_id }
     }
 }
 

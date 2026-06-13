@@ -6,18 +6,9 @@ use crate::shared::secret_override::get_secret;
 use std::sync::OnceLock;
 
 /// Module-level static for hot-reloaded runtime config.
-/// Shared between `handle_config_reload` (write) and `try_get_reload_config` (read).
+/// Shared between `handle_config_reload` (write) and future consumers.
 pub(super) static RUNTIME_CONFIG: OnceLock<std::sync::RwLock<Option<RuntimeConfig>>> =
     std::sync::OnceLock::new();
-
-/// Try to read the reloaded runtime config, if one was stored via `config.reload`.
-#[allow(dead_code)] // F-GAP-49 — Public API — reserved for subsystems that support hot-reload
-pub fn try_get_reload_config() -> Option<RuntimeConfig> {
-    RUNTIME_CONFIG
-        .get()
-        .and_then(|rw| rw.read().ok())
-        .and_then(|guard| guard.clone())
-}
 
 pub(super) fn governance_rule_fingerprint(config_path: Option<&str>) -> Value {
     let base_dir = config_path
@@ -352,8 +343,8 @@ pub(super) async fn handle_config_reload(
     // vector store) requires a server restart — those resources cannot
     // be safely swapped at runtime without coordination.
     // Store the new runtime config in the module-level static OnceLock so
-    // subsystems that support hot-reload can read the updated values via
-    // `try_get_reload_config()`.  The runtime_config on AcpServer itself
+    // subsystems that support hot-reload can read the updated values in the
+    // future.  The runtime_config on AcpServer itself
     // is not updated because a full live swap would require coordination
     // across all request handlers.  The response explicitly warns:
     // "agent/cache/vector changes require restart".

@@ -13,8 +13,8 @@ use crate::fault_tolerance::{
 
 impl FaultToleranceEngine {
     /// Register a node for heartbeat monitoring.
-    pub fn register_node(&self, node_id: &str) -> Result<()> {
-        let mut inner = write_guard(&self.inner);
+    pub async fn register_node(&self, node_id: &str) -> Result<()> {
+        let mut inner = write_guard(&self.inner).await;
         let node_id = node_id.to_string();
         if inner.heartbeats.contains_key(&node_id) {
             return Err(anyhow!("node '{}' is already registered", node_id));
@@ -44,8 +44,8 @@ impl FaultToleranceEngine {
     }
 
     /// Unregister a node, removing it from monitoring entirely.
-    pub fn unregister_node(&self, node_id: &str) -> Result<()> {
-        let mut inner = write_guard(&self.inner);
+    pub async fn unregister_node(&self, node_id: &str) -> Result<()> {
+        let mut inner = write_guard(&self.inner).await;
         let node_id = node_id.to_string();
         if inner.heartbeats.remove(&node_id).is_none() {
             return Err(anyhow!("node '{}' is not registered", node_id));
@@ -76,8 +76,8 @@ impl FaultToleranceEngine {
 
     /// Report a heartbeat from a node. Resets the missed-beat counter and
     /// moves the node back to Online if it was recovering.
-    pub fn report_heartbeat(&self, node_id: &str) -> Result<()> {
-        let mut inner = write_guard(&self.inner);
+    pub async fn report_heartbeat(&self, node_id: &str) -> Result<()> {
+        let mut inner = write_guard(&self.inner).await;
         let node_id = node_id.to_string();
         let record = inner
             .heartbeats
@@ -93,14 +93,14 @@ impl FaultToleranceEngine {
     }
 
     /// Report a fault on a node. Returns the generated fault id.
-    pub fn report_fault(
+    pub async fn report_fault(
         &self,
         node_id: &str,
         fault_type: FaultType,
         severity: u8,
         description: &str,
     ) -> Result<String> {
-        let mut inner = write_guard(&self.inner);
+        let mut inner = write_guard(&self.inner).await;
         let node_id = node_id.to_string();
         if !inner.heartbeats.contains_key(&node_id) {
             return Err(anyhow!("node '{}' is not registered", node_id));
@@ -150,8 +150,8 @@ impl FaultToleranceEngine {
     }
 
     /// Resolve an active fault by its id.
-    pub fn resolve_fault(&self, fault_id: &str) -> Result<()> {
-        let mut inner = write_guard(&self.inner);
+    pub async fn resolve_fault(&self, fault_id: &str) -> Result<()> {
+        let mut inner = write_guard(&self.inner).await;
         let fault_id = fault_id.to_string();
         let event = inner
             .faults
@@ -168,8 +168,8 @@ impl FaultToleranceEngine {
 
     /// Isolate a node under a specific isolation level. Creates or updates
     /// an isolation group containing the node.
-    pub fn isolate_node(&self, node_id: &str, level: IsolationLevel) -> Result<()> {
-        let mut inner = write_guard(&self.inner);
+    pub async fn isolate_node(&self, node_id: &str, level: IsolationLevel) -> Result<()> {
+        let mut inner = write_guard(&self.inner).await;
         let node_id = node_id.to_string();
         if !inner.heartbeats.contains_key(&node_id) {
             return Err(anyhow!("node '{}' is not registered", node_id));
@@ -223,8 +223,8 @@ impl FaultToleranceEngine {
 
     /// Check all heartbeats and return a list of node ids that have missed
     /// too many heartbeats (exceeded max_missed_beats).
-    pub fn check_heartbeats(&self) -> Vec<String> {
-        let mut inner = write_guard(&self.inner);
+    pub async fn check_heartbeats(&self) -> Vec<String> {
+        let mut inner = write_guard(&self.inner).await;
         let now = now_millis();
         let timeout = inner.config.heartbeat_timeout_ms;
         let max_missed = inner.config.max_missed_beats;
@@ -258,8 +258,8 @@ impl FaultToleranceEngine {
     }
 
     /// Return all active (unresolved) faults.
-    pub fn active_faults(&self) -> Vec<FaultEvent> {
-        let inner = read_guard(&self.inner);
+    pub async fn active_faults(&self) -> Vec<FaultEvent> {
+        let inner = read_guard(&self.inner).await;
         inner
             .faults
             .values()
@@ -269,8 +269,8 @@ impl FaultToleranceEngine {
     }
 
     /// Assess the escalation level for a given node.
-    pub fn escalation_level(&self, node_id: &str) -> EscalationLevel {
-        let inner = read_guard(&self.inner);
+    pub async fn escalation_level(&self, node_id: &str) -> EscalationLevel {
+        let inner = read_guard(&self.inner).await;
         let node_id = node_id.to_string();
         let record = match inner.heartbeats.get(&node_id) {
             Some(r) => r,
@@ -309,8 +309,8 @@ impl FaultToleranceEngine {
     }
 
     /// Get the overall cluster health.
-    pub fn cluster_health(&self) -> ClusterHealth {
-        let p = self.profile();
+    pub async fn cluster_health(&self) -> ClusterHealth {
+        let p = self.profile().await;
         if p.total_nodes == 0 {
             return ClusterHealth::Down;
         }

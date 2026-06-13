@@ -5,8 +5,6 @@
 
 use std::sync::Arc;
 
-use serde_json::Value;
-
 use crate::agent::Message;
 use crate::intelligence::token_cache::{CacheEntry, TokenMultiLevelCache};
 
@@ -14,11 +12,7 @@ use crate::intelligence::token_cache::{CacheEntry, TokenMultiLevelCache};
 #[derive(Debug, Clone)]
 pub enum CacheDecision {
     /// Use cached response
-    Hit {
-        response: String,
-        #[allow(dead_code)] // F-GAP-49: reserved for cache level tracking
-        level: String,
-    },
+    Hit { response: String },
     /// Cache hit but refused (execution-like request)
     Refused { level: String, reason: String },
     /// No cache entry
@@ -66,7 +60,6 @@ impl CacheStrategy {
         if confidence > 0.95 && !is_execution_like {
             CacheDecision::Hit {
                 response: String::new(),
-                level: level.to_string(),
             }
         } else if confidence > 0.95 && is_execution_like {
             CacheDecision::Refused {
@@ -86,10 +79,7 @@ impl CacheStrategy {
         response: String,
     ) -> CacheDecision {
         if should_serve_cache_hit(confidence as f32, is_execution_like) {
-            CacheDecision::Hit {
-                response,
-                level: level.to_string(),
-            }
+            CacheDecision::Hit { response }
         } else if should_refuse_cache_hit(confidence as f32, is_execution_like) {
             CacheDecision::Refused {
                 level: level.to_string(),
@@ -126,23 +116,6 @@ impl CacheStrategy {
             is_execution_like,
             entry.output.clone(),
         )
-    }
-
-    /// Build a structured agent_attempt entry for cache outcomes.
-    #[allow(dead_code)] // F-GAP-49: reserved for cache outcome recording
-    pub fn attempt_entry(decision: &CacheDecision) -> Value {
-        match decision {
-            CacheDecision::Hit { level, .. } => serde_json::json!({
-                "cached": true, "cache_level": level, "duration_ms": 0u64
-            }),
-            CacheDecision::Refused { level, reason } => serde_json::json!({
-                "cached": false, "shortcircuit_refused": true,
-                "cache_level": level, "reason": reason, "duration_ms": 0u64
-            }),
-            CacheDecision::Miss => serde_json::json!({
-                "cached": false, "duration_ms": 0u64
-            }),
-        }
     }
 }
 
@@ -231,9 +204,8 @@ mod tests {
     fn lookup_decision_preserves_cached_response() {
         let decision = CacheStrategy::lookup_decision("L1", 1.0, false, "cached".to_string());
         match decision {
-            CacheDecision::Hit { response, level } => {
+            CacheDecision::Hit { response } => {
                 assert_eq!(response, "cached");
-                assert_eq!(level, "L1");
             }
             _ => panic!("expected hit"),
         }
@@ -287,39 +259,6 @@ mod tests {
         assert!(CacheStrategy::should_bypass("AGENT", "hello"));
         assert!(CacheStrategy::should_bypass("Edit", "hello"));
         assert!(!CacheStrategy::should_bypass("CHAT", "hello"));
-    }
-
-    // ── CacheDecision: attempt_entry ─────────────────────────────────
-
-    #[test]
-    fn attempt_entry_hit_returns_cached_true() {
-        let decision = CacheDecision::Hit {
-            response: "cached".to_string(),
-            level: "L2".to_string(),
-        };
-        let entry = CacheStrategy::attempt_entry(&decision);
-        assert_eq!(entry["cached"], true);
-        assert_eq!(entry["cache_level"], "L2");
-    }
-
-    #[test]
-    fn attempt_entry_refused_returns_shortcircuit_refused() {
-        let decision = CacheDecision::Refused {
-            level: "L1".to_string(),
-            reason: "execution_like_request".to_string(),
-        };
-        let entry = CacheStrategy::attempt_entry(&decision);
-        assert_eq!(entry["cached"], false);
-        assert_eq!(entry["shortcircuit_refused"], true);
-        assert_eq!(entry["reason"], "execution_like_request");
-    }
-
-    #[test]
-    fn attempt_entry_miss_returns_cached_false() {
-        let decision = CacheDecision::Miss;
-        let entry = CacheStrategy::attempt_entry(&decision);
-        assert_eq!(entry["cached"], false);
-        assert!(entry.get("shortcircuit_refused").is_none());
     }
 
     // ── Cache strategy: L2 confidence fallback ────────────────────────

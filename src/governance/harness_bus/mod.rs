@@ -575,8 +575,8 @@ impl HarnessBus {
     }
 
     /// Fault tolerance profile snapshot (F-GAP-28)
-    pub fn fault_tolerance_profile(&self) -> FaultToleranceProfile {
-        self.fault_tolerance.profile()
+    pub async fn fault_tolerance_profile(&self) -> FaultToleranceProfile {
+        self.fault_tolerance.profile().await
     }
 
     /// Estimate token cost for a given input/output token count pair.

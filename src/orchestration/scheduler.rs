@@ -685,7 +685,7 @@ impl TaskScheduler {
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
-                        let summary = engine.run_recovery_cycle();
+                        let summary = engine.run_recovery_cycle().await;
                         info!(
                             "FaultTolerance: recovery cycle — {} offenders, {} plans created, {:?}",
                             summary.offenders.len(),

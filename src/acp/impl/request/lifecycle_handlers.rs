@@ -49,7 +49,7 @@ pub(super) async fn handle_health(server: &AcpServer, request_id: Option<Value>)
             "omnipotent": hb.omnipotent_profile(),
             "brain_runner": hb.brain_runner_profile().await,
             "resilience": hb.resilience_profile().await,
-            "fault_tolerance": hb.fault_tolerance_profile(),
+            "fault_tolerance": hb.fault_tolerance_profile().await,
         })
     } else {
         json!({"enabled": false})

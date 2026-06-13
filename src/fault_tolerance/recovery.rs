@@ -12,8 +12,8 @@ use crate::fault_tolerance::{
 
 impl FaultToleranceEngine {
     /// Reintegrate a previously isolated node back into the cluster.
-    pub fn reintegrate_node(&self, node_id: &str) -> Result<()> {
-        let mut inner = write_guard(&self.inner);
+    pub async fn reintegrate_node(&self, node_id: &str) -> Result<()> {
+        let mut inner = write_guard(&self.inner).await;
         let node_id = node_id.to_string();
         if !inner.heartbeats.contains_key(&node_id) {
             return Err(anyhow!("node '{}' is not registered", node_id));
@@ -81,8 +81,8 @@ impl FaultToleranceEngine {
 
     /// Create a recovery plan for a failed node.
     /// Determines appropriate recovery actions based on fault type and severity.
-    pub fn create_recovery_plan(&self, node_id: &str) -> Result<String> {
-        let mut inner = write_guard(&self.inner);
+    pub async fn create_recovery_plan(&self, node_id: &str) -> Result<String> {
+        let mut inner = write_guard(&self.inner).await;
         let node_id = node_id.to_string();
         if !inner.heartbeats.contains_key(&node_id) {
             return Err(anyhow!("node '{}' is not registered", node_id));
@@ -172,8 +172,8 @@ impl FaultToleranceEngine {
     }
 
     /// Execute a recovery plan — transitions it to InProgress.
-    pub fn execute_recovery_plan(&self, plan_id: &str) -> Result<()> {
-        let mut inner = write_guard(&self.inner);
+    pub async fn execute_recovery_plan(&self, plan_id: &str) -> Result<()> {
+        let mut inner = write_guard(&self.inner).await;
         let plan = inner
             .recovery_plans
             .get_mut(plan_id)
@@ -189,8 +189,8 @@ impl FaultToleranceEngine {
     }
 
     /// Run a post-recovery consistency check and return the result.
-    pub fn post_recovery_consistency_check(&self, plan_id: &str) -> ConsistencyCheckEvent {
-        let inner = read_guard(&self.inner);
+    pub async fn post_recovery_consistency_check(&self, plan_id: &str) -> ConsistencyCheckEvent {
+        let inner = read_guard(&self.inner).await;
         let plan = inner.recovery_plans.get(plan_id);
 
         let now = now_millis();
@@ -251,12 +251,12 @@ impl FaultToleranceEngine {
 
     /// Complete a recovery plan with a result. Runs a post-recovery
     /// consistency check and returns it alongside the completion outcome.
-    pub fn complete_recovery_plan(
+    pub async fn complete_recovery_plan(
         &self,
         plan_id: &str,
         result: &str,
     ) -> Result<ConsistencyCheckEvent> {
-        let mut inner = write_guard(&self.inner);
+        let mut inner = write_guard(&self.inner).await;
         let plan = inner
             .recovery_plans
             .get_mut(plan_id)
@@ -279,7 +279,7 @@ impl FaultToleranceEngine {
         drop(inner);
 
         // Run post-recovery consistency check
-        let check = self.post_recovery_consistency_check(plan_id);
+        let check = self.post_recovery_consistency_check(plan_id).await;
         if !check.passed {
             tracing::warn!(
                 "consistency check failed after recovery plan '{}': {}",
@@ -291,8 +291,8 @@ impl FaultToleranceEngine {
     }
 
     /// Fail a recovery plan.
-    pub fn fail_recovery_plan(&self, plan_id: &str, error: &str) -> Result<()> {
-        let mut inner = write_guard(&self.inner);
+    pub async fn fail_recovery_plan(&self, plan_id: &str, error: &str) -> Result<()> {
+        let mut inner = write_guard(&self.inner).await;
         let plan = inner
             .recovery_plans
             .get_mut(plan_id)
@@ -304,8 +304,8 @@ impl FaultToleranceEngine {
     }
 
     /// Get active recovery plans.
-    pub fn active_recovery_plans(&self) -> Vec<RecoveryPlan> {
-        let inner = read_guard(&self.inner);
+    pub async fn active_recovery_plans(&self) -> Vec<RecoveryPlan> {
+        let inner = read_guard(&self.inner).await;
         inner
             .recovery_plans
             .values()

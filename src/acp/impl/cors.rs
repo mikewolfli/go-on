@@ -103,27 +103,6 @@ pub fn build_cors_headers(origin: Option<&str>, config: &CorsConfig) -> Vec<(Str
     headers
 }
 
-/// Convenience wrapper around `build_cors_headers` for **actual** (non-preflight)
-/// responses.  Equivalent to calling `build_cors_headers(origin, config)`.
-#[allow(dead_code)] // F-GAP-49 — Public API — reserved for non-Origin-based CORS header generation
-pub fn build_cors_response_headers(config: &CorsConfig) -> Vec<(String, String)> {
-    // The caller should pass the actual Origin header value at runtime.
-    // This function exists as a shim for cases where we want a consistent
-    // header set regardless of the specific origin (e.g. when the wildcard
-    // `*` is the only allowed origin).
-    //
-    // For the common case with `*` we mirror the wildcard behaviour.
-    let origin = if config.allowed_origins.iter().any(|o| o == "*") {
-        Some("*")
-    } else {
-        // Without a concrete request origin we cannot return a meaningful
-        // set of headers; return empty so callers can supply the origin.
-        return Vec::new();
-    };
-
-    build_cors_headers(origin, config)
-}
-
 /// Build the CORS response headers for an **`OPTIONS`** (preflight) request.
 ///
 /// `request_headers` should contain the value of the
@@ -303,31 +282,6 @@ mod tests {
         assert_eq!(
             header_value(&headers, "Access-Control-Allow-Origin"),
             Some("*")
-        );
-    }
-
-    // -- build_cors_response_headers ---------------------------------------
-
-    #[test]
-    fn test_build_cors_response_headers_with_wildcard() {
-        let config = wildcard_config();
-        let headers = build_cors_response_headers(&config);
-        assert_eq!(
-            header_value(&headers, "Access-Control-Allow-Origin"),
-            Some("*")
-        );
-    }
-
-    #[test]
-    fn test_build_cors_response_headers_without_wildcard() {
-        let config = CorsConfig {
-            allowed_origins: vec!["https://app.go-on.dev".to_string()],
-            ..CorsConfig::default()
-        };
-        let headers = build_cors_response_headers(&config);
-        assert!(
-            headers.is_empty(),
-            "expected empty headers when no wildcard and no concrete origin"
         );
     }
 

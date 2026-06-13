@@ -10,8 +10,7 @@ use crate::config::PhaseOptions;
 use crate::orchestration::roles::role_registry_keywords_for;
 use crate::orchestration::task_router::TaskCharacteristics;
 use crate::reinforcement::{
-    recommend_reattach_modules_from_policy_history, ActionCheckKind, ArtifactLedger,
-    ExecutionDecisionCandidate,
+    recommend_reattach_modules_from_policy_history, ArtifactLedger, ExecutionDecisionCandidate,
 };
 
 // Helper functions from original acp/helpers module
@@ -21,13 +20,6 @@ fn extra_u64(options: Option<&PhaseOptions>, key: &str) -> Option<u64> {
     options
         .and_then(|opts| opts.extra.get(key))
         .and_then(|v| v.as_u64())
-}
-
-#[allow(dead_code)] // F-GAP-49 — reserved for future f64 extra policy parameters
-fn extra_f64(options: Option<&PhaseOptions>, key: &str) -> Option<f64> {
-    options
-        .and_then(|opts| opts.extra.get(key))
-        .and_then(|v| v.as_f64())
 }
 
 fn extra_string(options: Option<&PhaseOptions>, key: &str) -> Option<String> {
@@ -125,24 +117,6 @@ pub fn resolve_review_policy(
     }
 }
 
-/// Convert required check names to ActionCheckKind enum values
-#[allow(dead_code)] // F-GAP-49 — reserved for action gate integration
-pub fn action_check_kinds_from_policy(required_checks: &[String]) -> Vec<ActionCheckKind> {
-    if required_checks.is_empty() {
-        return Vec::new();
-    }
-
-    let mut out = Vec::new();
-    for name in required_checks {
-        if let Some(kind) = ActionCheckKind::parse(name) {
-            if !out.contains(&kind) {
-                out.push(kind);
-            }
-        }
-    }
-    out
-}
-
 /// Work grade classification
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkGrade {
@@ -168,7 +142,6 @@ impl WorkGrade {
     }
 
     /// Convert work grade to string representation
-    #[allow(dead_code)] // F-GAP-49 — reserved for serialization in policy reports
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Ask => "ask",
@@ -799,25 +772,6 @@ mod tests {
         let policy = resolve_review_policy(None, None, true, false);
         assert_eq!(policy.min_review_level, "enhanced");
         assert!(policy.enforce_action_gates);
-    }
-
-    #[test]
-    fn test_action_check_kinds_from_policy_returns_checks() {
-        let checks = action_check_kinds_from_policy(&["qa".to_string(), "retest".to_string()]);
-        assert!(checks.contains(&crate::reinforcement::ActionCheckKind::Qa));
-        assert!(checks.contains(&crate::reinforcement::ActionCheckKind::Retest));
-    }
-
-    #[test]
-    fn test_action_check_kinds_from_policy_empty_returns_empty() {
-        let checks = action_check_kinds_from_policy(&[]);
-        assert!(checks.is_empty());
-    }
-
-    #[test]
-    fn test_action_check_kinds_from_policy_unknown_skipped() {
-        let checks = action_check_kinds_from_policy(&["unknown_check".to_string()]);
-        assert!(checks.is_empty());
     }
 
     // ── decide_work_grade: edge cases ─────────────────────────────────

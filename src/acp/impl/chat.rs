@@ -1,9 +1,10 @@
 //! Chat handling implementation functions for ACP server
 //!
 //! This module contains standalone functions that implement chat handling
-//! functionality previously in the `impl AcpServer` block in `impl/chat.rs`.
+//! functionality, organized into 10 sub-modules:
+//! `agent_runtime`, `agent_selection`, `fallback`, `knowledge`, `params`,
+//! `session`, `streaming`, `tool_extraction`, `vector_context`, `voting`.
 //!
-//! TODO-BLUE64: Split into sub-modules — this file is ~4900 lines.
 //! These functions take `AcpServer` as their first parameter to maintain
 //! compatibility with the original implementation.
 
@@ -44,7 +45,6 @@ use crate::orchestration::tool::{execute_loop, LoopConfig, LoopDecision, ToolInp
 use crate::memory_module::{MemoryClass, MemoryEntry, MemoryPolicy, MemoryStore};
 use crate::reinforcement::{
     build_task_plan, build_workflow_generated_artifact, persist_workflow_generated, ArtifactLedger,
-    RequirementContractArtifact,
 };
 use crate::rpc_protocol::RequestTraceContext;
 
@@ -1502,30 +1502,6 @@ pub(crate) fn extract_task_description(messages: &[Message]) -> String {
     result
 }
 
-/// Create default requirement contract
-#[allow(dead_code)] // F-GAP-49 — reserved for default requirement contract wiring
-fn default_requirement_contract(task: &str, source: &str) -> RequirementContractArtifact {
-    RequirementContractArtifact {
-        generated_at: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64,
-        task: task.to_string(),
-        source: source.to_string(),
-        goal: String::new(),
-        scope: String::new(),
-        non_goals: Vec::new(),
-        acceptance_criteria: Vec::new(),
-        constraints: Vec::new(),
-        open_questions: Vec::new(),
-        ambiguity_score: 0,
-        user_confirmed: false,
-    }
-}
-
-// ============================================================================
-// Section: Supporting Utilities
-
 /// Get routing handles
 pub(crate) fn routing_handles(
     server: &AcpServer,
@@ -1646,16 +1622,10 @@ pub(crate) async fn auto_create_skills_from_conversation(
     // proactively propose creating a skill for it.
     let repeated_pattern = detect_repeated_task_pattern(&all_user_msgs);
 
-    if has_creation_intent || has_response_hint || repeated_pattern.is_some() {
-        // When a repeated pattern is detected, use its extracted info;
-        // otherwise fall back to extracting from the last user message.
-        let (skill_name, skill_description) = if let Some(ref pattern) = repeated_pattern {
-            (pattern.name.clone(), pattern.description.clone())
-        } else {
-            let name = generate_skill_name_from_conversation(last_user_msg, response_text);
-            let desc = generate_skill_description(last_user_msg, response_text);
-            (name, desc)
-        };
+    if has_creation_intent || has_response_hint || repeated_pattern {
+        // Generate skill name and description from the current conversation.
+        let skill_name = generate_skill_name_from_conversation(last_user_msg, response_text);
+        let skill_description = generate_skill_description(last_user_msg, response_text);
 
         if !skill_name.is_empty() && !skill_description.is_empty() {
             // Check if skill already exists

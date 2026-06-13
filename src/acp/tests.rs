@@ -110,50 +110,50 @@ mod test_suite {
     }
 
     /// Test conversation state is accessible on startup
-    #[test]
-    fn test_conversation_state_initial() {
+    #[tokio::test]
+    async fn test_conversation_state_initial() {
         let server = phase_inference_server("coding", &["coding", "review"]);
 
         // Verify conversation state is initialized and empty
-        let state = server.session.conversation_state.blocking_lock();
+        let state = server.session.conversation_state.lock().await;
         assert!(state.checkpoints.is_empty());
         assert!(state.branch_heads.is_empty());
     }
 
     /// Test that conversation checkpoint creation via runtime_pack works (integration smoke test)
-    #[test]
-    fn test_conversation_checkpoint_creation_via_runtime_pack() {
+    #[tokio::test]
+    async fn test_conversation_checkpoint_creation_via_runtime_pack() {
         use crate::acp::r#impl::request::create_checkpoint_record;
         use crate::agent::Message;
 
         let server = phase_inference_server("coding", &["coding", "review"]);
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
         let message = Message {
             role: "user".to_string(),
             content: "Test message".to_string(),
         };
-        let checkpoint = runtime.block_on(create_checkpoint_record(
+        let checkpoint = create_checkpoint_record(
             &server,
             "conv-test",
             "main",
             vec![message],
             Some("checkpoint note".to_string()),
             None,
-        ));
+        )
+        .await;
 
         assert_eq!(checkpoint.conversation_id, "conv-test");
         assert_eq!(checkpoint.branch_id, "main");
         assert_eq!(checkpoint.messages.len(), 1);
         assert!(!checkpoint.checkpoint_id.is_empty());
 
-        let state = server.session.conversation_state.blocking_lock();
+        let state = server.session.conversation_state.lock().await;
         assert_eq!(state.checkpoints.len(), 1);
         assert_eq!(state.checkpoints[0].checkpoint_id, checkpoint.checkpoint_id);
     }
 
     /// Test server status reporting
-    #[test]
-    fn test_server_status() {
+    #[tokio::test]
+    async fn test_server_status() {
         let server = phase_inference_server("coding", &["coding", "review"]);
 
         let status = server.get_status();
@@ -166,8 +166,8 @@ mod test_suite {
     }
 
     /// Test maintenance cycle
-    #[test]
-    fn test_maintenance_cycle() {
+    #[tokio::test]
+    async fn test_maintenance_cycle() {
         let server = phase_inference_server("coding", &["coding", "review"]);
 
         // Test that maintenance tracker is accessible
@@ -181,8 +181,8 @@ mod test_suite {
     }
 
     /// Test circuit breaker functionality
-    #[test]
-    fn test_circuit_breakers() {
+    #[tokio::test]
+    async fn test_circuit_breakers() {
         let server = phase_inference_server("coding", &["coding", "review"]);
 
         // Test circuit breaker registry
@@ -195,8 +195,8 @@ mod test_suite {
     }
 
     /// Test metrics collection
-    #[test]
-    fn test_metrics() {
+    #[tokio::test]
+    async fn test_metrics() {
         let server = phase_inference_server("coding", &["coding", "review"]);
 
         // Test basic metrics
@@ -208,8 +208,8 @@ mod test_suite {
     }
 
     /// Test lifecycle management
-    #[test]
-    fn test_lifecycle() {
+    #[tokio::test]
+    async fn test_lifecycle() {
         let server = phase_inference_server("coding", &["coding", "review"]);
 
         // Test initial state
@@ -222,8 +222,8 @@ mod test_suite {
     }
 
     /// Test server builder
-    #[test]
-    fn test_server_builder() {
+    #[tokio::test]
+    async fn test_server_builder() {
         // Use adaptive configuration
         let adaptive_config = AdaptiveConfig::auto_detect();
         let config = adaptive_config.to_app_config();
@@ -265,15 +265,15 @@ mod test_suite {
             "conv2".to_string(),
         ]));
 
-        // Use the function from helpers module
-        use crate::acp::helpers::conversation::touch_conversation_order;
+        // Use the function from prelude module
+        use crate::acp::prelude::touch_conversation_order;
         touch_conversation_order(&order, "conv3");
         let guard = match order.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
         assert_eq!(guard.len(), 3);
-        assert_eq!(guard[2], "conv3");
+        assert_eq!(guard[0], "conv3");
     }
 
     /// Test checkpoint capacity enforcement

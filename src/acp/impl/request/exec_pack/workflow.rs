@@ -174,11 +174,6 @@ fn transition_workflow_run(run_id: &str, target_status: &str) -> Result<Workflow
     Ok(record.clone())
 }
 
-#[allow(dead_code)] // F-GAP: reserved for future wiring
-pub(crate) fn execution_option_overrides(params: &Value) -> HashMap<String, Value> {
-    extract_effective_options(params)
-}
-
 pub(crate) fn workflow_run_list_payload(params: &Value) -> Value {
     let limit = params
         .get("limit")

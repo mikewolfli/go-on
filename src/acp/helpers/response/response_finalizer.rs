@@ -29,8 +29,6 @@ use crate::rpc_protocol::RequestTraceContext;
 struct AgentExecutionMetrics {
     elapsed_ms: u64,
     used_tokens: u64,
-    #[allow(dead_code)] // F-GAP-49 — reserved for future use
-    request_succeeded: bool,
 }
 
 /// Metadata computed during finalization, ready for injection into the response.
@@ -253,7 +251,6 @@ fn collect_agent_outputs(
     AgentExecutionMetrics {
         elapsed_ms: elapsed,
         used_tokens,
-        request_succeeded,
     }
 }
 

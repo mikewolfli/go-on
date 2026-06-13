@@ -1,11 +1,8 @@
 use super::*;
-use crate::acp::helpers::metrics::RuntimeGaugeSnapshot;
 
 static TRACE_EVENTS: OnceLock<StdMutex<Vec<TraceEvent>>> = OnceLock::new();
 static ERROR_RESPONSE_IDS: OnceLock<StdMutex<HashSet<String>>> = OnceLock::new();
 static TOOL_BUDGET_TRACKERS: OnceLock<StdMutex<HashMap<String, BudgetTracker>>> = OnceLock::new();
-#[allow(dead_code)] // F-GAP: reserved for idempotency resume
-static TASK_EXECUTE_IDEMPOTENCY_CACHE: OnceLock<StdMutex<IdempotencyCache>> = OnceLock::new();
 static MCP_AUDIT_LOGGER: OnceLock<AuditLogger> = OnceLock::new();
 static PUA_FEEDBACK_COLLECTOR: OnceLock<PuaFeedbackCollector> = OnceLock::new();
 static PUA_RESPONSE_REPORTS: OnceLock<StdMutex<HashMap<String, String>>> = OnceLock::new();
@@ -24,12 +21,6 @@ pub(super) fn pua_response_reports() -> &'static StdMutex<HashMap<String, String
 
 pub(super) fn tool_budget_trackers() -> &'static StdMutex<HashMap<String, BudgetTracker>> {
     TOOL_BUDGET_TRACKERS.get_or_init(|| StdMutex::new(HashMap::new()))
-}
-
-#[allow(dead_code)] // F-GAP: reserved for idempotency resume
-pub(super) fn task_execute_idempotency_cache() -> &'static StdMutex<IdempotencyCache> {
-    TASK_EXECUTE_IDEMPOTENCY_CACHE
-        .get_or_init(|| StdMutex::new(IdempotencyCache::new(Duration::from_secs(300))))
 }
 
 pub(super) fn mcp_audit_logger() -> &'static AuditLogger {
@@ -59,69 +50,6 @@ pub(super) fn take_error_response_mark(request_id: &str) -> bool {
         .unwrap_or(false)
 }
 
-#[allow(dead_code)] // F-GAP-49 — reserved for runtime gauge snapshot collection
-pub(super) fn build_runtime_gauge_snapshot(server: &AcpServer) -> RuntimeGaugeSnapshot {
-    let memory_cache_entries = server
-        .cache_deps
-        .cache
-        .memory_response_cache
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .active_entries() as u64;
-    let sqlite_cache_entries = server
-        .cache_deps
-        .cache
-        .response_cache
-        .as_ref()
-        .and_then(|cache| cache.entry_count().ok())
-        .unwrap_or(0);
-    let (vector_memory_entries, vector_summary_entries) = server
-        .cache_deps
-        .cache
-        .vector_store
-        .as_ref()
-        .map(|store| {
-            (
-                store.memory_entry_count().unwrap_or(0),
-                store.summary_entry_count().unwrap_or(0),
-            )
-        })
-        .unwrap_or((0, 0));
-    let breaker_snapshots = server
-        .resilience
-        .circuit_breakers
-        .lock()
-        .map(|guard| guard.snapshots())
-        .unwrap_or_default();
-    let circuit_open_agents = breaker_snapshots
-        .iter()
-        .filter(|item| item.state.eq_ignore_ascii_case("open"))
-        .count() as u64;
-    let circuit_half_open_agents = breaker_snapshots
-        .iter()
-        .filter(|item| item.state.eq_ignore_ascii_case("half-open"))
-        .count() as u64;
-    let circuit_tracked_agents = breaker_snapshots.len() as u64;
-    let rate_limiter_tracked_phases = server
-        .resilience
-        .phase_rate_limiter
-        .lock()
-        .map(|guard| guard.tracked_phases() as u64)
-        .unwrap_or(0);
-
-    RuntimeGaugeSnapshot {
-        memory_cache_entries,
-        sqlite_cache_entries,
-        vector_memory_entries,
-        vector_summary_entries,
-        circuit_open_agents,
-        circuit_half_open_agents,
-        circuit_tracked_agents,
-        rate_limiter_tracked_phases,
-    }
-}
-
-#[allow(dead_code)] // F-GAP-49 — reserved for trace metrics snapshot collection
 pub(super) fn trace_metrics_snapshot(server: &AcpServer) -> Value {
     let slow_top_n = server.runtime_config.trace_slow_top_n.max(1);
     let mut requests: Vec<(u64, Value)> = Vec::new();

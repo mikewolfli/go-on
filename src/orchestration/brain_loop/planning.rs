@@ -851,40 +851,6 @@ impl BrainLoop {
 }
 
 // ---------------------------------------------------------------------------
-// Synchronous compatibility wrapper
-// ---------------------------------------------------------------------------
-
-impl BrainLoop {
-    /// Synchronous compatibility wrapper around [`run_async`].
-    ///
-    /// Creates a temporary single-threaded tokio runtime to drive the
-    /// async loop to completion.  Prefer calling [`run_async`] directly
-    /// when already in an async context.
-    ///
-    /// ╔══════════════════════════════════════════════════════════════╗
-    /// ║  DEPRECATED — will be removed in a future release.         ║
-    /// ║  Do NOT call from an async context — creating a nested     ║
-    /// ║  runtime will panic. Use `run_async()` instead.            ║
-    /// ╚══════════════════════════════════════════════════════════════╝
-    #[deprecated(
-        since = "1.2.0",
-        note = "use run_async instead — this wrapper will be removed in a future release"
-    )]
-    // F-GAP-17: The deprecated run() wraps run_async internally
-    pub fn run(&self, task: &str, steps: Vec<BrainLoopStep>) -> anyhow::Result<BrainLoopProfile> {
-        tracing::error!(
-            "BrainLoop::run() is DEPRECATED and scheduled for removal — use run_async() directly instead"
-        );
-        let bl = self.clone();
-        let task = task.to_string();
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        rt.block_on(bl.run_async(&task, steps))
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 

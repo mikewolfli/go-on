@@ -680,6 +680,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_extract_frames_empty_video() {
+        // Check if ffmpeg is available in the environment
+        let ffmpeg_available = std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+
         let config = VideoProcessorConfig::default();
         let proc = VideoProcessor::new(config);
         let dir = tempfile::TempDir::new().expect("create temp dir");
@@ -687,11 +694,29 @@ mod tests {
         tokio::fs::write(&path, &[0u8; 100])
             .await
             .expect("write test file");
-        let frames = proc
-            .extract_frames(&path, 1.0)
-            .await
-            .expect("extract frames");
-        assert!(frames.is_empty() || frames.len() <= 1);
+
+        let result = proc.extract_frames(&path, 1.0).await;
+        if ffmpeg_available {
+            // With ffmpeg, expect empty frames for a corrupt/empty file
+            let frames = result.expect("extract frames with ffmpeg");
+            assert!(frames.is_empty() || frames.len() <= 1);
+        } else {
+            // Without ffmpeg, expect an actionable error message
+            match result {
+                Err(VideoProcessorError::AudioExtractionFailed(msg)) => {
+                    assert!(
+                        msg.contains("ffmpeg not available"),
+                        "expected ffmpeg error, got: {}",
+                        msg
+                    );
+                }
+                Ok(frames) => {
+                    // Edge case: if somehow it succeeded, verify invariants
+                    assert!(frames.is_empty() || frames.len() <= 1);
+                }
+                Err(e) => panic!("unexpected error variant: {e:?}"),
+            }
+        }
     }
 
     #[test]
