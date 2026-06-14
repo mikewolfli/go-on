@@ -152,11 +152,21 @@ impl AlertManager {
     }
 
     /// Evaluate all alert rules against current metrics
+    ///
+    /// Only evaluates rules that are semantically relevant to the given metric name.
+    /// A rule is relevant if its name shares a keyword prefix with the metric name
+    /// (e.g. "memory_free_mb" matches "memory_critical"/"memory_low"/"memory_jetsam_risk").
+    /// Rules with "fallback" in name or generic names match all metrics.
     pub fn evaluate(&mut self, metric_name: &str, value: f64) -> Vec<Alert> {
         let mut fired = Vec::new();
         let now = Instant::now();
 
         for rule in &self.rules {
+            // Skip rules whose name doesn't semantically match the metric name.
+            // This prevents false positives (e.g. circuit_breaker_open matching memory_free_mb).
+            if !rule_matches_metric(rule.name, metric_name) {
+                continue;
+            }
             let threshold = rule.threshold;
             if (rule.check)(value, threshold) {
                 let cooldown = Duration::from_secs(rule.cooldown_seconds);
@@ -363,6 +373,22 @@ impl AlertManager {
             active_webhook: self.webhook.enabled,
         }
     }
+}
+
+/// Check if a rule name is semantically relevant to a metric name.
+///
+/// Extracts the first segment of the metric name (e.g. "memory" from "memory_free_mb")
+/// and checks if that keyword appears in the rule name. For generic metric names that
+/// don't match any known prefix, all rules are evaluated (safe fallback).
+fn rule_matches_metric(rule_name: &str, metric_name: &str) -> bool {
+    // Extract the first keyword segment from the metric name
+    let metric_keyword = metric_name.split('_').next().unwrap_or(metric_name);
+    // If the metric has no recognizable keyword prefix, evaluate all rules
+    if metric_keyword.is_empty() || metric_keyword.len() <= 2 {
+        return true;
+    }
+    // Check if the keyword appears in the rule name
+    rule_name.contains(metric_keyword)
 }
 
 /// Statistics for the AlertManager

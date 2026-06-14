@@ -22,6 +22,7 @@ use crate::i18n::{I18n, Lang};
 use crate::keyring_util::REDACTED_API_KEY;
 use crate::state_sync::StateSyncEvent;
 use crate::view_registry::ViewRegistry;
+#[cfg(debug_assertions)]
 use crate::views::providers::PROVIDER_NAMES;
 use crate::views::ui_state::GlobalUiState;
 use std::net::{TcpStream, ToSocketAddrs};
@@ -363,6 +364,7 @@ impl GoOnApp {
                 cmd.current_dir(&config_dir)
                     .arg("--protocol-mode")
                     .arg(&config.protocol_mode)
+                    .arg("--low-memory")
                     .stdout(std::process::Stdio::null());
 
                 // API keys are NOT injected into the backend process environment.
@@ -378,11 +380,12 @@ impl GoOnApp {
                 // Sync language between GUI and backend
                 cmd.env("LANG", &config.language);
 
-                // Regenerate backend config.toml on every start to keep it
-                // in sync with the GUI's provider configuration.
-                // The file includes a header marking it as auto-generated.
+                // Only generate a default config.toml if one does NOT already exist.
+                // User-manual configs take precedence.
                 let backend_cfg_path = config_dir.join("config.toml");
-                Self::generate_backend_config(&backend_cfg_path, config);
+                if !backend_cfg_path.exists() {
+                    Self::generate_backend_config(&backend_cfg_path, config);
+                }
 
                 let log_path = config_dir.join("backend.log");
                 // Redirect stderr directly to file instead of spawning a reader thread

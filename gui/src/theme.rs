@@ -50,7 +50,7 @@ impl Theme {
     }
 
     pub fn apply(&self, ctx: &egui::Context, scale: f64) {
-        let mut style = (*ctx.style()).clone();
+        let mut style = (*ctx.global_style()).clone();
         // Common base: typography + spacing + interaction density
         // All font sizes are scaled by the user-configurable `scale` factor.
         style.text_styles.insert(
@@ -100,7 +100,7 @@ impl Theme {
             Theme::HelloKitty => Self::apply_hellokitty(&mut style),
             Theme::ServeThePeople => Self::apply_serve_the_people(&mut style),
         }
-        ctx.set_style(style);
+        ctx.set_global_style(style);
     }
 
     // ── 简约 ──────────────────────────────────────────────────

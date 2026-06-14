@@ -126,7 +126,9 @@ fn detect_system_language() -> Lang {
 // ═══════════════════════════════════════════════════════════════════════════
 
 impl eframe::App for GoOnApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        ctx.request_repaint(); // Ensure continuous repainting
         let _frame_start = std::time::Instant::now();
 
         self.config_store.sync_shared_if_needed();
@@ -160,7 +162,7 @@ impl eframe::App for GoOnApp {
         if self.last_applied_theme != self.config_store.shared().theme {
             self.last_applied_theme = self.config_store.shared().theme.clone();
             let theme = crate::theme::Theme::from_name(&self.config_store.shared().theme);
-            theme.apply(ctx, self.config_store.read().font_scale);
+            theme.apply(&ctx, self.config_store.read().font_scale);
         }
 
         if !self.connection.pending_refresh && !self.views.chat_view.sending {
@@ -196,10 +198,12 @@ impl eframe::App for GoOnApp {
         if self.show_setup {
             let done = {
                 let mut cfg = self.config_store.write();
-                let result =
-                    self.views
-                        .setup_view
-                        .show(ctx, &self.i18n, &mut cfg, &self.connection.backend);
+                let result = self.views.setup_view.show(
+                    &ctx,
+                    &self.i18n,
+                    &mut cfg,
+                    &self.connection.backend,
+                );
                 if result {
                     self.show_setup = false;
                     self.has_providers = has_valid_providers(&cfg);
@@ -209,7 +213,7 @@ impl eframe::App for GoOnApp {
             };
             if done {
                 self.config_store.sync_shared_if_needed();
-                self.restart_backend(ctx);
+                self.restart_backend(&ctx);
             }
             return;
         }
@@ -250,7 +254,7 @@ impl eframe::App for GoOnApp {
                             "Auto-restarting backend after crash (count={})...",
                             self.crash.backend_crash_count
                         );
-                        self.restart_backend(ctx);
+                        self.restart_backend(&ctx);
                     }
                 }
             }
@@ -267,13 +271,13 @@ impl eframe::App for GoOnApp {
             self.views.chat_view.reset_loaded_state();
         }
 
-        self.poll_state_sync_events(ctx);
+        self.poll_state_sync_events(&ctx);
         // Periodically persist UI state to disk (~every 5 seconds at 60fps)
         self.frame_count += 1;
         if self.frame_count.is_multiple_of(300) {
             self.ui_state.save();
         }
-        self.poll_backend_updates(ctx);
+        self.poll_backend_updates(&ctx);
         self.maybe_refresh_backend();
         self.has_providers = has_valid_providers(self.config_store.shared().as_ref());
 
@@ -293,7 +297,7 @@ impl eframe::App for GoOnApp {
             .is_some_and(|h| h.connected);
 
         // Toolbar
-        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
+        egui::Panel::top("toolbar").show_inside(ui, |ui| {
             egui::Frame::NONE.show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     let title_color = ui.style().visuals.text_color();
@@ -437,7 +441,7 @@ impl eframe::App for GoOnApp {
         ];
         let mut new_tab: Option<String> = None;
         let mut blocked_tab: Option<String> = None;
-        egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
+        egui::Panel::top("tabs").show_inside(ui, |ui| {
             egui::Frame::NONE.show(ui, |ui| {
                 egui::ScrollArea::horizontal().show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -493,7 +497,7 @@ impl eframe::App for GoOnApp {
                 .collapsible(false)
                 .resizable(false)
                 .auto_sized()
-                .show(ctx, |ui| {
+                .show(&ctx, |ui| {
                     ui.colored_label(
                         egui::Color32::from_rgb(220, 160, 50),
                         self.i18n.t("app.backendRequired"),
@@ -511,15 +515,8 @@ impl eframe::App for GoOnApp {
         }
 
         // ═══════════════════════════════════════════════════════════════
-        // ── Double-buffering render gate ────────────────────────────────
-        let render_hash = self.compute_render_hash();
-        if !self.render_cache.should_render(render_hash) {
-            return;
-        }
-
-        // ═══════════════════════════════════════════════════════════════
         // ── Main content ────────────────────────────────────────────────
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show_inside(ui, |ui| {
             egui::Frame::NONE.show(ui, |ui| {
                 egui::ScrollArea::vertical()
                     .id_salt("main_scroll")
@@ -544,7 +541,7 @@ impl eframe::App for GoOnApp {
                                     ui,
                                     &self.i18n,
                                     &self.connection.backend,
-                                    ctx,
+                                    &ctx,
                                     autotune_chain,
                                     ChatUiRuntimeConfig {
                                         repaint_interval_ms: cfg
@@ -570,7 +567,7 @@ impl eframe::App for GoOnApp {
                                     ui,
                                     &self.i18n,
                                     &self.connection.backend,
-                                    ctx,
+                                    &ctx,
                                     cfg.features.skills_lifecycle,
                                 );
                             }
@@ -588,7 +585,7 @@ impl eframe::App for GoOnApp {
                                         self.connection.backend_url_original =
                                             cfg.backend_url.clone();
                                         drop(cfg);
-                                        self.restart_backend(ctx);
+                                        self.restart_backend(&ctx);
                                     }
                                     ui.label(
                                         egui::RichText::new(self.i18n.t("settings.backendUrlHint"))
@@ -601,7 +598,7 @@ impl eframe::App for GoOnApp {
                                 self.views.workflow_view.show(
                                     ui,
                                     &self.i18n,
-                                    ctx,
+                                    &ctx,
                                     &self.connection.backend,
                                     cfg.features.workflow_run_center,
                                 );
@@ -631,7 +628,7 @@ impl eframe::App for GoOnApp {
                                 ui,
                                 &self.i18n,
                                 &self.connection.backend,
-                                ctx,
+                                &ctx,
                             ),
                             "config" => {
                                 let mut cfg = self.config_store.write();
@@ -646,7 +643,7 @@ impl eframe::App for GoOnApp {
                                     self.views.config_editor_view.applied = false;
                                     self.views.chat_view.reset_loaded_state();
                                     drop(cfg);
-                                    self.restart_backend(ctx);
+                                    self.restart_backend(&ctx);
                                 }
                             }
                             "providers" => {
@@ -657,14 +654,14 @@ impl eframe::App for GoOnApp {
                                     &self.i18n,
                                     &mut cfg,
                                     &self.connection.backend,
-                                    ctx,
+                                    &ctx,
                                     providers_ops,
                                 );
                                 if changed {
                                     save_app_config(&cfg);
                                     drop(cfg);
                                     self.config_store.sync_shared_if_needed();
-                                    self.restart_backend(ctx);
+                                    self.restart_backend(&ctx);
                                 }
                             }
                             "about" => {

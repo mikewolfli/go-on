@@ -64,6 +64,12 @@ pub fn built_in_provider_specs(name: &str) -> ProviderSpec {
             default_model: "gemini-2.5-flash",
             supports_system: false,
         },
+        "copilot" => ProviderSpec {
+            agent_type: "openai_compatible",
+            default_url: Some("https://api.githubcopilot.com"),
+            default_model: "auto",
+            supports_system: false,
+        },
         _ => ProviderSpec {
             agent_type: "openai_compatible",
             default_url: None,

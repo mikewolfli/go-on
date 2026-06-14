@@ -53,9 +53,12 @@ mod platform {
     /// Matches by service name (`-d "go-on"`) because the `keyring` crate stores
     /// the service as "go-on" but does NOT set a custom keychain "description" field.
     /// Using `-D` (description) would therefore be a silent no-op.
-    pub(crate) fn ensure_item_accessible(_account: &str) {
+    pub(crate) fn ensure_item_accessible(account: &str) {
         // `security set-key-partition-list` modifies the ACL partition list
-        // of a keychain item identified by its service name (-d "go-on").
+        // of a keychain item identified by service name (-d "go-on") AND
+        // account name (-a "{account}").  Using -a limits the operation to
+        // JUST the specific item, so each call only touches one keychain entry
+        // instead of ALL items with service="go-on".
         // -S "apple:default,apple:toolbar,apple:unknown,apple:keychain:basic"
         //    adds the standard system partition groups that all macOS processes
         //    (GUI and CLI) are automatically members of.
@@ -70,6 +73,8 @@ mod platform {
                 "", // empty keychain password (uses login keychain)
                 "-d",
                 "go-on",
+                "-a",
+                account,
                 "login.keychain",
             ])
             .output();

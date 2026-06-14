@@ -479,11 +479,11 @@ impl ChatView {
         }
 
         // ── Main layout: SidePanel + vertical right ──────────
-        egui::SidePanel::left("chat_sidebar_panel")
-            .default_width(220.0)
+        egui::Panel::left("chat_sidebar_panel")
+            .default_size(220.0)
             .resizable(true)
-            .min_width(140.0)
-            .max_width(400.0)
+            .min_size(140.0)
+            .max_size(400.0)
             .show_inside(ui, |ui| {
                 self.show_sidebar(ui, i18n, backend, ctx);
             });
@@ -558,7 +558,7 @@ impl ChatView {
                     if !self.sending
                         && !te_resp.has_focus()
                         && !self.input.is_empty()
-                        && !ui.ctx().is_using_pointer()
+                        && !ui.ctx().egui_is_using_pointer()
                     {
                         ui.memory_mut(|m| m.request_focus(input_id));
                     }

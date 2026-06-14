@@ -485,6 +485,18 @@ impl VectorStore {
             ",
         )?;
 
+        // Migration: add user_id column if it doesn't exist (schema from older version)
+        let has_user_id: bool = conn
+            .prepare(
+                "SELECT COUNT(*) FROM pragma_table_info('vector_memory') WHERE name='user_id'",
+            )?
+            .query_row([], |row| row.get::<_, i64>(0))
+            .map(|count| count > 0)?;
+        if !has_user_id {
+            conn.execute_batch("ALTER TABLE vector_memory ADD COLUMN user_id TEXT;")?;
+            tracing::info!("vector store: migrated schema, added user_id column");
+        }
+
         let mode = resolve_sqlite_vector_mode(&conn)?;
 
         Ok(Self {
@@ -1111,7 +1123,7 @@ impl VectorStore {
 //    disabling vector search.
 unsafe extern "C" fn sqlite3_vec_init_auto_extension(
     _db: *mut rusqlite::ffi::sqlite3,
-    _pz_err_msg: *mut *const std::os::raw::c_char,
+    _pz_err_msg: *mut *mut std::os::raw::c_char,
     _p_err_msg: *const rusqlite::ffi::sqlite3_api_routines,
 ) -> std::ffi::c_int {
     // The underlying C symbol (declared at the top of sqlite_vec::lib.rs

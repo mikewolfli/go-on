@@ -31,6 +31,10 @@ fn default_font_scale() -> f64 {
     1.0
 }
 
+fn default_stream_token_flush_ms() -> u64 {
+    16
+}
+
 fn default_true() -> bool {
     true
 }
@@ -45,6 +49,7 @@ pub struct UiStabilityConfig {
     pub chat_max_pending_events_per_frame: usize,
     /// Minimum interval (ms) between token batch flushes to the UI.
     /// Controls frame rate — e.g. 16ms → ~60fps.
+    #[serde(default = "default_stream_token_flush_ms")]
     pub stream_token_flush_ms: u64,
 }
 

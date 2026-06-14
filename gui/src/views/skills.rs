@@ -332,7 +332,7 @@ impl SkillsView {
             resp.context_menu(|ui| {
                 if ui.button(i18n.t("common.copyButton")).clicked() {
                     ui.ctx().copy_text(text.clone());
-                    ui.close_menu();
+                    ui.close();
                 }
             });
             ui.add_space(4.0);
@@ -345,7 +345,7 @@ impl SkillsView {
             resp.context_menu(|ui| {
                 if ui.button(i18n.t("common.copyButton")).clicked() {
                     ui.ctx().copy_text(text.clone());
-                    ui.close_menu();
+                    ui.close();
                 }
             });
             ui.add_space(4.0);

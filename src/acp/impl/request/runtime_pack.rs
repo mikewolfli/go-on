@@ -1507,7 +1507,7 @@ pub(super) async fn handle_provider_list_models(
 /// the service as "go-on" but does NOT set a custom keychain "description" field.
 /// Using `-D` (description) would therefore be a silent no-op.
 #[cfg(target_os = "macos")]
-fn ensure_keyring_item_accessible(_account: &str) {
+fn ensure_keyring_item_accessible(account: &str) {
     use std::process::Command;
     let _ = Command::new("security")
         .args([
@@ -1518,6 +1518,8 @@ fn ensure_keyring_item_accessible(_account: &str) {
             "",
             "-d",
             "go-on",
+            "-a",
+            account,
             "login.keychain",
         ])
         .output();

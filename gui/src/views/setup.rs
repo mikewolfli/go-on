@@ -169,6 +169,7 @@ impl SetupView {
             }
         }
 
+        #[allow(deprecated)]
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(60.0);
@@ -276,7 +277,7 @@ impl SetupView {
                     resp.context_menu(|ui| {
                         if ui.button(i18n.t("common.copyButton")).clicked() {
                             ui.ctx().copy_text(text.clone());
-                            ui.close_menu();
+                            ui.close();
                         }
                     });
                 }

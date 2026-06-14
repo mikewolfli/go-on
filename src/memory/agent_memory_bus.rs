@@ -138,11 +138,11 @@ impl AgentMemoryBus {
             tags.join(","),
             insight
         );
-        let id = format!("agent_mem_{:x}", {
+        let id = format!("agent_mem_{}", {
             let mut hasher = sha2::Sha256::new();
             use sha2::Digest;
             hasher.update(content.as_bytes());
-            hasher.finalize()
+            hex::encode(hasher.finalize())
         });
 
         let entry = MemoryEntry {

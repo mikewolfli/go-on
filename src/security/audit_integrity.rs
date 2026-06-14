@@ -552,7 +552,8 @@ mod tests {
 
         // Generate an Ed25519 key pair
         let mut seed = [0u8; 32];
-        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut seed);
+        use rand::Rng;
+        rand::rng().fill_bytes(&mut seed);
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
         let verifying_key = signing_key.verifying_key();
 
@@ -578,7 +579,8 @@ mod tests {
 
         // Generate an Ed25519 key pair
         let mut seed = [0u8; 32];
-        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut seed);
+        use rand::Rng;
+        rand::rng().fill_bytes(&mut seed);
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
         let verifying_key = signing_key.verifying_key();
 
@@ -606,7 +608,8 @@ mod tests {
 
         // Generate an Ed25519 key pair
         let mut seed = [0u8; 32];
-        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut seed);
+        use rand::Rng;
+        rand::rng().fill_bytes(&mut seed);
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
         let verifying_key = signing_key.verifying_key();
 

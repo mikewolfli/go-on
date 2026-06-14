@@ -118,7 +118,7 @@ pub fn sign_request(
             signing_key.sign(&to_sign).to_bytes().to_vec()
         }
         SigningAlgorithm::HmacSha256 => {
-            use hmac::Mac;
+            use hmac::{digest::KeyInit, Mac};
             let mut mac = hmac::Hmac::<Sha256>::new_from_slice(private_key)
                 .map_err(|e| SigningError::InvalidKey(e.to_string()))?;
             mac.update(&to_sign);
@@ -191,7 +191,7 @@ pub fn verify_request(
             public.verify(&to_verify, &sig).is_ok()
         }
         SigningAlgorithm::HmacSha256 => {
-            use hmac::Mac;
+            use hmac::{digest::KeyInit, Mac};
             let mut mac = hmac::Hmac::<Sha256>::new_from_slice(public_key)
                 .map_err(|e| SigningError::InvalidKey(e.to_string()))?;
             mac.update(&to_verify);
@@ -252,7 +252,8 @@ mod tests {
     fn test_sign_and_verify_ed25519() {
         // Generate a random Ed25519 signing key
         let mut seed = [0u8; 32];
-        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut seed);
+        use rand::Rng;
+        rand::rng().fill_bytes(&mut seed);
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
         let verifying_key = signing_key.verifying_key();
 

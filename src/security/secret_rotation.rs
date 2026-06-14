@@ -185,15 +185,15 @@ impl KeyRotator for MemoryRotator {
     ) -> Result<SecretEntry, SecretError> {
         let key_bytes = match algorithm {
             SecretAlgorithm::Ed25519 => {
-                use rand::RngCore;
+                use rand::Rng;
                 let mut key = vec![0u8; 64];
-                rand::rngs::OsRng.fill_bytes(&mut key);
+                rand::rng().fill_bytes(&mut key);
                 key
             }
             _ => {
-                use rand::RngCore;
+                use rand::Rng;
                 let mut key = vec![0u8; 32];
-                rand::rngs::OsRng.fill_bytes(&mut key);
+                rand::rng().fill_bytes(&mut key);
                 key
             }
         };
@@ -267,9 +267,9 @@ impl KeyRotator for EnvRotator {
         key_id: &str,
         algorithm: SecretAlgorithm,
     ) -> Result<SecretEntry, SecretError> {
-        use rand::RngCore;
+        use rand::Rng;
         let mut key = vec![0u8; 32];
-        rand::rngs::OsRng.fill_bytes(&mut key);
+        rand::rng().fill_bytes(&mut key);
 
         let encoded = base64::engine::general_purpose::STANDARD.encode(&key);
         std::env::set_var(self.env_key(key_id), encoded);
@@ -426,9 +426,9 @@ impl KeyRotator for VaultRotator {
                 .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok())
                 .unwrap_or_else(|| {
                     // Fallback: generate a random key when Vault returns no key data
-                    use rand::RngCore;
+                    use rand::Rng;
                     let mut buf = [0u8; 32];
-                    rand::thread_rng().try_fill_bytes(&mut buf).ok();
+                    rand::rng().fill_bytes(&mut buf);
                     buf.to_vec()
                 });
             let now_ms = std::time::SystemTime::now()

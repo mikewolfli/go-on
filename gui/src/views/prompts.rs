@@ -374,7 +374,7 @@ impl PromptsView {
                         resp.context_menu(|ui| {
                             if ui.button(i18n.t("common.copyButton")).clicked() {
                                 ui.ctx().copy_text(text.clone());
-                                ui.close_menu();
+                                ui.close();
                             }
                         });
                         ui.add_space(4.0);
@@ -607,10 +607,10 @@ impl PromptsView {
                         }
                     } else {
                         // ── Two-column layout ──────────────────────────────────────
-                        egui::SidePanel::left("prompts_categories")
+                        egui::Panel::left("prompts_categories")
                             .resizable(true)
-                            .default_width(200.0)
-                            .width_range(150.0..=350.0)
+                            .default_size(200.0)
+                            .size_range(150.0..=350.0)
                             .show_inside(ui, |ui| {
                                 ui.label(
                                     egui::RichText::new(i18n.t("prompts.categories"))

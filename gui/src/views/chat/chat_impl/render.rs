@@ -364,7 +364,7 @@ fn collect_segments<'a>(segments: &mut Vec<MarkdownSegment>, node: &'a comrak::n
             ));
         }
         comrak::nodes::NodeValue::Text(ref literal) => {
-            let t = literal.as_str().trim().to_string();
+            let t = literal.trim().to_string();
             if !t.is_empty() {
                 segments.push(MarkdownSegment::Raw(t));
             }
@@ -580,8 +580,7 @@ fn render_node<'a>(
         comrak::nodes::NodeValue::Text(ref literal) => {
             if !literal.trim().is_empty() {
                 ui.add(
-                    egui::Label::new(egui::RichText::new(literal.as_str()).color(text_color))
-                        .wrap(),
+                    egui::Label::new(egui::RichText::new(&literal[..]).color(text_color)).wrap(),
                 );
             }
         }
