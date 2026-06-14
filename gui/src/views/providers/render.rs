@@ -430,6 +430,7 @@ impl ProvidersView {
                                         }
                                     }
                                     save_app_config(config);
+                                    changed = true;
                                     self.status = format!(
                                         "{} '{}' {}",
                                         i18n.t("providers.api_key"),
@@ -506,6 +507,7 @@ impl ProvidersView {
                                     label: label_clean.clone(),
                                 });
                                 save_app_config(config);
+                                changed = true;
                                 self.status = format!(
                                     "{} '{}' {}.",
                                     i18n.t("providers.provider"),

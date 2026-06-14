@@ -334,11 +334,41 @@ impl GoOnApp {
 
         let bind_addr = backend_bind_addr_from_url(&config.backend_url);
         if is_addr_listening(&bind_addr) {
+            // Port is still in use — could be a dying process from a restart.
+            // Try a brief pause and re-check; if still in use, kill it.
             eprintln!(
-                "backend: detected existing listener at {}; reusing external backend",
+                "backend: detected existing listener at {}; waiting for release...",
                 bind_addr
             );
-            return (BackendClient::new(&config.backend_url), None, true);
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            if is_addr_listening(&bind_addr) {
+                // Force-kill the process holding the port
+                #[cfg(target_os = "macos")]
+                {
+                    let output = std::process::Command::new("lsof")
+                        .args(["-ti", "tcp:8090", "-sTCP:LISTEN"])
+                        .output();
+                    if let Ok(output) = output {
+                        if let Ok(pid_str) = String::from_utf8(output.stdout) {
+                            for pid in pid_str.trim().lines() {
+                                if let Ok(pid_num) = pid.trim().parse::<i32>() {
+                                    eprintln!("backend: force-killing stale PID {}", pid_num);
+                                    let _ = std::process::Command::new("kill")
+                                        .args(["-9", &pid_num.to_string()])
+                                        .output();
+                                }
+                            }
+                        }
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let _ = std::process::Command::new("fuser")
+                        .args(["-k", "8090/tcp"])
+                        .output();
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
         }
 
         match find_backend_binary() {
@@ -379,6 +409,23 @@ impl GoOnApp {
 
                 // Sync language between GUI and backend
                 cmd.env("LANG", &config.language);
+
+                // Inject API keys from .env file so the backend can read them
+                // as fallback when keychain access times out (macOS headless mode).
+                let env_path = config_dir.join(".env");
+                if let Ok(content) = std::fs::read_to_string(&env_path) {
+                    for line in content.lines() {
+                        let line = line.trim();
+                        if line.is_empty() || line.starts_with('#') {
+                            continue;
+                        }
+                        if let Some((key, value)) = line.split_once('=') {
+                            let env_key = key.trim();
+                            let env_val = value.trim().trim_matches('"');
+                            cmd.env(env_key, env_val);
+                        }
+                    }
+                }
 
                 // Only generate a default config.toml if one does NOT already exist.
                 // User-manual configs take precedence.
