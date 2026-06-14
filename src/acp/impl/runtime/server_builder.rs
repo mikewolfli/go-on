@@ -85,9 +85,21 @@ pub async fn new_acp_server(
                 storage_path,
             ))
         } else {
-            Arc::new(crate::governance::harness_bus::default_harness_bus(
-                storage_path,
-            ))
+            // When app_config is not provided, try to load it from disk.
+            // This ensures governance settings are respected.
+            let loaded_config = config_path
+                .as_ref()
+                .and_then(|p| crate::config::AppConfig::load(std::path::Path::new(p)).ok());
+            if let Some(ref cfg) = loaded_config {
+                Arc::new(crate::governance::harness_bus::config_aware_harness_bus(
+                    cfg,
+                    storage_path,
+                ))
+            } else {
+                Arc::new(crate::governance::harness_bus::default_harness_bus(
+                    storage_path,
+                ))
+            }
         }
     };
     // Inject RBAC enforcer into the harness bus and create HTTP-level enforcer (GAP-B58-D05)
@@ -384,8 +396,10 @@ pub async fn new_acp_server(
         builder = builder.with_policy_reloader(reloader);
     }
 
+    eprintln!("DEBUG: calling builder.build()...");
     match builder.build() {
         Ok(mut server) => {
+            eprintln!("DEBUG: builder.build() succeeded, calling wire_server...");
             // Set fields that aren't available in ServerBuilder yet
             server.cache_deps.vector_config = vector_config;
             server.cache_deps.autotune = autotune;
@@ -406,7 +420,9 @@ pub async fn new_acp_server(
             ));
 
             // B51-26: Shared wiring extracted to wire_server()
+            eprintln!("DEBUG: about to call wire_server (success path)...");
             wire_server(&mut server, &registry).await;
+            eprintln!("DEBUG: wire_server completed (success path)");
 
             // GAP-B52-30: Register security advisor alert channel with the alert manager.
             // Forward security alerts to the observability pipeline.
@@ -536,6 +552,7 @@ pub async fn new_acp_server(
         }
         Err(err) => {
             // Fallback to creating a minimal server if builder fails
+            eprintln!("DEBUG: builder.build() FAILED: {}", err);
             tracing::error!("Failed to build server with ServerBuilder: {}", err);
 
             // Create a minimal server with just the essential components
@@ -720,7 +737,9 @@ pub async fn new_acp_server(
             fallback_server.governance_deps.rbac_enforcer = Some(rbac_enforcer);
 
             // B51-26: Shared wiring extracted to wire_server()
+            eprintln!("DEBUG: about to call wire_server (fallback path)...");
             wire_server(&mut fallback_server, &registry).await;
+            eprintln!("DEBUG: wire_server completed (fallback path)");
 
             fallback_server
         }

@@ -580,14 +580,12 @@ async fn route_http_post(
                         handle_request(server_ref.as_ref(), request, Some(&headers_owned)).await
                     });
 
-                    let mut response_bytes = Vec::new();
-                    let read_result = tokio::time::timeout(
-                        std::time::Duration::from_secs(60),
-                        pipe_reader.read_to_end(&mut response_bytes),
-                    ).await;
-
                     let rpc_result = rpc_task.await;
 
+                    // Wait for the RPC task first, THEN restore stdout.
+                    // This drops the pipe writer BEFORE we read, so
+                    // read_to_end can complete (otherwise it would block
+                    // indefinitely waiting for the pipe to close).
                     // Restore stdout
                     {
                         let mut guard = server.output.lock().await;
@@ -596,6 +594,12 @@ async fn route_http_post(
                             Box::new(tokio::io::stdout()) as Box<dyn tokio::io::AsyncWrite + Send + Unpin>,
                         );
                     }
+
+                    let mut response_bytes = Vec::new();
+                    let read_result = tokio::time::timeout(
+                        std::time::Duration::from_secs(60),
+                        pipe_reader.read_to_end(&mut response_bytes),
+                    ).await;
 
                     match rpc_result {
                         Err(join_err) => {

@@ -581,8 +581,20 @@ impl ChatView {
 
             ui.horizontal(|ui| {
                 if CHAT_STAGE6_ENABLE_EXTRA_BUTTONS {
-                    attachments::handle_attach_button(self, ui);
-                    attachments::handle_external_editor(self, ui);
+                    if ui
+                        .button("📎")
+                        .on_hover_text(i18n.t("chat.attachFile"))
+                        .clicked()
+                    {
+                        attachments::handle_attach_button(self, ui);
+                    }
+                    if ui
+                        .button("✏️")
+                        .on_hover_text(i18n.t("chat.externalEditor"))
+                        .clicked()
+                    {
+                        attachments::handle_external_editor(self, ui);
+                    }
                     if ui
                         .button("💡")
                         .on_hover_text(i18n.t("chat.promptTemplates"))

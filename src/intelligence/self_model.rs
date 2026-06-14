@@ -207,8 +207,15 @@ impl SelfModelCore {
     /// operation. Logging is performed at debug level for observability.
     fn persist(&self) {
         let inner = lock_guard(&self.inner);
+        Self::persist_inner(&inner);
+    }
+
+    /// Persist without locking (caller must hold the lock).
+    /// Used to avoid re-entrant lock deadlocks when persist is called
+    /// from methods that already hold the lock.
+    fn persist_inner(inner: &Inner) {
         if let Some(path) = &inner.persistence_path {
-            match serde_json::to_string_pretty(&*inner) {
+            match serde_json::to_string_pretty(inner) {
                 Ok(json) => {
                     if let Err(e) = fs::write(path, &json) {
                         debug!("SelfModel: failed to write persistence file: {e}");
@@ -241,7 +248,8 @@ impl SelfModelCore {
         let mut inner = lock_guard(&self.inner);
         inner.identity = Some(identity);
         inner.last_update_ms = now_ms();
-        self.persist();
+        // Use persist_inner to avoid re-entrant lock deadlock
+        Self::persist_inner(&inner);
     }
 
     /// Get the system identity, if one has been set.

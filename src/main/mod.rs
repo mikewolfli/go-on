@@ -252,9 +252,13 @@ async fn run() -> Result<()> {
         Arc::new(tokio::sync::RwLock::new((*config).clone()));
 
     // Start config hot-reload watchdog
+    // NOTE: Temporarily disabled to debug startup deadlock on macOS.
+    // The notify kqueue watcher appears to deadlock with the tokio runtime
+    // during ServerBuilder::build(). Enabling this can be reverted once the
+    // root cause is identified.
     let hot_reload_cfg = crate::core::config::hot_reload::HotReloadConfig {
         config_path: config_path.clone(),
-        enabled: true,
+        enabled: false,
         ..Default::default()
     };
     let watchdog = crate::core::config::hot_reload::WatchDog::new(hot_reload_cfg, active_config);

@@ -21,7 +21,7 @@ use serde_json::Value;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 
 use crate::agents::vendors;
 use crate::agents::{
@@ -247,6 +247,11 @@ fn keyring_lookup_accounts(service: &str, account: &str) -> Vec<(String, String)
     targets
 }
 
+/// Set to true once a keychain lookup times out.
+/// Subsequent calls skip keychain entirely and go directly to env var fallback.
+static KEYCHAIN_TIMEOUT_OCCURRED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn load_secret_value(secret_ref: &str, field_name: &str) -> Result<String> {
     if let Some(locator) = secret_ref.strip_prefix(KEYRING_PREFIX) {
         let (service, account) = locator.split_once('/').ok_or_else(|| {
@@ -269,31 +274,63 @@ fn load_secret_value(secret_ref: &str, field_name: &str) -> Result<String> {
             );
         }
 
+        // Fast path: if a previous keychain lookup timed out, skip keychain
+        // entirely and go directly to env var fallback. This avoids 5-second
+        // delays on every chat message in background/headless mode.
         let mut keyring_error = "secret not found".to_string();
-        for (service_name, account_name) in keyring_lookup_accounts(service, account) {
-            match keyring::Entry::new(&service_name, &account_name) {
-                Ok(entry) => match entry.get_password() {
-                    Ok(value) if !value.trim().is_empty() => return Ok(value),
-                    Ok(_) => {
-                        keyring_error = format!(
-                            "entry {}/{} resolved to empty value",
-                            service_name, account_name
-                        );
+        if !KEYCHAIN_TIMEOUT_OCCURRED.load(std::sync::atomic::Ordering::Relaxed) {
+            for (service_name, account_name) in keyring_lookup_accounts(service, account) {
+                match keyring::Entry::new(&service_name, &account_name) {
+                    Ok(entry) => {
+                        // Use a timeout for keychain access to prevent hanging
+                        // when running in headless/background mode on macOS.
+                        // SecKeychainFindGenericPassword can block indefinitely if
+                        // the Security framework requires user interaction.
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        std::thread::spawn(move || {
+                            let _ = tx.send(entry.get_password());
+                        });
+                        match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+                            Ok(Ok(value)) if !value.trim().is_empty() => return Ok(value),
+                            Ok(Ok(_)) => {
+                                keyring_error = format!(
+                                    "entry {}/{} resolved to empty value",
+                                    service_name, account_name
+                                );
+                            }
+                            Ok(Err(err)) => {
+                                keyring_error = format!(
+                                    "failed to read keyring entry {}/{}: {}",
+                                    service_name, account_name, err
+                                );
+                            }
+                            Err(_) => {
+                                warn!(
+                                    "{} keyring lookup timed out after 5s for {}/{}, falling back",
+                                    field_name, service_name, account_name
+                                );
+                                KEYCHAIN_TIMEOUT_OCCURRED
+                                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                                keyring_error = format!(
+                                    "keychain lookup timed out for {}/{}",
+                                    service_name, account_name
+                                );
+                            }
+                        }
                     }
                     Err(err) => {
                         keyring_error = format!(
-                            "failed to read keyring entry {}/{}: {}",
+                            "failed to open keyring entry {}/{}: {}",
                             service_name, account_name, err
                         );
                     }
-                },
-                Err(err) => {
-                    keyring_error = format!(
-                        "failed to open keyring entry {}/{}: {}",
-                        service_name, account_name, err
-                    );
                 }
             }
+        } else {
+            debug!(
+                "{} keychain skipped (previous timeout), using env fallback directly",
+                field_name
+            );
         }
 
         let fallback_candidates = keyring_env_fallback_candidates(service, account);
