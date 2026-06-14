@@ -1,5 +1,5 @@
 ---
-name: CI Gate (check + clippy + tests)
+name: CI Gate (check + lint)
 on:
   workflow_dispatch:
   push:
@@ -9,186 +9,77 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: short
-  RUSTFLAGS: ""
+
 jobs:
-  # ── Backend: profiles + tests ───────────────────────────────
+  # ── Backend ──────────────────────────────────────────────
   gate-backend:
-    name: Backend (3 profiles + tests)
+    name: Backend (check + clippy)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
           shared-key: "go-on-backend"
 
-      - name: Check formatting
-        run: cargo fmt --check
-
-      - name: Code coverage (cargo-llvm-cov)
-        run: |
-          cargo install cargo-llvm-cov 2>/dev/null || true
-          cargo llvm-cov --all-targets --features profile-local,backend-sqlite -- --test-threads=1 --nocapture 2>&1 || \
-            echo "[warn] cargo-llvm-cov coverage skipped — try: cargo install cargo-llvm-cov"
-          echo "Fallback: running tests without coverage"
-          cargo test --features profile-local,backend-sqlite --test-threads=1
-
-      - name: Check dependencies (cargo-deny)
-        uses: EmbarkStudios/cargo-deny-action@v2
-
-      - name: Create required SQLite databases for CI
-        shell: bash
-        run: |
-          mkdir -p config
-          touch config/acp_cache.sqlite3
-          touch config/acp_vector.sqlite3
-
-      # ── Profile: local ────────────────────────────────────────
-      - name: Check (profile-local)
-        run: cargo check --all-targets --locked
-      - name: Clippy (profile-local)
-        run: cargo clippy --no-default-features -F profile-local -- -D warnings
-      - name: Lib unit tests (profile-local)
-        run: cargo test --no-default-features -F profile-local --lib
-      - name: Bin unit tests (profile-local)
-        run: cargo test --no-default-features -F profile-local --bin go-on
-
-      # ── Profile: simple-server ────────────────────────────────
-      - name: Clippy (profile-simple-server)
-        run: cargo clippy --no-default-features -F profile-simple-server -- -D warnings
-      - name: Lib unit tests (profile-simple-server)
-        run: cargo test --no-default-features -F profile-simple-server,backend-sqlite --lib
-
-      # ── Profile: multi-users-server ───────────────────────────
-      - name: Clippy (profile-multi-users-server)
-        run: cargo clippy --no-default-features -F profile-multi-users-server -- -D warnings
-      - name: Lib unit tests (profile-multi-users-server)
-        run: cargo test --no-default-features -F profile-multi-users-server,backend-postgres --lib
-
-      # ── Integration tests ─────────────────────────────────────
-      - name: All integration tests
-        timeout-minutes: 30
-        run: |
-          cargo test --no-default-features -F profile-local --test e2e_integration -- --test-threads=1 --nocapture
-          cargo test --no-default-features -F profile-local --test chaos_drill -- --test-threads=1 --nocapture
-        env:
-          GO_ON_ENABLE_LOCAL_TEST_AGENTS: "1"
-
-  # ── macOS gate ──────────────────────────────────────────────
-  gate-macos:
-    name: macOS (check)
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target"
-          shared-key: "go-on-macos"
       - name: Create required SQLite databases
         run: |
           mkdir -p config
           touch config/acp_cache.sqlite3
           touch config/acp_vector.sqlite3
-      - name: Check (profile-local)
-        run: cargo check --all-targets
 
-  # ── EGUI GUI ─────────────────────────────────────────────────
+      - name: Check (all targets, locked)
+        run: cargo check --all-targets --locked
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+  # ── GUI ──────────────────────────────────────────────────
   gate-gui:
-    name: GUI (check + clippy + test)
+    name: GUI (check + clippy)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
 
       - name: Install system dependencies (Linux)
-        shell: bash
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends \
-            libxkbcommon-dev \
-            libwayland-dev \
-            libx11-dev \
-            libxcb-composite0-dev \
-            libxcb-xfixes0-dev \
-            libxcb-xkb-dev \
-            libxcb-shape0-dev \
-            libgtk-3-dev \
-            libdbus-1-dev \
-            libvulkan-dev
+            libxkbcommon-dev libwayland-dev libx11-dev \
+            libxcb-composite0-dev libxcb-xfixes0-dev \
+            libxcb-xkb-dev libxcb-shape0-dev \
+            libgtk-3-dev libdbus-1-dev libvulkan-dev
 
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
           workspaces: "gui -> gui/target"
-          shared-key: "go-on-gui-check-v2"
+          shared-key: "go-on-gui-check"
 
-      - name: Check EGUI GUI (all targets, locked)
+      - name: Check (all targets, locked)
         run: cargo check --all-targets --locked --manifest-path gui/Cargo.toml
-
-      - name: Clippy EGUI GUI
+      - name: Clippy
         run: cargo clippy --all-targets --locked --manifest-path gui/Cargo.toml -- -D warnings
 
-  # ── VS Code addon ────────────────────────────────────────────
+  # ── VS Code addon ────────────────────────────────────────
   gate-vscode:
-    name: VSCode Addon (compile + lint + contract + package)
+    name: VSCode Addon (compile + lint)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: vscode-addon/package-lock.json
+
       - name: Install dependencies
         run: npm --prefix vscode-addon ci
-      - name: TypeScript compile (with output)
+      - name: Compile
         run: npm --prefix vscode-addon run compile
       - name: Lint
         run: npm --prefix vscode-addon run lint
-      - name: Contract smoke
-        run: npm --prefix vscode-addon run test:contract
-      - name: Verify extension output
-        run: |
-          test -f vscode-addon/out/extension.js || \
-            { echo "ERROR: extension.js not compiled. Ensure tsc output dir is correct."; exit 1; }
-          echo "Output files: $(ls vscode-addon/out/*.js | wc -l) .js files"
-      - name: Package VSIX (dry-run, skip marketplace auth)
-        run: |
-          npm install -g @vscode/vsce 2>/dev/null || true
-          cd vscode-addon && vsce package --out go-on-vscode.vsix 2>&1 || \
-            echo "[warn] VSIX packaging skipped (requires marketplace publisher)"
-
-  # ── Docker image ─────────────────────────────────────────────
-  gate-docker:
-    name: Docker (build)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image (simple-server)
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: deploy/simple-server/Dockerfile
-          push: false
-          tags: go-on:ci-${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max

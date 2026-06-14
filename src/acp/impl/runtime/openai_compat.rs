@@ -402,15 +402,44 @@ pub(crate) async fn handle_openai_chat_completions(
     if !openai_req.stream {
         let trace = http_trace_context("openai.chat.completions");
         let ctx = Some(ChatRequestContext::new(user_session.clone()));
-        let result = crate::acp::r#impl::chat::process_chat_request(
-            server.as_ref(),
-            &params,
-            None,
-            &trace,
-            None,
-            ctx,
+        // Add a 30-second timeout for the entire chat request pipeline.
+        // The provider API call, keychain fallback, and agent selection
+        // should complete well within this window. If it hangs (e.g.,
+        // harness review gate, empty agent selection), the client gets
+        // a clean error instead of hanging indefinitely.
+        let result = match tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            crate::acp::r#impl::chat::process_chat_request(
+                server.as_ref(),
+                &params,
+                None,
+                &trace,
+                None,
+                ctx,
+            ),
         )
-        .await;
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => {
+                let payload = serde_json::json!({
+                    "error": {
+                        "message": "chat request timed out after 30s",
+                        "type": "go_on_timeout"
+                    }
+                });
+                write_http_json_response_with_context(
+                    socket,
+                    504,
+                    payload,
+                    "openai.chat.completions",
+                    cors_headers,
+                )
+                .await?;
+                record_outcome(false);
+                return Ok(());
+            }
+        };
         let result = match result {
             Ok(result) => result,
             Err(err) => {

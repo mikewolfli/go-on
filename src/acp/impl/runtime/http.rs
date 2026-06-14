@@ -509,10 +509,29 @@ async fn route_http_post(
                         .await
                     });
 
-                    while let Some(frame) = rx.recv().await {
-                        if let Err(err) = write_sse_event(socket, frame.event, &frame.payload).await {
-                            task.abort();
-                            return Err(err);
+                    // Add a 30-second overall timeout for the chat stream.
+                    // If no events arrive (e.g., pipeline hang), abort and return error.
+                    let stream_timeout = tokio::time::sleep(std::time::Duration::from_secs(30));
+                    tokio::pin!(stream_timeout);
+                    loop {
+                        tokio::select! {
+                            frame = rx.recv() => {
+                                match frame {
+                                    Some(frame) => {
+                                        if let Err(err) = write_sse_event(socket, frame.event, &frame.payload).await {
+                                            task.abort();
+                                            return Err(err);
+                                        }
+                                    }
+                                    None => break, // channel closed
+                                }
+                            }
+                            _ = &mut stream_timeout => {
+                                task.abort();
+                                let payload = serde_json::json!({"error": "chat stream timed out after 30s"});
+                                let _ = write_sse_event(socket, "error", &payload).await;
+                                return Ok(());
+                            }
                         }
                     }
 

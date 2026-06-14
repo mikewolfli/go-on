@@ -563,7 +563,6 @@ impl ProvidersView {
                             }
                             self.new_key.clear();
                             self.new_secret_key.clear();
-                            changed = true;
                         }
                     });
                 }
