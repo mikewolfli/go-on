@@ -903,6 +903,78 @@ pub async fn start_background_tasks(
         );
     }
 
+    // ── Memory bridge: auto-migrate every 5 minutes (PERF-FIX: moved from new_acp_server) ──
+    // Uses the server's existing MemoryPersistence instead of creating a redundant
+    // third SQLite connection during the critical startup path.
+    if let Some(ref mp) = server.governance_deps.memory_persistence {
+        let mp = Arc::clone(mp);
+        let shutdown = shutdown_notify.clone();
+        spawn_background_task(
+            async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(300)); // 5 min
+                interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+                // Skip first tick to give startup time
+                interval.tick().await;
+                loop {
+                    tokio::select! {
+                        _ = shutdown.notified() => break,
+                        _ = interval.tick() => {}
+                    }
+                    match mp.auto_migrate() {
+                        Ok(report) => {
+                            let total = report.promoted_hot_to_warm
+                                + report.promoted_warm_to_cold
+                                + report.demoted_hot_to_cold
+                                + report.evicted_warm;
+                            if total > 0 {
+                                tracing::debug!(
+                                    target = "memory_bridge",
+                                    promoted_hot_to_warm = report.promoted_hot_to_warm,
+                                    promoted_warm_to_cold = report.promoted_warm_to_cold,
+                                    demoted_hot_to_cold = report.demoted_hot_to_cold,
+                                    evicted_warm = report.evicted_warm,
+                                    "memory_persistence auto_migrate cycle complete"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                target = "memory_bridge",
+                                "memory_persistence auto_migrate failed: {e}"
+                            );
+                        }
+                    }
+                }
+            },
+            "memory_auto_migrate",
+        );
+        tracing::info!(
+            target = "memory_bridge",
+            "memory persistence auto-migrate background task started (interval=300s)"
+        );
+    }
+
+    // ── Memory bridge: initial promote on startup (PERF-FIX: was only in stdio mode) ──
+    // GAP-B58-B13: Wire memory bridge — run initial promotion on startup.
+    // This was previously only called in run_acp_server (stdio mode).
+    // Now it runs for ALL protocol modes (HTTP, WebSocket, etc.).
+    if let Some(mp) = server.governance_deps.memory_persistence.as_ref() {
+        let memory_store = &server.persistence.memory_store;
+        match crate::memory::memory_bridge::bridge_promote(memory_store, mp) {
+            Ok(report) => {
+                if report.promoted_count > 0 {
+                    tracing::info!(
+                        "memory bridge: initial promote moved {} entries",
+                        report.promoted_count
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!("memory bridge: initial bridge_promote failed: {e}");
+            }
+        }
+    }
+
     // ── Metrics bridge (P5-6): periodically sync OTLP MetricsRecorder → RuntimeMetrics ──
     {
         let runtime_metrics = server.observability.metrics.clone();

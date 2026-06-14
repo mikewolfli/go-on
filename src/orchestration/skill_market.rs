@@ -405,7 +405,7 @@ impl SkillMarketRegistry {
                 rating: 3.8,
                 updated_at: "2026-04-28".to_string(),
                 verified: false,
-                min_go_on_version: "1.1.0".to_string(),
+                min_go_on_version: "1.2.0".to_string(),
                 compatible_providers: vec!["openai".to_string(), "anthropic".to_string()],
                 dependencies: {
                     let mut deps = HashMap::new();

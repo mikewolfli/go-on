@@ -44,7 +44,7 @@
 //!     log_level: "info".to_string(),
 //!     metrics_interval_secs: 30,
 //!     service_name: "my-service".to_string(),
-//!     service_version: "1.1.0".to_string(),
+//!     service_version: "1.2.0".to_string(),
 //! };
 //!
 //! // Initialize telemetry

@@ -461,11 +461,14 @@ pub async fn new_acp_server(
             // avoid first-request latency penalty from lazy initialization.
             crate::acp::r#impl::chat::pre_init_sse_buffer_pool();
 
-            // GAP-B55-020: Initialize memory bridge with auto-migration
-            // Called unconditionally (not gated on vector_store) so bridge
-            // functions bridge_store/bridge_promote are wired early.
-            crate::memory::memory_bridge::init_memory_persistence_with_auto_migrate(None);
-            tracing::info!("memory bridge: auto-migration task started");
+            // PERF-FIX: Removed init_memory_persistence_with_auto_migrate(None) from
+            // the critical startup path.  This call created a *third* MemoryPersistence
+            // instance (third SQLite connection + fs::create_dir_all + table/index DDL)
+            // synchronously on the tokio worker thread.  The auto-migrate background
+            // task is now started in start_background_tasks() using the server's
+            // existing MemoryPersistence, after the HTTP port is already bound.
+            // See: start_background_tasks() in src/acp/background.rs
+            tracing::info!("memory bridge: auto-migration deferred to start_background_tasks");
 
             // BLUE48 Step 1: Initialize global embedding vector store for
             // semantic task classification in the Planner.

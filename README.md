@@ -1,18 +1,22 @@
 <p align="center">
-  <img src="snapshots/head.png" alt="go-on" width="600">
+  <img src="snapshots/head.png" alt="go-on — AI Agent Orchestration Runtime" width="600">
 </p>
 
 <p align="center">
-  <strong>go-on</strong> — A Rust-based ACP/MCP agent orchestration runtime with desktop GUI, VS Code extension, and multi-AI-provider support.
+  <strong>go-on</strong> — A Rust-based ACP/MCP agent orchestration runtime with desktop GUI, VS Code extension, and multi-AI-provider support. v1.2.0
 </p>
 
 <p align="center">
   English | <a href="README.zh-CN.md">简体中文</a>
 </p>
 
+<p align="center">
+  <em>AI agent orchestration · multi-model routing · autonomous workflows · governance & safety</em>
+</p>
+
 ---
 
-[![Rust](https://img.shields.io/badge/rust-1.1.0-orange?logo=rust)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.2.0-orange?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-2252-brightgreen)]()
 [![Providers](https://img.shields.io/badge/providers-35+-9cf)]()
@@ -21,7 +25,7 @@
 
 ## What is go-on?
 
-go-on is a **local-first**, production-grade AI agent orchestration runtime written in Rust. It bridges large language models with your tools and workflows through standard agent protocols (ACP / MCP). You can run it as a CLI, a desktop GUI app, or a backend server — with autonomous loops, tool orchestration, and built-in governance.
+go-on is a **local-first**, production-grade **AI agent orchestration runtime** written in Rust. It bridges large language models with your tools and workflows through standard agent protocols (ACP / MCP). You can run it as a CLI, a desktop GUI app, or a backend server — with autonomous loops, tool orchestration, and built-in governance.
 
 **Use go-on to:**
 - 🖥️ Chat with AI models via a native desktop GUI or terminal
@@ -108,11 +112,11 @@ Native function calling is supported for OpenAI, Anthropic, DeepSeek, Gemini, Gr
 - **Prompt injection detection** — runtime scanning for injection patterns with configurable threshold
 - **Content safety checking** — SafeGuard mode for AI-powered risk assessment
 
-### Performance
+### Performance (v1.2.0)
+- **Fast sub-second startup** — Reduced redundant SQLite initialization; HTTP server binds port in seconds (previously 180s+)
 - **FastPathCache** — sub-millisecond cache lookup for repeated queries
 - **SSE buffer pool** — zero-allocation streaming event serialization
 - **Cache warming** — predictive pre-warming with adaptive TTL
-- **Concurrent execution** — per-role BinaryHeap dequeue (O(log n)), semaphore backpressure
 - **DAG Join timeout** — prevents single slow tool from stalling the pipeline
 
 ### Resilience
@@ -233,12 +237,12 @@ cargo build --no-default-features --features multi-users-server,backend-postgres
 
 | Profile | `cargo clippy -D warnings` | Test Status |
 |:--------|:--------------------------:|:-----------:|
-| `local` | ✅ **Zero warnings** | ✅ **2252 pass, 0 fail, 0 ignored** |
+| `local` | ✅ **Zero warnings** | ✅ **all pass, 0 fail, 0 ignored** |
 | `simple-server` | ✅ **Zero warnings** | ✅ **all pass** |
 | `multi-users-server` | ✅ **Zero warnings** | ✅ **all pass** |
 | `full` | ✅ **Zero warnings** | ✅ **all pass** |
 
-All 4 build profiles compile with zero clippy warnings. Unit tests (2252) all pass with zero failures and zero ignored tests. E2e integration tests require running infrastructure.
+All 4 build profiles compile with zero clippy warnings. Unit tests all pass with zero failures and zero ignored tests. E2e integration tests require running infrastructure.
 
 ---
 

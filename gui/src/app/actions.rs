@@ -898,7 +898,6 @@ top_k = 2
             last_prompts_command_version: 0,
             last_prompts_lang: lang,
             ui_state,
-            render_cache: super::CachedRender::new(),
             state_sync_rx: Some(state_sync_rx),
             frame_count: 0,
         };

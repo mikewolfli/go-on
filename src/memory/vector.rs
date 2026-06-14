@@ -452,6 +452,9 @@ impl VectorStore {
 
         register_sqlite_vec_auto_extension();
         let conn = Connection::open(path)?;
+
+        // Step 1: Initialize schema — PRAGMAs and table creation.
+        // CREATE TABLE IF NOT EXISTS is safe regardless of whether the table exists.
         conn.execute_batch(
             "
             PRAGMA journal_mode = WAL;
@@ -470,7 +473,23 @@ impl VectorStore {
                 last_hit_at INTEGER,
                 user_id TEXT
             );
+            ",
+        )?;
 
+        // Step 2: Schema migration — add user_id column if it was missing from an
+        // older version of the database (CREATE TABLE IF NOT EXISTS won't alter an
+        // existing table). Placed BEFORE index creation so indexes on user_id will
+        // succeed even on legacy databases.
+        if let Err(e) = conn.execute_batch("ALTER TABLE vector_memory ADD COLUMN user_id TEXT;") {
+            // "duplicate column name" is expected when the column already exists.
+            tracing::debug!("vector store: user_id column migration check ({e})");
+        }
+
+        // Step 3: Create indexes and auxiliary tables.
+        // These must run after the migration so that indexes on user_id don't fail
+        // on legacy databases that were missing the column.
+        conn.execute_batch(
+            "
             CREATE INDEX IF NOT EXISTS idx_vector_memory_phase_updated_at
                 ON vector_memory(phase, updated_at DESC);
 
@@ -484,18 +503,6 @@ impl VectorStore {
             );
             ",
         )?;
-
-        // Migration: add user_id column if it doesn't exist (schema from older version)
-        let has_user_id: bool = conn
-            .prepare(
-                "SELECT COUNT(*) FROM pragma_table_info('vector_memory') WHERE name='user_id'",
-            )?
-            .query_row([], |row| row.get::<_, i64>(0))
-            .map(|count| count > 0)?;
-        if !has_user_id {
-            conn.execute_batch("ALTER TABLE vector_memory ADD COLUMN user_id TEXT;")?;
-            tracing::info!("vector store: migrated schema, added user_id column");
-        }
 
         let mode = resolve_sqlite_vector_mode(&conn)?;
 

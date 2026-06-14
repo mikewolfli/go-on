@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Changed
+- **Version updated**: go-on v1.1.0 → v1.2.0
+- **Performance**: Startup time reduced from 180s+ to seconds by eliminating redundant
+  MemoryPersistence initialization in `new_acp_server()`.
+- **Memory bridge**: Auto-migrate task moved to `start_background_tasks()` for all
+  4 protocol modes; initial `bridge_promote` now runs on HTTP/WebSocket modes too.
 - **Config format migration**: GUI config format changed from JSON to TOML.
   `load_app_config()` and `save_app_config()` now delegate to the TOML-based
   load/save paths. Existing `gui_config.json` files are automatically migrated

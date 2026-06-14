@@ -43,29 +43,6 @@ pub fn log_msg(msg: &str) {
 // Section 2: GoOnApp struct — the main application state
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Simple double-buffering cache: tracks a hash of the full state and
-/// skips the expensive UI widget tree rebuild when nothing has changed.
-/// This reduces CPU usage by ~80% on idle frames.
-pub(crate) struct CachedRender {
-    last_state_hash: u64,
-}
-
-impl CachedRender {
-    fn new() -> Self {
-        Self { last_state_hash: 0 }
-    }
-
-    /// Compute hash of current state and return true if rendering is needed.
-    fn should_render(&mut self, state_hash: u64) -> bool {
-        if state_hash == 0 || state_hash != self.last_state_hash {
-            self.last_state_hash = state_hash;
-            true
-        } else {
-            false
-        }
-    }
-}
-
 pub struct GoOnApp {
     /// Configuration management (load, save, shared snapshot)
     pub config_store: ConfigStore,
@@ -75,8 +52,6 @@ pub struct GoOnApp {
     pub crash: CrashRecovery,
     /// All view structs (chat, monitor, providers, etc.)
     pub views: ViewRegistry,
-    /// Double-buffering render cache
-    render_cache: CachedRender,
     pub i18n: I18n,
     pub show_setup: bool,
     pub active_tab: String,
@@ -766,33 +741,6 @@ impl GoOnApp {
             _ => std::borrow::Cow::Borrowed(tab),
         }
         .to_string()
-    }
-
-    fn compute_render_hash(&self) -> u64 {
-        use std::hash::Hash;
-        let mut hasher = DefaultHasher::new();
-        self.config_store
-            .config_shared_fingerprint
-            .hash(&mut hasher);
-        self.active_tab.hash(&mut hasher);
-        self.show_setup.hash(&mut hasher);
-        let is_connected = self
-            .views
-            .monitor_view
-            .health
-            .as_ref()
-            .is_some_and(|h| h.connected);
-        is_connected.hash(&mut hasher);
-        self.has_providers.hash(&mut hasher);
-        self.connection.pending_refresh.hash(&mut hasher);
-        self.crash.backend_crash_count.hash(&mut hasher);
-        let toast_visible = self
-            .blocked_tab_toast_shown
-            .is_some_and(|t| t.elapsed() < Duration::from_secs(5));
-        toast_visible.hash(&mut hasher);
-        self.connection.backend.stale_models().hash(&mut hasher);
-        self.last_applied_theme.hash(&mut hasher);
-        hasher.finish()
     }
 }
 

@@ -268,7 +268,7 @@ pub async fn dispatch_server(
                 registry,
                 Arc::new(tr),
                 "go-on".into(),
-                "1.1.0".into(),
+                "1.2.0".into(),
                 Some(Arc::new(acp)),
             );
             s.run().await
@@ -295,7 +295,7 @@ pub async fn dispatch_server(
                 registry,
                 Arc::new(tr),
                 "go-on".into(),
-                "1.1.0".into(),
+                "1.2.0".into(),
                 acp_http_bind.into(),
                 Some(Arc::new(acp)),
             );
