@@ -21,14 +21,26 @@ use crate::rpc_protocol::RequestTraceContext;
 
 pub(crate) fn is_quota_or_token_limit_error(error_text: &str) -> bool {
     let text = error_text.to_ascii_lowercase();
+    // HTTP 429 rate limit / quota errors
     text.contains("429")
         || text.contains("rate limit")
         || text.contains("quota")
         || text.contains("insufficient_quota")
+        // Token limit/exhaustion
         || text.contains("token") && text.contains("limit")
         || text.contains("token") && text.contains("exhaust")
+        || text.contains("token") && text.contains("expired")
+        || text.contains("token") && text.contains("invalid")
+        // Copilot-specific: token refresh failures (401) or GitHub token access issues
+        || text.contains("token refresh failed")
+        || text.contains("copilot token") && text.contains("401")
+        || text.contains("copilot token") && text.contains("403")
+        // Billing / credit errors
         || text.contains("billing")
         || text.contains("credit") && text.contains("insufficient")
+        // Generic auth errors for API access failures (key issues often masquerade as 401/403)
+        || text.contains("unauthorized")
+        || text.contains("forbidden") && text.contains("token")
 }
 
 /// A job representing a high-risk multi-agent vote task.

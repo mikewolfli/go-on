@@ -261,7 +261,11 @@ impl ChatView {
                 conv_id_clone.as_deref(),
                 branch_id_clone.as_deref(),
             );
-            if !selected_agent_clone.is_empty() && model_name != "auto" {
+            // Always send preferred_agent when the user has explicitly selected an agent,
+            // regardless of model selection (auto vs specific). The model and agent
+            // are independent concerns — a user may want auto model selection but a
+            // specific provider/agent.
+            if !selected_agent_clone.is_empty() {
                 if let Some(serde_json::Value::Object(ref mut options_map)) = request_options {
                     options_map.insert(
                         "preferred_agent".to_string(),

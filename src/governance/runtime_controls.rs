@@ -5,6 +5,22 @@
 
 use std::collections::{HashMap, VecDeque};
 
+/// Infer a canonical task-type label from a phase name.
+///
+/// Used to populate the task-type-aware scoring dimension in
+/// `OnlineControllerState` without requiring every call site to
+/// pass task type explicitly.  Falls back to `"general"` when
+/// no specific mapping exists.
+fn infer_task_type_from_phase(phase_name: &str) -> &'static str {
+    match phase_name {
+        p if p.eq_ignore_ascii_case("planning") => "architecture_design",
+        p if p.eq_ignore_ascii_case("coding") => "feature_implementation",
+        p if p.eq_ignore_ascii_case("review") => "code_review",
+        p if p.eq_ignore_ascii_case("delivery") => "documentation",
+        _ => "general",
+    }
+}
+
 /// Streaming P95 latency estimator using reservoir sampling.
 /// Avoids cloning+sorting the entire VecDeque on every call.
 #[derive(Debug, Clone)]
@@ -147,6 +163,12 @@ pub struct OnlineControllerState {
     latency_estimator: LatencyQuantileEstimator,
     agent_windows: HashMap<String, AgentSignalWindow>,
     phase_agent_windows: HashMap<String, AgentSignalWindow>,
+    /// Per-task-type per-agent scores.
+    /// Key format: `"{task_type}::{agent_name}"`.
+    /// Enables querying agent reliability scoped to a specific task type
+    /// (e.g. bugfix, refactor, code_review) in addition to the existing
+    /// phase and global dimensions.
+    task_type_agent_windows: HashMap<String, AgentSignalWindow>,
     phase_windows: HashMap<String, AgentSignalWindow>,
     phase_bandit_arms: HashMap<String, PhaseBanditArm>,
     phase_bandit_total_pulls: u64,
@@ -156,6 +178,14 @@ impl OnlineControllerState {
     fn phase_agent_key(phase_name: &str, agent_name: &str) -> String {
         let mut key = String::with_capacity(phase_name.len() + 2 + agent_name.len());
         key.push_str(phase_name);
+        key.push_str("::");
+        key.push_str(agent_name);
+        key
+    }
+
+    fn task_type_agent_key(task_type: &str, agent_name: &str) -> String {
+        let mut key = String::with_capacity(task_type.len() + 2 + agent_name.len());
+        key.push_str(task_type);
         key.push_str("::");
         key.push_str(agent_name);
         key
@@ -186,6 +216,41 @@ impl OnlineControllerState {
             .entry(Self::phase_agent_key(phase_name, agent_name))
             .or_default()
             .record(success, duration_ms);
+
+        // Also index by inferred task type — additive, zero breakage.
+        let task_type = infer_task_type_from_phase(phase_name);
+        self.task_type_agent_windows
+            .entry(Self::task_type_agent_key(task_type, agent_name))
+            .or_default()
+            .record(success, duration_ms);
+    }
+
+    /// Record agent outcome with an additional **task-type** dimension.
+    ///
+    /// Same as `record_agent_outcome` but also stores the outcome in a
+    /// per-task-type-per-agent window, enabling scoring queries scoped
+    /// to a specific task type on top of the existing phase+agent view.
+    ///
+    /// Available for callers that have explicit task-type context.
+    /// When task type is unknown, prefer `record_agent_outcome` which
+    /// infers it from the phase name.
+    #[allow(dead_code)]
+    pub(crate) fn record_agent_outcome_with_task_type(
+        &mut self,
+        phase_name: &str,
+        task_type: &str,
+        agent_name: &str,
+        success: bool,
+        duration_ms: u64,
+    ) {
+        // Keep existing recording paths unchanged.
+        self.record_agent_outcome(phase_name, agent_name, success, duration_ms);
+
+        // Add task-type dimension.
+        self.task_type_agent_windows
+            .entry(Self::task_type_agent_key(task_type, agent_name))
+            .or_default()
+            .record(success, duration_ms);
     }
 
     fn agent_reliability_score(&self, phase_name: &str, agent_name: &str) -> f64 {
@@ -207,9 +272,66 @@ impl OnlineControllerState {
         }
     }
 
-    pub(crate) fn rank_agent_names_for_phase(
+    /// Agent reliability score **with task-type awareness**.
+    ///
+    /// Blends three signals when all are available:
+    ///   - phase+agent  (60%)
+    ///   - task_type+agent (25%)
+    ///   - global agent (15%)
+    ///
+    /// Falls back gracefully to the base `agent_reliability_score` when
+    /// the task-type dimension has no data, keeping existing behavior
+    /// unchanged.
+    fn agent_reliability_score_with_task_type(
         &self,
         phase_name: &str,
+        task_type: &str,
+        agent_name: &str,
+    ) -> f64 {
+        let base = self.agent_reliability_score(phase_name, agent_name);
+        let tt_key = Self::task_type_agent_key(task_type, agent_name);
+        let tt_score = self
+            .task_type_agent_windows
+            .get(&tt_key)
+            .and_then(AgentSignalWindow::reliability_score);
+
+        match tt_score {
+            Some(tt) => {
+                // Three-way blend: phase+agent dominates, task type adds signal.
+                let phase_key = Self::phase_agent_key(phase_name, agent_name);
+                let phase = self
+                    .phase_agent_windows
+                    .get(&phase_key)
+                    .and_then(AgentSignalWindow::reliability_score);
+                let global = self
+                    .agent_windows
+                    .get(agent_name)
+                    .and_then(AgentSignalWindow::reliability_score);
+                match (phase, global) {
+                    (Some(p), Some(g)) => (0.60 * p + 0.25 * tt + 0.15 * g).clamp(0.0, 1.0),
+                    (Some(p), None) => (0.70 * p + 0.30 * tt).clamp(0.0, 1.0),
+                    (None, Some(g)) => (0.55 * tt + 0.45 * g).clamp(0.0, 1.0),
+                    (None, None) => tt,
+                }
+            }
+            None => base,
+        }
+    }
+
+    /// Rank agents for a phase **and task type**.
+    ///
+    /// Same signature intent as `rank_agent_names_for_phase` but also
+    /// factors in per-task-type reliability where data exists.  Falls
+    /// back seamlessly to the phase-only ranking when no task-type
+    /// data is available.
+    ///
+    /// Available for callers that have explicit task-type context.
+    /// When task type is unknown, prefer `rank_agent_names_for_phase`.
+    #[allow(dead_code)]
+    pub(crate) fn rank_agent_names_for_phase_and_task_type(
+        &self,
+        phase_name: &str,
+        task_type: &str,
         agent_names: &[String],
     ) -> Vec<(String, f64)> {
         let mut scored = agent_names
@@ -219,7 +341,40 @@ impl OnlineControllerState {
                 (
                     idx,
                     name.clone(),
-                    self.agent_reliability_score(phase_name, name),
+                    self.agent_reliability_score_with_task_type(phase_name, task_type, name),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        scored.sort_by(|left, right| match right.2.partial_cmp(&left.2) {
+            Some(std::cmp::Ordering::Equal) | None => left.0.cmp(&right.0),
+            Some(other) => other,
+        });
+
+        scored
+            .into_iter()
+            .map(|(_, name, score)| (name, score))
+            .collect()
+    }
+
+    pub(crate) fn rank_agent_names_for_phase(
+        &self,
+        phase_name: &str,
+        agent_names: &[String],
+    ) -> Vec<(String, f64)> {
+        // Use task-type-aware ranking to incorporate the additional
+        // task-type scoring dimension alongside phase+agent and global.
+        // Falls back seamlessly to the base scoring when no task-type
+        // data exists.
+        let task_type = infer_task_type_from_phase(phase_name);
+        let mut scored = agent_names
+            .iter()
+            .enumerate()
+            .map(|(idx, name)| {
+                (
+                    idx,
+                    name.clone(),
+                    self.agent_reliability_score_with_task_type(phase_name, task_type, name),
                 )
             })
             .collect::<Vec<_>>();
