@@ -17,6 +17,7 @@ pub mod telemetry_enhanced;
 
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 
 // ── Re-exports ──────────────────────────────────────────────────────────────
 
@@ -44,48 +45,44 @@ impl Default for ObservabilityConfig {
     }
 }
 
-/// An independently constructed observability stack, decoupled from `AcpServer`.
-pub struct ObservabilityStack {
-    /// Performance monitoring (latency, throughput, error rates).
-    #[allow(dead_code)] // F-GAP-49 — reserved observability fields
+/// Global singleton for the independent observability stack.
+static OBSERVABILITY_STACK: OnceLock<ObservabilityStackInner> = OnceLock::new();
+
+/// Inner observability stack — fields are initialized once and never mutated.
+struct ObservabilityStackInner {
     pub performance_monitor: Arc<Mutex<crate::observability::performance::PerformanceMonitor>>,
-    /// Telemetry runtime for distributed tracing.
-    #[allow(dead_code)] // F-GAP-49 — reserved observability fields
-    pub telemetry_runtime: Arc<Mutex<crate::observability::telemetry::TelemetryRuntime>>,
-    /// Alert manager for threshold-based alerting.
-    #[allow(dead_code)] // F-GAP-49 — reserved observability fields
-    pub alert_manager: Arc<Mutex<crate::observability::alert_manager::AlertManager>>,
+    pub telemetry_runtime: crate::observability::telemetry::TelemetryRuntime,
+    pub alert_manager: crate::observability::alert_manager::AlertManager,
 }
 
-impl ObservabilityStack {
-    /// Initialise all observability subsystems from a standalone config,
-    /// without requiring an `AcpServer`.
-    pub fn init_independent(config: &ObservabilityConfig) -> Result<Self, anyhow::Error> {
-        let performance_monitor = crate::observability::performance::init_performance_monitoring();
+/// Initialize the independent observability stack (idempotent — only first call wins).
+pub fn init_independent_stack(config: &ObservabilityConfig) -> bool {
+    if OBSERVABILITY_STACK.get().is_some() {
+        return false;
+    }
 
-        let runtime_config = crate::config::RuntimeConfig {
-            otel_enabled: config.otel_enabled,
-            otel_sample_ratio: config.sample_ratio,
-            otel_service_name: config.service_name.clone(),
-            otel_endpoint: config.otlp_endpoint.clone(),
-            ..Default::default()
-        };
-        let telemetry_runtime = Arc::new(Mutex::new(
-            crate::observability::telemetry::TelemetryRuntime::new(&runtime_config),
-        ));
+    let performance_monitor = crate::observability::performance::init_performance_monitoring();
 
-        let alert_manager = Arc::new(Mutex::new(
-            crate::observability::alert_manager::AlertManager::new(
-                crate::observability::alert_manager::default_alert_rules(),
-            ),
-        ));
+    let runtime_config = crate::config::RuntimeConfig {
+        otel_enabled: config.otel_enabled,
+        otel_sample_ratio: config.sample_ratio,
+        otel_service_name: config.service_name.clone(),
+        otel_endpoint: config.otlp_endpoint.clone(),
+        ..Default::default()
+    };
+    let telemetry_runtime = crate::observability::telemetry::TelemetryRuntime::new(&runtime_config);
 
-        Ok(Self {
+    let alert_manager = crate::observability::alert_manager::AlertManager::new(
+        crate::observability::alert_manager::default_alert_rules(),
+    );
+
+    OBSERVABILITY_STACK
+        .set(ObservabilityStackInner {
             performance_monitor,
             telemetry_runtime,
             alert_manager,
         })
-    }
+        .is_ok()
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

@@ -38,4 +38,17 @@ if [[ -n "$APP_BUNDLE" ]]; then
   "$UNBLOCK_SCRIPT" --copy "$APP_BUNDLE"
 fi
 
+# Run skills environment setup if available.
+SKILLS_SETUP="$ROOT_DIR/scripts/skills-setup.sh"
+if [[ -x "$SKILLS_SETUP" ]]; then
+  echo "Running skills environment setup..."
+  if "$SKILLS_SETUP"; then
+    echo "Skills environment setup complete."
+  else
+    echo "Skills environment setup completed with warnings (non-fatal)."
+  fi
+else
+  echo "Skills setup script not found at $SKILLS_SETUP — skipping."
+fi
+
 echo "macOS first-run trust bootstrap finished."

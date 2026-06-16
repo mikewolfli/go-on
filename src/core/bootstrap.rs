@@ -67,13 +67,10 @@ pub async fn perform_bootstrap(config: &BootstrapConfig) -> Result<()> {
 
     // 4. Initialize observability stack (standalone decoupled path)
     let obs_config = crate::observability::ObservabilityConfig::default();
-    match crate::observability::ObservabilityStack::init_independent(&obs_config) {
-        Ok(_stack) => {
-            tracing::debug!(target: "go_on::core::bootstrap", "ObservabilityStack initialized");
-        }
-        Err(e) => {
-            tracing::warn!(target: "go_on::core::bootstrap", "ObservabilityStack init skipped: {e}");
-        }
+    if crate::observability::init_independent_stack(&obs_config) {
+        tracing::debug!(target: "go_on::core::bootstrap", "ObservabilityStack initialized");
+    } else {
+        tracing::warn!(target: "go_on::core::bootstrap", "ObservabilityStack init skipped (already initialized or failed)");
     }
 
     info!("System bootstrap completed");

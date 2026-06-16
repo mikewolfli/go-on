@@ -9,20 +9,10 @@ use serde::{Deserialize, Serialize};
 
 // ── Authentication ────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(transparent)]
-pub struct AuthMethodId(pub String);
-impl AuthMethodId {
-    #[allow(dead_code)]
-    pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthMethodAgent {
-    pub id: AuthMethodId,
+    pub id: String,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -59,19 +49,6 @@ impl AuthenticateResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct LogoutResponse {
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct InitializeRequest {
-    pub protocol_version: ProtocolVersion,
-    #[serde(default)]
-    pub client_capabilities: ClientCapabilities,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub client_info: Option<Implementation>,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
 }
@@ -113,17 +90,6 @@ impl InitializeResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
-pub struct NewSessionRequest {
-    pub cwd: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mcp_servers: Vec<McpServerConfig>,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
 pub struct NewSessionResponse {
     pub session_id: SessionId,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -150,18 +116,6 @@ impl NewSessionResponse {
         self.config_options = Some(v);
         self
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
-pub struct LoadSessionRequest {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mcp_servers: Vec<McpServerConfig>,
-    pub cwd: String,
-    pub session_id: SessionId,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -256,16 +210,6 @@ impl SessionMode {
         self.description = Some(v.into());
         self
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
-pub struct SetSessionModeRequest {
-    pub session_id: SessionId,
-    pub mode_id: SessionModeId,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -369,30 +313,6 @@ pub struct SetSessionConfigOptionResponse {
 
 // ── Capabilities ──────────────────────────────────────────────────────────
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct ClientCapabilities {
-    #[serde(default)]
-    pub fs: FileSystemCapabilities,
-    #[serde(default)]
-    pub terminal: bool,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct FileSystemCapabilities {
-    #[serde(default)]
-    pub read_text_file: bool,
-    #[serde(default)]
-    pub write_text_file: bool,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
-}
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentCapabilities {
@@ -468,32 +388,11 @@ pub struct SessionCloseCapabilities {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
-pub struct ResumeSessionRequest {
-    pub session_id: SessionId,
-    pub cwd: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mcp_servers: Vec<McpServerConfig>,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
 pub struct ResumeSessionResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub modes: Option<SessionModeState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_options: Option<Vec<SessionConfigOption>>,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
-pub struct CloseSessionRequest {
-    pub session_id: SessionId,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
 }
@@ -507,35 +406,10 @@ pub struct CloseSessionResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // F-GAP-25 — reserved ACP protocol type from v0.13.2 spec
-pub struct ListSessionsRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<String>,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
 pub struct ListSessionsResponse {
-    pub sessions: Vec<SessionInfo>,
+    pub sessions: Vec<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<Meta>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionInfo {
-    pub session_id: SessionId,
-    pub cwd: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub updated_at: Option<String>,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Meta>,
 }

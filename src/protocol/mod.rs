@@ -7,9 +7,6 @@ pub mod state_sync;
 // F-GAP-99: Legacy JSON-RPC types (superseded by mcp/schema.rs) — kept for existing callers in runtime.rs.
 pub mod rpc_protocol;
 
-// GAP-B54-052: HTTP JSON-RPC service definitions for distributed execution.
-// Wired into GrpcRemoteExecutor via call_execute_remote / call_health_check.
-pub mod grpc;
 pub mod rate_limit;
 pub mod transport;
 pub mod websocket;

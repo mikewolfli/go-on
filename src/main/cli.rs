@@ -3,6 +3,13 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{ArgAction, Parser, Subcommand};
 
+use std::sync::Arc;
+
+use tokio::sync::RwLock;
+
+use crate::orchestration::skill::SkillRegistry;
+use crate::orchestration::skill_import::SkillImportPolicy;
+use crate::orchestration::skill_market::SkillMarketRegistry;
 use crate::shared::protocol_mode::{ProtocolMode, ProtocolModeError};
 
 pub(crate) fn validate_cli_protocol_mode(raw: Option<&str>) -> Result<Option<String>> {
@@ -176,4 +183,113 @@ pub enum CliCommand {
     Status,
     /// Run end-to-end diagnosis with remediation hints
     Diagnose,
+    /// Manage skills (marketplace, import, list)
+    Skill {
+        #[command(subcommand)]
+        command: SkillCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SkillCommand {
+    /// List available skills from the marketplace
+    List {
+        /// Optional filter by tag
+        #[arg(long)]
+        tag: Option<String>,
+    },
+    /// Import a skill from a source
+    Import {
+        /// Source: "github:owner/repo" | "url:<url>" | "local:<path>"
+        source: String,
+    },
+    /// List imported/registered skills
+    ListImported,
+}
+
+/// Handle the `skill` CLI subcommand by creating in-process registries
+/// and performing the requested action.
+pub async fn handle_skill_command(cmd: SkillCommand) -> anyhow::Result<()> {
+    // Create a minimal SkillRegistry for local/imported skills
+    let skill_registry = Arc::new(RwLock::new(SkillRegistry::default()));
+
+    // Create a minimal SkillMarketRegistry for marketplace skills
+    let import_policy = SkillImportPolicy {
+        enabled: true,
+        allowed_sources: vec!["*".to_string()],
+        require_sha256: false,
+        allow_floating_ref: true,
+        cache_dir: std::env::temp_dir()
+            .join("go-on-skill-market")
+            .to_string_lossy()
+            .to_string(),
+    };
+    let market_registry = SkillMarketRegistry::new(
+        "https://marketplace.go-on.dev",
+        std::env::temp_dir().join("go-on-skill-market"),
+        skill_registry.clone(),
+        import_policy,
+    );
+
+    match cmd {
+        SkillCommand::List { tag } => {
+            // Refresh the marketplace to get built-in sample skills
+            let count = market_registry.refresh().await?;
+            let skills = match tag {
+                Some(ref t) => market_registry.list_skills_by_tag(t).await,
+                None => market_registry.list_skills().await,
+            };
+            eprintln!(
+                "Available skills ({} total, {} matching):",
+                count,
+                skills.len()
+            );
+            for skill in &skills {
+                let tags = skill.tags.join(", ");
+                eprintln!(
+                    "  {:<20} v{:<8} [{:>5.1}]  {:<40} tags: {}",
+                    skill.name, skill.version, skill.rating, skill.description, tags,
+                );
+            }
+            if skills.is_empty() {
+                eprintln!(
+                    "  (no skills found{})",
+                    tag.map_or(String::new(), |t| format!(" for tag '{}'", t))
+                );
+            }
+        }
+        SkillCommand::Import { source } => {
+            eprintln!("Importing skill from: {}", source);
+            // Refresh the marketplace to populate built-in skills
+            market_registry.refresh().await?;
+            // Attempt to install from the marketplace by name
+            match market_registry.install_skill(&source).await {
+                Ok(installation) => {
+                    eprintln!(
+                        "Skill '{}' v{} imported successfully",
+                        installation.name, installation.version
+                    );
+                    eprintln!("  Installed at: {}", installation.installed_path.display());
+                }
+                Err(e) => {
+                    anyhow::bail!("Failed to import skill '{}': {}", source, e);
+                }
+            }
+        }
+        SkillCommand::ListImported => {
+            // List skills registered in the local SkillRegistry
+            let descriptors = skill_registry.read().await.list();
+            eprintln!("Registered skills ({}):", descriptors.len());
+            for desc in &descriptors {
+                eprintln!(
+                    "  {:<20}  score: {:>5.2}  calls: {}  {}",
+                    desc.name, desc.score, desc.total_calls, desc.description,
+                );
+            }
+            if descriptors.is_empty() {
+                eprintln!("  (no skills registered)");
+            }
+        }
+    }
+    Ok(())
 }

@@ -153,10 +153,11 @@ pub fn start_secret_rotation_if_configured(
     Some(handle)
 }
 
-/// Spawn the certificate monitor if mTLS is configured.
+/// Log that mTLS certificate monitoring is not wired.
 ///
-/// Note: certificate monitoring was removed (MtlsConfig, spawn_cert_monitor_if_configured
-/// were dead code). This function is retained as a no-op to avoid breaking callers.
+/// The original certificate monitor implementation was removed because it
+/// was dead code. The function is kept as a lightweight no-op that logs
+/// when mTLS is enabled, so callers in the startup path remain intact.
 pub fn wire_cert_monitor(config: &crate::config::types::RuntimeConfig) {
     if config.mtls_enabled {
         tracing::info!(

@@ -582,6 +582,24 @@ async fn wire_server(server: &mut AcpServer, registry: &AgentRegistry) {
                 server.orchestration_deps.skill_registry.clone(),
             ),
         ));
+
+        // Wire the prompt skill agent so PromptBasedSkill can call a real LLM.
+        // Uses the first available agent from the registry (preferring "primary").
+        let agent_names = registry.names();
+        let prompt_agent = agent_names
+            .iter()
+            .find(|n| n.contains("primary"))
+            .or_else(|| agent_names.first())
+            .and_then(|name| registry.get(name));
+
+        if let Some(agent) = prompt_agent {
+            use crate::orchestration::skill::ChatBasedSkillAgent;
+            let skill_agent = Arc::new(ChatBasedSkillAgent::new(agent));
+            crate::orchestration::skill::set_prompt_skill_agent(skill_agent);
+            info!("prompt skill agent wired for LLM-based skill execution");
+        } else {
+            info!("no agent available for prompt skill execution — skills will use fallback mode");
+        }
     }
 
     // Wire the skill registry into the global discovery engine

@@ -199,6 +199,10 @@ async fn run() -> Result<()> {
             cli::CliCommand::Init => cli.setup = true,
             cli::CliCommand::Status => cli.status = true,
             cli::CliCommand::Diagnose => cli.diagnose = true,
+            cli::CliCommand::Skill { command } => {
+                // Handle the skill command and exit immediately
+                return cli::handle_skill_command(command).await;
+            }
         }
     }
 

@@ -291,6 +291,9 @@ impl DocumentParser {
             "md" | "markdown" => self.parse_markdown_bytes(bytes),
             "xls" | "xlsx" => self.parse_excel_bytes(bytes),
             "pptx" => self.parse_pptx_bytes(bytes),
+            "csv" | "json" | "xml" | "yaml" | "yml" | "txt" => {
+                self.parse_plain_text_bytes(bytes, ext.as_str())
+            }
             _ => return Err(DocumentParserError::UnsupportedExtension(ext)),
         }?;
 
@@ -315,6 +318,29 @@ impl DocumentParser {
                 ),
             );
         }
+    }
+
+    /// Parse plain text formats (csv, json, xml, yaml, txt).
+    /// These are read directly as UTF-8 text content without any
+    /// special parsing.
+    fn parse_plain_text_bytes(
+        &self,
+        bytes: &[u8],
+        format: &str,
+    ) -> Result<ParsedContent, DocumentParserError> {
+        if bytes.is_empty() {
+            return Err(DocumentParserError::EmptyInput("empty bytes".to_string()));
+        }
+        let text = String::from_utf8_lossy(bytes).to_string();
+        let mut content = ParsedContent::default();
+        content.text_content = text;
+        content
+            .metadata
+            .insert("parser".to_string(), "text".to_string());
+        content
+            .metadata
+            .insert("format".to_string(), format.to_string());
+        Ok(content)
     }
 
     // =======================================================================

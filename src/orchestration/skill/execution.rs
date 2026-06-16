@@ -6,6 +6,9 @@ use std::time::Duration;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use tokio::sync::mpsc;
+
+use crate::agent::{Agent, Message, StreamingSender};
 
 use super::registry::SkillRegistry;
 
@@ -23,8 +26,6 @@ static PROMPT_SKILL_AGENT: OnceLock<Arc<dyn PromptSkillAgent>> = OnceLock::new()
 /// Set the global prompt skill agent for LLM execution.
 /// Must be called before any PromptBasedSkill.execute() invocations that
 /// require real LLM execution.
-#[allow(dead_code)] // public API — reserved for LLM agent wiring
-                    // F-GAP-49 — reserved for future use
 pub fn set_prompt_skill_agent(agent: Arc<dyn PromptSkillAgent>) {
     let _ = PROMPT_SKILL_AGENT.set(agent);
 }
@@ -187,6 +188,49 @@ impl PromptBasedSkill {
                         // F-GAP-49 — reserved for future use
     pub fn boxed(self) -> Arc<dyn Skill> {
         Arc::new(self)
+    }
+}
+
+/// A `PromptSkillAgent` that delegates prompt execution to an `Agent` in the
+/// registry. This bridges the skill system with the configured LLM provider
+/// to enable real LLM-based skill execution.
+pub struct ChatBasedSkillAgent {
+    agent: Arc<dyn Agent>,
+}
+
+impl ChatBasedSkillAgent {
+    /// Create a new skill agent wrapping the given provider agent.
+    pub fn new(agent: Arc<dyn Agent>) -> Self {
+        Self { agent }
+    }
+}
+
+#[async_trait]
+impl PromptSkillAgent for ChatBasedSkillAgent {
+    async fn execute_prompt(&self, prompt: &str) -> Result<String> {
+        let messages = vec![Message {
+            role: "user".to_string(),
+            content: prompt.to_string(),
+        }];
+
+        let (tx, mut rx) = mpsc::channel::<String>(256);
+        let sender = StreamingSender::new(tx);
+
+        self.agent
+            .chat(messages, None, None, sender)
+            .await
+            .map_err(|e| anyhow::anyhow!("LLM agent chat failed: {}", e))?;
+
+        let mut response = String::new();
+        while let Some(token) = rx.recv().await {
+            response.push_str(&token);
+        }
+
+        if response.is_empty() {
+            anyhow::bail!("LLM agent returned empty response");
+        }
+
+        Ok(response)
     }
 }
 

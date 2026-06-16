@@ -97,6 +97,16 @@ pub use video_processor::MAX_DURATION_SECS;
 #[allow(unused_imports)]
 pub use video_processor::MAX_FILE_SIZE_MB;
 
+// ── Re-exports from excel_processor ──────────────────────────────────────
+#[cfg(feature = "document-excel")]
+#[allow(unused_imports)]
+pub use excel_processor::parse_excel_bytes;
+
+// ── Re-exports from ppt_processor ────────────────────────────────────────
+#[cfg(feature = "document-ppt")]
+#[allow(unused_imports)]
+pub use ppt_processor::parse_pptx_bytes;
+
 /// Represents a multimodal input payload that can be routed to an appropriate
 /// processor (document parser, ASR pipeline, vision model, etc.).
 ///
@@ -443,9 +453,8 @@ impl MultimodalProcessor {
     async fn process_audio(&self, data: &[u8]) -> ProcessedContent {
         if let Some(ref processor) = self.audio_processor {
             // AudioProcessor::transcribe is synchronous — no .await.
-            // Use AudioFormat::Wav as a reasonable default; callers with more
-            // information should parse the format beforehand.
-            let format = crate::multimodal::audio_processor::AudioFormat::Wav;
+            // Detect audio format from magic bytes for broader compatibility.
+            let format = detect_audio_format(data);
             match processor.transcribe(data, format) {
                 Ok(transcription) => {
                     return ProcessedContent {
@@ -469,11 +478,50 @@ impl MultimodalProcessor {
         }
     }
 
+    /// Detect video format from magic bytes and return the appropriate file extension.
+    fn detect_video_ext(data: &[u8]) -> &'static str {
+        if data.len() < 12 {
+            return "mp4"; // fallback
+        }
+        // EBML header (MKV / WebM): 0x1A 0x45 0xDF 0xA3
+        if data[0] == 0x1A && data[1] == 0x45 && data[2] == 0xDF && data[3] == 0xA3 {
+            return "mkv";
+        }
+        // RIFF header (AVI): bytes 0-3 "RIFF", bytes 8-11 "AVI "
+        if data[0] == 0x52
+            && data[1] == 0x49
+            && data[2] == 0x46
+            && data[3] == 0x46
+            && data[8] == 0x41
+            && data[9] == 0x56
+            && data[10] == 0x49
+            && data[11] == 0x20
+        {
+            return "avi";
+        }
+        // ftyp box (MP4 / MOV / M4V): bytes 4-7 "ftyp"
+        if data[4] == 0x66 && data[5] == 0x74 && data[6] == 0x79 && data[7] == 0x70 {
+            // Check for QuickTime brand at bytes 8-11: "qt  "
+            if data.len() >= 12
+                && data[8] == 0x71
+                && data[9] == 0x74
+                && data[10] == 0x20
+                && data[11] == 0x20
+            {
+                return "mov";
+            }
+            return "mp4";
+        }
+        // Fallback to mp4 (widest compatibility).
+        "mp4"
+    }
+
     /// Process a video input — delegates to the `VideoProcessor` when
     /// configured, otherwise returns an empty result.
     ///
-    /// Raw video bytes are written to a temporary file so the
-    /// `VideoProcessor` can read them (its API requires a `Path`).
+    /// Raw video bytes are written to a temporary file (with the correct
+    /// extension detected from magic bytes) so the `VideoProcessor` can
+    /// read them (its API requires a `Path`).
     async fn process_video(&self, data: &[u8]) -> ProcessedContent {
         if let Some(ref processor) = self.video_processor {
             // Write bytes to a temp file because VideoProcessor works with paths.
@@ -491,7 +539,8 @@ impl MultimodalProcessor {
                     };
                 }
             };
-            let video_path = tmp_dir.path().join("input.mp4");
+            let ext = Self::detect_video_ext(data);
+            let video_path = tmp_dir.path().join(format!("input.{ext}"));
             if let Err(e) = tokio::fs::write(&video_path, data).await {
                 tracing::warn!(
                     error = %e,
@@ -589,6 +638,26 @@ impl MultimodalProcessor {
 // ---------------------------------------------------------------------------
 // Helper functions
 // ---------------------------------------------------------------------------
+
+/// Detect audio format from magic bytes for broader compatibility
+/// with common audio codecs.
+fn detect_audio_format(bytes: &[u8]) -> crate::multimodal::audio_processor::AudioFormat {
+    use crate::multimodal::audio_processor::AudioFormat;
+    if bytes.len() < 4 {
+        return AudioFormat::Wav; // fallback
+    }
+    if &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WAVE" {
+        AudioFormat::Wav
+    } else if &bytes[0..4] == b"fLaC" {
+        AudioFormat::Flac
+    } else if &bytes[0..3] == b"ID3" || (bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0) {
+        AudioFormat::Mp3
+    } else if &bytes[0..4] == b"OggS" {
+        AudioFormat::Ogg
+    } else {
+        AudioFormat::Wav // fallback
+    }
+}
 
 /// Decode a base64 string (standard or URL-safe) into raw bytes.
 pub fn base64_decode(input: &str) -> Result<Vec<u8>, base64::DecodeError> {
